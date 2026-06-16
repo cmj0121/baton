@@ -1,0 +1,5 @@
+# Go sources and module files are formatted by gofmt, not prettier.
+*.go
+go.mod
+go.sum
+/bin/
