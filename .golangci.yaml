@@ -1,0 +1,30 @@
+# golangci-lint v2 configuration. See https://golangci-lint.run.
+version: "2"
+
+run:
+  timeout: 3m
+
+linters:
+  # The standard set (errcheck, govet, ineffassign, staticcheck, unused) plus a
+  # few low-noise extras.
+  default: standard
+  enable:
+    - misspell # common spelling mistakes in comments/strings
+    - unconvert # redundant type conversions
+    - revive # broad style/lint rules (golint successor)
+  settings:
+    revive:
+      rules:
+        - name: exported # exported identifiers should be documented
+        - name: var-declaration
+        - name: unreachable-code
+        - name: error-strings
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/cmj0121/baton

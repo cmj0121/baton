@@ -14,6 +14,16 @@ repos:
     hooks:
       - id: prettier
 
+  # -------- go linter --------
+  - repo: local
+    hooks:
+      - id: golangci-lint
+        name: golangci-lint
+        entry: golangci-lint run
+        language: system
+        types: [go]
+        pass_filenames: false
+
   # -------- security related linter --------
   - repo: https://github.com/zricethezav/gitleaks
     rev: v8.30.0
