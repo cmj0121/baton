@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/cmj0121/baton/internal/client"
-	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/server"
 )
@@ -46,12 +45,12 @@ func TestAttachAndCreateShellPanel(t *testing.T) {
 	}
 	defer func() { _ = c.Close() }()
 
-	base := len(panel.Mock()) // the server seeds a mock fleet
+	const base = 0 // the server starts with no panels
 	if got := recv(t, c); got.Type != "welcome" || got.Version != proto.ProtocolVersion {
 		t.Fatalf("expected welcome %s, got %+v", proto.ProtocolVersion, got)
 	}
 	if got := recv(t, c); got.Type != "panels" || len(got.Panels) != base {
-		t.Fatalf("expected seeded panels snapshot of %d, got %+v", base, got)
+		t.Fatalf("expected an empty panels snapshot, got %+v", got)
 	}
 
 	// Create a shell panel; the server broadcasts the updated snapshot.

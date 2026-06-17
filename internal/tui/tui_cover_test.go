@@ -302,23 +302,29 @@ func TestModelWithLiveServer(t *testing.T) {
 	_ = tick()    // tick constructor
 	m := tm.(model)
 
-	// Pump the welcome + panels snapshot through Update.
+	// Pump the welcome + (empty) panels snapshot through Update.
 	for i := 0; i < 2; i++ {
 		msg := waitEvent(c.Events)() // waitEvent
 		next, _ := m.Update(msg)     // Update eventMsg + applyEvent
 		m = next.(model)
 	}
-	if len(m.fleet) == 0 {
-		t.Fatal("expected the server's seeded fleet")
+	if len(m.fleet) != 0 {
+		t.Fatalf("a fresh server should have no panels, got %d", len(m.fleet))
 	}
 
-	// Spawn a panel: runAction actNewPanel sends over the live socket.
+	// Spawn a panel: runAction actNewPanel sends over the live socket; the
+	// server broadcasts the updated snapshot.
 	m = press(m, "ctrl+t", "p")
 	if !strings.Contains(m.status, "spawning") {
 		t.Fatalf("spawn status = %q", m.status)
 	}
+	next, _ := m.Update(waitEvent(c.Events)())
+	m = next.(model)
+	if len(m.fleet) != 1 {
+		t.Fatalf("expected one real panel after spawn, got %d", len(m.fleet))
+	}
 
-	// Close a panel with the gate off: closeSelected sends panel.close.
+	// Close it with the gate off: closeSelected sends panel.close.
 	m.confirmClose = false
 	m.cursor = 0
 	before := len(m.fleet)

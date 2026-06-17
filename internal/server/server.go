@@ -35,15 +35,12 @@ type Server struct {
 	clients map[*clientConn]struct{}
 }
 
-// New builds a server bound to ln. The fleet is seeded with a mock set of panels
-// so a fresh session looks alive; these are real, operable panels — they can be
-// closed and persist across client re-attach — until live process state replaces
-// the mock telemetry.
+// New builds a server bound to ln. The fleet starts empty — panels appear only
+// when the user spawns a real one.
 func New(ln net.Listener) *Server {
 	return &Server{
 		ln:      ln,
 		pty:     ptymgr.New(),
-		panels:  panel.Mock(),
 		clients: make(map[*clientConn]struct{}),
 	}
 }
