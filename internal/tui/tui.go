@@ -113,6 +113,29 @@ func New(c *client.Client) tea.Model {
 // editPrefix is the editIdx sentinel meaning the leader key is being rebound.
 const editPrefix = -1
 
+// rowKind classifies a row of the key-map panel.
+type rowKind int
+
+const (
+	rowPrefix  rowKind = iota // the leader key (row 0)
+	rowBinding                // a binding (rows 1..N)
+	rowSetting                // the confirm-on-close toggle (last row)
+)
+
+// keyMapRow resolves the current cursor to a key-map row: its kind and, for a
+// binding row, the binding's index. This is the single source of truth for the
+// panel's row layout (prefix, then bindings, then settings).
+func (m model) keyMapRow() (rowKind, int) {
+	switch {
+	case m.cursor <= 0:
+		return rowPrefix, 0
+	case m.cursor <= len(m.keymap()):
+		return rowBinding, m.cursor - 1
+	default:
+		return rowSetting, 0
+	}
+}
+
 // effPrefix is the active leader key, defaulting to keyPrefix for a zero-value
 // model (so tests and the first frame still arm on ctrl+t).
 func (m model) effPrefix() string {
@@ -292,17 +315,19 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "e":
-		// Edit the selected row's key (key map only): the leader key on row 0,
-		// otherwise the binding at that row.
+		// Edit the selected row's key (key map only): the leader key on the
+		// prefix row, otherwise the binding at that row.
 		if m.mode == modeKeyMap {
-			if m.cursor == 0 {
+			switch kind, idx := m.keyMapRow(); kind {
+			case rowPrefix:
 				m.editing = true
 				m.editIdx = editPrefix
 				m.status = "press the new prefix key  ·  esc cancels"
-			} else if m.cursor >= 1 && m.cursor <= len(m.keymap()) {
+			case rowBinding:
 				m.editing = true
-				m.editIdx = m.cursor - 1
-				m.status = "press the new key for " + fmt.Sprintf("%q", m.keymap()[m.cursor-1].desc) + "  ·  esc cancels"
+				m.editIdx = idx
+				m.status = "press the new key for " + fmt.Sprintf("%q", m.keymap()[idx].desc) + "  ·  esc cancels"
+			case rowSetting:
 			}
 		}
 		return m, nil
@@ -364,18 +389,17 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 // map, or focus the selected panel on the dashboard.
 func (m model) activate() (tea.Model, tea.Cmd) {
 	if m.mode == modeKeyMap {
-		if m.cursor == 0 {
+		switch kind, idx := m.keyMapRow(); kind {
+		case rowPrefix:
 			m.status = "press e to change the prefix key"
-			return m, nil
-		}
-		if m.cursor >= 1 && m.cursor <= len(m.keymap()) {
-			return m.runAction(m.keymap()[m.cursor-1].act)
-		}
-		// The row past the bindings is the confirm-on-close setting.
-		m.confirmClose = !m.confirmClose
-		m.status = "confirm on close: " + onOff(m.confirmClose)
-		if err := saveConfig(m.prefixKey, m.keymap(), m.confirmClose); err != nil {
-			m.status = "toggled, but save failed: " + err.Error()
+		case rowBinding:
+			return m.runAction(m.keymap()[idx].act)
+		case rowSetting:
+			m.confirmClose = !m.confirmClose
+			m.status = "confirm on close: " + onOff(m.confirmClose)
+			if err := saveConfig(m.prefixKey, m.keymap(), m.confirmClose); err != nil {
+				m.status = "toggled, but save failed: " + err.Error()
+			}
 		}
 		return m, nil
 	}
