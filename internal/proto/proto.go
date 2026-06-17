@@ -21,7 +21,7 @@ const EventBufferSize = 256
 // Command is sent from a client to the server. Beyond the lifecycle actions, a
 // zoomed client streams a panel with attach/input/resize/detach.
 type Command struct {
-	Action string `json:"action"`         // hello | panel.list | panel.create | panel.close | panel.attach | panel.detach | panel.input | panel.resize
+	Action string `json:"action"`         // hello | panel.list | panel.create | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.resize
 	Kind   string `json:"kind,omitempty"` // panel kind for "panel.create" (default "shell")
 	ID     string `json:"id,omitempty"`   // target panel for close/attach/input/resize
 	Path   string `json:"path,omitempty"` // init command (binary path) for "panel.create"; empty = default shell

@@ -155,6 +155,80 @@ func TestExitMarks(t *testing.T) {
 	}
 }
 
+func TestPurgeExited(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	sock := filepath.Join(t.TempDir(), "baton.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() { _ = server.New(ln).Serve() }()
+
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	recv(t, c) // welcome
+	recv(t, c) // empty panels
+
+	// One panel that will exit, and one that stays alive.
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+		t.Fatalf("create dying: %v", err)
+	}
+	dying := recv(t, c).Panels[0].ID
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+		t.Fatalf("create live: %v", err)
+	}
+	live := recv(t, c).Panels[1].ID
+
+	// Make the first one exit and wait for it to be marked exited.
+	if err := c.Send(proto.Command{Action: "panel.input", ID: dying, Data: []byte("exit\n")}); err != nil {
+		t.Fatalf("input: %v", err)
+	}
+	waitExited := func() {
+		deadline := time.After(3 * time.Second)
+		for {
+			select {
+			case msg := <-c.Events:
+				if msg.Type != "panels" {
+					continue
+				}
+				for _, p := range msg.Panels {
+					if p.ID == dying && p.State == "exited" {
+						return
+					}
+				}
+			case <-deadline:
+				t.Fatal("dying panel never reached exited state")
+			}
+		}
+	}
+	waitExited()
+
+	// Purge: the exited panel goes, the live one stays.
+	if err := c.Send(proto.Command{Action: "panel.purge"}); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	got := recv(t, c)
+	if got.Type != "panels" || len(got.Panels) != 1 || got.Panels[0].ID != live {
+		t.Fatalf("after purge expected only the live panel, got %+v", got.Panels)
+	}
+
+	// Purging again with nothing exited is a silent no-op (no broadcast): the
+	// next message we force is a fresh list with the live panel still present.
+	if err := c.Send(proto.Command{Action: "panel.purge"}); err != nil {
+		t.Fatalf("purge again: %v", err)
+	}
+	if err := c.Send(proto.Command{Action: "panel.list"}); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if got := recv(t, c); len(got.Panels) != 1 || got.Panels[0].ID != live {
+		t.Fatalf("live panel should remain after a no-op purge, got %+v", got.Panels)
+	}
+}
+
 func TestAttachIO(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	sock := filepath.Join(t.TempDir(), "baton.sock")

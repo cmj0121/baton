@@ -24,6 +24,7 @@ const (
 	keyNewPanel    = "p"
 	keyNewForm     = "n"
 	keyClose       = "w"
+	keyPurge       = "x"
 	keyDashboard   = "d"
 	keyShowMap     = "k"
 	keyPanelConfig = "P" // shift+p
@@ -54,6 +55,7 @@ const (
 	actNewPanel action = iota
 	actNewForm
 	actClose
+	actPurge
 	actDashboard
 	actToggleMap
 	actPanelConfig
@@ -77,6 +79,7 @@ var bindings = []binding{
 	{"new-panel", keyNewPanel, "spawn a new shell panel", actNewPanel},
 	{"new-panel-form", keyNewForm, "new panel (choose the command)", actNewForm},
 	{"close", keyClose, "close the selected panel", actClose},
+	{"purge-exited", keyPurge, "purge all exited panels", actPurge},
 	{"dashboard", keyDashboard, "jump back to the dashboard", actDashboard},
 	{"key-map", keyShowMap, "toggle this key map", actToggleMap},
 	{"panel-config", keyPanelConfig, "configure panel defaults", actPanelConfig},

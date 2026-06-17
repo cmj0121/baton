@@ -506,6 +506,13 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		} else {
 			m.closeSelected()
 		}
+	case actPurge:
+		if n := m.countState(panel.Exited); n == 0 {
+			m.status = "no exited panels to purge"
+		} else {
+			m.sendf(proto.Command{Action: "panel.purge"})
+			m.status = fmt.Sprintf("purging %d exited panel(s)", n)
+		}
 	case actDashboard:
 		m.mode = modeDashboard
 		m.cursor = 0
@@ -682,11 +689,12 @@ func (m model) itemCount() int {
 	}
 }
 
-// attentionCount is how many panels are flagged as needing the user.
-func (m model) attentionCount() int {
+// countState is how many panels are in a given lifecycle state — used for the
+// footer's attention badge and the purge candidate count.
+func (m model) countState(s panel.State) int {
 	n := 0
 	for _, p := range m.fleet {
-		if p.State == panel.Attention {
+		if p.State == s {
 			n++
 		}
 	}
@@ -1214,7 +1222,7 @@ func (m model) footer() string {
 		mode = "PANEL CONFIG"
 	}
 	left := seg("◈ BATON", colDark, colBrand) + seg(mode, colInk, colBlue)
-	if n := m.attentionCount(); n > 0 {
+	if n := m.countState(panel.Attention); n > 0 {
 		left += seg(fmt.Sprintf("◆ %d", n), colDark, states[panel.Attention].color)
 	}
 

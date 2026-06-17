@@ -162,6 +162,10 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			return
 		}
 		s.broadcast(s.panelsMsg())
+	case "panel.purge":
+		if s.purgeExited() > 0 {
+			s.broadcast(s.panelsMsg())
+		}
 	case "panel.attach":
 		s.attach(cc, cmd.ID)
 	case "panel.detach":
@@ -241,6 +245,31 @@ func (s *Server) closePanel(id string) error {
 	s.pty.Stop(id) // no-op for mock panels with no real process
 	log.Info().Str("panel", title).Msg("panel closed")
 	return nil
+}
+
+// purgeExited drops every exited panel from the fleet and frees its retained PTY
+// resources, leaving live panels untouched. Returns how many were removed.
+func (s *Server) purgeExited() int {
+	s.mu.Lock()
+	kept := make([]panel.Panel, 0, len(s.panels))
+	var gone []string
+	for _, p := range s.panels {
+		if p.State == panel.Exited {
+			gone = append(gone, p.ID)
+			continue
+		}
+		kept = append(kept, p)
+	}
+	s.panels = kept
+	s.mu.Unlock()
+
+	for _, id := range gone {
+		s.pty.Stop(id)
+	}
+	if len(gone) > 0 {
+		log.Info().Int("count", len(gone)).Msg("purged exited panels")
+	}
+	return len(gone)
 }
 
 func (s *Server) panelsMsg() proto.ServerMsg {
