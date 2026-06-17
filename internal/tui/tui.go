@@ -61,6 +61,7 @@ type mode int
 const (
 	modeDashboard mode = iota
 	modeKeyMap
+	modePanelConfig
 )
 
 type model struct {
@@ -83,10 +84,22 @@ type model struct {
 	editing   bool      // capturing the next key press as a rebind
 	editIdx   int       // binding being rebound; editPrefix means the leader key
 
+	shellPath string       // configured default shell binary path ("" = system shell)
+	input     inputPurpose // active text-input overlay, or inputNone
+	inputBuf  string       // text typed into the overlay
+
 	width, height int
 	quitting      bool
 	restart       bool // user asked to force-restart the daemon on exit
 }
+
+// inputPurpose is what an active text-input overlay feeds on submit.
+type inputPurpose int
+
+const (
+	inputNone      inputPurpose = iota
+	inputShellPath              // editing the default shell in panel config
+)
 
 // RestartRequested reports whether the cockpit exited because the user asked to
 // force-restart the server. The client runner relaunches the daemon and
@@ -97,16 +110,17 @@ func (m model) RestartRequested() bool { return m.restart }
 // is filled by the server's first snapshot, which arrives right after the hello
 // handshake — the server owns the panels now.
 func New(c *client.Client) tea.Model {
-	prefix, binds, confirmClose := loadConfig()
+	p := loadPrefs()
 	return model{
 		client:       c,
 		mode:         modeDashboard,
 		status:       "attaching…",
 		endpoint:     c.Endpoint(),
-		confirmClose: confirmClose,
+		confirmClose: p.confirmClose,
 		now:          time.Now(),
-		prefixKey:    prefix,
-		binds:        binds,
+		prefixKey:    p.prefix,
+		binds:        p.binds,
+		shellPath:    p.shellPath,
 	}
 }
 
@@ -241,6 +255,11 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := k.String()
 
+	// A text-input overlay is open: route the keystroke to it.
+	if m.input != inputNone {
+		return m.handleInput(k)
+	}
+
 	// Capturing a rebind: the next key press (other than esc) becomes the new
 	// chord for the binding — or the leader key — under edit.
 	if m.editing {
@@ -259,7 +278,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.binds[m.editIdx].key = key
 			m.status = fmt.Sprintf("rebound %q: %s → %s", m.binds[m.editIdx].desc, old, key)
 		}
-		if err := saveConfig(m.prefixKey, m.keymap(), m.confirmClose); err != nil {
+		if err := m.saveConfig(); err != nil {
 			m.status = "rebound, but save failed: " + err.Error()
 		}
 		return m, nil
@@ -330,16 +349,76 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case rowSetting:
 			}
 		}
+		if m.mode == modePanelConfig {
+			return m.editShellPath(), nil
+		}
 		return m, nil
 
 	case "enter":
 		return m.activate()
 	case "esc":
-		if m.mode == modeKeyMap {
+		if m.mode != modeDashboard {
 			return m.runAction(actDashboard)
 		}
 	}
 	return m, nil
+}
+
+// editShellPath opens the text-input overlay to edit the default shell, seeded
+// with the current value.
+func (m model) editShellPath() model {
+	m.input = inputShellPath
+	m.inputBuf = m.shellPath
+	m.status = "default shell · type a path (blank = system), enter to save"
+	return m
+}
+
+// handleInput routes a keystroke to the active text-input overlay: printable
+// runes append, backspace deletes, enter submits, esc cancels.
+func (m model) handleInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch k.Type {
+	case tea.KeyEsc:
+		m.input = inputNone
+		m.status = "cancelled"
+	case tea.KeyEnter:
+		return m.commitInput()
+	case tea.KeyBackspace:
+		if r := []rune(m.inputBuf); len(r) > 0 {
+			m.inputBuf = string(r[:len(r)-1])
+		}
+	case tea.KeySpace:
+		m.inputBuf += " "
+	case tea.KeyRunes:
+		m.inputBuf += string(k.Runes)
+	}
+	return m, nil
+}
+
+// commitInput applies the typed text to whatever opened the overlay.
+func (m model) commitInput() (tea.Model, tea.Cmd) {
+	buf := strings.TrimSpace(m.inputBuf)
+	purpose := m.input
+	m.input = inputNone
+
+	switch purpose {
+	case inputShellPath:
+		m.shellPath = buf
+		if err := m.saveConfig(); err != nil {
+			m.status = "save failed: " + err.Error()
+		} else {
+			m.status = "default shell · " + shellLabel(buf)
+		}
+	}
+	return m, nil
+}
+
+// shellLabel describes a configured shell path; an empty path means the system
+// default.
+func shellLabel(path string) string {
+	if path == "" {
+		return "system default"
+	}
+	return path
 }
 
 // runAction performs a binding's verb. Both the prefix handler and the key map's
@@ -347,10 +426,10 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 	switch a {
 	case actNewPanel:
-		if err := m.client.Send(proto.Command{Action: "panel.create", Kind: proto.KindShell}); err != nil {
+		if err := m.client.Send(proto.Command{Action: "panel.create", Kind: proto.KindShell, Path: m.shellPath}); err != nil {
 			m.status = "send failed: " + err.Error()
 		} else {
-			m.status = "requested new shell panel"
+			m.status = "spawning " + shellLabel(m.shellPath)
 		}
 	case actClose:
 		if len(m.fleet) == 0 {
@@ -373,6 +452,10 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		}
 		m.cursor = 0
 		m.status = "key map"
+	case actPanelConfig:
+		m.mode = modePanelConfig
+		m.cursor = 0
+		m.status = "panel config"
 	case actRestart:
 		m.restart = true
 		m.quitting = true
@@ -397,11 +480,14 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 		case rowSetting:
 			m.confirmClose = !m.confirmClose
 			m.status = "confirm on close: " + onOff(m.confirmClose)
-			if err := saveConfig(m.prefixKey, m.keymap(), m.confirmClose); err != nil {
+			if err := m.saveConfig(); err != nil {
 				m.status = "toggled, but save failed: " + err.Error()
 			}
 		}
 		return m, nil
+	}
+	if m.mode == modePanelConfig {
+		return m.editShellPath(), nil // the only row is the default shell
 	}
 	if m.cursor >= 0 && m.cursor < len(m.fleet) {
 		m.status = "focus · " + m.fleet[m.cursor].Title + "  (zoom not wired yet)"
@@ -444,10 +530,14 @@ func (m *model) move(delta int) {
 }
 
 func (m model) itemCount() int {
-	if m.mode == modeKeyMap {
+	switch m.mode {
+	case modeKeyMap:
 		return len(m.keymap()) + 2 // prefix row + bindings + the settings toggle
+	case modePanelConfig:
+		return 1 // the default-shell row
+	default:
+		return len(m.fleet)
 	}
-	return len(m.fleet)
 }
 
 // attentionCount is how many panels are flagged as needing the user.
@@ -468,9 +558,9 @@ func (m *model) clampCursor() {
 }
 
 // cols is how many panel cards sit on a row at the current width (1–3). The key
-// map and the tree view are single-column lists.
+// map, panel config, and tree view are single-column lists.
 func (m model) cols() int {
-	if m.mode == modeKeyMap || m.treeView() {
+	if m.mode != modeDashboard || m.treeView() {
 		return 1
 	}
 	c := m.width / (cardWidth + cardGap)
@@ -497,9 +587,14 @@ func (m model) View() string {
 	)
 
 	var body string
-	if m.mode == modeKeyMap {
+	switch {
+	case m.input != inputNone:
+		body = m.inputView()
+	case m.mode == modeKeyMap:
 		body = m.keyMapView()
-	} else {
+	case m.mode == modePanelConfig:
+		body = m.panelConfigView()
+	default:
 		body = m.dashboardView()
 	}
 
@@ -853,13 +948,62 @@ func (m model) keyMapView() string {
 	about := lipgloss.NewStyle().Foreground(colFaint).Render("protocol " + ver)
 	rows = append(rows, "", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(legend))), legend, about)
 
-	body := lipgloss.JoinVertical(lipgloss.Left, rows...)
+	return configBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
+}
+
+// configBox wraps a settings/overlay panel in the cockpit's bordered surface.
+func configBox(body string) string {
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colBrand).
 		Background(colSurface).
 		Padding(1, 3).
 		Render(body)
+}
+
+// panelConfigView renders the panel-defaults tab. For now its one row is the
+// default shell that new panels run.
+func (m model) panelConfigView() string {
+	caret := "  "
+	labelStyle := mutedStyle
+	if m.cursor == 0 {
+		caret = lipgloss.NewStyle().Foreground(colBrand).Bold(true).Render("▸ ")
+		labelStyle = inkStyle
+	}
+	value := lipgloss.NewStyle().Foreground(colCyan).Render(shellLabel(m.shellPath))
+	row := fmt.Sprintf("%s%-16s%s", caret, labelStyle.Render("default shell"), value)
+
+	legendKey := lipgloss.NewStyle().Foreground(colCyan).Bold(true)
+	legend := mutedStyle.Render("↑↓ move") + "   " +
+		legendKey.Render("e") + mutedStyle.Render(" edit") + "   " +
+		legendKey.Render("esc") + mutedStyle.Render(" back")
+
+	return configBox(lipgloss.JoinVertical(lipgloss.Left,
+		sectionStyle.Render(spaced("PANEL CONFIG")), "",
+		row, "",
+		mutedStyle.Render("new shell panels (C-t p) run this command"),
+		"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(legend))), legend,
+	))
+}
+
+// inputView renders the active text-input overlay as a centred popup.
+func (m model) inputView() string {
+	title, prompt := "INPUT", "value"
+	switch m.input {
+	case inputShellPath:
+		title, prompt = "DEFAULT SHELL", "shell path  (blank = system default)"
+	}
+
+	field := lipgloss.NewStyle().Width(46).Foreground(colInk).Background(colSurface).Render("› " + m.inputBuf + "▌")
+	legendKey := lipgloss.NewStyle().Foreground(colCyan).Bold(true)
+	legend := legendKey.Render("enter") + mutedStyle.Render(" save") + "   " +
+		legendKey.Render("esc") + mutedStyle.Render(" cancel")
+
+	return configBox(lipgloss.JoinVertical(lipgloss.Left,
+		sectionStyle.Render(spaced(title)), "",
+		mutedStyle.Render(prompt), field,
+		"", legend,
+	))
 }
 
 // onOff renders a boolean as a fixed-width ON/OFF label.
@@ -891,8 +1035,13 @@ func seg(text string, fg, bg lipgloss.Color) string {
 func (m model) footer() string {
 	// Left caps: brand · mode · (attention).
 	mode := "DASHBOARD"
-	if m.mode == modeKeyMap {
+	switch {
+	case m.input != inputNone:
+		mode = "INPUT"
+	case m.mode == modeKeyMap:
 		mode = "KEY MAP"
+	case m.mode == modePanelConfig:
+		mode = "PANEL CONFIG"
 	}
 	left := seg("◈ BATON", colDark, colBrand) + seg(mode, colInk, colBlue)
 	if n := m.attentionCount(); n > 0 {

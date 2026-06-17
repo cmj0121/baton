@@ -37,6 +37,9 @@ func TestViewRendersEveryMode(t *testing.T) {
 		{"keymap-edit-prefix", func(m *model) { m.mode = modeKeyMap; m.editing = true; m.editIdx = editPrefix }},
 		{"keymap-edit-binding", func(m *model) { m.mode = modeKeyMap; m.editing = true; m.editIdx = 0; m.cursor = 1 }},
 		{"keymap-setting-off", func(m *model) { m.mode = modeKeyMap; m.confirmClose = false; m.cursor = len(bindings) + 1 }},
+		{"panel-config", func(m *model) { m.mode = modePanelConfig; m.shellPath = "/bin/zsh" }},
+		{"panel-config-default", func(m *model) { m.mode = modePanelConfig }},
+		{"input-shell", func(m *model) { m.input = inputShellPath; m.inputBuf = "/bin/zsh" }},
 		{"prefix-armed", func(m *model) { m.fleet = panel.Mock()[:3]; m.prefix = true }},
 		{"error", func(m *model) { m.fleet = panel.Mock()[:3]; m.status = "error: boom" }},
 		{"narrow", func(m *model) { m.fleet = panel.Mock(); m.width = 40 }},
@@ -208,6 +211,47 @@ func TestRunActionsWithoutClient(t *testing.T) {
 	}
 }
 
+func TestPanelConfigEditsShell(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := model{fleet: panel.Mock(), prefixKey: "ctrl+t",
+		binds: append([]binding(nil), bindings...), confirmClose: true}
+
+	// prefix+P opens the panel config tab.
+	m = press(m, "ctrl+t", "P")
+	if m.mode != modePanelConfig {
+		t.Fatalf("prefix+P should open panel config, mode=%v", m.mode)
+	}
+
+	// e opens the shell text-input overlay; type a path with a correction.
+	m = press(m, "e")
+	if m.input != inputShellPath {
+		t.Fatal("e should open the shell input overlay")
+	}
+	for _, r := range "/bin/zsX" { // typo the last char...
+		m = press(m, string(r))
+	}
+	m = press(m, "backspace") // ...delete it...
+	m = press(m, "h")         // ...and fix it.
+	m = press(m, "enter")
+
+	if m.input != inputNone {
+		t.Fatal("enter should close the overlay")
+	}
+	if m.shellPath != "/bin/zsh" {
+		t.Fatalf("shellPath = %q, want /bin/zsh", m.shellPath)
+	}
+	if got := loadPrefs().shellPath; got != "/bin/zsh" {
+		t.Fatalf("shell not persisted, got %q", got)
+	}
+
+	// esc cancels an edit without changing the value.
+	m = press(m, "e")
+	m = press(m, "x", "esc")
+	if m.input != inputNone || m.shellPath != "/bin/zsh" {
+		t.Fatalf("esc should cancel, input=%v shell=%q", m.input, m.shellPath)
+	}
+}
+
 // TestModelWithLiveServer drives New, Init, waitEvent, Update(eventMsg) and the
 // client-backed actions against a real server over a socket.
 func TestModelWithLiveServer(t *testing.T) {
@@ -226,7 +270,7 @@ func TestModelWithLiveServer(t *testing.T) {
 	}
 	defer func() { _ = c.Close() }()
 
-	tm := New(c)  // New + loadConfig
+	tm := New(c)  // New + loadPrefs
 	_ = tm.Init() // Init
 	_ = tick()    // tick constructor
 	m := tm.(model)
@@ -243,7 +287,7 @@ func TestModelWithLiveServer(t *testing.T) {
 
 	// Spawn a panel: runAction actNewPanel sends over the live socket.
 	m = press(m, "ctrl+t", "p")
-	if !strings.Contains(m.status, "shell panel") {
+	if !strings.Contains(m.status, "spawning") {
 		t.Fatalf("spawn status = %q", m.status)
 	}
 
