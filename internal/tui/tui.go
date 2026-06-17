@@ -33,7 +33,7 @@ const (
 	colInk     = lipgloss.Color("253") // near-white text
 	colMuted   = lipgloss.Color("245") // dim text
 	colFaint   = lipgloss.Color("239") // hairlines / inactive borders
-	colSurface = lipgloss.Color("236") // panel & status-bar background
+	colSurface = lipgloss.Color("236") // modal / overlay surface (key map, input)
 
 	// Accents and semantics.
 	colBlue  = lipgloss.Color("25")  // deep-blue mode-segment fill
@@ -44,6 +44,8 @@ const (
 
 	colAgent = lipgloss.Color("75") // agent-panel count (blue)
 	colShell = lipgloss.Color("73") // shell-panel count (teal)
+
+	colBar = lipgloss.Color("111") // light-blue status-bar fill (the footer)
 )
 
 var (
@@ -54,7 +56,8 @@ var (
 
 	sectionStyle = lipgloss.NewStyle().Bold(true).Foreground(colBrandHi)
 
-	barStyle = lipgloss.NewStyle().Background(colSurface).Foreground(colInk)
+	barStyle = lipgloss.NewStyle().Background(colBar).Foreground(colDark)
+	barBold  = barStyle.Bold(true)
 )
 
 type mode int
@@ -64,18 +67,23 @@ const (
 	modeKeyMap
 	modePanelConfig
 	modeZoom
+	modeGroupZoom
 )
 
 type model struct {
 	client *client.Client
 	fleet  []panel.Panel // dummy + live panels shown on the dashboard
 
-	mode     mode
-	prefix   bool // armed by the prefix key, consumes the next key as a binding
-	cursor   int  // selection index (panel card, or key-map row)
-	status   string
-	endpoint string // where we are attached: "local", or a host/IP for remote
-	version  string // negotiated protocol version, surfaced in the key map
+	mode   mode
+	prefix bool            // armed by the prefix key, consumes the next key as a binding
+	cursor int             // selection index (dashboard item, or key-map row)
+	marked map[string]bool // panel ids tagged for the next group (multi-select)
+	status string
+
+	lastStatus string // status seen on the previous tick, to detect when it settles
+	statusAge  int    // ticks the status has gone unchanged, for the transient fade
+	endpoint   string // where we are attached: "local", or a host/IP for remote
+	version    string // negotiated protocol version, surfaced in the key map
 
 	confirmClose bool      // ask y/n before closing a panel (toggled in the key map)
 	pendingClose bool      // a close is awaiting y/n confirmation
@@ -94,11 +102,20 @@ type model struct {
 	input     inputPurpose // active text-input overlay, or inputNone
 	inputBuf  string       // text typed into the overlay
 
+	renameID    string // panel id being renamed via inputRename ("" if a group)
+	renameGroup string // group being renamed via inputRename ("" if a panel)
+
 	zoomID     string           // panel being zoomed (modeZoom)
 	zoomTitle  string           // its title, for the zoom footer
 	zoomArmed  bool             // prefix pressed inside a zoom, awaiting the verb
 	zoomExited bool             // the zoomed panel has exited — a read-only result view
 	emu        *vt.SafeEmulator // terminal emulator rendering the zoomed panel
+
+	groupName       string                      // work item being split-viewed (modeGroupZoom)
+	groupFocus      int                         // focused member tile within the split
+	groupCols       int                         // tile columns; 0 = auto-fit to the window
+	groupEmus       map[string]*vt.SafeEmulator // live emulator per member tile
+	zoomGroupOrigin string                      // group to return to from a single zoom, "" if none
 
 	width, height int
 	quitting      bool
@@ -112,6 +129,8 @@ const (
 	inputNone        inputPurpose = iota
 	inputShellPath                // editing the default shell in panel config
 	inputNewPanelCmd              // the prefix+n new-panel command popup
+	inputGroupName                // naming a new group from the marked panels
+	inputRename                   // renaming the selected panel or group
 )
 
 // RestartRequested reports whether the cockpit exited because the user asked to
@@ -163,6 +182,35 @@ func (m model) keyMapRow() (rowKind, int) {
 	}
 }
 
+// keyMapAnchors are the cursor rows that start each section of the key map: the
+// prefix row, the first binding of every purpose group, and the settings row.
+// tab/shift+tab hop between these.
+func (m model) keyMapAnchors() []int {
+	binds := m.keymap()
+	anchors := []int{0} // the prefix row
+	prev := ""
+	for i, b := range binds {
+		if b.cat != prev {
+			anchors = append(anchors, i+1) // binding rows follow the prefix at row 1
+			prev = b.cat
+		}
+	}
+	return append(anchors, len(binds)+1) // the settings row
+}
+
+// jumpSection moves the key-map cursor to the next (dir +1) or previous (dir -1)
+// section anchor, wrapping at the ends.
+func (m *model) jumpSection(dir int) {
+	anchors := m.keyMapAnchors()
+	at := 0
+	for i, a := range anchors {
+		if a <= m.cursor {
+			at = i
+		}
+	}
+	m.cursor = anchors[(at+dir+len(anchors))%len(anchors)]
+}
+
 // effPrefix is the active leader key, defaulting to keyPrefix for a zero-value
 // model (so tests and the first frame still arm on ctrl+t).
 func (m model) effPrefix() string {
@@ -188,10 +236,21 @@ func (m *model) ensureBinds() {
 	}
 }
 
-// lookup resolves a bare key pressed after the prefix to its binding.
+// lookup resolves a key pressed after the prefix to its binding. Bare bindings
+// (the group verbs) are excluded — they fire on their own keystroke, not a chord.
 func (m model) lookup(key string) (binding, bool) {
 	for _, b := range m.keymap() {
-		if b.key == key {
+		if !b.bare && b.key == key {
+			return b, true
+		}
+	}
+	return binding{}, false
+}
+
+// lookupBare resolves a bare keystroke (no prefix) to its group binding.
+func (m model) lookupBare(key string) (binding, bool) {
+	for _, b := range m.keymap() {
+		if b.bare && b.key == key {
 			return b, true
 		}
 	}
@@ -250,6 +309,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.emu.Resize(m.width, m.zoomRows())
 			m.sendf(proto.Command{Action: "panel.resize", ID: m.zoomID, Rows: m.zoomRows(), Cols: m.width})
 		}
+		if m.mode == modeGroupZoom {
+			m.resizeGroupTiles() // reflow the tiles to the new screen, net of the bar
+		}
 		return m, nil
 
 	case eventMsg:
@@ -257,8 +319,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitEvent(m.client.Events)
 
 	case panelOutputMsg:
-		if m.mode == modeZoom && m.emu != nil && proto.ServerMsg(msg).ID == m.zoomID {
-			_, _ = m.emu.Write(proto.ServerMsg(msg).Data)
+		sm := proto.ServerMsg(msg)
+		if m.mode == modeZoom && m.emu != nil && sm.ID == m.zoomID {
+			_, _ = m.emu.Write(sm.Data)
+		}
+		if m.mode == modeGroupZoom {
+			if emu := m.groupEmus[sm.ID]; emu != nil {
+				_, _ = emu.Write(sm.Data) // demux by id into the member's tile
+			}
 		}
 		return m, waitOutput(m.client.Output)
 
@@ -273,11 +341,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		m.now = time.Time(msg)
+		m.ageStatus()
 		return m, tick()
 
 	case tea.KeyMsg:
-		if m.mode == modeZoom {
+		switch m.mode {
+		case modeZoom:
 			return m.handleZoomKey(msg)
+		case modeGroupZoom:
+			return m.handleGroupZoomKey(msg)
 		}
 		return m.handleKey(msg)
 	}
@@ -291,6 +363,39 @@ func (m model) zoomRows() int {
 		return 1
 	}
 	return m.height - 1
+}
+
+// statusTTL is how many idle ticks a transient status survives before the footer
+// settles back to its resting line.
+const statusTTL = 4
+
+// ageStatus lets a one-off status message fade: once the same status has sat
+// unchanged for statusTTL ticks, the footer reverts to its resting line. Errors
+// stay put — they are not noise to clear. No per-call-site setter is needed; it
+// simply watches for the status to stop changing.
+func (m *model) ageStatus() {
+	resting := m.restingStatus()
+	if m.status == resting || strings.HasPrefix(m.status, "error") {
+		return
+	}
+	if m.status != m.lastStatus {
+		m.lastStatus = m.status
+		m.statusAge = 0
+		return
+	}
+	if m.statusAge++; m.statusAge >= statusTTL {
+		m.status = resting
+		m.statusAge = 0
+	}
+}
+
+// restingStatus is the footer's quiet, default line — where the status settles
+// between actions.
+func (m model) restingStatus() string {
+	if m.endpoint != "" {
+		return "attached · " + m.endpoint
+	}
+	return "dashboard"
 }
 
 // sendf sends a command if there is a live client (a no-op in tests).
@@ -394,11 +499,27 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		m.move(m.cols())
 		return m, nil
-	case "left", "h", "shift+tab":
+	case "left", "h":
 		m.move(-1)
 		return m, nil
-	case "right", "l", "tab":
+	case "right", "l":
 		m.move(1)
+		return m, nil
+	case "tab":
+		// In the key map, tab jumps to the next purpose section; elsewhere it
+		// steps the selection forward.
+		if m.mode == modeKeyMap {
+			m.jumpSection(1)
+		} else {
+			m.move(1)
+		}
+		return m, nil
+	case "shift+tab":
+		if m.mode == modeKeyMap {
+			m.jumpSection(-1)
+		} else {
+			m.move(-1)
+		}
 		return m, nil
 
 	case "e":
@@ -427,6 +548,13 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		if m.mode != modeDashboard {
 			return m.runAction(actDashboard)
+		}
+	default:
+		// A bare group verb (g / G / n) fires on the dashboard via its binding.
+		if m.mode == modeDashboard {
+			if b, ok := m.lookupBare(key); ok {
+				return m.runAction(b.act)
+			}
 		}
 	}
 	return m, nil
@@ -478,6 +606,10 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		}
 	case inputNewPanelCmd:
 		return m.spawnPanel(buf), nil
+	case inputGroupName:
+		return m.commitGroup(buf), nil
+	case inputRename:
+		return m.commitRename(buf), nil
 	}
 	return m, nil
 }
@@ -515,11 +647,11 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		m.inputBuf = m.shellPath
 		m.status = "new panel · type the command, enter to spawn"
 	case actClose:
-		if len(m.fleet) == 0 {
+		if it, ok := m.selectedItem(); !ok {
 			m.status = "no panel to close"
 		} else if m.confirmClose {
 			m.pendingClose = true
-			m.status = "close " + m.fleet[m.cursor].Title + "? (y/n)"
+			m.status = "close " + it.title() + "? (y/n)"
 		} else {
 			m.closeSelected()
 		}
@@ -554,6 +686,20 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 	case actDetach:
 		m.quitting = true
 		return m, tea.Quit
+
+	case actMark:
+		if it, ok := m.selectedItem(); ok {
+			m.toggleMark(it)
+			m.status = m.markStatus()
+		}
+	case actGroup:
+		return m.startGroup(), nil
+	case actUngroup:
+		return m.ungroupSelected(), nil
+	case actRename:
+		return m.startRename(), nil
+	case actGroupBack:
+		m.status = "already at the dashboard"
 	}
 	return m, nil
 }
@@ -579,9 +725,12 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 	if m.mode == modePanelConfig {
 		return m.editShellPath(), nil // the only row is the default shell
 	}
-	// Dashboard: zoom into the selected panel.
-	if m.cursor >= 0 && m.cursor < len(m.fleet) {
-		return m.zoomInto(m.fleet[m.cursor]), nil
+	// Dashboard: zoom into the selected panel, or open the group's split.
+	if it, ok := m.selectedItem(); ok {
+		if it.kind == itemGroup {
+			return m.zoomGroup(it), nil
+		}
+		return m.zoomInto(it.panel), nil
 	}
 	return m, nil
 }
@@ -594,6 +743,7 @@ func (m model) zoomInto(p panel.Panel) model {
 	m.zoomID = p.ID
 	m.zoomTitle = p.Title
 	m.zoomArmed = false
+	m.zoomGroupOrigin = "" // a direct zoom; the group path sets this after
 	m.zoomExited = p.State == panel.Exited
 	if m.width > 0 && m.height > 1 {
 		m.emu = vt.NewSafeEmulator(m.width, m.zoomRows())
@@ -618,8 +768,12 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.zoomArmed {
 		m.zoomArmed = false
 		switch key {
-		case m.bindingKey(actDashboard):
+		case m.bindingKey(actDashboard): // prefix+d → dashboard, always
 			return m.zoomDetach()
+		case m.bindingKey(actGroupBack): // prefix+g → back to the split it came from
+			if m.zoomGroupOrigin != "" {
+				return m.backToGroup()
+			}
 		case m.effPrefix():
 			if m.emu != nil {
 				feedKey(m.emu, k) // prefix+prefix sends a literal prefix
@@ -643,7 +797,7 @@ func (m model) zoomDetach() (tea.Model, tea.Cmd) {
 	closeZoom(m.emu) // stops the zoomReader goroutine (Read returns io.EOF)
 	m.mode = modeDashboard
 	m.emu = nil
-	m.zoomID, m.zoomTitle, m.zoomArmed, m.zoomExited = "", "", false, false
+	m.zoomID, m.zoomTitle, m.zoomArmed, m.zoomExited, m.zoomGroupOrigin = "", "", false, false, ""
 	m.status = "dashboard"
 	if m.client != nil {
 		return m, func() tea.Msg { _ = m.client.Send(proto.Command{Action: "panel.list"}); return nil }
@@ -661,23 +815,29 @@ func (m model) bindingKey(a action) string {
 	return ""
 }
 
-// closeSelected asks the server to close the highlighted panel and drops it from
-// the local fleet for immediate feedback; the server's broadcast then re-syncs
-// the authoritative list.
+// closeSelected asks the server to close the highlighted item and drops its
+// panels from the local fleet for immediate feedback; the server's broadcast
+// then re-syncs the authoritative list. Closing a group closes every member.
 func (m *model) closeSelected() {
-	if m.cursor < 0 || m.cursor >= len(m.fleet) {
+	it, ok := m.selectedItem()
+	if !ok {
 		return
 	}
-	p := m.fleet[m.cursor]
-	if m.client != nil {
-		if err := m.client.Send(proto.Command{Action: "panel.close", ID: p.ID}); err != nil {
-			m.status = "close failed: " + err.Error()
-			return
+	ids := it.ids()
+	gone := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if m.client != nil {
+			if err := m.client.Send(proto.Command{Action: "panel.close", ID: id}); err != nil {
+				m.status = "close failed: " + err.Error()
+				return
+			}
 		}
+		gone[id] = true
+		delete(m.marked, id)
 	}
-	m.fleet = slices.Delete(m.fleet, m.cursor, m.cursor+1)
+	m.fleet = slices.DeleteFunc(m.fleet, func(p panel.Panel) bool { return gone[p.ID] })
 	m.clampCursor()
-	m.status = "closed · " + p.Title
+	m.status = "closed · " + it.title()
 }
 
 // move shifts the cursor by delta within the active list, clamped to its bounds.
@@ -702,7 +862,7 @@ func (m model) itemCount() int {
 	case modePanelConfig:
 		return 1 // the default-shell row
 	default:
-		return len(m.fleet)
+		return len(m.dashItems())
 	}
 }
 
@@ -724,14 +884,20 @@ func (m *model) clampCursor() {
 	}
 }
 
-// cols is how many panel cards sit on a row at the current width (1–3). The key
-// map, panel config, and tree view are single-column lists.
+// gridCols is how many cards fit on a row at the given width (1–3).
+func gridCols(width int) int {
+	return min(3, max(1, width/(cardWidth+cardGap)))
+}
+
+// cols is how many panel cards sit on a row in the current view. The key map,
+// panel config, and tree view are single-column lists; the card grid uses
+// gridCols (which the grid renderer calls directly, so it never rebuilds the
+// item list just to count columns).
 func (m model) cols() int {
 	if m.mode != modeDashboard || m.treeView() {
 		return 1
 	}
-	c := m.width / (cardWidth + cardGap)
-	return min(3, max(1, c))
+	return gridCols(m.width)
 }
 
 // --- rendering ---
@@ -748,6 +914,9 @@ func (m model) View() string {
 	}
 	if m.mode == modeZoom {
 		return m.zoomView()
+	}
+	if m.mode == modeGroupZoom {
+		return m.groupZoomView()
 	}
 
 	header := lipgloss.JoinVertical(lipgloss.Center,
@@ -770,7 +939,7 @@ func (m model) View() string {
 
 	content := lipgloss.JoinVertical(lipgloss.Center, header, "", body)
 	// Center the cockpit over the terminal's own (transparent) background; the
-	// panels carry their own surface colour for depth.
+	// panels are transparent too, so only their borders carry the brand colour.
 	placed := lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Center, content)
 	return placed + "\n" + m.footer()
 }
@@ -802,27 +971,26 @@ func (m model) zoomView() string {
 // shows as a card grid; once it grows past treeThreshold it switches to a
 // space-efficient tree + preview split.
 func (m model) dashboardView() string {
+	items := m.dashItems() // built once and threaded through the render below
 	heading := sectionStyle.Render(spaced("FLEET")) + mutedStyle.Render(fmt.Sprintf("   %d panel(s)", len(m.fleet)))
 	summary := m.summaryStrip()
-	body := m.cardGrid()
-	if m.treeView() {
-		body = m.treeAndPreview()
+	body := m.cardGrid(items)
+	if len(items) > treeThreshold {
+		body = m.treeAndPreview(items)
 	}
 	return lipgloss.JoinVertical(lipgloss.Center, heading, "", summary, "", body)
 }
 
-// treeView reports whether the fleet is large enough to swap the card grid for
-// the tree + preview split.
+// treeView reports whether there are enough dashboard items to swap the card
+// grid for the tree + preview split. Groups count as one item, so collapsing a
+// crowd of panels into a work item can drop the dashboard back to the grid.
 func (m model) treeView() bool {
-	return m.mode == modeDashboard && len(m.fleet) > treeThreshold
+	return m.mode == modeDashboard && len(m.dashItems()) > treeThreshold
 }
 
 // summaryStrip is a row of chips counting panels in each state.
 func (m model) summaryStrip() string {
-	counts := map[panel.State]int{}
-	for _, p := range m.fleet {
-		counts[p.State]++
-	}
+	counts := stateCounts(m.fleet)
 	chips := make([]string, 0, len(stateOrder))
 	for _, st := range stateOrder {
 		n := counts[st]
@@ -839,22 +1007,32 @@ func (m model) summaryStrip() string {
 	return strings.Join(chips, mutedStyle.Render("   ·   "))
 }
 
-// cardGrid lays the fleet out as a responsive grid of panel cards.
-func (m model) cardGrid() string {
-	if len(m.fleet) == 0 {
+// cardGrid lays the dashboard out as a responsive grid of cards: a card per lone
+// panel, and one collapsed card per group.
+func (m model) cardGrid(items []dashItem) string {
+	if len(items) == 0 {
 		return ""
 	}
-	cols := m.cols()
-	rows := make([]string, 0, (len(m.fleet)+cols-1)/cols)
-	for i := 0; i < len(m.fleet); i += cols {
-		end := min(i+cols, len(m.fleet))
+	cols := gridCols(m.width) // grid mode here, so always the multi-column count
+	rows := make([]string, 0, (len(items)+cols-1)/cols)
+	for i := 0; i < len(items); i += cols {
+		end := min(i+cols, len(items))
 		cards := make([]string, 0, cols)
 		for j := i; j < end; j++ {
-			cards = append(cards, m.renderCard(m.fleet[j], j == m.cursor))
+			cards = append(cards, m.renderItemCard(items[j], j == m.cursor))
 		}
 		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, cards...))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+}
+
+// renderItemCard draws a dashboard item: a group card for a work item, otherwise
+// a panel card.
+func (m model) renderItemCard(it dashItem, selected bool) string {
+	if it.kind == itemGroup {
+		return m.renderGroupCard(it, selected)
+	}
+	return m.renderCard(it.panel, selected)
 }
 
 const (
@@ -879,9 +1057,13 @@ func (m model) renderCard(p panel.Panel, selected bool) string {
 		titleColor = colBrandHi
 	}
 
+	mark := ""
+	if m.selecting() {
+		mark = markCell(m.marked[p.ID])
+	}
 	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
-	title := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(p.Title, cardInner-2))
-	head := led + " " + title
+	title := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(p.Title, cardInner-4))
+	head := mark + led + " " + title
 
 	badge := kindBadge(p.Kind)
 	state := lipgloss.NewStyle().Foreground(info.color).Render(info.label)
@@ -894,7 +1076,6 @@ func (m model) renderCard(p panel.Panel, selected bool) string {
 		Width(cardWidth-2).
 		Padding(0, 1).
 		MarginRight(cardGap).
-		Background(colSurface).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(border)
 
@@ -912,21 +1093,21 @@ func kindBadge(kind panel.Kind) string {
 }
 
 // treeAndPreview renders the large-fleet layout: a compact, scrolling tree of
-// panel names on the left, and a preview window with the selected panel's
-// metadata and a recent output tail on the right. The two panes share a height
-// so they read as a unit and stay within the dashboard's vertical space.
-func (m model) treeAndPreview() string {
+// items (panels and groups) on the left, and a preview window for the selected
+// item on the right. The two panes share a height so they read as a unit and
+// stay within the dashboard's vertical space.
+func (m model) treeAndPreview(items []dashItem) string {
 	previewW := m.width - treeListWidth - 2 // 1-cell gutter, leave a little air
 	previewW = min(64, max(34, previewW))
 
-	visible := m.treeVisibleRows()
-	start, end := scrollWindow(m.cursor, len(m.fleet), visible)
+	visible := m.treeVisibleRows(len(items))
+	start, end := scrollWindow(m.cursor, len(items), visible)
 
-	tree := m.renderTree(start, end, visible)
-	preview := m.renderPreview(previewW - 4) // inner text width
+	tree := m.renderTree(items, start, end, visible)
+	preview := m.renderPreview(items, previewW-4) // inner text width
 
 	h := max(lipgloss.Height(tree), lipgloss.Height(preview))
-	pane := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Background(colSurface)
+	pane := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
 
 	leftPane := pane.
 		Width(treeListWidth - 2).Height(h).
@@ -940,17 +1121,17 @@ func (m model) treeAndPreview() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, " ", rightPane)
 }
 
-// treeVisibleRows is how many panel rows fit in the tree pane at the current
+// treeVisibleRows is how many item rows fit in the tree pane at the current
 // height, after reserving the banner, headings, summary, footer, and borders. It
-// never claims more rows than there are panels.
-func (m model) treeVisibleRows() int {
+// never claims more rows than there are items (count).
+func (m model) treeVisibleRows(count int) int {
 	const reserved = 18 // banner + headings + summary + footer + pane chrome
 	v := m.height - reserved
 	if v < 3 {
 		v = 3
 	}
-	if v > len(m.fleet) {
-		v = len(m.fleet)
+	if v > count {
+		v = count
 	}
 	return v
 }
@@ -971,21 +1152,19 @@ func scrollWindow(cursor, count, visible int) (int, int) {
 	return start, start + visible
 }
 
-// renderTree is the left pane: the windowed slice [start,end) of the fleet, one
-// line per panel (LED + name), with the selected row lit in the brand colour and
-// a position counter in the header when the list scrolls.
-func (m model) renderTree(start, end, visible int) string {
-	header := sectionStyle.Render(spaced("PANELS"))
-	if visible < len(m.fleet) {
-		header += mutedStyle.Render(fmt.Sprintf("  %d/%d", m.cursor+1, len(m.fleet)))
+// renderTree is the left pane: the windowed slice [start,end) of dashboard items,
+// one line each — a panel (LED + name) or a group (▣ + name + count) — with the
+// selected row lit in the brand colour and a position counter when it scrolls.
+func (m model) renderTree(items []dashItem, start, end, visible int) string {
+	header := sectionStyle.Render(spaced("FLEET"))
+	if visible < len(items) {
+		header += mutedStyle.Render(fmt.Sprintf("  %d/%d", m.cursor+1, len(items)))
 	}
 
 	rows := make([]string, 0, visible+2)
 	rows = append(rows, header, "")
 	for i := start; i < end; i++ {
-		p := m.fleet[i]
-		info := states[p.State]
-		led := lipgloss.NewStyle().Foreground(info.color).Render(info.led)
+		it := items[i]
 		selected := i == m.cursor
 		caret := "  "
 		if selected {
@@ -994,28 +1173,49 @@ func (m model) renderTree(start, end, visible int) string {
 		// Mark the clipped edges so it is clear the list continues.
 		if i == start && start > 0 {
 			caret = mutedStyle.Render("↑ ")
-		} else if i == end-1 && end < len(m.fleet) {
+		} else if i == end-1 && end < len(items) {
 			caret = mutedStyle.Render("↓ ")
 		}
-		name := truncate(p.Title, treeListWidth-9)
+
+		mark := ""
+		if m.selecting() {
+			mark = markCell(m.itemMarked(it))
+		}
+
+		var glyph, label string
+		if it.kind == itemGroup {
+			info := states[groupState(it.members)]
+			glyph = lipgloss.NewStyle().Foreground(info.color).Render("▣")
+			label = fmt.Sprintf("%s (%d)", it.title(), len(it.members))
+		} else {
+			info := states[it.panel.State]
+			glyph = lipgloss.NewStyle().Foreground(info.color).Render(info.led)
+			label = it.title()
+		}
+		name := truncate(label, treeListWidth-9-lipgloss.Width(mark))
+
 		row := lipgloss.NewStyle().Width(treeListWidth - 4)
 		if selected {
 			row = row.Foreground(colDark).Background(colBrand).Bold(true)
 		} else {
 			row = row.Foreground(colInk)
 		}
-		rows = append(rows, row.Render(caret+led+" "+name))
+		rows = append(rows, row.Render(caret+mark+glyph+" "+name))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
-// renderPreview is the right pane: the selected panel's title, kind/state, a
-// small metadata block, and a faux tail of recent output.
-func (m model) renderPreview(width int) string {
-	if m.cursor < 0 || m.cursor >= len(m.fleet) {
+// renderPreview is the right pane: a metadata block plus an output tail for the
+// selected panel, or a member roster for the selected group.
+func (m model) renderPreview(items []dashItem, width int) string {
+	if m.cursor < 0 || m.cursor >= len(items) {
 		return mutedStyle.Render("no panel selected")
 	}
-	p := m.fleet[m.cursor]
+	it := items[m.cursor]
+	if it.kind == itemGroup {
+		return m.renderGroupPreview(it, width)
+	}
+	p := it.panel
 	info := states[p.State]
 
 	title := lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(truncate(p.Title, width))
@@ -1101,13 +1301,31 @@ func (m model) keyMapView() string {
 	}
 	rows = append(rows, fmt.Sprintf("%s%s   %s", caret(prefSel), prefKeys, desc(prefSel, "prefix · leader key")))
 
-	// Rows 1..N: the bindings.
+	// Rows 1..N: the bindings, under a sub-header per purpose group. Prefixed
+	// commands show as a [C-t][key] chord; the bare group verbs show as a single
+	// keycap.
+	subhead := lipgloss.NewStyle().Foreground(colFaint).Bold(true)
+	prevCat := ""
 	for i, b := range binds {
+		if b.cat != prevCat {
+			rows = append(rows, "", "  "+subhead.Render(b.cat))
+			prevCat = b.cat
+		}
 		selected := i+1 == m.cursor
-		// Show the live capture prompt on the row being rebound.
-		keys := chord(prefLbl, b.key, selected)
-		if m.editing && m.editIdx == i {
+		var keys string
+		switch {
+		case m.editing && m.editIdx == i && b.bare:
+			keys = keycapHotStyle.Render("…type a key")
+		case m.editing && m.editIdx == i:
 			keys = keycapHotStyle.Render(prefLbl) + " " + keycapHotStyle.Render("…type a key")
+		case b.bare:
+			cap := keycapStyle
+			if selected {
+				cap = keycapHotStyle
+			}
+			keys = cap.Render(keyLabel(b.key))
+		default:
+			keys = chord(prefLbl, b.key, selected)
 		}
 		rows = append(rows, fmt.Sprintf("%s%s   %s", caret(selected), keys, desc(selected, b.desc)))
 	}
@@ -1131,6 +1349,7 @@ func (m model) keyMapView() string {
 	// negotiated protocol version, tucked here rather than the status bar.
 	legendKey := lipgloss.NewStyle().Foreground(colCyan).Bold(true)
 	legend := mutedStyle.Render("↑↓ move") + "   " +
+		legendKey.Render("tab") + mutedStyle.Render(" section") + "   " +
 		legendKey.Render("e") + mutedStyle.Render(" edit") + "   " +
 		legendKey.Render("enter") + mutedStyle.Render(" run") + "   " +
 		legendKey.Render("esc") + mutedStyle.Render(" back")
@@ -1187,6 +1406,10 @@ func (m model) inputView() string {
 		title, prompt = "DEFAULT SHELL", "shell path  (blank = system default)"
 	case inputNewPanelCmd:
 		title, prompt, action = "NEW PANEL", "command to run  (blank = system shell)", "spawn"
+	case inputGroupName:
+		title, prompt, action = "NEW GROUP", "work-item name", "create"
+	case inputRename:
+		title, prompt, action = "RENAME", "new name", "save"
 	}
 
 	field := lipgloss.NewStyle().Width(46).Foreground(colInk).Background(colSurface).Render("› " + m.inputBuf + "▌")
@@ -1222,11 +1445,43 @@ func seg(text string, fg, bg lipgloss.Color) string {
 	return lipgloss.NewStyle().Foreground(fg).Background(bg).Bold(true).Padding(0, 1).Render(text)
 }
 
-// footer renders the cockpit telemetry strip: a magenta brand cap, a blue mode
-// segment, an amber attention counter (only when agents need you), the live
-// fleet breakdown (agents vs shells) in the middle, and a clock plus a green
-// connection segment on the right that flips to red on error. The key hints
-// live in the C-t k key map, not here, so the strip stays a status readout.
+// segWidth sums the rendered widths of bar segments.
+func segWidth(segs ...string) int {
+	w := 0
+	for _, s := range segs {
+		w += lipgloss.Width(s)
+	}
+	return w
+}
+
+// firstFit returns the first cap set (richest first) that fits beside left
+// within width, joined in order; if none fit, the leanest (last) set. It is the
+// group footer's "drop optional hints until the bar fits" logic.
+func firstFit(width int, left string, sets [][]string) string {
+	lw := lipgloss.Width(left)
+	for _, set := range sets {
+		if lw+segWidth(set...) <= width {
+			return strings.Join(set, "")
+		}
+	}
+	return strings.Join(sets[len(sets)-1], "")
+}
+
+// fillBar joins a left and right strip into a full-width status bar, filling the
+// middle with the surface colour so the whole row reads as one solid strip.
+func fillBar(width int, left, right string) string {
+	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 0 {
+		gap = 0
+	}
+	return left + barStyle.Render(strings.Repeat(" ", gap)) + right
+}
+
+// footer renders the cockpit telemetry strip as one solid light-blue bar: a
+// brand cap and a mode segment on the left, the live fleet breakdown (agents vs
+// shells) filling the middle, and the host stats, a clock, and a green/red
+// status cap on the right. The key hints live in the C-t k key map, not here, so
+// the strip stays a status readout.
 func (m model) footer() string {
 	// Left caps: brand · mode · (attention).
 	mode := "DASHBOARD"
@@ -1243,14 +1498,28 @@ func (m model) footer() string {
 		left += seg(fmt.Sprintf("◆ %d", n), colDark, states[panel.Attention].color)
 	}
 
-	// Right caps: system stats · optional PREFIX badge · clock · connection status.
+	// Right caps: optional PREFIX badge · system stats · clock · status. The
+	// status is a full colour cap (green, red on error) so the strip stays vivid
+	// edge to edge; it is clipped to whatever space is left so it can never spill
+	// onto a second line and swallow the footer.
+	prefixBadge := ""
+	if m.prefix {
+		prefixBadge = seg("PREFIX", colDark, colBrandHi)
+	}
+	clock := seg("⏱ "+m.now.Format("15:04:05"), colDark, colCyan)
+	stats := m.statsStrip()
+
 	statusBg := colGreen
 	if strings.HasPrefix(m.status, "error") {
 		statusBg = colRed
 	}
-	right := m.statsStrip() + seg("⏱ "+m.now.Format("15:04:05"), colDark, colCyan) + seg("● "+m.status, colInk, statusBg)
-	if m.prefix {
-		right = seg("PREFIX", colDark, colBrandHi) + right
+	// The stats and the clock always stay; only the status flexes, clipped to
+	// whatever space is left (and dropped entirely when there is none) so the
+	// strip never spills onto a second line.
+	caps := prefixBadge + stats + clock
+	right := caps
+	if budget := m.width - lipgloss.Width(left) - lipgloss.Width(caps) - 4; budget > 0 {
+		right += seg("● "+truncate(m.status, budget), colInk, statusBg) // "● " + cap padding
 	}
 
 	// Middle: the agents-vs-shells fleet breakdown, filling the leftover space.
@@ -1268,10 +1537,8 @@ func (m model) statsStrip() string {
 	if m.memTotal == 0 {
 		return ""
 	}
-	lab := lipgloss.NewStyle().Background(colSurface).Foreground(colMuted)
-	val := lipgloss.NewStyle().Background(colSurface).Foreground(colCyan).Bold(true)
-	body := lab.Render(" CPU ") + val.Render(fmt.Sprintf("%.0f%%", m.cpuPct)) +
-		lab.Render("  MEM ") + val.Render(memLabel(m.memUsed, m.memTotal)) + lab.Render(" ")
+	body := barStyle.Render(" CPU ") + barBold.Render(fmt.Sprintf("%.0f%%", m.cpuPct)) +
+		barStyle.Render("  MEM ") + barBold.Render(memLabel(m.memUsed, m.memTotal)) + barStyle.Render(" ")
 	return barStyle.Render(body)
 }
 
@@ -1300,12 +1567,12 @@ func (m model) renderCounts(width int) string {
 	}
 
 	chip := func(n int, label string, c lipgloss.Color) string {
-		dot := lipgloss.NewStyle().Background(colSurface).Foreground(c).Render("●")
-		num := lipgloss.NewStyle().Background(colSurface).Foreground(c).Bold(true).Render(fmt.Sprintf(" %d ", n))
-		lab := lipgloss.NewStyle().Background(colSurface).Foreground(colMuted).Render(label)
+		dot := barBold.Foreground(c).Render("●")
+		num := barBold.Render(fmt.Sprintf(" %d ", n))
+		lab := barStyle.Render(label)
 		return dot + num + lab
 	}
-	sep := lipgloss.NewStyle().Background(colSurface).Foreground(colFaint).Render("   ·   ")
+	sep := barStyle.Render("   ·   ")
 	body := " " + chip(agents, "agents", colAgent) + sep + chip(shells, "shells", colShell)
 
 	if lipgloss.Width(body) > width {

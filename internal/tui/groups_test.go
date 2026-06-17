@@ -1,0 +1,365 @@
+package tui
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/cmj0121/baton/internal/panel"
+)
+
+// groupedFleet is a small fleet with two work items and two lone panels, in a
+// deliberately interleaved order to exercise the fold.
+func groupedFleet() []panel.Panel {
+	return []panel.Panel{
+		{ID: "1", Kind: panel.Agent, Title: "api · a", State: panel.Running, Group: "api"},
+		{ID: "2", Kind: panel.Shell, Title: "lone shell", State: panel.Idle},
+		{ID: "3", Kind: panel.Agent, Title: "api · b", State: panel.Attention, Group: "api"},
+		{ID: "4", Kind: panel.Agent, Title: "db · a", State: panel.Exited, Group: "db"},
+		{ID: "5", Kind: panel.Shell, Title: "lone two", State: panel.Running},
+		{ID: "6", Kind: panel.Agent, Title: "api · c", State: panel.Idle, Group: "api"},
+	}
+}
+
+func TestDashItemsCollapsesGroups(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+	items := m.dashItems()
+
+	// Expected order: api group (at panel 1), lone shell, db group, lone two.
+	if len(items) != 4 {
+		t.Fatalf("expected 4 items, got %d: %+v", len(items), items)
+	}
+	if items[0].kind != itemGroup || items[0].name != "api" || len(items[0].members) != 3 {
+		t.Fatalf("item 0 should be the 3-member api group, got %+v", items[0])
+	}
+	if items[1].kind != itemPanel || items[1].panel.ID != "2" {
+		t.Fatalf("item 1 should be lone shell #2, got %+v", items[1])
+	}
+	if items[2].kind != itemGroup || items[2].name != "db" {
+		t.Fatalf("item 2 should be the db group, got %+v", items[2])
+	}
+	if items[3].kind != itemPanel || items[3].panel.ID != "5" {
+		t.Fatalf("item 3 should be lone two #5, got %+v", items[3])
+	}
+
+	// itemCount and treeView track the folded count, not the panel count.
+	if got := m.itemCount(); got != 4 {
+		t.Fatalf("itemCount should be 4 items, got %d", got)
+	}
+}
+
+func TestGroupStateRollup(t *testing.T) {
+	// The most urgent member wins: api has an Attention member.
+	members := []panel.Panel{{State: panel.Idle}, {State: panel.Attention}, {State: panel.Running}}
+	if got := groupState(members); got != panel.Attention {
+		t.Fatalf("rollup should be attention, got %v", got)
+	}
+	// All exited rolls up to exited.
+	if got := groupState([]panel.Panel{{State: panel.Exited}, {State: panel.Exited}}); got != panel.Exited {
+		t.Fatalf("rollup should be exited, got %v", got)
+	}
+}
+
+func TestToggleMarkGroupMarksAllMembers(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+	items := m.dashItems()
+
+	// Marking the api group marks all three of its members.
+	m.toggleMark(items[0])
+	if !m.itemMarked(items[0]) {
+		t.Fatal("api group should read as marked after toggle")
+	}
+	if !m.selecting() {
+		t.Fatal("selecting() should be true once something is marked")
+	}
+	if ids := m.markedIDs(); strings.Join(ids, ",") != "1,3,6" {
+		t.Fatalf("markedIDs should be the api members in fleet order, got %v", ids)
+	}
+
+	// Toggling again clears them.
+	m.toggleMark(items[0])
+	if m.itemMarked(items[0]) || m.selecting() {
+		t.Fatal("toggling the group again should clear all marks")
+	}
+
+	// A lone panel marks just itself.
+	m.toggleMark(items[1])
+	if ids := m.markedIDs(); strings.Join(ids, ",") != "2" {
+		t.Fatalf("marking the lone panel should mark only #2, got %v", ids)
+	}
+}
+
+func TestSelectedItemBounds(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+	m.cursor = 0
+	if it, ok := m.selectedItem(); !ok || it.kind != itemGroup {
+		t.Fatalf("cursor 0 should select the api group, got %+v ok=%v", it, ok)
+	}
+	m.cursor = 99
+	if _, ok := m.selectedItem(); ok {
+		t.Fatal("an out-of-range cursor should not resolve to an item")
+	}
+}
+
+func TestCloseGroupClosesAllMembers(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+	m.cursor = 0 // the api group
+	m.toggleMark(m.dashItems()[0])
+
+	m.closeSelected() // no client: mutates the local fleet directly
+
+	for _, p := range m.fleet {
+		if p.Group == "api" {
+			t.Fatalf("api member %s should be gone after closing the group", p.ID)
+		}
+	}
+	if len(m.fleet) != 3 {
+		t.Fatalf("3 panels should remain, got %d", len(m.fleet))
+	}
+	if m.selecting() {
+		t.Fatal("closing the group should clear its marks")
+	}
+}
+
+func TestGroupViewsRender(t *testing.T) {
+	// Grid, tree, and preview all render with groups present and a selection in
+	// progress, covering the group card / row / preview paths.
+	for _, tc := range []struct {
+		name string
+		mut  func(*model)
+	}{
+		{"group-grid", func(m *model) { m.fleet = groupedFleet() }},
+		{"group-grid-selecting", func(m *model) { m.fleet = groupedFleet(); m.toggleMark(m.dashItems()[0]) }},
+		{"group-tree", func(m *model) { m.fleet = append(groupedFleet(), panel.Mock()...); m.height = 40 }},
+		{"group-tree-selecting", func(m *model) {
+			m.fleet = append(groupedFleet(), panel.Mock()...)
+			m.height = 40
+			m.toggleMark(m.dashItems()[0])
+		}},
+		{"group-preview", func(m *model) { m.fleet = append(groupedFleet(), panel.Mock()...); m.height = 40; m.cursor = 0 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := baseModel()
+			tc.mut(&m)
+			if m.View() == "" {
+				t.Fatal("expected a non-empty render")
+			}
+		})
+	}
+}
+
+func TestZoomGroupSetsStatus(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+	m = m.zoomGroup(m.dashItems()[0])
+	if !strings.Contains(m.status, "api") {
+		t.Fatalf("zoomGroup should name the group in the status, got %q", m.status)
+	}
+}
+
+func TestMarkAndGroupFlow(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+
+	// g marks the selected lone panel (#2 at item index 1).
+	m.cursor = 1
+	m = press(m, keyMark)
+	if !m.marked["2"] {
+		t.Fatal("g should mark the selected panel")
+	}
+	// Mark the other lone panel (#5 at item index 3) too.
+	m.cursor = 3
+	m = press(m, keyMark)
+	if !m.marked["5"] {
+		t.Fatal("g should mark the second lone panel")
+	}
+
+	// C-g opens the name overlay; typing a name and submitting groups them.
+	m = press(m, keyGroup)
+	if m.input != inputGroupName {
+		t.Fatalf("ctrl+g should open the group-name overlay, got %v", m.input)
+	}
+	m = press(m, "o", "p", "s")
+	m = press(m, "enter")
+	if m.input != inputNone {
+		t.Fatal("overlay should close after submit")
+	}
+	if len(m.marked) != 0 {
+		t.Fatalf("marks should clear after grouping, got %v", m.marked)
+	}
+	if !strings.Contains(m.status, "ops") {
+		t.Fatalf("status should mention the new group, got %q", m.status)
+	}
+}
+
+func TestMarkTogglesOff(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+	m.cursor = 1
+	m = press(m, keyMark)
+	m = press(m, keyMark) // toggle the same item off
+	if m.selecting() {
+		t.Fatal("toggling the mark off should end the selection")
+	}
+	if !strings.Contains(m.status, "cleared") {
+		t.Fatalf("status should note the cleared selection, got %q", m.status)
+	}
+}
+
+func TestGroupWithoutSelectionHints(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+	m = press(m, keyGroup)
+	if m.input != inputNone {
+		t.Fatal("ctrl+g with nothing marked should not open an overlay")
+	}
+	if !strings.Contains(m.status, "select") {
+		t.Fatalf("expected a hint to select first, got %q", m.status)
+	}
+}
+
+func TestRenamePanelAndGroup(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+
+	// n on a group (item 0 = api) opens rename with the group remembered, seeded.
+	m.cursor = 0
+	m = press(m, keyRename)
+	if m.input != inputRename || m.renameGroup != "api" || m.inputBuf != "api" {
+		t.Fatalf("n on a group should seed a group rename, got input=%v group=%q buf=%q", m.input, m.renameGroup, m.inputBuf)
+	}
+	m = press(m, "enter")
+	if m.input != inputNone || !strings.Contains(m.status, "group") {
+		t.Fatalf("group rename should commit, got input=%v status=%q", m.input, m.status)
+	}
+
+	// n on a lone panel (item 1 = #2) remembers the panel id instead.
+	m.cursor = 1
+	m = press(m, keyRename)
+	if m.renameID != "2" || m.renameGroup != "" {
+		t.Fatalf("n on a panel should rename the panel, got id=%q group=%q", m.renameID, m.renameGroup)
+	}
+}
+
+func TestGroupAndRenameGuards(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+
+	if got := m.commitGroup(""); !strings.Contains(got.status, "name") {
+		t.Fatalf("empty group name should be rejected, got %q", got.status)
+	}
+	if got := m.commitGroup("x"); !strings.Contains(got.status, "no panels") {
+		t.Fatalf("grouping with no marks should be rejected, got %q", got.status)
+	}
+	if got := m.commitRename(""); !strings.Contains(got.status, "empty") {
+		t.Fatalf("empty rename should be rejected, got %q", got.status)
+	}
+	if got := m.commitRename("x"); !strings.Contains(got.status, "nothing") {
+		t.Fatalf("rename with no target should be rejected, got %q", got.status)
+	}
+	empty := baseModel()
+	if got := empty.startRename(); !strings.Contains(got.status, "nothing") {
+		t.Fatalf("rename with no item should hint, got %q", got.status)
+	}
+}
+
+func TestGroupOverlaysRender(t *testing.T) {
+	for _, in := range []inputPurpose{inputGroupName, inputRename} {
+		m := baseModel()
+		m.fleet = groupedFleet()
+		m.input = in
+		m.inputBuf = "x"
+		if m.View() == "" {
+			t.Fatalf("overlay %v should render", in)
+		}
+	}
+}
+
+func TestKeyMapIncludesGroupVerbs(t *testing.T) {
+	// The group verbs are editable bindings, so they show in the key map and
+	// persist like any other. The dashboard verbs are single keys (bare); the
+	// group-back is a prefixed shortcut (BIND-g).
+	wantBare := map[string]bool{"mark": true, "group": true, "rename": true}
+	wantPrefixed := map[string]bool{"group-back": true}
+	for _, b := range bindings {
+		switch {
+		case wantBare[b.name]:
+			if !b.bare {
+				t.Fatalf("dashboard verb %q should be a single (bare) key", b.name)
+			}
+			delete(wantBare, b.name)
+		case wantPrefixed[b.name]:
+			if b.bare {
+				t.Fatalf("%q should be a prefixed shortcut, not bare", b.name)
+			}
+			delete(wantPrefixed, b.name)
+		}
+	}
+	if len(wantBare) != 0 || len(wantPrefixed) != 0 {
+		t.Fatalf("key map is missing group bindings: bare=%v prefixed=%v", wantBare, wantPrefixed)
+	}
+}
+
+func TestKeyMapRebindsGroupKey(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // rebinding persists to $HOME/.baton/config
+
+	m := model{mode: modeKeyMap, fleet: groupedFleet(), binds: append([]binding(nil), bindings...)}
+	gi := -1
+	for i, b := range m.keymap() {
+		if b.name == "group" {
+			gi = i
+			break
+		}
+	}
+	if gi < 0 {
+		t.Fatal("group binding missing from the key map")
+	}
+
+	// Edit the group row (row 0 is the prefix; bindings start at row 1) and rebind
+	// it to 'z' by typing.
+	m.cursor = gi + 1
+	m = press(m, "e")
+	if !m.editing {
+		t.Fatal("e should start capturing a new key")
+	}
+	m = press(m, "z")
+	if m.binds[gi].key != "z" {
+		t.Fatalf("group should rebind to z, got %q", m.binds[gi].key)
+	}
+
+	// The rebound bare key now triggers grouping on the dashboard.
+	m.mode = modeDashboard
+	m.cursor = 1
+	m = press(m, "g") // mark a panel (mark key unchanged)
+	m = press(m, "z") // the rebound group key
+	if m.input != inputGroupName {
+		t.Fatalf("the rebound group key should open the group overlay, got %v", m.input)
+	}
+
+	// The old default key no longer groups.
+	if _, ok := m.lookupBare("G"); ok {
+		t.Fatal("the old group key G should no longer be bound")
+	}
+}
+
+func TestUngroupSelected(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+
+	// u on a group dissolves it (status notes the group it ungrouped).
+	m.cursor = 0 // the api group
+	m = press(m, keyUngroup)
+	if !strings.Contains(m.status, "api") {
+		t.Fatalf("ungroup should name the dissolved group, got %q", m.status)
+	}
+
+	// u on a lone panel is a no-op with a hint.
+	m.cursor = 1 // lone shell #2
+	m = press(m, keyUngroup)
+	if !strings.Contains(m.status, "select a group") {
+		t.Fatalf("ungroup on a panel should hint, got %q", m.status)
+	}
+}

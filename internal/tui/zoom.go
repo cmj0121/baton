@@ -6,7 +6,6 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	vt "github.com/charmbracelet/x/vt"
 
 	"github.com/cmj0121/baton/internal/client"
@@ -25,17 +24,11 @@ func zoomFooter(width int, title, prefixLabel, dashLabel string, exited bool) st
 		state = seg("◼ EXITED", colDark, colMuted)
 		hintText = " back · read-only "
 	}
-	name := barStyle.Foreground(colBrandHi).Bold(true).Render(" " + title + " ")
+	name := barBold.Render(" " + title + " ")
 
-	keyStyle := lipgloss.NewStyle().Background(colSurface).Foreground(colCyan).Bold(true)
-	mut := lipgloss.NewStyle().Background(colSurface).Foreground(colMuted)
-	hint := keyStyle.Render(" "+prefixLabel+" "+dashLabel) + mut.Render(hintText)
+	hint := barBold.Render(" "+prefixLabel+" "+dashLabel) + barStyle.Render(hintText)
 
-	gap := width - lipgloss.Width(brand+state+name) - lipgloss.Width(hint)
-	if gap < 0 {
-		gap = 0
-	}
-	return brand + state + name + barStyle.Render(strings.Repeat(" ", gap)) + hint
+	return fillBar(width, brand+state+name, hint)
 }
 
 // overlayCursor inserts a reverse-video cell at visible column col of an

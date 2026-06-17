@@ -27,6 +27,16 @@ var states = map[panel.State]stateInfo{
 // stateOrder is the display order for the summary strip's chips.
 var stateOrder = []panel.State{panel.Attention, panel.Running, panel.Idle, panel.Spawning, panel.Exited}
 
+// stateCounts tallies panels by lifecycle state, the shared input to the fleet
+// summary strip and a group's per-state chips.
+func stateCounts(panels []panel.Panel) map[panel.State]int {
+	counts := make(map[panel.State]int, len(stateOrder))
+	for _, p := range panels {
+		counts[p.State]++
+	}
+	return counts
+}
+
 // mergeFleet maps a server snapshot into the dashboard's panel model. The server
 // owns the fleet now, so this is a faithful translation — whatever it sends is
 // what the cockpit shows.

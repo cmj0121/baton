@@ -283,3 +283,44 @@ func TestTreeViewKicksInForLargeFleet(t *testing.T) {
 		t.Fatalf("fleet of %d should use the card grid", len(small.fleet))
 	}
 }
+
+func TestKeyMapShowsPurposeSections(t *testing.T) {
+	m := model{mode: modeKeyMap, width: 120, height: 40, binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+	v := m.View()
+	for _, sec := range []string{"Panels", "View", "Work items", "Session"} {
+		if !strings.Contains(v, sec) {
+			t.Fatalf("key map should show the %q purpose section", sec)
+		}
+	}
+}
+
+func TestKeyMapTabJumpsSections(t *testing.T) {
+	m := model{mode: modeKeyMap, binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+	anchors := m.keyMapAnchors()
+	if anchors[0] != 0 {
+		t.Fatalf("first anchor should be the prefix row, got %d", anchors[0])
+	}
+	if last := anchors[len(anchors)-1]; last != len(m.keymap())+1 {
+		t.Fatalf("last anchor should be the settings row, got %d", last)
+	}
+
+	// tab steps forward through the section anchors; shift+tab back; both wrap.
+	m.cursor = 0
+	m = press(m, "tab")
+	if m.cursor != anchors[1] {
+		t.Fatalf("tab from the prefix should land on the first section, got %d want %d", m.cursor, anchors[1])
+	}
+	m = press(m, "tab")
+	if m.cursor != anchors[2] {
+		t.Fatalf("tab should advance to the next section, got %d want %d", m.cursor, anchors[2])
+	}
+	m = press(m, "shift+tab")
+	if m.cursor != anchors[1] {
+		t.Fatalf("shift+tab should go back a section, got %d want %d", m.cursor, anchors[1])
+	}
+	m.cursor = anchors[len(anchors)-1]
+	m = press(m, "tab")
+	if m.cursor != anchors[0] {
+		t.Fatalf("tab should wrap from the last section to the prefix, got %d", m.cursor)
+	}
+}

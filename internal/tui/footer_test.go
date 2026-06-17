@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 )
 
@@ -56,5 +59,87 @@ func TestStatsEventPopulatesFooter(t *testing.T) {
 	}
 	if got := m.footer(); !strings.Contains(got, "42%") || !strings.Contains(got, "4.0/8G") {
 		t.Fatalf("footer should show the backend stats, got %q", got)
+	}
+}
+
+func TestFooterClipsLongStatus(t *testing.T) {
+	// A long status must not overflow onto a second line and swallow the bar:
+	// the footer stays exactly one row, the full terminal width.
+	m := model{width: 80, endpoint: "local"}
+	m.status = strings.Repeat("grouped a very long work item name ", 5)
+	foot := m.footer()
+	if strings.Contains(foot, "\n") {
+		t.Fatalf("footer should be a single line, got %d lines", strings.Count(foot, "\n")+1)
+	}
+	if w := lipgloss.Width(foot); w != 80 {
+		t.Fatalf("footer should fill the width exactly, got %d want 80", w)
+	}
+}
+
+func TestStatusFadesAfterIdle(t *testing.T) {
+	m := model{endpoint: "local"}
+	m.status = "grouped 2 panel(s)"
+
+	// It survives a few ticks, then settles back to the resting line.
+	for i := 0; i < statusTTL+1; i++ {
+		m.ageStatus()
+	}
+	if m.status != m.restingStatus() {
+		t.Fatalf("status should fade to the resting line, got %q", m.status)
+	}
+
+	// Errors are sticky — they do not fade.
+	m.status = "error: boom"
+	for i := 0; i < statusTTL+2; i++ {
+		m.ageStatus()
+	}
+	if m.status != "error: boom" {
+		t.Fatalf("an error status should persist, got %q", m.status)
+	}
+}
+
+// TestFooterFillsWidth pins the invariant the user cares about: the footer is a
+// single, full-width coloured strip in every state and at every width — never
+// short (leaving an uncoloured tail) and never wrapped onto a second line.
+func TestFooterFillsWidth(t *testing.T) {
+	states := []struct {
+		name string
+		mut  func(*model)
+	}{
+		{"plain", func(m *model) {}},
+		{"with-stats", func(m *model) { m.cpuPct = 18; m.memUsed = 9 << 30; m.memTotal = 16 << 30 }},
+		{"prefix-armed", func(m *model) { m.prefix = true }},
+		{"attention", func(m *model) { m.fleet = []panel.Panel{{State: panel.Attention}} }},
+		{"error", func(m *model) { m.status = "error: boom" }},
+		{"long-status", func(m *model) { m.status = strings.Repeat("grouped a long work item ", 6) }},
+	}
+	// The stats and clock are always shown, so the footer needs a realistic
+	// terminal width to fit them — widths below ~60 are not a supported size.
+	for _, w := range []int{60, 80, 120, 200} {
+		for _, st := range states {
+			m := model{width: w, height: 30, endpoint: "local", status: "dashboard"}
+			st.mut(&m)
+			foot := m.footer()
+			if strings.Contains(foot, "\n") {
+				t.Fatalf("%s @ w=%d: footer wrapped to %d lines", st.name, w, strings.Count(foot, "\n")+1)
+			}
+			if got := lipgloss.Width(foot); got != w {
+				t.Fatalf("%s @ w=%d: footer width = %d, want %d (uncoloured tail)", st.name, w, got, w)
+			}
+		}
+	}
+}
+
+// TestGroupZoomFooterFillsWidth holds the same invariant for the group split bar.
+func TestGroupZoomFooterFillsWidth(t *testing.T) {
+	for _, w := range []int{60, 80, 120, 200} {
+		m := model{width: w, height: 30, groupName: "api", binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+		foot := m.groupZoomFooter()
+		if strings.Contains(foot, "\n") {
+			t.Fatalf("group footer @ w=%d wrapped to %d lines", w, strings.Count(foot, "\n")+1)
+		}
+		if got := lipgloss.Width(foot); got != w {
+			t.Fatalf("group footer @ w=%d width = %d, want %d", w, got, w)
+		}
 	}
 }

@@ -32,6 +32,20 @@ const (
 	keyDetach      = "q"
 
 	keyCtrlC = "ctrl+c" // bare emergency quit
+
+	// Single dashboard keys for grouping — direct, not behind the prefix, so a
+	// work item is one keystroke away. Surfaced in the key map for discoverability.
+	keyMark    = "g" // mark / unmark the selected item
+	keyGroup   = "G" // group the marked panels (shift+g)
+	keyUngroup = "u" // dissolve the selected work item
+	keyRename  = "n" // rename the selected panel or group
+
+	// keyGroupBack steps back out of a group view. It is a prefixed shortcut
+	// (BIND-g), so it works safely inside a live zoom where a bare letter would be
+	// stolen by the program. It deliberately shares the "g" key with keyMark:
+	// they never collide because bare keys only resolve on the dashboard and
+	// prefixed ones only after the prefix in the zoom/group handlers.
+	keyGroupBack = "g"
 )
 
 // keyLabel renders a key string as a compact label: ctrl+x → C-x, alt+x → M-x,
@@ -61,30 +75,50 @@ const (
 	actPanelConfig
 	actRestart
 	actDetach
+
+	// Group verbs, triggered by bare keys on the dashboard (and, for back, inside
+	// a group/zoom view) rather than after the prefix.
+	actMark
+	actGroup
+	actUngroup
+	actRename
+	actGroupBack
 )
 
-// binding is one prefixed command: a stable name (used to persist the chord),
-// the bare key pressed after the prefix, the human description, and the action
-// it triggers.
+// binding is one editable command: a stable name (used to persist the key), the
+// trigger key, the human description, the action it runs, and the purpose section
+// it belongs to in the key map. Most fire after the prefix; bare bindings (the
+// dashboard group verbs) fire on their own keystroke.
 type binding struct {
 	name string // stable id for the config file, e.g. "new-panel"
-	key  string // bare key after the prefix, e.g. "p"
+	key  string // the key — pressed after the prefix, or bare when bare is set
 	desc string
 	act  action
+	bare bool   // triggered directly, not behind the prefix
+	cat  string // purpose section header in the key map
 }
 
-// bindings lists the prefixed commands in display order. This is the single
-// source of truth for the footer hint, the in-view key map, and the config keys.
+// bindings lists every editable command grouped by purpose — the order the key
+// map shows them, and tab jumps between these groups. This is the single source
+// of truth for the in-view key map and the config keys.
 var bindings = []binding{
-	{"new-panel", keyNewPanel, "spawn a new shell panel", actNewPanel},
-	{"new-panel-form", keyNewForm, "new panel (choose the command)", actNewForm},
-	{"close", keyClose, "close the selected panel", actClose},
-	{"purge-exited", keyPurge, "purge all exited panels", actPurge},
-	{"dashboard", keyDashboard, "jump back to the dashboard", actDashboard},
-	{"key-map", keyShowMap, "toggle this key map", actToggleMap},
-	{"panel-config", keyPanelConfig, "configure panel defaults", actPanelConfig},
-	{"restart", keyRestart, "force-restart the server", actRestart},
-	{"detach", keyDetach, "detach (server keeps running)", actDetach},
+	{"new-panel", keyNewPanel, "spawn a new shell panel", actNewPanel, false, "Panels"},
+	{"new-panel-form", keyNewForm, "new panel (choose the command)", actNewForm, false, "Panels"},
+	{"close", keyClose, "close the selected panel", actClose, false, "Panels"},
+	{"purge-exited", keyPurge, "purge all exited panels", actPurge, false, "Panels"},
+
+	{"dashboard", keyDashboard, "jump back to the dashboard", actDashboard, false, "View"},
+	{"key-map", keyShowMap, "toggle this key map", actToggleMap, false, "View"},
+	{"panel-config", keyPanelConfig, "configure panel defaults", actPanelConfig, false, "View"},
+
+	{"mark", keyMark, "mark a panel for grouping", actMark, true, "Work items"},
+	{"group", keyGroup, "group the marked panels", actGroup, true, "Work items"},
+	{"ungroup", keyUngroup, "ungroup the selected work item", actUngroup, true, "Work items"},
+	{"rename", keyRename, "rename the panel or group", actRename, true, "Work items"},
+	{"group-back", keyGroupBack, "step back out of a group view", actGroupBack, false, "Work items"},
+
+	{"restart", keyRestart, "force-restart the server", actRestart, false, "Session"},
+	{"detach", keyDetach, "detach (server keeps running)", actDetach, false, "Session"},
 }
 
 // prefs is the cockpit state persisted to $HOME/.baton/config.
