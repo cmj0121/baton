@@ -53,6 +53,11 @@ func (m *Manager) StartShell(id string) error {
 	return nil
 }
 
+// Stop terminates the PTY backing the given panel id, if any. Closing the
+// master hangs up the child; the drain goroutine then reaps it. Safe to call for
+// an unknown id (e.g. a mock panel with no real process).
+func (m *Manager) Stop(id string) { m.remove(id) }
+
 func (m *Manager) remove(id string) {
 	m.mu.Lock()
 	if f, ok := m.ptys[id]; ok {

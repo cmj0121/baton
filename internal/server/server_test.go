@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cmj0121/baton/internal/client"
+	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/server"
 )
@@ -44,11 +45,12 @@ func TestAttachAndCreateShellPanel(t *testing.T) {
 	}
 	defer func() { _ = c.Close() }()
 
+	base := len(panel.Mock()) // the server seeds a mock fleet
 	if got := recv(t, c); got.Type != "welcome" || got.Version != proto.ProtocolVersion {
 		t.Fatalf("expected welcome %s, got %+v", proto.ProtocolVersion, got)
 	}
-	if got := recv(t, c); got.Type != "panels" || len(got.Panels) != 0 {
-		t.Fatalf("expected empty panels snapshot, got %+v", got)
+	if got := recv(t, c); got.Type != "panels" || len(got.Panels) != base {
+		t.Fatalf("expected seeded panels snapshot of %d, got %+v", base, got)
 	}
 
 	// Create a shell panel; the server broadcasts the updated snapshot.
@@ -56,14 +58,29 @@ func TestAttachAndCreateShellPanel(t *testing.T) {
 		t.Fatalf("send: %v", err)
 	}
 	got := recv(t, c)
-	if got.Type != "panels" || len(got.Panels) != 1 {
-		t.Fatalf("expected one panel after create, got %+v", got)
+	if got.Type != "panels" || len(got.Panels) != base+1 {
+		t.Fatalf("expected %d panels after create, got %+v", base+1, got)
 	}
-	if p := got.Panels[0]; p.Kind != "shell" || p.ID == "" {
-		t.Fatalf("unexpected panel %+v", p)
+	created := got.Panels[len(got.Panels)-1]
+	if created.Kind != "shell" || created.ID == "" {
+		t.Fatalf("unexpected created panel %+v", created)
 	}
 
-	// Re-attach a second client: it should see the existing panel immediately.
+	// Close it again; the server broadcasts the panel gone.
+	if err := c.Send(proto.Command{Action: "panel.close", ID: created.ID}); err != nil {
+		t.Fatalf("send close: %v", err)
+	}
+	got = recv(t, c)
+	if got.Type != "panels" || len(got.Panels) != base {
+		t.Fatalf("expected %d panels after close, got %+v", base, got)
+	}
+	for _, p := range got.Panels {
+		if p.ID == created.ID {
+			t.Fatalf("closed panel %s still present", created.ID)
+		}
+	}
+
+	// Re-attach a second client: it should see the persisted fleet immediately.
 	c2, err := client.Dial(sock)
 	if err != nil {
 		t.Fatalf("re-attach dial: %v", err)
@@ -72,7 +89,7 @@ func TestAttachAndCreateShellPanel(t *testing.T) {
 	if got := recv(t, c2); got.Type != "welcome" {
 		t.Fatalf("expected welcome on re-attach, got %+v", got)
 	}
-	if got := recv(t, c2); got.Type != "panels" || len(got.Panels) != 1 {
-		t.Fatalf("re-attached client should see 1 panel, got %+v", got)
+	if got := recv(t, c2); got.Type != "panels" || len(got.Panels) != base {
+		t.Fatalf("re-attached client should see %d panels, got %+v", base, got)
 	}
 }
