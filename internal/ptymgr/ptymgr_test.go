@@ -43,6 +43,27 @@ func TestStreamsOutputAndForwardsInput(t *testing.T) {
 	t.Fatal("did not see the echoed output")
 }
 
+func TestOnCloseFiresOnExit(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	m := New()
+	closed := make(chan string, 1)
+	m.OnClose(func(id string) { closed <- id })
+
+	if err := m.Start("1", ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	m.Write("1", []byte("exit\n")) // make the shell exit on its own
+
+	select {
+	case id := <-closed:
+		if id != "1" {
+			t.Fatalf("OnClose got %q, want 1", id)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("OnClose did not fire after the shell exited")
+	}
+}
+
 func TestWriteResizeSnapshotUnknownIDSafe(t *testing.T) {
 	m := New()
 	m.Write("nope", []byte("x")) // no panic

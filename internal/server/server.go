@@ -46,7 +46,36 @@ func New(ln net.Listener) *Server {
 		clients: make(map[*clientConn]struct{}),
 	}
 	s.pty.OnOutput(s.routeOutput)
+	s.pty.OnClose(s.onPanelExit)
 	return s
+}
+
+// onPanelExit marks a panel exited when its process ends on its own, notifies
+// and detaches any client zoomed into it, and broadcasts the change. It is a
+// no-op for a panel already gone (e.g. an explicit panel.close).
+func (s *Server) onPanelExit(id string) {
+	s.mu.Lock()
+	found := false
+	for i := range s.panels {
+		if s.panels[i].ID == id {
+			s.panels[i].State = panel.Exited
+			s.panels[i].Activity = "exited"
+			found = true
+			break
+		}
+	}
+	for cc := range s.clients {
+		if cc.attached == id {
+			send(cc, proto.ServerMsg{Type: "output", ID: id, Data: []byte("\r\n[process exited]\r\n")})
+			cc.attached = ""
+		}
+	}
+	s.mu.Unlock()
+
+	if found {
+		log.Info().Str("panel", id).Msg("panel process exited")
+		s.broadcast(s.panelsMsg())
+	}
 }
 
 // routeOutput fans a panel's output out to every client zoomed into it.

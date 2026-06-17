@@ -109,6 +109,52 @@ func TestAttachAndCreateShellPanel(t *testing.T) {
 	}
 }
 
+func TestExitMarks(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	sock := filepath.Join(t.TempDir(), "baton.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() { _ = server.New(ln).Serve() }()
+
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	recv(t, c) // welcome
+	recv(t, c) // empty panels
+
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	id := recv(t, c).Panels[0].ID
+
+	// Make the shell exit on its own; the server should mark the panel exited
+	// and broadcast it.
+	if err := c.Send(proto.Command{Action: "panel.input", ID: id, Data: []byte("exit\n")}); err != nil {
+		t.Fatalf("input: %v", err)
+	}
+
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case msg := <-c.Events:
+			if msg.Type == "panels" {
+				for _, p := range msg.Panels {
+					if p.ID == id && p.State == "exited" {
+						return // detected
+					}
+				}
+			}
+		case <-deadline:
+			t.Fatal("panel was not marked exited after the shell exited")
+		}
+	}
+}
+
 func TestAttachIO(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	sock := filepath.Join(t.TempDir(), "baton.sock")

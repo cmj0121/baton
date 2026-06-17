@@ -25,6 +25,7 @@ type Manager struct {
 	mu       sync.Mutex
 	ptys     map[string]*pane
 	onOutput func(id string, data []byte)
+	onClose  func(id string)
 }
 
 // New returns an empty manager.
@@ -35,6 +36,9 @@ func New() *Manager {
 // OnOutput registers the sink that receives every panel's output. Set it once,
 // before any panels are started.
 func (m *Manager) OnOutput(fn func(id string, data []byte)) { m.onOutput = fn }
+
+// OnClose registers a callback fired when a panel's process exits on its own.
+func (m *Manager) OnClose(fn func(id string)) { m.onClose = fn }
 
 // Start launches command (a binary path) under a new PTY for the given panel id.
 // An empty command falls back to the user's shell ($SHELL, then /bin/sh). Output
@@ -80,6 +84,9 @@ func (m *Manager) pump(id string, p *pane, cmd *exec.Cmd) {
 	}
 	_ = cmd.Wait()
 	m.remove(id)
+	if m.onClose != nil {
+		m.onClose(id)
+	}
 }
 
 func (m *Manager) appendRing(p *pane, chunk []byte) {
