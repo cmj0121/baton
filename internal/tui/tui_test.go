@@ -73,10 +73,11 @@ func TestCloseCancelsOnAnyOtherKey(t *testing.T) {
 }
 
 func TestConfirmToggleSkipsPrompt(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // toggling persists to $HOME/.baton/config
 	m := model{mode: modeKeyMap, fleet: panel.Mock(), confirmClose: true}
-	// Move the cursor onto the settings toggle (the row past the bindings) and
+	// Move the cursor onto the settings toggle (after the prefix + bindings) and
 	// flip it off.
-	m.cursor = len(bindings)
+	m.cursor = len(bindings) + 1
 	m = press(m, "enter")
 	if m.confirmClose {
 		t.Fatal("expected confirm-on-close to be toggled off")
@@ -104,8 +105,9 @@ func TestTabCyclesSelection(t *testing.T) {
 }
 
 func TestRebindKeyByTyping(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // rebinding persists to $HOME/.baton/config
 	m := model{mode: modeKeyMap, fleet: panel.Mock(), binds: append([]binding(nil), bindings...)}
-	m.cursor = 0 // the spawn binding, default key "p"
+	m.cursor = 1 // row 0 is the prefix; row 1 is the spawn binding (default "p")
 
 	// e arms the capture; it does not change anything yet.
 	m = press(m, "e")
@@ -131,15 +133,82 @@ func TestRebindKeyByTyping(t *testing.T) {
 	}
 }
 
+func TestRebindPersistsToConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// Rebind spawn from p to x, which writes the config file as a side effect.
+	m := model{mode: modeKeyMap, fleet: panel.Mock(), binds: append([]binding(nil), bindings...)}
+	m.cursor = 1 // the spawn binding (row 0 is the prefix)
+	press(m, "e", "x")
+
+	// A fresh load (as New would do) sees the override applied to spawn and the
+	// other bindings left at their defaults.
+	_, reloaded, _ := loadConfig()
+	for _, b := range reloaded {
+		switch b.name {
+		case "new-panel":
+			if b.key != "x" {
+				t.Fatalf("persisted spawn key = %q, want x", b.key)
+			}
+		case "close":
+			if b.key != keyClose {
+				t.Fatalf("close key drifted to %q", b.key)
+			}
+		}
+	}
+}
+
+func TestConfirmTogglePersists(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// Default is on; toggle it off on the settings row.
+	m := model{mode: modeKeyMap, fleet: panel.Mock(), confirmClose: true, binds: append([]binding(nil), bindings...)}
+	m.cursor = len(bindings) + 1 // prefix row + bindings, then the settings toggle
+	press(m, "enter")
+
+	if _, _, confirmClose := loadConfig(); confirmClose {
+		t.Fatal("confirm-on-close should persist as off")
+	}
+}
+
 func TestRebindCancelsOnEsc(t *testing.T) {
 	m := model{mode: modeKeyMap, fleet: panel.Mock(), binds: append([]binding(nil), bindings...)}
-	m.cursor = 0
+	m.cursor = 1 // the spawn binding (row 0 is the prefix)
 	m = press(m, "e", "esc")
 	if m.editing {
 		t.Fatal("esc should cancel the capture")
 	}
 	if m.binds[0].key != "p" {
 		t.Fatalf("binding should be unchanged after cancel, got %q", m.binds[0].key)
+	}
+}
+
+func TestChangePrefixKey(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// Edit the prefix row (row 0) and type a new leader key.
+	m := model{mode: modeKeyMap, fleet: panel.Mock(), prefixKey: keyPrefix, binds: append([]binding(nil), bindings...)}
+	m.cursor = 0
+	m = press(m, "e", "ctrl+a")
+	if m.editing {
+		t.Fatal("capture should end after a key is typed")
+	}
+	if m.prefixKey != "ctrl+a" {
+		t.Fatalf("prefix not changed, got %q", m.prefixKey)
+	}
+
+	// The new prefix arms a binding; the old one no longer does.
+	armed := press(m, "ctrl+a")
+	if !armed.prefix {
+		t.Fatal("the new prefix ctrl+a should arm")
+	}
+	if old := press(m, "ctrl+t"); old.prefix {
+		t.Fatal("the old prefix ctrl+t should no longer arm")
+	}
+
+	// And it persists for the next session.
+	if prefix, _, _ := loadConfig(); prefix != "ctrl+a" {
+		t.Fatalf("prefix not persisted, got %q", prefix)
 	}
 }
 

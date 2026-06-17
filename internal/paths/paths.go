@@ -35,6 +35,12 @@ func LogFile() string {
 	return filepath.Join(os.Getenv("HOME"), ".baton", "baton.log")
 }
 
+// ConfigFile is the user's persistent client configuration ($HOME/.baton/config,
+// YAML). It holds settings such as the key-binding overrides.
+func ConfigFile() string {
+	return filepath.Join(os.Getenv("HOME"), ".baton", "config")
+}
+
 // EnsureDir creates the directory that holds the given file, with private perms.
 func EnsureDir(file string) error {
 	return os.MkdirAll(filepath.Dir(file), 0o700)

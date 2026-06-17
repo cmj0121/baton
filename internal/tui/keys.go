@@ -1,6 +1,12 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/cmj0121/baton/internal/config"
+)
 
 // Keybindings follow a tmux-style prefix model: press the prefix, then a verb.
 //
@@ -25,8 +31,18 @@ const (
 	keyCtrlC = "ctrl+c" // bare emergency quit
 )
 
-// prefixLabel is how the prefix renders in hints and the key map.
-const prefixLabel = "C-t"
+// keyLabel renders a key string as a compact label: ctrl+x → C-x, alt+x → M-x,
+// otherwise the key as typed.
+func keyLabel(key string) string {
+	switch {
+	case strings.HasPrefix(key, "ctrl+"):
+		return "C-" + strings.TrimPrefix(key, "ctrl+")
+	case strings.HasPrefix(key, "alt+"):
+		return "M-" + strings.TrimPrefix(key, "alt+")
+	default:
+		return key
+	}
+}
 
 // action is the verb a binding performs; the prefix handler and the navigable
 // key map both resolve to one of these, so they can never drift apart.
@@ -41,23 +57,66 @@ const (
 	actDetach
 )
 
-// binding is one prefixed command: the bare key pressed after the prefix, the
-// human description, and the action it triggers.
+// binding is one prefixed command: a stable name (used to persist the chord),
+// the bare key pressed after the prefix, the human description, and the action
+// it triggers.
 type binding struct {
+	name string // stable id for the config file, e.g. "new-panel"
 	key  string // bare key after the prefix, e.g. "p"
 	desc string
 	act  action
 }
 
 // bindings lists the prefixed commands in display order. This is the single
-// source of truth for both the footer hint and the in-view key map.
+// source of truth for the footer hint, the in-view key map, and the config keys.
 var bindings = []binding{
-	{keyNewPanel, "spawn a new shell panel", actNewPanel},
-	{keyClose, "close the selected panel", actClose},
-	{keyDashboard, "jump back to the dashboard", actDashboard},
-	{keyShowMap, "toggle this key map", actToggleMap},
-	{keyRestart, "force-restart the server", actRestart},
-	{keyDetach, "detach (server keeps running)", actDetach},
+	{"new-panel", keyNewPanel, "spawn a new shell panel", actNewPanel},
+	{"close", keyClose, "close the selected panel", actClose},
+	{"dashboard", keyDashboard, "jump back to the dashboard", actDashboard},
+	{"key-map", keyShowMap, "toggle this key map", actToggleMap},
+	{"restart", keyRestart, "force-restart the server", actRestart},
+	{"detach", keyDetach, "detach (server keeps running)", actDetach},
+}
+
+// loadConfig reads $HOME/.baton/config and returns the leader prefix, the
+// bindings (defaults with any saved key overrides applied), and the
+// confirm-on-close setting. Missing values fall back to their defaults
+// (prefix "ctrl+t", confirm-on-close true) rather than failing the cockpit.
+func loadConfig() (prefix string, binds []binding, confirmClose bool) {
+	prefix = keyPrefix
+	binds = append([]binding(nil), bindings...)
+	confirmClose = true
+
+	cfg, err := config.Load()
+	if err != nil {
+		return prefix, binds, confirmClose
+	}
+	if cfg.Prefix != "" {
+		prefix = cfg.Prefix
+	}
+	for i := range binds {
+		if k := cfg.Keys[binds[i].name]; k != "" {
+			binds[i].key = k
+		}
+	}
+	if cfg.Settings.ConfirmClose != nil {
+		confirmClose = *cfg.Settings.ConfirmClose
+	}
+	return prefix, binds, confirmClose
+}
+
+// saveConfig persists the prefix, the whole key map, and settings together, so
+// saving one never drops the others. Chords are keyed by each binding's name.
+func saveConfig(prefix string, binds []binding, confirmClose bool) error {
+	keys := make(map[string]string, len(binds))
+	for _, b := range binds {
+		keys[b.name] = b.key
+	}
+	return config.Config{
+		Prefix:   prefix,
+		Keys:     keys,
+		Settings: config.Settings{ConfirmClose: &confirmClose},
+	}.Save()
 }
 
 // --- keycap rendering ---------------------------------------------------------
@@ -74,12 +133,13 @@ var (
 			Bold(true)
 )
 
-// chord renders a prefixed binding as two keycaps, e.g. [C-t][p]. When hot the
-// caps glow in the brand colour (used for the selected key-map row).
-func chord(key string, hot bool) string {
+// chord renders a prefixed binding as two keycaps, e.g. [C-t][p], using prefix
+// as the leader label. When hot the caps glow in the brand colour (used for the
+// selected key-map row).
+func chord(prefix, key string, hot bool) string {
 	cap := keycapStyle
 	if hot {
 		cap = keycapHotStyle
 	}
-	return cap.Render(prefixLabel) + " " + cap.Render(key)
+	return cap.Render(prefix) + " " + cap.Render(key)
 }

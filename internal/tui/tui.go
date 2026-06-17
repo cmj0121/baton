@@ -78,9 +78,10 @@ type model struct {
 	pendingClose bool      // a close is awaiting y/n confirmation
 	now          time.Time // wall clock shown in the footer, ticked every second
 
-	binds   []binding // editable copy of the bindings (nil ⇒ the defaults)
-	editing bool      // capturing the next key press as a rebind
-	editIdx int       // which binding is being rebound
+	prefixKey string    // leader key armed before a binding (default ctrl+t)
+	binds     []binding // editable copy of the bindings (nil ⇒ the defaults)
+	editing   bool      // capturing the next key press as a rebind
+	editIdx   int       // binding being rebound; editPrefix means the leader key
 
 	width, height int
 	quitting      bool
@@ -96,15 +97,29 @@ func (m model) RestartRequested() bool { return m.restart }
 // is filled by the server's first snapshot, which arrives right after the hello
 // handshake — the server owns the panels now.
 func New(c *client.Client) tea.Model {
+	prefix, binds, confirmClose := loadConfig()
 	return model{
 		client:       c,
 		mode:         modeDashboard,
 		status:       "attaching…",
 		endpoint:     c.Endpoint(),
-		confirmClose: true,
+		confirmClose: confirmClose,
 		now:          time.Now(),
-		binds:        append([]binding(nil), bindings...),
+		prefixKey:    prefix,
+		binds:        binds,
 	}
+}
+
+// editPrefix is the editIdx sentinel meaning the leader key is being rebound.
+const editPrefix = -1
+
+// effPrefix is the active leader key, defaulting to keyPrefix for a zero-value
+// model (so tests and the first frame still arm on ctrl+t).
+func (m model) effPrefix() string {
+	if m.prefixKey != "" {
+		return m.prefixKey
+	}
+	return keyPrefix
 }
 
 // keymap is the active binding set: the model's editable copy, or the package
@@ -204,17 +219,26 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := k.String()
 
 	// Capturing a rebind: the next key press (other than esc) becomes the new
-	// chord for the binding under edit.
+	// chord for the binding — or the leader key — under edit.
 	if m.editing {
 		m.editing = false
 		if key == "esc" {
 			m.status = "rebind cancelled"
 			return m, nil
 		}
-		m.ensureBinds()
-		old := m.binds[m.editIdx].key
-		m.binds[m.editIdx].key = key
-		m.status = fmt.Sprintf("rebound %q: %s → %s", m.binds[m.editIdx].desc, old, key)
+		if m.editIdx == editPrefix {
+			old := m.effPrefix()
+			m.prefixKey = key
+			m.status = fmt.Sprintf("prefix: %s → %s", keyLabel(old), keyLabel(key))
+		} else {
+			m.ensureBinds()
+			old := m.binds[m.editIdx].key
+			m.binds[m.editIdx].key = key
+			m.status = fmt.Sprintf("rebound %q: %s → %s", m.binds[m.editIdx].desc, old, key)
+		}
+		if err := saveConfig(m.prefixKey, m.keymap(), m.confirmClose); err != nil {
+			m.status = "rebound, but save failed: " + err.Error()
+		}
 		return m, nil
 	}
 
@@ -230,14 +254,16 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	pkey := m.effPrefix()
+
 	// A key following the prefix is interpreted as a binding.
 	if m.prefix {
 		m.prefix = false
 		if b, ok := m.lookup(key); ok {
 			return m.runAction(b.act)
 		}
-		if key == keyPrefix {
-			m.status = "dashboard" // C-t C-t is a no-op for now
+		if key == pkey {
+			m.status = "dashboard" // prefix-prefix is a no-op for now
 			return m, nil
 		}
 		m.status = "no binding for " + key
@@ -245,7 +271,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch key {
-	case keyPrefix:
+	case pkey:
 		m.prefix = true
 		return m, nil
 	case keyCtrlC:
@@ -266,11 +292,18 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "e":
-		// Edit the selected binding's chord (key map only).
-		if m.mode == modeKeyMap && m.cursor < len(m.keymap()) {
-			m.editing = true
-			m.editIdx = m.cursor
-			m.status = "press the new key for " + fmt.Sprintf("%q", m.keymap()[m.cursor].desc) + "  ·  esc cancels"
+		// Edit the selected row's key (key map only): the leader key on row 0,
+		// otherwise the binding at that row.
+		if m.mode == modeKeyMap {
+			if m.cursor == 0 {
+				m.editing = true
+				m.editIdx = editPrefix
+				m.status = "press the new prefix key  ·  esc cancels"
+			} else if m.cursor >= 1 && m.cursor <= len(m.keymap()) {
+				m.editing = true
+				m.editIdx = m.cursor - 1
+				m.status = "press the new key for " + fmt.Sprintf("%q", m.keymap()[m.cursor-1].desc) + "  ·  esc cancels"
+			}
 		}
 		return m, nil
 
@@ -331,12 +364,19 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 // map, or focus the selected panel on the dashboard.
 func (m model) activate() (tea.Model, tea.Cmd) {
 	if m.mode == modeKeyMap {
-		if m.cursor >= 0 && m.cursor < len(m.keymap()) {
-			return m.runAction(m.keymap()[m.cursor].act)
+		if m.cursor == 0 {
+			m.status = "press e to change the prefix key"
+			return m, nil
+		}
+		if m.cursor >= 1 && m.cursor <= len(m.keymap()) {
+			return m.runAction(m.keymap()[m.cursor-1].act)
 		}
 		// The row past the bindings is the confirm-on-close setting.
 		m.confirmClose = !m.confirmClose
 		m.status = "confirm on close: " + onOff(m.confirmClose)
+		if err := saveConfig(m.prefixKey, m.keymap(), m.confirmClose); err != nil {
+			m.status = "toggled, but save failed: " + err.Error()
+		}
 		return m, nil
 	}
 	if m.cursor >= 0 && m.cursor < len(m.fleet) {
@@ -381,7 +421,7 @@ func (m *model) move(delta int) {
 
 func (m model) itemCount() int {
 	if m.mode == modeKeyMap {
-		return len(m.keymap()) + 1 // bindings + the settings toggle
+		return len(m.keymap()) + 2 // prefix row + bindings + the settings toggle
 	}
 	return len(m.fleet)
 }
@@ -725,25 +765,43 @@ func (m model) keyMapView() string {
 		return "  "
 	}
 
+	desc := func(on bool, s string) string {
+		if on {
+			return inkStyle.Render(s)
+		}
+		return mutedStyle.Render(s)
+	}
+
 	binds := m.keymap()
-	rows := make([]string, 0, len(binds)+8)
+	prefLbl := keyLabel(m.effPrefix())
+	rows := make([]string, 0, len(binds)+9)
 	rows = append(rows, sectionStyle.Render(spaced("KEY BINDINGS")), "")
+
+	// Row 0: the leader/prefix key.
+	prefSel := m.cursor == 0
+	prefCap := keycapStyle
+	if prefSel {
+		prefCap = keycapHotStyle
+	}
+	prefKeys := prefCap.Render(prefLbl)
+	if m.editing && m.editIdx == editPrefix {
+		prefKeys = keycapHotStyle.Render("…type a key")
+	}
+	rows = append(rows, fmt.Sprintf("%s%s   %s", caret(prefSel), prefKeys, desc(prefSel, "prefix · leader key")))
+
+	// Rows 1..N: the bindings.
 	for i, b := range binds {
-		selected := i == m.cursor
-		descStyle := mutedStyle
-		if selected {
-			descStyle = inkStyle
-		}
+		selected := i+1 == m.cursor
 		// Show the live capture prompt on the row being rebound.
-		keys := chord(b.key, selected)
-		if m.editing && i == m.editIdx {
-			keys = keycapHotStyle.Render(prefixLabel) + " " + keycapHotStyle.Render("…type a key")
+		keys := chord(prefLbl, b.key, selected)
+		if m.editing && m.editIdx == i {
+			keys = keycapHotStyle.Render(prefLbl) + " " + keycapHotStyle.Render("…type a key")
 		}
-		rows = append(rows, fmt.Sprintf("%s%s   %s", caret(selected), keys, descStyle.Render(b.desc)))
+		rows = append(rows, fmt.Sprintf("%s%s   %s", caret(selected), keys, desc(selected, b.desc)))
 	}
 
 	// Settings: the confirm-on-close toggle, selectable as the last row.
-	selected := m.cursor == len(binds)
+	selected := m.cursor == len(binds)+1
 	box := lipgloss.NewStyle().Foreground(colDark).Background(checkColor(m.confirmClose)).Bold(true).Padding(0, 1)
 	check := box.Render(onOff(m.confirmClose))
 	label := mutedStyle.Render("confirm before closing a panel")
