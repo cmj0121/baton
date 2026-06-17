@@ -108,3 +108,55 @@ func TestAttachAndCreateShellPanel(t *testing.T) {
 		t.Fatalf("re-attached client should see %d panels, got %+v", base, got)
 	}
 }
+
+func TestAttachIO(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	sock := filepath.Join(t.TempDir(), "baton.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() { _ = server.New(ln).Serve() }()
+
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	recv(t, c) // welcome
+	recv(t, c) // empty panels
+
+	// Spawn a shell and grab its id.
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	id := recv(t, c).Panels[0].ID
+
+	// Attach and type a command; its output streams back as "output" messages.
+	if err := c.Send(proto.Command{Action: "panel.attach", ID: id}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if err := c.Send(proto.Command{Action: "panel.input", ID: id, Data: []byte("echo baton-xyz\n")}); err != nil {
+		t.Fatalf("input: %v", err)
+	}
+
+	found := false
+	for i := 0; i < 40 && !found; i++ {
+		msg := recv(t, c)
+		if msg.Type == "output" && msg.ID == id && strings.Contains(string(msg.Data), "baton-xyz") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected echoed output for the attached panel")
+	}
+
+	// Detach stops the stream.
+	if err := c.Send(proto.Command{Action: "panel.detach", ID: id}); err != nil {
+		t.Fatalf("detach: %v", err)
+	}
+	if err := c.Send(proto.Command{Action: "panel.close", ID: id}); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}

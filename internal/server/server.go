@@ -19,9 +19,11 @@ import (
 )
 
 // clientConn is one attached frontend. Outbound messages go through its buffered
-// channel so a slow client never stalls a broadcast.
+// channel so a slow client never stalls a broadcast. attached is the panel id
+// this client is zoomed into (guarded by Server.mu), or "" for none.
 type clientConn struct {
-	out chan proto.ServerMsg
+	out      chan proto.ServerMsg
+	attached string
 }
 
 // Server owns all state and every PTY. It is safe for concurrent use.
@@ -38,11 +40,38 @@ type Server struct {
 // New builds a server bound to ln. The fleet starts empty — panels appear only
 // when the user spawns a real one.
 func New(ln net.Listener) *Server {
-	return &Server{
+	s := &Server{
 		ln:      ln,
 		pty:     ptymgr.New(),
 		clients: make(map[*clientConn]struct{}),
 	}
+	s.pty.OnOutput(s.routeOutput)
+	return s
+}
+
+// routeOutput fans a panel's output out to every client zoomed into it.
+func (s *Server) routeOutput(id string, data []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for cc := range s.clients {
+		if cc.attached == id {
+			send(cc, proto.ServerMsg{Type: "output", ID: id, Data: data})
+		}
+	}
+}
+
+// attach zooms a client into panel id (or "" to detach). The recent output is
+// replayed before live output starts, so the screen is not blank and stays in
+// order — both happen under the lock that gates routeOutput.
+func (s *Server) attach(cc *clientConn, id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if id != "" {
+		if snap := s.pty.Snapshot(id); len(snap) > 0 {
+			send(cc, proto.ServerMsg{Type: "output", ID: id, Data: snap})
+		}
+	}
+	cc.attached = id
 }
 
 // Serve accepts connections until the listener closes.
@@ -104,6 +133,14 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			return
 		}
 		s.broadcast(s.panelsMsg())
+	case "panel.attach":
+		s.attach(cc, cmd.ID)
+	case "panel.detach":
+		s.attach(cc, "")
+	case "panel.input":
+		s.pty.Write(cmd.ID, cmd.Data)
+	case "panel.resize":
+		s.pty.Resize(cmd.ID, cmd.Rows, cmd.Cols)
 	default:
 		send(cc, proto.ServerMsg{Type: "error", Error: fmt.Sprintf("unknown action %q", cmd.Action)})
 	}

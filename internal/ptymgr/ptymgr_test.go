@@ -1,9 +1,56 @@
 package ptymgr
 
 import (
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestStreamsOutputAndForwardsInput(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	m := New()
+
+	var mu sync.Mutex
+	var got []byte
+	m.OnOutput(func(_ string, data []byte) {
+		mu.Lock()
+		got = append(got, data...)
+		mu.Unlock()
+	})
+
+	if err := m.Start("1", ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer m.Stop("1")
+
+	m.Resize("1", 24, 80)
+	m.Write("1", []byte("echo baton-ok\n"))
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		seen := strings.Contains(string(got), "baton-ok")
+		mu.Unlock()
+		if seen {
+			if !strings.Contains(string(m.Snapshot("1")), "baton-ok") {
+				t.Fatal("snapshot should hold the recent output")
+			}
+			return // input forwarded, output streamed and buffered
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("did not see the echoed output")
+}
+
+func TestWriteResizeSnapshotUnknownIDSafe(t *testing.T) {
+	m := New()
+	m.Write("nope", []byte("x")) // no panic
+	m.Resize("nope", 10, 10)
+	if m.Snapshot("nope") != nil {
+		t.Fatal("snapshot of an unknown id should be nil")
+	}
+}
 
 func TestStartAndStopShell(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
