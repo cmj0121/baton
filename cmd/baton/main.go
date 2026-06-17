@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -202,10 +203,22 @@ func runServer() error {
 		log.Warn().Err(err).Str("pid_file", pidPath).Msg("could not write pid file")
 	}
 
+	// Tidy the socket and PID file on the way out, whichever path gets us there:
+	// a SIGINT/SIGTERM (the usual stop, and what baton --force / restart send) or
+	// the server loop returning on its own. sync.Once keeps it to exactly one run
+	// so the signal handler and the defer can both call it safely.
+	//
+	// Remove the files *before* closing the listener. A force-restart waits only
+	// for the socket to become unreachable, so unlinking it first guarantees both
+	// files are gone before this daemon returns — otherwise a lagging removal here
+	// could race a replacement daemon and delete its fresh socket/PID.
+	var once sync.Once
 	cleanup := func() {
-		_ = ln.Close()
-		_ = os.Remove(sock)
-		_ = os.Remove(pidPath)
+		once.Do(func() {
+			_ = os.Remove(sock)
+			_ = os.Remove(pidPath)
+			_ = ln.Close()
+		})
 	}
 	defer cleanup()
 
@@ -265,8 +278,10 @@ func alive(sock string) bool {
 	return true
 }
 
-// clearStaleSocket removes a leftover socket from a crashed server, but refuses
-// to clobber a live one — enforcing one server per session.
+// clearStaleSocket removes a leftover socket (and its orphaned PID file) from a
+// crashed server, but refuses to clobber a live one — enforcing one server per
+// session. A SIGKILLed daemon never runs its own cleanup, so we tidy both files
+// here before a fresh daemon takes the session.
 func clearStaleSocket(sock string) error {
 	if _, err := os.Stat(sock); err != nil {
 		return nil
@@ -274,6 +289,7 @@ func clearStaleSocket(sock string) error {
 	if alive(sock) {
 		return fmt.Errorf("baton server already running on %s", sock)
 	}
+	_ = os.Remove(paths.PidFile(sock))
 	return os.Remove(sock)
 }
 
