@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"path/filepath"
 	"slices"
 	"sync"
 
@@ -95,7 +96,7 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "panel.list":
 		send(cc, s.panelsMsg())
 	case "panel.create":
-		if err := s.createPanel(cmd.Kind); err != nil {
+		if err := s.createPanel(cmd.Kind, cmd.Path); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
@@ -111,9 +112,9 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	}
 }
 
-// createPanel is a core action: it spawns the backing process and records the
-// new panel in the fleet.
-func (s *Server) createPanel(kind string) error {
+// createPanel is a core action: it spawns the backing process (running path, or
+// the default shell when empty) and records the new panel in the fleet.
+func (s *Server) createPanel(kind, path string) error {
 	if kind == "" {
 		kind = proto.KindShell
 	}
@@ -125,17 +126,21 @@ func (s *Server) createPanel(kind string) error {
 
 	switch kind {
 	case proto.KindShell:
-		if err := s.pty.StartShell(id); err != nil {
+		if err := s.pty.Start(id, path); err != nil {
 			return err
 		}
 	default:
 		return fmt.Errorf("unknown panel kind %q", kind)
 	}
 
+	name := "shell"
+	if path != "" {
+		name = filepath.Base(path)
+	}
 	p := panel.Panel{
 		ID:       id,
 		Kind:     panel.ParseKind(kind),
-		Title:    fmt.Sprintf("%s #%s", kind, id),
+		Title:    fmt.Sprintf("%s #%s", name, id),
 		State:    panel.Running,
 		Activity: "spawned",
 	}

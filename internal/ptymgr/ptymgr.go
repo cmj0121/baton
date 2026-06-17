@@ -22,17 +22,16 @@ func New() *Manager {
 	return &Manager{ptys: make(map[string]*os.File)}
 }
 
-// StartShell launches the user's shell under a new PTY for the given panel id.
-// Output is drained (the banner-only dashboard does not render it yet) so the
-// process never blocks on a full buffer. When the shell exits it is reaped and
-// forgotten.
-func (m *Manager) StartShell(id string) error {
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/sh"
+// Start launches command (a binary path) under a new PTY for the given panel id.
+// An empty command falls back to the user's shell ($SHELL, then /bin/sh). Output
+// is drained (the dashboard does not render it yet) so the process never blocks
+// on a full buffer. When the process exits it is reaped and forgotten.
+func (m *Manager) Start(id, command string) error {
+	if command == "" {
+		command = DefaultShell()
 	}
 
-	cmd := exec.Command(shell)
+	cmd := exec.Command(command)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
 	f, err := pty.Start(cmd)
@@ -51,6 +50,17 @@ func (m *Manager) StartShell(id string) error {
 	}()
 
 	return nil
+}
+
+// StartShell launches the user's default shell. Equivalent to Start(id, "").
+func (m *Manager) StartShell(id string) error { return m.Start(id, "") }
+
+// DefaultShell is the system shell: $SHELL, or /bin/sh when unset.
+func DefaultShell() string {
+	if shell := os.Getenv("SHELL"); shell != "" {
+		return shell
+	}
+	return "/bin/sh"
 }
 
 // Stop terminates the PTY backing the given panel id, if any. Closing the

@@ -22,6 +22,7 @@ type Command struct {
 	Action string `json:"action"`         // "hello" | "panel.list" | "panel.create" | "panel.close"
 	Kind   string `json:"kind,omitempty"` // panel kind for "panel.create" (default "shell")
 	ID     string `json:"id,omitempty"`   // target panel for "panel.close"
+	Path   string `json:"path,omitempty"` // init command (binary path) for "panel.create"; empty = default shell
 }
 
 // Panel is the server-side view of a single live terminal.

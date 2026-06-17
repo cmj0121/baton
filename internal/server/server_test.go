@@ -3,6 +3,7 @@ package server_test
 import (
 	"net"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,6 +66,21 @@ func TestAttachAndCreateShellPanel(t *testing.T) {
 	if created.Kind != "shell" || created.ID == "" {
 		t.Fatalf("unexpected created panel %+v", created)
 	}
+
+	// Create with an explicit command path; its basename names the panel.
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell", Path: "/bin/sh"}); err != nil {
+		t.Fatalf("send create with path: %v", err)
+	}
+	got = recv(t, c)
+	withPath := got.Panels[len(got.Panels)-1]
+	if !strings.HasPrefix(withPath.Title, "sh #") {
+		t.Fatalf("explicit command should name the panel by basename, got %q", withPath.Title)
+	}
+	// Close it again to return to base+1 for the close assertion below.
+	if err := c.Send(proto.Command{Action: "panel.close", ID: withPath.ID}); err != nil {
+		t.Fatalf("send close: %v", err)
+	}
+	recv(t, c)
 
 	// Close it again; the server broadcasts the panel gone.
 	if err := c.Send(proto.Command{Action: "panel.close", ID: created.ID}); err != nil {
