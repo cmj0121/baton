@@ -40,6 +40,7 @@ func TestViewRendersEveryMode(t *testing.T) {
 		{"panel-config", func(m *model) { m.mode = modePanelConfig; m.shellPath = "/bin/zsh" }},
 		{"panel-config-default", func(m *model) { m.mode = modePanelConfig }},
 		{"input-shell", func(m *model) { m.input = inputShellPath; m.inputBuf = "/bin/zsh" }},
+		{"input-new-panel", func(m *model) { m.input = inputNewPanelCmd; m.inputBuf = "/bin/sh" }},
 		{"prefix-armed", func(m *model) { m.fleet = panel.Mock()[:3]; m.prefix = true }},
 		{"error", func(m *model) { m.fleet = panel.Mock()[:3]; m.status = "error: boom" }},
 		{"narrow", func(m *model) { m.fleet = panel.Mock(); m.width = 40 }},
@@ -249,6 +250,32 @@ func TestPanelConfigEditsShell(t *testing.T) {
 	m = press(m, "x", "esc")
 	if m.input != inputNone || m.shellPath != "/bin/zsh" {
 		t.Fatalf("esc should cancel, input=%v shell=%q", m.input, m.shellPath)
+	}
+}
+
+func TestNewPanelFormPrefills(t *testing.T) {
+	m := model{fleet: panel.Mock(), prefixKey: "ctrl+t",
+		binds: append([]binding(nil), bindings...), shellPath: "/bin/zsh"}
+
+	// prefix+n opens the new-panel popup prefilled with the default shell.
+	m = press(m, "ctrl+t", "n")
+	if m.input != inputNewPanelCmd {
+		t.Fatalf("prefix+n should open the new-panel input, got %v", m.input)
+	}
+	if m.inputBuf != "/bin/zsh" {
+		t.Fatalf("popup should prefill the default shell, got %q", m.inputBuf)
+	}
+
+	// Edit /bin/zsh → /bin/bash and submit (no client: spawnPanel just sets
+	// status).
+	m = press(m, "backspace", "backspace", "backspace") // drop "zsh"
+	m = press(m, "b", "a", "s", "h")
+	m = press(m, "enter")
+	if m.input != inputNone {
+		t.Fatal("enter should close the popup")
+	}
+	if !strings.Contains(m.status, "spawning") || !strings.Contains(m.status, "/bin/bash") {
+		t.Fatalf("spawn status = %q", m.status)
 	}
 }
 

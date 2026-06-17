@@ -97,8 +97,9 @@ type model struct {
 type inputPurpose int
 
 const (
-	inputNone      inputPurpose = iota
-	inputShellPath              // editing the default shell in panel config
+	inputNone        inputPurpose = iota
+	inputShellPath                // editing the default shell in panel config
+	inputNewPanelCmd              // the prefix+n new-panel command popup
 )
 
 // RestartRequested reports whether the cockpit exited because the user asked to
@@ -408,8 +409,23 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "default shell · " + shellLabel(buf)
 		}
+	case inputNewPanelCmd:
+		return m.spawnPanel(buf), nil
 	}
 	return m, nil
+}
+
+// spawnPanel asks the server to create a shell panel running command (empty =
+// the default shell).
+func (m model) spawnPanel(command string) model {
+	if m.client != nil {
+		if err := m.client.Send(proto.Command{Action: "panel.create", Kind: proto.KindShell, Path: command}); err != nil {
+			m.status = "send failed: " + err.Error()
+			return m
+		}
+	}
+	m.status = "spawning " + shellLabel(command)
+	return m
 }
 
 // shellLabel describes a configured shell path; an empty path means the system
@@ -426,11 +442,11 @@ func shellLabel(path string) string {
 func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 	switch a {
 	case actNewPanel:
-		if err := m.client.Send(proto.Command{Action: "panel.create", Kind: proto.KindShell, Path: m.shellPath}); err != nil {
-			m.status = "send failed: " + err.Error()
-		} else {
-			m.status = "spawning " + shellLabel(m.shellPath)
-		}
+		return m.spawnPanel(m.shellPath), nil
+	case actNewForm:
+		m.input = inputNewPanelCmd
+		m.inputBuf = m.shellPath
+		m.status = "new panel · type the command, enter to spawn"
 	case actClose:
 		if len(m.fleet) == 0 {
 			m.status = "no panel to close"
@@ -981,22 +997,24 @@ func (m model) panelConfigView() string {
 	return configBox(lipgloss.JoinVertical(lipgloss.Left,
 		sectionStyle.Render(spaced("PANEL CONFIG")), "",
 		row, "",
-		mutedStyle.Render("new shell panels (C-t p) run this command"),
+		mutedStyle.Render("C-t p spawns this · C-t n picks a command per panel"),
 		"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(legend))), legend,
 	))
 }
 
 // inputView renders the active text-input overlay as a centred popup.
 func (m model) inputView() string {
-	title, prompt := "INPUT", "value"
+	title, prompt, action := "INPUT", "value", "save"
 	switch m.input {
 	case inputShellPath:
 		title, prompt = "DEFAULT SHELL", "shell path  (blank = system default)"
+	case inputNewPanelCmd:
+		title, prompt, action = "NEW PANEL", "command to run  (blank = system shell)", "spawn"
 	}
 
 	field := lipgloss.NewStyle().Width(46).Foreground(colInk).Background(colSurface).Render("› " + m.inputBuf + "▌")
 	legendKey := lipgloss.NewStyle().Foreground(colCyan).Bold(true)
-	legend := legendKey.Render("enter") + mutedStyle.Render(" save") + "   " +
+	legend := legendKey.Render("enter") + mutedStyle.Render(" "+action) + "   " +
 		legendKey.Render("esc") + mutedStyle.Render(" cancel")
 
 	return configBox(lipgloss.JoinVertical(lipgloss.Left,

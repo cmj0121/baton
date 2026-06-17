@@ -22,6 +22,7 @@ import (
 const (
 	keyPrefix      = "ctrl+t"
 	keyNewPanel    = "p"
+	keyNewForm     = "n"
 	keyClose       = "w"
 	keyDashboard   = "d"
 	keyShowMap     = "k"
@@ -51,6 +52,7 @@ type action int
 
 const (
 	actNewPanel action = iota
+	actNewForm
 	actClose
 	actDashboard
 	actToggleMap
@@ -73,6 +75,7 @@ type binding struct {
 // source of truth for the footer hint, the in-view key map, and the config keys.
 var bindings = []binding{
 	{"new-panel", keyNewPanel, "spawn a new shell panel", actNewPanel},
+	{"new-panel-form", keyNewForm, "new panel (choose the command)", actNewForm},
 	{"close", keyClose, "close the selected panel", actClose},
 	{"dashboard", keyDashboard, "jump back to the dashboard", actDashboard},
 	{"key-map", keyShowMap, "toggle this key map", actToggleMap},
