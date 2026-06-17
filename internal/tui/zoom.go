@@ -14,22 +14,28 @@ import (
 )
 
 // zoomFooter builds the coloured strip shown below the emulated panel while
-// zoomed: a brand cap, a green live-ZOOM cap, the panel title, and the
+// zoomed: a brand cap, a state cap (green live-ZOOM, or a grey EXITED for the
+// read-only result of a finished program), the panel title, and the
 // prefix+dashboard detach hint.
-func zoomFooter(width int, title, prefixLabel, dashLabel string) string {
+func zoomFooter(width int, title, prefixLabel, dashLabel string, exited bool) string {
 	brand := seg("◈ BATON", colDark, colBrand)
-	zoom := seg("◉ ZOOM", colInk, colGreen)
+	state := seg("◉ ZOOM", colInk, colGreen)
+	hintText := " dashboard "
+	if exited {
+		state = seg("◼ EXITED", colDark, colMuted)
+		hintText = " back · read-only "
+	}
 	name := barStyle.Foreground(colBrandHi).Bold(true).Render(" " + title + " ")
 
 	keyStyle := lipgloss.NewStyle().Background(colSurface).Foreground(colCyan).Bold(true)
 	mut := lipgloss.NewStyle().Background(colSurface).Foreground(colMuted)
-	hint := keyStyle.Render(" "+prefixLabel+" "+dashLabel) + mut.Render(" dashboard ")
+	hint := keyStyle.Render(" "+prefixLabel+" "+dashLabel) + mut.Render(hintText)
 
-	gap := width - lipgloss.Width(brand+zoom+name) - lipgloss.Width(hint)
+	gap := width - lipgloss.Width(brand+state+name) - lipgloss.Width(hint)
 	if gap < 0 {
 		gap = 0
 	}
-	return brand + zoom + name + barStyle.Render(strings.Repeat(" ", gap)) + hint
+	return brand + state + name + barStyle.Render(strings.Repeat(" ", gap)) + hint
 }
 
 // overlayCursor inserts a reverse-video cell at visible column col of an

@@ -90,10 +90,11 @@ type model struct {
 	input     inputPurpose // active text-input overlay, or inputNone
 	inputBuf  string       // text typed into the overlay
 
-	zoomID    string           // panel being zoomed (modeZoom)
-	zoomTitle string           // its title, for the zoom footer
-	zoomArmed bool             // prefix pressed inside a zoom, awaiting the verb
-	emu       *vt.SafeEmulator // terminal emulator rendering the zoomed panel
+	zoomID     string           // panel being zoomed (modeZoom)
+	zoomTitle  string           // its title, for the zoom footer
+	zoomArmed  bool             // prefix pressed inside a zoom, awaiting the verb
+	zoomExited bool             // the zoomed panel has exited — a read-only result view
+	emu        *vt.SafeEmulator // terminal emulator rendering the zoomed panel
 
 	width, height int
 	quitting      bool
@@ -569,6 +570,7 @@ func (m model) zoomInto(p panel.Panel) model {
 	m.zoomID = p.ID
 	m.zoomTitle = p.Title
 	m.zoomArmed = false
+	m.zoomExited = p.State == panel.Exited
 	if m.width > 0 && m.height > 1 {
 		m.emu = vt.NewSafeEmulator(m.width, m.zoomRows())
 		// Drain the emulator's input side (encoded keys + query replies) to the
@@ -577,7 +579,11 @@ func (m model) zoomInto(p panel.Panel) model {
 	}
 	m.sendf(proto.Command{Action: "panel.resize", ID: p.ID, Rows: m.zoomRows(), Cols: m.width})
 	m.sendf(proto.Command{Action: "panel.attach", ID: p.ID})
-	m.status = "zoomed · " + p.Title
+	if m.zoomExited {
+		m.status = "result · " + p.Title + " (exited)"
+	} else {
+		m.status = "zoomed · " + p.Title
+	}
 	return m
 }
 
@@ -613,7 +619,7 @@ func (m model) zoomDetach() (tea.Model, tea.Cmd) {
 	closeZoom(m.emu) // stops the zoomReader goroutine (Read returns io.EOF)
 	m.mode = modeDashboard
 	m.emu = nil
-	m.zoomID, m.zoomTitle, m.zoomArmed = "", "", false
+	m.zoomID, m.zoomTitle, m.zoomArmed, m.zoomExited = "", "", false, false
 	m.status = "dashboard"
 	if m.client != nil {
 		return m, func() tea.Msg { _ = m.client.Send(proto.Command{Action: "panel.list"}); return nil }
@@ -763,7 +769,7 @@ func (m model) zoomView() string {
 			}
 		}
 	}
-	footer := zoomFooter(m.width, m.zoomTitle, keyLabel(m.effPrefix()), keyLabel(m.bindingKey(actDashboard)))
+	footer := zoomFooter(m.width, m.zoomTitle, keyLabel(m.effPrefix()), keyLabel(m.bindingKey(actDashboard)), m.zoomExited)
 	return strings.Join(lines, "\n") + "\n" + footer
 }
 

@@ -64,6 +64,38 @@ func TestOnCloseFiresOnExit(t *testing.T) {
 	}
 }
 
+func TestSnapshotSurvivesExit(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	m := New()
+	closed := make(chan string, 1)
+	m.OnClose(func(id string) { closed <- id })
+
+	if err := m.Start("1", ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// Print a marker, then exit; the marker must survive in the ring afterwards.
+	m.Write("1", []byte("echo result-kept; exit\n"))
+
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("process did not exit")
+	}
+
+	// The result is still replayable after the process is gone …
+	if !strings.Contains(string(m.Snapshot("1")), "result-kept") {
+		t.Fatalf("snapshot should retain output after exit, got %q", m.Snapshot("1"))
+	}
+	// … writes to the dead panel are safe no-ops …
+	m.Write("1", []byte("ignored"))
+	m.Resize("1", 10, 10)
+	// … and an explicit Stop finally frees it.
+	m.Stop("1")
+	if m.Snapshot("1") != nil {
+		t.Fatal("snapshot should be gone after Stop")
+	}
+}
+
 func TestWriteResizeSnapshotUnknownIDSafe(t *testing.T) {
 	m := New()
 	m.Write("nope", []byte("x")) // no panic

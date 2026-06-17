@@ -13,10 +13,13 @@ import (
 // ringCap is how much recent output is kept per panel for replay on attach.
 const ringCap = 32 * 1024
 
-// pane is one live PTY plus a ring buffer of its recent output.
+// pane is one PTY plus a ring buffer of its recent output. After the process
+// exits the pane is kept (dead) so its final output can still be replayed; it is
+// freed only when the panel is closed or purged.
 type pane struct {
 	f    *os.File
 	ring []byte
+	dead bool // process exited: f is closed, ring retained for replay
 }
 
 // Manager tracks the live PTYs keyed by panel id and fans their output out
@@ -43,7 +46,8 @@ func (m *Manager) OnClose(fn func(id string)) { m.onClose = fn }
 // Start launches command (a binary path) under a new PTY for the given panel id.
 // An empty command falls back to the user's shell ($SHELL, then /bin/sh). Output
 // is streamed to the sink and kept in a small ring for replay; when the process
-// exits it is reaped and forgotten.
+// exits its PTY is reaped but the ring is retained, so the final result can
+// still be shown until the panel is closed or purged.
 func (m *Manager) Start(id, command string) error {
 	if command == "" {
 		command = DefaultShell()
@@ -83,10 +87,21 @@ func (m *Manager) pump(id string, p *pane, cmd *exec.Cmd) {
 		}
 	}
 	_ = cmd.Wait()
-	m.remove(id)
+	m.markDead(id)
 	if m.onClose != nil {
 		m.onClose(id)
 	}
+}
+
+// markDead closes a panel's PTY but keeps its pane so the retained output ring
+// can still be replayed. The pane is freed for real by Stop (close/purge).
+func (m *Manager) markDead(id string) {
+	m.mu.Lock()
+	if p, ok := m.ptys[id]; ok {
+		_ = p.f.Close()
+		p.dead = true
+	}
+	m.mu.Unlock()
 }
 
 func (m *Manager) appendRing(p *pane, chunk []byte) {
@@ -109,22 +124,28 @@ func (m *Manager) Snapshot(id string) []byte {
 	return nil
 }
 
-// Write forwards input bytes to a panel's process. A no-op for an unknown id.
-func (m *Manager) Write(id string, data []byte) {
+// livePane returns a panel's pane if it exists and its process is still running.
+// It is the shared guard for operations that must skip unknown or exited (dead)
+// panels; the PTY is touched by the caller after the lock is released.
+func (m *Manager) livePane(id string) (*pane, bool) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	p, ok := m.ptys[id]
-	m.mu.Unlock()
-	if ok {
+	return p, ok && !p.dead
+}
+
+// Write forwards input bytes to a panel's process. A no-op for an unknown or
+// exited (dead) panel.
+func (m *Manager) Write(id string, data []byte) {
+	if p, live := m.livePane(id); live {
 		_, _ = p.f.Write(data)
 	}
 }
 
-// Resize sets a panel's window size (in cells). A no-op for an unknown id.
+// Resize sets a panel's window size (in cells). A no-op for an unknown or exited
+// (dead) panel.
 func (m *Manager) Resize(id string, rows, cols int) {
-	m.mu.Lock()
-	p, ok := m.ptys[id]
-	m.mu.Unlock()
-	if ok {
+	if p, live := m.livePane(id); live {
 		_ = pty.Setsize(p.f, &pty.Winsize{Rows: clampCell(rows), Cols: clampCell(cols)})
 	}
 }
