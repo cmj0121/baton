@@ -155,6 +155,39 @@ func TestExitMarks(t *testing.T) {
 	}
 }
 
+func TestStatsOnAttach(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "baton.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() { _ = server.New(ln).Serve() }()
+
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	recv(t, c) // welcome
+	recv(t, c) // panels
+
+	// The server seeds a stats sample right after the handshake on the dedicated
+	// Stats channel; it is measured on the server (the backend), so total memory
+	// must be real.
+	select {
+	case got := <-c.Stats:
+		if got.Type != "stats" {
+			t.Fatalf("expected a stats message, got %+v", got)
+		}
+		if got.MemTotal == 0 || got.MemUsed == 0 || got.MemUsed > got.MemTotal {
+			t.Fatalf("stats out of range: used=%d total=%d", got.MemUsed, got.MemTotal)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no stats sample arrived after attach")
+	}
+}
+
 func TestPurgeExited(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	sock := filepath.Join(t.TempDir(), "baton.sock")

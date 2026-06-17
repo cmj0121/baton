@@ -18,10 +18,12 @@ type Client struct {
 	enc    *json.Encoder
 
 	// Events delivers control messages; Output delivers PTY data from a zoomed
-	// panel. Splitting them keeps a burst of output from starving the cockpit.
-	// Both are closed on disconnect.
+	// panel; Stats delivers the server's host telemetry. Splitting them keeps a
+	// burst of output (or a stale stat) from starving the cockpit. All are closed
+	// on disconnect.
 	Events chan proto.ServerMsg
 	Output chan proto.ServerMsg
+	Stats  chan proto.ServerMsg
 }
 
 // Dial connects to the server at socket, says hello, and starts reading events.
@@ -36,6 +38,7 @@ func Dial(socket string) (*Client, error) {
 		enc:    json.NewEncoder(conn),
 		Events: make(chan proto.ServerMsg, proto.EventBufferSize),
 		Output: make(chan proto.ServerMsg, proto.EventBufferSize),
+		Stats:  make(chan proto.ServerMsg, proto.EventBufferSize),
 	}
 	go c.readLoop()
 
@@ -76,15 +79,24 @@ func (c *Client) Close() error {
 func (c *Client) readLoop() {
 	defer close(c.Events)
 	defer close(c.Output)
+	defer close(c.Stats)
 	dec := json.NewDecoder(c.conn)
 	for {
 		var msg proto.ServerMsg
 		if err := dec.Decode(&msg); err != nil {
 			return
 		}
-		if msg.Type == "output" {
+		switch msg.Type {
+		case "output":
 			c.Output <- msg
-		} else {
+		case "stats":
+			// Telemetry is latest-wins; drop a stale sample rather than let a
+			// full buffer stall control messages.
+			select {
+			case c.Stats <- msg:
+			default:
+			}
+		default:
 			c.Events <- msg
 		}
 	}

@@ -10,13 +10,19 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/mem"
 
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/ptymgr"
 )
+
+// statsInterval is how often the server samples host CPU/memory for the footer.
+const statsInterval = 2 * time.Second
 
 // clientConn is one attached frontend. Outbound messages go through its buffered
 // channel so a slow client never stalls a broadcast. attached is the panel id
@@ -105,6 +111,10 @@ func (s *Server) attach(cc *clientConn, id string) {
 
 // Serve accepts connections until the listener closes.
 func (s *Server) Serve() error {
+	stop := make(chan struct{})
+	defer close(stop)
+	go s.statsLoop(stop)
+
 	for {
 		conn, err := s.ln.Accept()
 		if err != nil {
@@ -112,6 +122,41 @@ func (s *Server) Serve() error {
 		}
 		go s.handle(conn)
 	}
+}
+
+// statsLoop samples host CPU/memory on a fixed interval and broadcasts it to
+// attached clients, so the footer reflects the server's machine. It stops when
+// Serve returns (the listener closed).
+func (s *Server) statsLoop(stop <-chan struct{}) {
+	_, _ = cpu.Percent(0, false) // prime the rolling CPU delta
+	t := time.NewTicker(statsInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			s.mu.Lock()
+			n := len(s.clients)
+			s.mu.Unlock()
+			if n > 0 {
+				s.broadcast(statsMsg())
+			}
+		}
+	}
+}
+
+// statsMsg samples the host's CPU load and memory for the footer. cpu.Percent
+// with a zero interval is non-blocking, reporting load since the previous call.
+func statsMsg() proto.ServerMsg {
+	msg := proto.ServerMsg{Type: "stats"}
+	if pct, err := cpu.Percent(0, false); err == nil && len(pct) > 0 {
+		msg.CPU = pct[0]
+	}
+	if vm, err := mem.VirtualMemory(); err == nil {
+		msg.MemUsed, msg.MemTotal = vm.Used, vm.Total
+	}
+	return msg
 }
 
 func (s *Server) handle(conn net.Conn) {
@@ -148,6 +193,7 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "hello":
 		send(cc, proto.ServerMsg{Type: "welcome", Version: proto.ProtocolVersion})
 		send(cc, s.panelsMsg())
+		send(cc, statsMsg()) // seed the footer immediately, before the first tick
 	case "panel.list":
 		send(cc, s.panelsMsg())
 	case "panel.create":

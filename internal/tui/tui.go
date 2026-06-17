@@ -81,6 +81,10 @@ type model struct {
 	pendingClose bool      // a close is awaiting y/n confirmation
 	now          time.Time // wall clock shown in the footer, ticked every second
 
+	cpuPct   float64 // system-wide CPU load %, sampled each tick for the footer
+	memUsed  uint64  // system memory in use, bytes
+	memTotal uint64  // total system memory, bytes
+
 	prefixKey string    // leader key armed before a binding (default ctrl+t)
 	binds     []binding // editable copy of the bindings (nil ⇒ the defaults)
 	editing   bool      // capturing the next key press as a rebind
@@ -198,29 +202,35 @@ func (m model) lookup(key string) (binding, bool) {
 
 type eventMsg proto.ServerMsg
 type panelOutputMsg proto.ServerMsg
+type statsEventMsg proto.ServerMsg
 type connClosedMsg struct{}
 type tickMsg time.Time
 
-func waitEvent(ch chan proto.ServerMsg) tea.Cmd {
+// waitMsg returns a command that blocks for the next message on ch and wraps it
+// with wrap — a per-channel type so Update can re-arm the channel that fired. A
+// closed channel means the server hung up. The cockpit reads control, panel
+// output, and host telemetry on separate channels so a burst on one never delays
+// another; each gets its own wait command below.
+func waitMsg(ch chan proto.ServerMsg, wrap func(proto.ServerMsg) tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		msg, ok := <-ch
 		if !ok {
 			return connClosedMsg{}
 		}
-		return eventMsg(msg)
+		return wrap(msg)
 	}
 }
 
-// waitOutput streams a zoomed panel's PTY output. It runs alongside waitEvent on
-// a separate channel so a burst of output never blocks control messages.
+func waitEvent(ch chan proto.ServerMsg) tea.Cmd {
+	return waitMsg(ch, func(m proto.ServerMsg) tea.Msg { return eventMsg(m) })
+}
+
 func waitOutput(ch chan proto.ServerMsg) tea.Cmd {
-	return func() tea.Msg {
-		msg, ok := <-ch
-		if !ok {
-			return connClosedMsg{}
-		}
-		return panelOutputMsg(msg)
-	}
+	return waitMsg(ch, func(m proto.ServerMsg) tea.Msg { return panelOutputMsg(m) })
+}
+
+func waitStats(ch chan proto.ServerMsg) tea.Cmd {
+	return waitMsg(ch, func(m proto.ServerMsg) tea.Msg { return statsEventMsg(m) })
 }
 
 // tick drives the footer clock, firing once a second.
@@ -229,7 +239,7 @@ func tick() tea.Cmd {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(waitEvent(m.client.Events), waitOutput(m.client.Output), tick())
+	return tea.Batch(waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), tick())
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -251,6 +261,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			_, _ = m.emu.Write(proto.ServerMsg(msg).Data)
 		}
 		return m, waitOutput(m.client.Output)
+
+	case statsEventMsg:
+		m.applyEvent(proto.ServerMsg(msg))
+		return m, waitStats(m.client.Stats)
 
 	case connClosedMsg:
 		m.status = "server closed the connection"
@@ -298,6 +312,9 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 	case "panels":
 		m.fleet = mergeFleet(sm.Panels)
 		m.clampCursor()
+	case "stats":
+		m.cpuPct = sm.CPU
+		m.memUsed, m.memTotal = sm.MemUsed, sm.MemTotal
 	case "error":
 		m.status = "error: " + sm.Error
 	}
@@ -1226,12 +1243,12 @@ func (m model) footer() string {
 		left += seg(fmt.Sprintf("◆ %d", n), colDark, states[panel.Attention].color)
 	}
 
-	// Right caps: optional PREFIX badge · clock · connection status.
+	// Right caps: system stats · optional PREFIX badge · clock · connection status.
 	statusBg := colGreen
 	if strings.HasPrefix(m.status, "error") {
 		statusBg = colRed
 	}
-	right := seg("⏱ "+m.now.Format("15:04:05"), colDark, colCyan) + seg("● "+m.status, colInk, statusBg)
+	right := m.statsStrip() + seg("⏱ "+m.now.Format("15:04:05"), colDark, colCyan) + seg("● "+m.status, colInk, statusBg)
 	if m.prefix {
 		right = seg("PREFIX", colDark, colBrandHi) + right
 	}
@@ -1242,6 +1259,31 @@ func (m model) footer() string {
 		gap = 0
 	}
 	return left + m.renderCounts(gap) + right
+}
+
+// statsStrip renders the system CPU and memory readout as a surface-coloured
+// telemetry segment (e.g. "CPU 18%  MEM 9.2/16G"). It is blank until the first
+// sample lands, so the footer never shows a bogus 0/0.
+func (m model) statsStrip() string {
+	if m.memTotal == 0 {
+		return ""
+	}
+	lab := lipgloss.NewStyle().Background(colSurface).Foreground(colMuted)
+	val := lipgloss.NewStyle().Background(colSurface).Foreground(colCyan).Bold(true)
+	body := lab.Render(" CPU ") + val.Render(fmt.Sprintf("%.0f%%", m.cpuPct)) +
+		lab.Render("  MEM ") + val.Render(memLabel(m.memUsed, m.memTotal)) + lab.Render(" ")
+	return barStyle.Render(body)
+}
+
+// memLabel formats a used/total byte pair in the total's unit, e.g. "9.2/16G".
+func memLabel(used, total uint64) string {
+	units := []string{"B", "K", "M", "G", "T", "P"}
+	div, exp := uint64(1), 0
+	for total/div >= 1024 && exp < len(units)-1 {
+		div *= 1024
+		exp++
+	}
+	return fmt.Sprintf("%.1f/%.0f%s", float64(used)/float64(div), float64(total)/float64(div), units[exp])
 }
 
 // renderCounts lays the per-kind panel tally onto a surface-coloured strip
