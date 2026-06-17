@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"slices"
 	"sync"
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/ptymgr"
 )
@@ -28,15 +30,19 @@ type Server struct {
 
 	mu      sync.Mutex
 	seq     int
-	panels  []proto.Panel
+	panels  []panel.Panel
 	clients map[*clientConn]struct{}
 }
 
-// New builds a server bound to ln.
+// New builds a server bound to ln. The fleet is seeded with a mock set of panels
+// so a fresh session looks alive; these are real, operable panels — they can be
+// closed and persist across client re-attach — until live process state replaces
+// the mock telemetry.
 func New(ln net.Listener) *Server {
 	return &Server{
 		ln:      ln,
 		pty:     ptymgr.New(),
+		panels:  panel.Mock(),
 		clients: make(map[*clientConn]struct{}),
 	}
 }
@@ -94,12 +100,19 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			return
 		}
 		s.broadcast(s.panelsMsg())
+	case "panel.close":
+		if err := s.closePanel(cmd.ID); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		s.broadcast(s.panelsMsg())
 	default:
 		send(cc, proto.ServerMsg{Type: "error", Error: fmt.Sprintf("unknown action %q", cmd.Action)})
 	}
 }
 
-// createPanel is a core action: it spawns the backing process and records state.
+// createPanel is a core action: it spawns the backing process and records the
+// new panel in the fleet.
 func (s *Server) createPanel(kind string) error {
 	if kind == "" {
 		kind = proto.KindShell
@@ -119,12 +132,46 @@ func (s *Server) createPanel(kind string) error {
 		return fmt.Errorf("unknown panel kind %q", kind)
 	}
 
-	panel := proto.Panel{ID: id, Kind: kind, Title: fmt.Sprintf("%s #%s", kind, id)}
+	p := panel.Panel{
+		ID:       id,
+		Kind:     panel.ParseKind(kind),
+		Title:    fmt.Sprintf("%s #%s", kind, id),
+		State:    panel.Running,
+		Activity: "spawned",
+	}
 	s.mu.Lock()
-	s.panels = append(s.panels, panel)
+	s.panels = append(s.panels, p)
 	s.mu.Unlock()
 
-	log.Info().Str("panel", panel.Title).Msg("panel created")
+	log.Info().Str("panel", p.Title).Msg("panel created")
+	return nil
+}
+
+// closePanel is a core action: it removes the panel with the given id from the
+// fleet and stops its backing process, if any.
+func (s *Server) closePanel(id string) error {
+	if id == "" {
+		return fmt.Errorf("panel.close needs an id")
+	}
+
+	s.mu.Lock()
+	idx := -1
+	for i, p := range s.panels {
+		if p.ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		s.mu.Unlock()
+		return fmt.Errorf("no panel with id %q", id)
+	}
+	title := s.panels[idx].Title
+	s.panels = slices.Delete(s.panels, idx, idx+1)
+	s.mu.Unlock()
+
+	s.pty.Stop(id) // no-op for mock panels with no real process
+	log.Info().Str("panel", title).Msg("panel closed")
 	return nil
 }
 
@@ -132,7 +179,9 @@ func (s *Server) panelsMsg() proto.ServerMsg {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]proto.Panel, len(s.panels))
-	copy(out, s.panels)
+	for i, p := range s.panels {
+		out[i] = p.ToProto()
+	}
 	return proto.ServerMsg{Type: "panels", Panels: out}
 }
 

@@ -15,6 +15,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -37,8 +39,9 @@ const daemonEnv = "BATON_DAEMON"
 
 // CLI is the entire baton command-line surface: a few flags, no commands.
 type CLI struct {
-	Log     string           `short:"l" name:"log" placeholder:"FILE" help:"Write logs to FILE, e.g. /var/log/baton.log (default: a per-session file under the runtime dir)."`
+	Log     string           `short:"l" name:"log" placeholder:"FILE" help:"Write logs to FILE (default: $HOME/.baton/baton.log)."`
 	Verbose int              `short:"v" type:"counter" help:"Increase log verbosity (-v debug, -vv trace)."`
+	Force   bool             `short:"f" name:"force" help:"Force-stop any running server for this session and start a fresh one before attaching."`
 	Version kong.VersionFlag `short:"V" help:"Print the version and quit."`
 }
 
@@ -62,15 +65,48 @@ func main() {
 		kctx.FatalIfErrorf(runServer())
 		return
 	}
-	kctx.FatalIfErrorf(attach(cli.Verbose, logPath))
+	kctx.FatalIfErrorf(attach(cli.Verbose, logPath, cli.Force))
 }
 
-// attach starts the session's server if needed, then runs the cockpit.
-func attach(verbose int, logPath string) error {
+// attach starts the session's server if needed, then runs the cockpit. With
+// force, any running server is stopped first so the session comes up fresh.
+func attach(verbose int, logPath string, force bool) error {
+	if force {
+		if err := stopDaemon(paths.Socket()); err != nil {
+			return err
+		}
+	}
 	if err := startDaemon(verbose, logPath); err != nil {
 		return err
 	}
-	return runClient()
+	return runClient(verbose, logPath)
+}
+
+// stopDaemon force-stops this session's running daemon, if any, and waits for it
+// to release the socket. It is a no-op (bar tidying a stale socket) when no
+// server is alive.
+func stopDaemon(sock string) error {
+	if !alive(sock) {
+		return clearStaleSocket(sock)
+	}
+
+	pidPath := paths.PidFile(sock)
+	data, err := os.ReadFile(pidPath)
+	if err != nil {
+		return fmt.Errorf("find daemon pid (%s): %w", pidPath, err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return fmt.Errorf("parse daemon pid from %s: %w", pidPath, err)
+	}
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		return fmt.Errorf("signal daemon %d: %w", pid, err)
+	}
+	if !waitFor(func() bool { return !alive(sock) }, 50, 50*time.Millisecond) {
+		return fmt.Errorf("daemon %d did not stop in time", pid)
+	}
+	log.Info().Int("pid", pid).Msg("daemon stopped")
+	return nil
 }
 
 // setupLogger points the global zerolog logger at the log file, creating it (and
@@ -158,9 +194,18 @@ func runServer() error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", sock, err)
 	}
+
+	// Record the PID so clients can force-stop this daemon (baton --force / the
+	// in-TUI restart). Non-fatal if it cannot be written.
+	pidPath := paths.PidFile(sock)
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		log.Warn().Err(err).Str("pid_file", pidPath).Msg("could not write pid file")
+	}
+
 	cleanup := func() {
 		_ = ln.Close()
 		_ = os.Remove(sock)
+		_ = os.Remove(pidPath)
 	}
 	defer cleanup()
 
@@ -180,19 +225,34 @@ func runServer() error {
 	return nil
 }
 
-// runClient attaches a TUI cockpit to this session's server.
-func runClient() error {
+// runClient attaches a TUI cockpit to this session's server. If the cockpit
+// exits asking for a restart (the prefix+S binding), it force-stops the daemon,
+// starts a fresh one, and re-attaches.
+func runClient(verbose int, logPath string) error {
 	sock := paths.Socket()
-	c, err := client.Dial(sock)
-	if err != nil {
-		return fmt.Errorf("attach to baton server at %s: %w", sock, err)
-	}
-	defer func() { _ = c.Close() }()
+	for {
+		c, err := client.Dial(sock)
+		if err != nil {
+			return fmt.Errorf("attach to baton server at %s: %w", sock, err)
+		}
 
-	if _, err := tea.NewProgram(tui.New(c), tea.WithAltScreen()).Run(); err != nil {
-		return fmt.Errorf("tui: %w", err)
+		final, runErr := tea.NewProgram(tui.New(c), tea.WithAltScreen()).Run()
+		_ = c.Close()
+		if runErr != nil {
+			return fmt.Errorf("tui: %w", runErr)
+		}
+
+		r, ok := final.(interface{ RestartRequested() bool })
+		if !ok || !r.RestartRequested() {
+			return nil
+		}
+		if err := stopDaemon(sock); err != nil {
+			return err
+		}
+		if err := startDaemon(verbose, logPath); err != nil {
+			return err
+		}
 	}
-	return nil
 }
 
 // alive reports whether a server is accepting connections on sock.

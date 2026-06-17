@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 )
 
@@ -20,10 +21,24 @@ func Socket() string {
 	return filepath.Join(runtimeDir(), fmt.Sprintf("baton-%d.sock", sessionID()))
 }
 
-// LogFile is the default log file, used when --log is not given. One server
-// runs per login session, so it needs no per-instance suffix.
+// PidFile returns the daemon PID file that pairs with the given socket. It is
+// derived from the socket path so the daemon child — which re-sessions itself
+// and cannot recompute Socket() — resolves the same path from BATON_SOCK.
+func PidFile(socket string) string {
+	return strings.TrimSuffix(socket, ".sock") + ".pid"
+}
+
+// LogFile is the default log file ($HOME/.baton/baton.log), used when --log is
+// not given. One server runs per login session, so it needs no per-instance
+// suffix.
 func LogFile() string {
-	return filepath.Join(os.Getenv("HOME"), ".baton", "log")
+	return filepath.Join(os.Getenv("HOME"), ".baton", "baton.log")
+}
+
+// ConfigFile is the user's persistent client configuration ($HOME/.baton/config,
+// YAML). It holds settings such as the key-binding overrides.
+func ConfigFile() string {
+	return filepath.Join(os.Getenv("HOME"), ".baton", "config")
 }
 
 // EnsureDir creates the directory that holds the given file, with private perms.

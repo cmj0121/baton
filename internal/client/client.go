@@ -44,6 +44,20 @@ func (c *Client) Send(cmd proto.Command) error {
 	return c.enc.Encode(cmd)
 }
 
+// Endpoint is a short, human label for where this client is attached: "local"
+// for a Unix-domain (same-host) server, or the host/IP for a future remote (TCP)
+// server. It is what the cockpit shows in the footer.
+func (c *Client) Endpoint() string {
+	addr := c.conn.RemoteAddr()
+	if addr == nil || addr.Network() == "unix" {
+		return "local"
+	}
+	if host, _, err := net.SplitHostPort(addr.String()); err == nil {
+		return host
+	}
+	return addr.String()
+}
+
 // Close detaches from the server. The server keeps running.
 func (c *Client) Close() error {
 	return c.conn.Close()
