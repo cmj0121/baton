@@ -1,6 +1,48 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"testing"
+
+	"github.com/cmj0121/baton/internal/paths"
+)
+
+func TestLoadDirectoryErrors(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	// A directory where the config file should be makes ReadFile fail with a
+	// non-not-exist error.
+	if err := os.MkdirAll(paths.ConfigFile(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(); err == nil {
+		t.Fatal("reading a directory as the config should error")
+	}
+}
+
+func TestSaveDirPrepFails(t *testing.T) {
+	// Point HOME at a regular file so creating $HOME/.baton fails.
+	notADir := t.TempDir() + "/file"
+	if err := os.WriteFile(notADir, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", notADir)
+	if err := (Config{Keys: map[string]string{"a": "b"}}).Save(); err == nil {
+		t.Fatal("Save should fail when its directory cannot be created")
+	}
+}
+
+func TestLoadMalformedYAMLErrors(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := paths.EnsureDir(paths.ConfigFile()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.ConfigFile(), []byte("keys: [not-a-map\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(); err == nil {
+		t.Fatal("malformed YAML should return an error")
+	}
+}
 
 func TestLoadMissingIsEmpty(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
