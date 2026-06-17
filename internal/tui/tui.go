@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	vt "github.com/charmbracelet/x/vt"
 
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/panel"
@@ -62,6 +63,7 @@ const (
 	modeDashboard mode = iota
 	modeKeyMap
 	modePanelConfig
+	modeZoom
 )
 
 type model struct {
@@ -87,6 +89,11 @@ type model struct {
 	shellPath string       // configured default shell binary path ("" = system shell)
 	input     inputPurpose // active text-input overlay, or inputNone
 	inputBuf  string       // text typed into the overlay
+
+	zoomID    string           // panel being zoomed (modeZoom)
+	zoomTitle string           // its title, for the zoom footer
+	zoomArmed bool             // prefix pressed inside a zoom, awaiting the verb
+	emu       *vt.SafeEmulator // terminal emulator rendering the zoomed panel
 
 	width, height int
 	quitting      bool
@@ -189,6 +196,7 @@ func (m model) lookup(key string) (binding, bool) {
 // --- bubbletea event plumbing ---
 
 type eventMsg proto.ServerMsg
+type panelOutputMsg proto.ServerMsg
 type connClosedMsg struct{}
 type tickMsg time.Time
 
@@ -202,24 +210,46 @@ func waitEvent(ch chan proto.ServerMsg) tea.Cmd {
 	}
 }
 
+// waitOutput streams a zoomed panel's PTY output. It runs alongside waitEvent on
+// a separate channel so a burst of output never blocks control messages.
+func waitOutput(ch chan proto.ServerMsg) tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-ch
+		if !ok {
+			return connClosedMsg{}
+		}
+		return panelOutputMsg(msg)
+	}
+}
+
 // tick drives the footer clock, firing once a second.
 func tick() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(waitEvent(m.client.Events), tick())
+	return tea.Batch(waitEvent(m.client.Events), waitOutput(m.client.Output), tick())
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		if m.mode == modeZoom && m.emu != nil {
+			m.emu.Resize(m.width, m.zoomRows())
+			m.sendf(proto.Command{Action: "panel.resize", ID: m.zoomID, Rows: m.zoomRows(), Cols: m.width})
+		}
 		return m, nil
 
 	case eventMsg:
 		m.applyEvent(proto.ServerMsg(msg))
 		return m, waitEvent(m.client.Events)
+
+	case panelOutputMsg:
+		if m.mode == modeZoom && m.emu != nil && proto.ServerMsg(msg).ID == m.zoomID {
+			_, _ = m.emu.Write(proto.ServerMsg(msg).Data)
+		}
+		return m, waitOutput(m.client.Output)
 
 	case connClosedMsg:
 		m.status = "server closed the connection"
@@ -231,9 +261,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tick()
 
 	case tea.KeyMsg:
+		if m.mode == modeZoom {
+			return m.handleZoomKey(msg)
+		}
 		return m.handleKey(msg)
 	}
 	return m, nil
+}
+
+// zoomRows is the rows available to the zoomed panel (the terminal height less
+// the footer row).
+func (m model) zoomRows() int {
+	if m.height < 2 {
+		return 1
+	}
+	return m.height - 1
+}
+
+// sendf sends a command if there is a live client (a no-op in tests).
+func (m model) sendf(cmd proto.Command) {
+	if m.client != nil {
+		_ = m.client.Send(cmd)
+	}
 }
 
 func (m *model) applyEvent(sm proto.ServerMsg) {
@@ -505,10 +554,81 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 	if m.mode == modePanelConfig {
 		return m.editShellPath(), nil // the only row is the default shell
 	}
+	// Dashboard: zoom into the selected panel.
 	if m.cursor >= 0 && m.cursor < len(m.fleet) {
-		m.status = "focus · " + m.fleet[m.cursor].Title + "  (zoom not wired yet)"
+		return m.zoomInto(m.fleet[m.cursor]), nil
 	}
 	return m, nil
+}
+
+// zoomInto opens a terminal emulator for panel p and attaches to its PTY: output
+// streams into the emulator and keystrokes are forwarded back. baton owns the
+// screen, so the footer (rendered in View) is always safe.
+func (m model) zoomInto(p panel.Panel) model {
+	m.mode = modeZoom
+	m.zoomID = p.ID
+	m.zoomTitle = p.Title
+	m.zoomArmed = false
+	if m.width > 0 && m.height > 1 {
+		m.emu = vt.NewSafeEmulator(m.width, m.zoomRows())
+		// Drain the emulator's input side (encoded keys + query replies) to the
+		// PTY. The goroutine ends when zoomDetach closes the emulator.
+		go zoomReader(m.emu, m.client, p.ID)
+	}
+	m.sendf(proto.Command{Action: "panel.resize", ID: p.ID, Rows: m.zoomRows(), Cols: m.width})
+	m.sendf(proto.Command{Action: "panel.attach", ID: p.ID})
+	m.status = "zoomed · " + p.Title
+	return m
+}
+
+// handleZoomKey forwards keystrokes to the zoomed panel, treating the prefix as
+// a leader: prefix+dashboard detaches, prefix+prefix sends a literal prefix.
+func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := k.String()
+	if m.zoomArmed {
+		m.zoomArmed = false
+		switch key {
+		case m.bindingKey(actDashboard):
+			return m.zoomDetach()
+		case m.effPrefix():
+			if m.emu != nil {
+				feedKey(m.emu, k) // prefix+prefix sends a literal prefix
+			}
+		}
+		return m, nil
+	}
+	if key == m.effPrefix() {
+		m.zoomArmed = true
+		return m, nil
+	}
+	if m.emu != nil {
+		feedKey(m.emu, k)
+	}
+	return m, nil
+}
+
+// zoomDetach leaves the zoom, returning to a refreshed dashboard.
+func (m model) zoomDetach() (tea.Model, tea.Cmd) {
+	m.sendf(proto.Command{Action: "panel.detach", ID: m.zoomID})
+	closeZoom(m.emu) // stops the zoomReader goroutine (Read returns io.EOF)
+	m.mode = modeDashboard
+	m.emu = nil
+	m.zoomID, m.zoomTitle, m.zoomArmed = "", "", false
+	m.status = "dashboard"
+	if m.client != nil {
+		return m, func() tea.Msg { _ = m.client.Send(proto.Command{Action: "panel.list"}); return nil }
+	}
+	return m, nil
+}
+
+// bindingKey returns the bare key bound to an action, or "" if none.
+func (m model) bindingKey(a action) string {
+	for _, b := range m.keymap() {
+		if b.act == a {
+			return b.key
+		}
+	}
+	return ""
 }
 
 // closeSelected asks the server to close the highlighted panel and drops it from
@@ -595,6 +715,9 @@ func (m model) View() string {
 	if m.width == 0 || m.height == 0 {
 		return "" // wait for the first size message
 	}
+	if m.mode == modeZoom {
+		return m.zoomView()
+	}
 
 	header := lipgloss.JoinVertical(lipgloss.Center,
 		bannerStyle.Render(banner),
@@ -619,6 +742,29 @@ func (m model) View() string {
 	// panels carry their own surface colour for depth.
 	placed := lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Center, content)
 	return placed + "\n" + m.footer()
+}
+
+// zoomView renders the emulated panel screen filling the top rows, with a cursor
+// drawn at the emulator's cursor cell and the zoom footer pinned to the last
+// line. baton owns every cell, so the footer can never be smeared by the program
+// inside.
+func (m model) zoomView() string {
+	rows := m.zoomRows()
+	lines := make([]string, rows)
+	if m.emu != nil {
+		raw := strings.Split(m.emu.Render(), "\n")
+		cur := m.emu.CursorPosition()
+		for i := range lines {
+			if i < len(raw) {
+				lines[i] = raw[i]
+			}
+			if i == cur.Y {
+				lines[i] = overlayCursor(lines[i], cur.X)
+			}
+		}
+	}
+	footer := zoomFooter(m.width, m.zoomTitle, keyLabel(m.effPrefix()), keyLabel(m.bindingKey(actDashboard)))
+	return strings.Join(lines, "\n") + "\n" + footer
 }
 
 // dashboardView renders the status summary strip above the fleet. A small fleet

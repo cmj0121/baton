@@ -41,6 +41,7 @@ func TestViewRendersEveryMode(t *testing.T) {
 		{"panel-config-default", func(m *model) { m.mode = modePanelConfig }},
 		{"input-shell", func(m *model) { m.input = inputShellPath; m.inputBuf = "/bin/zsh" }},
 		{"input-new-panel", func(m *model) { m.input = inputNewPanelCmd; m.inputBuf = "/bin/sh" }},
+		{"zoom", func(m *model) { m.mode = modeZoom; m.zoomTitle = "shell #1" }},
 		{"prefix-armed", func(m *model) { m.fleet = panel.Mock()[:3]; m.prefix = true }},
 		{"error", func(m *model) { m.fleet = panel.Mock()[:3]; m.status = "error: boom" }},
 		{"narrow", func(m *model) { m.fleet = panel.Mock(); m.width = 40 }},
@@ -193,10 +194,10 @@ func TestRunActionsWithoutClient(t *testing.T) {
 		t.Fatal("ctrl+c should quit")
 	}
 
-	// dashboard cursor movement and focus.
+	// dashboard cursor movement, then enter zooms the selected panel.
 	nav := press(base(), "down", "up", "left", "right", "j", "k", "h", "l", "tab", "shift+tab", "enter")
-	if !strings.Contains(nav.status, "focus") {
-		t.Fatalf("enter on a card should focus, status=%q", nav.status)
+	if !strings.Contains(nav.status, "zoomed") {
+		t.Fatalf("enter on a card should zoom, status=%q", nav.status)
 	}
 
 	// esc leaves the key map.

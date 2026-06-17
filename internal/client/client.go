@@ -5,6 +5,7 @@ package client
 import (
 	"encoding/json"
 	"net"
+	"sync"
 
 	"github.com/cmj0121/baton/internal/proto"
 )
@@ -12,10 +13,15 @@ import (
 // Client is a live attachment to the baton server.
 type Client struct {
 	conn net.Conn
-	enc  *json.Encoder
 
-	// Events delivers messages pushed by the server; it is closed on disconnect.
+	sendMu sync.Mutex // serialises Send; the zoom reader and the UI both write
+	enc    *json.Encoder
+
+	// Events delivers control messages; Output delivers PTY data from a zoomed
+	// panel. Splitting them keeps a burst of output from starving the cockpit.
+	// Both are closed on disconnect.
 	Events chan proto.ServerMsg
+	Output chan proto.ServerMsg
 }
 
 // Dial connects to the server at socket, says hello, and starts reading events.
@@ -29,6 +35,7 @@ func Dial(socket string) (*Client, error) {
 		conn:   conn,
 		enc:    json.NewEncoder(conn),
 		Events: make(chan proto.ServerMsg, proto.EventBufferSize),
+		Output: make(chan proto.ServerMsg, proto.EventBufferSize),
 	}
 	go c.readLoop()
 
@@ -39,8 +46,11 @@ func Dial(socket string) (*Client, error) {
 	return c, nil
 }
 
-// Send writes a command to the server.
+// Send writes a command to the server. It is safe for concurrent use: the
+// cockpit's event loop and the zoom reader goroutine both send.
 func (c *Client) Send(cmd proto.Command) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
 	return c.enc.Encode(cmd)
 }
 
@@ -65,12 +75,17 @@ func (c *Client) Close() error {
 
 func (c *Client) readLoop() {
 	defer close(c.Events)
+	defer close(c.Output)
 	dec := json.NewDecoder(c.conn)
 	for {
 		var msg proto.ServerMsg
 		if err := dec.Decode(&msg); err != nil {
 			return
 		}
-		c.Events <- msg
+		if msg.Type == "output" {
+			c.Output <- msg
+		} else {
+			c.Events <- msg
+		}
 	}
 }

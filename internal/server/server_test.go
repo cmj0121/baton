@@ -141,15 +141,17 @@ func TestAttachIO(t *testing.T) {
 		t.Fatalf("input: %v", err)
 	}
 
+	deadline := time.After(3 * time.Second)
 	found := false
-	for i := 0; i < 40 && !found; i++ {
-		msg := recv(t, c)
-		if msg.Type == "output" && msg.ID == id && strings.Contains(string(msg.Data), "baton-xyz") {
-			found = true
+	for !found {
+		select {
+		case msg := <-c.Output: // the client routes "output" to its own channel
+			if msg.ID == id && strings.Contains(string(msg.Data), "baton-xyz") {
+				found = true
+			}
+		case <-deadline:
+			t.Fatal("expected echoed output for the attached panel")
 		}
-	}
-	if !found {
-		t.Fatal("expected echoed output for the attached panel")
 	}
 
 	// Detach stops the stream.
