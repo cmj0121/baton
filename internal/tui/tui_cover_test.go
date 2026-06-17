@@ -37,6 +37,11 @@ func TestViewRendersEveryMode(t *testing.T) {
 		{"keymap-edit-prefix", func(m *model) { m.mode = modeKeyMap; m.editing = true; m.editIdx = editPrefix }},
 		{"keymap-edit-binding", func(m *model) { m.mode = modeKeyMap; m.editing = true; m.editIdx = 0; m.cursor = 1 }},
 		{"keymap-setting-off", func(m *model) { m.mode = modeKeyMap; m.confirmClose = false; m.cursor = len(bindings) + 1 }},
+		{"panel-config", func(m *model) { m.mode = modePanelConfig; m.shellPath = "/bin/zsh" }},
+		{"panel-config-default", func(m *model) { m.mode = modePanelConfig }},
+		{"input-shell", func(m *model) { m.input = inputShellPath; m.inputBuf = "/bin/zsh" }},
+		{"input-new-panel", func(m *model) { m.input = inputNewPanelCmd; m.inputBuf = "/bin/sh" }},
+		{"zoom", func(m *model) { m.mode = modeZoom; m.zoomTitle = "shell #1" }},
 		{"prefix-armed", func(m *model) { m.fleet = panel.Mock()[:3]; m.prefix = true }},
 		{"error", func(m *model) { m.fleet = panel.Mock()[:3]; m.status = "error: boom" }},
 		{"narrow", func(m *model) { m.fleet = panel.Mock(); m.width = 40 }},
@@ -189,10 +194,10 @@ func TestRunActionsWithoutClient(t *testing.T) {
 		t.Fatal("ctrl+c should quit")
 	}
 
-	// dashboard cursor movement and focus.
+	// dashboard cursor movement, then enter zooms the selected panel.
 	nav := press(base(), "down", "up", "left", "right", "j", "k", "h", "l", "tab", "shift+tab", "enter")
-	if !strings.Contains(nav.status, "focus") {
-		t.Fatalf("enter on a card should focus, status=%q", nav.status)
+	if !strings.Contains(nav.status, "zoomed") {
+		t.Fatalf("enter on a card should zoom, status=%q", nav.status)
 	}
 
 	// esc leaves the key map.
@@ -205,6 +210,73 @@ func TestRunActionsWithoutClient(t *testing.T) {
 	cow = press(cow, "e", "z")
 	if cow.binds == nil || cow.binds[0].key != "z" {
 		t.Fatal("ensureBinds copy-on-write failed")
+	}
+}
+
+func TestPanelConfigEditsShell(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := model{fleet: panel.Mock(), prefixKey: "ctrl+t",
+		binds: append([]binding(nil), bindings...), confirmClose: true}
+
+	// prefix+P opens the panel config tab.
+	m = press(m, "ctrl+t", "P")
+	if m.mode != modePanelConfig {
+		t.Fatalf("prefix+P should open panel config, mode=%v", m.mode)
+	}
+
+	// e opens the shell text-input overlay; type a path with a correction.
+	m = press(m, "e")
+	if m.input != inputShellPath {
+		t.Fatal("e should open the shell input overlay")
+	}
+	for _, r := range "/bin/zsX" { // typo the last char...
+		m = press(m, string(r))
+	}
+	m = press(m, "backspace") // ...delete it...
+	m = press(m, "h")         // ...and fix it.
+	m = press(m, "enter")
+
+	if m.input != inputNone {
+		t.Fatal("enter should close the overlay")
+	}
+	if m.shellPath != "/bin/zsh" {
+		t.Fatalf("shellPath = %q, want /bin/zsh", m.shellPath)
+	}
+	if got := loadPrefs().shellPath; got != "/bin/zsh" {
+		t.Fatalf("shell not persisted, got %q", got)
+	}
+
+	// esc cancels an edit without changing the value.
+	m = press(m, "e")
+	m = press(m, "x", "esc")
+	if m.input != inputNone || m.shellPath != "/bin/zsh" {
+		t.Fatalf("esc should cancel, input=%v shell=%q", m.input, m.shellPath)
+	}
+}
+
+func TestNewPanelFormPrefills(t *testing.T) {
+	m := model{fleet: panel.Mock(), prefixKey: "ctrl+t",
+		binds: append([]binding(nil), bindings...), shellPath: "/bin/zsh"}
+
+	// prefix+n opens the new-panel popup prefilled with the default shell.
+	m = press(m, "ctrl+t", "n")
+	if m.input != inputNewPanelCmd {
+		t.Fatalf("prefix+n should open the new-panel input, got %v", m.input)
+	}
+	if m.inputBuf != "/bin/zsh" {
+		t.Fatalf("popup should prefill the default shell, got %q", m.inputBuf)
+	}
+
+	// Edit /bin/zsh → /bin/bash and submit (no client: spawnPanel just sets
+	// status).
+	m = press(m, "backspace", "backspace", "backspace") // drop "zsh"
+	m = press(m, "b", "a", "s", "h")
+	m = press(m, "enter")
+	if m.input != inputNone {
+		t.Fatal("enter should close the popup")
+	}
+	if !strings.Contains(m.status, "spawning") || !strings.Contains(m.status, "/bin/bash") {
+		t.Fatalf("spawn status = %q", m.status)
 	}
 }
 
@@ -226,28 +298,34 @@ func TestModelWithLiveServer(t *testing.T) {
 	}
 	defer func() { _ = c.Close() }()
 
-	tm := New(c)  // New + loadConfig
+	tm := New(c)  // New + loadPrefs
 	_ = tm.Init() // Init
 	_ = tick()    // tick constructor
 	m := tm.(model)
 
-	// Pump the welcome + panels snapshot through Update.
+	// Pump the welcome + (empty) panels snapshot through Update.
 	for i := 0; i < 2; i++ {
 		msg := waitEvent(c.Events)() // waitEvent
 		next, _ := m.Update(msg)     // Update eventMsg + applyEvent
 		m = next.(model)
 	}
-	if len(m.fleet) == 0 {
-		t.Fatal("expected the server's seeded fleet")
+	if len(m.fleet) != 0 {
+		t.Fatalf("a fresh server should have no panels, got %d", len(m.fleet))
 	}
 
-	// Spawn a panel: runAction actNewPanel sends over the live socket.
+	// Spawn a panel: runAction actNewPanel sends over the live socket; the
+	// server broadcasts the updated snapshot.
 	m = press(m, "ctrl+t", "p")
-	if !strings.Contains(m.status, "shell panel") {
+	if !strings.Contains(m.status, "spawning") {
 		t.Fatalf("spawn status = %q", m.status)
 	}
+	next, _ := m.Update(waitEvent(c.Events)())
+	m = next.(model)
+	if len(m.fleet) != 1 {
+		t.Fatalf("expected one real panel after spawn, got %d", len(m.fleet))
+	}
 
-	// Close a panel with the gate off: closeSelected sends panel.close.
+	// Close it with the gate off: closeSelected sends panel.close.
 	m.confirmClose = false
 	m.cursor = 0
 	before := len(m.fleet)

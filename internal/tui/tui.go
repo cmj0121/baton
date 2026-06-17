@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	vt "github.com/charmbracelet/x/vt"
 
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/panel"
@@ -61,6 +62,8 @@ type mode int
 const (
 	modeDashboard mode = iota
 	modeKeyMap
+	modePanelConfig
+	modeZoom
 )
 
 type model struct {
@@ -78,15 +81,38 @@ type model struct {
 	pendingClose bool      // a close is awaiting y/n confirmation
 	now          time.Time // wall clock shown in the footer, ticked every second
 
+	cpuPct   float64 // system-wide CPU load %, sampled each tick for the footer
+	memUsed  uint64  // system memory in use, bytes
+	memTotal uint64  // total system memory, bytes
+
 	prefixKey string    // leader key armed before a binding (default ctrl+t)
 	binds     []binding // editable copy of the bindings (nil ⇒ the defaults)
 	editing   bool      // capturing the next key press as a rebind
 	editIdx   int       // binding being rebound; editPrefix means the leader key
 
+	shellPath string       // configured default shell binary path ("" = system shell)
+	input     inputPurpose // active text-input overlay, or inputNone
+	inputBuf  string       // text typed into the overlay
+
+	zoomID     string           // panel being zoomed (modeZoom)
+	zoomTitle  string           // its title, for the zoom footer
+	zoomArmed  bool             // prefix pressed inside a zoom, awaiting the verb
+	zoomExited bool             // the zoomed panel has exited — a read-only result view
+	emu        *vt.SafeEmulator // terminal emulator rendering the zoomed panel
+
 	width, height int
 	quitting      bool
 	restart       bool // user asked to force-restart the daemon on exit
 }
+
+// inputPurpose is what an active text-input overlay feeds on submit.
+type inputPurpose int
+
+const (
+	inputNone        inputPurpose = iota
+	inputShellPath                // editing the default shell in panel config
+	inputNewPanelCmd              // the prefix+n new-panel command popup
+)
 
 // RestartRequested reports whether the cockpit exited because the user asked to
 // force-restart the server. The client runner relaunches the daemon and
@@ -97,16 +123,17 @@ func (m model) RestartRequested() bool { return m.restart }
 // is filled by the server's first snapshot, which arrives right after the hello
 // handshake — the server owns the panels now.
 func New(c *client.Client) tea.Model {
-	prefix, binds, confirmClose := loadConfig()
+	p := loadPrefs()
 	return model{
 		client:       c,
 		mode:         modeDashboard,
 		status:       "attaching…",
 		endpoint:     c.Endpoint(),
-		confirmClose: confirmClose,
+		confirmClose: p.confirmClose,
 		now:          time.Now(),
-		prefixKey:    prefix,
-		binds:        binds,
+		prefixKey:    p.prefix,
+		binds:        p.binds,
+		shellPath:    p.shellPath,
 	}
 }
 
@@ -174,17 +201,36 @@ func (m model) lookup(key string) (binding, bool) {
 // --- bubbletea event plumbing ---
 
 type eventMsg proto.ServerMsg
+type panelOutputMsg proto.ServerMsg
+type statsEventMsg proto.ServerMsg
 type connClosedMsg struct{}
 type tickMsg time.Time
 
-func waitEvent(ch chan proto.ServerMsg) tea.Cmd {
+// waitMsg returns a command that blocks for the next message on ch and wraps it
+// with wrap — a per-channel type so Update can re-arm the channel that fired. A
+// closed channel means the server hung up. The cockpit reads control, panel
+// output, and host telemetry on separate channels so a burst on one never delays
+// another; each gets its own wait command below.
+func waitMsg(ch chan proto.ServerMsg, wrap func(proto.ServerMsg) tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		msg, ok := <-ch
 		if !ok {
 			return connClosedMsg{}
 		}
-		return eventMsg(msg)
+		return wrap(msg)
 	}
+}
+
+func waitEvent(ch chan proto.ServerMsg) tea.Cmd {
+	return waitMsg(ch, func(m proto.ServerMsg) tea.Msg { return eventMsg(m) })
+}
+
+func waitOutput(ch chan proto.ServerMsg) tea.Cmd {
+	return waitMsg(ch, func(m proto.ServerMsg) tea.Msg { return panelOutputMsg(m) })
+}
+
+func waitStats(ch chan proto.ServerMsg) tea.Cmd {
+	return waitMsg(ch, func(m proto.ServerMsg) tea.Msg { return statsEventMsg(m) })
 }
 
 // tick drives the footer clock, firing once a second.
@@ -193,18 +239,32 @@ func tick() tea.Cmd {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(waitEvent(m.client.Events), tick())
+	return tea.Batch(waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), tick())
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		if m.mode == modeZoom && m.emu != nil {
+			m.emu.Resize(m.width, m.zoomRows())
+			m.sendf(proto.Command{Action: "panel.resize", ID: m.zoomID, Rows: m.zoomRows(), Cols: m.width})
+		}
 		return m, nil
 
 	case eventMsg:
 		m.applyEvent(proto.ServerMsg(msg))
 		return m, waitEvent(m.client.Events)
+
+	case panelOutputMsg:
+		if m.mode == modeZoom && m.emu != nil && proto.ServerMsg(msg).ID == m.zoomID {
+			_, _ = m.emu.Write(proto.ServerMsg(msg).Data)
+		}
+		return m, waitOutput(m.client.Output)
+
+	case statsEventMsg:
+		m.applyEvent(proto.ServerMsg(msg))
+		return m, waitStats(m.client.Stats)
 
 	case connClosedMsg:
 		m.status = "server closed the connection"
@@ -216,9 +276,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tick()
 
 	case tea.KeyMsg:
+		if m.mode == modeZoom {
+			return m.handleZoomKey(msg)
+		}
 		return m.handleKey(msg)
 	}
 	return m, nil
+}
+
+// zoomRows is the rows available to the zoomed panel (the terminal height less
+// the footer row).
+func (m model) zoomRows() int {
+	if m.height < 2 {
+		return 1
+	}
+	return m.height - 1
+}
+
+// sendf sends a command if there is a live client (a no-op in tests).
+func (m model) sendf(cmd proto.Command) {
+	if m.client != nil {
+		_ = m.client.Send(cmd)
+	}
 }
 
 func (m *model) applyEvent(sm proto.ServerMsg) {
@@ -233,6 +312,9 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 	case "panels":
 		m.fleet = mergeFleet(sm.Panels)
 		m.clampCursor()
+	case "stats":
+		m.cpuPct = sm.CPU
+		m.memUsed, m.memTotal = sm.MemUsed, sm.MemTotal
 	case "error":
 		m.status = "error: " + sm.Error
 	}
@@ -240,6 +322,11 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 
 func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := k.String()
+
+	// A text-input overlay is open: route the keystroke to it.
+	if m.input != inputNone {
+		return m.handleInput(k)
+	}
 
 	// Capturing a rebind: the next key press (other than esc) becomes the new
 	// chord for the binding — or the leader key — under edit.
@@ -259,7 +346,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.binds[m.editIdx].key = key
 			m.status = fmt.Sprintf("rebound %q: %s → %s", m.binds[m.editIdx].desc, old, key)
 		}
-		if err := saveConfig(m.prefixKey, m.keymap(), m.confirmClose); err != nil {
+		if err := m.saveConfig(); err != nil {
 			m.status = "rebound, but save failed: " + err.Error()
 		}
 		return m, nil
@@ -330,16 +417,91 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case rowSetting:
 			}
 		}
+		if m.mode == modePanelConfig {
+			return m.editShellPath(), nil
+		}
 		return m, nil
 
 	case "enter":
 		return m.activate()
 	case "esc":
-		if m.mode == modeKeyMap {
+		if m.mode != modeDashboard {
 			return m.runAction(actDashboard)
 		}
 	}
 	return m, nil
+}
+
+// editShellPath opens the text-input overlay to edit the default shell, seeded
+// with the current value.
+func (m model) editShellPath() model {
+	m.input = inputShellPath
+	m.inputBuf = m.shellPath
+	m.status = "default shell · type a path (blank = system), enter to save"
+	return m
+}
+
+// handleInput routes a keystroke to the active text-input overlay: printable
+// runes append, backspace deletes, enter submits, esc cancels.
+func (m model) handleInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch k.Type {
+	case tea.KeyEsc:
+		m.input = inputNone
+		m.status = "cancelled"
+	case tea.KeyEnter:
+		return m.commitInput()
+	case tea.KeyBackspace:
+		if r := []rune(m.inputBuf); len(r) > 0 {
+			m.inputBuf = string(r[:len(r)-1])
+		}
+	case tea.KeySpace:
+		m.inputBuf += " "
+	case tea.KeyRunes:
+		m.inputBuf += string(k.Runes)
+	}
+	return m, nil
+}
+
+// commitInput applies the typed text to whatever opened the overlay.
+func (m model) commitInput() (tea.Model, tea.Cmd) {
+	buf := strings.TrimSpace(m.inputBuf)
+	purpose := m.input
+	m.input = inputNone
+
+	switch purpose {
+	case inputShellPath:
+		m.shellPath = buf
+		if err := m.saveConfig(); err != nil {
+			m.status = "save failed: " + err.Error()
+		} else {
+			m.status = "default shell · " + shellLabel(buf)
+		}
+	case inputNewPanelCmd:
+		return m.spawnPanel(buf), nil
+	}
+	return m, nil
+}
+
+// spawnPanel asks the server to create a shell panel running command (empty =
+// the default shell).
+func (m model) spawnPanel(command string) model {
+	if m.client != nil {
+		if err := m.client.Send(proto.Command{Action: "panel.create", Kind: proto.KindShell, Path: command}); err != nil {
+			m.status = "send failed: " + err.Error()
+			return m
+		}
+	}
+	m.status = "spawning " + shellLabel(command)
+	return m
+}
+
+// shellLabel describes a configured shell path; an empty path means the system
+// default.
+func shellLabel(path string) string {
+	if path == "" {
+		return "system default"
+	}
+	return path
 }
 
 // runAction performs a binding's verb. Both the prefix handler and the key map's
@@ -347,11 +509,11 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 	switch a {
 	case actNewPanel:
-		if err := m.client.Send(proto.Command{Action: "panel.create", Kind: proto.KindShell}); err != nil {
-			m.status = "send failed: " + err.Error()
-		} else {
-			m.status = "requested new shell panel"
-		}
+		return m.spawnPanel(m.shellPath), nil
+	case actNewForm:
+		m.input = inputNewPanelCmd
+		m.inputBuf = m.shellPath
+		m.status = "new panel · type the command, enter to spawn"
 	case actClose:
 		if len(m.fleet) == 0 {
 			m.status = "no panel to close"
@@ -360,6 +522,13 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 			m.status = "close " + m.fleet[m.cursor].Title + "? (y/n)"
 		} else {
 			m.closeSelected()
+		}
+	case actPurge:
+		if n := m.countState(panel.Exited); n == 0 {
+			m.status = "no exited panels to purge"
+		} else {
+			m.sendf(proto.Command{Action: "panel.purge"})
+			m.status = fmt.Sprintf("purging %d exited panel(s)", n)
 		}
 	case actDashboard:
 		m.mode = modeDashboard
@@ -373,6 +542,10 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		}
 		m.cursor = 0
 		m.status = "key map"
+	case actPanelConfig:
+		m.mode = modePanelConfig
+		m.cursor = 0
+		m.status = "panel config"
 	case actRestart:
 		m.restart = true
 		m.quitting = true
@@ -397,16 +570,95 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 		case rowSetting:
 			m.confirmClose = !m.confirmClose
 			m.status = "confirm on close: " + onOff(m.confirmClose)
-			if err := saveConfig(m.prefixKey, m.keymap(), m.confirmClose); err != nil {
+			if err := m.saveConfig(); err != nil {
 				m.status = "toggled, but save failed: " + err.Error()
 			}
 		}
 		return m, nil
 	}
+	if m.mode == modePanelConfig {
+		return m.editShellPath(), nil // the only row is the default shell
+	}
+	// Dashboard: zoom into the selected panel.
 	if m.cursor >= 0 && m.cursor < len(m.fleet) {
-		m.status = "focus · " + m.fleet[m.cursor].Title + "  (zoom not wired yet)"
+		return m.zoomInto(m.fleet[m.cursor]), nil
 	}
 	return m, nil
+}
+
+// zoomInto opens a terminal emulator for panel p and attaches to its PTY: output
+// streams into the emulator and keystrokes are forwarded back. baton owns the
+// screen, so the footer (rendered in View) is always safe.
+func (m model) zoomInto(p panel.Panel) model {
+	m.mode = modeZoom
+	m.zoomID = p.ID
+	m.zoomTitle = p.Title
+	m.zoomArmed = false
+	m.zoomExited = p.State == panel.Exited
+	if m.width > 0 && m.height > 1 {
+		m.emu = vt.NewSafeEmulator(m.width, m.zoomRows())
+		// Drain the emulator's input side (encoded keys + query replies) to the
+		// PTY. The goroutine ends when zoomDetach closes the emulator.
+		go zoomReader(m.emu, m.client, p.ID)
+	}
+	m.sendf(proto.Command{Action: "panel.resize", ID: p.ID, Rows: m.zoomRows(), Cols: m.width})
+	m.sendf(proto.Command{Action: "panel.attach", ID: p.ID})
+	if m.zoomExited {
+		m.status = "result · " + p.Title + " (exited)"
+	} else {
+		m.status = "zoomed · " + p.Title
+	}
+	return m
+}
+
+// handleZoomKey forwards keystrokes to the zoomed panel, treating the prefix as
+// a leader: prefix+dashboard detaches, prefix+prefix sends a literal prefix.
+func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := k.String()
+	if m.zoomArmed {
+		m.zoomArmed = false
+		switch key {
+		case m.bindingKey(actDashboard):
+			return m.zoomDetach()
+		case m.effPrefix():
+			if m.emu != nil {
+				feedKey(m.emu, k) // prefix+prefix sends a literal prefix
+			}
+		}
+		return m, nil
+	}
+	if key == m.effPrefix() {
+		m.zoomArmed = true
+		return m, nil
+	}
+	if m.emu != nil {
+		feedKey(m.emu, k)
+	}
+	return m, nil
+}
+
+// zoomDetach leaves the zoom, returning to a refreshed dashboard.
+func (m model) zoomDetach() (tea.Model, tea.Cmd) {
+	m.sendf(proto.Command{Action: "panel.detach", ID: m.zoomID})
+	closeZoom(m.emu) // stops the zoomReader goroutine (Read returns io.EOF)
+	m.mode = modeDashboard
+	m.emu = nil
+	m.zoomID, m.zoomTitle, m.zoomArmed, m.zoomExited = "", "", false, false
+	m.status = "dashboard"
+	if m.client != nil {
+		return m, func() tea.Msg { _ = m.client.Send(proto.Command{Action: "panel.list"}); return nil }
+	}
+	return m, nil
+}
+
+// bindingKey returns the bare key bound to an action, or "" if none.
+func (m model) bindingKey(a action) string {
+	for _, b := range m.keymap() {
+		if b.act == a {
+			return b.key
+		}
+	}
+	return ""
 }
 
 // closeSelected asks the server to close the highlighted panel and drops it from
@@ -444,17 +696,22 @@ func (m *model) move(delta int) {
 }
 
 func (m model) itemCount() int {
-	if m.mode == modeKeyMap {
+	switch m.mode {
+	case modeKeyMap:
 		return len(m.keymap()) + 2 // prefix row + bindings + the settings toggle
+	case modePanelConfig:
+		return 1 // the default-shell row
+	default:
+		return len(m.fleet)
 	}
-	return len(m.fleet)
 }
 
-// attentionCount is how many panels are flagged as needing the user.
-func (m model) attentionCount() int {
+// countState is how many panels are in a given lifecycle state — used for the
+// footer's attention badge and the purge candidate count.
+func (m model) countState(s panel.State) int {
 	n := 0
 	for _, p := range m.fleet {
-		if p.State == panel.Attention {
+		if p.State == s {
 			n++
 		}
 	}
@@ -468,9 +725,9 @@ func (m *model) clampCursor() {
 }
 
 // cols is how many panel cards sit on a row at the current width (1–3). The key
-// map and the tree view are single-column lists.
+// map, panel config, and tree view are single-column lists.
 func (m model) cols() int {
-	if m.mode == modeKeyMap || m.treeView() {
+	if m.mode != modeDashboard || m.treeView() {
 		return 1
 	}
 	c := m.width / (cardWidth + cardGap)
@@ -489,6 +746,9 @@ func (m model) View() string {
 	if m.width == 0 || m.height == 0 {
 		return "" // wait for the first size message
 	}
+	if m.mode == modeZoom {
+		return m.zoomView()
+	}
 
 	header := lipgloss.JoinVertical(lipgloss.Center,
 		bannerStyle.Render(banner),
@@ -497,9 +757,14 @@ func (m model) View() string {
 	)
 
 	var body string
-	if m.mode == modeKeyMap {
+	switch {
+	case m.input != inputNone:
+		body = m.inputView()
+	case m.mode == modeKeyMap:
 		body = m.keyMapView()
-	} else {
+	case m.mode == modePanelConfig:
+		body = m.panelConfigView()
+	default:
 		body = m.dashboardView()
 	}
 
@@ -508,6 +773,29 @@ func (m model) View() string {
 	// panels carry their own surface colour for depth.
 	placed := lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Center, content)
 	return placed + "\n" + m.footer()
+}
+
+// zoomView renders the emulated panel screen filling the top rows, with a cursor
+// drawn at the emulator's cursor cell and the zoom footer pinned to the last
+// line. baton owns every cell, so the footer can never be smeared by the program
+// inside.
+func (m model) zoomView() string {
+	rows := m.zoomRows()
+	lines := make([]string, rows)
+	if m.emu != nil {
+		raw := strings.Split(m.emu.Render(), "\n")
+		cur := m.emu.CursorPosition()
+		for i := range lines {
+			if i < len(raw) {
+				lines[i] = raw[i]
+			}
+			if i == cur.Y {
+				lines[i] = overlayCursor(lines[i], cur.X)
+			}
+		}
+	}
+	footer := zoomFooter(m.width, m.zoomTitle, keyLabel(m.effPrefix()), keyLabel(m.bindingKey(actDashboard)), m.zoomExited)
+	return strings.Join(lines, "\n") + "\n" + footer
 }
 
 // dashboardView renders the status summary strip above the fleet. A small fleet
@@ -853,13 +1141,64 @@ func (m model) keyMapView() string {
 	about := lipgloss.NewStyle().Foreground(colFaint).Render("protocol " + ver)
 	rows = append(rows, "", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(legend))), legend, about)
 
-	body := lipgloss.JoinVertical(lipgloss.Left, rows...)
+	return configBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
+}
+
+// configBox wraps a settings/overlay panel in the cockpit's bordered surface.
+func configBox(body string) string {
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colBrand).
 		Background(colSurface).
 		Padding(1, 3).
 		Render(body)
+}
+
+// panelConfigView renders the panel-defaults tab. For now its one row is the
+// default shell that new panels run.
+func (m model) panelConfigView() string {
+	caret := "  "
+	labelStyle := mutedStyle
+	if m.cursor == 0 {
+		caret = lipgloss.NewStyle().Foreground(colBrand).Bold(true).Render("▸ ")
+		labelStyle = inkStyle
+	}
+	value := lipgloss.NewStyle().Foreground(colCyan).Render(shellLabel(m.shellPath))
+	row := fmt.Sprintf("%s%-16s%s", caret, labelStyle.Render("default shell"), value)
+
+	legendKey := lipgloss.NewStyle().Foreground(colCyan).Bold(true)
+	legend := mutedStyle.Render("↑↓ move") + "   " +
+		legendKey.Render("e") + mutedStyle.Render(" edit") + "   " +
+		legendKey.Render("esc") + mutedStyle.Render(" back")
+
+	return configBox(lipgloss.JoinVertical(lipgloss.Left,
+		sectionStyle.Render(spaced("PANEL CONFIG")), "",
+		row, "",
+		mutedStyle.Render("C-t p spawns this · C-t n picks a command per panel"),
+		"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(legend))), legend,
+	))
+}
+
+// inputView renders the active text-input overlay as a centred popup.
+func (m model) inputView() string {
+	title, prompt, action := "INPUT", "value", "save"
+	switch m.input {
+	case inputShellPath:
+		title, prompt = "DEFAULT SHELL", "shell path  (blank = system default)"
+	case inputNewPanelCmd:
+		title, prompt, action = "NEW PANEL", "command to run  (blank = system shell)", "spawn"
+	}
+
+	field := lipgloss.NewStyle().Width(46).Foreground(colInk).Background(colSurface).Render("› " + m.inputBuf + "▌")
+	legendKey := lipgloss.NewStyle().Foreground(colCyan).Bold(true)
+	legend := legendKey.Render("enter") + mutedStyle.Render(" "+action) + "   " +
+		legendKey.Render("esc") + mutedStyle.Render(" cancel")
+
+	return configBox(lipgloss.JoinVertical(lipgloss.Left,
+		sectionStyle.Render(spaced(title)), "",
+		mutedStyle.Render(prompt), field,
+		"", legend,
+	))
 }
 
 // onOff renders a boolean as a fixed-width ON/OFF label.
@@ -891,20 +1230,25 @@ func seg(text string, fg, bg lipgloss.Color) string {
 func (m model) footer() string {
 	// Left caps: brand · mode · (attention).
 	mode := "DASHBOARD"
-	if m.mode == modeKeyMap {
+	switch {
+	case m.input != inputNone:
+		mode = "INPUT"
+	case m.mode == modeKeyMap:
 		mode = "KEY MAP"
+	case m.mode == modePanelConfig:
+		mode = "PANEL CONFIG"
 	}
 	left := seg("◈ BATON", colDark, colBrand) + seg(mode, colInk, colBlue)
-	if n := m.attentionCount(); n > 0 {
+	if n := m.countState(panel.Attention); n > 0 {
 		left += seg(fmt.Sprintf("◆ %d", n), colDark, states[panel.Attention].color)
 	}
 
-	// Right caps: optional PREFIX badge · clock · connection status.
+	// Right caps: system stats · optional PREFIX badge · clock · connection status.
 	statusBg := colGreen
 	if strings.HasPrefix(m.status, "error") {
 		statusBg = colRed
 	}
-	right := seg("⏱ "+m.now.Format("15:04:05"), colDark, colCyan) + seg("● "+m.status, colInk, statusBg)
+	right := m.statsStrip() + seg("⏱ "+m.now.Format("15:04:05"), colDark, colCyan) + seg("● "+m.status, colInk, statusBg)
 	if m.prefix {
 		right = seg("PREFIX", colDark, colBrandHi) + right
 	}
@@ -915,6 +1259,31 @@ func (m model) footer() string {
 		gap = 0
 	}
 	return left + m.renderCounts(gap) + right
+}
+
+// statsStrip renders the system CPU and memory readout as a surface-coloured
+// telemetry segment (e.g. "CPU 18%  MEM 9.2/16G"). It is blank until the first
+// sample lands, so the footer never shows a bogus 0/0.
+func (m model) statsStrip() string {
+	if m.memTotal == 0 {
+		return ""
+	}
+	lab := lipgloss.NewStyle().Background(colSurface).Foreground(colMuted)
+	val := lipgloss.NewStyle().Background(colSurface).Foreground(colCyan).Bold(true)
+	body := lab.Render(" CPU ") + val.Render(fmt.Sprintf("%.0f%%", m.cpuPct)) +
+		lab.Render("  MEM ") + val.Render(memLabel(m.memUsed, m.memTotal)) + lab.Render(" ")
+	return barStyle.Render(body)
+}
+
+// memLabel formats a used/total byte pair in the total's unit, e.g. "9.2/16G".
+func memLabel(used, total uint64) string {
+	units := []string{"B", "K", "M", "G", "T", "P"}
+	div, exp := uint64(1), 0
+	for total/div >= 1024 && exp < len(units)-1 {
+		div *= 1024
+		exp++
+	}
+	return fmt.Sprintf("%.1f/%.0f%s", float64(used)/float64(div), float64(total)/float64(div), units[exp])
 }
 
 // renderCounts lays the per-kind panel tally onto a surface-coloured strip

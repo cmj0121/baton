@@ -55,9 +55,14 @@ func TestClearStaleSocket(t *testing.T) {
 		t.Fatalf("missing socket: %v", err)
 	}
 
-	// A leftover (dead) socket file is removed.
+	// A leftover (dead) socket file is removed, along with its orphaned PID file
+	// (a SIGKILLed daemon leaves both behind).
 	stale := filepath.Join(dir, "stale.sock")
+	stalePid := paths.PidFile(stale)
 	if err := os.WriteFile(stale, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stalePid, []byte("99999"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := clearStaleSocket(stale); err != nil {
@@ -65,6 +70,9 @@ func TestClearStaleSocket(t *testing.T) {
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatal("stale socket should have been removed")
+	}
+	if _, err := os.Stat(stalePid); !os.IsNotExist(err) {
+		t.Fatal("orphaned PID file should have been removed")
 	}
 
 	// A live socket is refused.

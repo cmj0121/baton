@@ -59,8 +59,10 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	off := false
 	want := Config{
+		Prefix:   "ctrl+a",
 		Keys:     map[string]string{"new-panel": "x", "close": "W"},
 		Settings: Settings{ConfirmClose: &off},
+		Panel:    PanelDefaults{Shell: "/bin/zsh"},
 	}
 	if err := want.Save(); err != nil {
 		t.Fatalf("save: %v", err)
@@ -74,6 +76,9 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if got.Settings.ConfirmClose == nil || *got.Settings.ConfirmClose {
 		t.Fatalf("confirm-close should round-trip as false, got %+v", got.Settings.ConfirmClose)
+	}
+	if got.Prefix != "ctrl+a" || got.Panel.Shell != "/bin/zsh" {
+		t.Fatalf("prefix/panel round-trip mismatch: %q %q", got.Prefix, got.Panel.Shell)
 	}
 }
 

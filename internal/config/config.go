@@ -23,12 +23,20 @@ type Config struct {
 
 	// Settings holds the cockpit toggles.
 	Settings Settings `yaml:"settings,omitempty"`
+
+	// Panel holds the default behaviour for new panels.
+	Panel PanelDefaults `yaml:"panel,omitempty"`
 }
 
 // Settings are the persisted cockpit toggles. Pointers distinguish "unset"
 // (use the default) from an explicit false.
 type Settings struct {
 	ConfirmClose *bool `yaml:"confirm-close,omitempty"` // ask y/n before closing a panel
+}
+
+// PanelDefaults configure how new panels are spawned.
+type PanelDefaults struct {
+	Shell string `yaml:"shell,omitempty"` // default shell binary path; empty = system shell
 }
 
 // Load reads the config file. A missing file yields an empty Config and no

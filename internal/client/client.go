@@ -5,6 +5,7 @@ package client
 import (
 	"encoding/json"
 	"net"
+	"sync"
 
 	"github.com/cmj0121/baton/internal/proto"
 )
@@ -12,10 +13,17 @@ import (
 // Client is a live attachment to the baton server.
 type Client struct {
 	conn net.Conn
-	enc  *json.Encoder
 
-	// Events delivers messages pushed by the server; it is closed on disconnect.
+	sendMu sync.Mutex // serialises Send; the zoom reader and the UI both write
+	enc    *json.Encoder
+
+	// Events delivers control messages; Output delivers PTY data from a zoomed
+	// panel; Stats delivers the server's host telemetry. Splitting them keeps a
+	// burst of output (or a stale stat) from starving the cockpit. All are closed
+	// on disconnect.
 	Events chan proto.ServerMsg
+	Output chan proto.ServerMsg
+	Stats  chan proto.ServerMsg
 }
 
 // Dial connects to the server at socket, says hello, and starts reading events.
@@ -29,6 +37,8 @@ func Dial(socket string) (*Client, error) {
 		conn:   conn,
 		enc:    json.NewEncoder(conn),
 		Events: make(chan proto.ServerMsg, proto.EventBufferSize),
+		Output: make(chan proto.ServerMsg, proto.EventBufferSize),
+		Stats:  make(chan proto.ServerMsg, proto.EventBufferSize),
 	}
 	go c.readLoop()
 
@@ -39,8 +49,11 @@ func Dial(socket string) (*Client, error) {
 	return c, nil
 }
 
-// Send writes a command to the server.
+// Send writes a command to the server. It is safe for concurrent use: the
+// cockpit's event loop and the zoom reader goroutine both send.
 func (c *Client) Send(cmd proto.Command) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
 	return c.enc.Encode(cmd)
 }
 
@@ -65,12 +78,26 @@ func (c *Client) Close() error {
 
 func (c *Client) readLoop() {
 	defer close(c.Events)
+	defer close(c.Output)
+	defer close(c.Stats)
 	dec := json.NewDecoder(c.conn)
 	for {
 		var msg proto.ServerMsg
 		if err := dec.Decode(&msg); err != nil {
 			return
 		}
-		c.Events <- msg
+		switch msg.Type {
+		case "output":
+			c.Output <- msg
+		case "stats":
+			// Telemetry is latest-wins; drop a stale sample rather than let a
+			// full buffer stall control messages.
+			select {
+			case c.Stats <- msg:
+			default:
+			}
+		default:
+			c.Events <- msg
+		}
 	}
 }

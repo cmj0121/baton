@@ -19,6 +19,10 @@ func key(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyTab}
 	case "esc":
 		return tea.KeyMsg{Type: tea.KeyEsc}
+	case "backspace":
+		return tea.KeyMsg{Type: tea.KeyBackspace}
+	case "space":
+		return tea.KeyMsg{Type: tea.KeySpace}
 	default:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 	}
@@ -143,7 +147,7 @@ func TestRebindPersistsToConfig(t *testing.T) {
 
 	// A fresh load (as New would do) sees the override applied to spawn and the
 	// other bindings left at their defaults.
-	_, reloaded, _ := loadConfig()
+	reloaded := loadPrefs().binds
 	for _, b := range reloaded {
 		switch b.name {
 		case "new-panel":
@@ -166,7 +170,7 @@ func TestConfirmTogglePersists(t *testing.T) {
 	m.cursor = len(bindings) + 1 // prefix row + bindings, then the settings toggle
 	press(m, "enter")
 
-	if _, _, confirmClose := loadConfig(); confirmClose {
+	if loadPrefs().confirmClose {
 		t.Fatal("confirm-on-close should persist as off")
 	}
 }
@@ -207,8 +211,8 @@ func TestChangePrefixKey(t *testing.T) {
 	}
 
 	// And it persists for the next session.
-	if prefix, _, _ := loadConfig(); prefix != "ctrl+a" {
-		t.Fatalf("prefix not persisted, got %q", prefix)
+	if got := loadPrefs().prefix; got != "ctrl+a" {
+		t.Fatalf("prefix not persisted, got %q", got)
 	}
 }
 

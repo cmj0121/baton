@@ -14,14 +14,20 @@ const (
 	KindAgent = "agent" // an agent CLI run as the panel process
 )
 
-// EventBufferSize is the per-client buffer of outbound server messages.
-const EventBufferSize = 16
+// EventBufferSize is the per-client buffer of outbound server messages. It is
+// generous so a burst of zoomed panel output is not dropped.
+const EventBufferSize = 256
 
-// Command is sent from a client to the server.
+// Command is sent from a client to the server. Beyond the lifecycle actions, a
+// zoomed client streams a panel with attach/input/resize/detach.
 type Command struct {
-	Action string `json:"action"`         // "hello" | "panel.list" | "panel.create" | "panel.close"
+	Action string `json:"action"`         // hello | panel.list | panel.create | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.resize
 	Kind   string `json:"kind,omitempty"` // panel kind for "panel.create" (default "shell")
-	ID     string `json:"id,omitempty"`   // target panel for "panel.close"
+	ID     string `json:"id,omitempty"`   // target panel for close/attach/input/resize
+	Path   string `json:"path,omitempty"` // init command (binary path) for "panel.create"; empty = default shell
+	Data   []byte `json:"data,omitempty"` // input bytes for "panel.input"
+	Rows   int    `json:"rows,omitempty"` // window size for "panel.resize"
+	Cols   int    `json:"cols,omitempty"`
 }
 
 // Panel is the server-side view of a single live terminal.
@@ -36,8 +42,16 @@ type Panel struct {
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type    string  `json:"type"`              // "welcome" | "panels" | "error"
+	Type    string  `json:"type"`              // "welcome" | "panels" | "output" | "stats" | "error"
 	Version string  `json:"version,omitempty"` // set on "welcome"
 	Error   string  `json:"error,omitempty"`   // set on "error"
 	Panels  []Panel `json:"panels,omitempty"`  // full snapshot on "panels"
+	ID      string  `json:"id,omitempty"`      // panel id on "output"
+	Data    []byte  `json:"data,omitempty"`    // pty output bytes on "output"
+
+	// Host resource sample on "stats", measured on the server so the footer
+	// reflects the machine where the panels actually run.
+	CPU      float64 `json:"cpu,omitempty"`       // system-wide CPU load %
+	MemUsed  uint64  `json:"mem_used,omitempty"`  // system memory in use, bytes
+	MemTotal uint64  `json:"mem_total,omitempty"` // total system memory, bytes
 }

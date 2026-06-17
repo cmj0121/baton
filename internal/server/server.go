@@ -7,20 +7,29 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"path/filepath"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/mem"
 
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/ptymgr"
 )
 
+// statsInterval is how often the server samples host CPU/memory for the footer.
+const statsInterval = 2 * time.Second
+
 // clientConn is one attached frontend. Outbound messages go through its buffered
-// channel so a slow client never stalls a broadcast.
+// channel so a slow client never stalls a broadcast. attached is the panel id
+// this client is zoomed into (guarded by Server.mu), or "" for none.
 type clientConn struct {
-	out chan proto.ServerMsg
+	out      chan proto.ServerMsg
+	attached string
 }
 
 // Server owns all state and every PTY. It is safe for concurrent use.
@@ -34,21 +43,78 @@ type Server struct {
 	clients map[*clientConn]struct{}
 }
 
-// New builds a server bound to ln. The fleet is seeded with a mock set of panels
-// so a fresh session looks alive; these are real, operable panels — they can be
-// closed and persist across client re-attach — until live process state replaces
-// the mock telemetry.
+// New builds a server bound to ln. The fleet starts empty — panels appear only
+// when the user spawns a real one.
 func New(ln net.Listener) *Server {
-	return &Server{
+	s := &Server{
 		ln:      ln,
 		pty:     ptymgr.New(),
-		panels:  panel.Mock(),
 		clients: make(map[*clientConn]struct{}),
 	}
+	s.pty.OnOutput(s.routeOutput)
+	s.pty.OnClose(s.onPanelExit)
+	return s
+}
+
+// onPanelExit marks a panel exited when its process ends on its own, notifies
+// and detaches any client zoomed into it, and broadcasts the change. It is a
+// no-op for a panel already gone (e.g. an explicit panel.close).
+func (s *Server) onPanelExit(id string) {
+	s.mu.Lock()
+	found := false
+	for i := range s.panels {
+		if s.panels[i].ID == id {
+			s.panels[i].State = panel.Exited
+			s.panels[i].Activity = "exited"
+			found = true
+			break
+		}
+	}
+	for cc := range s.clients {
+		if cc.attached == id {
+			send(cc, proto.ServerMsg{Type: "output", ID: id, Data: []byte("\r\n[process exited]\r\n")})
+			cc.attached = ""
+		}
+	}
+	s.mu.Unlock()
+
+	if found {
+		log.Info().Str("panel", id).Msg("panel process exited")
+		s.broadcast(s.panelsMsg())
+	}
+}
+
+// routeOutput fans a panel's output out to every client zoomed into it.
+func (s *Server) routeOutput(id string, data []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for cc := range s.clients {
+		if cc.attached == id {
+			send(cc, proto.ServerMsg{Type: "output", ID: id, Data: data})
+		}
+	}
+}
+
+// attach zooms a client into panel id (or "" to detach). The recent output is
+// replayed before live output starts, so the screen is not blank and stays in
+// order — both happen under the lock that gates routeOutput.
+func (s *Server) attach(cc *clientConn, id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if id != "" {
+		if snap := s.pty.Snapshot(id); len(snap) > 0 {
+			send(cc, proto.ServerMsg{Type: "output", ID: id, Data: snap})
+		}
+	}
+	cc.attached = id
 }
 
 // Serve accepts connections until the listener closes.
 func (s *Server) Serve() error {
+	stop := make(chan struct{})
+	defer close(stop)
+	go s.statsLoop(stop)
+
 	for {
 		conn, err := s.ln.Accept()
 		if err != nil {
@@ -56,6 +122,41 @@ func (s *Server) Serve() error {
 		}
 		go s.handle(conn)
 	}
+}
+
+// statsLoop samples host CPU/memory on a fixed interval and broadcasts it to
+// attached clients, so the footer reflects the server's machine. It stops when
+// Serve returns (the listener closed).
+func (s *Server) statsLoop(stop <-chan struct{}) {
+	_, _ = cpu.Percent(0, false) // prime the rolling CPU delta
+	t := time.NewTicker(statsInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			s.mu.Lock()
+			n := len(s.clients)
+			s.mu.Unlock()
+			if n > 0 {
+				s.broadcast(statsMsg())
+			}
+		}
+	}
+}
+
+// statsMsg samples the host's CPU load and memory for the footer. cpu.Percent
+// with a zero interval is non-blocking, reporting load since the previous call.
+func statsMsg() proto.ServerMsg {
+	msg := proto.ServerMsg{Type: "stats"}
+	if pct, err := cpu.Percent(0, false); err == nil && len(pct) > 0 {
+		msg.CPU = pct[0]
+	}
+	if vm, err := mem.VirtualMemory(); err == nil {
+		msg.MemUsed, msg.MemTotal = vm.Used, vm.Total
+	}
+	return msg
 }
 
 func (s *Server) handle(conn net.Conn) {
@@ -92,10 +193,11 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "hello":
 		send(cc, proto.ServerMsg{Type: "welcome", Version: proto.ProtocolVersion})
 		send(cc, s.panelsMsg())
+		send(cc, statsMsg()) // seed the footer immediately, before the first tick
 	case "panel.list":
 		send(cc, s.panelsMsg())
 	case "panel.create":
-		if err := s.createPanel(cmd.Kind); err != nil {
+		if err := s.createPanel(cmd.Kind, cmd.Path); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
@@ -106,14 +208,26 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			return
 		}
 		s.broadcast(s.panelsMsg())
+	case "panel.purge":
+		if s.purgeExited() > 0 {
+			s.broadcast(s.panelsMsg())
+		}
+	case "panel.attach":
+		s.attach(cc, cmd.ID)
+	case "panel.detach":
+		s.attach(cc, "")
+	case "panel.input":
+		s.pty.Write(cmd.ID, cmd.Data)
+	case "panel.resize":
+		s.pty.Resize(cmd.ID, cmd.Rows, cmd.Cols)
 	default:
 		send(cc, proto.ServerMsg{Type: "error", Error: fmt.Sprintf("unknown action %q", cmd.Action)})
 	}
 }
 
-// createPanel is a core action: it spawns the backing process and records the
-// new panel in the fleet.
-func (s *Server) createPanel(kind string) error {
+// createPanel is a core action: it spawns the backing process (running path, or
+// the default shell when empty) and records the new panel in the fleet.
+func (s *Server) createPanel(kind, path string) error {
 	if kind == "" {
 		kind = proto.KindShell
 	}
@@ -125,17 +239,21 @@ func (s *Server) createPanel(kind string) error {
 
 	switch kind {
 	case proto.KindShell:
-		if err := s.pty.StartShell(id); err != nil {
+		if err := s.pty.Start(id, path); err != nil {
 			return err
 		}
 	default:
 		return fmt.Errorf("unknown panel kind %q", kind)
 	}
 
+	name := "shell"
+	if path != "" {
+		name = filepath.Base(path)
+	}
 	p := panel.Panel{
 		ID:       id,
 		Kind:     panel.ParseKind(kind),
-		Title:    fmt.Sprintf("%s #%s", kind, id),
+		Title:    fmt.Sprintf("%s #%s", name, id),
 		State:    panel.Running,
 		Activity: "spawned",
 	}
@@ -173,6 +291,31 @@ func (s *Server) closePanel(id string) error {
 	s.pty.Stop(id) // no-op for mock panels with no real process
 	log.Info().Str("panel", title).Msg("panel closed")
 	return nil
+}
+
+// purgeExited drops every exited panel from the fleet and frees its retained PTY
+// resources, leaving live panels untouched. Returns how many were removed.
+func (s *Server) purgeExited() int {
+	s.mu.Lock()
+	kept := make([]panel.Panel, 0, len(s.panels))
+	var gone []string
+	for _, p := range s.panels {
+		if p.State == panel.Exited {
+			gone = append(gone, p.ID)
+			continue
+		}
+		kept = append(kept, p)
+	}
+	s.panels = kept
+	s.mu.Unlock()
+
+	for _, id := range gone {
+		s.pty.Stop(id)
+	}
+	if len(gone) > 0 {
+		log.Info().Int("count", len(gone)).Msg("purged exited panels")
+	}
+	return len(gone)
 }
 
 func (s *Server) panelsMsg() proto.ServerMsg {

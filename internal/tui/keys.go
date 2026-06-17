@@ -20,13 +20,16 @@ import (
 // map) enter runs the highlighted binding — so the whole surface is reachable
 // without memorising the chords.
 const (
-	keyPrefix    = "ctrl+t"
-	keyNewPanel  = "p"
-	keyClose     = "w"
-	keyDashboard = "d"
-	keyShowMap   = "k"
-	keyRestart   = "S" // shift+s
-	keyDetach    = "q"
+	keyPrefix      = "ctrl+t"
+	keyNewPanel    = "p"
+	keyNewForm     = "n"
+	keyClose       = "w"
+	keyPurge       = "x"
+	keyDashboard   = "d"
+	keyShowMap     = "k"
+	keyPanelConfig = "P" // shift+p
+	keyRestart     = "S" // shift+s
+	keyDetach      = "q"
 
 	keyCtrlC = "ctrl+c" // bare emergency quit
 )
@@ -50,9 +53,12 @@ type action int
 
 const (
 	actNewPanel action = iota
+	actNewForm
 	actClose
+	actPurge
 	actDashboard
 	actToggleMap
+	actPanelConfig
 	actRestart
 	actDetach
 )
@@ -71,51 +77,62 @@ type binding struct {
 // source of truth for the footer hint, the in-view key map, and the config keys.
 var bindings = []binding{
 	{"new-panel", keyNewPanel, "spawn a new shell panel", actNewPanel},
+	{"new-panel-form", keyNewForm, "new panel (choose the command)", actNewForm},
 	{"close", keyClose, "close the selected panel", actClose},
+	{"purge-exited", keyPurge, "purge all exited panels", actPurge},
 	{"dashboard", keyDashboard, "jump back to the dashboard", actDashboard},
 	{"key-map", keyShowMap, "toggle this key map", actToggleMap},
+	{"panel-config", keyPanelConfig, "configure panel defaults", actPanelConfig},
 	{"restart", keyRestart, "force-restart the server", actRestart},
 	{"detach", keyDetach, "detach (server keeps running)", actDetach},
 }
 
-// loadConfig reads $HOME/.baton/config and returns the leader prefix, the
-// bindings (defaults with any saved key overrides applied), and the
-// confirm-on-close setting. Missing values fall back to their defaults
-// (prefix "ctrl+t", confirm-on-close true) rather than failing the cockpit.
-func loadConfig() (prefix string, binds []binding, confirmClose bool) {
-	prefix = keyPrefix
-	binds = append([]binding(nil), bindings...)
-	confirmClose = true
+// prefs is the cockpit state persisted to $HOME/.baton/config.
+type prefs struct {
+	prefix       string
+	binds        []binding
+	confirmClose bool
+	shellPath    string
+}
+
+// loadPrefs reads the config file, returning defaults for anything missing or on
+// any read error (so the cockpit always comes up). Defaults: prefix "ctrl+t",
+// confirm-on-close on, system shell.
+func loadPrefs() prefs {
+	p := prefs{prefix: keyPrefix, binds: append([]binding(nil), bindings...), confirmClose: true}
 
 	cfg, err := config.Load()
 	if err != nil {
-		return prefix, binds, confirmClose
+		return p
 	}
 	if cfg.Prefix != "" {
-		prefix = cfg.Prefix
+		p.prefix = cfg.Prefix
 	}
-	for i := range binds {
-		if k := cfg.Keys[binds[i].name]; k != "" {
-			binds[i].key = k
+	for i := range p.binds {
+		if k := cfg.Keys[p.binds[i].name]; k != "" {
+			p.binds[i].key = k
 		}
 	}
 	if cfg.Settings.ConfirmClose != nil {
-		confirmClose = *cfg.Settings.ConfirmClose
+		p.confirmClose = *cfg.Settings.ConfirmClose
 	}
-	return prefix, binds, confirmClose
+	p.shellPath = cfg.Panel.Shell
+	return p
 }
 
-// saveConfig persists the prefix, the whole key map, and settings together, so
-// saving one never drops the others. Chords are keyed by each binding's name.
-func saveConfig(prefix string, binds []binding, confirmClose bool) error {
-	keys := make(map[string]string, len(binds))
-	for _, b := range binds {
+// saveConfig persists the cockpit's whole config (prefix, key map, settings, and
+// panel defaults) from the model, so saving one part never drops another.
+func (m model) saveConfig() error {
+	keys := make(map[string]string, len(m.keymap()))
+	for _, b := range m.keymap() {
 		keys[b.name] = b.key
 	}
+	confirmClose := m.confirmClose
 	return config.Config{
-		Prefix:   prefix,
+		Prefix:   m.effPrefix(),
 		Keys:     keys,
 		Settings: config.Settings{ConfirmClose: &confirmClose},
+		Panel:    config.PanelDefaults{Shell: m.shellPath},
 	}.Save()
 }
 

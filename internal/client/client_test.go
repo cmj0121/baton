@@ -92,6 +92,45 @@ func TestEventsCloseOnDisconnect(t *testing.T) {
 	}
 }
 
+func TestOutputRoutedSeparately(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "o.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_ = json.NewDecoder(conn).Decode(new(proto.Command)) // hello
+		enc := json.NewEncoder(conn)
+		_ = enc.Encode(proto.ServerMsg{Type: "welcome", Version: proto.ProtocolVersion})
+		_ = enc.Encode(proto.ServerMsg{Type: "output", ID: "1", Data: []byte("hi")})
+		time.Sleep(50 * time.Millisecond)
+	}()
+
+	c, err := Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	if got := <-c.Events; got.Type != "welcome" {
+		t.Fatalf("welcome should arrive on Events, got %+v", got)
+	}
+	select {
+	case got := <-c.Output:
+		if got.Type != "output" || string(got.Data) != "hi" {
+			t.Fatalf("unexpected output message: %+v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("output never arrived on the Output channel")
+	}
+}
+
 func TestDialUnknownSocketErrors(t *testing.T) {
 	if _, err := Dial(filepath.Join(t.TempDir(), "nope.sock")); err == nil {
 		t.Fatal("dialing a missing socket should error")
