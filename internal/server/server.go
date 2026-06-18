@@ -38,19 +38,34 @@ type Server struct {
 	ln  net.Listener
 	pty *ptymgr.Manager
 
+	allowNameConflict bool // when false, panel titles and group names stay unique
+
 	mu      sync.Mutex
 	seq     int
 	panels  []panel.Panel
 	clients map[*clientConn]struct{}
 }
 
+// Option tunes a Server at construction. Options keep New's signature stable as
+// settings accrue.
+type Option func(*Server)
+
+// WithAllowNameConflict lets two work items share a name, disabling the default
+// uniqueness check on panel titles and group names.
+func WithAllowNameConflict(allow bool) Option {
+	return func(s *Server) { s.allowNameConflict = allow }
+}
+
 // New builds a server bound to ln. The fleet starts empty — panels appear only
 // when the user spawns a real one.
-func New(ln net.Listener) *Server {
+func New(ln net.Listener, opts ...Option) *Server {
 	s := &Server{
 		ln:      ln,
 		pty:     ptymgr.New(),
 		clients: make(map[*clientConn]struct{}),
+	}
+	for _, opt := range opts {
+		opt(s)
 	}
 	s.pty.OnOutput(s.routeOutput)
 	s.pty.OnClose(s.onPanelExit)
@@ -363,6 +378,12 @@ func (s *Server) groupPanels(ids []string, name string) error {
 	if len(ids) == 0 {
 		return fmt.Errorf("panel.group needs at least one panel")
 	}
+	// The new name must not collide with another panel title or group; skipping
+	// the group of this same name lets the "add" action merge into an existing
+	// work item, which is intentional rather than a conflict.
+	if !s.allowNameConflict && s.nameTaken(name, "", name) {
+		return fmt.Errorf("the name %q is already taken", name)
+	}
 
 	want := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
@@ -375,6 +396,26 @@ func (s *Server) groupPanels(ids []string, name string) error {
 	}
 	log.Info().Str("group", name).Int("panels", moved).Msg("panels grouped")
 	return nil
+}
+
+// nameTaken reports whether name already identifies a different work item — a
+// panel title (other than skipID) or a group name (other than skipGroup). It is
+// the basis of the no-duplicate-names policy. An empty name never collides.
+func (s *Server) nameTaken(name, skipID, skipGroup string) bool {
+	if name == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, p := range s.panels {
+		if p.ID != skipID && p.Title == name {
+			return true
+		}
+		if p.Group != "" && p.Group != skipGroup && p.Group == name {
+			return true
+		}
+	}
+	return false
 }
 
 // setGroup files every panel matching match under name, returning how many moved.
@@ -444,6 +485,9 @@ func (s *Server) rename(id, group, name string) error {
 
 // renamePanel sets the title of the panel with the given id.
 func (s *Server) renamePanel(id, title string) error {
+	if !s.allowNameConflict && s.nameTaken(title, id, "") {
+		return fmt.Errorf("the name %q is already taken", title)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.panels {
@@ -460,6 +504,9 @@ func (s *Server) renamePanel(id, title string) error {
 // new name. Renaming onto an existing group name merges the two — group identity
 // is the name itself.
 func (s *Server) renameGroup(old, name string) error {
+	if !s.allowNameConflict && s.nameTaken(name, "", old) {
+		return fmt.Errorf("the name %q is already taken", name)
+	}
 	moved := s.setGroup(func(p panel.Panel) bool { return p.Group == old }, name)
 	if moved == 0 {
 		return fmt.Errorf("no panels in group %q", old)

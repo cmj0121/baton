@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -422,8 +423,8 @@ func TestGroupAndRename(t *testing.T) {
 		}
 	}
 
-	// Merge semantics: a third panel in its own group, renamed onto "backend",
-	// joins the existing members — group identity is just the name.
+	// Under the default strict policy, renaming one group onto another's name is
+	// a conflict: the rename is rejected and the group keeps its own name.
 	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
 		t.Fatalf("create d: %v", err)
 	}
@@ -435,11 +436,14 @@ func TestGroupAndRename(t *testing.T) {
 	if err := c.Send(proto.Command{Action: "panel.rename", Group: "infra", Name: "backend"}); err != nil {
 		t.Fatalf("merge group: %v", err)
 	}
-	got = recv(t, c)
-	for _, p := range got.Panels {
-		if p.Group != "backend" {
-			t.Fatalf("after merge every panel should be in backend, got %s=%q", p.ID, p.Group)
-		}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("merging onto an existing group should be rejected, got %+v", msg)
+	}
+	if err := c.Send(proto.Command{Action: "panel.list"}); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if g := panelByID(recv(t, c).Panels, d).Group; g != "infra" {
+		t.Fatalf("the rejected member should stay in infra, got %q", g)
 	}
 
 	// Error paths reply with an error and do not broadcast a snapshot.
@@ -469,6 +473,108 @@ func panelByID(panels []proto.Panel, id string) proto.Panel {
 		}
 	}
 	return proto.Panel{}
+}
+
+// TestNameConflictPolicy covers the uniqueness rule on panel titles and group
+// names: rejected by default, bypassed for "add to existing group", and lifted
+// entirely when the server is built to allow conflicts.
+func TestNameConflictPolicy(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+
+	// setup spins a server with the given options and returns a client with two
+	// shell panels (ids a, b), past the welcome + snapshot handshake. A short
+	// socket dir keeps the path under the macOS sun_path limit.
+	setup := func(t *testing.T, opts ...server.Option) (*client.Client, string, string) {
+		t.Helper()
+		dir, err := os.MkdirTemp("", "bt")
+		if err != nil {
+			t.Fatalf("tempdir: %v", err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(dir) })
+		sock := filepath.Join(dir, "s.sock")
+		ln, err := net.Listen("unix", sock)
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		t.Cleanup(func() { _ = ln.Close() })
+		go func() { _ = server.New(ln, opts...).Serve() }()
+
+		c, err := client.Dial(sock)
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		recv(t, c) // welcome
+		recv(t, c) // empty snapshot
+		if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+			t.Fatalf("create a: %v", err)
+		}
+		a := recv(t, c).Panels[0].ID
+		if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+			t.Fatalf("create b: %v", err)
+		}
+		b := recv(t, c).Panels[1].ID
+		return c, a, b
+	}
+
+	t.Run("strict", func(t *testing.T) {
+		c, a, b := setup(t)
+		if err := c.Send(proto.Command{Action: "panel.rename", ID: a, Name: "dup"}); err != nil {
+			t.Fatalf("rename a: %v", err)
+		}
+		recv(t, c)
+		// Renaming b onto a's title is a conflict.
+		if err := c.Send(proto.Command{Action: "panel.rename", ID: b, Name: "dup"}); err != nil {
+			t.Fatalf("rename b: %v", err)
+		}
+		if msg := recv(t, c); msg.Type != "error" {
+			t.Fatalf("a duplicate title should be rejected, got %+v", msg)
+		}
+		// A new group whose name collides with a panel title is a conflict too.
+		if err := c.Send(proto.Command{Action: "panel.group", IDs: []string{b}, Group: "dup"}); err != nil {
+			t.Fatalf("group: %v", err)
+		}
+		if msg := recv(t, c); msg.Type != "error" {
+			t.Fatalf("a group name colliding with a title should be rejected, got %+v", msg)
+		}
+	})
+
+	t.Run("add-bypasses", func(t *testing.T) {
+		c, a, b := setup(t)
+		if err := c.Send(proto.Command{Action: "panel.group", IDs: []string{a}, Group: "work"}); err != nil {
+			t.Fatalf("group a: %v", err)
+		}
+		recv(t, c)
+		// Adding b to the existing "work" group reuses the name — allowed.
+		if err := c.Send(proto.Command{Action: "panel.group", IDs: []string{b}, Group: "work"}); err != nil {
+			t.Fatalf("add b: %v", err)
+		}
+		got := recv(t, c)
+		if got.Type == "error" {
+			t.Fatalf("adding to an existing group should be allowed, got %+v", got)
+		}
+		if g := panelByID(got.Panels, b).Group; g != "work" {
+			t.Fatalf("b should have joined work, got %q", g)
+		}
+	})
+
+	t.Run("allow-conflict", func(t *testing.T) {
+		c, a, b := setup(t, server.WithAllowNameConflict(true))
+		if err := c.Send(proto.Command{Action: "panel.rename", ID: a, Name: "dup"}); err != nil {
+			t.Fatalf("rename a: %v", err)
+		}
+		recv(t, c)
+		if err := c.Send(proto.Command{Action: "panel.rename", ID: b, Name: "dup"}); err != nil {
+			t.Fatalf("rename b: %v", err)
+		}
+		got := recv(t, c)
+		if got.Type == "error" {
+			t.Fatalf("with conflicts allowed a duplicate title should pass, got %+v", got)
+		}
+		if title := panelByID(got.Panels, b).Title; title != "dup" {
+			t.Fatalf("b should be renamed to dup, got %q", title)
+		}
+	})
 }
 
 func TestMultiAttach(t *testing.T) {

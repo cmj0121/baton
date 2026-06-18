@@ -86,9 +86,10 @@ type model struct {
 	endpoint   string // where we are attached: "local", or a host/IP for remote
 	version    string // negotiated protocol version, surfaced in the key map
 
-	confirmClose bool      // ask y/n before closing a panel (toggled in the key map)
-	pendingClose bool      // a close is awaiting y/n confirmation
-	now          time.Time // wall clock shown in the footer, ticked every second
+	confirmClose      bool      // ask y/n before closing a panel (toggled in the key map)
+	allowNameConflict bool      // let two work items share a name (server enforces; kept to round-trip config)
+	pendingClose      bool      // a close is awaiting y/n confirmation
+	now               time.Time // wall clock shown in the footer, ticked every second
 
 	cpuPct   float64 // system-wide CPU load %, sampled each tick for the footer
 	memUsed  uint64  // system memory in use, bytes
@@ -147,15 +148,16 @@ func (m model) RestartRequested() bool { return m.restart }
 func New(c *client.Client) tea.Model {
 	p := loadPrefs()
 	return model{
-		client:       c,
-		mode:         modeDashboard,
-		status:       "attaching…",
-		endpoint:     c.Endpoint(),
-		confirmClose: p.confirmClose,
-		now:          time.Now(),
-		prefixKey:    p.prefix,
-		binds:        p.binds,
-		shellPath:    p.shellPath,
+		client:            c,
+		mode:              modeDashboard,
+		status:            "attaching…",
+		endpoint:          c.Endpoint(),
+		confirmClose:      p.confirmClose,
+		allowNameConflict: p.allowNameConflict,
+		now:               time.Now(),
+		prefixKey:         p.prefix,
+		binds:             p.binds,
+		shellPath:         p.shellPath,
 	}
 }
 

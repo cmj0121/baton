@@ -129,10 +129,11 @@ var bindings = []binding{
 
 // prefs is the cockpit state persisted to $HOME/.baton/config.
 type prefs struct {
-	prefix       string
-	binds        []binding
-	confirmClose bool
-	shellPath    string
+	prefix            string
+	binds             []binding
+	confirmClose      bool
+	allowNameConflict bool
+	shellPath         string
 }
 
 // loadPrefs reads the config file, returning defaults for anything missing or on
@@ -155,6 +156,9 @@ func loadPrefs() prefs {
 	}
 	if cfg.Settings.ConfirmClose != nil {
 		p.confirmClose = *cfg.Settings.ConfirmClose
+	}
+	if cfg.Settings.AllowNameConflict != nil {
+		p.allowNameConflict = *cfg.Settings.AllowNameConflict
 	}
 	p.shellPath = cfg.Panel.Shell
 	return p
@@ -180,11 +184,15 @@ func (m model) saveConfig() error {
 		prefix = m.effPrefix()
 	}
 	confirmClose := m.confirmClose
+	allowNameConflict := m.allowNameConflict
 	return config.Config{
-		Prefix:   prefix,
-		Keys:     keys,
-		Settings: config.Settings{ConfirmClose: &confirmClose},
-		Panel:    config.PanelDefaults{Shell: m.shellPath},
+		Prefix: prefix,
+		Keys:   keys,
+		Settings: config.Settings{
+			ConfirmClose:      &confirmClose,
+			AllowNameConflict: &allowNameConflict,
+		},
+		Panel: config.PanelDefaults{Shell: m.shellPath},
 	}.Save()
 }
 
