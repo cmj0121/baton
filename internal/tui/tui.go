@@ -1343,45 +1343,68 @@ func (m model) helpView() string {
 	pfx := keyLabel(m.effPrefix())
 	dash := keyLabel(m.bindingKey(actDashboard))
 
+	// helpRow is one key line tagged with the purpose section it sorts under, so
+	// every stage's list groups by category just like the editable key map.
+	type helpRow struct{ cat, keys, desc string }
+
 	var title string
-	var rows [][2]string
+	var rows []helpRow
 	switch m.helpFrom {
 	case modeGroupZoom:
 		title = "GROUP VIEW"
-		rows = [][2]string{
-			{kc("tab") + " " + kc("S-tab"), "focus the next / previous panel"},
-			{kc("enter"), "zoom the focused panel"},
-			{kc("+") + " " + kc("-"), "more / fewer columns"},
-			{kc(keyLabel(keyRemove)), "remove the focused panel from the group"},
-			{kc(dash) + " " + kc("esc"), "back to the dashboard"},
-			{kc(pfx) + " " + kc(dash), "dashboard (works in every view)"},
+		rows = []helpRow{
+			{"Navigation", kc("tab") + " " + kc("S-tab"), "focus the next / previous panel"},
+			{"Navigation", kc("enter"), "zoom the focused panel"},
+			{"Navigation", kc("+") + " " + kc("-"), "more / fewer columns"},
+			{"Work items", kc(keyLabel(keyRemove)), "remove the focused panel from the group"},
+			{"View", kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
+			{"View", kc(dash) + " " + kc("esc"), "back to the dashboard"},
+			{"View", kc(pfx) + " " + kc(dash), "dashboard (works in every view)"},
+			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), "edit the key map"},
 		}
 	case modeZoom:
 		title = "ZOOM"
-		rows = [][2]string{
-			{kc("type"), "drive the program directly"},
-			{kc(pfx) + " " + kc(dash), "back to the dashboard"},
-			{kc(pfx) + " " + kc(keyLabel(m.bindingKey(actGroupView))), "back to the group view"},
-			{kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), "edit the key map"},
-			{kc(pfx) + " " + kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
-			{kc(pfx) + " " + kc(pfx), "send a literal " + pfx},
+		rows = []helpRow{
+			{"Navigation", kc("type"), "drive the program directly"},
+			{"Navigation", kc(pfx) + " " + kc(pfx), "send a literal " + pfx},
+			{"View", kc(pfx) + " " + kc(dash), "back to the dashboard"},
+			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actGroupView))), "back to the group view"},
+			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
+			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), "edit the key map"},
 		}
 	default: // dashboard — single keys for commands, C-t for the escapes
 		title = "DASHBOARD"
-		rows = [][2]string{{kc("hjkl") + " " + kc("↑↓←→"), "move"}, {kc("enter"), "open / zoom"}, {kc("esc"), "clear the selection"}}
+		rows = []helpRow{
+			{"Navigation", kc("hjkl") + " " + kc("↑↓←→"), "move"},
+			{"Navigation", kc("enter"), "open / zoom"},
+			{"Navigation", kc("esc"), "clear the selection"},
+		}
 		for _, b := range m.keymap() {
+			keys := kc(keyLabel(b.key))
 			if isEscape(b.act) {
-				rows = append(rows, [2]string{kc(pfx) + " " + kc(keyLabel(b.key)), b.desc})
-			} else {
-				rows = append(rows, [2]string{kc(keyLabel(b.key)), b.desc})
+				keys = kc(pfx) + " " + kc(keyLabel(b.key))
 			}
+			rows = append(rows, helpRow{b.cat, keys, b.desc})
 		}
 	}
 
+	// Render category by category in a stable order, so the list always reads the
+	// same way and matches the editable key map's grouping.
 	keyCol := lipgloss.NewStyle().Width(20)
-	out := []string{sectionStyle.Render(spaced(title + " KEYS")), ""}
-	for _, r := range rows {
-		out = append(out, keyCol.Render(r[0])+mutedStyle.Render(r[1]))
+	subhead := lipgloss.NewStyle().Foreground(colFaint).Bold(true)
+	out := []string{sectionStyle.Render(spaced(title + " KEYS"))}
+	for _, cat := range []string{"Navigation", "Panels", "Work items", "View", "Session"} {
+		shown := false
+		for _, r := range rows {
+			if r.cat != cat {
+				continue
+			}
+			if !shown {
+				out = append(out, "", "  "+subhead.Render(cat))
+				shown = true
+			}
+			out = append(out, keyCol.Render(r.keys)+mutedStyle.Render(r.desc))
+		}
 	}
 	out = append(out, "", mutedStyle.Render("esc  back   ·   "+keyLabel(pfx)+" "+keyLabel(m.bindingKey(actEditMap))+"  edit"))
 	return configBox(lipgloss.JoinVertical(lipgloss.Left, out...))

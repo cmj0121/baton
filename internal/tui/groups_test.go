@@ -466,6 +466,31 @@ func TestHelpContextAndZoomFooter(t *testing.T) {
 	}
 }
 
+// TestHelpGroupsByCategory checks the ? key list carries its purpose-section
+// headers in every stage, mirroring the editable key map's grouping.
+func TestHelpGroupsByCategory(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+
+	cases := []struct {
+		from mode
+		cats []string
+	}{
+		{modeDashboard, []string{"Navigation", "Panels", "Work items", "View", "Session"}},
+		{modeGroupZoom, []string{"Navigation", "Work items", "View"}},
+		{modeZoom, []string{"Navigation", "View"}},
+	}
+	for _, tc := range cases {
+		m.helpFrom = tc.from
+		view := m.helpView()
+		for _, cat := range tc.cats {
+			if !strings.Contains(view, cat) {
+				t.Fatalf("help from %v should group under %q, got:\n%s", tc.from, cat, view)
+			}
+		}
+	}
+}
+
 // TestExitKeysCaptured checks Ctrl-C and Ctrl-E never quit in command mode: on
 // the dashboard and in the group split they only hint at the detach binding.
 func TestExitKeysCaptured(t *testing.T) {
