@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 )
@@ -42,7 +43,7 @@ func TestCloseRequiresConfirmation(t *testing.T) {
 	before := len(m.fleet)
 
 	// prefix + w arms the confirmation but does not close yet.
-	m = press(m, "ctrl+t", "w")
+	m = press(m, "w")
 	if !m.pendingClose {
 		t.Fatal("expected a pending close confirmation")
 	}
@@ -64,7 +65,7 @@ func TestCloseCancelsOnAnyOtherKey(t *testing.T) {
 	m := model{fleet: panel.Mock(), confirmClose: true}
 	before := len(m.fleet)
 
-	m = press(m, "ctrl+t", "w", "n")
+	m = press(m, "w", "n")
 	if m.pendingClose {
 		t.Fatal("expected the confirmation to be cancelled")
 	}
@@ -91,7 +92,7 @@ func TestConfirmToggleSkipsPrompt(t *testing.T) {
 	m.mode = modeDashboard
 	m.cursor = 0
 	before := len(m.fleet)
-	m = press(m, "ctrl+t", "w")
+	m = press(m, "w")
 	if m.pendingClose {
 		t.Fatal("close should not prompt when the gate is off")
 	}
@@ -129,10 +130,10 @@ func TestRebindKeyByTyping(t *testing.T) {
 	}
 
 	// The prefix now resolves the new chord and forgets the old one.
-	if b, ok := m.lookup("x"); !ok || b.act != actNewPanel {
+	if b, ok := m.lookupCmd("x"); !ok || b.act != actNewPanel {
 		t.Fatalf("prefix+x should trigger spawn, got %+v ok=%v", b, ok)
 	}
-	if _, ok := m.lookup("p"); ok {
+	if _, ok := m.lookupCmd("p"); ok {
 		t.Fatal("old key p should no longer be bound")
 	}
 }
@@ -159,6 +160,19 @@ func TestRebindPersistsToConfig(t *testing.T) {
 				t.Fatalf("close key drifted to %q", b.key)
 			}
 		}
+	}
+
+	// Only the changed key is persisted, so a default the user never touched
+	// flows through on the next release instead of being masked.
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Keys["new-panel"] != "x" {
+		t.Fatalf("changed key should persist, got %q", cfg.Keys["new-panel"])
+	}
+	if _, ok := cfg.Keys["close"]; ok {
+		t.Fatal("an unchanged key should not be written to the config")
 	}
 }
 
@@ -223,7 +237,7 @@ func TestRestartBindingFlagsRestart(t *testing.T) {
 	}
 
 	// prefix + S (shift+s) asks for a force-restart and quits.
-	m = press(m, "ctrl+t", "S")
+	m = press(m, "S")
 	if !m.restart || !m.RestartRequested() {
 		t.Fatal("prefix+S should flag a restart")
 	}
@@ -281,5 +295,46 @@ func TestTreeViewKicksInForLargeFleet(t *testing.T) {
 	small := model{fleet: panel.Mock()[:treeThreshold]}
 	if small.treeView() {
 		t.Fatalf("fleet of %d should use the card grid", len(small.fleet))
+	}
+}
+
+func TestKeyMapShowsPurposeSections(t *testing.T) {
+	m := model{mode: modeKeyMap, width: 120, height: 40, binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+	v := m.View()
+	for _, sec := range []string{"Panels", "View", "Work items", "Session"} {
+		if !strings.Contains(v, sec) {
+			t.Fatalf("key map should show the %q purpose section", sec)
+		}
+	}
+}
+
+func TestKeyMapTabJumpsSections(t *testing.T) {
+	m := model{mode: modeKeyMap, binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+	anchors := m.keyMapAnchors()
+	if anchors[0] != 0 {
+		t.Fatalf("first anchor should be the prefix row, got %d", anchors[0])
+	}
+	if last := anchors[len(anchors)-1]; last != len(m.keymap())+1 {
+		t.Fatalf("last anchor should be the settings row, got %d", last)
+	}
+
+	// tab steps forward through the section anchors; shift+tab back; both wrap.
+	m.cursor = 0
+	m = press(m, "tab")
+	if m.cursor != anchors[1] {
+		t.Fatalf("tab from the prefix should land on the first section, got %d want %d", m.cursor, anchors[1])
+	}
+	m = press(m, "tab")
+	if m.cursor != anchors[2] {
+		t.Fatalf("tab should advance to the next section, got %d want %d", m.cursor, anchors[2])
+	}
+	m = press(m, "shift+tab")
+	if m.cursor != anchors[1] {
+		t.Fatalf("shift+tab should go back a section, got %d want %d", m.cursor, anchors[1])
+	}
+	m.cursor = anchors[len(anchors)-1]
+	m = press(m, "tab")
+	if m.cursor != anchors[0] {
+		t.Fatalf("tab should wrap from the last section to the prefix, got %d", m.cursor)
 	}
 }

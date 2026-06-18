@@ -27,6 +27,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/cmj0121/baton/internal/client"
+	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/server"
 	"github.com/cmj0121/baton/internal/tui"
@@ -231,8 +232,15 @@ func runServer() error {
 		os.Exit(0)
 	}()
 
+	// Honour the user's naming-conflict policy from the shared config file; a
+	// missing or unreadable config keeps the strict default (unique names).
+	var opts []server.Option
+	if cfg, err := config.Load(); err == nil && cfg.Settings.AllowNameConflict != nil {
+		opts = append(opts, server.WithAllowNameConflict(*cfg.Settings.AllowNameConflict))
+	}
+
 	log.Info().Str("socket", sock).Int("pid", os.Getpid()).Msgf("baton %s listening", version)
-	if err := server.New(ln).Serve(); err != nil {
+	if err := server.New(ln, opts...).Serve(); err != nil {
 		log.Info().Err(err).Msg("server stopped")
 	}
 	return nil

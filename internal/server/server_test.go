@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -313,5 +314,360 @@ func TestAttachIO(t *testing.T) {
 	}
 	if err := c.Send(proto.Command{Action: "panel.close", ID: id}); err != nil {
 		t.Fatalf("close: %v", err)
+	}
+}
+
+func TestGroupAndRename(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	sock := filepath.Join(t.TempDir(), "baton.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() { _ = server.New(ln).Serve() }()
+
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	recv(t, c) // welcome
+	recv(t, c) // empty panels
+
+	// Two panels to file under one work item.
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+		t.Fatalf("create a: %v", err)
+	}
+	a := recv(t, c).Panels[0].ID
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+		t.Fatalf("create b: %v", err)
+	}
+	b := recv(t, c).Panels[1].ID
+
+	// Group both under "api". The broadcast carries Group on each member.
+	if err := c.Send(proto.Command{Action: "panel.group", IDs: []string{a, b}, Group: "api"}); err != nil {
+		t.Fatalf("group: %v", err)
+	}
+	got := recv(t, c)
+	for _, p := range got.Panels {
+		if p.Group != "api" {
+			t.Fatalf("panel %s should be in group api, got %q", p.ID, p.Group)
+		}
+	}
+
+	// Ungroup dissolves the work item: both members go back to no group.
+	if err := c.Send(proto.Command{Action: "panel.ungroup", Group: "api"}); err != nil {
+		t.Fatalf("ungroup: %v", err)
+	}
+	got = recv(t, c)
+	for _, p := range got.Panels {
+		if p.Group != "" {
+			t.Fatalf("panel %s should be ungrouped, got %q", p.ID, p.Group)
+		}
+	}
+	// Ungrouping a group that does not exist errors.
+	if err := c.Send(proto.Command{Action: "panel.ungroup", Group: "ghost"}); err != nil {
+		t.Fatalf("send ungroup ghost: %v", err)
+	}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("ungrouping a missing group should error, got %+v", msg)
+	}
+	// Re-group for the rest of the test.
+	if err := c.Send(proto.Command{Action: "panel.group", IDs: []string{a, b}, Group: "api"}); err != nil {
+		t.Fatalf("regroup: %v", err)
+	}
+	recv(t, c)
+
+	// Remove just one member by id: a leaves the group, b stays.
+	if err := c.Send(proto.Command{Action: "panel.ungroup", IDs: []string{a}}); err != nil {
+		t.Fatalf("remove member: %v", err)
+	}
+	got = recv(t, c)
+	if g := panelByID(got.Panels, a).Group; g != "" {
+		t.Fatalf("panel a should have left the group, got %q", g)
+	}
+	if g := panelByID(got.Panels, b).Group; g != "api" {
+		t.Fatalf("panel b should remain in api, got %q", g)
+	}
+	// Removing an id that is not in any group errors.
+	if err := c.Send(proto.Command{Action: "panel.ungroup", IDs: []string{a}}); err != nil {
+		t.Fatalf("send remove ungrouped: %v", err)
+	}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("removing an ungrouped panel should error, got %+v", msg)
+	}
+	// Put a back for the rest of the test.
+	if err := c.Send(proto.Command{Action: "panel.group", IDs: []string{a}, Group: "api"}); err != nil {
+		t.Fatalf("regroup a: %v", err)
+	}
+	recv(t, c)
+
+	// Rename one panel's title.
+	if err := c.Send(proto.Command{Action: "panel.rename", ID: a, Name: "worker"}); err != nil {
+		t.Fatalf("rename panel: %v", err)
+	}
+	got = recv(t, c)
+	if title := panelByID(got.Panels, a).Title; title != "worker" {
+		t.Fatalf("panel a should be titled worker, got %q", title)
+	}
+
+	// Rename the group; every member follows.
+	if err := c.Send(proto.Command{Action: "panel.rename", Group: "api", Name: "backend"}); err != nil {
+		t.Fatalf("rename group: %v", err)
+	}
+	got = recv(t, c)
+	for _, p := range got.Panels {
+		if p.Group != "backend" {
+			t.Fatalf("panel %s should follow the group rename, got %q", p.ID, p.Group)
+		}
+	}
+
+	// Under the default strict policy, renaming one group onto another's name is
+	// a conflict: the rename is rejected and the group keeps its own name.
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+		t.Fatalf("create d: %v", err)
+	}
+	d := recv(t, c).Panels[2].ID
+	if err := c.Send(proto.Command{Action: "panel.group", IDs: []string{d}, Group: "infra"}); err != nil {
+		t.Fatalf("group d: %v", err)
+	}
+	recv(t, c)
+	if err := c.Send(proto.Command{Action: "panel.rename", Group: "infra", Name: "backend"}); err != nil {
+		t.Fatalf("merge group: %v", err)
+	}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("merging onto an existing group should be rejected, got %+v", msg)
+	}
+	if err := c.Send(proto.Command{Action: "panel.list"}); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if g := panelByID(recv(t, c).Panels, d).Group; g != "infra" {
+		t.Fatalf("the rejected member should stay in infra, got %q", g)
+	}
+
+	// Error paths reply with an error and do not broadcast a snapshot.
+	for _, bad := range []proto.Command{
+		{Action: "panel.group", IDs: []string{a}, Group: ""},         // empty name
+		{Action: "panel.group", IDs: nil, Group: "x"},                // no panels
+		{Action: "panel.group", IDs: []string{"nope"}, Group: "x"},   // no match
+		{Action: "panel.rename", ID: a, Group: "backend", Name: "z"}, // ambiguous target
+		{Action: "panel.rename", Name: "z"},                          // no target
+		{Action: "panel.rename", ID: "nope", Name: "z"},              // unknown panel
+		{Action: "panel.rename", Group: "ghost", Name: "z"},          // unknown group
+	} {
+		if err := c.Send(bad); err != nil {
+			t.Fatalf("send %v: %v", bad, err)
+		}
+		if msg := recv(t, c); msg.Type != "error" || msg.Error == "" {
+			t.Fatalf("command %+v should error, got %+v", bad, msg)
+		}
+	}
+}
+
+// panelByID finds a panel in a snapshot by id, or returns the zero value.
+func panelByID(panels []proto.Panel, id string) proto.Panel {
+	for _, p := range panels {
+		if p.ID == id {
+			return p
+		}
+	}
+	return proto.Panel{}
+}
+
+// TestNameConflictPolicy covers the uniqueness rule on panel titles and group
+// names: rejected by default, bypassed for "add to existing group", and lifted
+// entirely when the server is built to allow conflicts.
+func TestNameConflictPolicy(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+
+	// setup spins a server with the given options and returns a client with two
+	// shell panels (ids a, b), past the welcome + snapshot handshake. A short
+	// socket dir keeps the path under the macOS sun_path limit.
+	setup := func(t *testing.T, opts ...server.Option) (*client.Client, string, string) {
+		t.Helper()
+		dir, err := os.MkdirTemp("", "bt")
+		if err != nil {
+			t.Fatalf("tempdir: %v", err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(dir) })
+		sock := filepath.Join(dir, "s.sock")
+		ln, err := net.Listen("unix", sock)
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		t.Cleanup(func() { _ = ln.Close() })
+		go func() { _ = server.New(ln, opts...).Serve() }()
+
+		c, err := client.Dial(sock)
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		recv(t, c) // welcome
+		recv(t, c) // empty snapshot
+		if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+			t.Fatalf("create a: %v", err)
+		}
+		a := recv(t, c).Panels[0].ID
+		if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+			t.Fatalf("create b: %v", err)
+		}
+		b := recv(t, c).Panels[1].ID
+		return c, a, b
+	}
+
+	t.Run("strict", func(t *testing.T) {
+		c, a, b := setup(t)
+		if err := c.Send(proto.Command{Action: "panel.rename", ID: a, Name: "dup"}); err != nil {
+			t.Fatalf("rename a: %v", err)
+		}
+		recv(t, c)
+		// Renaming b onto a's title is a conflict.
+		if err := c.Send(proto.Command{Action: "panel.rename", ID: b, Name: "dup"}); err != nil {
+			t.Fatalf("rename b: %v", err)
+		}
+		if msg := recv(t, c); msg.Type != "error" {
+			t.Fatalf("a duplicate title should be rejected, got %+v", msg)
+		}
+		// A new group whose name collides with a panel title is a conflict too.
+		if err := c.Send(proto.Command{Action: "panel.group", IDs: []string{b}, Group: "dup"}); err != nil {
+			t.Fatalf("group: %v", err)
+		}
+		if msg := recv(t, c); msg.Type != "error" {
+			t.Fatalf("a group name colliding with a title should be rejected, got %+v", msg)
+		}
+	})
+
+	t.Run("add-bypasses", func(t *testing.T) {
+		c, a, b := setup(t)
+		if err := c.Send(proto.Command{Action: "panel.group", IDs: []string{a}, Group: "work"}); err != nil {
+			t.Fatalf("group a: %v", err)
+		}
+		recv(t, c)
+		// Adding b to the existing "work" group reuses the name — allowed.
+		if err := c.Send(proto.Command{Action: "panel.group", IDs: []string{b}, Group: "work"}); err != nil {
+			t.Fatalf("add b: %v", err)
+		}
+		got := recv(t, c)
+		if got.Type == "error" {
+			t.Fatalf("adding to an existing group should be allowed, got %+v", got)
+		}
+		if g := panelByID(got.Panels, b).Group; g != "work" {
+			t.Fatalf("b should have joined work, got %q", g)
+		}
+	})
+
+	t.Run("allow-conflict", func(t *testing.T) {
+		c, a, b := setup(t, server.WithAllowNameConflict(true))
+		if err := c.Send(proto.Command{Action: "panel.rename", ID: a, Name: "dup"}); err != nil {
+			t.Fatalf("rename a: %v", err)
+		}
+		recv(t, c)
+		if err := c.Send(proto.Command{Action: "panel.rename", ID: b, Name: "dup"}); err != nil {
+			t.Fatalf("rename b: %v", err)
+		}
+		got := recv(t, c)
+		if got.Type == "error" {
+			t.Fatalf("with conflicts allowed a duplicate title should pass, got %+v", got)
+		}
+		if title := panelByID(got.Panels, b).Title; title != "dup" {
+			t.Fatalf("b should be renamed to dup, got %q", title)
+		}
+	})
+}
+
+func TestMultiAttach(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	sock := filepath.Join(t.TempDir(), "baton.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() { _ = server.New(ln).Serve() }()
+
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	recv(t, c) // welcome
+	recv(t, c) // empty panels
+
+	// Two shells, both attached at once — the group-split case.
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+		t.Fatalf("create a: %v", err)
+	}
+	a := recv(t, c).Panels[0].ID
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+		t.Fatalf("create b: %v", err)
+	}
+	b := recv(t, c).Panels[1].ID
+
+	for _, id := range []string{a, b} {
+		if err := c.Send(proto.Command{Action: "panel.attach", ID: id}); err != nil {
+			t.Fatalf("attach %s: %v", id, err)
+		}
+	}
+
+	// Drive both; their output must arrive tagged with the right id so a client
+	// can demux into per-tile emulators.
+	if err := c.Send(proto.Command{Action: "panel.input", ID: a, Data: []byte("echo AAA-marker\n")}); err != nil {
+		t.Fatalf("input a: %v", err)
+	}
+	if err := c.Send(proto.Command{Action: "panel.input", ID: b, Data: []byte("echo BBB-marker\n")}); err != nil {
+		t.Fatalf("input b: %v", err)
+	}
+
+	waitFor := func(id, marker string) {
+		deadline := time.After(3 * time.Second)
+		for {
+			select {
+			case msg := <-c.Output:
+				if msg.ID == id && strings.Contains(string(msg.Data), marker) {
+					return
+				}
+				if msg.ID != id && strings.Contains(string(msg.Data), marker) {
+					t.Fatalf("marker %q arrived tagged with %q, not %q", marker, msg.ID, id)
+				}
+			case <-deadline:
+				t.Fatalf("never saw %q for panel %s", marker, id)
+			}
+		}
+	}
+	waitFor(a, "AAA-marker")
+	waitFor(b, "BBB-marker")
+
+	// Detaching just one stops its stream while the other keeps flowing. Poke the
+	// detached panel and the live one; we must see the live one but never the
+	// detached one (a is detached before its echo runs, so it can't route here).
+	if err := c.Send(proto.Command{Action: "panel.detach", ID: a}); err != nil {
+		t.Fatalf("detach a: %v", err)
+	}
+	if err := c.Send(proto.Command{Action: "panel.input", ID: a, Data: []byte("echo A-GONE\n")}); err != nil {
+		t.Fatalf("input a after detach: %v", err)
+	}
+	if err := c.Send(proto.Command{Action: "panel.input", ID: b, Data: []byte("echo STILL-HERE\n")}); err != nil {
+		t.Fatalf("input b again: %v", err)
+	}
+	deadline := time.After(3 * time.Second)
+	for done := false; !done; {
+		select {
+		case msg := <-c.Output:
+			if msg.ID == a && strings.Contains(string(msg.Data), "A-GONE") {
+				t.Fatal("detached panel a should not stream any more")
+			}
+			if msg.ID == b && strings.Contains(string(msg.Data), "STILL-HERE") {
+				done = true // b is live and a stayed silent up to here
+			}
+		case <-deadline:
+			t.Fatal("never saw the live panel's output after detaching a")
+		}
+	}
+
+	// Detach-all (empty id) clears the rest.
+	if err := c.Send(proto.Command{Action: "panel.detach"}); err != nil {
+		t.Fatalf("detach all: %v", err)
 	}
 }

@@ -32,6 +32,10 @@ type Config struct {
 // (use the default) from an explicit false.
 type Settings struct {
 	ConfirmClose *bool `yaml:"confirm-close,omitempty"` // ask y/n before closing a panel
+
+	// AllowNameConflict lets two work items share a name. Unset or false keeps
+	// the default policy: panel titles and group names must be unique.
+	AllowNameConflict *bool `yaml:"allow-name-conflict,omitempty"`
 }
 
 // PanelDefaults configure how new panels are spawned.

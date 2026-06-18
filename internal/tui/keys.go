@@ -8,30 +8,40 @@ import (
 	"github.com/cmj0121/baton/internal/config"
 )
 
-// Keybindings follow a tmux-style prefix model: press the prefix, then a verb.
+// Keybindings are modal. In the command-mode views (dashboard, group split) an
+// action fires on a single key. In a zoom the keys reach the live program, so an
+// action fires on the prefix then the key. Two escapes — dashboard and group
+// view — are bound to the prefix and work in every mode.
 //
-//	prefix          ctrl-t      enter "waiting for a binding" mode
-//	prefix + p      new panel   create a panel (default: shell)
-//	prefix + d      dashboard   switch to the dashboard view
-//	prefix + k      keys        toggle the in-view key map
-//	prefix + q      detach      detach this client (the server keeps running)
-//
-// Inside a view the cursor moves with the arrow keys or hjkl, and (in the key
-// map) enter runs the highlighted binding — so the whole surface is reachable
-// without memorising the chords.
+//	dashboard:  p new · w close · g mark · G group · ? key map · …  (single keys)
+//	zoom:       C-t p new · C-t w close · …                          (prefix + key)
+//	any mode:   C-t d dashboard · C-t g group view                  (escapes)
 const (
 	keyPrefix      = "ctrl+t"
 	keyNewPanel    = "p"
-	keyNewForm     = "n"
+	keyNewForm     = "c" // "choose the command" (n is rename)
 	keyClose       = "w"
 	keyPurge       = "x"
-	keyDashboard   = "d"
-	keyShowMap     = "k"
+	keyHelp        = "?" // view the key list for the current view
+	keyEditMap     = "k" // edit the key map (prefix only: C-t k)
 	keyPanelConfig = "P" // shift+p
 	keyRestart     = "S" // shift+s
 	keyDetach      = "q"
 
-	keyCtrlC = "ctrl+c" // bare emergency quit
+	keyMark    = "g" // mark / unmark the selected item
+	keyGroup   = "G" // group the marked panels (shift+g)
+	keyAdd     = "a" // add the marked panels to the selected group
+	keyUngroup = "u" // dissolve the selected work item
+	keyRename  = "e" // edit the name of the selected panel or group
+
+	// The two universal escapes, bound to the prefix in every mode.
+	keyDashboard = "d" // C-t d → the dashboard
+	keyGroupView = "g" // C-t g → the group view (the split, or back from a zoom)
+
+	keyRemove = "x" // in the group split: remove the focused member from the group
+
+	keyCtrlC = "ctrl+c" // captured in command mode — exit is the detach binding only
+	keyCtrlE = "ctrl+e" // captured in command mode — exit is the detach binding only
 )
 
 // keyLabel renders a key string as a compact label: ctrl+x → C-x, alt+x → M-x,
@@ -56,43 +66,75 @@ const (
 	actNewForm
 	actClose
 	actPurge
-	actDashboard
-	actToggleMap
+	actHelp
 	actPanelConfig
 	actRestart
 	actDetach
+
+	actMark
+	actGroup
+	actAdd
+	actUngroup
+	actRename
+
+	// Escapes — bound to the prefix in every mode.
+	actDashboard
+	actGroupView
+	actEditMap
 )
 
-// binding is one prefixed command: a stable name (used to persist the chord),
-// the bare key pressed after the prefix, the human description, and the action
-// it triggers.
-type binding struct {
-	name string // stable id for the config file, e.g. "new-panel"
-	key  string // bare key after the prefix, e.g. "p"
-	desc string
-	act  action
+// isEscape reports whether an action is reached after the prefix rather than on a
+// bare key — lookupCmd skips these, lookupEscape resolves them. The dashboard and
+// group-view jumps and the key-map editor work after the prefix in every mode;
+// panel config opens this way from command mode.
+func isEscape(a action) bool {
+	return a == actDashboard || a == actGroupView || a == actEditMap || a == actPanelConfig
 }
 
-// bindings lists the prefixed commands in display order. This is the single
-// source of truth for the footer hint, the in-view key map, and the config keys.
+// binding is one editable command: a stable name (used to persist the key), the
+// trigger key, the human description, the action it runs, and the purpose section
+// it groups under in the key map. Commands fire on a single key in command mode
+// and after the prefix in a zoom; the escapes always fire after the prefix.
+type binding struct {
+	name string // stable id for the config file, e.g. "new-panel"
+	key  string
+	desc string
+	act  action
+	cat  string // purpose section header in the key map
+}
+
+// bindings lists every editable command grouped by purpose — the order the key
+// map shows them, and tab jumps between these groups. This is the single source
+// of truth for the in-view key map and the config keys.
 var bindings = []binding{
-	{"new-panel", keyNewPanel, "spawn a new shell panel", actNewPanel},
-	{"new-panel-form", keyNewForm, "new panel (choose the command)", actNewForm},
-	{"close", keyClose, "close the selected panel", actClose},
-	{"purge-exited", keyPurge, "purge all exited panels", actPurge},
-	{"dashboard", keyDashboard, "jump back to the dashboard", actDashboard},
-	{"key-map", keyShowMap, "toggle this key map", actToggleMap},
-	{"panel-config", keyPanelConfig, "configure panel defaults", actPanelConfig},
-	{"restart", keyRestart, "force-restart the server", actRestart},
-	{"detach", keyDetach, "detach (server keeps running)", actDetach},
+	{"new-panel", keyNewPanel, "spawn a new shell panel", actNewPanel, "Panels"},
+	{"new-panel-form", keyNewForm, "new panel (choose the command)", actNewForm, "Panels"},
+	{"close", keyClose, "close the selected panel", actClose, "Panels"},
+	{"purge-exited", keyPurge, "purge all exited panels", actPurge, "Panels"},
+
+	{"mark", keyMark, "mark a panel for grouping", actMark, "Work items"},
+	{"group", keyGroup, "group the marked panels", actGroup, "Work items"},
+	{"add", keyAdd, "add the marked panels to the selected group", actAdd, "Work items"},
+	{"ungroup", keyUngroup, "ungroup the selected work item", actUngroup, "Work items"},
+	{"rename", keyRename, "rename the panel or group", actRename, "Work items"},
+
+	{"help", keyHelp, "view the keys for this view", actHelp, "View"},
+	{"key-map", keyEditMap, "edit the key map (prefix)", actEditMap, "View"},
+	{"panel-config", keyPanelConfig, "configure panel defaults (prefix)", actPanelConfig, "View"},
+	{"dashboard", keyDashboard, "jump to the dashboard (prefix)", actDashboard, "View"},
+	{"group-view", keyGroupView, "go to the group view (prefix)", actGroupView, "View"},
+
+	{"restart", keyRestart, "force-restart the server", actRestart, "Session"},
+	{"detach", keyDetach, "detach (server keeps running)", actDetach, "Session"},
 }
 
 // prefs is the cockpit state persisted to $HOME/.baton/config.
 type prefs struct {
-	prefix       string
-	binds        []binding
-	confirmClose bool
-	shellPath    string
+	prefix            string
+	binds             []binding
+	confirmClose      bool
+	allowNameConflict bool
+	shellPath         string
 }
 
 // loadPrefs reads the config file, returning defaults for anything missing or on
@@ -116,23 +158,42 @@ func loadPrefs() prefs {
 	if cfg.Settings.ConfirmClose != nil {
 		p.confirmClose = *cfg.Settings.ConfirmClose
 	}
+	if cfg.Settings.AllowNameConflict != nil {
+		p.allowNameConflict = *cfg.Settings.AllowNameConflict
+	}
 	p.shellPath = cfg.Panel.Shell
 	return p
 }
 
 // saveConfig persists the cockpit's whole config (prefix, key map, settings, and
-// panel defaults) from the model, so saving one part never drops another.
+// panel defaults) from the model, so saving one part never drops another. Only
+// keys the user has changed from the default are written, so a later change to a
+// default flows through instead of being masked by a stale persisted value.
 func (m model) saveConfig() error {
-	keys := make(map[string]string, len(m.keymap()))
+	def := make(map[string]string, len(bindings))
+	for _, b := range bindings {
+		def[b.name] = b.key
+	}
+	keys := make(map[string]string)
 	for _, b := range m.keymap() {
-		keys[b.name] = b.key
+		if b.key != def[b.name] {
+			keys[b.name] = b.key
+		}
+	}
+	prefix := ""
+	if m.effPrefix() != keyPrefix {
+		prefix = m.effPrefix()
 	}
 	confirmClose := m.confirmClose
+	allowNameConflict := m.allowNameConflict
 	return config.Config{
-		Prefix:   m.effPrefix(),
-		Keys:     keys,
-		Settings: config.Settings{ConfirmClose: &confirmClose},
-		Panel:    config.PanelDefaults{Shell: m.shellPath},
+		Prefix: prefix,
+		Keys:   keys,
+		Settings: config.Settings{
+			ConfirmClose:      &confirmClose,
+			AllowNameConflict: &allowNameConflict,
+		},
+		Panel: config.PanelDefaults{Shell: m.shellPath},
 	}.Save()
 }
 

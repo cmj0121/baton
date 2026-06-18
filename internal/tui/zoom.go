@@ -6,36 +6,23 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	vt "github.com/charmbracelet/x/vt"
 
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/proto"
 )
 
-// zoomFooter builds the coloured strip shown below the emulated panel while
-// zoomed: a brand cap, a state cap (green live-ZOOM, or a grey EXITED for the
-// read-only result of a finished program), the panel title, and the
-// prefix+dashboard detach hint.
-func zoomFooter(width int, title, prefixLabel, dashLabel string, exited bool) string {
-	brand := seg("◈ BATON", colDark, colBrand)
+// zoomFooter builds the coloured strip below the emulated panel: a brand cap, a
+// state cap (green live ZOOM, or grey EXITED for a finished program), the panel
+// title, the C-t ? help hint, and — like every view — the host stats, clock, and
+// connection status.
+func (m model) zoomFooter() string {
 	state := seg("◉ ZOOM", colInk, colGreen)
-	hintText := " dashboard "
-	if exited {
+	if m.zoomExited {
 		state = seg("◼ EXITED", colDark, colMuted)
-		hintText = " back · read-only "
 	}
-	name := barStyle.Foreground(colBrandHi).Bold(true).Render(" " + title + " ")
-
-	keyStyle := lipgloss.NewStyle().Background(colSurface).Foreground(colCyan).Bold(true)
-	mut := lipgloss.NewStyle().Background(colSurface).Foreground(colMuted)
-	hint := keyStyle.Render(" "+prefixLabel+" "+dashLabel) + mut.Render(hintText)
-
-	gap := width - lipgloss.Width(brand+state+name) - lipgloss.Width(hint)
-	if gap < 0 {
-		gap = 0
-	}
-	return brand + state + name + barStyle.Render(strings.Repeat(" ", gap)) + hint
+	left := seg("◈ BATON", colDark, colBrand) + state + barBold.Render(" "+m.zoomTitle+" ")
+	return m.statusBar(left, m.helpHint())
 }
 
 // overlayCursor inserts a reverse-video cell at visible column col of an

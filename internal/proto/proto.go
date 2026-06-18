@@ -19,15 +19,19 @@ const (
 const EventBufferSize = 256
 
 // Command is sent from a client to the server. Beyond the lifecycle actions, a
-// zoomed client streams a panel with attach/input/resize/detach.
+// zoomed client streams a panel with attach/input/resize/detach, and organises
+// the fleet with panel.group / panel.rename.
 type Command struct {
-	Action string `json:"action"`         // hello | panel.list | panel.create | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.resize
-	Kind   string `json:"kind,omitempty"` // panel kind for "panel.create" (default "shell")
-	ID     string `json:"id,omitempty"`   // target panel for close/attach/input/resize
-	Path   string `json:"path,omitempty"` // init command (binary path) for "panel.create"; empty = default shell
-	Data   []byte `json:"data,omitempty"` // input bytes for "panel.input"
-	Rows   int    `json:"rows,omitempty"` // window size for "panel.resize"
-	Cols   int    `json:"cols,omitempty"`
+	Action string   `json:"action"`         // hello | panel.list | panel.create | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.resize | panel.group | panel.ungroup | panel.rename
+	Kind   string   `json:"kind,omitempty"` // panel kind for "panel.create" (default "shell")
+	ID     string   `json:"id,omitempty"`   // target panel for close/attach/input/resize, or the panel to rename
+	Path   string   `json:"path,omitempty"` // init command (binary path) for "panel.create"; empty = default shell
+	Data   []byte   `json:"data,omitempty"` // input bytes for "panel.input"
+	Rows   int      `json:"rows,omitempty"` // window size for "panel.resize"
+	Cols   int      `json:"cols,omitempty"`
+	IDs    []string `json:"ids,omitempty"`   // panels to put in a work item, for "panel.group"
+	Group  string   `json:"group,omitempty"` // group name to assign ("panel.group"), or the group to rename ("panel.rename")
+	Name   string   `json:"name,omitempty"`  // new name for "panel.rename" (a panel title or a group name)
 }
 
 // Panel is the server-side view of a single live terminal.

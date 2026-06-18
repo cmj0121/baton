@@ -25,11 +25,12 @@ import (
 const statsInterval = 2 * time.Second
 
 // clientConn is one attached frontend. Outbound messages go through its buffered
-// channel so a slow client never stalls a broadcast. attached is the panel id
-// this client is zoomed into (guarded by Server.mu), or "" for none.
+// channel so a slow client never stalls a broadcast. attached is the set of panel
+// ids this client is streaming (guarded by Server.mu) — one for a single zoom,
+// several for a group split, empty for none.
 type clientConn struct {
 	out      chan proto.ServerMsg
-	attached string
+	attached map[string]bool
 }
 
 // Server owns all state and every PTY. It is safe for concurrent use.
@@ -37,19 +38,34 @@ type Server struct {
 	ln  net.Listener
 	pty *ptymgr.Manager
 
+	allowNameConflict bool // when false, panel titles and group names stay unique
+
 	mu      sync.Mutex
 	seq     int
 	panels  []panel.Panel
 	clients map[*clientConn]struct{}
 }
 
+// Option tunes a Server at construction. Options keep New's signature stable as
+// settings accrue.
+type Option func(*Server)
+
+// WithAllowNameConflict lets two work items share a name, disabling the default
+// uniqueness check on panel titles and group names.
+func WithAllowNameConflict(allow bool) Option {
+	return func(s *Server) { s.allowNameConflict = allow }
+}
+
 // New builds a server bound to ln. The fleet starts empty — panels appear only
 // when the user spawns a real one.
-func New(ln net.Listener) *Server {
+func New(ln net.Listener, opts ...Option) *Server {
 	s := &Server{
 		ln:      ln,
 		pty:     ptymgr.New(),
 		clients: make(map[*clientConn]struct{}),
+	}
+	for _, opt := range opts {
+		opt(s)
 	}
 	s.pty.OnOutput(s.routeOutput)
 	s.pty.OnClose(s.onPanelExit)
@@ -71,9 +87,9 @@ func (s *Server) onPanelExit(id string) {
 		}
 	}
 	for cc := range s.clients {
-		if cc.attached == id {
+		if cc.attached[id] {
 			send(cc, proto.ServerMsg{Type: "output", ID: id, Data: []byte("\r\n[process exited]\r\n")})
-			cc.attached = ""
+			delete(cc.attached, id)
 		}
 	}
 	s.mu.Unlock()
@@ -89,24 +105,39 @@ func (s *Server) routeOutput(id string, data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for cc := range s.clients {
-		if cc.attached == id {
+		if cc.attached[id] {
 			send(cc, proto.ServerMsg{Type: "output", ID: id, Data: data})
 		}
 	}
 }
 
-// attach zooms a client into panel id (or "" to detach). The recent output is
-// replayed before live output starts, so the screen is not blank and stays in
-// order — both happen under the lock that gates routeOutput.
+// attach adds panel id to a client's stream set. The recent output is replayed
+// before live output starts, so the screen is not blank and stays in order —
+// both happen under the lock that gates routeOutput. Attaching is additive, so a
+// group split can stream every member at once; each message is tagged with its
+// panel id, so the client demuxes. Detaching is detach's job.
 func (s *Server) attach(cc *clientConn, id string) {
+	if id == "" {
+		return // detaching is detach's job; attaching nothing is a no-op
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if id != "" {
-		if snap := s.pty.Snapshot(id); len(snap) > 0 {
-			send(cc, proto.ServerMsg{Type: "output", ID: id, Data: snap})
-		}
+	if snap := s.pty.Snapshot(id); len(snap) > 0 {
+		send(cc, proto.ServerMsg{Type: "output", ID: id, Data: snap})
 	}
-	cc.attached = id
+	cc.attached[id] = true
+}
+
+// detach removes panel id from a client's stream set, or all of them when id is
+// empty (the back-compatible "detach everything" a single zoom sends).
+func (s *Server) detach(cc *clientConn, id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if id == "" {
+		cc.attached = make(map[string]bool)
+		return
+	}
+	delete(cc.attached, id)
 }
 
 // Serve accepts connections until the listener closes.
@@ -162,7 +193,7 @@ func statsMsg() proto.ServerMsg {
 func (s *Server) handle(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 
-	cc := &clientConn{out: make(chan proto.ServerMsg, proto.EventBufferSize)}
+	cc := &clientConn{out: make(chan proto.ServerMsg, proto.EventBufferSize), attached: make(map[string]bool)}
 	s.addClient(cc)
 	defer s.removeClient(cc)
 
@@ -212,10 +243,28 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		if s.purgeExited() > 0 {
 			s.broadcast(s.panelsMsg())
 		}
+	case "panel.group":
+		if err := s.groupPanels(cmd.IDs, cmd.Group); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		s.broadcast(s.panelsMsg())
+	case "panel.ungroup":
+		if err := s.ungroup(cmd.IDs, cmd.Group); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		s.broadcast(s.panelsMsg())
+	case "panel.rename":
+		if err := s.rename(cmd.ID, cmd.Group, cmd.Name); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		s.broadcast(s.panelsMsg())
 	case "panel.attach":
 		s.attach(cc, cmd.ID)
 	case "panel.detach":
-		s.attach(cc, "")
+		s.detach(cc, cmd.ID)
 	case "panel.input":
 		s.pty.Write(cmd.ID, cmd.Data)
 	case "panel.resize":
@@ -316,6 +365,154 @@ func (s *Server) purgeExited() int {
 		log.Info().Int("count", len(gone)).Msg("purged exited panels")
 	}
 	return len(gone)
+}
+
+// groupPanels is a core action: it files the given panels under one work-item
+// name, the shared identity every group view keys on. An empty name is rejected
+// (the empty string means "ungrouped"); ids that match no panel are skipped, and
+// if none match at all it errors.
+func (s *Server) groupPanels(ids []string, name string) error {
+	if name == "" {
+		return fmt.Errorf("panel.group needs a name")
+	}
+	if len(ids) == 0 {
+		return fmt.Errorf("panel.group needs at least one panel")
+	}
+	// The new name must not collide with another panel title or group; skipping
+	// the group of this same name lets the "add" action merge into an existing
+	// work item, which is intentional rather than a conflict.
+	if !s.allowNameConflict && s.nameTaken(name, "", name) {
+		return fmt.Errorf("the name %q is already taken", name)
+	}
+
+	want := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+
+	moved := s.setGroup(func(p panel.Panel) bool { _, ok := want[p.ID]; return ok }, name)
+	if moved == 0 {
+		return fmt.Errorf("no panel matched the given ids")
+	}
+	log.Info().Str("group", name).Int("panels", moved).Msg("panels grouped")
+	return nil
+}
+
+// nameTaken reports whether name already identifies a different work item — a
+// panel title (other than skipID) or a group name (other than skipGroup). It is
+// the basis of the no-duplicate-names policy. An empty name never collides.
+func (s *Server) nameTaken(name, skipID, skipGroup string) bool {
+	if name == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, p := range s.panels {
+		if p.ID != skipID && p.Title == name {
+			return true
+		}
+		if p.Group != "" && p.Group != skipGroup && p.Group == name {
+			return true
+		}
+	}
+	return false
+}
+
+// setGroup files every panel matching match under name, returning how many moved.
+// It holds the lock for the whole scan, the shared core of grouping and renaming.
+func (s *Server) setGroup(match func(panel.Panel) bool, name string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	moved := 0
+	for i := range s.panels {
+		if match(s.panels[i]) {
+			s.panels[i].Group = name
+			moved++
+		}
+	}
+	return moved
+}
+
+// ungroup is a core action that clears the Group on its targets, returning them
+// to the dashboard as lone panels. Given ids it removes just those members from
+// whatever group they sit in; otherwise it dissolves the whole named group.
+func (s *Server) ungroup(ids []string, name string) error {
+	if len(ids) > 0 {
+		want := make(map[string]struct{}, len(ids))
+		for _, id := range ids {
+			want[id] = struct{}{}
+		}
+		moved := s.setGroup(func(p panel.Panel) bool {
+			_, ok := want[p.ID]
+			return ok && p.Group != ""
+		}, "")
+		if moved == 0 {
+			return fmt.Errorf("no grouped panel matched the given ids")
+		}
+		log.Info().Int("panels", moved).Msg("panels removed from group")
+		return nil
+	}
+	if name == "" {
+		return fmt.Errorf("panel.ungroup needs a group or panel ids")
+	}
+	moved := s.setGroup(func(p panel.Panel) bool { return p.Group == name }, "")
+	if moved == 0 {
+		return fmt.Errorf("no panels in group %q", name)
+	}
+	log.Info().Str("group", name).Int("panels", moved).Msg("group dissolved")
+	return nil
+}
+
+// rename is a core action that renames either one panel (by id) or a whole group
+// (by its current name). A panel rename changes its title; a group rename rewrites
+// the Group on every member. Exactly one target must be given, and the new name
+// must be non-empty.
+func (s *Server) rename(id, group, name string) error {
+	if name == "" {
+		return fmt.Errorf("panel.rename needs a name")
+	}
+	switch {
+	case id != "" && group != "":
+		return fmt.Errorf("panel.rename takes a panel id or a group, not both")
+	case id != "":
+		return s.renamePanel(id, name)
+	case group != "":
+		return s.renameGroup(group, name)
+	default:
+		return fmt.Errorf("panel.rename needs a panel id or a group")
+	}
+}
+
+// renamePanel sets the title of the panel with the given id.
+func (s *Server) renamePanel(id, title string) error {
+	if !s.allowNameConflict && s.nameTaken(title, id, "") {
+		return fmt.Errorf("the name %q is already taken", title)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.panels {
+		if s.panels[i].ID == id {
+			s.panels[i].Title = title
+			log.Info().Str("panel", id).Str("title", title).Msg("panel renamed")
+			return nil
+		}
+	}
+	return fmt.Errorf("no panel with id %q", id)
+}
+
+// renameGroup rewrites the Group of every panel currently filed under old to the
+// new name. Renaming onto an existing group name merges the two — group identity
+// is the name itself.
+func (s *Server) renameGroup(old, name string) error {
+	if !s.allowNameConflict && s.nameTaken(name, "", old) {
+		return fmt.Errorf("the name %q is already taken", name)
+	}
+	moved := s.setGroup(func(p panel.Panel) bool { return p.Group == old }, name)
+	if moved == 0 {
+		return fmt.Errorf("no panels in group %q", old)
+	}
+	log.Info().Str("from", old).Str("to", name).Int("panels", moved).Msg("group renamed")
+	return nil
 }
 
 func (s *Server) panelsMsg() proto.ServerMsg {
