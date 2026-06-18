@@ -88,6 +88,63 @@ func TestGroupZoomExit(t *testing.T) {
 	}
 }
 
+func TestRemoveFocusedMember(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+	m = m.zoomGroup(m.dashItems()[0]) // api, members 1,3,6
+	m.groupFocus = 1                  // member id "3"
+
+	nm, _ := m.handleGroupZoomKey(key(keyRemove))
+	m = nm.(model)
+	if !strings.Contains(m.status, "removed") {
+		t.Fatalf("removing the focused member should report it, got %q", m.status)
+	}
+
+	// An out-of-range focus is a no-op, not a panic.
+	m.groupFocus = 99
+	before := m.status
+	nm, _ = m.handleGroupZoomKey(key(keyRemove))
+	if got := nm.(model).status; got != before {
+		t.Fatalf("removing with an out-of-range focus should be a no-op, got %q", got)
+	}
+}
+
+// TestRemoveMemberLive drives the real path: group two shells, open the split,
+// remove the focused one, and confirm the server drops it from the group.
+func TestRemoveMemberLive(t *testing.T) {
+	c, a := zoomServer(t)
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+		t.Fatalf("create second: %v", err)
+	}
+	b := (<-c.Events).Panels[1].ID
+	if err := c.Send(proto.Command{Action: "panel.group", IDs: []string{a, b}, Group: "grp"}); err != nil {
+		t.Fatalf("group: %v", err)
+	}
+	snap := <-c.Events
+
+	m := model{client: c, width: 100, height: 30, binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+	m.fleet = mergeFleet(snap.Panels)
+	m = m.zoomGroup(m.dashItems()[0])
+	m.groupFocus = 0 // member a
+
+	m = m.removeFocusedMember()
+	got := <-c.Events // the broadcast after the server drops a from the group
+	groupOf := func(id string) string {
+		for _, p := range got.Panels {
+			if p.ID == id {
+				return p.Group
+			}
+		}
+		return "<missing>"
+	}
+	if g := groupOf(a); g != "" {
+		t.Fatalf("member a should have left grp, got %q", g)
+	}
+	if g := groupOf(b); g != "grp" {
+		t.Fatalf("member b should remain in grp, got %q", g)
+	}
+}
+
 func TestGroupZoomRenders(t *testing.T) {
 	m := baseModel()
 	m.fleet = groupedFleet()

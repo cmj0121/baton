@@ -235,7 +235,7 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		}
 		s.broadcast(s.panelsMsg())
 	case "panel.ungroup":
-		if err := s.ungroup(cmd.Group); err != nil {
+		if err := s.ungroup(cmd.IDs, cmd.Group); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
@@ -392,11 +392,27 @@ func (s *Server) setGroup(match func(panel.Panel) bool, name string) int {
 	return moved
 }
 
-// ungroup is a core action that dissolves a work item: it clears the Group on
-// every member, returning them to the dashboard as lone panels.
-func (s *Server) ungroup(name string) error {
+// ungroup is a core action that clears the Group on its targets, returning them
+// to the dashboard as lone panels. Given ids it removes just those members from
+// whatever group they sit in; otherwise it dissolves the whole named group.
+func (s *Server) ungroup(ids []string, name string) error {
+	if len(ids) > 0 {
+		want := make(map[string]struct{}, len(ids))
+		for _, id := range ids {
+			want[id] = struct{}{}
+		}
+		moved := s.setGroup(func(p panel.Panel) bool {
+			_, ok := want[p.ID]
+			return ok && p.Group != ""
+		}, "")
+		if moved == 0 {
+			return fmt.Errorf("no grouped panel matched the given ids")
+		}
+		log.Info().Int("panels", moved).Msg("panels removed from group")
+		return nil
+	}
 	if name == "" {
-		return fmt.Errorf("panel.ungroup needs a group")
+		return fmt.Errorf("panel.ungroup needs a group or panel ids")
 	}
 	moved := s.setGroup(func(p panel.Panel) bool { return p.Group == name }, "")
 	if moved == 0 {

@@ -167,14 +167,16 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // removeFocusedMember takes the focused tile's panel out of the group, returning
-// it to the dashboard as a lone panel. (Server-side removal lands in a later
-// unit; for now it reports the intent.)
+// it to the dashboard as a lone panel. The server broadcasts a fresh snapshot,
+// and the split reconciles its tiles on the next applyEvent.
 func (m model) removeFocusedMember() model {
 	members := m.groupMembers()
 	if m.groupFocus < 0 || m.groupFocus >= len(members) {
 		return m
 	}
-	m.status = "remove " + members[m.groupFocus].Title + " from the group"
+	p := members[m.groupFocus]
+	m.sendf(proto.Command{Action: "panel.ungroup", IDs: []string{p.ID}})
+	m.status = "removed " + p.Title + " from the group"
 	return m
 }
 

@@ -378,6 +378,30 @@ func TestGroupAndRename(t *testing.T) {
 	}
 	recv(t, c)
 
+	// Remove just one member by id: a leaves the group, b stays.
+	if err := c.Send(proto.Command{Action: "panel.ungroup", IDs: []string{a}}); err != nil {
+		t.Fatalf("remove member: %v", err)
+	}
+	got = recv(t, c)
+	if g := panelByID(got.Panels, a).Group; g != "" {
+		t.Fatalf("panel a should have left the group, got %q", g)
+	}
+	if g := panelByID(got.Panels, b).Group; g != "api" {
+		t.Fatalf("panel b should remain in api, got %q", g)
+	}
+	// Removing an id that is not in any group errors.
+	if err := c.Send(proto.Command{Action: "panel.ungroup", IDs: []string{a}}); err != nil {
+		t.Fatalf("send remove ungrouped: %v", err)
+	}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("removing an ungrouped panel should error, got %+v", msg)
+	}
+	// Put a back for the rest of the test.
+	if err := c.Send(proto.Command{Action: "panel.group", IDs: []string{a}, Group: "api"}); err != nil {
+		t.Fatalf("regroup a: %v", err)
+	}
+	recv(t, c)
+
 	// Rename one panel's title.
 	if err := c.Send(proto.Command{Action: "panel.rename", ID: a, Name: "worker"}); err != nil {
 		t.Fatalf("rename panel: %v", err)
