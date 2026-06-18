@@ -88,24 +88,42 @@ func (m *model) attachTile(p panel.Panel, emuCols, emuRows int) {
 	m.sendf(proto.Command{Action: "panel.attach", ID: p.ID})
 }
 
-// liveMembers is the members that should hold a live tile emulator: the group's
-// members capped at maxGroupTiles, in fleet order. The remainder render from
-// their preview tail rather than a live stream.
-func (m model) liveMembers() []panel.Panel {
-	members := m.groupMembers()
-	if len(members) > maxGroupTiles {
-		members = members[:maxGroupTiles]
+// splitMembers returns the group's members and the capped subset that holds a
+// live tile (the first maxGroupTiles, in fleet order; the rest render from their
+// preview tail). Returning both from one fleet scan lets a render or reconcile
+// avoid walking the fleet twice.
+func (m model) splitMembers() (all, live []panel.Panel) {
+	all = m.groupMembers()
+	live = all
+	if len(all) > maxGroupTiles {
+		live = all[:maxGroupTiles]
 	}
-	return members
+	return all, live
 }
 
-// focusedMemberID is the id of the panel the split's focus currently rests on,
-// read before a snapshot is applied so reconcileGroupTiles can keep the focus on
-// the same panel even as the roster shifts. Empty when the focus is out of range.
-func (m model) focusedMemberID() string {
+// liveMembers is the capped subset of the group that holds a live tile emulator.
+func (m model) liveMembers() []panel.Panel {
+	_, live := m.splitMembers()
+	return live
+}
+
+// focusedMember resolves the split's focus to its live member, reporting false
+// when the focus is out of range — the single bounds check the interact, remove,
+// and zoom actions share.
+func (m model) focusedMember() (panel.Panel, bool) {
 	live := m.liveMembers()
-	if m.groupFocus >= 0 && m.groupFocus < len(live) {
-		return live[m.groupFocus].ID
+	if m.groupFocus < 0 || m.groupFocus >= len(live) {
+		return panel.Panel{}, false
+	}
+	return live[m.groupFocus], true
+}
+
+// focusedMemberID is the id of the panel the focus rests on, read before a
+// snapshot so reconcileGroupTiles can keep the focus on the same panel as the
+// roster shifts. Empty when the focus is out of range.
+func (m model) focusedMemberID() string {
+	if p, ok := m.focusedMember(); ok {
+		return p.ID
 	}
 	return ""
 }
@@ -116,7 +134,7 @@ func (m model) focusedMemberID() string {
 // focus on the same panel (by id) when the roster shifts. A no-op without a
 // client. focusID is the panel the focus rested on before the snapshot.
 func (m *model) reconcileGroupTiles(focusID string) {
-	members := m.groupMembers()
+	members, live := m.splitMembers()
 	if len(members) == 0 {
 		// The group dissolved or lost its last panel: leave for the dashboard.
 		m.resetToDashboard("group emptied · dashboard")
@@ -129,7 +147,6 @@ func (m *model) reconcileGroupTiles(focusID string) {
 		if m.groupEmus == nil {
 			m.groupEmus = make(map[string]*vt.SafeEmulator)
 		}
-		live := m.liveMembers()
 		want := make(map[string]bool, len(live))
 		for _, p := range live {
 			want[p.ID] = true
@@ -160,7 +177,6 @@ func (m *model) reconcileGroupTiles(focusID string) {
 	}
 	// Keep the focus on the same panel by id; fall back to clamping into range
 	// when that panel left the live tiles (removed, or pushed past the cap).
-	live := m.liveMembers()
 	if idx := indexOfMember(live, focusID); idx >= 0 {
 		m.groupFocus = idx
 	} else {
@@ -192,11 +208,11 @@ func indexOfMember(members []panel.Panel, id string) int {
 // above the footer bar — changes.
 func (m *model) resizeGroupTiles() {
 	_, emuCols, emuRows := m.tileGeometry()
-	for _, p := range m.groupMembers() {
-		if emu := m.groupEmus[p.ID]; emu != nil {
-			emu.Resize(emuCols, emuRows)
-			m.sendf(proto.Command{Action: "panel.resize", ID: p.ID, Rows: emuRows, Cols: emuCols})
-		}
+	// groupEmus already holds exactly the live tiles, keyed by id, so resize them
+	// directly rather than re-scanning the fleet for members.
+	for id, emu := range m.groupEmus {
+		emu.Resize(emuCols, emuRows)
+		m.sendf(proto.Command{Action: "panel.resize", ID: id, Rows: emuRows, Cols: emuCols})
 	}
 }
 
@@ -330,11 +346,10 @@ func (m model) handleGroupInteractKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // type into, so it is a no-op (with a hint) on a preview-only or out-of-range
 // focus.
 func (m model) enterInteract() model {
-	members := m.liveMembers()
-	if m.groupFocus < 0 || m.groupFocus >= len(members) {
+	p, ok := m.focusedMember()
+	if !ok {
 		return m
 	}
-	p := members[m.groupFocus]
 	if m.groupEmus[p.ID] == nil {
 		m.status = "interact needs a live panel"
 		return m
@@ -357,11 +372,11 @@ func (m model) exitInteract() model {
 // in the program's mode; the tile's reader forwards the bytes to the PTY. A no-op
 // when the focus has no live emulator.
 func (m model) feedFocused(k tea.KeyMsg) {
-	members := m.liveMembers()
-	if m.groupFocus < 0 || m.groupFocus >= len(members) {
+	p, ok := m.focusedMember()
+	if !ok {
 		return
 	}
-	if emu := m.groupEmus[members[m.groupFocus].ID]; emu != nil {
+	if emu := m.groupEmus[p.ID]; emu != nil {
 		feedKey(emu, k)
 	}
 }
@@ -370,11 +385,10 @@ func (m model) feedFocused(k tea.KeyMsg) {
 // it to the dashboard as a lone panel. The server broadcasts a fresh snapshot,
 // and the split reconciles its tiles on the next applyEvent.
 func (m model) removeFocusedMember() model {
-	members := m.liveMembers()
-	if m.groupFocus < 0 || m.groupFocus >= len(members) {
+	p, ok := m.focusedMember()
+	if !ok {
 		return m
 	}
-	p := members[m.groupFocus]
 	m.sendf(proto.Command{Action: "panel.ungroup", IDs: []string{p.ID}})
 	m.status = "removed " + p.Title + " from the group"
 	return m
@@ -398,8 +412,8 @@ func (m model) adjustGroupCols(delta int) model {
 // zoomFocusedMember drops from the split into the focused panel's own live zoom,
 // remembering the group so BIND-g returns to the split.
 func (m model) zoomFocusedMember() (tea.Model, tea.Cmd) {
-	members := m.liveMembers()
-	if m.groupFocus < 0 || m.groupFocus >= len(members) {
+	p, ok := m.focusedMember()
+	if !ok {
 		return m, nil
 	}
 	origin := m.groupName
@@ -407,7 +421,7 @@ func (m model) zoomFocusedMember() (tea.Model, tea.Cmd) {
 	m.sendf(proto.Command{Action: "panel.detach"}) // detach all
 	m.closeGroupEmus()
 	m.groupInteract = false
-	m = m.zoomInto(members[m.groupFocus])
+	m = m.zoomInto(p)
 	m.zoomGroupOrigin = origin
 	return m, nil
 }
@@ -456,8 +470,8 @@ func (m model) backToGroup() (tea.Model, tea.Cmd) {
 // groupZoomView renders the split: a header, a grid of member tiles with the
 // focused one lit, and a footer of key hints pinned to the last line.
 func (m model) groupZoomView() string {
-	total := len(m.groupMembers())
-	tilesFor := m.liveMembers() // only the capped, live tiles get a cell
+	members, tilesFor := m.splitMembers() // tilesFor: only the capped, live tiles
+	total := len(members)
 	header := sectionStyle.Render(spaced("GROUP")) + "  " +
 		lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(m.groupName) +
 		mutedStyle.Render(fmt.Sprintf("   %d panel(s)", total))

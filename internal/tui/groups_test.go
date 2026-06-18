@@ -5,18 +5,7 @@ import (
 	"testing"
 
 	"github.com/cmj0121/baton/internal/panel"
-	"github.com/cmj0121/baton/internal/proto"
 )
-
-// panelsEvent wraps a fleet as a server "panels" snapshot, for driving applyEvent
-// in tests the way a real broadcast would.
-func panelsEvent(fleet []panel.Panel) proto.ServerMsg {
-	out := make([]proto.Panel, len(fleet))
-	for i, p := range fleet {
-		out[i] = p.ToProto()
-	}
-	return proto.ServerMsg{Type: "panels", Panels: out}
-}
 
 // groupedFleet is a small fleet with two work items and two lone panels, in a
 // deliberately interleaved order to exercise the fold.
@@ -347,7 +336,7 @@ func TestCursorFollowsItemAcrossSnapshot(t *testing.T) {
 
 	// A new panel arrives at the head of the fleet, pushing every item down one.
 	nf := append([]panel.Panel{{ID: "9", Kind: panel.Shell, Title: "newcomer", State: panel.Running}}, groupedFleet()...)
-	m.applyEvent(panelsEvent(nf))
+	m.applyEvent(snapshot(nf))
 
 	it, ok := m.selectedItem()
 	if !ok || it.kind != itemPanel || it.panel.ID != "5" {
@@ -370,7 +359,7 @@ func TestCursorFollowsPanelIntoGroup(t *testing.T) {
 			nf[i].Group = "api"
 		}
 	}
-	m.applyEvent(panelsEvent(nf))
+	m.applyEvent(snapshot(nf))
 
 	it, ok := m.selectedItem()
 	if !ok || it.kind != itemGroup || it.name != "api" {
@@ -387,7 +376,7 @@ func TestSnapshotInKeyMapKeepsRowCursor(t *testing.T) {
 	m.fleet = groupedFleet()
 	m.cursor = 5 // a key-map row, unrelated to dashboard items
 
-	m.applyEvent(panelsEvent(groupedFleet()))
+	m.applyEvent(snapshot(groupedFleet()))
 	if m.cursor != 5 {
 		t.Fatalf("a snapshot in the key map should leave the row cursor at 5, got %d", m.cursor)
 	}

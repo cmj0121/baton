@@ -425,7 +425,7 @@ func TestGroupFocusFollowsPanelAcrossSnapshot(t *testing.T) {
 			nf = append(nf, p)
 		}
 	}
-	m.applyEvent(panelsEvent(nf))
+	m.applyEvent(snapshot(nf))
 
 	if id := m.focusedMemberID(); id != "6" {
 		t.Fatalf("focus should still follow panel 6, got %q (focus=%d)", id, m.groupFocus)
