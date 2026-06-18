@@ -370,40 +370,141 @@ func bigGroup(name string, n int) []panel.Panel {
 	return fleet
 }
 
-// TestGroupSplitCapsVisibleTiles checks the split renders at most maxGroupTiles
-// tiles and surfaces an overflow note for the rest, rather than shrinking every
-// member into a fake-output sliver (gaps #2 and #3).
+// TestGroupPinCuratesTiles checks that pinning over-cap switches the split to the
+// pinned set: the pinned panel becomes the only tile and everyone else, including
+// the formerly-auto-filled tiles, moves to the list. Unpinning restores the
+// default fill.
+func TestGroupPinCuratesTiles(t *testing.T) {
+	m := baseModel()
+	m.fleet = bigGroup("big", maxGroupTiles+4) // a..t: default tiles a..p, list q..t
+	m = m.zoomGroup(m.dashItems()[0])
+
+	tiles, tree := m.splitMembers()
+	if indexOfMember(tiles, "q") >= 0 || indexOfMember(tree, "q") < 0 {
+		t.Fatal("q should start in the list, not a tile")
+	}
+
+	// Focus q (first list row) and pin it: the grid collapses to just q.
+	m.groupFocus = maxGroupTiles
+	m = m.togglePin()
+	if !m.groupPinned["q"] {
+		t.Fatal("q should be pinned")
+	}
+	tiles, _ = m.splitMembers()
+	if len(tiles) != 1 || indexOfMember(tiles, "q") < 0 {
+		t.Fatalf("the only tile should be the pinned q, got %v", ids(tiles))
+	}
+	if disp := m.displayedMembers(); len(disp) != maxGroupTiles+4 {
+		t.Fatalf("every member should still be reachable, got %d", len(disp))
+	}
+
+	// Reconcile keeps the focus on q; unpinning restores the default fill.
+	m = m.togglePin()
+	if m.groupPinned["q"] {
+		t.Fatal("unpinning should clear q's pin")
+	}
+	tiles, _ = m.splitMembers()
+	if len(tiles) != maxGroupTiles || indexOfMember(tiles, "q") >= 0 {
+		t.Fatal("unpinning should restore the default fill with q back in the list")
+	}
+}
+
+// ids is the member ids of a slice, for test diagnostics.
+func ids(ps []panel.Panel) []string {
+	out := make([]string, len(ps))
+	for i, p := range ps {
+		out[i] = p.ID
+	}
+	return out
+}
+
+// TestGroupPinCapRefused checks the pin set cannot exceed maxGroupTiles.
+func TestGroupPinCapRefused(t *testing.T) {
+	m := baseModel()
+	m.fleet = bigGroup("big", maxGroupTiles+4)
+	m = m.zoomGroup(m.dashItems()[0])
+	m.groupPinned = map[string]bool{}
+	for i := 0; i < maxGroupTiles; i++ {
+		m.groupPinned[string(rune('a'+i))] = true // pin the cap's worth
+	}
+
+	m.groupFocus = len(m.displayedMembers()) - 1 // a tree row
+	before := m.pinnedCount()
+	m = m.togglePin()
+	if m.pinnedCount() != before {
+		t.Fatalf("pinning beyond the cap should be refused, count went %d→%d", before, m.pinnedCount())
+	}
+	if !strings.Contains(m.status, "unpin one first") {
+		t.Fatalf("status should explain the cap, got %q", m.status)
+	}
+}
+
+// TestInteractOnTreeMemberHintsToPin checks interact refuses a tree-listed member
+// and points the user at pinning it first.
+func TestInteractOnTreeMemberHintsToPin(t *testing.T) {
+	m := baseModel()
+	m.fleet = bigGroup("big", maxGroupTiles+4)
+	m = m.zoomGroup(m.dashItems()[0])
+	m.groupFocus = maxGroupTiles // first tree row
+
+	got := m.enterInteract()
+	if got.groupInteract {
+		t.Fatal("interact should not start on a tree member")
+	}
+	if !strings.Contains(got.status, "pin") {
+		t.Fatalf("should hint to pin first, got %q", got.status)
+	}
+}
+
+// TestGroupTreePaneRenders checks the overflow tree pane is drawn for a large
+// group.
+func TestGroupTreePaneRenders(t *testing.T) {
+	m := baseModel()
+	m.fleet = bigGroup("big", maxGroupTiles+4)
+	m = m.zoomGroup(m.dashItems()[0])
+	m.groupFocus = maxGroupTiles + 1 // a tree row, so the pane lights a row
+	if !strings.Contains(m.groupZoomView(), "L I S T") {
+		t.Fatal("the split should render the tree (LIST) pane for the overflow")
+	}
+}
+
+// TestGroupSplitCapsVisibleTiles checks a large group streams at most
+// maxGroupTiles live tiles, files the rest into the tree list, and says so in the
+// header (gaps #2/#3, and the overflow is now reachable rather than stranded).
 func TestGroupSplitCapsVisibleTiles(t *testing.T) {
 	m := baseModel()
 	m.fleet = bigGroup("big", maxGroupTiles+4)
 	m = m.zoomGroup(m.dashItems()[0])
 
-	// Layout is sized to the live tiles, not the full membership.
-	if got := len(m.liveMembers()); got != maxGroupTiles {
-		t.Fatalf("live tiles should cap at %d, got %d", maxGroupTiles, got)
+	tiles, tree := m.splitMembers()
+	if len(tiles) != maxGroupTiles {
+		t.Fatalf("live tiles should cap at %d, got %d", maxGroupTiles, len(tiles))
+	}
+	if len(tree) != 4 {
+		t.Fatalf("the 4 overflow members should be in the tree, got %d", len(tree))
 	}
 	view := m.groupZoomView()
-	if !strings.Contains(view, "+4 more") {
-		t.Fatalf("the header should note the 4 capped members, got:\n%s", view)
-	}
-	if !strings.Contains(view, "showing first") {
-		t.Fatalf("the header should say it is showing the live subset, got:\n%s", view)
+	if !strings.Contains(view, "16 live · 4 in list") {
+		t.Fatalf("the header should report the live/list split, got:\n%s", view)
 	}
 }
 
-// TestGroupSplitFocusStaysOnLiveTiles checks focus cannot walk onto a capped,
-// tile-less member: tab wraps over the live tiles only (gap #2).
-func TestGroupSplitFocusStaysOnLiveTiles(t *testing.T) {
+// TestGroupSplitFocusReachesTree checks focus now walks every member — the live
+// tiles and then the tree overflow — so a large group's tail is reachable.
+func TestGroupSplitFocusReachesTree(t *testing.T) {
 	m := baseModel()
-	m.fleet = bigGroup("big", maxGroupTiles+4)
+	m.fleet = bigGroup("big", maxGroupTiles+4) // 16 tiles + 4 in the tree
 	m = m.zoomGroup(m.dashItems()[0])
 
-	// Walk backwards from the first tile: it should wrap to the last live tile,
-	// never into the capped remainder.
+	// shift+tab from the first member wraps to the very last tree row, not the
+	// last tile.
 	nm, _ := m.handleGroupZoomKey(key("shift+tab"))
 	m = nm.(model)
-	if m.groupFocus != maxGroupTiles-1 {
-		t.Fatalf("focus should wrap to the last live tile (%d), got %d", maxGroupTiles-1, m.groupFocus)
+	if m.groupFocus != maxGroupTiles+3 {
+		t.Fatalf("focus should wrap to the last member (%d), got %d", maxGroupTiles+3, m.groupFocus)
+	}
+	if m.focusedIsTile() {
+		t.Fatal("the last member is in the tree, so the focus should not be on a tile")
 	}
 }
 

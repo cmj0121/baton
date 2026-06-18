@@ -22,6 +22,7 @@ const (
 	gtileMinW       = 32 // preferred minimum tile width, deciding the column count
 	gtileFloorW     = 16 // hard floor on a tile's width when the user dials columns up
 	groupHeaderRows = 2  // header line + blank above the grid in groupZoomView
+	groupTreeWidth  = 26 // outer width of the tree pane listing the unpinned members
 
 	// maxGroupTiles caps how many members stream live at once, bounding the PTYs,
 	// emulators, and drain goroutines a single huge group can spin up. Members
@@ -50,13 +51,23 @@ func tileGeometry(n, w, h, want int) (cols, emuCols, emuRows int) {
 	return cols, emuCols, emuRows
 }
 
+// gridWidth is the width left for the tile grid, after reserving the tree pane
+// when the group has any unpinned members listed there.
+func (m model) gridWidth() int {
+	_, tree := m.splitMembers()
+	if len(tree) > 0 {
+		return max(1, m.width-groupTreeWidth-1)
+	}
+	return m.width
+}
+
 // tileGeometry resolves the split's layout from the current model dimensions,
-// reserving the footer bar (one row) and the header, honouring any column
-// override the user has dialled in. It lays out only the live (capped) tiles —
-// members past the cap are summarised in the header, not given a tile — so a
-// huge group never shrinks the grid into unreadable slivers.
+// reserving the footer bar (one row), the header, and the tree pane, honouring
+// any column override the user has dialled in. It lays out only the live tiles,
+// so a huge group never shrinks the grid into unreadable slivers — its overflow
+// lives in the tree list instead.
 func (m model) tileGeometry() (cols, emuCols, emuRows int) {
-	return tileGeometry(len(m.liveMembers()), m.width, m.height-1-groupHeaderRows, m.groupCols)
+	return tileGeometry(len(m.tileMembers()), m.gridWidth(), m.height-1-groupHeaderRows, m.groupCols)
 }
 
 // attachGroupMembers opens a live emulator for every member of the group and
@@ -88,34 +99,86 @@ func (m *model) attachTile(p panel.Panel, emuCols, emuRows int) {
 	m.sendf(proto.Command{Action: "panel.attach", ID: p.ID})
 }
 
-// splitMembers returns the group's members and the capped subset that holds a
-// live tile (the first maxGroupTiles, in fleet order; the rest render from their
-// preview tail). Returning both from one fleet scan lets a render or reconcile
-// avoid walking the fleet twice.
-func (m model) splitMembers() (all, live []panel.Panel) {
-	all = m.groupMembers()
-	live = all
-	if len(all) > maxGroupTiles {
-		live = all[:maxGroupTiles]
+// splitMembers partitions the group into the live tiles and the tree list, in
+// fleet order, from a single fleet scan:
+//
+//   - A group that fits the cap is all tiles, no list — pins do not matter.
+//   - Over the cap, if the user has pinned any panels, those pinned panels are
+//     the tiles and everyone else is the list, so you curate a few to watch live.
+//   - Over the cap with no pins, the first maxGroupTiles are tiles and the rest
+//     fall into the list — a sensible default before any curation.
+func (m model) splitMembers() (tiles, tree []panel.Panel) {
+	all := m.groupMembers()
+	if len(all) <= maxGroupTiles {
+		return all, nil // everything fits as tiles; pins are moot
 	}
-	return all, live
+	pins := 0
+	for _, p := range all {
+		if m.groupPinned[p.ID] {
+			pins++
+		}
+	}
+	for i, p := range all {
+		switch {
+		case pins > 0:
+			if m.groupPinned[p.ID] {
+				tiles = append(tiles, p)
+			} else {
+				tree = append(tree, p)
+			}
+		case i < maxGroupTiles:
+			tiles = append(tiles, p)
+		default:
+			tree = append(tree, p)
+		}
+	}
+	return tiles, tree
 }
 
-// liveMembers is the capped subset of the group that holds a live tile emulator.
-func (m model) liveMembers() []panel.Panel {
-	_, live := m.splitMembers()
-	return live
+// tileMembers is the subset of the group that holds a live tile emulator.
+func (m model) tileMembers() []panel.Panel {
+	tiles, _ := m.splitMembers()
+	return tiles
 }
 
-// focusedMember resolves the split's focus to its live member, reporting false
-// when the focus is out of range — the single bounds check the interact, remove,
-// and zoom actions share.
+// liveMembers is an alias for tileMembers — the panels with a live emulator.
+func (m model) liveMembers() []panel.Panel { return m.tileMembers() }
+
+// displayedMembers is every member in the order the focus walks them: the live
+// tiles first, then the tree list. The cursor indexes into this.
+func (m model) displayedMembers() []panel.Panel {
+	tiles, tree := m.splitMembers()
+	out := make([]panel.Panel, 0, len(tiles)+len(tree))
+	out = append(out, tiles...)
+	return append(out, tree...)
+}
+
+// pinnedCount is how many of the group's members are pinned to a live tile.
+func (m model) pinnedCount() int {
+	n := 0
+	for _, p := range m.groupMembers() {
+		if m.groupPinned[p.ID] {
+			n++
+		}
+	}
+	return n
+}
+
+// focusedMember resolves the focus to its member — a tile or a tree row —
+// reporting false when out of range. The single bounds check the pin, interact,
+// remove, and zoom actions share.
 func (m model) focusedMember() (panel.Panel, bool) {
-	live := m.liveMembers()
-	if m.groupFocus < 0 || m.groupFocus >= len(live) {
+	disp := m.displayedMembers()
+	if m.groupFocus < 0 || m.groupFocus >= len(disp) {
 		return panel.Panel{}, false
 	}
-	return live[m.groupFocus], true
+	return disp[m.groupFocus], true
+}
+
+// focusedIsTile reports whether the focus currently rests on a live tile (rather
+// than a tree row) — the gate for interact, which needs a streaming emulator.
+func (m model) focusedIsTile() bool {
+	return m.groupFocus >= 0 && m.groupFocus < len(m.tileMembers())
 }
 
 // focusedMemberID is the id of the panel the focus rests on, read before a
@@ -128,14 +191,15 @@ func (m model) focusedMemberID() string {
 	return ""
 }
 
-// reconcileGroupTiles brings the split's live tiles in line with the latest
-// fleet after a snapshot: it leaves an emptied group for the dashboard, attaches
-// newly added members (up to the cap), tears down departed ones, and keeps the
-// focus on the same panel (by id) when the roster shifts. A no-op without a
-// client. focusID is the panel the focus rested on before the snapshot.
+// reconcileGroupTiles brings the split's live tiles in line with the current
+// membership and pin set — after a snapshot, or after a pin toggle: it leaves an
+// emptied group for the dashboard, attaches newly-live members, tears down those
+// that left the tile set (removed from the group, or demoted to the tree), and
+// keeps the focus on the same panel (by id) across both regions. A no-op without
+// a client. focusID is the panel the focus rested on before the change.
 func (m *model) reconcileGroupTiles(focusID string) {
-	members, live := m.splitMembers()
-	if len(members) == 0 {
+	tiles, tree := m.splitMembers()
+	if len(tiles)+len(tree) == 0 {
 		// The group dissolved or lost its last panel: leave for the dashboard.
 		m.resetToDashboard("group emptied · dashboard")
 		return
@@ -147,13 +211,13 @@ func (m *model) reconcileGroupTiles(focusID string) {
 		if m.groupEmus == nil {
 			m.groupEmus = make(map[string]*vt.SafeEmulator)
 		}
-		want := make(map[string]bool, len(live))
-		for _, p := range live {
+		want := make(map[string]bool, len(tiles))
+		for _, p := range tiles {
 			want[p.ID] = true
 		}
 
 		changed := false
-		// Drop tiles whose panel left the group (or fell past the cap).
+		// Drop tiles whose panel left the tile set (removed, or demoted to the tree).
 		for id, emu := range m.groupEmus {
 			if !want[id] {
 				m.sendf(proto.Command{Action: "panel.detach", ID: id})
@@ -162,31 +226,33 @@ func (m *model) reconcileGroupTiles(focusID string) {
 				changed = true
 			}
 		}
-		// Attach a tile for each newly added member, sized to the current grid.
+		// Attach a tile for each newly-live member, sized to the current grid.
 		_, emuCols, emuRows := m.tileGeometry()
-		for _, p := range live {
+		for _, p := range tiles {
 			if m.groupEmus[p.ID] == nil {
 				m.attachTile(p, emuCols, emuRows)
 				changed = true
 			}
 		}
-		// A changed membership reflows the grid, so refit every existing tile too.
+		// A changed tile set reflows the grid, so refit every existing tile too.
 		if changed {
 			m.resizeGroupTiles()
 		}
 	}
-	// Keep the focus on the same panel by id; fall back to clamping into range
-	// when that panel left the live tiles (removed, or pushed past the cap).
-	if idx := indexOfMember(live, focusID); idx >= 0 {
+	// Keep the focus on the same panel by id across tiles and tree; fall back to
+	// clamping into range when that panel left the group entirely.
+	disp := m.displayedMembers()
+	if idx := indexOfMember(disp, focusID); idx >= 0 {
 		m.groupFocus = idx
 	} else {
-		m.groupFocus = max(0, min(m.groupFocus, len(live)-1))
-		// The panel being typed into is gone: stop interacting so keys don't land
-		// on whatever tile the focus fell onto.
-		if m.groupInteract {
-			m.groupInteract = false
-			m.status = "interact ended · the panel left the group"
-		}
+		m.groupFocus = max(0, min(m.groupFocus, len(disp)-1))
+	}
+	// Interact needs a live tile: stop if the panel being typed into (focusID) is
+	// no longer one — removed, or demoted to the tree — so keys never land on
+	// whatever panel the focus clamped onto instead.
+	if m.groupInteract && indexOfMember(tiles, focusID) < 0 {
+		m.groupInteract = false
+		m.status = "interact ended · panel is no longer a live tile"
 	}
 }
 
@@ -271,8 +337,9 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key == m.bindingKey(actDashboard) || key == "esc" {
 		return m.exitGroupZoom()
 	}
-	// Focus walks the live tiles only; members past the cap have no tile to land on.
-	n := len(m.liveMembers())
+	// Focus walks every member — the live tiles first, then the tree list — so a
+	// large group's overflow is reachable, not stranded.
+	n := len(m.displayedMembers())
 	switch key {
 	case "tab", "right", "l", "down", "j":
 		if n > 0 {
@@ -286,6 +353,8 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.adjustGroupCols(1), nil
 	case "-", "_":
 		return m.adjustGroupCols(-1), nil
+	case keyPin:
+		return m.togglePin(), nil
 	case keyRemove:
 		return m.removeFocusedMember(), nil
 	case keyInteract:
@@ -343,11 +412,15 @@ func (m model) handleGroupInteractKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // enterInteract hands the keyboard to the focused tile so it can be driven in
 // place, without dropping into a full single-panel zoom. It needs a live tile to
-// type into, so it is a no-op (with a hint) on a preview-only or out-of-range
-// focus.
+// type into, so it hints to pin a tree-listed panel first, and is a no-op on a
+// preview-only (no client) or out-of-range focus.
 func (m model) enterInteract() model {
 	p, ok := m.focusedMember()
 	if !ok {
+		return m
+	}
+	if !m.focusedIsTile() {
+		m.status = fmt.Sprintf("%s is in the list — press %s to pin it first", p.Title, keyPin)
 		return m
 	}
 	if m.groupEmus[p.ID] == nil {
@@ -379,6 +452,34 @@ func (m model) feedFocused(k tea.KeyMsg) {
 	if emu := m.groupEmus[p.ID]; emu != nil {
 		feedKey(emu, k)
 	}
+}
+
+// togglePin pins or unpins the focused member. Pinning promotes a tree-listed
+// panel to a live streaming tile; unpinning demotes a tile back to the list when
+// the group is over the tile budget. The pin set is capped at maxGroupTiles, so
+// pinning beyond it is refused. Reconciling attaches or tears down the affected
+// tile and keeps the focus on the same panel.
+func (m model) togglePin() model {
+	p, ok := m.focusedMember()
+	if !ok {
+		return m
+	}
+	if m.groupPinned == nil {
+		m.groupPinned = map[string]bool{}
+	}
+	if m.groupPinned[p.ID] {
+		delete(m.groupPinned, p.ID)
+		m.status = "unpinned " + p.Title
+	} else {
+		if m.pinnedCount() >= maxGroupTiles {
+			m.status = fmt.Sprintf("at most %d panels can be pinned — unpin one first", maxGroupTiles)
+			return m
+		}
+		m.groupPinned[p.ID] = true
+		m.status = "pinned " + p.Title
+	}
+	m.reconcileGroupTiles(p.ID) // attach/detach the affected tile, keep focus on p
+	return m
 }
 
 // removeFocusedMember takes the focused tile's panel out of the group, returning
@@ -437,6 +538,7 @@ func (m *model) resetToDashboard(status string) {
 	m.groupFocus = 0
 	m.groupArmed = false
 	m.groupInteract = false
+	m.groupPinned = nil
 	m.status = status
 }
 
@@ -467,31 +569,73 @@ func (m model) backToGroup() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// groupZoomView renders the split: a header, a grid of member tiles with the
-// focused one lit, and a footer of key hints pinned to the last line.
+// groupZoomView renders the split: a header, the grid of live member tiles, the
+// tree pane listing the unpinned overflow when there is any, and a footer pinned
+// to the last line.
 func (m model) groupZoomView() string {
-	members, tilesFor := m.splitMembers() // tilesFor: only the capped, live tiles
-	total := len(members)
+	tiles, tree := m.splitMembers()
+	total := len(tiles) + len(tree)
 	header := sectionStyle.Render(spaced("GROUP")) + "  " +
 		lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(m.groupName) +
 		mutedStyle.Render(fmt.Sprintf("   %d panel(s)", total))
-	if over := total - len(tilesFor); over > 0 {
-		// Members past the live-tile cap are not drawn; say so rather than show a
-		// shrunken or fabricated tile for them.
+	if len(tree) > 0 {
 		header += lipgloss.NewStyle().Foreground(states[panel.Idle].color).
-			Render(fmt.Sprintf("   · +%d more (showing first %d live)", over, len(tilesFor)))
+			Render(fmt.Sprintf("   · %d live · %d in list", len(tiles), len(tree)))
 	}
 
-	cols, emuCols, emuRows := tileGeometry(len(tilesFor), m.width, m.height-1-groupHeaderRows, m.groupCols)
-	tiles := make([]string, len(tilesFor))
-	for i, p := range tilesFor {
-		tiles[i] = m.renderTile(p, i == m.groupFocus, emuCols, emuRows)
+	cols, emuCols, emuRows := m.tileGeometry()
+	rendered := make([]string, len(tiles))
+	for i, p := range tiles {
+		rendered[i] = m.renderTile(p, i == m.groupFocus, emuCols, emuRows)
 	}
-	grid := tileGrid(tiles, cols)
+	grid := tileGrid(rendered, cols)
+
+	if len(tree) > 0 {
+		// The focus index within the tree (after the tiles), or < 0 on a tile.
+		pane := m.renderGroupTree(tree, m.groupFocus-len(tiles), lipgloss.Height(grid))
+		grid = lipgloss.JoinHorizontal(lipgloss.Top, grid, " ", pane)
+	}
 
 	body := lipgloss.JoinVertical(lipgloss.Left, header, "", grid)
 	placed := lipgloss.Place(m.width, m.height-1, lipgloss.Left, lipgloss.Top, body)
 	return placed + "\n" + m.groupZoomFooter()
+}
+
+// renderGroupTree draws the right-hand pane listing the group's unpinned members
+// — the overflow without a live tile — as a compact, scrollable list with the
+// focused row lit. focusIdx is the focused row within the tree, or < 0 when the
+// focus rests on a tile. The pane is sized to the grid's height so the two align.
+func (m model) renderGroupTree(tree []panel.Panel, focusIdx, height int) string {
+	inner := groupTreeWidth - 4 // border (2) + padding (2)
+	head := sectionStyle.Render(spaced("LIST")) + mutedStyle.Render(fmt.Sprintf(" %d", len(tree)))
+
+	// Reserve the header, a blank, a blank, and the hint; scroll the rest.
+	visible := max(1, height-6)
+	start, end := scrollWindow(max(0, focusIdx), len(tree), visible)
+
+	rows := []string{head, ""}
+	for i := start; i < end; i++ {
+		p := tree[i]
+		info := states[p.State]
+		led := lipgloss.NewStyle().Foreground(info.color).Render(info.led)
+		name := truncate(p.Title, inner-2)
+		style := lipgloss.NewStyle().Width(inner)
+		if i == focusIdx {
+			style = style.Foreground(colDark).Background(colBrand).Bold(true)
+		} else {
+			style = style.Foreground(colInk)
+		}
+		rows = append(rows, style.Render(led+" "+name))
+	}
+	rows = append(rows, "", mutedStyle.Render(fmt.Sprintf("%s pin · enter zoom", keyPin)))
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colFaint).
+		Padding(0, 1).
+		Width(groupTreeWidth - 2).
+		Height(height).
+		Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
 
 // tileGrid arranges rendered tiles into rows of at most cols columns.
@@ -527,8 +671,11 @@ func (m model) renderTile(p panel.Panel, focused bool, emuCols, emuRows int) str
 	}
 
 	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
-	title := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(p.Title, emuCols-2))
+	title := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(p.Title, emuCols-3))
 	head := led + " " + title
+	if m.groupPinned[p.ID] { // mark a pinned tile so it reads apart from auto-filled ones
+		head = lipgloss.NewStyle().Foreground(colBrandHi).Render("⊙") + " " + head
+	}
 	if interacting {
 		badge := lipgloss.NewStyle().Foreground(colDark).Background(colGreen).Bold(true).Render(" ⌨ ")
 		head = badge + " " + led + " " + title

@@ -40,6 +40,7 @@ const (
 
 	keyRemove   = "x" // in the group split: remove the focused member from the group
 	keyInteract = "i" // in the group split: drive the focused tile in place, no zoom
+	keyPin      = "p" // in the group split: pin/unpin the focused member to a live tile
 
 	keyCtrlC = "ctrl+c" // captured in command mode — exit is the detach binding only
 	keyCtrlE = "ctrl+e" // captured in command mode — exit is the detach binding only

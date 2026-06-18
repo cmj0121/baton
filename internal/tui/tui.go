@@ -115,10 +115,11 @@ type model struct {
 	emu        *vt.SafeEmulator // terminal emulator rendering the zoomed panel
 
 	groupName       string                      // work item being split-viewed (modeGroupZoom)
-	groupFocus      int                         // focused member tile within the split
+	groupFocus      int                         // focused member, indexing tiles then the tree list
 	groupArmed      bool                        // prefix pressed in the split, awaiting an escape
 	groupInteract   bool                        // keys drive the focused tile in place (i), no zoom
 	groupCols       int                         // tile columns; 0 = auto-fit to the window
+	groupPinned     map[string]bool             // member ids the user pinned to a live tile in this view
 	groupEmus       map[string]*vt.SafeEmulator // live emulator per member tile
 	zoomGroupOrigin string                      // group to return to from a single zoom, "" if none
 
@@ -1430,6 +1431,7 @@ func (m model) helpView() string {
 			{"Navigation", kc(keyLabel(keyInteract)), "interact: type into the focused panel in place"},
 			{"Navigation", kc("enter"), "zoom the focused panel"},
 			{"Navigation", kc("+") + " " + kc("-"), "more / fewer columns"},
+			{"Work items", kc(keyLabel(keyPin)), "pin / unpin the focused panel to a live tile"},
 			{"Work items", kc(keyLabel(keyRemove)), "remove the focused panel from the group"},
 			{"View", kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
 			{"View", kc(dash) + " " + kc("esc"), "back to the dashboard"},

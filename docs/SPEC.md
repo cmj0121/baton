@@ -91,6 +91,14 @@ tiles, `+`/`-` adjusts the column count, `x` removes the focused member from the
 panel's own single zoom, and `d`/`esc` returns to the dashboard. From a zoomed member, the always-on `C-t g` escape pops
 back to the split.
 
+**Pinning, for crowded groups.** Live tiles are capped (`maxGroupTiles`) so a huge group cannot spawn unbounded
+terminals. Rather than stranding the overflow, the split shows the capped set of tiles beside a **tree list** of the
+remaining members; `tab` walks the tiles and then the list as one ring, so every member is reachable. `p` **pins** the
+focused member: a pinned panel always holds a live tile (a `⊙` marks it), promoting it out of the list and demoting an
+auto-filled tile to keep the tile count at the cap. So you curate which of a busy group's panels stream live and which
+stay a compact, navigable list. From a list row, `enter` still zooms the panel and `x` still removes it; interact (`i`)
+needs a live tile, so it asks you to pin the panel first. Pins are per-view and reset when you leave the split.
+
 **Interact mode.** Pressing `i` hands the keyboard to the focused tile so you can drive its program _in place_, without
 the full-screen zoom — the tile glows green and wears a keyboard badge, and every keystroke is forwarded to that panel.
 Like a zoom, the prefix is the only way out: `C-t i` (or `C-t g`) returns to navigation, `C-t d` leaves for the
