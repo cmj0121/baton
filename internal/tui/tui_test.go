@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 )
@@ -42,7 +43,7 @@ func TestCloseRequiresConfirmation(t *testing.T) {
 	before := len(m.fleet)
 
 	// prefix + w arms the confirmation but does not close yet.
-	m = press(m, "ctrl+t", "w")
+	m = press(m, "w")
 	if !m.pendingClose {
 		t.Fatal("expected a pending close confirmation")
 	}
@@ -64,7 +65,7 @@ func TestCloseCancelsOnAnyOtherKey(t *testing.T) {
 	m := model{fleet: panel.Mock(), confirmClose: true}
 	before := len(m.fleet)
 
-	m = press(m, "ctrl+t", "w", "n")
+	m = press(m, "w", "n")
 	if m.pendingClose {
 		t.Fatal("expected the confirmation to be cancelled")
 	}
@@ -91,7 +92,7 @@ func TestConfirmToggleSkipsPrompt(t *testing.T) {
 	m.mode = modeDashboard
 	m.cursor = 0
 	before := len(m.fleet)
-	m = press(m, "ctrl+t", "w")
+	m = press(m, "w")
 	if m.pendingClose {
 		t.Fatal("close should not prompt when the gate is off")
 	}
@@ -129,10 +130,10 @@ func TestRebindKeyByTyping(t *testing.T) {
 	}
 
 	// The prefix now resolves the new chord and forgets the old one.
-	if b, ok := m.lookup("x"); !ok || b.act != actNewPanel {
+	if b, ok := m.lookupCmd("x"); !ok || b.act != actNewPanel {
 		t.Fatalf("prefix+x should trigger spawn, got %+v ok=%v", b, ok)
 	}
-	if _, ok := m.lookup("p"); ok {
+	if _, ok := m.lookupCmd("p"); ok {
 		t.Fatal("old key p should no longer be bound")
 	}
 }
@@ -159,6 +160,19 @@ func TestRebindPersistsToConfig(t *testing.T) {
 				t.Fatalf("close key drifted to %q", b.key)
 			}
 		}
+	}
+
+	// Only the changed key is persisted, so a default the user never touched
+	// flows through on the next release instead of being masked.
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Keys["new-panel"] != "x" {
+		t.Fatalf("changed key should persist, got %q", cfg.Keys["new-panel"])
+	}
+	if _, ok := cfg.Keys["close"]; ok {
+		t.Fatal("an unchanged key should not be written to the config")
 	}
 }
 
@@ -223,7 +237,7 @@ func TestRestartBindingFlagsRestart(t *testing.T) {
 	}
 
 	// prefix + S (shift+s) asks for a force-restart and quits.
-	m = press(m, "ctrl+t", "S")
+	m = press(m, "S")
 	if !m.restart || !m.RestartRequested() {
 		t.Fatal("prefix+S should flag a restart")
 	}

@@ -34,6 +34,9 @@ func TestViewRendersEveryMode(t *testing.T) {
 		{"tree-scroll", func(m *model) { m.fleet = panel.Mock(); m.height = 20; m.cursor = 6 }},
 		{"empty", func(m *model) { m.fleet = nil }},
 		{"keymap", func(m *model) { m.mode = modeKeyMap; m.fleet = panel.Mock()[:3] }},
+		{"help-dashboard", func(m *model) { m.mode = modeHelp; m.helpFrom = modeDashboard; m.fleet = panel.Mock()[:3] }},
+		{"help-group", func(m *model) { m.mode = modeHelp; m.helpFrom = modeGroupZoom; m.groupName = "api" }},
+		{"help-zoom", func(m *model) { m.mode = modeHelp; m.helpFrom = modeZoom }},
 		{"keymap-edit-prefix", func(m *model) { m.mode = modeKeyMap; m.editing = true; m.editIdx = editPrefix }},
 		{"keymap-edit-binding", func(m *model) { m.mode = modeKeyMap; m.editing = true; m.editIdx = 0; m.cursor = 1 }},
 		{"keymap-setting-off", func(m *model) { m.mode = modeKeyMap; m.confirmClose = false; m.cursor = len(bindings) + 1 }},
@@ -167,29 +170,23 @@ func TestRunActionsWithoutClient(t *testing.T) {
 	}
 
 	if m := press(base(), "ctrl+t", "d"); m.mode != modeDashboard {
-		t.Fatal("prefix+d should show the dashboard")
+		t.Fatal("C-t d should show the dashboard")
 	}
-	// toggle into and back out of the key map
-	m := press(base(), "ctrl+t", "k")
-	if m.mode != modeKeyMap {
-		t.Fatal("prefix+k should open the key map")
+	// ? opens the key map (single key), esc leaves it.
+	m := press(base(), "?")
+	if m.mode != modeHelp {
+		t.Fatal("? should open the key list")
 	}
-	if m = press(m, "ctrl+t", "k"); m.mode != modeKeyMap {
-		// after toggling back it returns to the dashboard
-		if m.mode != modeDashboard {
-			t.Fatalf("prefix+k should toggle back, mode=%v", m.mode)
-		}
+	if m := press(base(), "S"); !m.restart {
+		t.Fatal("S should request a restart")
 	}
-	if m := press(base(), "ctrl+t", "S"); !m.restart {
-		t.Fatal("prefix+S should request a restart")
+	if m := press(base(), "q"); !m.quitting {
+		t.Fatal("q should quit")
 	}
-	if m := press(base(), "ctrl+t", "q"); !m.quitting {
-		t.Fatal("prefix+q should quit")
+	if m := press(base(), "ctrl+t", "Z"); !strings.Contains(m.status, "no escape") {
+		t.Fatalf("an unknown escape status = %q", m.status)
 	}
-	if m := press(base(), "ctrl+t", "Z"); !strings.Contains(m.status, "no binding") {
-		t.Fatalf("unknown binding status = %q", m.status)
-	}
-	press(base(), "ctrl+t", "ctrl+t") // prefix-prefix no-op
+	press(base(), "ctrl+t", "ctrl+t") // prefix then a non-escape: no-op
 	if m := press(base(), "ctrl+c"); !m.quitting {
 		t.Fatal("ctrl+c should quit")
 	}
@@ -201,7 +198,7 @@ func TestRunActionsWithoutClient(t *testing.T) {
 	}
 
 	// esc leaves the key map.
-	if m := press(press(base(), "ctrl+t", "k"), "esc"); m.mode != modeDashboard {
+	if m := press(press(base(), "?"), "esc"); m.mode != modeDashboard {
 		t.Fatal("esc should return to the dashboard")
 	}
 
@@ -218,10 +215,13 @@ func TestPanelConfigEditsShell(t *testing.T) {
 	m := model{fleet: panel.Mock(), prefixKey: "ctrl+t",
 		binds: append([]binding(nil), bindings...), confirmClose: true}
 
-	// prefix+P opens the panel config tab.
+	// C-t P opens the panel config tab; bare P no longer does.
+	if got := press(m, "P"); got.mode == modePanelConfig {
+		t.Fatal("bare P should no longer open panel config")
+	}
 	m = press(m, "ctrl+t", "P")
 	if m.mode != modePanelConfig {
-		t.Fatalf("prefix+P should open panel config, mode=%v", m.mode)
+		t.Fatalf("C-t P should open panel config, mode=%v", m.mode)
 	}
 
 	// e opens the shell text-input overlay; type a path with a correction.
@@ -259,7 +259,7 @@ func TestNewPanelFormPrefills(t *testing.T) {
 		binds: append([]binding(nil), bindings...), shellPath: "/bin/zsh"}
 
 	// prefix+n opens the new-panel popup prefilled with the default shell.
-	m = press(m, "ctrl+t", "n")
+	m = press(m, "c")
 	if m.input != inputNewPanelCmd {
 		t.Fatalf("prefix+n should open the new-panel input, got %v", m.input)
 	}
@@ -315,7 +315,7 @@ func TestModelWithLiveServer(t *testing.T) {
 
 	// Spawn a panel: runAction actNewPanel sends over the live socket; the
 	// server broadcasts the updated snapshot.
-	m = press(m, "ctrl+t", "p")
+	m = press(m, "p")
 	if !strings.Contains(m.status, "spawning") {
 		t.Fatalf("spawn status = %q", m.status)
 	}
@@ -329,7 +329,7 @@ func TestModelWithLiveServer(t *testing.T) {
 	m.confirmClose = false
 	m.cursor = 0
 	before := len(m.fleet)
-	m = press(m, "ctrl+t", "w")
+	m = press(m, "w")
 	if len(m.fleet) != before-1 {
 		t.Fatalf("close should drop a panel, %d -> %d", before, len(m.fleet))
 	}

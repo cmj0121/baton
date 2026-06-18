@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/cmj0121/baton/internal/panel"
@@ -200,6 +201,35 @@ func (m model) commitGroup(name string) model {
 	return m
 }
 
+// addMarkedToGroup files the marked panels into the selected work item and
+// clears the selection. The cursor must be on a group card.
+func (m model) addMarkedToGroup() model {
+	it, ok := m.selectedItem()
+	if !ok || it.kind != itemGroup {
+		m.status = "select a group to add to"
+		return m
+	}
+	ids := m.markedIDs()
+	if len(ids) == 0 {
+		m.status = "mark panels first, then add to a group"
+		return m
+	}
+	m.sendf(proto.Command{Action: "panel.group", IDs: ids, Group: it.name})
+	m.marked = nil
+	m.status = fmt.Sprintf("added %d panel(s) to %q", len(ids), it.name)
+	return m
+}
+
+// enterGroupView opens the selected group's split (the C-t g escape from the
+// dashboard).
+func (m model) enterGroupView() (tea.Model, tea.Cmd) {
+	if it, ok := m.selectedItem(); ok && it.kind == itemGroup {
+		return m.zoomGroup(it), nil
+	}
+	m.status = "select a group to view"
+	return m, nil
+}
+
 // ungroupSelected dissolves the selected work item, returning its panels to the
 // dashboard as lone cards. It is a no-op on a lone panel.
 func (m model) ungroupSelected() model {
@@ -260,6 +290,7 @@ func (m model) zoomGroup(it dashItem) model {
 	m.mode = modeGroupZoom
 	m.groupName = it.name
 	m.groupFocus = 0
+	m.groupArmed = false
 	m.groupCols = 0 // auto-fit until the user dials columns in
 	m.attachGroupMembers()
 	m.status = fmt.Sprintf("group · %s (%d panels)", it.name, len(it.members))

@@ -8,44 +8,39 @@ import (
 	"github.com/cmj0121/baton/internal/config"
 )
 
-// Keybindings follow a tmux-style prefix model: press the prefix, then a verb.
+// Keybindings are modal. In the command-mode views (dashboard, group split) an
+// action fires on a single key. In a zoom the keys reach the live program, so an
+// action fires on the prefix then the key. Two escapes — dashboard and group
+// view — are bound to the prefix and work in every mode.
 //
-//	prefix          ctrl-t      enter "waiting for a binding" mode
-//	prefix + p      new panel   create a panel (default: shell)
-//	prefix + d      dashboard   switch to the dashboard view
-//	prefix + k      keys        toggle the in-view key map
-//	prefix + q      detach      detach this client (the server keeps running)
-//
-// Inside a view the cursor moves with the arrow keys or hjkl, and (in the key
-// map) enter runs the highlighted binding — so the whole surface is reachable
-// without memorising the chords.
+//	dashboard:  p new · w close · g mark · G group · ? key map · …  (single keys)
+//	zoom:       C-t p new · C-t w close · …                          (prefix + key)
+//	any mode:   C-t d dashboard · C-t g group view                  (escapes)
 const (
 	keyPrefix      = "ctrl+t"
 	keyNewPanel    = "p"
-	keyNewForm     = "n"
+	keyNewForm     = "c" // "choose the command" (n is rename)
 	keyClose       = "w"
 	keyPurge       = "x"
-	keyDashboard   = "d"
-	keyShowMap     = "k"
+	keyHelp        = "?" // view the key list for the current view
+	keyEditMap     = "k" // edit the key map (prefix only: C-t k)
 	keyPanelConfig = "P" // shift+p
 	keyRestart     = "S" // shift+s
 	keyDetach      = "q"
 
-	keyCtrlC = "ctrl+c" // bare emergency quit
-
-	// Single dashboard keys for grouping — direct, not behind the prefix, so a
-	// work item is one keystroke away. Surfaced in the key map for discoverability.
 	keyMark    = "g" // mark / unmark the selected item
 	keyGroup   = "G" // group the marked panels (shift+g)
+	keyAdd     = "a" // add the marked panels to the selected group
 	keyUngroup = "u" // dissolve the selected work item
 	keyRename  = "n" // rename the selected panel or group
 
-	// keyGroupBack steps back out of a group view. It is a prefixed shortcut
-	// (BIND-g), so it works safely inside a live zoom where a bare letter would be
-	// stolen by the program. It deliberately shares the "g" key with keyMark:
-	// they never collide because bare keys only resolve on the dashboard and
-	// prefixed ones only after the prefix in the zoom/group handlers.
-	keyGroupBack = "g"
+	// The two universal escapes, bound to the prefix in every mode.
+	keyDashboard = "d" // C-t d → the dashboard
+	keyGroupView = "g" // C-t g → the group view (the split, or back from a zoom)
+
+	keyRemove = "x" // in the group split: remove the focused member from the group
+
+	keyCtrlC = "ctrl+c" // bare emergency quit
 )
 
 // keyLabel renders a key string as a compact label: ctrl+x → C-x, alt+x → M-x,
@@ -70,31 +65,40 @@ const (
 	actNewForm
 	actClose
 	actPurge
-	actDashboard
-	actToggleMap
+	actHelp
 	actPanelConfig
 	actRestart
 	actDetach
 
-	// Group verbs, triggered by bare keys on the dashboard (and, for back, inside
-	// a group/zoom view) rather than after the prefix.
 	actMark
 	actGroup
+	actAdd
 	actUngroup
 	actRename
-	actGroupBack
+
+	// Escapes — bound to the prefix in every mode.
+	actDashboard
+	actGroupView
+	actEditMap
 )
+
+// isEscape reports whether an action is reached after the prefix rather than on a
+// bare key — lookupCmd skips these, lookupEscape resolves them. The dashboard and
+// group-view jumps and the key-map editor work after the prefix in every mode;
+// panel config opens this way from command mode.
+func isEscape(a action) bool {
+	return a == actDashboard || a == actGroupView || a == actEditMap || a == actPanelConfig
+}
 
 // binding is one editable command: a stable name (used to persist the key), the
 // trigger key, the human description, the action it runs, and the purpose section
-// it belongs to in the key map. Most fire after the prefix; bare bindings (the
-// dashboard group verbs) fire on their own keystroke.
+// it groups under in the key map. Commands fire on a single key in command mode
+// and after the prefix in a zoom; the escapes always fire after the prefix.
 type binding struct {
 	name string // stable id for the config file, e.g. "new-panel"
-	key  string // the key — pressed after the prefix, or bare when bare is set
+	key  string
 	desc string
 	act  action
-	bare bool   // triggered directly, not behind the prefix
 	cat  string // purpose section header in the key map
 }
 
@@ -102,23 +106,25 @@ type binding struct {
 // map shows them, and tab jumps between these groups. This is the single source
 // of truth for the in-view key map and the config keys.
 var bindings = []binding{
-	{"new-panel", keyNewPanel, "spawn a new shell panel", actNewPanel, false, "Panels"},
-	{"new-panel-form", keyNewForm, "new panel (choose the command)", actNewForm, false, "Panels"},
-	{"close", keyClose, "close the selected panel", actClose, false, "Panels"},
-	{"purge-exited", keyPurge, "purge all exited panels", actPurge, false, "Panels"},
+	{"new-panel", keyNewPanel, "spawn a new shell panel", actNewPanel, "Panels"},
+	{"new-panel-form", keyNewForm, "new panel (choose the command)", actNewForm, "Panels"},
+	{"close", keyClose, "close the selected panel", actClose, "Panels"},
+	{"purge-exited", keyPurge, "purge all exited panels", actPurge, "Panels"},
 
-	{"dashboard", keyDashboard, "jump back to the dashboard", actDashboard, false, "View"},
-	{"key-map", keyShowMap, "toggle this key map", actToggleMap, false, "View"},
-	{"panel-config", keyPanelConfig, "configure panel defaults", actPanelConfig, false, "View"},
+	{"mark", keyMark, "mark a panel for grouping", actMark, "Work items"},
+	{"group", keyGroup, "group the marked panels", actGroup, "Work items"},
+	{"add", keyAdd, "add the marked panels to the selected group", actAdd, "Work items"},
+	{"ungroup", keyUngroup, "ungroup the selected work item", actUngroup, "Work items"},
+	{"rename", keyRename, "rename the panel or group", actRename, "Work items"},
 
-	{"mark", keyMark, "mark a panel for grouping", actMark, true, "Work items"},
-	{"group", keyGroup, "group the marked panels", actGroup, true, "Work items"},
-	{"ungroup", keyUngroup, "ungroup the selected work item", actUngroup, true, "Work items"},
-	{"rename", keyRename, "rename the panel or group", actRename, true, "Work items"},
-	{"group-back", keyGroupBack, "step back out of a group view", actGroupBack, false, "Work items"},
+	{"help", keyHelp, "view the keys for this view", actHelp, "View"},
+	{"key-map", keyEditMap, "edit the key map (prefix)", actEditMap, "View"},
+	{"panel-config", keyPanelConfig, "configure panel defaults (prefix)", actPanelConfig, "View"},
+	{"dashboard", keyDashboard, "jump to the dashboard (prefix)", actDashboard, "View"},
+	{"group-view", keyGroupView, "go to the group view (prefix)", actGroupView, "View"},
 
-	{"restart", keyRestart, "force-restart the server", actRestart, false, "Session"},
-	{"detach", keyDetach, "detach (server keeps running)", actDetach, false, "Session"},
+	{"restart", keyRestart, "force-restart the server", actRestart, "Session"},
+	{"detach", keyDetach, "detach (server keeps running)", actDetach, "Session"},
 }
 
 // prefs is the cockpit state persisted to $HOME/.baton/config.
@@ -155,15 +161,27 @@ func loadPrefs() prefs {
 }
 
 // saveConfig persists the cockpit's whole config (prefix, key map, settings, and
-// panel defaults) from the model, so saving one part never drops another.
+// panel defaults) from the model, so saving one part never drops another. Only
+// keys the user has changed from the default are written, so a later change to a
+// default flows through instead of being masked by a stale persisted value.
 func (m model) saveConfig() error {
-	keys := make(map[string]string, len(m.keymap()))
+	def := make(map[string]string, len(bindings))
+	for _, b := range bindings {
+		def[b.name] = b.key
+	}
+	keys := make(map[string]string)
 	for _, b := range m.keymap() {
-		keys[b.name] = b.key
+		if b.key != def[b.name] {
+			keys[b.name] = b.key
+		}
+	}
+	prefix := ""
+	if m.effPrefix() != keyPrefix {
+		prefix = m.effPrefix()
 	}
 	confirmClose := m.confirmClose
 	return config.Config{
-		Prefix:   m.effPrefix(),
+		Prefix:   prefix,
 		Keys:     keys,
 		Settings: config.Settings{ConfirmClose: &confirmClose},
 		Panel:    config.PanelDefaults{Shell: m.shellPath},

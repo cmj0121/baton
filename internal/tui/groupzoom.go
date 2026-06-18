@@ -120,8 +120,25 @@ func (m model) groupMembers() []panel.Panel {
 // leave. Movement wraps so tab walks the whole group.
 func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := k.String()
-	// The split is an output-only mosaic, so a bare key is safe here: the
-	// dashboard key (d) — or esc — leaves straight for the dashboard.
+	// The split is command-mode, so the prefix is only needed for the universal
+	// escapes — C-t d leaves, C-t g is a no-op (already in the group view).
+	if m.groupArmed {
+		m.groupArmed = false
+		if b, ok := m.lookupEscape(key); ok {
+			switch b.act {
+			case actDashboard:
+				return m.exitGroupZoom()
+			case actEditMap:
+				return m.openEditMap(modeGroupZoom), nil
+			}
+		}
+		return m, nil
+	}
+	if key == m.effPrefix() {
+		m.groupArmed = true
+		return m, nil
+	}
+	// Bare single keys drive the split. The dashboard key (d) and esc leave.
 	if key == m.bindingKey(actDashboard) || key == "esc" {
 		return m.exitGroupZoom()
 	}
@@ -139,10 +156,26 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.adjustGroupCols(1), nil
 	case "-", "_":
 		return m.adjustGroupCols(-1), nil
+	case keyRemove:
+		return m.removeFocusedMember(), nil
+	case keyHelp:
+		return m.openHelp(modeGroupZoom), nil
 	case "enter":
 		return m.zoomFocusedMember()
 	}
 	return m, nil
+}
+
+// removeFocusedMember takes the focused tile's panel out of the group, returning
+// it to the dashboard as a lone panel. (Server-side removal lands in a later
+// unit; for now it reports the intent.)
+func (m model) removeFocusedMember() model {
+	members := m.groupMembers()
+	if m.groupFocus < 0 || m.groupFocus >= len(members) {
+		return m
+	}
+	m.status = "remove " + members[m.groupFocus].Title + " from the group"
+	return m
 }
 
 // adjustGroupCols nudges the tile column count by delta (clamped to one column up
@@ -180,6 +213,7 @@ func (m model) exitGroupZoom() (tea.Model, tea.Cmd) {
 	m.mode = modeDashboard
 	m.groupName = ""
 	m.groupFocus = 0
+	m.groupArmed = false
 	m.status = "dashboard"
 	if m.client != nil {
 		return m, func() tea.Msg { _ = m.client.Send(proto.Command{Action: "panel.list"}); return nil }
@@ -195,6 +229,7 @@ func (m model) backToGroup() (tea.Model, tea.Cmd) {
 	closeZoom(m.emu)
 	m.mode = modeGroupZoom
 	m.groupName = m.zoomGroupOrigin
+	m.groupArmed = false
 	m.emu = nil
 	m.zoomID, m.zoomTitle, m.zoomArmed, m.zoomExited, m.zoomGroupOrigin = "", "", false, false, ""
 	m.attachGroupMembers() // re-subscribe every tile's live stream
@@ -282,28 +317,12 @@ func (m model) tileBody(p panel.Panel, emuCols, emuRows int) []string {
 	return rows
 }
 
-// groupZoomFooter is the split's status bar: a full-width strip of bright caps,
-// matching the dashboard footer — a brand cap, a GROUP mode cap and the group
-// name on the left, and the navigation keys as colour caps on the right, with a
-// surface-filled middle so the whole row is solid colour.
+// groupZoomFooter is the split's status bar: the brand and GROUP caps with the
+// work-item name on the left, the ? help hint in the middle, and the shared
+// host stats, clock, and connection status on the right.
 func (m model) groupZoomFooter() string {
 	left := seg("◈ BATON", colDark, colBrand) +
 		seg("▣ GROUP", colInk, colBlue) +
 		seg(truncate(m.groupName, 24), colDark, colBrandHi)
-
-	next := seg("TAB next", colDark, colCyan)
-	cols := seg("±  cols", colDark, colBrandHi)
-	zoom := seg("⏎ zoom", colDark, colGreen)
-	dash := seg(keyLabel(m.bindingKey(actDashboard))+" dashboard", colInk, colBlue)
-
-	// Keep as many hints as fit, dropping the least essential first (cols, then
-	// next), so the bar never spills past the edge on a narrow terminal.
-	right := firstFit(m.width, left, [][]string{
-		{next, cols, zoom, dash},
-		{next, zoom, dash},
-		{zoom, dash},
-		{dash},
-		{},
-	})
-	return fillBar(m.width, left, right)
+	return m.statusBar(left, m.helpHint())
 }

@@ -12,23 +12,17 @@ import (
 	"github.com/cmj0121/baton/internal/proto"
 )
 
-// zoomFooter builds the coloured strip shown below the emulated panel while
-// zoomed: a brand cap, a state cap (green live-ZOOM, or a grey EXITED for the
-// read-only result of a finished program), the panel title, and the
-// prefix+dashboard detach hint.
-func zoomFooter(width int, title, prefixLabel, dashLabel string, exited bool) string {
-	brand := seg("◈ BATON", colDark, colBrand)
+// zoomFooter builds the coloured strip below the emulated panel: a brand cap, a
+// state cap (green live ZOOM, or grey EXITED for a finished program), the panel
+// title, the C-t ? help hint, and — like every view — the host stats, clock, and
+// connection status.
+func (m model) zoomFooter() string {
 	state := seg("◉ ZOOM", colInk, colGreen)
-	hintText := " dashboard "
-	if exited {
+	if m.zoomExited {
 		state = seg("◼ EXITED", colDark, colMuted)
-		hintText = " back · read-only "
 	}
-	name := barBold.Render(" " + title + " ")
-
-	hint := barBold.Render(" "+prefixLabel+" "+dashLabel) + barStyle.Render(hintText)
-
-	return fillBar(width, brand+state+name, hint)
+	left := seg("◈ BATON", colDark, colBrand) + state + barBold.Render(" "+m.zoomTitle+" ")
+	return m.statusBar(left, m.helpHint())
 }
 
 // overlayCursor inserts a reverse-video cell at visible column col of an

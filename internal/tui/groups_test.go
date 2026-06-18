@@ -279,27 +279,26 @@ func TestGroupOverlaysRender(t *testing.T) {
 }
 
 func TestKeyMapIncludesGroupVerbs(t *testing.T) {
-	// The group verbs are editable bindings, so they show in the key map and
-	// persist like any other. The dashboard verbs are single keys (bare); the
-	// group-back is a prefixed shortcut (BIND-g).
-	wantBare := map[string]bool{"mark": true, "group": true, "rename": true}
-	wantPrefixed := map[string]bool{"group-back": true}
+	// The group verbs are editable bindings, so they show in the key map. The
+	// dashboard verbs are single-key commands; dashboard/group-view are escapes.
+	wantCmd := map[string]bool{"mark": true, "group": true, "add": true, "ungroup": true, "rename": true}
+	wantEscape := map[string]bool{"dashboard": true, "group-view": true}
 	for _, b := range bindings {
 		switch {
-		case wantBare[b.name]:
-			if !b.bare {
-				t.Fatalf("dashboard verb %q should be a single (bare) key", b.name)
+		case wantCmd[b.name]:
+			if isEscape(b.act) {
+				t.Fatalf("dashboard verb %q should be a single-key command", b.name)
 			}
-			delete(wantBare, b.name)
-		case wantPrefixed[b.name]:
-			if b.bare {
-				t.Fatalf("%q should be a prefixed shortcut, not bare", b.name)
+			delete(wantCmd, b.name)
+		case wantEscape[b.name]:
+			if !isEscape(b.act) {
+				t.Fatalf("%q should be a universal escape", b.name)
 			}
-			delete(wantPrefixed, b.name)
+			delete(wantEscape, b.name)
 		}
 	}
-	if len(wantBare) != 0 || len(wantPrefixed) != 0 {
-		t.Fatalf("key map is missing group bindings: bare=%v prefixed=%v", wantBare, wantPrefixed)
+	if len(wantCmd) != 0 || len(wantEscape) != 0 {
+		t.Fatalf("key map is missing bindings: cmd=%v escape=%v", wantCmd, wantEscape)
 	}
 }
 
@@ -340,7 +339,7 @@ func TestKeyMapRebindsGroupKey(t *testing.T) {
 	}
 
 	// The old default key no longer groups.
-	if _, ok := m.lookupBare("G"); ok {
+	if _, ok := m.lookupCmd("G"); ok {
 		t.Fatal("the old group key G should no longer be bound")
 	}
 }
@@ -361,5 +360,108 @@ func TestUngroupSelected(t *testing.T) {
 	m = press(m, keyUngroup)
 	if !strings.Contains(m.status, "select a group") {
 		t.Fatalf("ungroup on a panel should hint, got %q", m.status)
+	}
+}
+
+func TestCommandAndEscapeKeys(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+
+	// A bare command opens the read-only key list (single key, no prefix), and
+	// C-t k opens the editable key map.
+	if got := press(m, "?"); got.mode != modeHelp {
+		t.Fatal("? should open the key list")
+	}
+	if got := press(m, "ctrl+t", "k"); got.mode != modeKeyMap {
+		t.Fatal("C-t k should open the editable key map")
+	}
+	// The escape C-t g enters the selected group's split.
+	m.cursor = 0 // the api group
+	got := press(m, "ctrl+t", "g")
+	if got.mode != modeGroupZoom || got.groupName != "api" {
+		t.Fatalf("C-t g should enter the group split, got mode=%v name=%q", got.mode, got.groupName)
+	}
+	// C-t d leaves the split for the dashboard.
+	g2, _ := got.handleGroupZoomKey(key("ctrl+t"))
+	g3, _ := g2.(model).handleGroupZoomKey(key("d"))
+	if g3.(model).mode != modeDashboard {
+		t.Fatal("C-t d should leave the split for the dashboard")
+	}
+}
+
+func TestAddMarkedToGroup(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+
+	// Mark the two lone panels, put the cursor on the api group, press a.
+	m.cursor = 1
+	m = press(m, keyMark) // mark #2
+	m.cursor = 3
+	m = press(m, keyMark) // mark #5
+	m.cursor = 0          // the api group
+	m = press(m, keyAdd)
+	if len(m.marked) != 0 {
+		t.Fatalf("add should clear the marks, got %v", m.marked)
+	}
+	if !strings.Contains(m.status, "added") {
+		t.Fatalf("add should confirm in the status, got %q", m.status)
+	}
+
+	// Add with the cursor on a lone panel hints to pick a group.
+	lone := baseModel()
+	lone.fleet = groupedFleet()
+	lone.cursor = 1
+	if got := press(lone, keyAdd); !strings.Contains(got.status, "select a group") {
+		t.Fatalf("add on a non-group should hint, got %q", got.status)
+	}
+
+	// enterGroupView on a lone panel hints too.
+	if _, ok := lone.selectedItem(); ok {
+		got, _ := lone.enterGroupView()
+		if !strings.Contains(got.(model).status, "select a group") {
+			t.Fatalf("group view on a non-group should hint, got %q", got.(model).status)
+		}
+	}
+}
+
+func TestHelpContextAndZoomFooter(t *testing.T) {
+	// ? from the dashboard opens the editable key map.
+	m := baseModel()
+	m.fleet = groupedFleet()
+	if got := press(m, "?"); got.mode != modeHelp || got.helpFrom != modeDashboard {
+		t.Fatalf("? should open the key list from the dashboard, got mode=%v from=%v", got.mode, got.helpFrom)
+	}
+
+	// ? from the group split opens the read-only context help; esc returns to it.
+	g := baseModel()
+	g.fleet = groupedFleet()
+	g = g.zoomGroup(g.dashItems()[0])
+	gh, _ := g.handleGroupZoomKey(key("?"))
+	gm := gh.(model)
+	if gm.mode != modeHelp || gm.helpFrom != modeGroupZoom {
+		t.Fatalf("? in the split should open context help, got mode=%v from=%v", gm.mode, gm.helpFrom)
+	}
+	if !strings.Contains(gm.helpView(), "remove the focused panel") {
+		t.Fatal("the split help should list the group-view keys")
+	}
+	back, _ := gm.handleKey(key("esc"))
+	if back.(model).mode != modeGroupZoom {
+		t.Fatal("esc should return from the help to the split")
+	}
+
+	// A zoom footer carries the host stats and clock like the other views, and
+	// C-t ? opens the zoom help.
+	z := baseModel()
+	z.mode = modeZoom
+	z.zoomTitle = "sh"
+	z.cpuPct, z.memUsed, z.memTotal = 10, 1<<30, 2<<30
+	foot := z.zoomFooter()
+	if !strings.Contains(foot, "CPU") || !strings.Contains(foot, "ZOOM") {
+		t.Fatalf("zoom footer should show ZOOM + CPU/MEM, got %q", foot)
+	}
+	za, _ := z.handleZoomKey(key("ctrl+t"))
+	zh, _ := za.(model).handleZoomKey(key("?"))
+	if zm := zh.(model); zm.mode != modeHelp || zm.helpFrom != modeZoom {
+		t.Fatalf("C-t ? in a zoom should open the zoom help, got mode=%v from=%v", zm.mode, zm.helpFrom)
 	}
 }

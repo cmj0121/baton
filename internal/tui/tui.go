@@ -64,7 +64,8 @@ type mode int
 
 const (
 	modeDashboard mode = iota
-	modeKeyMap
+	modeKeyMap         // the editable key map (C-t k)
+	modeHelp           // the read-only key list for a view (?)
 	modePanelConfig
 	modeZoom
 	modeGroupZoom
@@ -101,6 +102,7 @@ type model struct {
 	shellPath string       // configured default shell binary path ("" = system shell)
 	input     inputPurpose // active text-input overlay, or inputNone
 	inputBuf  string       // text typed into the overlay
+	helpFrom  mode         // the view the key map (?) was opened from, to restore on esc
 
 	renameID    string // panel id being renamed via inputRename ("" if a group)
 	renameGroup string // group being renamed via inputRename ("" if a panel)
@@ -113,6 +115,7 @@ type model struct {
 
 	groupName       string                      // work item being split-viewed (modeGroupZoom)
 	groupFocus      int                         // focused member tile within the split
+	groupArmed      bool                        // prefix pressed in the split, awaiting an escape
 	groupCols       int                         // tile columns; 0 = auto-fit to the window
 	groupEmus       map[string]*vt.SafeEmulator // live emulator per member tile
 	zoomGroupOrigin string                      // group to return to from a single zoom, "" if none
@@ -236,21 +239,22 @@ func (m *model) ensureBinds() {
 	}
 }
 
-// lookup resolves a key pressed after the prefix to its binding. Bare bindings
-// (the group verbs) are excluded — they fire on their own keystroke, not a chord.
-func (m model) lookup(key string) (binding, bool) {
+// lookupCmd resolves a command key (a single keystroke in command mode, or the
+// key after the prefix in a zoom) to its binding. Escapes are excluded.
+func (m model) lookupCmd(key string) (binding, bool) {
 	for _, b := range m.keymap() {
-		if !b.bare && b.key == key {
+		if !isEscape(b.act) && b.key == key {
 			return b, true
 		}
 	}
 	return binding{}, false
 }
 
-// lookupBare resolves a bare keystroke (no prefix) to its group binding.
-func (m model) lookupBare(key string) (binding, bool) {
+// lookupEscape resolves a key pressed after the prefix to one of the two
+// universal escapes (dashboard, group view).
+func (m model) lookupEscape(key string) (binding, bool) {
 	for _, b := range m.keymap() {
-		if b.bare && b.key == key {
+		if isEscape(b.act) && b.key == key {
 			return b, true
 		}
 	}
@@ -471,17 +475,14 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	pkey := m.effPrefix()
 
-	// A key following the prefix is interpreted as a binding.
+	// In command mode the prefix is only for the universal escapes (C-t d / C-t
+	// g); every other action is a single key.
 	if m.prefix {
 		m.prefix = false
-		if b, ok := m.lookup(key); ok {
+		if b, ok := m.lookupEscape(key); ok {
 			return m.runAction(b.act)
 		}
-		if key == pkey {
-			m.status = "dashboard" // prefix-prefix is a no-op for now
-			return m, nil
-		}
-		m.status = "no binding for " + key
+		m.status = "no escape for " + keyLabel(key)
 		return m, nil
 	}
 
@@ -546,13 +547,20 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m.activate()
 	case "esc":
+		// The help and the key map restore whichever view opened them (the split
+		// and zoom keep their live state); other overlays fall back to the dashboard.
+		if m.mode == modeHelp || m.mode == modeKeyMap {
+			m.mode = m.helpFrom
+			m.status = ""
+			return m, nil
+		}
 		if m.mode != modeDashboard {
 			return m.runAction(actDashboard)
 		}
 	default:
-		// A bare group verb (g / G / n) fires on the dashboard via its binding.
+		// On the dashboard every command is a single key.
 		if m.mode == modeDashboard {
-			if b, ok := m.lookupBare(key); ok {
+			if b, ok := m.lookupCmd(key); ok {
 				return m.runAction(b.act)
 			}
 		}
@@ -636,6 +644,26 @@ func shellLabel(path string) string {
 	return path
 }
 
+// openHelp shows the read-only key list for the current view (?), remembering
+// where it was opened from so esc restores it (the split and zoom keep their live
+// state).
+func (m model) openHelp(from mode) model {
+	m.helpFrom = from
+	m.mode = modeHelp
+	m.status = "keys"
+	return m
+}
+
+// openEditMap shows the editable key map (C-t k), remembering the originating
+// view so esc restores it.
+func (m model) openEditMap(from mode) model {
+	m.helpFrom = from
+	m.mode = modeKeyMap
+	m.cursor = 0
+	m.status = "key map"
+	return m
+}
+
 // runAction performs a binding's verb. Both the prefix handler and the key map's
 // enter key funnel through here.
 func (m model) runAction(a action) (tea.Model, tea.Cmd) {
@@ -666,14 +694,10 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		m.mode = modeDashboard
 		m.cursor = 0
 		m.status = "dashboard"
-	case actToggleMap:
-		if m.mode == modeKeyMap {
-			m.mode = modeDashboard
-		} else {
-			m.mode = modeKeyMap
-		}
-		m.cursor = 0
-		m.status = "key map"
+	case actHelp:
+		return m.openHelp(m.mode), nil
+	case actEditMap:
+		return m.openEditMap(m.mode), nil
 	case actPanelConfig:
 		m.mode = modePanelConfig
 		m.cursor = 0
@@ -694,12 +718,14 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		}
 	case actGroup:
 		return m.startGroup(), nil
+	case actAdd:
+		return m.addMarkedToGroup(), nil
 	case actUngroup:
 		return m.ungroupSelected(), nil
 	case actRename:
 		return m.startRename(), nil
-	case actGroupBack:
-		m.status = "already at the dashboard"
+	case actGroupView:
+		return m.enterGroupView()
 	}
 	return m, nil
 }
@@ -767,17 +793,27 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := k.String()
 	if m.zoomArmed {
 		m.zoomArmed = false
-		switch key {
-		case m.bindingKey(actDashboard): // prefix+d → dashboard, always
-			return m.zoomDetach()
-		case m.bindingKey(actGroupBack): // prefix+g → back to the split it came from
-			if m.zoomGroupOrigin != "" {
-				return m.backToGroup()
-			}
-		case m.effPrefix():
+		if key == m.effPrefix() {
 			if m.emu != nil {
 				feedKey(m.emu, k) // prefix+prefix sends a literal prefix
 			}
+			return m, nil
+		}
+		if b, ok := m.lookupEscape(key); ok {
+			switch b.act {
+			case actDashboard: // C-t d → dashboard, always
+				return m.zoomDetach()
+			case actGroupView: // C-t g → back to the split it came from
+				if m.zoomGroupOrigin != "" {
+					return m.backToGroup()
+				}
+			case actEditMap: // C-t k → edit the key map
+				return m.openEditMap(modeZoom), nil
+			}
+			return m, nil
+		}
+		if b, ok := m.lookupCmd(key); ok && b.act == actHelp { // C-t ? → the key list
+			return m.openHelp(modeZoom), nil
 		}
 		return m, nil
 	}
@@ -929,6 +965,8 @@ func (m model) View() string {
 	switch {
 	case m.input != inputNone:
 		body = m.inputView()
+	case m.mode == modeHelp:
+		body = m.helpView()
 	case m.mode == modeKeyMap:
 		body = m.keyMapView()
 	case m.mode == modePanelConfig:
@@ -963,7 +1001,7 @@ func (m model) zoomView() string {
 			}
 		}
 	}
-	footer := zoomFooter(m.width, m.zoomTitle, keyLabel(m.effPrefix()), keyLabel(m.bindingKey(actDashboard)), m.zoomExited)
+	footer := m.zoomFooter()
 	return strings.Join(lines, "\n") + "\n" + footer
 }
 
@@ -1266,9 +1304,57 @@ func previewLines(p panel.Panel) []string {
 	}
 }
 
-// keyMapView renders the editable key-binding list plus a settings toggle, all
-// reachable with one cursor. Select a row and press e to rebind it by typing the
-// new key.
+// helpView is the read-only key list for the current stage — the keys that view
+// responds to — shown when ? (or C-t ? in a zoom) is pressed.
+func (m model) helpView() string {
+	kc := func(s string) string { return keycapStyle.Render(s) }
+	pfx := keyLabel(m.effPrefix())
+	dash := keyLabel(m.bindingKey(actDashboard))
+
+	var title string
+	var rows [][2]string
+	switch m.helpFrom {
+	case modeGroupZoom:
+		title = "GROUP VIEW"
+		rows = [][2]string{
+			{kc("tab") + " " + kc("S-tab"), "focus the next / previous panel"},
+			{kc("enter"), "zoom the focused panel"},
+			{kc("+") + " " + kc("-"), "more / fewer columns"},
+			{kc(keyLabel(keyRemove)), "remove the focused panel from the group"},
+			{kc(dash) + " " + kc("esc"), "back to the dashboard"},
+			{kc(pfx) + " " + kc(dash), "dashboard (works in every view)"},
+		}
+	case modeZoom:
+		title = "ZOOM"
+		rows = [][2]string{
+			{kc("type"), "drive the program directly"},
+			{kc(pfx) + " " + kc(dash), "back to the dashboard"},
+			{kc(pfx) + " " + kc(keyLabel(m.bindingKey(actGroupView))), "back to the group view"},
+			{kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), "edit the key map"},
+			{kc(pfx) + " " + kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
+			{kc(pfx) + " " + kc(pfx), "send a literal " + pfx},
+		}
+	default: // dashboard — single keys for commands, C-t for the escapes
+		title = "DASHBOARD"
+		rows = [][2]string{{kc("hjkl") + " " + kc("↑↓←→"), "move"}, {kc("enter"), "open / zoom"}, {kc("esc"), "clear the selection"}}
+		for _, b := range m.keymap() {
+			if isEscape(b.act) {
+				rows = append(rows, [2]string{kc(pfx) + " " + kc(keyLabel(b.key)), b.desc})
+			} else {
+				rows = append(rows, [2]string{kc(keyLabel(b.key)), b.desc})
+			}
+		}
+	}
+
+	keyCol := lipgloss.NewStyle().Width(20)
+	out := []string{sectionStyle.Render(spaced(title + " KEYS")), ""}
+	for _, r := range rows {
+		out = append(out, keyCol.Render(r[0])+mutedStyle.Render(r[1]))
+	}
+	out = append(out, "", mutedStyle.Render("esc  back   ·   "+keyLabel(pfx)+" "+keyLabel(m.bindingKey(actEditMap))+"  edit"))
+	return configBox(lipgloss.JoinVertical(lipgloss.Left, out...))
+}
+
 func (m model) keyMapView() string {
 	caret := func(on bool) string {
 		if on {
@@ -1312,20 +1398,22 @@ func (m model) keyMapView() string {
 			prevCat = b.cat
 		}
 		selected := i+1 == m.cursor
+		// Escapes are prefixed (C-t d); commands are a single key.
+		esc := isEscape(b.act)
 		var keys string
 		switch {
-		case m.editing && m.editIdx == i && b.bare:
-			keys = keycapHotStyle.Render("…type a key")
-		case m.editing && m.editIdx == i:
+		case m.editing && m.editIdx == i && esc:
 			keys = keycapHotStyle.Render(prefLbl) + " " + keycapHotStyle.Render("…type a key")
-		case b.bare:
+		case m.editing && m.editIdx == i:
+			keys = keycapHotStyle.Render("…type a key")
+		case esc:
+			keys = chord(prefLbl, b.key, selected)
+		default:
 			cap := keycapStyle
 			if selected {
 				cap = keycapHotStyle
 			}
 			keys = cap.Render(keyLabel(b.key))
-		default:
-			keys = chord(prefLbl, b.key, selected)
 		}
 		rows = append(rows, fmt.Sprintf("%s%s   %s", caret(selected), keys, desc(selected, b.desc)))
 	}
@@ -1445,38 +1533,6 @@ func seg(text string, fg, bg lipgloss.Color) string {
 	return lipgloss.NewStyle().Foreground(fg).Background(bg).Bold(true).Padding(0, 1).Render(text)
 }
 
-// segWidth sums the rendered widths of bar segments.
-func segWidth(segs ...string) int {
-	w := 0
-	for _, s := range segs {
-		w += lipgloss.Width(s)
-	}
-	return w
-}
-
-// firstFit returns the first cap set (richest first) that fits beside left
-// within width, joined in order; if none fit, the leanest (last) set. It is the
-// group footer's "drop optional hints until the bar fits" logic.
-func firstFit(width int, left string, sets [][]string) string {
-	lw := lipgloss.Width(left)
-	for _, set := range sets {
-		if lw+segWidth(set...) <= width {
-			return strings.Join(set, "")
-		}
-	}
-	return strings.Join(sets[len(sets)-1], "")
-}
-
-// fillBar joins a left and right strip into a full-width status bar, filling the
-// middle with the surface colour so the whole row reads as one solid strip.
-func fillBar(width int, left, right string) string {
-	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 0 {
-		gap = 0
-	}
-	return left + barStyle.Render(strings.Repeat(" ", gap)) + right
-}
-
 // footer renders the cockpit telemetry strip as one solid light-blue bar: a
 // brand cap and a mode segment on the left, the live fleet breakdown (agents vs
 // shells) filling the middle, and the host stats, a clock, and a green/red
@@ -1497,11 +1553,15 @@ func (m model) footer() string {
 	if n := m.countState(panel.Attention); n > 0 {
 		left += seg(fmt.Sprintf("◆ %d", n), colDark, states[panel.Attention].color)
 	}
+	return m.statusBar(left, m.helpHint())
+}
 
-	// Right caps: optional PREFIX badge · system stats · clock · status. The
-	// status is a full colour cap (green, red on error) so the strip stays vivid
-	// edge to edge; it is clipped to whatever space is left so it can never spill
-	// onto a second line and swallow the footer.
+// statusBar composes a full-width footer for any view: the view's left caps, a
+// middle hint, and the always-present right side — system stats, the clock, and
+// the connection status (green, red on error). The status is clipped to whatever
+// space is left and the hint drops when too narrow, so the strip never spills
+// onto a second line and swallows the footer.
+func (m model) statusBar(left, hint string) string {
 	prefixBadge := ""
 	if m.prefix {
 		prefixBadge = seg("PREFIX", colDark, colBrandHi)
@@ -1513,21 +1573,30 @@ func (m model) footer() string {
 	if strings.HasPrefix(m.status, "error") {
 		statusBg = colRed
 	}
-	// The stats and the clock always stay; only the status flexes, clipped to
-	// whatever space is left (and dropped entirely when there is none) so the
-	// strip never spills onto a second line.
 	caps := prefixBadge + stats + clock
 	right := caps
 	if budget := m.width - lipgloss.Width(left) - lipgloss.Width(caps) - 4; budget > 0 {
 		right += seg("● "+truncate(m.status, budget), colInk, statusBg) // "● " + cap padding
 	}
 
-	// Middle: the agents-vs-shells fleet breakdown, filling the leftover space.
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 0 {
 		gap = 0
 	}
-	return left + m.renderCounts(gap) + right
+	if lipgloss.Width(hint) > gap {
+		hint = ""
+	}
+	return left + barStyle.Width(gap).Render(hint) + right
+}
+
+// helpHint is the footer's standing invitation to the key list: "? keys" in a
+// command-mode view, "C-t ? keys" in a zoom where the prefix is needed.
+func (m model) helpHint() string {
+	k := keyLabel(m.bindingKey(actHelp))
+	if m.mode == modeZoom {
+		k = keyLabel(m.effPrefix()) + " " + k
+	}
+	return barBold.Render(" "+k) + barStyle.Render(" keys ")
 }
 
 // statsStrip renders the system CPU and memory readout as a surface-coloured
@@ -1551,34 +1620,6 @@ func memLabel(used, total uint64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f/%.0f%s", float64(used)/float64(div), float64(total)/float64(div), units[exp])
-}
-
-// renderCounts lays the per-kind panel tally onto a surface-coloured strip
-// exactly width cells wide: how many agent panels and how many shell panels are
-// in the fleet. It drops to blank rather than wrap when the strip is too narrow.
-func (m model) renderCounts(width int) string {
-	agents, shells := 0, 0
-	for _, p := range m.fleet {
-		if p.Kind == panel.Shell {
-			shells++
-		} else {
-			agents++
-		}
-	}
-
-	chip := func(n int, label string, c lipgloss.Color) string {
-		dot := barBold.Foreground(c).Render("●")
-		num := barBold.Render(fmt.Sprintf(" %d ", n))
-		lab := barStyle.Render(label)
-		return dot + num + lab
-	}
-	sep := barStyle.Render("   ·   ")
-	body := " " + chip(agents, "agents", colAgent) + sep + chip(shells, "shells", colShell)
-
-	if lipgloss.Width(body) > width {
-		body = "" // too tight — keep just the surface fill
-	}
-	return barStyle.Width(width).Render(body)
 }
 
 // spaced widens a short label by inserting a hair of space between letters,
