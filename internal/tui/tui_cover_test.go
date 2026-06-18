@@ -187,8 +187,16 @@ func TestRunActionsWithoutClient(t *testing.T) {
 		t.Fatalf("an unknown escape status = %q", m.status)
 	}
 	press(base(), "ctrl+t", "ctrl+t") // prefix then a non-escape: no-op
-	if m := press(base(), "ctrl+c"); !m.quitting {
-		t.Fatal("ctrl+c should quit")
+	// Ctrl-C and Ctrl-E are captured on the dashboard: they never quit, just
+	// point the user at the detach binding.
+	for _, k := range []string{"ctrl+c", "ctrl+e"} {
+		m := press(base(), k)
+		if m.quitting {
+			t.Fatalf("%s must not quit the dashboard", k)
+		}
+		if !strings.Contains(m.status, "disabled") {
+			t.Fatalf("%s should hint that exit is disabled, got %q", k, m.status)
+		}
 	}
 
 	// dashboard cursor movement, then enter zooms the selected panel.

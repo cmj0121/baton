@@ -496,9 +496,11 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case pkey:
 		m.prefix = true
 		return m, nil
-	case keyCtrlC:
-		m.quitting = true
-		return m, tea.Quit
+	case keyCtrlC, keyCtrlE:
+		// Emergency-quit keys are captured here: command mode exits only through
+		// the detach binding, so nudge the user toward it instead of quitting.
+		m.status = m.exitHint()
+		return m, nil
 
 	case "up", "k":
 		m.move(-m.cols())
@@ -855,6 +857,13 @@ func (m model) bindingKey(a action) string {
 		}
 	}
 	return ""
+}
+
+// exitHint is the message shown when a captured emergency-quit key (Ctrl-C /
+// Ctrl-E) is pressed in command mode, where leaving is only via the detach
+// binding — never an accidental Ctrl-C.
+func (m model) exitHint() string {
+	return "exit is disabled here — press " + keyLabel(m.bindingKey(actDetach)) + " to detach"
 }
 
 // closeSelected asks the server to close the highlighted item and drops its

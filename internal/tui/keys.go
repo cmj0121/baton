@@ -40,7 +40,8 @@ const (
 
 	keyRemove = "x" // in the group split: remove the focused member from the group
 
-	keyCtrlC = "ctrl+c" // bare emergency quit
+	keyCtrlC = "ctrl+c" // captured in command mode — exit is the detach binding only
+	keyCtrlE = "ctrl+e" // captured in command mode — exit is the detach binding only
 )
 
 // keyLabel renders a key string as a compact label: ctrl+x → C-x, alt+x → M-x,

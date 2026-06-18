@@ -235,6 +235,9 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.removeFocusedMember(), nil
 	case keyHelp:
 		return m.openHelp(modeGroupZoom), nil
+	case keyCtrlC, keyCtrlE:
+		// Captured like on the dashboard: the split exits only via detach.
+		m.status = m.exitHint()
 	case "enter":
 		return m.zoomFocusedMember()
 	}

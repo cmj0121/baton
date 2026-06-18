@@ -465,3 +465,24 @@ func TestHelpContextAndZoomFooter(t *testing.T) {
 		t.Fatalf("C-t ? in a zoom should open the zoom help, got mode=%v from=%v", zm.mode, zm.helpFrom)
 	}
 }
+
+// TestExitKeysCaptured checks Ctrl-C and Ctrl-E never quit in command mode: on
+// the dashboard and in the group split they only hint at the detach binding.
+func TestExitKeysCaptured(t *testing.T) {
+	for _, k := range []string{"ctrl+c", "ctrl+e"} {
+		// Dashboard.
+		d := press(baseModel(), k)
+		if d.quitting || !strings.Contains(d.status, "disabled") {
+			t.Fatalf("%s on the dashboard should hint, not quit; status=%q quit=%v", k, d.status, d.quitting)
+		}
+		// Group split.
+		g := baseModel()
+		g.fleet = groupedFleet()
+		g = g.zoomGroup(g.dashItems()[0])
+		gh, _ := g.handleGroupZoomKey(key(k))
+		gm := gh.(model)
+		if gm.quitting || gm.mode != modeGroupZoom || !strings.Contains(gm.status, "disabled") {
+			t.Fatalf("%s in the split should hint and stay; status=%q mode=%v", k, gm.status, gm.mode)
+		}
+	}
+}
