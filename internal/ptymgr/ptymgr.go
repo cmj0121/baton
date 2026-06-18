@@ -141,6 +141,22 @@ func (m *Manager) Snapshot(id string) []byte {
 	return nil
 }
 
+// Tail returns up to the last n bytes of a panel's retained output, the cheap
+// read the Monitor uses to sniff whether a quiet panel is waiting on you. Nil for
+// an unknown id; the whole ring when it holds fewer than n bytes.
+func (m *Manager) Tail(id string, n int) []byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.ptys[id]
+	if !ok {
+		return nil
+	}
+	if n >= len(p.ring) {
+		return append([]byte(nil), p.ring...)
+	}
+	return append([]byte(nil), p.ring[len(p.ring)-n:]...)
+}
+
 // livePane returns a panel's pane if it exists and its process is still running.
 // It is the shared guard for operations that must skip unknown or exited (dead)
 // panels; the PTY is touched by the caller after the lock is released.

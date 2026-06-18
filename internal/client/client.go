@@ -18,12 +18,14 @@ type Client struct {
 	enc    *json.Encoder
 
 	// Events delivers control messages; Output delivers PTY data from a zoomed
-	// panel; Stats delivers the server's host telemetry. Splitting them keeps a
-	// burst of output (or a stale stat) from starving the cockpit. All are closed
-	// on disconnect.
-	Events chan proto.ServerMsg
-	Output chan proto.ServerMsg
-	Stats  chan proto.ServerMsg
+	// panel; Stats delivers the server's host telemetry; Telemetry delivers the
+	// Monitor's live panel refreshes (state, activity, sparkline). Splitting them
+	// keeps a burst of output, a stale stat, or a telemetry tick from starving the
+	// cockpit's structural events. All are closed on disconnect.
+	Events    chan proto.ServerMsg
+	Output    chan proto.ServerMsg
+	Stats     chan proto.ServerMsg
+	Telemetry chan proto.ServerMsg
 }
 
 // Dial connects to the server at socket, says hello, and starts reading events.
@@ -34,11 +36,12 @@ func Dial(socket string) (*Client, error) {
 	}
 
 	c := &Client{
-		conn:   conn,
-		enc:    json.NewEncoder(conn),
-		Events: make(chan proto.ServerMsg, proto.EventBufferSize),
-		Output: make(chan proto.ServerMsg, proto.EventBufferSize),
-		Stats:  make(chan proto.ServerMsg, proto.EventBufferSize),
+		conn:      conn,
+		enc:       json.NewEncoder(conn),
+		Events:    make(chan proto.ServerMsg, proto.EventBufferSize),
+		Output:    make(chan proto.ServerMsg, proto.EventBufferSize),
+		Stats:     make(chan proto.ServerMsg, proto.EventBufferSize),
+		Telemetry: make(chan proto.ServerMsg, proto.EventBufferSize),
 	}
 	go c.readLoop()
 
@@ -80,6 +83,7 @@ func (c *Client) readLoop() {
 	defer close(c.Events)
 	defer close(c.Output)
 	defer close(c.Stats)
+	defer close(c.Telemetry)
 	dec := json.NewDecoder(c.conn)
 	for {
 		var msg proto.ServerMsg
@@ -90,10 +94,17 @@ func (c *Client) readLoop() {
 		case "output":
 			c.Output <- msg
 		case "stats":
-			// Telemetry is latest-wins; drop a stale sample rather than let a
+			// Host telemetry is latest-wins; drop a stale sample rather than let a
 			// full buffer stall control messages.
 			select {
 			case c.Stats <- msg:
+			default:
+			}
+		case "telemetry":
+			// Panel telemetry is latest-wins too: a dropped refresh is corrected by
+			// the next tick, and must never stall structural events.
+			select {
+			case c.Telemetry <- msg:
 			default:
 			}
 		default:

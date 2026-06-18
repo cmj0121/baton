@@ -278,6 +278,7 @@ func (m model) lookupEscape(key string) (binding, bool) {
 type eventMsg proto.ServerMsg
 type panelOutputMsg proto.ServerMsg
 type statsEventMsg proto.ServerMsg
+type telemetryEventMsg proto.ServerMsg
 type connClosedMsg struct{}
 type tickMsg time.Time
 
@@ -308,13 +309,17 @@ func waitStats(ch chan proto.ServerMsg) tea.Cmd {
 	return waitMsg(ch, func(m proto.ServerMsg) tea.Msg { return statsEventMsg(m) })
 }
 
+func waitTelemetry(ch chan proto.ServerMsg) tea.Cmd {
+	return waitMsg(ch, func(m proto.ServerMsg) tea.Msg { return telemetryEventMsg(m) })
+}
+
 // tick drives the footer clock, firing once a second.
 func tick() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), tick())
+	return tea.Batch(waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), waitTelemetry(m.client.Telemetry), tick())
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -349,6 +354,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statsEventMsg:
 		m.applyEvent(proto.ServerMsg(msg))
 		return m, waitStats(m.client.Stats)
+
+	case telemetryEventMsg:
+		m.applyEvent(proto.ServerMsg(msg))
+		return m, waitTelemetry(m.client.Telemetry)
 
 	case connClosedMsg:
 		m.status = "server closed the connection"
@@ -430,10 +439,12 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		} else {
 			m.status = "attached · " + m.endpoint
 		}
-	case "panels":
-		// Capture what the cursor and the split focus rest on before the fleet
-		// changes under them, so both can be restored to the same item by identity
-		// rather than left on a raw index that now points elsewhere.
+	case "panels", "telemetry":
+		// A structural "panels" snapshot and a live "telemetry" refresh both carry
+		// the full fleet and merge the same way. Capture what the cursor and the
+		// split focus rest on before the fleet changes under them, so both can be
+		// restored to the same item by identity rather than left on a raw index that
+		// now points elsewhere.
 		focusID := m.focusedMemberID()
 		onDash := m.mode == modeDashboard
 		selKind, selID, selGroup, hadSel := dashKind(0), "", "", false

@@ -45,6 +45,7 @@ type Server struct {
 	seq     int
 	panels  []panel.Panel
 	clients map[*clientConn]struct{}
+	mon     *monitor // lifecycle + telemetry bookkeeping, guarded by mu
 }
 
 // Option tunes a Server at construction. Options keep New's signature stable as
@@ -64,6 +65,7 @@ func New(ln net.Listener, opts ...Option) *Server {
 		ln:      ln,
 		pty:     ptymgr.New(),
 		clients: make(map[*clientConn]struct{}),
+		mon:     newMonitor(),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -83,6 +85,7 @@ func (s *Server) onPanelExit(id string) {
 		if s.panels[i].ID == id {
 			s.panels[i].State = panel.Exited
 			s.panels[i].Activity = "exited"
+			s.mon.forget(id) // a dead panel no longer ticks
 			found = true
 			break
 		}
@@ -101,15 +104,37 @@ func (s *Server) onPanelExit(id string) {
 	}
 }
 
-// routeOutput fans a panel's output out to every client zoomed into it.
+// routeOutput fans a panel's output out to every client zoomed into it, and feeds
+// the Monitor: output is the signal that wakes a quiet (or just-spawned) panel
+// back to running. The wake is in-memory only — the next monitor tick carries it
+// to clients — so the hot output path never triggers a broadcast of its own.
 func (s *Server) routeOutput(id string, data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.mon.observed(id)
+	if i := s.indexLocked(id); i >= 0 {
+		switch s.panels[i].State {
+		case panel.Spawning, panel.Idle, panel.Attention:
+			s.panels[i].State = panel.Running
+			s.mon.entered(id)
+		}
+	}
 	for cc := range s.clients {
 		if cc.attached[id] {
 			send(cc, proto.ServerMsg{Type: "output", ID: id, Data: data})
 		}
 	}
+}
+
+// indexLocked returns the index of the panel with the given id, or -1. The caller
+// must hold s.mu.
+func (s *Server) indexLocked(id string) int {
+	for i := range s.panels {
+		if s.panels[i].ID == id {
+			return i
+		}
+	}
+	return -1
 }
 
 // attach adds panel id to a client's stream set. The recent output is replayed
@@ -146,6 +171,7 @@ func (s *Server) Serve() error {
 	stop := make(chan struct{})
 	defer close(stop)
 	go s.statsLoop(stop)
+	go s.monitorLoop(stop)
 
 	for {
 		conn, err := s.ln.Accept()
@@ -189,6 +215,62 @@ func statsMsg() proto.ServerMsg {
 		msg.MemUsed, msg.MemTotal = vm.Used, vm.Total
 	}
 	return msg
+}
+
+// monitorLoop is the Monitor's heartbeat: on each tick it advances every panel's
+// lifecycle and telemetry, and broadcasts the refresh when something moved. It
+// stops when Serve returns.
+func (s *Server) monitorLoop(stop <-chan struct{}) {
+	t := time.NewTicker(monitorInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			if msg, ok := s.monitorTick(); ok {
+				s.broadcast(msg)
+			}
+		}
+	}
+}
+
+// monitorTick re-evaluates every live panel: it settles a quiet one to idle or
+// attention (wakes are handled on the output path) and refreshes the activity
+// line. It returns a "telemetry" snapshot and true when any panel moved and there
+// is a client to tell; telemetry rides its own message type so it never disturbs a
+// frontend's structural panel stream.
+func (s *Server) monitorTick() (proto.ServerMsg, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	changed := false
+	for i := range s.panels {
+		p := &s.panels[i]
+		if p.State == panel.Exited {
+			continue
+		}
+		quiet := s.mon.quiet(p.ID)
+		attention := quiet && p.State == panel.Running && looksLikeAttention(s.pty.Tail(p.ID, attnTailBytes))
+		if ns, ok := nextState(p.State, quiet, attention); ok {
+			p.State = ns
+			s.mon.entered(p.ID)
+			changed = true
+		}
+		if act := activityText(p.State, s.mon.since(p.ID)); act != p.Activity {
+			p.Activity = act
+			changed = true
+		}
+	}
+
+	if !changed || len(s.clients) == 0 {
+		return proto.ServerMsg{}, false
+	}
+	out := make([]proto.Panel, len(s.panels))
+	for i, p := range s.panels {
+		out[i] = p.ToProto()
+	}
+	return proto.ServerMsg{Type: "telemetry", Panels: out}, true
 }
 
 func (s *Server) handle(conn net.Conn) {
@@ -313,11 +395,12 @@ func (s *Server) createPanel(kind, path string, args []string, dir string) error
 		ID:       id,
 		Kind:     panel.ParseKind(kind),
 		Title:    panelTitle(kind, path, dir, id),
-		State:    panel.Running,
-		Activity: panelActivity(kind, dir),
+		State:    panel.Spawning,
+		Activity: activityText(panel.Spawning, 0), // the Monitor keeps it live from here
 	}
 	s.mu.Lock()
 	s.panels = append(s.panels, p)
+	s.mon.spawned(id) // start the Monitor's clock; first output wakes it to running
 	s.mu.Unlock()
 
 	log.Info().Str("panel", p.Title).Msg("panel created")
@@ -340,15 +423,6 @@ func panelTitle(kind, path, dir, id string) string {
 		name = filepath.Base(path)
 	}
 	return fmt.Sprintf("%s #%s", name, id)
-}
-
-// panelActivity is the short status line a new panel starts with: an agent shows
-// its working directory, a shell just notes the spawn.
-func panelActivity(kind, dir string) string {
-	if kind == proto.KindAgent && dir != "" {
-		return "in " + dir
-	}
-	return "spawned"
 }
 
 // closePanels closes every listed panel and broadcasts once for the whole batch
@@ -392,6 +466,7 @@ func (s *Server) closePanel(id string) error {
 	}
 	title := s.panels[idx].Title
 	s.panels = slices.Delete(s.panels, idx, idx+1)
+	s.mon.forget(id)
 	s.mu.Unlock()
 
 	s.pty.Stop(id) // no-op for mock panels with no real process
@@ -408,6 +483,7 @@ func (s *Server) purgeExited() int {
 	for _, p := range s.panels {
 		if p.State == panel.Exited {
 			gone = append(gone, p.ID)
+			s.mon.forget(p.ID)
 			continue
 		}
 		kept = append(kept, p)

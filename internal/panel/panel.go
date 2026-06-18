@@ -79,9 +79,9 @@ func ParseState(s string) State {
 }
 
 // Panel is one live terminal the server owns: a shell or an agent, plus the
-// Monitor's lifecycle state. The Group field anticipates grouping panels into
-// work items; the Activity/Spark fields are mock telemetry that stand in until
-// the Monitor reports real output.
+// Monitor's lifecycle state. The Group field files the panel under a work item;
+// the Activity field is the live status line the Monitor reports as output ebbs
+// and flows.
 type Panel struct {
 	ID    string
 	Kind  Kind
@@ -89,7 +89,7 @@ type Panel struct {
 	State State
 	Group string // work item this panel belongs to, "" if ungrouped
 
-	Activity string // short status line, e.g. "streaming · 3m"
+	Activity string // short status line, e.g. "running · 3m"
 }
 
 // IsAgent reports whether the panel runs an agent CLI rather than a shell.
