@@ -6,11 +6,36 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	vt "github.com/charmbracelet/x/vt"
 
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 )
+
+// TestRenderTileHeadStaysOneRow guards against a long title (with a pin glyph or
+// interact badge taking head space) wrapping the head onto a second row: a tile
+// is exactly head (1) + body (emuRows) + border (2) tall.
+func TestRenderTileHeadStaysOneRow(t *testing.T) {
+	const emuCols, emuRows = 24, 5
+	long := "claude · refactor the auth module and write the tests"
+	for _, tc := range []struct {
+		name string
+		mut  func(*model, panel.Panel)
+	}{
+		{"pinned", func(m *model, p panel.Panel) { m.groupPinned = map[string]bool{p.ID: true} }},
+		{"interacting", func(m *model, _ panel.Panel) { m.groupInteract = true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := baseModel()
+			p := panel.Panel{ID: "x", Title: long, State: panel.Running}
+			tc.mut(&m, p)
+			if h := lipgloss.Height(m.renderTile(p, true, emuCols, emuRows)); h != emuRows+3 {
+				t.Fatalf("head should stay one row: tile height %d, want %d", h, emuRows+3)
+			}
+		})
+	}
+}
 
 func TestGroupMembers(t *testing.T) {
 	m := baseModel()
@@ -167,12 +192,20 @@ func TestGroupZoomLiveTileRenders(t *testing.T) {
 	_, _ = emu.Write([]byte("hello-live"))
 	m.groupEmus = map[string]*vt.SafeEmulator{"1": emu}
 
-	body := m.tileBody(m.groupMembers()[0], 30, 6) // member id "1"
+	body := m.tileBody(m.groupMembers()[0], 30, 6, false) // member id "1"
 	if len(body) != 6 {
 		t.Fatalf("a live tile should have 6 rows, got %d", len(body))
 	}
 	if !strings.Contains(strings.Join(body, ""), "hello-live") {
 		t.Fatalf("live tile should show emulator output, got %q", strings.Join(body, ""))
+	}
+	// A passive tile draws no cursor; the interacting tile overlays one.
+	if strings.Contains(strings.Join(body, ""), "\x1b[7m") {
+		t.Fatal("a passive tile should not draw a cursor")
+	}
+	cursored := m.tileBody(m.groupMembers()[0], 30, 6, true)
+	if !strings.Contains(strings.Join(cursored, ""), "\x1b[7m") {
+		t.Fatalf("the interacting tile should overlay a reverse-video cursor, got %q", strings.Join(cursored, ""))
 	}
 	if m.View() == "" {
 		t.Fatal("live group zoom should render")
@@ -350,6 +383,349 @@ func TestLiveMembersCap(t *testing.T) {
 	}
 }
 
+// bigGroup is a group of n members all filed under name, for the cap and overflow
+// paths.
+func bigGroup(name string, n int) []panel.Panel {
+	fleet := make([]panel.Panel, 0, n)
+	for i := 0; i < n; i++ {
+		fleet = append(fleet, panel.Panel{
+			ID: string(rune('a' + i)), Title: "p", State: panel.Running, Group: name,
+		})
+	}
+	return fleet
+}
+
+// TestGroupPinCuratesTiles checks that pinning over-cap switches the split to the
+// pinned set: the pinned panel becomes the only tile and everyone else, including
+// the formerly-auto-filled tiles, moves to the list. Unpinning restores the
+// default fill.
+func TestGroupPinCuratesTiles(t *testing.T) {
+	m := baseModel()
+	m.fleet = bigGroup("big", maxGroupTiles+4) // a..t: default tiles a..p, list q..t
+	m = m.zoomGroup(m.dashItems()[0])
+
+	tiles, tree := m.splitMembers()
+	if indexOfMember(tiles, "q") >= 0 || indexOfMember(tree, "q") < 0 {
+		t.Fatal("q should start in the list, not a tile")
+	}
+
+	// Focus q (first list row) and pin it: the grid collapses to just q.
+	m.groupFocus = maxGroupTiles
+	m = m.togglePin()
+	if !m.groupPinned["q"] {
+		t.Fatal("q should be pinned")
+	}
+	tiles, _ = m.splitMembers()
+	if len(tiles) != 1 || indexOfMember(tiles, "q") < 0 {
+		t.Fatalf("the only tile should be the pinned q, got %v", ids(tiles))
+	}
+	if disp := m.displayedMembers(); len(disp) != maxGroupTiles+4 {
+		t.Fatalf("every member should still be reachable, got %d", len(disp))
+	}
+
+	// Reconcile keeps the focus on q; unpinning restores the default fill.
+	m = m.togglePin()
+	if m.groupPinned["q"] {
+		t.Fatal("unpinning should clear q's pin")
+	}
+	tiles, _ = m.splitMembers()
+	if len(tiles) != maxGroupTiles || indexOfMember(tiles, "q") >= 0 {
+		t.Fatal("unpinning should restore the default fill with q back in the list")
+	}
+}
+
+// ids is the member ids of a slice, for test diagnostics.
+func ids(ps []panel.Panel) []string {
+	out := make([]string, len(ps))
+	for i, p := range ps {
+		out[i] = p.ID
+	}
+	return out
+}
+
+// TestGroupPinCapRefused checks the pin set cannot exceed maxGroupTiles.
+func TestGroupPinCapRefused(t *testing.T) {
+	m := baseModel()
+	m.fleet = bigGroup("big", maxGroupTiles+4)
+	m = m.zoomGroup(m.dashItems()[0])
+	m.groupPinned = map[string]bool{}
+	for i := 0; i < maxGroupTiles; i++ {
+		m.groupPinned[string(rune('a'+i))] = true // pin the cap's worth
+	}
+
+	m.groupFocus = len(m.displayedMembers()) - 1 // a tree row
+	before := m.pinnedCount()
+	m = m.togglePin()
+	if m.pinnedCount() != before {
+		t.Fatalf("pinning beyond the cap should be refused, count went %d→%d", before, m.pinnedCount())
+	}
+	if !strings.Contains(m.status, "unpin one first") {
+		t.Fatalf("status should explain the cap, got %q", m.status)
+	}
+}
+
+// TestInteractOnTreeMemberHintsToPin checks interact refuses a tree-listed member
+// and points the user at pinning it first.
+func TestInteractOnTreeMemberHintsToPin(t *testing.T) {
+	m := baseModel()
+	m.fleet = bigGroup("big", maxGroupTiles+4)
+	m = m.zoomGroup(m.dashItems()[0])
+	m.groupFocus = maxGroupTiles // first tree row
+
+	got := m.enterInteract()
+	if got.groupInteract {
+		t.Fatal("interact should not start on a tree member")
+	}
+	if !strings.Contains(got.status, "pin") {
+		t.Fatalf("should hint to pin first, got %q", got.status)
+	}
+}
+
+// TestGroupTreePaneRenders checks the overflow tree pane is drawn for a large
+// group.
+func TestGroupTreePaneRenders(t *testing.T) {
+	m := baseModel()
+	m.fleet = bigGroup("big", maxGroupTiles+4)
+	m = m.zoomGroup(m.dashItems()[0])
+	m.groupFocus = maxGroupTiles + 1 // a tree row, so the pane lights a row
+	if !strings.Contains(m.groupZoomView(), "L I S T") {
+		t.Fatal("the split should render the tree (LIST) pane for the overflow")
+	}
+}
+
+// TestGroupSplitCapsVisibleTiles checks a large group streams at most
+// maxGroupTiles live tiles, files the rest into the tree list, and says so in the
+// header (gaps #2/#3, and the overflow is now reachable rather than stranded).
+func TestGroupSplitCapsVisibleTiles(t *testing.T) {
+	m := baseModel()
+	m.fleet = bigGroup("big", maxGroupTiles+4)
+	m = m.zoomGroup(m.dashItems()[0])
+
+	tiles, tree := m.splitMembers()
+	if len(tiles) != maxGroupTiles {
+		t.Fatalf("live tiles should cap at %d, got %d", maxGroupTiles, len(tiles))
+	}
+	if len(tree) != 4 {
+		t.Fatalf("the 4 overflow members should be in the tree, got %d", len(tree))
+	}
+	view := m.groupZoomView()
+	if !strings.Contains(view, "16 live · 4 in list") {
+		t.Fatalf("the header should report the live/list split, got:\n%s", view)
+	}
+}
+
+// TestGroupSplitFocusReachesTree checks focus now walks every member — the live
+// tiles and then the tree overflow — so a large group's tail is reachable.
+func TestGroupSplitFocusReachesTree(t *testing.T) {
+	m := baseModel()
+	m.fleet = bigGroup("big", maxGroupTiles+4) // 16 tiles + 4 in the tree
+	m = m.zoomGroup(m.dashItems()[0])
+
+	// shift+tab from the first member wraps to the very last tree row, not the
+	// last tile.
+	nm, _ := m.handleGroupZoomKey(key("shift+tab"))
+	m = nm.(model)
+	if m.groupFocus != maxGroupTiles+3 {
+		t.Fatalf("focus should wrap to the last member (%d), got %d", maxGroupTiles+3, m.groupFocus)
+	}
+	if m.focusedIsTile() {
+		t.Fatal("the last member is in the tree, so the focus should not be on a tile")
+	}
+}
+
+// TestGroupFocusFollowsPanelAcrossSnapshot checks the split keeps focus on the
+// same panel by id when the roster shifts under it (gap #8).
+func TestGroupFocusFollowsPanelAcrossSnapshot(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()          // api members in fleet order: 1, 3, 6
+	m = m.zoomGroup(m.dashItems()[0]) // the api group
+	m.groupFocus = 2                  // rest on member #6
+	if id := m.focusedMemberID(); id != "6" {
+		t.Fatalf("focus should rest on member 6, got %q", id)
+	}
+
+	// A snapshot drops the first member (1); 3 and 6 remain, so #6 slides to index 1.
+	nf := make([]panel.Panel, 0)
+	for _, p := range groupedFleet() {
+		if p.ID != "1" {
+			nf = append(nf, p)
+		}
+	}
+	m.applyEvent(snapshot(nf))
+
+	if id := m.focusedMemberID(); id != "6" {
+		t.Fatalf("focus should still follow panel 6, got %q (focus=%d)", id, m.groupFocus)
+	}
+	if m.groupFocus != 1 {
+		t.Fatalf("panel 6 should now sit at focus index 1, got %d", m.groupFocus)
+	}
+}
+
+// liveSplit opens the api group's split and injects a drained live emulator per
+// member, so interact-mode key routing can be exercised without a server. Each
+// tile's input side is drained (zoomReader with no client) so feedKey — which
+// writes to a synchronous pipe — never blocks.
+func liveSplit(t *testing.T) model {
+	t.Helper()
+	m := baseModel()
+	m.fleet = groupedFleet()
+	m = m.zoomGroup(m.dashItems()[0]) // the api group: members 1, 3, 6
+	m.groupEmus = map[string]*vt.SafeEmulator{}
+	for _, id := range []string{"1", "3", "6"} {
+		emu := vt.NewSafeEmulator(20, 5)
+		m.groupEmus[id] = emu
+		go zoomReader(emu, nil, id)
+		t.Cleanup(func() { closeZoom(emu) })
+	}
+	return m
+}
+
+// TestGroupInteractToggle checks i enters interact mode on a live tile (and is a
+// no-op with a hint on a preview-only one), and that C-t i leaves it.
+func TestGroupInteractToggle(t *testing.T) {
+	// Without a live tile (no client) interact cannot start.
+	m := baseModel()
+	m.fleet = groupedFleet()
+	m = m.zoomGroup(m.dashItems()[0])
+	if got := m.enterInteract(); got.groupInteract || !strings.Contains(got.status, "live panel") {
+		t.Fatalf("interact without a live tile should hint, got interact=%v status=%q", got.groupInteract, got.status)
+	}
+
+	// With live tiles, i enters interact and the footer flips to INTERACT.
+	m = liveSplit(t)
+	nm, _ := m.handleGroupZoomKey(key(keyInteract))
+	m = nm.(model)
+	if !m.groupInteract {
+		t.Fatal("i should enter interact mode")
+	}
+	if !strings.Contains(m.groupZoomFooter(), "INTERACT") {
+		t.Fatal("the split footer should show INTERACT while interacting")
+	}
+	if !strings.Contains(m.groupZoomView(), "⌨") {
+		t.Fatal("the focused tile should wear the interact badge")
+	}
+	if !strings.Contains(m.groupZoomView(), "\x1b[7m") {
+		t.Fatal("the interacting tile should show a cursor")
+	}
+
+	// C-t i returns to navigation.
+	a, _ := m.handleGroupZoomKey(key("ctrl+t"))
+	b, _ := a.(model).handleGroupZoomKey(key(keyInteract))
+	if b.(model).groupInteract {
+		t.Fatal("C-t i should stop interacting")
+	}
+}
+
+// TestGroupInteractCapturesBareKeys checks that while interacting the split's own
+// navigation keys are handed to the focused program instead of steering the split;
+// only the prefixed escapes still act.
+func TestGroupInteractCapturesBareKeys(t *testing.T) {
+	m := liveSplit(t)
+	m.groupFocus = 0
+	m = m.enterInteract()
+
+	// Keys that would navigate, remove, resize, or open help now go to the program.
+	for _, k := range []string{"j", "tab", keyRemove, "+", keyHelp} {
+		nm, _ := m.handleGroupZoomKey(key(k))
+		m = nm.(model)
+	}
+	if m.groupFocus != 0 {
+		t.Fatalf("bare keys in interact should not move focus, got %d", m.groupFocus)
+	}
+	if m.mode != modeGroupZoom {
+		t.Fatalf("bare keys in interact should stay in the split, got mode=%v", m.mode)
+	}
+
+	// The bare dashboard key is captured too; only C-t d leaves.
+	nm, _ := m.handleGroupZoomKey(key(m.bindingKey(actDashboard)))
+	if nm.(model).mode != modeGroupZoom {
+		t.Fatalf("the bare dashboard key should be captured by interact, got mode=%v", nm.(model).mode)
+	}
+	a, _ := m.handleGroupZoomKey(key("ctrl+t"))
+	d, _ := a.(model).handleGroupZoomKey(key(m.bindingKey(actDashboard)))
+	if d.(model).mode != modeDashboard {
+		t.Fatal("C-t d should still leave interact for the dashboard")
+	}
+}
+
+// TestGroupInteractEndsWhenPanelLeaves checks interact stops when a snapshot pulls
+// the panel being typed into out of the group, so keys never land on a tile the
+// focus merely fell onto.
+func TestGroupInteractEndsWhenPanelLeaves(t *testing.T) {
+	m := liveSplit(t)
+	m.groupFocus = 0 // member "1"
+	m = m.enterInteract()
+	if !m.groupInteract {
+		t.Fatal("expected to be interacting")
+	}
+
+	nf := groupedFleet()
+	for i := range nf {
+		if nf[i].ID == "1" {
+			nf[i].Group = "" // member 1 leaves the api group
+		}
+	}
+	m.applyEvent(snapshot(nf))
+	if m.groupInteract {
+		t.Fatal("interact should end when the focused panel leaves the group")
+	}
+}
+
+// TestGroupInteractDrivesPanel is the end-to-end path: group two shells, open the
+// split, interact with the focused tile, type a command, and confirm that tile —
+// and only that tile — reflects it, all without zooming in.
+func TestGroupInteractDrivesPanel(t *testing.T) {
+	c, a := zoomServer(t)
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+		t.Fatalf("create second: %v", err)
+	}
+	b := (<-c.Events).Panels[1].ID
+	if err := c.Send(proto.Command{Action: "panel.group", IDs: []string{a, b}, Group: "grp"}); err != nil {
+		t.Fatalf("group: %v", err)
+	}
+	snap := <-c.Events
+
+	m := model{client: c, width: 100, height: 30, binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+	m.fleet = mergeFleet(snap.Panels)
+	m = m.zoomGroup(m.dashItems()[0])
+	m.groupFocus = 0 // focus member a
+	if id := m.focusedMemberID(); id != a {
+		t.Fatalf("focus should be on member a (%s), got %q", a, id)
+	}
+
+	// Enter interact and type into a — staying in the split, not a single zoom.
+	nm, _ := m.handleGroupZoomKey(key(keyInteract))
+	m = nm.(model)
+	if !m.groupInteract || m.mode != modeGroupZoom {
+		t.Fatalf("i should interact in place, got interact=%v mode=%v", m.groupInteract, m.mode)
+	}
+	for _, r := range "echo grp-interact" {
+		nm, _ := m.handleGroupZoomKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(string(r))})
+		m = nm.(model)
+	}
+	nm, _ = m.handleGroupZoomKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = nm.(model)
+
+	// a's tile echoes the typed command; b's must never see it.
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case msg := <-c.Output:
+			if emu := m.groupEmus[msg.ID]; emu != nil {
+				_, _ = emu.Write(msg.Data)
+			}
+			if e := m.groupEmus[a]; e != nil && strings.Contains(e.Render(), "grp-interact") {
+				return // success
+			}
+			if e := m.groupEmus[b]; e != nil && strings.Contains(e.Render(), "grp-interact") {
+				t.Fatal("only the focused tile (a) should receive the keystrokes, not b")
+			}
+		case <-deadline:
+			t.Fatal("the focused tile never echoed the interacted command")
+		}
+	}
+}
+
 // TestReconcileTilesLive drives the real path: group two shells, open the split,
 // remove one through the server, and confirm the split tears down just that tile.
 func TestReconcileTilesLive(t *testing.T) {
@@ -449,31 +825,59 @@ func TestGroupZoomResizeReflows(t *testing.T) {
 
 func TestGroupColumnsAdjust(t *testing.T) {
 	m := baseModel()
-	m.width, m.height = 40, 20 // narrow: the auto layout is a single column
+	// Width 60: auto-fit starts at one column, and the width floor still allows up
+	// to one column per member, so + steps up to the 3-member cap.
+	m.width, m.height = 60, 30
 	m.fleet = groupedFleet()
 	m = m.zoomGroup(m.dashItems()[0]) // api, 3 members
 
 	cols := func() int { c, _, _ := m.tileGeometry(); return c }
-	if cols() != 1 {
-		t.Fatalf("narrow auto layout should be 1 column, got %d", cols())
-	}
-
 	step := func(k string) { nm, _ := m.handleGroupZoomKey(key(k)); m = nm.(model) }
 
+	if start := cols(); start != 1 {
+		t.Fatalf("auto layout at width 60 should be 1 column, got %d", start)
+	}
 	step("+")
 	if cols() != 2 {
 		t.Fatalf("+ should widen to 2 columns, got %d", cols())
 	}
-	step("+")
-	if cols() != 3 {
-		t.Fatalf("+ should widen to 3 columns, got %d", cols())
+	// Dial all the way up: the column count clamps at one per member (3 here).
+	for i := 0; i < 5; i++ {
+		step("+")
 	}
-	step("+") // clamp at the member count
 	if cols() != 3 {
-		t.Fatalf("+ should clamp at 3 columns, got %d", cols())
+		t.Fatalf("+ should clamp at the member count (3), got %d", cols())
 	}
 	step("-")
 	if cols() != 2 {
 		t.Fatalf("- should narrow back to 2 columns, got %d", cols())
+	}
+}
+
+// TestGroupColumnsWidthFloor checks that dialling columns up cannot shrink tiles
+// below the width floor: on a narrow screen the column count caps well under the
+// member count, so the grid never collapses into unreadable slivers (gap #7).
+func TestGroupColumnsWidthFloor(t *testing.T) {
+	m := baseModel()
+	m.width, m.height = 40, 20 // narrow: the floor binds before the member count
+	m.fleet = nil
+	for i := 0; i < 6; i++ { // a 6-member group, more than the floor allows
+		m.fleet = append(m.fleet, panel.Panel{
+			ID: string(rune('a' + i)), Title: "p", State: panel.Running, Group: "wide",
+		})
+	}
+	m = m.zoomGroup(m.dashItems()[0])
+
+	cols := func() int { c, _, _ := m.tileGeometry(); return c }
+	for i := 0; i < 10; i++ { // hammer + far past any sane column count
+		nm, _ := m.handleGroupZoomKey(key("+"))
+		m = nm.(model)
+	}
+	floorCols := max(1, (m.width+gtileGap)/(gtileFloorW+gtileGap))
+	if got := cols(); got != floorCols {
+		t.Fatalf("+ should clamp at the width floor (%d cols) on a narrow screen, got %d", floorCols, got)
+	}
+	if got := cols(); got >= len(m.groupMembers()) {
+		t.Fatalf("the floor should cap below the 6-member count, got %d columns", got)
 	}
 }

@@ -182,9 +182,30 @@ func (m model) startGroup() model {
 	return m
 }
 
+// nameConflict mirrors the server's uniqueness policy on the local fleet so the
+// cockpit can reject a duplicate name before sending — and so the pending
+// selection (or rename) survives the rejection instead of being cleared
+// optimistically only to have the server bounce it. skipID/skipGroup exempt the
+// item being renamed; an empty name or the allow-conflict setting never collide.
+func (m model) nameConflict(name, skipID, skipGroup string) bool {
+	if name == "" || m.allowNameConflict {
+		return false
+	}
+	for _, p := range m.fleet {
+		if p.ID != skipID && p.Title == name {
+			return true
+		}
+		if p.Group != "" && p.Group != skipGroup && p.Group == name {
+			return true
+		}
+	}
+	return false
+}
+
 // commitGroup files the marked panels under the typed name and clears the
 // selection. The server is the source of truth, so the broadcast re-syncs the
-// fleet with the new group.
+// fleet with the new group. A name that already belongs to another panel or
+// group is rejected here, keeping the selection intact so the user can retype.
 func (m model) commitGroup(name string) model {
 	if name == "" {
 		m.status = "a group needs a name"
@@ -193,6 +214,10 @@ func (m model) commitGroup(name string) model {
 	ids := m.markedIDs()
 	if len(ids) == 0 {
 		m.status = "no panels selected"
+		return m
+	}
+	if m.nameConflict(name, "", name) {
+		m.status = fmt.Sprintf("the name %q is already taken — pick another", name)
 		return m
 	}
 	m.sendf(proto.Command{Action: "panel.group", IDs: ids, Group: name})
@@ -264,10 +289,19 @@ func (m model) startRename() model {
 	return m
 }
 
-// commitRename sends the rename for whichever target startRename remembered.
+// commitRename sends the rename for whichever target startRename remembered. A
+// name that collides with another panel or group is rejected before sending and
+// the overlay stays open, seeded with the attempt, so the rename target is not
+// lost to a round-trip the server would only bounce.
 func (m model) commitRename(name string) model {
 	if name == "" {
 		m.status = "a name cannot be empty"
+		return m
+	}
+	if m.nameConflict(name, m.renameID, m.renameGroup) {
+		m.input = inputRename // keep the overlay open with the target remembered
+		m.inputBuf = name
+		m.status = fmt.Sprintf("the name %q is already taken — pick another", name)
 		return m
 	}
 	switch {
@@ -291,9 +325,10 @@ func (m model) zoomGroup(it dashItem) model {
 	m.groupName = it.name
 	m.groupFocus = 0
 	m.groupArmed = false
-	m.groupCols = 0 // auto-fit until the user dials columns in
+	m.groupCols = 0     // auto-fit until the user dials columns in
+	m.groupPinned = nil // pins are per-view; start from the default tile fill
 	m.attachGroupMembers()
-	m.status = fmt.Sprintf("group · %s (%d panels)", it.name, len(it.members))
+	m.status = fmt.Sprintf("group · %s (%d panels)", it.name, len(m.groupMembers()))
 	return m
 }
 

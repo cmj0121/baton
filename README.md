@@ -17,19 +17,33 @@ You hold the baton. The agents play. You conduct.
 | ------------- | ----------------------------------------------------------------------- |
 | **Panel**     | One live terminal — an _agent_ panel (an agent CLI) or a _shell_ panel. |
 | **Work item** | A named group of panels that belong to one task.                        |
-| **Dashboard** | The live grid of every panel, with status and a preview.                |
-| **Zoom**      | Focus one panel (or work item) and drive it as your only terminal.      |
+
+## Views
+
+You drive Baton through three views, moving between them with a keystroke:
+
+- **Dashboard** — mission control. A live grid (a tree once it gets crowded) of every panel with its status and a
+  preview. Here you navigate, spawn and close panels, and group them into work items.
+- **Group** — a work item's live split: its panels tiled side by side, all streaming at once. Pin a few to watch large
+  while the rest stay a navigable list, drive the focused one in place with **`i`**, or **`enter`** to drop into it.
+- **Zoom** — one panel as your only terminal. Keystrokes go straight to the program; the leader **`C-t`** is how you act
+  or step back out.
 
 ## Keys
 
-Keys are modal. On the dashboard and the group split every action is a **single key**; in a zoom keystrokes go to the
-program, so a Baton action is the leader **`C-t`** then the key. **`C-t d`** (dashboard), **`C-t g`** (group view), and
-**`C-t k`** (key map) work in every mode; **`q`** / **`C-t q`** detaches and leaves the server running; **`?`** shows the
-rebindable key list for the current view.
+Keys are modal: on the **dashboard** and in a **group** each action is a single key; in a **zoom** or **interact**
+keystrokes drive the program, so a Baton action is the leader **`C-t`** then the key. Press **`?`** for the full,
+rebindable list of the current view.
 
-Group from the dashboard: **`g`** mark, **`G`** group, **`a`** add, **`u`** ungroup, **`e`** rename — names stay unique
-unless you set `allow-name-conflict`. **`enter`** zooms a panel, or opens a group's live split: every member tiled at
-once, navigated with `tab`, `+`/`-`, `enter` to drop in, and `x` to remove one.
+| Context         | Keys                                                                          |
+| --------------- | ----------------------------------------------------------------------------- |
+| After `C-t`     | `d` dashboard, `g` group, `k` key map, `q` detach                             |
+| Dashboard       | `hjkl` move, `enter` open, `p` new panel, `c` new (pick cmd), `w` close       |
+| Dashboard group | `g` mark, `G` group, `a` add, `u` ungroup, `e` rename                         |
+| Group           | `tab` focus, `+`/`-` columns, `p` pin, `i` interact, `x` remove, `enter` zoom |
+| Zoom / interact | type to drive the program, `C-t C-t` sends a literal `C-t`                    |
+
+Names stay unique unless you set `allow-name-conflict`.
 
 ## Architecture
 

@@ -29,7 +29,7 @@ type Command struct {
 	Data   []byte   `json:"data,omitempty"` // input bytes for "panel.input"
 	Rows   int      `json:"rows,omitempty"` // window size for "panel.resize"
 	Cols   int      `json:"cols,omitempty"`
-	IDs    []string `json:"ids,omitempty"`   // panels to put in a work item, for "panel.group"
+	IDs    []string `json:"ids,omitempty"`   // panels to group ("panel.group"), remove ("panel.ungroup"), or close ("panel.close")
 	Group  string   `json:"group,omitempty"` // group name to assign ("panel.group"), or the group to rename ("panel.rename")
 	Name   string   `json:"name,omitempty"`  // new name for "panel.rename" (a panel title or a group name)
 }

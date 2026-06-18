@@ -9,6 +9,7 @@ import (
 	"net"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -234,7 +235,11 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		}
 		s.broadcast(s.panelsMsg())
 	case "panel.close":
-		if err := s.closePanel(cmd.ID); err != nil {
+		ids := cmd.IDs
+		if len(ids) == 0 && cmd.ID != "" {
+			ids = []string{cmd.ID} // back-compat: a single id still closes one panel
+		}
+		if err := s.closePanels(ids); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
@@ -314,6 +319,26 @@ func (s *Server) createPanel(kind, path string) error {
 	return nil
 }
 
+// closePanels closes every listed panel and broadcasts once for the whole batch
+// — closing a work item is one command, not one round-trip per member. Ids that
+// match no panel are skipped; it errors only when none matched, so closing a
+// group another client already thinned still retires the rest.
+func (s *Server) closePanels(ids []string) error {
+	if len(ids) == 0 {
+		return fmt.Errorf("panel.close needs an id")
+	}
+	closed := 0
+	for _, id := range ids {
+		if err := s.closePanel(id); err == nil {
+			closed++
+		}
+	}
+	if closed == 0 {
+		return fmt.Errorf("no panel matched the given ids")
+	}
+	return nil
+}
+
 // closePanel is a core action: it removes the panel with the given id from the
 // fleet and stops its backing process, if any.
 func (s *Server) closePanel(id string) error {
@@ -372,17 +397,12 @@ func (s *Server) purgeExited() int {
 // (the empty string means "ungrouped"); ids that match no panel are skipped, and
 // if none match at all it errors.
 func (s *Server) groupPanels(ids []string, name string) error {
+	name = strings.TrimSpace(name)
 	if name == "" {
 		return fmt.Errorf("panel.group needs a name")
 	}
 	if len(ids) == 0 {
 		return fmt.Errorf("panel.group needs at least one panel")
-	}
-	// The new name must not collide with another panel title or group; skipping
-	// the group of this same name lets the "add" action merge into an existing
-	// work item, which is intentional rather than a conflict.
-	if !s.allowNameConflict && s.nameTaken(name, "", name) {
-		return fmt.Errorf("the name %q is already taken", name)
 	}
 
 	want := make(map[string]struct{}, len(ids))
@@ -390,7 +410,16 @@ func (s *Server) groupPanels(ids []string, name string) error {
 		want[id] = struct{}{}
 	}
 
-	moved := s.setGroup(func(p panel.Panel) bool { _, ok := want[p.ID]; return ok }, name)
+	// Check the name and file the panels under one lock, so two clients racing the
+	// same name cannot both pass the uniqueness test before either writes. Skipping
+	// the group of this same name lets the "add" action merge into an existing work
+	// item, which is intentional rather than a conflict.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.allowNameConflict && s.nameTakenLocked(name, "", name) {
+		return fmt.Errorf("the name %q is already taken", name)
+	}
+	moved := s.setGroupLocked(func(p panel.Panel) bool { _, ok := want[p.ID]; return ok }, name)
 	if moved == 0 {
 		return fmt.Errorf("no panel matched the given ids")
 	}
@@ -398,15 +427,14 @@ func (s *Server) groupPanels(ids []string, name string) error {
 	return nil
 }
 
-// nameTaken reports whether name already identifies a different work item — a
-// panel title (other than skipID) or a group name (other than skipGroup). It is
-// the basis of the no-duplicate-names policy. An empty name never collides.
-func (s *Server) nameTaken(name, skipID, skipGroup string) bool {
+// nameTakenLocked reports whether name already identifies a different work item —
+// a panel title (other than skipID) or a group name (other than skipGroup). It is
+// the basis of the no-duplicate-names policy. An empty name never collides. The
+// caller must hold s.mu, so the check and the write it guards stay atomic.
+func (s *Server) nameTakenLocked(name, skipID, skipGroup string) bool {
 	if name == "" {
 		return false
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, p := range s.panels {
 		if p.ID != skipID && p.Title == name {
 			return true
@@ -419,10 +447,16 @@ func (s *Server) nameTaken(name, skipID, skipGroup string) bool {
 }
 
 // setGroup files every panel matching match under name, returning how many moved.
-// It holds the lock for the whole scan, the shared core of grouping and renaming.
+// It takes the lock itself, for callers (ungroup) that have no name to check.
 func (s *Server) setGroup(match func(panel.Panel) bool, name string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.setGroupLocked(match, name)
+}
+
+// setGroupLocked is the lock-free core of setGroup; the caller must hold s.mu so
+// a name check and the move it gates run as one atomic step.
+func (s *Server) setGroupLocked(match func(panel.Panel) bool, name string) int {
 	moved := 0
 	for i := range s.panels {
 		if match(s.panels[i]) {
@@ -468,6 +502,7 @@ func (s *Server) ungroup(ids []string, name string) error {
 // the Group on every member. Exactly one target must be given, and the new name
 // must be non-empty.
 func (s *Server) rename(id, group, name string) error {
+	name = strings.TrimSpace(name)
 	if name == "" {
 		return fmt.Errorf("panel.rename needs a name")
 	}
@@ -483,13 +518,15 @@ func (s *Server) rename(id, group, name string) error {
 	}
 }
 
-// renamePanel sets the title of the panel with the given id.
+// renamePanel sets the title of the panel with the given id. The uniqueness
+// check and the write happen under one lock so a racing rename cannot slip a
+// duplicate title past the test.
 func (s *Server) renamePanel(id, title string) error {
-	if !s.allowNameConflict && s.nameTaken(title, id, "") {
-		return fmt.Errorf("the name %q is already taken", title)
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.allowNameConflict && s.nameTakenLocked(title, id, "") {
+		return fmt.Errorf("the name %q is already taken", title)
+	}
 	for i := range s.panels {
 		if s.panels[i].ID == id {
 			s.panels[i].Title = title
@@ -502,12 +539,15 @@ func (s *Server) renamePanel(id, title string) error {
 
 // renameGroup rewrites the Group of every panel currently filed under old to the
 // new name. Renaming onto an existing group name merges the two — group identity
-// is the name itself.
+// is the name itself. The check and the rewrite share one lock so the merge
+// decision cannot race another rename.
 func (s *Server) renameGroup(old, name string) error {
-	if !s.allowNameConflict && s.nameTaken(name, "", old) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.allowNameConflict && s.nameTakenLocked(name, "", old) {
 		return fmt.Errorf("the name %q is already taken", name)
 	}
-	moved := s.setGroup(func(p panel.Panel) bool { return p.Group == old }, name)
+	moved := s.setGroupLocked(func(p panel.Panel) bool { return p.Group == old }, name)
 	if moved == 0 {
 		return fmt.Errorf("no panels in group %q", old)
 	}

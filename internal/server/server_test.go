@@ -577,6 +577,128 @@ func TestNameConflictPolicy(t *testing.T) {
 	})
 }
 
+// startServer spins a unix-socket server with opts and returns a client advanced
+// past the welcome + empty-snapshot handshake, with cleanups registered.
+func startServer(t *testing.T, opts ...server.Option) *client.Client {
+	t.Helper()
+	t.Setenv("SHELL", "/bin/sh")
+	dir, err := os.MkdirTemp("", "bt")
+	if err != nil {
+		t.Fatalf("tempdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "s.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() { _ = server.New(ln, opts...).Serve() }()
+
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	recv(t, c) // welcome
+	recv(t, c) // empty snapshot
+	return c
+}
+
+// createShells spawns n shell panels and returns their ids, one snapshot per
+// create.
+func createShells(t *testing.T, c *client.Client, n int) []string {
+	t.Helper()
+	ids := make([]string, n)
+	for i := 0; i < n; i++ {
+		if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+			t.Fatalf("create %d: %v", i, err)
+		}
+		ids[i] = recv(t, c).Panels[i].ID
+	}
+	return ids
+}
+
+// TestCloseGroupInOneCommand checks panel.close accepts a batch of ids and
+// broadcasts a single snapshot, so closing a whole work item is one command
+// rather than one round-trip per member (gap #6).
+func TestCloseGroupInOneCommand(t *testing.T) {
+	c := startServer(t)
+	ids := createShells(t, c, 3)
+
+	// Group the first two, then close the group in one command.
+	if err := c.Send(proto.Command{Action: "panel.group", IDs: ids[:2], Group: "work"}); err != nil {
+		t.Fatalf("group: %v", err)
+	}
+	recv(t, c)
+	if err := c.Send(proto.Command{Action: "panel.close", IDs: ids[:2]}); err != nil {
+		t.Fatalf("close group: %v", err)
+	}
+	got := recv(t, c)
+	if got.Type != "panels" {
+		t.Fatalf("a batch close should broadcast one panels snapshot, got %+v", got)
+	}
+	if len(got.Panels) != 1 || got.Panels[0].ID != ids[2] {
+		t.Fatalf("only the third panel should remain, got %+v", got.Panels)
+	}
+
+	// A single id still closes one panel (back-compat).
+	if err := c.Send(proto.Command{Action: "panel.close", ID: ids[2]}); err != nil {
+		t.Fatalf("close single: %v", err)
+	}
+	if got := recv(t, c); len(got.Panels) != 0 {
+		t.Fatalf("the last panel should be gone, got %+v", got.Panels)
+	}
+
+	// A batch of only-unknown ids errors and broadcasts nothing.
+	if err := c.Send(proto.Command{Action: "panel.close", IDs: []string{"ghost1", "ghost2"}}); err != nil {
+		t.Fatalf("close ghosts: %v", err)
+	}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("closing only-unknown ids should error, got %+v", msg)
+	}
+}
+
+// TestNamesAreTrimmed checks the server trims surrounding whitespace from group
+// and rename names, so " api " and "api" can never become two distinct work
+// items, and a whitespace-only name is rejected as empty (gap #9).
+func TestNamesAreTrimmed(t *testing.T) {
+	c := startServer(t)
+	a := createShells(t, c, 1)[0]
+
+	// Group under a padded name: it is stored trimmed.
+	if err := c.Send(proto.Command{Action: "panel.group", IDs: []string{a}, Group: "  api  "}); err != nil {
+		t.Fatalf("group: %v", err)
+	}
+	if g := panelByID(recv(t, c).Panels, a).Group; g != "api" {
+		t.Fatalf("the group name should be trimmed to %q, got %q", "api", g)
+	}
+
+	// Group rename with padding follows through trimmed.
+	if err := c.Send(proto.Command{Action: "panel.rename", Group: "api", Name: "  backend  "}); err != nil {
+		t.Fatalf("rename group: %v", err)
+	}
+	if g := panelByID(recv(t, c).Panels, a).Group; g != "backend" {
+		t.Fatalf("the renamed group should be trimmed to %q, got %q", "backend", g)
+	}
+
+	// Panel title rename trims too.
+	if err := c.Send(proto.Command{Action: "panel.rename", ID: a, Name: "  worker  "}); err != nil {
+		t.Fatalf("rename panel: %v", err)
+	}
+	if title := panelByID(recv(t, c).Panels, a).Title; title != "worker" {
+		t.Fatalf("the title should be trimmed to %q, got %q", "worker", title)
+	}
+
+	// A whitespace-only name is empty after trimming and rejected.
+	if err := c.Send(proto.Command{Action: "panel.rename", ID: a, Name: "   "}); err != nil {
+		t.Fatalf("rename blank: %v", err)
+	}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("a whitespace-only name should be rejected, got %+v", msg)
+	}
+}
+
 func TestMultiAttach(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	sock := filepath.Join(t.TempDir(), "baton.sock")
