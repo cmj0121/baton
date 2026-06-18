@@ -67,42 +67,14 @@ func activeState(s panel.State) bool {
 	return s == panel.Running || s == panel.Attention || s == panel.Spawning
 }
 
-// panelSpark is a panel's sparkline: the Monitor's live output-rate bars when the
-// server has reported them, falling back to the state-keyed placeholder for mock
-// panels or before the first telemetry tick.
-func panelSpark(p panel.Panel) string {
-	if p.Spark != "" {
-		return p.Spark
-	}
-	return sparkFor(p.State)
-}
-
 // groupSpark is the sparkline a work-item card animates with: the live bars of the
 // member the group rolls up to, so the card breathes with the panel that speaks
-// for it. Falls back to the rolled-up state's placeholder when no such member has
-// reported telemetry yet.
+// for it. Empty when no such member has reported telemetry yet.
 func groupSpark(members []panel.Panel, rollup panel.State) string {
 	for _, p := range members {
 		if p.State == rollup && p.Spark != "" {
 			return p.Spark
 		}
 	}
-	return sparkFor(rollup)
-}
-
-// sparkFor is a placeholder activity sparkline keyed on a panel's state, used
-// until the Monitor reports real output rates (mock panels, or the first tick).
-func sparkFor(s panel.State) string {
-	switch s {
-	case panel.Attention:
-		return "▂▃▅▇▆▃▁"
-	case panel.Running:
-		return "▃▅▆▇▆▅▃▅"
-	case panel.Idle:
-		return "▂▁▁▂▁▁▁▁"
-	case panel.Spawning:
-		return "▁▁▂▁▁▁▁▁"
-	default: // exited
-		return "▁▁▁▁▁▁▁▁"
-	}
+	return ""
 }

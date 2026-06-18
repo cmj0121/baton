@@ -78,29 +78,3 @@ func TestProtoRoundTrip(t *testing.T) {
 		t.Fatal("FromProto state decode failed")
 	}
 }
-
-func TestMockFleet(t *testing.T) {
-	m := Mock()
-	if len(m) < 1 {
-		t.Fatal("Mock fleet should be non-empty")
-	}
-	seen := map[string]bool{}
-	agents, shells := 0, 0
-	for _, p := range m {
-		if p.ID == "" || p.Title == "" {
-			t.Errorf("mock panel missing id/title: %+v", p)
-		}
-		if seen[p.ID] {
-			t.Errorf("duplicate mock id %q", p.ID)
-		}
-		seen[p.ID] = true
-		if p.IsAgent() {
-			agents++
-		} else {
-			shells++
-		}
-	}
-	if agents == 0 || shells == 0 {
-		t.Fatalf("mock fleet should mix agents and shells, got %d/%d", agents, shells)
-	}
-}

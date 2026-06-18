@@ -39,7 +39,7 @@ func press(m model, keys ...string) model {
 }
 
 func TestCloseRequiresConfirmation(t *testing.T) {
-	m := model{fleet: panel.Mock(), confirmClose: true}
+	m := model{fleet: sampleFleet(), confirmClose: true}
 	before := len(m.fleet)
 
 	// prefix + w arms the confirmation but does not close yet.
@@ -62,7 +62,7 @@ func TestCloseRequiresConfirmation(t *testing.T) {
 }
 
 func TestCloseCancelsOnAnyOtherKey(t *testing.T) {
-	m := model{fleet: panel.Mock(), confirmClose: true}
+	m := model{fleet: sampleFleet(), confirmClose: true}
 	before := len(m.fleet)
 
 	m = press(m, "w", "n")
@@ -79,7 +79,7 @@ func TestCloseCancelsOnAnyOtherKey(t *testing.T) {
 
 func TestConfirmToggleSkipsPrompt(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // toggling persists to $HOME/.baton/config
-	m := model{mode: modeKeyMap, fleet: panel.Mock(), confirmClose: true}
+	m := model{mode: modeKeyMap, fleet: sampleFleet(), confirmClose: true}
 	// Move the cursor onto the settings toggle (after the prefix + bindings) and
 	// flip it off.
 	m.cursor = len(bindings) + 1
@@ -102,7 +102,7 @@ func TestConfirmToggleSkipsPrompt(t *testing.T) {
 }
 
 func TestTabCyclesSelection(t *testing.T) {
-	m := model{mode: modeDashboard, fleet: panel.Mock(), width: 110}
+	m := model{mode: modeDashboard, fleet: sampleFleet(), width: 110}
 	m = press(m, "tab", "tab")
 	if m.cursor != 2 {
 		t.Fatalf("expected cursor at 2 after two tabs, got %d", m.cursor)
@@ -112,7 +112,7 @@ func TestTabCyclesSelection(t *testing.T) {
 // TestTabWrapsOnDashboard checks tab/shift+tab wrap at the ends on the dashboard,
 // matching the group split's focus ring.
 func TestTabWrapsOnDashboard(t *testing.T) {
-	m := model{mode: modeDashboard, fleet: panel.Mock(), width: 110}
+	m := model{mode: modeDashboard, fleet: sampleFleet(), width: 110}
 	last := m.itemCount() - 1
 
 	// shift+tab from the first item wraps to the last.
@@ -129,7 +129,7 @@ func TestTabWrapsOnDashboard(t *testing.T) {
 
 func TestRebindKeyByTyping(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // rebinding persists to $HOME/.baton/config
-	m := model{mode: modeKeyMap, fleet: panel.Mock(), binds: append([]binding(nil), bindings...)}
+	m := model{mode: modeKeyMap, fleet: sampleFleet(), binds: append([]binding(nil), bindings...)}
 	m.cursor = 1 // row 0 is the prefix; row 1 is the spawn binding (default "p")
 
 	// e arms the capture; it does not change anything yet.
@@ -160,7 +160,7 @@ func TestRebindPersistsToConfig(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	// Rebind spawn from p to x, which writes the config file as a side effect.
-	m := model{mode: modeKeyMap, fleet: panel.Mock(), binds: append([]binding(nil), bindings...)}
+	m := model{mode: modeKeyMap, fleet: sampleFleet(), binds: append([]binding(nil), bindings...)}
 	m.cursor = 1 // the spawn binding (row 0 is the prefix)
 	press(m, "e", "x")
 
@@ -198,7 +198,7 @@ func TestConfirmTogglePersists(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	// Default is on; toggle it off on the settings row.
-	m := model{mode: modeKeyMap, fleet: panel.Mock(), confirmClose: true, binds: append([]binding(nil), bindings...)}
+	m := model{mode: modeKeyMap, fleet: sampleFleet(), confirmClose: true, binds: append([]binding(nil), bindings...)}
 	m.cursor = len(bindings) + 1 // prefix row + bindings, then the settings toggle
 	press(m, "enter")
 
@@ -208,7 +208,7 @@ func TestConfirmTogglePersists(t *testing.T) {
 }
 
 func TestRebindCancelsOnEsc(t *testing.T) {
-	m := model{mode: modeKeyMap, fleet: panel.Mock(), binds: append([]binding(nil), bindings...)}
+	m := model{mode: modeKeyMap, fleet: sampleFleet(), binds: append([]binding(nil), bindings...)}
 	m.cursor = 1 // the spawn binding (row 0 is the prefix)
 	m = press(m, "e", "esc")
 	if m.editing {
@@ -223,7 +223,7 @@ func TestChangePrefixKey(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	// Edit the prefix row (row 0) and type a new leader key.
-	m := model{mode: modeKeyMap, fleet: panel.Mock(), prefixKey: keyPrefix, binds: append([]binding(nil), bindings...)}
+	m := model{mode: modeKeyMap, fleet: sampleFleet(), prefixKey: keyPrefix, binds: append([]binding(nil), bindings...)}
 	m.cursor = 0
 	m = press(m, "e", "ctrl+a")
 	if m.editing {
@@ -249,7 +249,7 @@ func TestChangePrefixKey(t *testing.T) {
 }
 
 func TestRestartBindingFlagsRestart(t *testing.T) {
-	m := model{mode: modeDashboard, fleet: panel.Mock()}
+	m := model{mode: modeDashboard, fleet: sampleFleet()}
 	if m.RestartRequested() {
 		t.Fatal("a fresh model should not request a restart")
 	}
@@ -305,12 +305,12 @@ func TestScrollWindowKeepsCursorVisible(t *testing.T) {
 }
 
 func TestTreeViewKicksInForLargeFleet(t *testing.T) {
-	full := model{fleet: panel.Mock()}
+	full := model{fleet: sampleFleet()}
 	if !full.treeView() {
 		t.Fatalf("fleet of %d should use the tree view", len(full.fleet))
 	}
 
-	small := model{fleet: panel.Mock()[:treeThreshold]}
+	small := model{fleet: sampleFleet()[:treeThreshold]}
 	if small.treeView() {
 		t.Fatalf("fleet of %d should use the card grid", len(small.fleet))
 	}

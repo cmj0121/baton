@@ -188,7 +188,7 @@ func (m *Manager) StartShell(id string) error { return m.Start(id, "") }
 
 // Stop terminates the PTY backing the given panel id, if any. Closing the
 // master hangs up the child; the pump then reaps it. Safe to call for an unknown
-// id (e.g. a mock panel with no real process).
+// id (a panel with no live process).
 func (m *Manager) Stop(id string) { m.remove(id) }
 
 func (m *Manager) remove(id string) {

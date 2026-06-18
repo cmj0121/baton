@@ -1,10 +1,10 @@
 // Package panel defines baton's core panel model: one live terminal that runs
 // either a shell or an agent, together with the Monitor's view of its lifecycle.
 //
-// Panels are mock data today — they populate the dashboard before the server
-// reports anything real. The struct is shaped so the core can later own panels
-// and operate on them directly: group them into work items, signal their
-// processes, retire them, and so on.
+// A Panel is the real, server-fed model: the server owns the fleet and reports it
+// to every frontend, which renders it as-is. The struct is shaped so the core can
+// operate on panels directly — group them into work items, signal their processes,
+// retire them, and so on.
 package panel
 
 import "github.com/cmj0121/baton/internal/proto"
@@ -119,20 +119,5 @@ func (p Panel) ToProto() proto.Panel {
 		Group:    p.Group,
 		Activity: p.Activity,
 		Spark:    p.Spark,
-	}
-}
-
-// Mock returns a believable fleet of shells and agents used to populate the
-// dashboard before (and alongside) the first real server snapshot.
-func Mock() []Panel {
-	return []Panel{
-		{ID: "a1", Kind: Agent, Title: "claude · refactor auth", State: Attention, Activity: "needs you · 8m"},
-		{ID: "a2", Kind: Agent, Title: "claude · write tests", State: Running, Activity: "streaming · 3m"},
-		{ID: "a3", Kind: Agent, Title: "copilot · api docs", State: Idle, Activity: "waiting · 21m"},
-		{ID: "s1", Kind: Shell, Title: "shell · make build", State: Running, Activity: "building · 1m"},
-		{ID: "s2", Kind: Shell, Title: "shell · tail logs", State: Idle, Activity: "quiet · 12m"},
-		{ID: "a4", Kind: Agent, Title: "claude · review PR", State: Spawning, Activity: "spawning · 2s"},
-		{ID: "s3", Kind: Shell, Title: "shell · run server", State: Running, Activity: "serving · 44m"},
-		{ID: "a5", Kind: Agent, Title: "claude · migrate db", State: Exited, Activity: "exit 0 · done"},
 	}
 }

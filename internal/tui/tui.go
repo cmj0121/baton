@@ -1362,7 +1362,7 @@ func (m model) renderCard(p panel.Panel, selected bool) string {
 	state := lipgloss.NewStyle().Foreground(info.color).Render(info.label)
 	kindLine := badge + "  " + state
 
-	spark := lipgloss.NewStyle().Foreground(info.color).Render(panelSpark(p))
+	spark := lipgloss.NewStyle().Foreground(info.color).Render(p.Spark)
 	footer := spark + "  " + mutedStyle.Render(truncate(p.Activity, cardInner-lipgloss.Width(spark)-2))
 
 	style := lipgloss.NewStyle().
@@ -1498,8 +1498,8 @@ func (m model) renderTree(items []dashItem, start, end, visible int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
-// renderPreview is the right pane: a metadata block plus an output tail for the
-// selected panel, or a member roster for the selected group.
+// renderPreview is the right pane: a metadata block for the selected panel, or a
+// member roster for the selected group.
 func (m model) renderPreview(items []dashItem, width int) string {
 	if m.cursor < 0 || m.cursor >= len(items) {
 		return mutedStyle.Render("no panel selected")
@@ -1520,17 +1520,10 @@ func (m model) renderPreview(items []dashItem, width int) string {
 		metaRow("state", info.label, info.color),
 		metaRow("kind", p.Kind.String(), colInk),
 		metaRow("activity", p.Activity, colInk),
-		metaRow("signal", panelSpark(p), info.color),
+		metaRow("signal", p.Spark, info.color),
 	)
 
-	out := []string{mutedStyle.Render(spaced("OUTPUT"))}
-	for _, line := range previewLines(p) {
-		out = append(out, mutedStyle.Render(truncate(line, width)))
-	}
-
-	return lipgloss.JoinVertical(lipgloss.Left,
-		title, statusLine, rule, meta, "", lipgloss.JoinVertical(lipgloss.Left, out...),
-	)
+	return lipgloss.JoinVertical(lipgloss.Left, title, statusLine, rule, meta)
 }
 
 // metaRow formats one aligned "label  value" line for the preview pane.
@@ -1538,25 +1531,6 @@ func metaRow(label, value string, valColor lipgloss.Color) string {
 	l := mutedStyle.Render(fmt.Sprintf("%-9s", label))
 	v := lipgloss.NewStyle().Foreground(valColor).Render(value)
 	return l + " " + v
-}
-
-// previewLines fakes a short tail of recent output, shaped by the panel's kind
-// and state, so the preview pane reads like a live window.
-func previewLines(p panel.Panel) []string {
-	switch {
-	case p.State == panel.Attention:
-		return []string{"▌ I need your input to continue:", "▌ > Apply the proposed changes? (y/n)"}
-	case p.State == panel.Exited:
-		return []string{"$ done — process exited cleanly", "  (press C-t w to dismiss)"}
-	case p.Kind == panel.Shell && p.State == panel.Running:
-		return []string{"$ go build ./...", "  compiling internal/tui …", "  ok  0.6s"}
-	case p.Kind == panel.Shell:
-		return []string{"$ tail -f app.log", "  (no new lines)"}
-	case p.State == panel.Idle:
-		return []string{"… waiting for the next instruction", "  idle"}
-	default:
-		return []string{"› thinking …", "› drafting the next edit", "› streaming tokens ▁▂▃▅▇"}
-	}
 }
 
 // helpView is the read-only key list for the current stage — the keys that view

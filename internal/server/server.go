@@ -473,7 +473,7 @@ func (s *Server) closePanel(id string) error {
 	s.mon.forget(id)
 	s.mu.Unlock()
 
-	s.pty.Stop(id) // no-op for mock panels with no real process
+	s.pty.Stop(id) // no-op for a panel with no live process
 	log.Info().Str("panel", title).Msg("panel closed")
 	return nil
 }

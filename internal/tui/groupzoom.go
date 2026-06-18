@@ -698,19 +698,17 @@ func (m model) renderTile(p panel.Panel, focused bool, emuCols, emuRows int) str
 }
 
 // tileBody is a tile's content rows, always exactly emuRows tall: the member's
-// live screen when it is streaming, or its preview tail before output lands (and
-// when there is no client, as in tests). When showCursor is set — the tile being
-// interacted with — a reverse-video cell is drawn at the emulator's cursor, so
-// you can see where your typing lands, exactly as the single zoom does.
+// live screen when it is streaming, or a one-line activity note before output
+// lands (and when there is no client, as in tests). When showCursor is set — the
+// tile being interacted with — a reverse-video cell is drawn at the emulator's
+// cursor, so you can see where your typing lands, exactly as the single zoom does.
 func (m model) tileBody(p panel.Panel, emuCols, emuRows int, showCursor bool) []string {
 	emu := m.groupEmus[p.ID]
 	var src []string
 	if emu != nil {
 		src = strings.Split(emu.Render(), "\n")
-	} else {
-		for _, line := range previewLines(p) {
-			src = append(src, mutedStyle.Render(truncate(line, emuCols)))
-		}
+	} else if p.Activity != "" {
+		src = []string{mutedStyle.Render(truncate(p.Activity, emuCols))}
 	}
 	rows := make([]string, emuRows) // pad/clip to a fixed tile height; copy stops at min
 	copy(rows, src)
