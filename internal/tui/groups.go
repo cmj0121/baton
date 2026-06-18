@@ -359,7 +359,13 @@ func (m model) renderGroupCard(it dashItem, selected bool) string {
 	// "2 agent · 1 shell" — not just how many panels.
 	kindLine := badge + "  " + kindBreakdown(it.members)
 
+	// The footer is the per-state chips, led by a sparkline in the group's rolled-up
+	// colour while it is active — so a working group animates like a panel card.
 	footer := groupCountChips(it.members)
+	if activeState(st) {
+		spark := lipgloss.NewStyle().Foreground(info.color).Render(sparkFor(st))
+		footer = spark + "  " + footer
+	}
 
 	style := lipgloss.NewStyle().
 		Width(cardWidth-2).

@@ -413,6 +413,22 @@ func TestFleetBreakdownCountsGroups(t *testing.T) {
 	}
 }
 
+// TestGroupCardSparklineWhenActive checks a group card animates with the
+// rolled-up sparkline while active, and stays still (chips only) when done.
+func TestGroupCardSparklineWhenActive(t *testing.T) {
+	m := baseModel()
+
+	active := dashItem{kind: itemGroup, name: "api", members: []panel.Panel{{State: panel.Running}}}
+	if !strings.Contains(m.renderGroupCard(active, false), sparkFor(panel.Running)) {
+		t.Fatal("an active group card should show its sparkline")
+	}
+
+	done := dashItem{kind: itemGroup, name: "db", members: []panel.Panel{{State: panel.Exited}}}
+	if strings.Contains(m.renderGroupCard(done, false), sparkFor(panel.Running)) {
+		t.Fatal("a done group card should not animate")
+	}
+}
+
 func TestGroupOverlaysRender(t *testing.T) {
 	for _, in := range []inputPurpose{inputGroupName, inputRename} {
 		m := baseModel()

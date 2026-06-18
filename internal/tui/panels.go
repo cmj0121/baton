@@ -60,6 +60,13 @@ func mergeFleet(panels []proto.Panel) []panel.Panel {
 	return out
 }
 
+// activeState reports whether a state is live enough to animate — running,
+// attention, or spawning — as opposed to resting (idle) or done (exited). A
+// group shows its sparkline only when it rolls up to one of these.
+func activeState(s panel.State) bool {
+	return s == panel.Running || s == panel.Attention || s == panel.Spawning
+}
+
 // sparkFor is a placeholder activity sparkline keyed on a panel's state, derived
 // at render time until the Monitor reports real output rates.
 func sparkFor(s panel.State) string {
