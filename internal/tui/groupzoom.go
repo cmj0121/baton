@@ -575,10 +575,10 @@ func (m model) backToGroup() (tea.Model, tea.Cmd) {
 // to the last line.
 func (m model) groupZoomView() string {
 	tiles, tree := m.splitMembers()
-	total := len(tiles) + len(tree)
+	members := append(append([]panel.Panel{}, tiles...), tree...)
 	header := sectionStyle.Render(spaced("GROUP")) + "  " +
 		lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(m.groupName) +
-		mutedStyle.Render(fmt.Sprintf("   %d panel(s)", total))
+		mutedStyle.Render(fmt.Sprintf("   %d panel(s)  ", len(members))) + kindBreakdown(members)
 	if len(tree) > 0 {
 		header += lipgloss.NewStyle().Foreground(states[panel.Idle].color).
 			Render(fmt.Sprintf("   · %d live · %d in list", len(tiles), len(tree)))

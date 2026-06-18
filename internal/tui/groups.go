@@ -355,8 +355,9 @@ func (m model) renderGroupCard(it dashItem, selected bool) string {
 	head := mark + glyph + " " + name
 
 	badge := groupBadge()
-	count := mutedStyle.Render(fmt.Sprintf("%d panel(s)", len(it.members)))
-	kindLine := badge + "  " + count
+	// Split the member count by kind, so a card says what kind of work it holds —
+	// "2 agent · 1 shell" — not just how many panels.
+	kindLine := badge + "  " + kindBreakdown(it.members)
 
 	footer := groupCountChips(it.members)
 
@@ -375,7 +376,8 @@ func (m model) renderGroupCard(it dashItem, selected bool) string {
 // state, so the group reads as a unit before you zoom in.
 func (m model) renderGroupPreview(it dashItem, width int) string {
 	title := lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(truncate(it.title(), width))
-	statusLine := groupBadge() + "  " + mutedStyle.Render(fmt.Sprintf("%d panel(s)", len(it.members)))
+	statusLine := groupBadge() + "  " +
+		mutedStyle.Render(fmt.Sprintf("%d panel(s)", len(it.members))) + "  " + kindBreakdown(it.members)
 	rule := mutedStyle.Render(strings.Repeat("─", width))
 
 	roster := make([]string, 0, len(it.members)+1)
@@ -395,6 +397,44 @@ func (m model) renderGroupPreview(it dashItem, width int) string {
 // groupBadge tags a card as a work item, mirroring kindBadge's look.
 func groupBadge() string {
 	return lipgloss.NewStyle().Foreground(colDark).Background(colBrand).Bold(true).Padding(0, 1).Render("GROUP")
+}
+
+// kindBreakdown summarises panels by kind — "2 agent · 1 shell" — in the kind
+// colours, showing only the kinds present. A single em dash when there are none.
+func kindBreakdown(panels []panel.Panel) string {
+	agents, shells := kindCounts(panels)
+	parts := make([]string, 0, 2)
+	if agents > 0 {
+		parts = append(parts, lipgloss.NewStyle().Foreground(colAgent).Render(fmt.Sprintf("%d agent", agents)))
+	}
+	if shells > 0 {
+		parts = append(parts, lipgloss.NewStyle().Foreground(colShell).Render(fmt.Sprintf("%d shell", shells)))
+	}
+	if len(parts) == 0 {
+		return mutedStyle.Render("—")
+	}
+	return strings.Join(parts, mutedStyle.Render(" · "))
+}
+
+// fleetBreakdown summarises the whole dashboard: the panels by kind plus how many
+// items are work-item groups, so "5 agent · 3 shell · 2 group" reads the makeup at
+// a glance. Empty for an empty fleet; the group count is dropped when there are
+// none.
+func fleetBreakdown(fleet []panel.Panel, items []dashItem) string {
+	if len(fleet) == 0 {
+		return ""
+	}
+	parts := []string{kindBreakdown(fleet)}
+	groups := 0
+	for _, it := range items {
+		if it.kind == itemGroup {
+			groups++
+		}
+	}
+	if groups > 0 {
+		parts = append(parts, lipgloss.NewStyle().Foreground(colBrand).Render(fmt.Sprintf("%d group", groups)))
+	}
+	return strings.Join(parts, mutedStyle.Render(" · "))
 }
 
 // groupCountChips renders a compact per-state tally for a group's members, e.g.

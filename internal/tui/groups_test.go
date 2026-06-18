@@ -382,6 +382,37 @@ func TestSnapshotInKeyMapKeepsRowCursor(t *testing.T) {
 	}
 }
 
+// TestKindBreakdown checks the agent/shell split shows only the kinds present.
+func TestKindBreakdown(t *testing.T) {
+	got := kindBreakdown([]panel.Panel{{Kind: panel.Agent}, {Kind: panel.Agent}, {Kind: panel.Shell}})
+	if !strings.Contains(got, "2 agent") || !strings.Contains(got, "1 shell") {
+		t.Fatalf("kindBreakdown = %q, want 2 agent / 1 shell", got)
+	}
+	if got := kindBreakdown([]panel.Panel{{Kind: panel.Shell}}); strings.Contains(got, "agent") {
+		t.Fatalf("a shell-only set should not mention agents, got %q", got)
+	}
+	if got := kindBreakdown(nil); !strings.Contains(got, "—") {
+		t.Fatalf("empty should be a dash, got %q", got)
+	}
+}
+
+// TestFleetBreakdownCountsGroups checks the dashboard breakdown splits by kind and
+// counts work-item groups, and is empty for an empty fleet.
+func TestFleetBreakdownCountsGroups(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet() // groups api + db, agents and shells mixed
+	got := fleetBreakdown(m.fleet, m.dashItems())
+	if !strings.Contains(got, "2 group") {
+		t.Fatalf("fleetBreakdown should count the 2 groups, got %q", got)
+	}
+	if !strings.Contains(got, "agent") || !strings.Contains(got, "shell") {
+		t.Fatalf("fleetBreakdown should split the kinds, got %q", got)
+	}
+	if got := fleetBreakdown(nil, nil); got != "" {
+		t.Fatalf("an empty fleet should yield an empty breakdown, got %q", got)
+	}
+}
+
 func TestGroupOverlaysRender(t *testing.T) {
 	for _, in := range []inputPurpose{inputGroupName, inputRename} {
 		m := baseModel()

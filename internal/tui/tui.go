@@ -1217,7 +1217,8 @@ func (m model) zoomView() string {
 // space-efficient tree + preview split.
 func (m model) dashboardView() string {
 	items := m.dashItems() // built once and threaded through the render below
-	heading := sectionStyle.Render(spaced("FLEET")) + mutedStyle.Render(fmt.Sprintf("   %d panel(s)", len(m.fleet)))
+	heading := sectionStyle.Render(spaced("FLEET")) +
+		mutedStyle.Render(fmt.Sprintf("   %d panel(s)  ", len(m.fleet))) + fleetBreakdown(m.fleet, items)
 	summary := m.summaryStrip()
 	body := m.cardGrid(items)
 	if len(items) > treeThreshold {

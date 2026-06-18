@@ -37,6 +37,18 @@ func stateCounts(panels []panel.Panel) map[panel.State]int {
 	return counts
 }
 
+// kindCounts tallies panels by kind, the shared input to a kind breakdown.
+func kindCounts(panels []panel.Panel) (agents, shells int) {
+	for _, p := range panels {
+		if p.IsAgent() {
+			agents++
+		} else {
+			shells++
+		}
+	}
+	return agents, shells
+}
+
 // mergeFleet maps a server snapshot into the dashboard's panel model. The server
 // owns the fleet now, so this is a faithful translation — whatever it sends is
 // what the cockpit shows.
