@@ -592,6 +592,18 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "right", "l":
 		m.move(1)
 		return m, nil
+	case "shift+up", "shift+left":
+		// Reorder the selected item earlier on the dashboard (no effect in the
+		// single-column overlays, which are not user-orderable).
+		if m.mode == modeDashboard {
+			return m.reorderDashItem(-1), nil
+		}
+		return m, nil
+	case "shift+down", "shift+right":
+		if m.mode == modeDashboard {
+			return m.reorderDashItem(1), nil
+		}
+		return m, nil
 	case "tab":
 		// In the key map, tab jumps to the next purpose section; elsewhere it
 		// cycles the selection forward, wrapping like the group split's focus.
@@ -1579,6 +1591,7 @@ func (m model) helpView() string {
 		title = "DASHBOARD"
 		rows = []helpRow{
 			{"Navigation", kc("hjkl") + " " + kc("↑↓←→"), "move"},
+			{"Navigation", kc("S-←") + " " + kc("S-→"), "reorder the selected item"},
 			{"Navigation", kc("enter"), "open / zoom"},
 			{"Navigation", kc("esc"), "clear the selection"},
 		}

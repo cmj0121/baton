@@ -352,6 +352,12 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			return
 		}
 		s.broadcast(s.panelsMsg())
+	case "panel.move":
+		if err := s.movePanels(cmd.IDs, cmd.Index); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		s.broadcast(s.panelsMsg())
 	case "panel.attach":
 		s.attach(cc, cmd.ID)
 	case "panel.detach":
@@ -664,6 +670,54 @@ func (s *Server) renameGroup(old, name string) error {
 		return fmt.Errorf("no panels in group %q", old)
 	}
 	log.Info().Str("from", old).Str("to", name).Int("panels", moved).Msg("group renamed")
+	return nil
+}
+
+// movePanels is a core action that reorders the fleet: it lifts the panels named
+// in ids out as a block (keeping their current relative order) and reinserts them
+// at index among the remaining panels. Fleet order is the single source of truth
+// every frontend renders from — the dashboard's item order and a group's member
+// order both follow it — so reordering here moves items in every view at once and
+// for every attached client. The index is clamped into range; ids that match no
+// panel are ignored, and it errors only when none match. A moved group's members
+// land contiguously, which is a tidy side effect rather than a requirement.
+func (s *Server) movePanels(ids []string, index int) error {
+	if len(ids) == 0 {
+		return fmt.Errorf("panel.move needs at least one panel")
+	}
+	want := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	block := make([]panel.Panel, 0, len(ids))
+	rest := make([]panel.Panel, 0, len(s.panels))
+	for _, p := range s.panels {
+		if _, ok := want[p.ID]; ok {
+			block = append(block, p)
+		} else {
+			rest = append(rest, p)
+		}
+	}
+	if len(block) == 0 {
+		return fmt.Errorf("no panel matched the given ids")
+	}
+	if index < 0 {
+		index = 0
+	}
+	if index > len(rest) {
+		index = len(rest)
+	}
+
+	out := make([]panel.Panel, 0, len(s.panels))
+	out = append(out, rest[:index]...)
+	out = append(out, block...)
+	out = append(out, rest[index:]...)
+	s.panels = out
+
+	log.Info().Int("panels", len(block)).Int("index", index).Msg("panels reordered")
 	return nil
 }
 

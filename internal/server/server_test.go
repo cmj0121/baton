@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -846,5 +847,84 @@ func TestMultiAttach(t *testing.T) {
 	// Detach-all (empty id) clears the rest.
 	if err := c.Send(proto.Command{Action: "panel.detach"}); err != nil {
 		t.Fatalf("detach all: %v", err)
+	}
+}
+
+// orderIDs is the fleet's panel ids in broadcast (and thus fleet) order.
+func orderIDs(panels []proto.Panel) []string {
+	ids := make([]string, len(panels))
+	for i, p := range panels {
+		ids[i] = p.ID
+	}
+	return ids
+}
+
+// TestMovePanels reorders the fleet: a block is lifted out and reinserted at the
+// given index, which drives both the dashboard's item order and a group's member
+// order since every frontend renders from this one order.
+func TestMovePanels(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	sock := filepath.Join(t.TempDir(), "baton.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() { _ = server.New(ln).Serve() }()
+
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	recv(t, c) // welcome
+	recv(t, c) // empty panels
+
+	// Three panels, in creation order a, b, c.
+	var ids []string
+	for range 3 {
+		if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		ids = append(ids, recv(t, c).Panels[len(ids)].ID)
+	}
+	a, b, cID := ids[0], ids[1], ids[2]
+
+	// Move a to the end: order becomes b, c, a.
+	if err := c.Send(proto.Command{Action: "panel.move", IDs: []string{a}, Index: 2}); err != nil {
+		t.Fatalf("move a: %v", err)
+	}
+	if got, want := orderIDs(recv(t, c).Panels), []string{b, cID, a}; !slices.Equal(got, want) {
+		t.Fatalf("after moving a to the end: order %v, want %v", got, want)
+	}
+
+	// Move c to the front: order becomes c, b, a.
+	if err := c.Send(proto.Command{Action: "panel.move", IDs: []string{cID}, Index: 0}); err != nil {
+		t.Fatalf("move c: %v", err)
+	}
+	if got, want := orderIDs(recv(t, c).Panels), []string{cID, b, a}; !slices.Equal(got, want) {
+		t.Fatalf("after moving c to the front: order %v, want %v", got, want)
+	}
+
+	// An out-of-range index clamps to the end rather than erroring.
+	if err := c.Send(proto.Command{Action: "panel.move", IDs: []string{cID}, Index: 99}); err != nil {
+		t.Fatalf("move c clamp: %v", err)
+	}
+	if got, want := orderIDs(recv(t, c).Panels), []string{b, a, cID}; !slices.Equal(got, want) {
+		t.Fatalf("after clamped move: order %v, want %v", got, want)
+	}
+
+	// No ids is an error; an unknown id matches nothing and also errors.
+	if err := c.Send(proto.Command{Action: "panel.move"}); err != nil {
+		t.Fatalf("send empty move: %v", err)
+	}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("move with no ids should error, got %+v", msg)
+	}
+	if err := c.Send(proto.Command{Action: "panel.move", IDs: []string{"ghost"}, Index: 0}); err != nil {
+		t.Fatalf("send ghost move: %v", err)
+	}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("move of an unknown id should error, got %+v", msg)
 	}
 }
