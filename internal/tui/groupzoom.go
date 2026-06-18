@@ -502,7 +502,8 @@ func (m model) adjustGroupCols(delta int) model {
 	cols, _, _ := m.tileGeometry() // the current effective column count
 	// Cap columns at one per live tile and at whatever keeps a tile above the
 	// width floor, so dialling up never collapses the grid into unreadable slivers.
-	floorCols := max(1, (m.width+gtileGap)/(gtileFloorW+gtileGap))
+	// Use the grid's own width, which the tree pane narrows when it is shown.
+	floorCols := max(1, (m.gridWidth()+gtileGap)/(gtileFloorW+gtileGap))
 	maxCols := min(len(m.liveMembers()), floorCols)
 	m.groupCols = max(1, min(cols+delta, maxCols))
 	m.resizeGroupTiles()
@@ -634,7 +635,7 @@ func (m model) renderGroupTree(tree []panel.Panel, focusIdx, height int) string 
 		BorderForeground(colFaint).
 		Padding(0, 1).
 		Width(groupTreeWidth - 2).
-		Height(height).
+		Height(max(1, height-2)). // the border adds the 2 rows back, matching the grid
 		Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
 
@@ -671,15 +672,21 @@ func (m model) renderTile(p panel.Panel, focused bool, emuCols, emuRows int) str
 	}
 
 	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
-	title := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(p.Title, emuCols-3))
-	head := led + " " + title
-	if m.groupPinned[p.ID] { // mark a pinned tile so it reads apart from auto-filled ones
-		head = lipgloss.NewStyle().Foreground(colBrandHi).Render("⊙") + " " + head
-	}
-	if interacting {
+	// Build the head's leading markers first — an interact badge, else a pin glyph —
+	// then fit the title in whatever width is left, so a long title never wraps the
+	// head onto a second row.
+	prefix := led + " "
+	switch {
+	case interacting:
 		badge := lipgloss.NewStyle().Foreground(colDark).Background(colGreen).Bold(true).Render(" ⌨ ")
-		head = badge + " " + led + " " + title
+		prefix = badge + " " + led + " "
+	case m.groupPinned[p.ID]:
+		pin := lipgloss.NewStyle().Foreground(colBrandHi).Render("⊙")
+		prefix = pin + " " + led + " "
 	}
+	title := lipgloss.NewStyle().Foreground(titleColor).Bold(true).
+		Render(truncate(p.Title, max(1, emuCols-lipgloss.Width(prefix))))
+	head := prefix + title
 
 	box := lipgloss.NewStyle().
 		Width(emuCols+2). // inner content + padding; the border adds the last 2

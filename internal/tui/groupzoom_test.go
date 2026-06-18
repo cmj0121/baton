@@ -6,11 +6,36 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	vt "github.com/charmbracelet/x/vt"
 
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 )
+
+// TestRenderTileHeadStaysOneRow guards against a long title (with a pin glyph or
+// interact badge taking head space) wrapping the head onto a second row: a tile
+// is exactly head (1) + body (emuRows) + border (2) tall.
+func TestRenderTileHeadStaysOneRow(t *testing.T) {
+	const emuCols, emuRows = 24, 5
+	long := "claude · refactor the auth module and write the tests"
+	for _, tc := range []struct {
+		name string
+		mut  func(*model, panel.Panel)
+	}{
+		{"pinned", func(m *model, p panel.Panel) { m.groupPinned = map[string]bool{p.ID: true} }},
+		{"interacting", func(m *model, _ panel.Panel) { m.groupInteract = true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := baseModel()
+			p := panel.Panel{ID: "x", Title: long, State: panel.Running}
+			tc.mut(&m, p)
+			if h := lipgloss.Height(m.renderTile(p, true, emuCols, emuRows)); h != emuRows+3 {
+				t.Fatalf("head should stay one row: tile height %d, want %d", h, emuRows+3)
+			}
+		})
+	}
+}
 
 func TestGroupMembers(t *testing.T) {
 	m := baseModel()
