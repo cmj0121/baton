@@ -350,6 +350,83 @@ func TestLiveMembersCap(t *testing.T) {
 	}
 }
 
+// bigGroup is a group of n members all filed under name, for the cap and overflow
+// paths.
+func bigGroup(name string, n int) []panel.Panel {
+	fleet := make([]panel.Panel, 0, n)
+	for i := 0; i < n; i++ {
+		fleet = append(fleet, panel.Panel{
+			ID: string(rune('a' + i)), Title: "p", State: panel.Running, Group: name,
+		})
+	}
+	return fleet
+}
+
+// TestGroupSplitCapsVisibleTiles checks the split renders at most maxGroupTiles
+// tiles and surfaces an overflow note for the rest, rather than shrinking every
+// member into a fake-output sliver (gaps #2 and #3).
+func TestGroupSplitCapsVisibleTiles(t *testing.T) {
+	m := baseModel()
+	m.fleet = bigGroup("big", maxGroupTiles+4)
+	m = m.zoomGroup(m.dashItems()[0])
+
+	// Layout is sized to the live tiles, not the full membership.
+	if got := len(m.liveMembers()); got != maxGroupTiles {
+		t.Fatalf("live tiles should cap at %d, got %d", maxGroupTiles, got)
+	}
+	view := m.groupZoomView()
+	if !strings.Contains(view, "+4 more") {
+		t.Fatalf("the header should note the 4 capped members, got:\n%s", view)
+	}
+	if !strings.Contains(view, "showing first") {
+		t.Fatalf("the header should say it is showing the live subset, got:\n%s", view)
+	}
+}
+
+// TestGroupSplitFocusStaysOnLiveTiles checks focus cannot walk onto a capped,
+// tile-less member: tab wraps over the live tiles only (gap #2).
+func TestGroupSplitFocusStaysOnLiveTiles(t *testing.T) {
+	m := baseModel()
+	m.fleet = bigGroup("big", maxGroupTiles+4)
+	m = m.zoomGroup(m.dashItems()[0])
+
+	// Walk backwards from the first tile: it should wrap to the last live tile,
+	// never into the capped remainder.
+	nm, _ := m.handleGroupZoomKey(key("shift+tab"))
+	m = nm.(model)
+	if m.groupFocus != maxGroupTiles-1 {
+		t.Fatalf("focus should wrap to the last live tile (%d), got %d", maxGroupTiles-1, m.groupFocus)
+	}
+}
+
+// TestGroupFocusFollowsPanelAcrossSnapshot checks the split keeps focus on the
+// same panel by id when the roster shifts under it (gap #8).
+func TestGroupFocusFollowsPanelAcrossSnapshot(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()          // api members in fleet order: 1, 3, 6
+	m = m.zoomGroup(m.dashItems()[0]) // the api group
+	m.groupFocus = 2                  // rest on member #6
+	if id := m.focusedMemberID(); id != "6" {
+		t.Fatalf("focus should rest on member 6, got %q", id)
+	}
+
+	// A snapshot drops the first member (1); 3 and 6 remain, so #6 slides to index 1.
+	nf := make([]panel.Panel, 0)
+	for _, p := range groupedFleet() {
+		if p.ID != "1" {
+			nf = append(nf, p)
+		}
+	}
+	m.applyEvent(panelsEvent(nf))
+
+	if id := m.focusedMemberID(); id != "6" {
+		t.Fatalf("focus should still follow panel 6, got %q (focus=%d)", id, m.groupFocus)
+	}
+	if m.groupFocus != 1 {
+		t.Fatalf("panel 6 should now sit at focus index 1, got %d", m.groupFocus)
+	}
+}
+
 // TestReconcileTilesLive drives the real path: group two shells, open the split,
 // remove one through the server, and confirm the split tears down just that tile.
 func TestReconcileTilesLive(t *testing.T) {
@@ -449,31 +526,59 @@ func TestGroupZoomResizeReflows(t *testing.T) {
 
 func TestGroupColumnsAdjust(t *testing.T) {
 	m := baseModel()
-	m.width, m.height = 40, 20 // narrow: the auto layout is a single column
+	// Width 60: auto-fit starts at one column, and the width floor still allows up
+	// to one column per member, so + steps up to the 3-member cap.
+	m.width, m.height = 60, 30
 	m.fleet = groupedFleet()
 	m = m.zoomGroup(m.dashItems()[0]) // api, 3 members
 
 	cols := func() int { c, _, _ := m.tileGeometry(); return c }
-	if cols() != 1 {
-		t.Fatalf("narrow auto layout should be 1 column, got %d", cols())
-	}
-
 	step := func(k string) { nm, _ := m.handleGroupZoomKey(key(k)); m = nm.(model) }
 
+	if start := cols(); start != 1 {
+		t.Fatalf("auto layout at width 60 should be 1 column, got %d", start)
+	}
 	step("+")
 	if cols() != 2 {
 		t.Fatalf("+ should widen to 2 columns, got %d", cols())
 	}
-	step("+")
-	if cols() != 3 {
-		t.Fatalf("+ should widen to 3 columns, got %d", cols())
+	// Dial all the way up: the column count clamps at one per member (3 here).
+	for i := 0; i < 5; i++ {
+		step("+")
 	}
-	step("+") // clamp at the member count
 	if cols() != 3 {
-		t.Fatalf("+ should clamp at 3 columns, got %d", cols())
+		t.Fatalf("+ should clamp at the member count (3), got %d", cols())
 	}
 	step("-")
 	if cols() != 2 {
 		t.Fatalf("- should narrow back to 2 columns, got %d", cols())
+	}
+}
+
+// TestGroupColumnsWidthFloor checks that dialling columns up cannot shrink tiles
+// below the width floor: on a narrow screen the column count caps well under the
+// member count, so the grid never collapses into unreadable slivers (gap #7).
+func TestGroupColumnsWidthFloor(t *testing.T) {
+	m := baseModel()
+	m.width, m.height = 40, 20 // narrow: the floor binds before the member count
+	m.fleet = nil
+	for i := 0; i < 6; i++ { // a 6-member group, more than the floor allows
+		m.fleet = append(m.fleet, panel.Panel{
+			ID: string(rune('a' + i)), Title: "p", State: panel.Running, Group: "wide",
+		})
+	}
+	m = m.zoomGroup(m.dashItems()[0])
+
+	cols := func() int { c, _, _ := m.tileGeometry(); return c }
+	for i := 0; i < 10; i++ { // hammer + far past any sane column count
+		nm, _ := m.handleGroupZoomKey(key("+"))
+		m = nm.(model)
+	}
+	floorCols := max(1, (m.width+gtileGap)/(gtileFloorW+gtileGap))
+	if got := cols(); got != floorCols {
+		t.Fatalf("+ should clamp at the width floor (%d cols) on a narrow screen, got %d", floorCols, got)
+	}
+	if got := cols(); got >= len(m.groupMembers()) {
+		t.Fatalf("the floor should cap below the 6-member count, got %d columns", got)
 	}
 }

@@ -5,7 +5,18 @@ import (
 	"testing"
 
 	"github.com/cmj0121/baton/internal/panel"
+	"github.com/cmj0121/baton/internal/proto"
 )
+
+// panelsEvent wraps a fleet as a server "panels" snapshot, for driving applyEvent
+// in tests the way a real broadcast would.
+func panelsEvent(fleet []panel.Panel) proto.ServerMsg {
+	out := make([]proto.Panel, len(fleet))
+	for i, p := range fleet {
+		out[i] = p.ToProto()
+	}
+	return proto.ServerMsg{Type: "panels", Panels: out}
+}
 
 // groupedFleet is a small fleet with two work items and two lone panels, in a
 // deliberately interleaved order to exercise the fold.
@@ -263,6 +274,122 @@ func TestGroupAndRenameGuards(t *testing.T) {
 	empty := baseModel()
 	if got := empty.startRename(); !strings.Contains(got.status, "nothing") {
 		t.Fatalf("rename with no item should hint, got %q", got.status)
+	}
+}
+
+// TestCommitGroupKeepsSelectionOnConflict checks that grouping under a name that
+// already belongs to another panel title is rejected without dropping the marks,
+// so the user can retype instead of re-selecting every panel (gap #1). Grouping
+// under an existing *group* name is an intentional merge, not a conflict, so it
+// goes through — matching the server's policy that the client mirrors.
+func TestCommitGroupKeepsSelectionOnConflict(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet() // group "db", panel titled "lone shell"
+
+	// Mark the two lone panels (#2, #5).
+	m.cursor = 1
+	m = press(m, keyMark)
+	m.cursor = 3
+	m = press(m, keyMark)
+
+	// A name that collides with a panel title is rejected, keeping the marks.
+	got := m.commitGroup("lone shell")
+	if len(got.marked) != 2 {
+		t.Fatalf("a rejected group should keep the 2 marks, got %v", got.marked)
+	}
+	if !strings.Contains(got.status, "already taken") {
+		t.Fatalf("status should explain the conflict, got %q", got.status)
+	}
+
+	// An existing group name is a merge, not a conflict: it goes through.
+	got = m.commitGroup("db")
+	if len(got.marked) != 0 {
+		t.Fatalf("merging into the existing db group should clear the marks, got %v", got.marked)
+	}
+
+	// With the conflict policy lifted, even a title collision is allowed.
+	m.allowNameConflict = true
+	got = m.commitGroup("lone shell")
+	if len(got.marked) != 0 {
+		t.Fatalf("allow-name-conflict should let the duplicate through, got marks=%v", got.marked)
+	}
+}
+
+// TestCommitRenameKeepsOverlayOnConflict checks a colliding rename keeps the
+// overlay open with the target remembered, rather than discarding it (gap #1).
+func TestCommitRenameKeepsOverlayOnConflict(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+
+	// Start renaming the api group, then attempt the existing name "db".
+	m.cursor = 0
+	m = press(m, keyRename)
+	got := m.commitRename("db")
+	if got.input != inputRename {
+		t.Fatalf("a rejected rename should keep the overlay open, got input=%v", got.input)
+	}
+	if got.renameGroup != "api" {
+		t.Fatalf("the rename target should be remembered, got group=%q", got.renameGroup)
+	}
+	if got.inputBuf != "db" || !strings.Contains(got.status, "already taken") {
+		t.Fatalf("the attempt should be seeded and explained, got buf=%q status=%q", got.inputBuf, got.status)
+	}
+}
+
+// TestCursorFollowsItemAcrossSnapshot checks the dashboard cursor stays on the
+// same item by identity when a snapshot reorders the fleet, rather than holding a
+// raw index that now points elsewhere (gap #4).
+func TestCursorFollowsItemAcrossSnapshot(t *testing.T) {
+	m := baseModel()
+	m.mode = modeDashboard
+	m.fleet = groupedFleet() // items: api, #2, db, #5
+	m.cursor = 3             // the lone panel #5
+
+	// A new panel arrives at the head of the fleet, pushing every item down one.
+	nf := append([]panel.Panel{{ID: "9", Kind: panel.Shell, Title: "newcomer", State: panel.Running}}, groupedFleet()...)
+	m.applyEvent(panelsEvent(nf))
+
+	it, ok := m.selectedItem()
+	if !ok || it.kind != itemPanel || it.panel.ID != "5" {
+		t.Fatalf("cursor should still select panel #5 after the reorder, got %+v ok=%v", it, ok)
+	}
+}
+
+// TestCursorFollowsPanelIntoGroup checks that when the selected lone panel is
+// folded into a group by a snapshot, the cursor lands on that group (gap #4).
+func TestCursorFollowsPanelIntoGroup(t *testing.T) {
+	m := baseModel()
+	m.mode = modeDashboard
+	m.fleet = groupedFleet()
+	m.cursor = 1 // the lone shell #2
+
+	// #2 is grouped into "api" elsewhere; its lone item disappears.
+	nf := groupedFleet()
+	for i := range nf {
+		if nf[i].ID == "2" {
+			nf[i].Group = "api"
+		}
+	}
+	m.applyEvent(panelsEvent(nf))
+
+	it, ok := m.selectedItem()
+	if !ok || it.kind != itemGroup || it.name != "api" {
+		t.Fatalf("cursor should follow #2 into the api group, got %+v ok=%v", it, ok)
+	}
+}
+
+// TestSnapshotInKeyMapKeepsRowCursor guards the mode-aware path: a snapshot that
+// arrives while the key map is open must not rewrite the row cursor as if it were
+// a dashboard item index.
+func TestSnapshotInKeyMapKeepsRowCursor(t *testing.T) {
+	m := baseModel()
+	m.mode = modeKeyMap
+	m.fleet = groupedFleet()
+	m.cursor = 5 // a key-map row, unrelated to dashboard items
+
+	m.applyEvent(panelsEvent(groupedFleet()))
+	if m.cursor != 5 {
+		t.Fatalf("a snapshot in the key map should leave the row cursor at 5, got %d", m.cursor)
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 const (
 	gtileGap        = 1  // space reserved to the right of each tile
 	gtileMinW       = 32 // preferred minimum tile width, deciding the column count
+	gtileFloorW     = 16 // hard floor on a tile's width when the user dials columns up
 	groupHeaderRows = 2  // header line + blank above the grid in groupZoomView
 
 	// maxGroupTiles caps how many members stream live at once, bounding the PTYs,
@@ -51,9 +52,11 @@ func tileGeometry(n, w, h, want int) (cols, emuCols, emuRows int) {
 
 // tileGeometry resolves the split's layout from the current model dimensions,
 // reserving the footer bar (one row) and the header, honouring any column
-// override the user has dialled in.
+// override the user has dialled in. It lays out only the live (capped) tiles —
+// members past the cap are summarised in the header, not given a tile — so a
+// huge group never shrinks the grid into unreadable slivers.
 func (m model) tileGeometry() (cols, emuCols, emuRows int) {
-	return tileGeometry(len(m.groupMembers()), m.width, m.height-1-groupHeaderRows, m.groupCols)
+	return tileGeometry(len(m.liveMembers()), m.width, m.height-1-groupHeaderRows, m.groupCols)
 }
 
 // attachGroupMembers opens a live emulator for every member of the group and
@@ -95,11 +98,23 @@ func (m model) liveMembers() []panel.Panel {
 	return members
 }
 
+// focusedMemberID is the id of the panel the split's focus currently rests on,
+// read before a snapshot is applied so reconcileGroupTiles can keep the focus on
+// the same panel even as the roster shifts. Empty when the focus is out of range.
+func (m model) focusedMemberID() string {
+	live := m.liveMembers()
+	if m.groupFocus >= 0 && m.groupFocus < len(live) {
+		return live[m.groupFocus].ID
+	}
+	return ""
+}
+
 // reconcileGroupTiles brings the split's live tiles in line with the latest
 // fleet after a snapshot: it leaves an emptied group for the dashboard, attaches
 // newly added members (up to the cap), tears down departed ones, and keeps the
-// focus on a real tile. A no-op without a client.
-func (m *model) reconcileGroupTiles() {
+// focus on the same panel (by id) when the roster shifts. A no-op without a
+// client. focusID is the panel the focus rested on before the snapshot.
+func (m *model) reconcileGroupTiles(focusID string) {
 	members := m.groupMembers()
 	if len(members) == 0 {
 		// The group dissolved or lost its last panel: leave for the dashboard.
@@ -142,8 +157,27 @@ func (m *model) reconcileGroupTiles() {
 			m.resizeGroupTiles()
 		}
 	}
-	// Keep the focus on a real tile.
-	m.groupFocus = max(0, min(m.groupFocus, len(members)-1))
+	// Keep the focus on the same panel by id; fall back to clamping into range
+	// when that panel left the live tiles (removed, or pushed past the cap).
+	live := m.liveMembers()
+	if idx := indexOfMember(live, focusID); idx >= 0 {
+		m.groupFocus = idx
+	} else {
+		m.groupFocus = max(0, min(m.groupFocus, len(live)-1))
+	}
+}
+
+// indexOfMember is the position of the panel with id in members, or -1.
+func indexOfMember(members []panel.Panel, id string) int {
+	if id == "" {
+		return -1
+	}
+	for i, p := range members {
+		if p.ID == id {
+			return i
+		}
+	}
+	return -1
 }
 
 // resizeGroupTiles re-sizes every tile emulator and its panel's PTY to the
@@ -220,7 +254,8 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key == m.bindingKey(actDashboard) || key == "esc" {
 		return m.exitGroupZoom()
 	}
-	n := len(m.groupMembers())
+	// Focus walks the live tiles only; members past the cap have no tile to land on.
+	n := len(m.liveMembers())
 	switch key {
 	case "tab", "right", "l", "down", "j":
 		if n > 0 {
@@ -251,7 +286,7 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // it to the dashboard as a lone panel. The server broadcasts a fresh snapshot,
 // and the split reconciles its tiles on the next applyEvent.
 func (m model) removeFocusedMember() model {
-	members := m.groupMembers()
+	members := m.liveMembers()
 	if m.groupFocus < 0 || m.groupFocus >= len(members) {
 		return m
 	}
@@ -266,7 +301,11 @@ func (m model) removeFocusedMember() model {
 // the new layout.
 func (m model) adjustGroupCols(delta int) model {
 	cols, _, _ := m.tileGeometry() // the current effective column count
-	m.groupCols = max(1, min(cols+delta, len(m.groupMembers())))
+	// Cap columns at one per live tile and at whatever keeps a tile above the
+	// width floor, so dialling up never collapses the grid into unreadable slivers.
+	floorCols := max(1, (m.width+gtileGap)/(gtileFloorW+gtileGap))
+	maxCols := min(len(m.liveMembers()), floorCols)
+	m.groupCols = max(1, min(cols+delta, maxCols))
 	m.resizeGroupTiles()
 	m.status = fmt.Sprintf("group · %d column(s)", m.groupCols)
 	return m
@@ -275,7 +314,7 @@ func (m model) adjustGroupCols(delta int) model {
 // zoomFocusedMember drops from the split into the focused panel's own live zoom,
 // remembering the group so BIND-g returns to the split.
 func (m model) zoomFocusedMember() (tea.Model, tea.Cmd) {
-	members := m.groupMembers()
+	members := m.liveMembers()
 	if m.groupFocus < 0 || m.groupFocus >= len(members) {
 		return m, nil
 	}
@@ -330,14 +369,21 @@ func (m model) backToGroup() (tea.Model, tea.Cmd) {
 // groupZoomView renders the split: a header, a grid of member tiles with the
 // focused one lit, and a footer of key hints pinned to the last line.
 func (m model) groupZoomView() string {
-	members := m.groupMembers()
+	total := len(m.groupMembers())
+	tilesFor := m.liveMembers() // only the capped, live tiles get a cell
 	header := sectionStyle.Render(spaced("GROUP")) + "  " +
 		lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(m.groupName) +
-		mutedStyle.Render(fmt.Sprintf("   %d panel(s)", len(members)))
+		mutedStyle.Render(fmt.Sprintf("   %d panel(s)", total))
+	if over := total - len(tilesFor); over > 0 {
+		// Members past the live-tile cap are not drawn; say so rather than show a
+		// shrunken or fabricated tile for them.
+		header += lipgloss.NewStyle().Foreground(states[panel.Idle].color).
+			Render(fmt.Sprintf("   · +%d more (showing first %d live)", over, len(tilesFor)))
+	}
 
-	cols, emuCols, emuRows := tileGeometry(len(members), m.width, m.height-1-groupHeaderRows, m.groupCols)
-	tiles := make([]string, len(members))
-	for i, p := range members {
+	cols, emuCols, emuRows := tileGeometry(len(tilesFor), m.width, m.height-1-groupHeaderRows, m.groupCols)
+	tiles := make([]string, len(tilesFor))
+	for i, p := range tilesFor {
 		tiles[i] = m.renderTile(p, i == m.groupFocus, emuCols, emuRows)
 	}
 	grid := tileGrid(tiles, cols)

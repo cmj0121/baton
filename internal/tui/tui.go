@@ -421,11 +421,24 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 			m.status = "attached · " + m.endpoint
 		}
 	case "panels":
+		// Capture what the cursor and the split focus rest on before the fleet
+		// changes under them, so both can be restored to the same item by identity
+		// rather than left on a raw index that now points elsewhere.
+		focusID := m.focusedMemberID()
+		onDash := m.mode == modeDashboard
+		selKind, selID, selGroup, hadSel := dashKind(0), "", "", false
+		if onDash {
+			selKind, selID, selGroup, hadSel = m.selectedKey()
+		}
 		m.fleet = mergeFleet(sm.Panels)
-		m.clampCursor()
+		if onDash {
+			m.restoreCursor(selKind, selID, selGroup, hadSel)
+		} else {
+			m.clampCursor()
+		}
 		m.pruneMarks()
 		if m.mode == modeGroupZoom {
-			m.reconcileGroupTiles()
+			m.reconcileGroupTiles(focusID)
 		}
 	case "stats":
 		m.cpuPct = sm.CPU
@@ -882,14 +895,16 @@ func (m *model) closeSelected() {
 		return
 	}
 	ids := it.ids()
+	// One command closes the whole item — a lone panel or every member of a group
+	// — so the server retires them together and broadcasts a single snapshot.
+	if m.client != nil {
+		if err := m.client.Send(proto.Command{Action: "panel.close", IDs: ids}); err != nil {
+			m.status = "close failed: " + err.Error()
+			return
+		}
+	}
 	gone := make(map[string]bool, len(ids))
 	for _, id := range ids {
-		if m.client != nil {
-			if err := m.client.Send(proto.Command{Action: "panel.close", ID: id}); err != nil {
-				m.status = "close failed: " + err.Error()
-				return
-			}
-		}
 		gone[id] = true
 		delete(m.marked, id)
 	}
@@ -940,6 +955,55 @@ func (m *model) clampCursor() {
 	if n := m.itemCount(); m.cursor >= n {
 		m.cursor = max(0, n-1)
 	}
+}
+
+// selectedKey captures the identity of the selected dashboard item — a panel by
+// id, or a group by name — read before a snapshot so restoreCursor can land the
+// cursor back on the same item once the fleet has refolded. ok is false when
+// nothing is selected.
+func (m model) selectedKey() (kind dashKind, id, group string, ok bool) {
+	it, ok := m.selectedItem()
+	if !ok {
+		return itemPanel, "", "", false
+	}
+	if it.kind == itemGroup {
+		return itemGroup, "", it.name, true
+	}
+	return itemPanel, it.panel.ID, "", true
+}
+
+// restoreCursor moves the cursor back onto the item selectedKey captured, after
+// the fleet changed: the same group by name, or the same panel by id. A lone
+// panel that has since been folded into a group lands the cursor on that group,
+// so the selection follows the panel into its new home. It falls back to a
+// bounds clamp when the item is gone (closed, exited-and-purged).
+func (m *model) restoreCursor(kind dashKind, id, group string, had bool) {
+	if !had {
+		m.clampCursor()
+		return
+	}
+	items := m.dashItems()
+	for i, it := range items {
+		switch {
+		case kind == itemGroup && it.kind == itemGroup && it.name == group:
+			m.cursor = i
+			return
+		case kind == itemPanel && it.kind == itemPanel && it.panel.ID == id:
+			m.cursor = i
+			return
+		}
+	}
+	// The panel may have been grouped since the last snapshot: follow it into the
+	// group that now holds it.
+	if kind == itemPanel {
+		for i, it := range items {
+			if it.kind == itemGroup && indexOfMember(it.members, id) >= 0 {
+				m.cursor = i
+				return
+			}
+		}
+	}
+	m.clampCursor()
 }
 
 // pruneMarks drops marks on panels the latest snapshot no longer carries, so a
