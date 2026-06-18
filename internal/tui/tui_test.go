@@ -109,6 +109,24 @@ func TestTabCyclesSelection(t *testing.T) {
 	}
 }
 
+// TestTabWrapsOnDashboard checks tab/shift+tab wrap at the ends on the dashboard,
+// matching the group split's focus ring.
+func TestTabWrapsOnDashboard(t *testing.T) {
+	m := model{mode: modeDashboard, fleet: panel.Mock(), width: 110}
+	last := m.itemCount() - 1
+
+	// shift+tab from the first item wraps to the last.
+	m = press(m, "shift+tab")
+	if m.cursor != last {
+		t.Fatalf("shift+tab from the top should wrap to %d, got %d", last, m.cursor)
+	}
+	// tab from the last wraps back to the first.
+	m = press(m, "tab")
+	if m.cursor != 0 {
+		t.Fatalf("tab from the last should wrap to 0, got %d", m.cursor)
+	}
+}
+
 func TestRebindKeyByTyping(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // rebinding persists to $HOME/.baton/config
 	m := model{mode: modeKeyMap, fleet: panel.Mock(), binds: append([]binding(nil), bindings...)}

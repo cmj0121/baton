@@ -342,13 +342,9 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	n := len(m.displayedMembers())
 	switch key {
 	case "tab", "right", "l", "down", "j":
-		if n > 0 {
-			m.groupFocus = (m.groupFocus + 1) % n
-		}
+		m.groupFocus = wrapIndex(m.groupFocus, 1, n)
 	case "shift+tab", "left", "h", "up", "k":
-		if n > 0 {
-			m.groupFocus = (m.groupFocus - 1 + n) % n
-		}
+		m.groupFocus = wrapIndex(m.groupFocus, -1, n)
 	case "+", "=":
 		return m.adjustGroupCols(1), nil
 	case "-", "_":

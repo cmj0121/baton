@@ -564,18 +564,18 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "tab":
 		// In the key map, tab jumps to the next purpose section; elsewhere it
-		// steps the selection forward.
+		// cycles the selection forward, wrapping like the group split's focus.
 		if m.mode == modeKeyMap {
 			m.jumpSection(1)
 		} else {
-			m.move(1)
+			m.cycle(1)
 		}
 		return m, nil
 	case "shift+tab":
 		if m.mode == modeKeyMap {
 			m.jumpSection(-1)
 		} else {
-			m.move(-1)
+			m.cycle(-1)
 		}
 		return m, nil
 
@@ -1030,6 +1030,23 @@ func (m *model) move(delta int) {
 	if m.cursor >= n {
 		m.cursor = n - 1
 	}
+}
+
+// cycle steps the cursor by delta and wraps at the ends, so tab walks the whole
+// list as a ring — the same behaviour as the group split, where tab cycles the
+// member focus. The grid arrows still clamp via move; only tab wraps.
+func (m *model) cycle(delta int) {
+	m.cursor = wrapIndex(m.cursor, delta, m.itemCount())
+}
+
+// wrapIndex steps index i by delta within [0, n) and wraps at both ends — the
+// shared ring-step behind the dashboard's tab and the group split's focus. It is
+// safe for an empty list (n <= 0), returning 0.
+func wrapIndex(i, delta, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	return ((i+delta)%n + n) % n
 }
 
 func (m model) itemCount() int {
