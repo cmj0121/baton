@@ -69,6 +69,32 @@ The Monitor moves a panel through a small set of states, from the moment you spa
 panel can be **killed from any state**, jumping straight to `closed`, and it reaches `exited` whenever its process stops
 on its own — from `running`, `idle`, or `attention` alike.
 
+## Work items
+
+A **work item** is a named group of panels that belong to one task. Group membership is just a name carried on each
+panel (`group`), so a work item _is_ its name: filing panels under `"api"` makes them one item, renaming the group
+rewrites that name on every member, and removing one panel clears only its own name. The server owns this — grouping,
+removing, and renaming are core actions (`panel.group`, `panel.ungroup`, `panel.rename`) reached over the socket — so
+every frontend and every reattach sees the same groups. `panel.ungroup` takes either a group name (dissolve the whole
+item) or a set of panel ids (drop just those members).
+
+**Names are unique by default.** The server rejects a rename or a new group whose name already belongs to another panel
+title or group, so a work item is never ambiguous. Adding panels to an _existing_ group reuses its name and is allowed;
+the policy can be lifted with the `allow-name-conflict` setting, which the daemon reads at startup.
+
+On the dashboard a work item collapses into a single card: a member count and a state that **rolls up to its most urgent
+member** (attention beats running beats spawning beats idle beats exited), so one card speaks for the whole task.
+
+**The group split.** Zooming a work item opens a split — every member rendered live in its own tile, all streaming at
+once. The split is an _overview you navigate_, not a surface you type into: `tab` moves the focus between tiles, `+`/`-`
+adjusts the column count, `x` removes the focused member from the group, `enter` drops into the focused panel's own
+single zoom (where keystrokes finally reach the program), and `d`/`esc` returns to the dashboard. From a zoomed member,
+the always-on `C-t g` escape pops back to the split. Because tiles never forward input, the navigation keys are never
+ambiguous with what a panel might want. Under the hood a single client attaches to every member at once; the server tags
+each output message with its panel id and the client demuxes it into the matching tile. The split reconciles on every
+snapshot — members added or removed elsewhere appear and disappear in place, an emptied group exits to the dashboard,
+and live tiles are capped so a very large group cannot spawn unbounded terminals.
+
 ## Architecture
 
 ```txt
