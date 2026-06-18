@@ -252,8 +252,8 @@ func (m model) lookupCmd(key string) (binding, bool) {
 	return binding{}, false
 }
 
-// lookupEscape resolves a key pressed after the prefix to one of the two
-// universal escapes (dashboard, group view).
+// lookupEscape resolves a key pressed after the prefix to a prefix-accessed
+// action (the dashboard/group jumps, the key-map editor, panel config).
 func (m model) lookupEscape(key string) (binding, bool) {
 	for _, b := range m.keymap() {
 		if isEscape(b.act) && b.key == key {
@@ -487,6 +487,9 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.prefix = false
 		if b, ok := m.lookupEscape(key); ok {
 			return m.runAction(b.act)
+		}
+		if key == m.bindingKey(actDetach) { // C-t q detaches from every mode
+			return m.runAction(actDetach)
 		}
 		m.status = "no escape for " + keyLabel(key)
 		return m, nil
@@ -820,6 +823,9 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.openEditMap(modeZoom), nil
 			}
 			return m, nil
+		}
+		if key == m.bindingKey(actDetach) { // C-t q detaches from a zoom too
+			return m.runAction(actDetach)
 		}
 		if b, ok := m.lookupCmd(key); ok && b.act == actHelp { // C-t ? → the key list
 			return m.openHelp(modeZoom), nil
@@ -1343,6 +1349,7 @@ func (m model) helpView() string {
 	kc := func(s string) string { return keycapStyle.Render(s) }
 	pfx := keyLabel(m.effPrefix())
 	dash := keyLabel(m.bindingKey(actDashboard))
+	detach := keyLabel(m.bindingKey(actDetach))
 
 	// helpRow is one key line tagged with the purpose section it sorts under, so
 	// every stage's list groups by category just like the editable key map.
@@ -1362,6 +1369,7 @@ func (m model) helpView() string {
 			{"View", kc(dash) + " " + kc("esc"), "back to the dashboard"},
 			{"View", kc(pfx) + " " + kc(dash), "dashboard (works in every view)"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), "edit the key map"},
+			{"Session", kc(pfx) + " " + kc(detach), "detach (server keeps running)"},
 		}
 	case modeZoom:
 		title = "ZOOM"
@@ -1372,6 +1380,7 @@ func (m model) helpView() string {
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actGroupView))), "back to the group view"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), "edit the key map"},
+			{"Session", kc(pfx) + " " + kc(detach), "detach (server keeps running)"},
 		}
 	default: // dashboard — single keys for commands, C-t for the escapes
 		title = "DASHBOARD"

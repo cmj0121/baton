@@ -207,6 +207,9 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.openEditMap(modeGroupZoom), nil
 			}
 		}
+		if key == m.bindingKey(actDetach) { // C-t q detaches from the split too
+			return m.runAction(actDetach)
+		}
 		return m, nil
 	}
 	if key == m.effPrefix() {

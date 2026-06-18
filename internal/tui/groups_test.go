@@ -511,3 +511,32 @@ func TestExitKeysCaptured(t *testing.T) {
 		}
 	}
 }
+
+// TestDetachWithPrefixQ checks C-t q detaches (quits the client) from every
+// scenario — the dashboard, the group split, and a zoom.
+func TestDetachWithPrefixQ(t *testing.T) {
+	// Dashboard.
+	if d := press(baseModel(), "ctrl+t", keyDetach); !d.quitting {
+		t.Fatal("C-t q should detach from the dashboard")
+	}
+
+	// Group split.
+	g := baseModel()
+	g.fleet = groupedFleet()
+	g = g.zoomGroup(g.dashItems()[0])
+	ga, _ := g.handleGroupZoomKey(key("ctrl+t"))
+	gd, _ := ga.(model).handleGroupZoomKey(key(keyDetach))
+	if !gd.(model).quitting {
+		t.Fatal("C-t q should detach from the group split")
+	}
+
+	// Zoom.
+	z := baseModel()
+	z.mode = modeZoom
+	z.zoomID = "1"
+	za, _ := z.handleZoomKey(key("ctrl+t"))
+	zd, _ := za.(model).handleZoomKey(key(keyDetach))
+	if !zd.(model).quitting {
+		t.Fatal("C-t q should detach from a zoom")
+	}
+}
