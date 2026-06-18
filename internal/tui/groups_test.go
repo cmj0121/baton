@@ -225,22 +225,22 @@ func TestRenamePanelAndGroup(t *testing.T) {
 	m := baseModel()
 	m.fleet = groupedFleet()
 
-	// n on a group (item 0 = api) opens rename with the group remembered, seeded.
+	// e on a group (item 0 = api) opens rename with the group remembered, seeded.
 	m.cursor = 0
 	m = press(m, keyRename)
 	if m.input != inputRename || m.renameGroup != "api" || m.inputBuf != "api" {
-		t.Fatalf("n on a group should seed a group rename, got input=%v group=%q buf=%q", m.input, m.renameGroup, m.inputBuf)
+		t.Fatalf("e on a group should seed a group rename, got input=%v group=%q buf=%q", m.input, m.renameGroup, m.inputBuf)
 	}
 	m = press(m, "enter")
 	if m.input != inputNone || !strings.Contains(m.status, "group") {
 		t.Fatalf("group rename should commit, got input=%v status=%q", m.input, m.status)
 	}
 
-	// n on a lone panel (item 1 = #2) remembers the panel id instead.
+	// e on a lone panel (item 1 = #2) remembers the panel id instead.
 	m.cursor = 1
 	m = press(m, keyRename)
 	if m.renameID != "2" || m.renameGroup != "" {
-		t.Fatalf("n on a panel should rename the panel, got id=%q group=%q", m.renameID, m.renameGroup)
+		t.Fatalf("e on a panel should rename the panel, got id=%q group=%q", m.renameID, m.renameGroup)
 	}
 }
 

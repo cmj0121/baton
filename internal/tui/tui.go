@@ -492,6 +492,28 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// In the overlays, e edits the selected row — the leader/binding key in the
+	// key map, the shell path in panel config. Everywhere else it falls through to
+	// the command dispatch below (on the dashboard it is the rename binding).
+	if key == "e" {
+		switch m.mode {
+		case modeKeyMap:
+			switch kind, idx := m.keyMapRow(); kind {
+			case rowPrefix:
+				m.editing = true
+				m.editIdx = editPrefix
+				m.status = "press the new prefix key  ·  esc cancels"
+			case rowBinding:
+				m.editing = true
+				m.editIdx = idx
+				m.status = "press the new key for " + fmt.Sprintf("%q", m.keymap()[idx].desc) + "  ·  esc cancels"
+			}
+			return m, nil
+		case modePanelConfig:
+			return m.editShellPath(), nil
+		}
+	}
+
 	switch key {
 	case pkey:
 		m.prefix = true
@@ -528,27 +550,6 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.jumpSection(-1)
 		} else {
 			m.move(-1)
-		}
-		return m, nil
-
-	case "e":
-		// Edit the selected row's key (key map only): the leader key on the
-		// prefix row, otherwise the binding at that row.
-		if m.mode == modeKeyMap {
-			switch kind, idx := m.keyMapRow(); kind {
-			case rowPrefix:
-				m.editing = true
-				m.editIdx = editPrefix
-				m.status = "press the new prefix key  ·  esc cancels"
-			case rowBinding:
-				m.editing = true
-				m.editIdx = idx
-				m.status = "press the new key for " + fmt.Sprintf("%q", m.keymap()[idx].desc) + "  ·  esc cancels"
-			case rowSetting:
-			}
-		}
-		if m.mode == modePanelConfig {
-			return m.editShellPath(), nil
 		}
 		return m, nil
 

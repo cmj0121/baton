@@ -32,7 +32,7 @@ const (
 	keyGroup   = "G" // group the marked panels (shift+g)
 	keyAdd     = "a" // add the marked panels to the selected group
 	keyUngroup = "u" // dissolve the selected work item
-	keyRename  = "n" // rename the selected panel or group
+	keyRename  = "e" // edit the name of the selected panel or group
 
 	// The two universal escapes, bound to the prefix in every mode.
 	keyDashboard = "d" // C-t d → the dashboard
