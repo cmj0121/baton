@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	vt "github.com/charmbracelet/x/vt"
 
+	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 )
 
@@ -272,6 +273,119 @@ func TestGroupZoomLiveMosaic(t *testing.T) {
 	if m.groupEmus != nil {
 		t.Fatal("exiting the split should tear down the tiles")
 	}
+}
+
+// snapshot turns a panel fleet into the "panels" server message a broadcast
+// carries, so a test can drive applyEvent's reconciliation directly.
+func snapshot(fleet []panel.Panel) proto.ServerMsg {
+	ps := make([]proto.Panel, len(fleet))
+	for i, p := range fleet {
+		ps[i] = proto.Panel{ID: p.ID, Kind: p.Kind.String(), Title: p.Title, State: p.State.String(), Group: p.Group}
+	}
+	return proto.ServerMsg{Type: "panels", Panels: ps}
+}
+
+func TestGroupAutoExitsWhenEmptied(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+	m = m.zoomGroup(m.dashItems()[0]) // api
+
+	// A snapshot where every api member is gone leaves the split for the dash.
+	m.applyEvent(snapshot([]panel.Panel{
+		{ID: "2", Kind: panel.Shell, Title: "lone shell", State: panel.Idle},
+	}))
+	if m.mode != modeDashboard || m.groupName != "" {
+		t.Fatalf("an emptied group should drop to the dashboard, got mode=%v group=%q", m.mode, m.groupName)
+	}
+}
+
+func TestGroupFocusClampsOnShrink(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+	m = m.zoomGroup(m.dashItems()[0]) // api, 3 members
+	m.groupFocus = 2                  // last member
+
+	// api shrinks to a single member: the focus must fall back onto a real tile.
+	m.applyEvent(snapshot([]panel.Panel{
+		{ID: "1", Kind: panel.Agent, Title: "api · a", State: panel.Running, Group: "api"},
+	}))
+	if m.mode != modeGroupZoom {
+		t.Fatalf("a still-populated group should stay in the split, got mode=%v", m.mode)
+	}
+	if m.groupFocus != 0 {
+		t.Fatalf("focus should clamp onto the remaining tile, got %d", m.groupFocus)
+	}
+}
+
+func TestPruneMarksOnSnapshot(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+	m.marked = map[string]bool{"2": true, "5": true}
+
+	// Panel 5 vanishes from the fleet: its stale mark is dropped, 2 survives.
+	m.applyEvent(snapshot([]panel.Panel{
+		{ID: "2", Kind: panel.Shell, Title: "lone shell", State: panel.Idle},
+	}))
+	if m.marked["5"] {
+		t.Fatal("a mark on a departed panel should be pruned")
+	}
+	if !m.marked["2"] {
+		t.Fatal("a mark on a surviving panel should remain")
+	}
+}
+
+func TestLiveMembersCap(t *testing.T) {
+	m := baseModel()
+	m.groupName = "big"
+	fleet := make([]panel.Panel, 0, maxGroupTiles+5)
+	for i := 0; i < maxGroupTiles+5; i++ {
+		fleet = append(fleet, panel.Panel{ID: string(rune('a' + i)), Title: "p", State: panel.Running, Group: "big"})
+	}
+	m.fleet = fleet
+	if got := len(m.groupMembers()); got != maxGroupTiles+5 {
+		t.Fatalf("the group should keep all %d members, got %d", maxGroupTiles+5, got)
+	}
+	if got := len(m.liveMembers()); got != maxGroupTiles {
+		t.Fatalf("live tiles should cap at %d, got %d", maxGroupTiles, got)
+	}
+}
+
+// TestReconcileTilesLive drives the real path: group two shells, open the split,
+// remove one through the server, and confirm the split tears down just that tile.
+func TestReconcileTilesLive(t *testing.T) {
+	c, a := zoomServer(t)
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+		t.Fatalf("create second: %v", err)
+	}
+	b := (<-c.Events).Panels[1].ID
+	if err := c.Send(proto.Command{Action: "panel.group", IDs: []string{a, b}, Group: "grp"}); err != nil {
+		t.Fatalf("group: %v", err)
+	}
+	snap := <-c.Events
+
+	m := model{client: c, width: 100, height: 30, binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+	m.fleet = mergeFleet(snap.Panels)
+	m = m.zoomGroup(m.dashItems()[0])
+	if len(m.groupEmus) != 2 {
+		t.Fatalf("expected 2 live tiles, got %d", len(m.groupEmus))
+	}
+
+	// Remove a from the group; the broadcast snapshot drives reconciliation.
+	if err := c.Send(proto.Command{Action: "panel.ungroup", IDs: []string{a}}); err != nil {
+		t.Fatalf("remove a: %v", err)
+	}
+	m.applyEvent(<-c.Events)
+	if m.mode != modeGroupZoom {
+		t.Fatalf("the group still has a member, should stay in the split, got mode=%v", m.mode)
+	}
+	if len(m.groupEmus) != 1 || m.groupEmus[b] == nil {
+		t.Fatalf("only b's tile should remain, got %d tiles", len(m.groupEmus))
+	}
+	if m.groupEmus[a] != nil {
+		t.Fatal("a's tile should have been torn down")
+	}
+	next, _ := m.exitGroupZoom()
+	_ = next
 }
 
 func TestTileGeometryFillsScreen(t *testing.T) {

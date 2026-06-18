@@ -21,6 +21,11 @@ const (
 	gtileGap        = 1  // space reserved to the right of each tile
 	gtileMinW       = 32 // preferred minimum tile width, deciding the column count
 	groupHeaderRows = 2  // header line + blank above the grid in groupZoomView
+
+	// maxGroupTiles caps how many members stream live at once, bounding the PTYs,
+	// emulators, and drain goroutines a single huge group can spin up. Members
+	// past the cap still render from their preview tail.
+	maxGroupTiles = 16
 )
 
 // tileGeometry lays n tiles into a w×h area (h already net of the footer bar and
@@ -62,13 +67,83 @@ func (m *model) attachGroupMembers() {
 	}
 	_, emuCols, emuRows := m.tileGeometry()
 	m.groupEmus = make(map[string]*vt.SafeEmulator)
-	for _, p := range m.groupMembers() {
-		emu := vt.NewSafeEmulator(emuCols, emuRows)
-		m.groupEmus[p.ID] = emu
-		go drainEmu(emu)
-		m.sendf(proto.Command{Action: "panel.resize", ID: p.ID, Rows: emuRows, Cols: emuCols})
-		m.sendf(proto.Command{Action: "panel.attach", ID: p.ID})
+	for _, p := range m.liveMembers() {
+		m.attachTile(p, emuCols, emuRows)
 	}
+}
+
+// attachTile opens a live, tile-sized emulator for one member and subscribes to
+// its output. Tiles are output-only, so a drain goroutine discards the
+// emulator's input side and no keystrokes are forwarded — the shared per-member
+// step of building the split and of reconciling it after a snapshot.
+func (m *model) attachTile(p panel.Panel, emuCols, emuRows int) {
+	emu := vt.NewSafeEmulator(emuCols, emuRows)
+	m.groupEmus[p.ID] = emu
+	go drainEmu(emu)
+	m.sendf(proto.Command{Action: "panel.resize", ID: p.ID, Rows: emuRows, Cols: emuCols})
+	m.sendf(proto.Command{Action: "panel.attach", ID: p.ID})
+}
+
+// liveMembers is the members that should hold a live tile emulator: the group's
+// members capped at maxGroupTiles, in fleet order. The remainder render from
+// their preview tail rather than a live stream.
+func (m model) liveMembers() []panel.Panel {
+	members := m.groupMembers()
+	if len(members) > maxGroupTiles {
+		members = members[:maxGroupTiles]
+	}
+	return members
+}
+
+// reconcileGroupTiles brings the split's live tiles in line with the latest
+// fleet after a snapshot: it leaves an emptied group for the dashboard, attaches
+// newly added members (up to the cap), tears down departed ones, and keeps the
+// focus on a real tile. A no-op without a client.
+func (m *model) reconcileGroupTiles() {
+	members := m.groupMembers()
+	if len(members) == 0 {
+		// The group dissolved or lost its last panel: leave for the dashboard.
+		m.resetToDashboard("group emptied · dashboard")
+		return
+	}
+
+	// Live tiles only exist with a client attached; without one the split shows
+	// previews, so there is nothing to attach or tear down.
+	if m.client != nil {
+		if m.groupEmus == nil {
+			m.groupEmus = make(map[string]*vt.SafeEmulator)
+		}
+		live := m.liveMembers()
+		want := make(map[string]bool, len(live))
+		for _, p := range live {
+			want[p.ID] = true
+		}
+
+		changed := false
+		// Drop tiles whose panel left the group (or fell past the cap).
+		for id, emu := range m.groupEmus {
+			if !want[id] {
+				m.sendf(proto.Command{Action: "panel.detach", ID: id})
+				closeZoom(emu)
+				delete(m.groupEmus, id)
+				changed = true
+			}
+		}
+		// Attach a tile for each newly added member, sized to the current grid.
+		_, emuCols, emuRows := m.tileGeometry()
+		for _, p := range live {
+			if m.groupEmus[p.ID] == nil {
+				m.attachTile(p, emuCols, emuRows)
+				changed = true
+			}
+		}
+		// A changed membership reflows the grid, so refit every existing tile too.
+		if changed {
+			m.resizeGroupTiles()
+		}
+	}
+	// Keep the focus on a real tile.
+	m.groupFocus = max(0, min(m.groupFocus, len(members)-1))
 }
 
 // resizeGroupTiles re-sizes every tile emulator and its panel's PTY to the
@@ -207,16 +282,23 @@ func (m model) zoomFocusedMember() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// exitGroupZoom leaves the split for the dashboard: detach every tile, tear down
-// its emulator, and ask the server for a fresh snapshot so the fleet is current.
-func (m model) exitGroupZoom() (tea.Model, tea.Cmd) {
+// resetToDashboard detaches every tile, tears down the split's emulators, and
+// returns the model to a clean dashboard with the given status — the shared core
+// of leaving the group view, whether by key or because the group emptied.
+func (m *model) resetToDashboard(status string) {
 	m.sendf(proto.Command{Action: "panel.detach"}) // detach all
 	m.closeGroupEmus()
 	m.mode = modeDashboard
 	m.groupName = ""
 	m.groupFocus = 0
 	m.groupArmed = false
-	m.status = "dashboard"
+	m.status = status
+}
+
+// exitGroupZoom leaves the split for the dashboard and asks the server for a
+// fresh snapshot so the fleet is current.
+func (m model) exitGroupZoom() (tea.Model, tea.Cmd) {
+	m.resetToDashboard("dashboard")
 	if m.client != nil {
 		return m, func() tea.Msg { _ = m.client.Send(proto.Command{Action: "panel.list"}); return nil }
 	}

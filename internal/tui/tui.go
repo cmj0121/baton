@@ -423,6 +423,10 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 	case "panels":
 		m.fleet = mergeFleet(sm.Panels)
 		m.clampCursor()
+		m.pruneMarks()
+		if m.mode == modeGroupZoom {
+			m.reconcileGroupTiles()
+		}
 	case "stats":
 		m.cpuPct = sm.CPU
 		m.memUsed, m.memTotal = sm.MemUsed, sm.MemTotal
@@ -919,6 +923,23 @@ func (m model) countState(s panel.State) int {
 func (m *model) clampCursor() {
 	if n := m.itemCount(); m.cursor >= n {
 		m.cursor = max(0, n-1)
+	}
+}
+
+// pruneMarks drops marks on panels the latest snapshot no longer carries, so a
+// closed or exited-and-purged panel never lingers in a pending selection.
+func (m *model) pruneMarks() {
+	if len(m.marked) == 0 {
+		return
+	}
+	live := make(map[string]bool, len(m.fleet))
+	for _, p := range m.fleet {
+		live[p.ID] = true
+	}
+	for id := range m.marked {
+		if !live[id] {
+			delete(m.marked, id)
+		}
 	}
 }
 
