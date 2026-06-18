@@ -38,10 +38,10 @@ rebindable list of the current view.
 | Context         | Keys                                                                             |
 | --------------- | -------------------------------------------------------------------------------- |
 | After `C-t`     | `d` dashboard, `g` group, `k` key map, `q` detach                                |
-| Dashboard       | `hjkl` move, `enter` open, `p` new panel, `A` new agent, `c` pick cmd, `w` close |
+| Dashboard       | `hjkl` move, `S-←`/`S-→` reorder, `enter` open, `p` new panel, `A` new agent, `c` pick cmd, `w` close |
 | Dashboard group | `g` mark, `G` group, `a` add, `u` ungroup, `e` rename                            |
-| Group           | `tab` focus, `+`/`-` columns, `p` pin, `i` interact, `x` remove, `enter` zoom    |
-| Zoom / interact | type to drive the program, `C-t C-t` sends a literal `C-t`                       |
+| Group           | `tab` focus, `+`/`-` columns, `p` pin, `i` interact, `x` remove, `S-←`/`S-→` reorder, `S-↑`/`S-↓` scroll, `enter` zoom |
+| Zoom / interact | type to drive the program, `S-↑`/`S-↓`/`PgUp`/`PgDn` scroll, `C-t C-t` sends a literal `C-t` |
 
 Names stay unique unless you set `allow-name-conflict`.
 

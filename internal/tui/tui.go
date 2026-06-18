@@ -118,6 +118,7 @@ type model struct {
 	zoomArmed  bool             // prefix pressed inside a zoom, awaiting the verb
 	zoomExited bool             // the zoomed panel has exited — a read-only result view
 	emu        *vt.SafeEmulator // terminal emulator rendering the zoomed panel
+	scrollOff  int              // scrollback offset (lines above the live bottom) for the zoom / focused tile
 
 	groupName       string                      // work item being split-viewed (modeGroupZoom)
 	groupFocus      int                         // focused member, indexing tiles then the tree list
@@ -940,6 +941,7 @@ func (m model) zoomInto(p panel.Panel) model {
 	m.zoomID = p.ID
 	m.zoomTitle = p.Title
 	m.zoomArmed = false
+	m.scrollOff = 0        // a fresh zoom opens at the live bottom
 	m.zoomGroupOrigin = "" // a direct zoom; the group path sets this after
 	m.zoomExited = p.State == panel.Exited
 	if m.width > 0 && m.height > 1 {
@@ -995,10 +997,30 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.zoomArmed = true
 		return m, nil
 	}
+	// Scrollback keys page through the panel's history without disturbing the
+	// program; every other key returns to the live bottom and drives it.
+	switch key {
+	case "shift+up", "pgup":
+		m.scrollEmu(m.emu, scrollStep(key, m.zoomRows()))
+		return m, nil
+	case "shift+down", "pgdown":
+		m.scrollEmu(m.emu, -scrollStep(key, m.zoomRows()))
+		return m, nil
+	}
+	m.scrollOff = 0
 	if m.emu != nil {
 		feedKey(m.emu, k)
 	}
 	return m, nil
+}
+
+// scrollStep is how far a scrollback key moves: a single line for the shift+arrow
+// keys, very nearly a full page (kept one line for context) for page up/down.
+func scrollStep(key string, rows int) int {
+	if key == "pgup" || key == "pgdown" {
+		return max(1, rows-1)
+	}
+	return 1
 }
 
 // zoomDetach leaves the zoom, returning to a refreshed dashboard.
@@ -1007,6 +1029,7 @@ func (m model) zoomDetach() (tea.Model, tea.Cmd) {
 	closeZoom(m.emu) // stops the zoomReader goroutine (Read returns io.EOF)
 	m.mode = modeDashboard
 	m.emu = nil
+	m.scrollOff = 0
 	m.zoomID, m.zoomTitle, m.zoomArmed, m.zoomExited, m.zoomGroupOrigin = "", "", false, false, ""
 	m.status = "dashboard"
 	if m.client != nil {
@@ -1256,14 +1279,13 @@ func (m model) zoomView() string {
 	rows := m.zoomRows()
 	lines := make([]string, rows)
 	if m.emu != nil {
-		raw := strings.Split(m.emu.Render(), "\n")
-		cur := m.emu.CursorPosition()
-		for i := range lines {
-			if i < len(raw) {
-				lines[i] = raw[i]
-			}
-			if i == cur.Y {
-				lines[i] = overlayCursor(lines[i], cur.X)
+		lines = emuWindow(m.emu, m.width, rows, m.scrollOff)
+		// The cursor belongs to the live screen, so draw it only at the bottom; a
+		// scrolled-back view is history and carries no cursor.
+		if m.scrollOff == 0 {
+			cur := m.emu.CursorPosition()
+			if cur.Y >= 0 && cur.Y < len(lines) {
+				lines[cur.Y] = overlayCursor(lines[cur.Y], cur.X)
 			}
 		}
 	}
@@ -1567,6 +1589,8 @@ func (m model) helpView() string {
 			{"Navigation", kc(keyLabel(keyInteract)), "interact: type into the focused panel in place"},
 			{"Navigation", kc("enter"), "zoom the focused panel"},
 			{"Navigation", kc("+") + " " + kc("-"), "more / fewer columns"},
+			{"Navigation", kc("S-←") + " " + kc("S-→"), "reorder the focused panel"},
+			{"Navigation", kc("S-↑") + " " + kc("S-↓") + " " + kc("PgUp") + kc("PgDn"), "scroll the focused panel's history"},
 			{"Work items", kc(keyLabel(keyPin)), "pin / unpin the focused panel to a live tile"},
 			{"Work items", kc(keyLabel(keyRemove)), "remove the focused panel from the group"},
 			{"View", kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
@@ -1580,6 +1604,7 @@ func (m model) helpView() string {
 		title = "ZOOM"
 		rows = []helpRow{
 			{"Navigation", kc("type"), "drive the program directly"},
+			{"Navigation", kc("S-↑") + " " + kc("S-↓") + " " + kc("PgUp") + kc("PgDn"), "scroll back / forward through history"},
 			{"Navigation", kc(pfx) + " " + kc(pfx), "send a literal " + pfx},
 			{"View", kc(pfx) + " " + kc(dash), "back to the dashboard"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actGroupView))), "back to the group view"},

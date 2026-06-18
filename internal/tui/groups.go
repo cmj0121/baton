@@ -325,6 +325,7 @@ func (m model) zoomGroup(it dashItem) model {
 	m.groupName = it.name
 	m.groupFocus = 0
 	m.groupArmed = false
+	m.scrollOff = 0     // open at the live bottom
 	m.groupCols = 0     // auto-fit until the user dials columns in
 	m.groupPinned = nil // pins are per-view; start from the default tile fill
 	m.attachGroupMembers()

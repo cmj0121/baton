@@ -192,7 +192,7 @@ func TestGroupZoomLiveTileRenders(t *testing.T) {
 	_, _ = emu.Write([]byte("hello-live"))
 	m.groupEmus = map[string]*vt.SafeEmulator{"1": emu}
 
-	body := m.tileBody(m.groupMembers()[0], 30, 6, false) // member id "1"
+	body := m.tileBody(m.groupMembers()[0], 30, 6, false, false) // member id "1"
 	if len(body) != 6 {
 		t.Fatalf("a live tile should have 6 rows, got %d", len(body))
 	}
@@ -203,7 +203,7 @@ func TestGroupZoomLiveTileRenders(t *testing.T) {
 	if strings.Contains(strings.Join(body, ""), "\x1b[7m") {
 		t.Fatal("a passive tile should not draw a cursor")
 	}
-	cursored := m.tileBody(m.groupMembers()[0], 30, 6, true)
+	cursored := m.tileBody(m.groupMembers()[0], 30, 6, true, true)
 	if !strings.Contains(strings.Join(cursored, ""), "\x1b[7m") {
 		t.Fatalf("the interacting tile should overlay a reverse-video cursor, got %q", strings.Join(cursored, ""))
 	}

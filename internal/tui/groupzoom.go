@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -343,8 +342,18 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key {
 	case "tab", "right", "l", "down", "j":
 		m.groupFocus = wrapIndex(m.groupFocus, 1, n)
+		m.scrollOff = 0 // scrollback follows the focus; a new tile starts at its bottom
 	case "shift+tab", "left", "h", "up", "k":
 		m.groupFocus = wrapIndex(m.groupFocus, -1, n)
+		m.scrollOff = 0
+	case "shift+up", "pgup":
+		return m.scrollFocusedTile(1, key), nil
+	case "shift+down", "pgdown":
+		return m.scrollFocusedTile(-1, key), nil
+	case "shift+left":
+		return m.reorderGroupMember(-1), nil
+	case "shift+right":
+		return m.reorderGroupMember(1), nil
 	case "+", "=":
 		return m.adjustGroupCols(1), nil
 	case "-", "_":
@@ -402,6 +411,7 @@ func (m model) handleGroupInteractKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.groupArmed = true
 		return m, nil
 	}
+	m.scrollOff = 0 // driving the program returns the tile to its live bottom
 	m.feedFocused(k)
 	return m, nil
 }
@@ -425,6 +435,7 @@ func (m model) enterInteract() model {
 	}
 	m.groupInteract = true
 	m.groupArmed = false
+	m.scrollOff = 0 // typing happens at the live bottom
 	m.status = fmt.Sprintf("interact · %s · %s %s to stop", p.Title, keyLabel(m.effPrefix()), keyInteract)
 	return m
 }
@@ -448,6 +459,24 @@ func (m model) feedFocused(k tea.KeyMsg) {
 	if emu := m.groupEmus[p.ID]; emu != nil {
 		feedKey(emu, k)
 	}
+}
+
+// scrollFocusedTile pages the focused tile's scrollback by dir (positive toward
+// older output): a single line for the shift+arrow keys, nearly a full page for
+// page up/down. It needs a live tile to scroll, so it nudges the user to pin a
+// tree-listed member first.
+func (m model) scrollFocusedTile(dir int, key string) model {
+	p, ok := m.focusedMember()
+	if !ok {
+		return m
+	}
+	if !m.focusedIsTile() {
+		m.status = fmt.Sprintf("%s is in the list — press %s to pin it first", p.Title, keyPin)
+		return m
+	}
+	_, _, rows := m.tileGeometry()
+	m.scrollEmu(m.groupEmus[p.ID], dir*scrollStep(key, rows))
+	return m
 }
 
 // togglePin pins or unpins the focused member. Pinning promotes a tree-listed
@@ -536,6 +565,7 @@ func (m *model) resetToDashboard(status string) {
 	m.groupArmed = false
 	m.groupInteract = false
 	m.groupPinned = nil
+	m.scrollOff = 0
 	m.status = status
 }
 
@@ -559,6 +589,7 @@ func (m model) backToGroup() (tea.Model, tea.Cmd) {
 	m.groupName = m.zoomGroupOrigin
 	m.groupArmed = false
 	m.groupInteract = false
+	m.scrollOff = 0
 	m.emu = nil
 	m.zoomID, m.zoomTitle, m.zoomArmed, m.zoomExited, m.zoomGroupOrigin = "", "", false, false, ""
 	m.attachGroupMembers() // re-subscribe every tile's live stream
@@ -693,26 +724,32 @@ func (m model) renderTile(p panel.Panel, focused bool, emuCols, emuRows int) str
 
 	return box.Render(lipgloss.JoinVertical(lipgloss.Left,
 		head,
-		lipgloss.JoinVertical(lipgloss.Left, m.tileBody(p, emuCols, emuRows, interacting)...),
+		lipgloss.JoinVertical(lipgloss.Left, m.tileBody(p, emuCols, emuRows, focused, interacting)...),
 	))
 }
 
 // tileBody is a tile's content rows, always exactly emuRows tall: the member's
 // live screen when it is streaming, or a one-line activity note before output
-// lands (and when there is no client, as in tests). When showCursor is set — the
-// tile being interacted with — a reverse-video cell is drawn at the emulator's
-// cursor, so you can see where your typing lands, exactly as the single zoom does.
-func (m model) tileBody(p panel.Panel, emuCols, emuRows int, showCursor bool) []string {
+// lands (and when there is no client, as in tests). The focused tile honours the
+// scrollback offset, so its history scrolls in place while the other tiles stay
+// at their live bottom. When showCursor is set — the tile being interacted with,
+// and not scrolled back — a reverse-video cell is drawn at the emulator's cursor,
+// so you can see where your typing lands, exactly as the single zoom does.
+func (m model) tileBody(p panel.Panel, emuCols, emuRows int, focused, showCursor bool) []string {
 	emu := m.groupEmus[p.ID]
-	var src []string
-	if emu != nil {
-		src = strings.Split(emu.Render(), "\n")
-	} else if p.Activity != "" {
-		src = []string{mutedStyle.Render(truncate(p.Activity, emuCols))}
+	if emu == nil {
+		rows := make([]string, emuRows) // pad to a fixed tile height
+		if p.Activity != "" && len(rows) > 0 {
+			rows[0] = mutedStyle.Render(truncate(p.Activity, emuCols))
+		}
+		return rows
 	}
-	rows := make([]string, emuRows) // pad/clip to a fixed tile height; copy stops at min
-	copy(rows, src)
-	if showCursor && emu != nil {
+	off := 0
+	if focused {
+		off = m.scrollOff
+	}
+	rows := emuWindow(emu, emuCols, emuRows, off)
+	if showCursor && off == 0 {
 		cur := emu.CursorPosition()
 		if cur.Y >= 0 && cur.Y < len(rows) {
 			rows[cur.Y] = overlayCursor(rows[cur.Y], cur.X)
@@ -731,6 +768,7 @@ func (m model) groupZoomFooter() string {
 	}
 	left := seg("◈ BATON", colDark, colBrand) +
 		mode +
-		seg(truncate(m.groupName, 24), colDark, colBrandHi)
+		seg(truncate(m.groupName, 24), colDark, colBrandHi) +
+		scrollSeg(m.scrollOff)
 	return m.statusBar(left, m.helpHint())
 }

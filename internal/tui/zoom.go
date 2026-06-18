@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"io"
 	"strings"
 	"unicode/utf8"
@@ -13,16 +14,117 @@ import (
 )
 
 // zoomFooter builds the coloured strip below the emulated panel: a brand cap, a
-// state cap (green live ZOOM, or grey EXITED for a finished program), the panel
-// title, the C-t ? help hint, and — like every view — the host stats, clock, and
-// connection status.
+// state cap (green live ZOOM, or grey EXITED for a finished program), a scrollback
+// marker when the view is scrolled off the live bottom, the panel title, the C-t ?
+// help hint, and — like every view — the host stats, clock, and connection status.
 func (m model) zoomFooter() string {
 	state := seg("◉ ZOOM", colInk, colGreen)
 	if m.zoomExited {
 		state = seg("◼ EXITED", colDark, colMuted)
 	}
-	left := seg("◈ BATON", colDark, colBrand) + state + barBold.Render(" "+m.zoomTitle+" ")
+	left := seg("◈ BATON", colDark, colBrand) + state + scrollSeg(m.scrollOff) + barBold.Render(" "+m.zoomTitle+" ")
 	return m.statusBar(left, m.helpHint())
+}
+
+// scrollSeg is the footer marker shown while a view is scrolled back through the
+// scrollback buffer — how many lines above the live bottom the window sits. Empty
+// at the bottom, so the live view carries no marker.
+func scrollSeg(off int) string {
+	if off <= 0 {
+		return ""
+	}
+	return seg(fmt.Sprintf("⮝ %d", off), colDark, colCyan)
+}
+
+// scrollEmu moves the scrollback viewport by delta lines for the given emulator:
+// positive scrolls toward older output, negative back toward the live bottom. It
+// clamps to the live bottom (0) and to the buffer's depth, so holding the key at
+// either end simply rests there.
+func (m *model) scrollEmu(emu *vt.SafeEmulator, delta int) {
+	if emu == nil {
+		return
+	}
+	off := m.scrollOff + delta
+	if off < 0 {
+		off = 0
+	}
+	if depth := emu.ScrollbackLen(); off > depth {
+		off = depth
+	}
+	m.scrollOff = off
+}
+
+// emuWindow renders a rows-tall window of an emulator's content, scrolled off
+// lines up from the live bottom. The lines that have rolled off the top live in
+// the emulator's scrollback buffer; this stitches the needed slice of them above
+// the current screen so scrolling reveals earlier output. Each line is clipped to
+// cols, so a line captured while the panel was wider cannot spill past its tile.
+// off is clamped to the buffer depth, and only the visible scrollback lines are
+// rendered, so a deep buffer costs nothing while sitting at the bottom.
+func emuWindow(emu *vt.SafeEmulator, cols, rows, off int) []string {
+	out := make([]string, rows)
+	if emu == nil || rows < 1 {
+		return out
+	}
+	screen := strings.Split(emu.Render(), "\n")
+	sbLen := 0
+	var sb *vt.Scrollback
+	if off > 0 {
+		sb = emu.Scrollback()
+		sbLen = sb.Len()
+		if off > sbLen {
+			off = sbLen
+		}
+	}
+	start := sbLen - off // top of the window, in the combined scrollback+screen space
+	for i := range out {
+		idx := start + i
+		switch {
+		case idx < 0:
+			// above the oldest line: leave blank
+		case idx < sbLen:
+			if ln := sb.Line(idx); ln != nil {
+				out[i] = clipVisible(ln.Render(), cols)
+			}
+		default:
+			if si := idx - sbLen; si >= 0 && si < len(screen) {
+				out[i] = clipVisible(screen[si], cols)
+			}
+		}
+	}
+	return out
+}
+
+// clipVisible returns the prefix of s holding at most width visible columns,
+// copying escape sequences verbatim since they cost no columns. A scrollback line
+// captured at a wider size is thus trimmed to fit, and a trailing reset is added
+// when the clip lands mid-styling so a colour cannot bleed past the cut.
+func clipVisible(s string, width int) string {
+	if width < 1 {
+		return ""
+	}
+	var out strings.Builder
+	vis, clipped := 0, false
+	for i := 0; i < len(s); {
+		if s[i] == 0x1b {
+			n := escLen(s[i:])
+			out.WriteString(s[i : i+n])
+			i += n
+			continue
+		}
+		if vis >= width {
+			clipped = true
+			break
+		}
+		_, size := utf8.DecodeRuneInString(s[i:])
+		out.WriteString(s[i : i+size])
+		vis++
+		i += size
+	}
+	if clipped {
+		out.WriteString("\x1b[0m")
+	}
+	return out.String()
 }
 
 // overlayCursor inserts a reverse-video cell at visible column col of an
