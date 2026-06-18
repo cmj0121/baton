@@ -63,7 +63,7 @@ func TestIsAgent(t *testing.T) {
 }
 
 func TestProtoRoundTrip(t *testing.T) {
-	p := Panel{ID: "7", Kind: Agent, Title: "claude", State: Attention, Group: "auth", Activity: "needs you"}
+	p := Panel{ID: "7", Kind: Agent, Title: "claude", State: Attention, Group: "auth", Activity: "needs you", Spark: "▂▃▅▇▆▃▁"}
 	got := FromProto(p.ToProto())
 	if got != p {
 		t.Fatalf("round-trip mismatch:\n got %+v\nwant %+v", got, p)

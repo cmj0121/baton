@@ -9,26 +9,36 @@ import (
 	"github.com/cmj0121/baton/internal/panel"
 )
 
-// The Monitor's timing. monitorInterval is how often the Monitor re-evaluates
-// every panel; idleAfter is how long output must stay quiet before a running panel
-// settles to idle (or attention); attnTailBytes is how much trailing output the
-// attention sniff inspects.
+// The Monitor's timing and shape. monitorInterval is how often the Monitor
+// re-evaluates every panel and rolls its sparkline forward one bucket; idleAfter
+// is how long output must stay quiet before a running panel settles to idle (or
+// attention); sparkWidth is how many buckets the sparkline shows; attnTailBytes is
+// how much trailing output the attention sniff inspects.
 const (
 	monitorInterval = time.Second
 	idleAfter       = 10 * time.Second
+	sparkWidth      = 8
 	attnTailBytes   = 1024
 )
+
+// sparkRunes are the eight bar heights a sparkline bucket can render as, lowest to
+// highest.
+var sparkRunes = []rune("▁▂▃▄▅▆▇█")
 
 // ansiSeq matches a CSI escape sequence, stripped before the attention sniff so a
 // coloured prompt is read by its text, not its escape codes.
 var ansiSeq = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
-// panelMon is the Monitor's per-panel bookkeeping: when output last arrived and
-// when the panel entered its current state (for the activity duration). It lives
-// beside the panel rather than on it because none of it belongs on the wire.
+// panelMon is the Monitor's per-panel bookkeeping: when output last arrived, when
+// the panel entered its current state (for the activity duration), the bytes seen
+// since the last tick, and the rolling window of per-bucket byte counts behind the
+// sparkline. It lives beside the panel rather than on it because none of it
+// belongs on the wire.
 type panelMon struct {
 	lastOutput time.Time
 	stateSince time.Time
+	bucket     int
+	spark      [sparkWidth]int
 }
 
 // monitor is the MONITOR core block: it watches each panel's output stream and
@@ -55,10 +65,12 @@ func (mo *monitor) spawned(id string) {
 // forget drops a panel's bookkeeping when it exits or is closed.
 func (mo *monitor) forget(id string) { delete(mo.panels, id) }
 
-// observed records that output arrived, resetting the quiet timer.
-func (mo *monitor) observed(id string) {
+// observed records n bytes of output: it resets the quiet timer and adds to the
+// current sparkline bucket.
+func (mo *monitor) observed(id string, n int) {
 	if pm := mo.panels[id]; pm != nil {
 		pm.lastOutput = mo.now()
+		pm.bucket += n
 	}
 }
 
@@ -85,6 +97,19 @@ func (mo *monitor) since(id string) time.Duration {
 	return mo.now().Sub(pm.stateSince)
 }
 
+// roll advances the sparkline window by one bucket — pushing the bytes seen this
+// tick onto the right and dropping the oldest — and returns the rendered bars.
+func (mo *monitor) roll(id string) string {
+	pm := mo.panels[id]
+	if pm == nil {
+		return ""
+	}
+	copy(pm.spark[:], pm.spark[1:])
+	pm.spark[sparkWidth-1] = pm.bucket
+	pm.bucket = 0
+	return renderSpark(pm.spark[:])
+}
+
 // nextState is the Monitor's pure transition: given the current lifecycle state,
 // whether output has gone quiet, and whether a quiet tail looks like the panel
 // needs you, it returns the next state and whether it changed. Waking back to
@@ -103,6 +128,27 @@ func nextState(cur panel.State, quiet, attention bool) (panel.State, bool) {
 		}
 	}
 	return cur, false
+}
+
+// renderSpark turns a window of per-bucket byte counts into a bar sparkline,
+// scaled to the busiest bucket so the shape shows relative output rate. An
+// all-quiet window renders as flat baseline bars.
+func renderSpark(buckets []int) string {
+	max := 0
+	for _, b := range buckets {
+		if b > max {
+			max = b
+		}
+	}
+	var sb strings.Builder
+	for _, b := range buckets {
+		idx := 0
+		if max > 0 {
+			idx = b * (len(sparkRunes) - 1) / max
+		}
+		sb.WriteRune(sparkRunes[idx])
+	}
+	return sb.String()
 }
 
 // looksLikeAttention reports whether a quiet panel's trailing output reads like it

@@ -111,7 +111,7 @@ func (s *Server) onPanelExit(id string) {
 func (s *Server) routeOutput(id string, data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.mon.observed(id)
+	s.mon.observed(id, len(data))
 	if i := s.indexLocked(id); i >= 0 {
 		switch s.panels[i].State {
 		case panel.Spawning, panel.Idle, panel.Attention:
@@ -236,10 +236,10 @@ func (s *Server) monitorLoop(stop <-chan struct{}) {
 }
 
 // monitorTick re-evaluates every live panel: it settles a quiet one to idle or
-// attention (wakes are handled on the output path) and refreshes the activity
-// line. It returns a "telemetry" snapshot and true when any panel moved and there
-// is a client to tell; telemetry rides its own message type so it never disturbs a
-// frontend's structural panel stream.
+// attention (wakes are handled on the output path), rolls each sparkline, and
+// refreshes the activity line. It returns a "telemetry" snapshot and true when any
+// panel moved and there is a client to tell; telemetry rides its own message type
+// so it never disturbs a frontend's structural panel stream.
 func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -255,6 +255,10 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 		if ns, ok := nextState(p.State, quiet, attention); ok {
 			p.State = ns
 			s.mon.entered(p.ID)
+			changed = true
+		}
+		if spark := s.mon.roll(p.ID); spark != p.Spark {
+			p.Spark = spark
 			changed = true
 		}
 		if act := activityText(p.State, s.mon.since(p.ID)); act != p.Activity {

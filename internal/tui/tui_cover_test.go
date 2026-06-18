@@ -130,6 +130,28 @@ func TestApplyEventBranches(t *testing.T) {
 	}
 }
 
+// TestApplyTelemetryMergesInPlace checks that a telemetry refresh updates live
+// fields of existing panels by id, but never adds or removes panels — so a stale
+// telemetry tick cannot resurrect a panel a structural snapshot already dropped.
+func TestApplyTelemetryMergesInPlace(t *testing.T) {
+	m := baseModel()
+	m.fleet = []panel.Panel{{ID: "1", Kind: panel.Agent, State: panel.Running, Activity: "running · 1s"}}
+
+	// A telemetry tick refreshes panel 1 and also carries a panel 2 the fleet no
+	// longer holds (e.g. built just before a close landed on the panels channel).
+	m.applyTelemetry(proto.ServerMsg{Type: "telemetry", Panels: []proto.Panel{
+		{ID: "1", State: "attention", Activity: "needs you · 12s", Spark: "▂▃▅▇"},
+		{ID: "2", State: "running", Activity: "running · 3s"},
+	}})
+
+	if len(m.fleet) != 1 {
+		t.Fatalf("telemetry must not change the panel set, got %d panels", len(m.fleet))
+	}
+	if m.fleet[0].State != panel.Attention || m.fleet[0].Activity != "needs you · 12s" || m.fleet[0].Spark != "▂▃▅▇" {
+		t.Fatalf("telemetry should refresh live fields in place, got %+v", m.fleet[0])
+	}
+}
+
 func TestUpdateBranches(t *testing.T) {
 	m := baseModel()
 

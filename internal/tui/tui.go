@@ -356,7 +356,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitStats(m.client.Stats)
 
 	case telemetryEventMsg:
-		m.applyEvent(proto.ServerMsg(msg))
+		m.applyTelemetry(proto.ServerMsg(msg))
 		return m, waitTelemetry(m.client.Telemetry)
 
 	case connClosedMsg:
@@ -439,12 +439,10 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		} else {
 			m.status = "attached · " + m.endpoint
 		}
-	case "panels", "telemetry":
-		// A structural "panels" snapshot and a live "telemetry" refresh both carry
-		// the full fleet and merge the same way. Capture what the cursor and the
-		// split focus rest on before the fleet changes under them, so both can be
-		// restored to the same item by identity rather than left on a raw index that
-		// now points elsewhere.
+	case "panels":
+		// Capture what the cursor and the split focus rest on before the fleet
+		// changes under them, so both can be restored to the same item by identity
+		// rather than left on a raw index that now points elsewhere.
 		focusID := m.focusedMemberID()
 		onDash := m.mode == modeDashboard
 		selKind, selID, selGroup, hadSel := dashKind(0), "", "", false
@@ -466,6 +464,27 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		m.memUsed, m.memTotal = sm.MemUsed, sm.MemTotal
 	case "error":
 		m.status = "error: " + sm.Error
+	}
+}
+
+// applyTelemetry merges the Monitor's live fields — state, activity, sparkline —
+// into the current fleet by id, leaving the panel set, order, selection, and group
+// tiles untouched. Telemetry refreshes panels; it never adds or removes them (a
+// structural "panels" snapshot does that). Updating in place, and skipping ids the
+// fleet no longer holds, keeps a telemetry tick built just before a close — and
+// delivered on its own channel, out of order with that close — from resurrecting
+// the closed panel.
+func (m *model) applyTelemetry(sm proto.ServerMsg) {
+	live := make(map[string]proto.Panel, len(sm.Panels))
+	for _, p := range sm.Panels {
+		live[p.ID] = p
+	}
+	for i := range m.fleet {
+		if p, ok := live[m.fleet[i].ID]; ok {
+			m.fleet[i].State = panel.ParseState(p.State)
+			m.fleet[i].Activity = p.Activity
+			m.fleet[i].Spark = p.Spark
+		}
 	}
 }
 
@@ -1343,7 +1362,7 @@ func (m model) renderCard(p panel.Panel, selected bool) string {
 	state := lipgloss.NewStyle().Foreground(info.color).Render(info.label)
 	kindLine := badge + "  " + state
 
-	spark := lipgloss.NewStyle().Foreground(info.color).Render(sparkFor(p.State))
+	spark := lipgloss.NewStyle().Foreground(info.color).Render(panelSpark(p))
 	footer := spark + "  " + mutedStyle.Render(truncate(p.Activity, cardInner-lipgloss.Width(spark)-2))
 
 	style := lipgloss.NewStyle().
@@ -1501,7 +1520,7 @@ func (m model) renderPreview(items []dashItem, width int) string {
 		metaRow("state", info.label, info.color),
 		metaRow("kind", p.Kind.String(), colInk),
 		metaRow("activity", p.Activity, colInk),
-		metaRow("signal", sparkFor(p.State), info.color),
+		metaRow("signal", panelSpark(p), info.color),
 	)
 
 	out := []string{mutedStyle.Render(spaced("OUTPUT"))}

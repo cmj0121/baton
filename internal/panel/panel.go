@@ -80,8 +80,8 @@ func ParseState(s string) State {
 
 // Panel is one live terminal the server owns: a shell or an agent, plus the
 // Monitor's lifecycle state. The Group field files the panel under a work item;
-// the Activity field is the live status line the Monitor reports as output ebbs
-// and flows.
+// the Activity/Spark fields are live telemetry the Monitor reports as output
+// ebbs and flows — a short status line and an output-rate sparkline.
 type Panel struct {
 	ID    string
 	Kind  Kind
@@ -90,6 +90,7 @@ type Panel struct {
 	Group string // work item this panel belongs to, "" if ungrouped
 
 	Activity string // short status line, e.g. "running · 3m"
+	Spark    string // output-rate sparkline over the recent window, e.g. "▂▃▅▇▆▃▁"
 }
 
 // IsAgent reports whether the panel runs an agent CLI rather than a shell.
@@ -104,6 +105,7 @@ func FromProto(p proto.Panel) Panel {
 		State:    ParseState(p.State),
 		Group:    p.Group,
 		Activity: p.Activity,
+		Spark:    p.Spark,
 	}
 }
 
@@ -116,6 +118,7 @@ func (p Panel) ToProto() proto.Panel {
 		State:    p.State.String(),
 		Group:    p.Group,
 		Activity: p.Activity,
+		Spark:    p.Spark,
 	}
 }
 

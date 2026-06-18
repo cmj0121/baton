@@ -363,7 +363,7 @@ func (m model) renderGroupCard(it dashItem, selected bool) string {
 	// colour while it is active — so a working group animates like a panel card.
 	footer := groupCountChips(it.members)
 	if activeState(st) {
-		spark := lipgloss.NewStyle().Foreground(info.color).Render(sparkFor(st))
+		spark := lipgloss.NewStyle().Foreground(info.color).Render(groupSpark(it.members, st))
 		footer = spark + "  " + footer
 	}
 

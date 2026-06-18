@@ -60,7 +60,7 @@ func TestQuietAndObserve(t *testing.T) {
 		t.Fatal("a just-spawned panel should not be quiet")
 	}
 	clk.add(idleAfter - time.Second)
-	mo.observed("p1")
+	mo.observed("p1", 10)
 	clk.add(idleAfter - time.Second)
 	if mo.quiet("p1") {
 		t.Fatal("output should have reset the quiet timer")
@@ -71,6 +71,49 @@ func TestQuietAndObserve(t *testing.T) {
 	}
 	if !mo.quiet("ghost") {
 		t.Fatal("an unknown panel should read quiet")
+	}
+}
+
+// TestRollSpark checks the sparkline window: each tick pushes the bytes seen onto
+// the right and drops the oldest, and the bars scale to the busiest bucket.
+func TestRollSpark(t *testing.T) {
+	mo, _ := newTestMonitor()
+	mo.spawned("p1")
+
+	if got := mo.roll("p1"); got != "▁▁▁▁▁▁▁▁" {
+		t.Fatalf("an empty window should be flat, got %q", got)
+	}
+	mo.observed("p1", 100)
+	spark := mo.roll("p1")
+	runes := []rune(spark)
+	if len(runes) != sparkWidth {
+		t.Fatalf("spark width = %d, want %d", len(runes), sparkWidth)
+	}
+	if runes[sparkWidth-1] != '█' {
+		t.Fatalf("the busiest, newest bucket should peak, got %q", spark)
+	}
+	if runes[0] != '▁' {
+		t.Fatalf("the oldest, empty bucket should be baseline, got %q", spark)
+	}
+	// The bucket resets after rolling, so a quiet tick shifts the spike one slot
+	// left rather than re-counting it; it takes a full window to drain flat.
+	if got := mo.roll("p1"); got != "▁▁▁▁▁▁█▁" {
+		t.Fatalf("a quiet tick should shift the spike left, got %q", got)
+	}
+	for range sparkWidth {
+		mo.roll("p1")
+	}
+	if got := mo.roll("p1"); got != "▁▁▁▁▁▁▁▁" {
+		t.Fatalf("the spike should drain flat after a full window, got %q", got)
+	}
+}
+
+func TestRenderSpark(t *testing.T) {
+	if got := renderSpark([]int{0, 0, 0}); got != "▁▁▁" {
+		t.Fatalf("all-zero = %q", got)
+	}
+	if got := renderSpark([]int{0, 4, 8}); got != "▁▄█" {
+		t.Fatalf("scaled = %q", got)
 	}
 }
 
@@ -125,8 +168,8 @@ func TestActivityText(t *testing.T) {
 
 // TestMonitorTickSettlesAndEmits drives the server-level tick: a panel that has
 // gone quiet settles to idle and the tick emits a "telemetry" refresh carrying
-// the new state and activity line. A second tick with nothing new reports no
-// change.
+// the new state, activity, and sparkline. A second tick with nothing new reports
+// no change.
 func TestMonitorTickSettlesAndEmits(t *testing.T) {
 	mo, clk := newTestMonitor()
 	cc := &clientConn{out: make(chan proto.ServerMsg, 8), attached: map[string]bool{}}
@@ -149,8 +192,8 @@ func TestMonitorTickSettlesAndEmits(t *testing.T) {
 	if s.panels[0].State != panel.Idle {
 		t.Fatalf("a quiet panel should settle to idle, got %v", s.panels[0].State)
 	}
-	if msg.Panels[0].State != "idle" || msg.Panels[0].Activity == "" {
-		t.Fatalf("telemetry should carry state and activity, got %+v", msg.Panels[0])
+	if msg.Panels[0].State != "idle" || msg.Panels[0].Activity == "" || msg.Panels[0].Spark == "" {
+		t.Fatalf("telemetry should carry state/activity/spark, got %+v", msg.Panels[0])
 	}
 
 	// The activity line carries a live age, so it keeps refreshing while the
