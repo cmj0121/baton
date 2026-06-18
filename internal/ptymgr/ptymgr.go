@@ -43,18 +43,35 @@ func (m *Manager) OnOutput(fn func(id string, data []byte)) { m.onOutput = fn }
 // OnClose registers a callback fired when a panel's process exits on its own.
 func (m *Manager) OnClose(fn func(id string)) { m.onClose = fn }
 
+// Spec describes the process behind a panel: the binary, its arguments, and the
+// directory it runs in. The zero value (empty Command) launches the user's shell
+// in the inherited directory — the plain shell-panel case.
+type Spec struct {
+	Command string   // binary path; empty = the user's shell ($SHELL, then /bin/sh)
+	Args    []string // arguments, e.g. an agent profile's flags
+	Dir     string   // working directory; empty inherits the server's
+}
+
 // Start launches command (a binary path) under a new PTY for the given panel id.
-// An empty command falls back to the user's shell ($SHELL, then /bin/sh). Output
-// is streamed to the sink and kept in a small ring for replay; when the process
+// An empty command falls back to the user's shell. It is the simple shell-panel
+// entry; StartCmd carries arguments and a working directory for agent panels.
+func (m *Manager) Start(id, command string) error {
+	return m.StartCmd(id, Spec{Command: command})
+}
+
+// StartCmd launches spec under a new PTY for the given panel id. Output is
+// streamed to the sink and kept in a small ring for replay; when the process
 // exits its PTY is reaped but the ring is retained, so the final result can
 // still be shown until the panel is closed or purged.
-func (m *Manager) Start(id, command string) error {
+func (m *Manager) StartCmd(id string, spec Spec) error {
+	command := spec.Command
 	if command == "" {
 		command = DefaultShell()
 	}
 
-	cmd := exec.Command(command)
+	cmd := exec.Command(command, spec.Args...)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	cmd.Dir = spec.Dir // empty inherits the server's working directory
 
 	f, err := pty.Start(cmd)
 	if err != nil {
@@ -124,6 +141,22 @@ func (m *Manager) Snapshot(id string) []byte {
 	return nil
 }
 
+// Tail returns up to the last n bytes of a panel's retained output, the cheap
+// read the Monitor uses to sniff whether a quiet panel is waiting on you. Nil for
+// an unknown id; the whole ring when it holds fewer than n bytes.
+func (m *Manager) Tail(id string, n int) []byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.ptys[id]
+	if !ok {
+		return nil
+	}
+	if n >= len(p.ring) {
+		return append([]byte(nil), p.ring...)
+	}
+	return append([]byte(nil), p.ring[len(p.ring)-n:]...)
+}
+
 // livePane returns a panel's pane if it exists and its process is still running.
 // It is the shared guard for operations that must skip unknown or exited (dead)
 // panels; the PTY is touched by the caller after the lock is released.
@@ -155,7 +188,7 @@ func (m *Manager) StartShell(id string) error { return m.Start(id, "") }
 
 // Stop terminates the PTY backing the given panel id, if any. Closing the
 // master hangs up the child; the pump then reaps it. Safe to call for an unknown
-// id (e.g. a mock panel with no real process).
+// id (a panel with no live process).
 func (m *Manager) Stop(id string) { m.remove(id) }
 
 func (m *Manager) remove(id string) {

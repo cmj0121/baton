@@ -4,6 +4,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -13,6 +15,7 @@ import (
 	vt "github.com/charmbracelet/x/vt"
 
 	"github.com/cmj0121/baton/internal/client"
+	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 )
@@ -100,10 +103,12 @@ type model struct {
 	editing   bool      // capturing the next key press as a rebind
 	editIdx   int       // binding being rebound; editPrefix means the leader key
 
-	shellPath string       // configured default shell binary path ("" = system shell)
-	input     inputPurpose // active text-input overlay, or inputNone
-	inputBuf  string       // text typed into the overlay
-	helpFrom  mode         // the view the key map (?) was opened from, to restore on esc
+	shellPath    string                         // configured default shell binary path ("" = system shell)
+	defaultAgent string                         // agent profile the new-agent action spawns ("" = claude)
+	agents       map[string]config.AgentProfile // user-configured agent profiles
+	input        inputPurpose                   // active text-input overlay, or inputNone
+	inputBuf     string                         // text typed into the overlay
+	helpFrom     mode                           // the view the key map (?) was opened from, to restore on esc
 
 	renameID    string // panel id being renamed via inputRename ("" if a group)
 	renameGroup string // group being renamed via inputRename ("" if a panel)
@@ -135,6 +140,7 @@ const (
 	inputNone        inputPurpose = iota
 	inputShellPath                // editing the default shell in panel config
 	inputNewPanelCmd              // the prefix+n new-panel command popup
+	inputAgentDir                 // the workdir for a new agent panel
 	inputGroupName                // naming a new group from the marked panels
 	inputRename                   // renaming the selected panel or group
 )
@@ -160,6 +166,8 @@ func New(c *client.Client) tea.Model {
 		prefixKey:         p.prefix,
 		binds:             p.binds,
 		shellPath:         p.shellPath,
+		defaultAgent:      p.defaultAgent,
+		agents:            p.agents,
 	}
 }
 
@@ -270,6 +278,7 @@ func (m model) lookupEscape(key string) (binding, bool) {
 type eventMsg proto.ServerMsg
 type panelOutputMsg proto.ServerMsg
 type statsEventMsg proto.ServerMsg
+type telemetryEventMsg proto.ServerMsg
 type connClosedMsg struct{}
 type tickMsg time.Time
 
@@ -300,13 +309,17 @@ func waitStats(ch chan proto.ServerMsg) tea.Cmd {
 	return waitMsg(ch, func(m proto.ServerMsg) tea.Msg { return statsEventMsg(m) })
 }
 
+func waitTelemetry(ch chan proto.ServerMsg) tea.Cmd {
+	return waitMsg(ch, func(m proto.ServerMsg) tea.Msg { return telemetryEventMsg(m) })
+}
+
 // tick drives the footer clock, firing once a second.
 func tick() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), tick())
+	return tea.Batch(waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), waitTelemetry(m.client.Telemetry), tick())
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -341,6 +354,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statsEventMsg:
 		m.applyEvent(proto.ServerMsg(msg))
 		return m, waitStats(m.client.Stats)
+
+	case telemetryEventMsg:
+		m.applyTelemetry(proto.ServerMsg(msg))
+		return m, waitTelemetry(m.client.Telemetry)
 
 	case connClosedMsg:
 		m.status = "server closed the connection"
@@ -450,6 +467,27 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 	}
 }
 
+// applyTelemetry merges the Monitor's live fields — state, activity, sparkline —
+// into the current fleet by id, leaving the panel set, order, selection, and group
+// tiles untouched. Telemetry refreshes panels; it never adds or removes them (a
+// structural "panels" snapshot does that). Updating in place, and skipping ids the
+// fleet no longer holds, keeps a telemetry tick built just before a close — and
+// delivered on its own channel, out of order with that close — from resurrecting
+// the closed panel.
+func (m *model) applyTelemetry(sm proto.ServerMsg) {
+	live := make(map[string]proto.Panel, len(sm.Panels))
+	for _, p := range sm.Panels {
+		live[p.ID] = p
+	}
+	for i := range m.fleet {
+		if p, ok := live[m.fleet[i].ID]; ok {
+			m.fleet[i].State = panel.ParseState(p.State)
+			m.fleet[i].Activity = p.Activity
+			m.fleet[i].Spark = p.Spark
+		}
+	}
+}
+
 func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := k.String()
 
@@ -556,18 +594,18 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "tab":
 		// In the key map, tab jumps to the next purpose section; elsewhere it
-		// steps the selection forward.
+		// cycles the selection forward, wrapping like the group split's focus.
 		if m.mode == modeKeyMap {
 			m.jumpSection(1)
 		} else {
-			m.move(1)
+			m.cycle(1)
 		}
 		return m, nil
 	case "shift+tab":
 		if m.mode == modeKeyMap {
 			m.jumpSection(-1)
 		} else {
-			m.move(-1)
+			m.cycle(-1)
 		}
 		return m, nil
 
@@ -641,6 +679,8 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		}
 	case inputNewPanelCmd:
 		return m.spawnPanel(buf), nil
+	case inputAgentDir:
+		return m.spawnAgent(buf), nil
 	case inputGroupName:
 		return m.commitGroup(buf), nil
 	case inputRename:
@@ -660,6 +700,89 @@ func (m model) spawnPanel(command string) model {
 	}
 	m.status = "spawning " + shellLabel(command)
 	return m
+}
+
+// resolveAgent picks the agent profile the new-agent action spawns: the
+// configured default (falling back to "claude"), looked up in the user's
+// profiles and then the built-ins. ok is false when the named profile is unknown.
+func (m model) resolveAgent() (config.AgentProfile, string, bool) {
+	name := m.defaultAgent
+	if name == "" {
+		name = defaultAgentName
+	}
+	if prof, ok := m.agents[name]; ok {
+		return prof, name, true
+	}
+	if prof, ok := builtinAgent(name); ok {
+		return prof, name, true
+	}
+	return config.AgentProfile{}, name, false
+}
+
+// spawnAgent asks the server to create an agent panel: the resolved profile's
+// command and args, run in dir — the directory the agent operates on. An empty
+// dir falls back to the user's home, so an agent always lands somewhere sensible.
+func (m model) spawnAgent(dir string) model {
+	prof, name, ok := m.resolveAgent()
+	if !ok {
+		m.status = fmt.Sprintf("no agent profile %q configured", name)
+		return m
+	}
+	dir = expandDir(dir)
+	if m.client != nil {
+		cmd := proto.Command{Action: "panel.create", Kind: proto.KindAgent, Path: prof.Command, Args: prof.Args, Dir: dir}
+		if err := m.client.Send(cmd); err != nil {
+			m.status = "send failed: " + err.Error()
+			return m
+		}
+	}
+	m.status = fmt.Sprintf("spawning %s · %s", name, dirLabel(dir))
+	return m
+}
+
+// workingDir is the client's current directory, the default workdir offered for a
+// new agent. Empty if it cannot be determined.
+func workingDir() string {
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+	return ""
+}
+
+// expandDir resolves a typed workdir to an absolute path: ~ and ~/… expand to the
+// home directory, a relative path resolves against the client's cwd, and an empty
+// path falls back to home. The agent runs on the server, so an absolute path is
+// what travels unambiguously over the socket.
+func expandDir(dir string) string {
+	dir = strings.TrimSpace(dir)
+	home, _ := os.UserHomeDir()
+	switch {
+	case dir == "" || dir == "~":
+		return home
+	case strings.HasPrefix(dir, "~/"):
+		dir = filepath.Join(home, dir[2:])
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		return abs
+	}
+	return dir
+}
+
+// dirLabel shortens a workdir for the status line, replacing the home directory
+// with ~ so a long absolute path stays readable. The match is on a path boundary,
+// so a sibling like /Users/bobby is never mistaken for a child of /Users/bob.
+func dirLabel(dir string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return dir
+	}
+	if dir == home {
+		return "~"
+	}
+	if rest := strings.TrimPrefix(dir, home+string(os.PathSeparator)); rest != dir {
+		return "~" + string(os.PathSeparator) + rest
+	}
+	return dir
 }
 
 // shellLabel describes a configured shell path; an empty path means the system
@@ -701,6 +824,15 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		m.input = inputNewPanelCmd
 		m.inputBuf = m.shellPath
 		m.status = "new panel · type the command, enter to spawn"
+	case actNewAgent:
+		_, name, ok := m.resolveAgent()
+		if !ok {
+			m.status = fmt.Sprintf("no agent profile %q configured", name)
+			return m, nil
+		}
+		m.input = inputAgentDir
+		m.inputBuf = workingDir()
+		m.status = fmt.Sprintf("new %s agent · type the workdir, enter to spawn", name)
 	case actClose:
 		if it, ok := m.selectedItem(); !ok {
 			m.status = "no panel to close"
@@ -930,6 +1062,23 @@ func (m *model) move(delta int) {
 	}
 }
 
+// cycle steps the cursor by delta and wraps at the ends, so tab walks the whole
+// list as a ring — the same behaviour as the group split, where tab cycles the
+// member focus. The grid arrows still clamp via move; only tab wraps.
+func (m *model) cycle(delta int) {
+	m.cursor = wrapIndex(m.cursor, delta, m.itemCount())
+}
+
+// wrapIndex steps index i by delta within [0, n) and wraps at both ends — the
+// shared ring-step behind the dashboard's tab and the group split's focus. It is
+// safe for an empty list (n <= 0), returning 0.
+func wrapIndex(i, delta, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	return ((i+delta)%n + n) % n
+}
+
 func (m model) itemCount() int {
 	switch m.mode {
 	case modeKeyMap:
@@ -1115,7 +1264,8 @@ func (m model) zoomView() string {
 // space-efficient tree + preview split.
 func (m model) dashboardView() string {
 	items := m.dashItems() // built once and threaded through the render below
-	heading := sectionStyle.Render(spaced("FLEET")) + mutedStyle.Render(fmt.Sprintf("   %d panel(s)", len(m.fleet)))
+	heading := sectionStyle.Render(spaced("FLEET")) +
+		mutedStyle.Render(fmt.Sprintf("   %d panel(s)  ", len(m.fleet))) + fleetBreakdown(m.fleet, items)
 	summary := m.summaryStrip()
 	body := m.cardGrid(items)
 	if len(items) > treeThreshold {
@@ -1212,7 +1362,7 @@ func (m model) renderCard(p panel.Panel, selected bool) string {
 	state := lipgloss.NewStyle().Foreground(info.color).Render(info.label)
 	kindLine := badge + "  " + state
 
-	spark := lipgloss.NewStyle().Foreground(info.color).Render(sparkFor(p.State))
+	spark := lipgloss.NewStyle().Foreground(info.color).Render(p.Spark)
 	footer := spark + "  " + mutedStyle.Render(truncate(p.Activity, cardInner-lipgloss.Width(spark)-2))
 
 	style := lipgloss.NewStyle().
@@ -1348,8 +1498,8 @@ func (m model) renderTree(items []dashItem, start, end, visible int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
-// renderPreview is the right pane: a metadata block plus an output tail for the
-// selected panel, or a member roster for the selected group.
+// renderPreview is the right pane: a metadata block for the selected panel, or a
+// member roster for the selected group.
 func (m model) renderPreview(items []dashItem, width int) string {
 	if m.cursor < 0 || m.cursor >= len(items) {
 		return mutedStyle.Render("no panel selected")
@@ -1370,17 +1520,10 @@ func (m model) renderPreview(items []dashItem, width int) string {
 		metaRow("state", info.label, info.color),
 		metaRow("kind", p.Kind.String(), colInk),
 		metaRow("activity", p.Activity, colInk),
-		metaRow("signal", sparkFor(p.State), info.color),
+		metaRow("signal", p.Spark, info.color),
 	)
 
-	out := []string{mutedStyle.Render(spaced("OUTPUT"))}
-	for _, line := range previewLines(p) {
-		out = append(out, mutedStyle.Render(truncate(line, width)))
-	}
-
-	return lipgloss.JoinVertical(lipgloss.Left,
-		title, statusLine, rule, meta, "", lipgloss.JoinVertical(lipgloss.Left, out...),
-	)
+	return lipgloss.JoinVertical(lipgloss.Left, title, statusLine, rule, meta)
 }
 
 // metaRow formats one aligned "label  value" line for the preview pane.
@@ -1388,25 +1531,6 @@ func metaRow(label, value string, valColor lipgloss.Color) string {
 	l := mutedStyle.Render(fmt.Sprintf("%-9s", label))
 	v := lipgloss.NewStyle().Foreground(valColor).Render(value)
 	return l + " " + v
-}
-
-// previewLines fakes a short tail of recent output, shaped by the panel's kind
-// and state, so the preview pane reads like a live window.
-func previewLines(p panel.Panel) []string {
-	switch {
-	case p.State == panel.Attention:
-		return []string{"▌ I need your input to continue:", "▌ > Apply the proposed changes? (y/n)"}
-	case p.State == panel.Exited:
-		return []string{"$ done — process exited cleanly", "  (press C-t w to dismiss)"}
-	case p.Kind == panel.Shell && p.State == panel.Running:
-		return []string{"$ go build ./...", "  compiling internal/tui …", "  ok  0.6s"}
-	case p.Kind == panel.Shell:
-		return []string{"$ tail -f app.log", "  (no new lines)"}
-	case p.State == panel.Idle:
-		return []string{"… waiting for the next instruction", "  idle"}
-	default:
-		return []string{"› thinking …", "› drafting the next edit", "› streaming tokens ▁▂▃▅▇"}
-	}
 }
 
 // helpView is the read-only key list for the current stage — the keys that view
@@ -1628,6 +1752,8 @@ func (m model) inputView() string {
 		title, prompt = "DEFAULT SHELL", "shell path  (blank = system default)"
 	case inputNewPanelCmd:
 		title, prompt, action = "NEW PANEL", "command to run  (blank = system shell)", "spawn"
+	case inputAgentDir:
+		title, prompt, action = "NEW AGENT", "working directory  (blank = home)", "spawn"
 	case inputGroupName:
 		title, prompt, action = "NEW GROUP", "work-item name", "create"
 	case inputRename:

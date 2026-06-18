@@ -342,13 +342,9 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	n := len(m.displayedMembers())
 	switch key {
 	case "tab", "right", "l", "down", "j":
-		if n > 0 {
-			m.groupFocus = (m.groupFocus + 1) % n
-		}
+		m.groupFocus = wrapIndex(m.groupFocus, 1, n)
 	case "shift+tab", "left", "h", "up", "k":
-		if n > 0 {
-			m.groupFocus = (m.groupFocus - 1 + n) % n
-		}
+		m.groupFocus = wrapIndex(m.groupFocus, -1, n)
 	case "+", "=":
 		return m.adjustGroupCols(1), nil
 	case "-", "_":
@@ -575,10 +571,10 @@ func (m model) backToGroup() (tea.Model, tea.Cmd) {
 // to the last line.
 func (m model) groupZoomView() string {
 	tiles, tree := m.splitMembers()
-	total := len(tiles) + len(tree)
+	members := append(append([]panel.Panel{}, tiles...), tree...)
 	header := sectionStyle.Render(spaced("GROUP")) + "  " +
 		lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(m.groupName) +
-		mutedStyle.Render(fmt.Sprintf("   %d panel(s)", total))
+		mutedStyle.Render(fmt.Sprintf("   %d panel(s)  ", len(members))) + kindBreakdown(members)
 	if len(tree) > 0 {
 		header += lipgloss.NewStyle().Foreground(states[panel.Idle].color).
 			Render(fmt.Sprintf("   · %d live · %d in list", len(tiles), len(tree)))
@@ -702,19 +698,17 @@ func (m model) renderTile(p panel.Panel, focused bool, emuCols, emuRows int) str
 }
 
 // tileBody is a tile's content rows, always exactly emuRows tall: the member's
-// live screen when it is streaming, or its preview tail before output lands (and
-// when there is no client, as in tests). When showCursor is set — the tile being
-// interacted with — a reverse-video cell is drawn at the emulator's cursor, so
-// you can see where your typing lands, exactly as the single zoom does.
+// live screen when it is streaming, or a one-line activity note before output
+// lands (and when there is no client, as in tests). When showCursor is set — the
+// tile being interacted with — a reverse-video cell is drawn at the emulator's
+// cursor, so you can see where your typing lands, exactly as the single zoom does.
 func (m model) tileBody(p panel.Panel, emuCols, emuRows int, showCursor bool) []string {
 	emu := m.groupEmus[p.ID]
 	var src []string
 	if emu != nil {
 		src = strings.Split(emu.Render(), "\n")
-	} else {
-		for _, line := range previewLines(p) {
-			src = append(src, mutedStyle.Render(truncate(line, emuCols)))
-		}
+	} else if p.Activity != "" {
+		src = []string{mutedStyle.Render(truncate(p.Activity, emuCols))}
 	}
 	rows := make([]string, emuRows) // pad/clip to a fixed tile height; copy stops at min
 	copy(rows, src)

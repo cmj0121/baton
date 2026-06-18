@@ -26,6 +26,8 @@ type Command struct {
 	Kind   string   `json:"kind,omitempty"` // panel kind for "panel.create" (default "shell")
 	ID     string   `json:"id,omitempty"`   // target panel for close/attach/input/resize, or the panel to rename
 	Path   string   `json:"path,omitempty"` // init command (binary path) for "panel.create"; empty = default shell
+	Args   []string `json:"args,omitempty"` // command arguments for "panel.create" (an agent profile's args)
+	Dir    string   `json:"dir,omitempty"`  // working directory the new panel's process runs in ("panel.create")
 	Data   []byte   `json:"data,omitempty"` // input bytes for "panel.input"
 	Rows   int      `json:"rows,omitempty"` // window size for "panel.resize"
 	Cols   int      `json:"cols,omitempty"`
@@ -41,15 +43,16 @@ type Panel struct {
 	Title    string `json:"title"`              // human label shown on the dashboard
 	State    string `json:"state,omitempty"`    // lifecycle: spawning|running|idle|attention|exited
 	Group    string `json:"group,omitempty"`    // work item the panel belongs to, if any
-	Activity string `json:"activity,omitempty"` // short status line (mock telemetry for now)
+	Activity string `json:"activity,omitempty"` // short status line the Monitor keeps live
+	Spark    string `json:"spark,omitempty"`    // output-rate sparkline over the recent window
 }
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type    string  `json:"type"`              // "welcome" | "panels" | "output" | "stats" | "error"
+	Type    string  `json:"type"`              // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error"
 	Version string  `json:"version,omitempty"` // set on "welcome"
 	Error   string  `json:"error,omitempty"`   // set on "error"
-	Panels  []Panel `json:"panels,omitempty"`  // full snapshot on "panels"
+	Panels  []Panel `json:"panels,omitempty"`  // full snapshot on "panels"; live state/spark refresh on "telemetry"
 	ID      string  `json:"id,omitempty"`      // panel id on "output"
 	Data    []byte  `json:"data,omitempty"`    // pty output bytes on "output"
 

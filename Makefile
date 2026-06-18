@@ -1,10 +1,15 @@
 SUBDIR :=
 
-.PHONY: all clean lint test run build upgrade help $(SUBDIR)
+.PHONY: all clean lint test run build install uninstall upgrade help $(SUBDIR)
 
 # strip the symbol table (-s) and DWARF debug info (-w), and trim absolute paths,
 # to keep the release binary small and reproducible.
 LDFLAGS := -s -w
+
+# system install prefix; baton also lands in the Go bin dir via `go install`.
+PREFIX ?= /usr/local
+# elevate only when the system bin dir is not writable by the current user.
+SUDO := $(shell [ -w $(PREFIX)/bin ] 2>/dev/null || echo sudo)
 
 all: $(SUBDIR) 		# default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -25,6 +30,14 @@ run:				# run in the local environment
 
 build:				# build the binary/library
 	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/baton ./cmd/baton
+
+install: build		# install baton to the Go bin dir and $(PREFIX)/bin
+	go install -trimpath -ldflags "$(LDFLAGS)" ./cmd/baton
+	$(SUDO) install -m 0755 bin/baton $(PREFIX)/bin/baton
+
+uninstall:			# remove baton from the Go bin dir and $(PREFIX)/bin
+	rm -f $(shell go env GOPATH)/bin/baton
+	$(SUDO) rm -f $(PREFIX)/bin/baton
 
 upgrade:			# upgrade all the necessary packages
 	pre-commit autoupdate

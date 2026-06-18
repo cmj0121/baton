@@ -20,6 +20,7 @@ const (
 	keyPrefix      = "ctrl+t"
 	keyNewPanel    = "p"
 	keyNewForm     = "c" // "choose the command" (n is rename)
+	keyNewAgent    = "A" // spawn an agent panel (shift+a)
 	keyClose       = "w"
 	keyPurge       = "x"
 	keyHelp        = "?" // view the key list for the current view
@@ -66,6 +67,7 @@ type action int
 const (
 	actNewPanel action = iota
 	actNewForm
+	actNewAgent
 	actClose
 	actPurge
 	actHelp
@@ -111,6 +113,7 @@ type binding struct {
 var bindings = []binding{
 	{"new-panel", keyNewPanel, "spawn a new shell panel", actNewPanel, "Panels"},
 	{"new-panel-form", keyNewForm, "new panel (choose the command)", actNewForm, "Panels"},
+	{"new-agent", keyNewAgent, "spawn an agent panel in a workdir", actNewAgent, "Panels"},
 	{"close", keyClose, "close the selected panel", actClose, "Panels"},
 	{"purge-exited", keyPurge, "purge all exited panels", actPurge, "Panels"},
 
@@ -137,6 +140,21 @@ type prefs struct {
 	confirmClose      bool
 	allowNameConflict bool
 	shellPath         string
+	defaultAgent      string                         // agent profile the new-agent action spawns
+	agents            map[string]config.AgentProfile // user-configured agent profiles
+}
+
+// defaultAgentName is the built-in agent profile, used when none is configured —
+// Claude is the first agent Baton ships with.
+const defaultAgentName = "claude"
+
+// builtinAgent returns the profile for a name the user has not configured. Only
+// the built-in "claude" exists for now.
+func builtinAgent(name string) (config.AgentProfile, bool) {
+	if name == "" || name == defaultAgentName {
+		return config.AgentProfile{Command: "claude"}, true
+	}
+	return config.AgentProfile{}, false
 }
 
 // loadPrefs reads the config file, returning defaults for anything missing or on
@@ -164,6 +182,8 @@ func loadPrefs() prefs {
 		p.allowNameConflict = *cfg.Settings.AllowNameConflict
 	}
 	p.shellPath = cfg.Panel.Shell
+	p.defaultAgent = cfg.Panel.DefaultAgent
+	p.agents = cfg.Panel.Agents
 	return p
 }
 
@@ -195,7 +215,11 @@ func (m model) saveConfig() error {
 			ConfirmClose:      &confirmClose,
 			AllowNameConflict: &allowNameConflict,
 		},
-		Panel: config.PanelDefaults{Shell: m.shellPath},
+		Panel: config.PanelDefaults{
+			Shell:        m.shellPath,
+			DefaultAgent: m.defaultAgent,
+			Agents:       m.agents, // round-trip the user's profiles so a save never drops them
+		},
 	}.Save()
 }
 

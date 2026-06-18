@@ -35,13 +35,13 @@ Keys are modal: on the **dashboard** and in a **group** each action is a single 
 keystrokes drive the program, so a Baton action is the leader **`C-t`** then the key. Press **`?`** for the full,
 rebindable list of the current view.
 
-| Context         | Keys                                                                          |
-| --------------- | ----------------------------------------------------------------------------- |
-| After `C-t`     | `d` dashboard, `g` group, `k` key map, `q` detach                             |
-| Dashboard       | `hjkl` move, `enter` open, `p` new panel, `c` new (pick cmd), `w` close       |
-| Dashboard group | `g` mark, `G` group, `a` add, `u` ungroup, `e` rename                         |
-| Group           | `tab` focus, `+`/`-` columns, `p` pin, `i` interact, `x` remove, `enter` zoom |
-| Zoom / interact | type to drive the program, `C-t C-t` sends a literal `C-t`                    |
+| Context         | Keys                                                                             |
+| --------------- | -------------------------------------------------------------------------------- |
+| After `C-t`     | `d` dashboard, `g` group, `k` key map, `q` detach                                |
+| Dashboard       | `hjkl` move, `enter` open, `p` new panel, `A` new agent, `c` pick cmd, `w` close |
+| Dashboard group | `g` mark, `G` group, `a` add, `u` ungroup, `e` rename                            |
+| Group           | `tab` focus, `+`/`-` columns, `p` pin, `i` interact, `x` remove, `enter` zoom    |
+| Zoom / interact | type to drive the program, `C-t C-t` sends a literal `C-t`                       |
 
 Names stay unique unless you set `allow-name-conflict`.
 

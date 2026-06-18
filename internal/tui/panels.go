@@ -37,6 +37,18 @@ func stateCounts(panels []panel.Panel) map[panel.State]int {
 	return counts
 }
 
+// kindCounts tallies panels by kind, the shared input to a kind breakdown.
+func kindCounts(panels []panel.Panel) (agents, shells int) {
+	for _, p := range panels {
+		if p.IsAgent() {
+			agents++
+		} else {
+			shells++
+		}
+	}
+	return agents, shells
+}
+
 // mergeFleet maps a server snapshot into the dashboard's panel model. The server
 // owns the fleet now, so this is a faithful translation — whatever it sends is
 // what the cockpit shows.
@@ -48,19 +60,21 @@ func mergeFleet(panels []proto.Panel) []panel.Panel {
 	return out
 }
 
-// sparkFor is a placeholder activity sparkline keyed on a panel's state, derived
-// at render time until the Monitor reports real output rates.
-func sparkFor(s panel.State) string {
-	switch s {
-	case panel.Attention:
-		return "▂▃▅▇▆▃▁"
-	case panel.Running:
-		return "▃▅▆▇▆▅▃▅"
-	case panel.Idle:
-		return "▂▁▁▂▁▁▁▁"
-	case panel.Spawning:
-		return "▁▁▂▁▁▁▁▁"
-	default: // exited
-		return "▁▁▁▁▁▁▁▁"
+// activeState reports whether a state is live enough to animate — running,
+// attention, or spawning — as opposed to resting (idle) or done (exited). A
+// group shows its sparkline only when it rolls up to one of these.
+func activeState(s panel.State) bool {
+	return s == panel.Running || s == panel.Attention || s == panel.Spawning
+}
+
+// groupSpark is the sparkline a work-item card animates with: the live bars of the
+// member the group rolls up to, so the card breathes with the panel that speaks
+// for it. Empty when no such member has reported telemetry yet.
+func groupSpark(members []panel.Panel, rollup panel.State) string {
+	for _, p := range members {
+		if p.State == rollup && p.Spark != "" {
+			return p.Spark
+		}
 	}
+	return ""
 }

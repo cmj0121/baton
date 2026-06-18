@@ -7,6 +7,21 @@ import (
 	"github.com/cmj0121/baton/internal/panel"
 )
 
+// sampleFleet is a believable mixed fleet of agents and shells across every
+// lifecycle state, used to exercise the dashboard's rendering and navigation.
+func sampleFleet() []panel.Panel {
+	return []panel.Panel{
+		{ID: "a1", Kind: panel.Agent, Title: "claude · refactor auth", State: panel.Attention, Activity: "needs you · 8m"},
+		{ID: "a2", Kind: panel.Agent, Title: "claude · write tests", State: panel.Running, Activity: "running · 3m"},
+		{ID: "a3", Kind: panel.Agent, Title: "copilot · api docs", State: panel.Idle, Activity: "idle · 21m"},
+		{ID: "s1", Kind: panel.Shell, Title: "shell · make build", State: panel.Running, Activity: "running · 1m"},
+		{ID: "s2", Kind: panel.Shell, Title: "shell · tail logs", State: panel.Idle, Activity: "idle · 12m"},
+		{ID: "a4", Kind: panel.Agent, Title: "claude · review PR", State: panel.Spawning, Activity: "spawning · 2s"},
+		{ID: "s3", Kind: panel.Shell, Title: "shell · run server", State: panel.Running, Activity: "running · 44m"},
+		{ID: "a5", Kind: panel.Agent, Title: "claude · migrate db", State: panel.Exited, Activity: "exited"},
+	}
+}
+
 // groupedFleet is a small fleet with two work items and two lone panels, in a
 // deliberately interleaved order to exercise the fold.
 func groupedFleet() []panel.Panel {
@@ -133,13 +148,13 @@ func TestGroupViewsRender(t *testing.T) {
 	}{
 		{"group-grid", func(m *model) { m.fleet = groupedFleet() }},
 		{"group-grid-selecting", func(m *model) { m.fleet = groupedFleet(); m.toggleMark(m.dashItems()[0]) }},
-		{"group-tree", func(m *model) { m.fleet = append(groupedFleet(), panel.Mock()...); m.height = 40 }},
+		{"group-tree", func(m *model) { m.fleet = append(groupedFleet(), sampleFleet()...); m.height = 40 }},
 		{"group-tree-selecting", func(m *model) {
-			m.fleet = append(groupedFleet(), panel.Mock()...)
+			m.fleet = append(groupedFleet(), sampleFleet()...)
 			m.height = 40
 			m.toggleMark(m.dashItems()[0])
 		}},
-		{"group-preview", func(m *model) { m.fleet = append(groupedFleet(), panel.Mock()...); m.height = 40; m.cursor = 0 }},
+		{"group-preview", func(m *model) { m.fleet = append(groupedFleet(), sampleFleet()...); m.height = 40; m.cursor = 0 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := baseModel()
@@ -379,6 +394,54 @@ func TestSnapshotInKeyMapKeepsRowCursor(t *testing.T) {
 	m.applyEvent(snapshot(groupedFleet()))
 	if m.cursor != 5 {
 		t.Fatalf("a snapshot in the key map should leave the row cursor at 5, got %d", m.cursor)
+	}
+}
+
+// TestKindBreakdown checks the agent/shell split shows only the kinds present.
+func TestKindBreakdown(t *testing.T) {
+	got := kindBreakdown([]panel.Panel{{Kind: panel.Agent}, {Kind: panel.Agent}, {Kind: panel.Shell}})
+	if !strings.Contains(got, "2 agent") || !strings.Contains(got, "1 shell") {
+		t.Fatalf("kindBreakdown = %q, want 2 agent / 1 shell", got)
+	}
+	if got := kindBreakdown([]panel.Panel{{Kind: panel.Shell}}); strings.Contains(got, "agent") {
+		t.Fatalf("a shell-only set should not mention agents, got %q", got)
+	}
+	if got := kindBreakdown(nil); !strings.Contains(got, "—") {
+		t.Fatalf("empty should be a dash, got %q", got)
+	}
+}
+
+// TestFleetBreakdownCountsGroups checks the dashboard breakdown splits by kind and
+// counts work-item groups, and is empty for an empty fleet.
+func TestFleetBreakdownCountsGroups(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet() // groups api + db, agents and shells mixed
+	got := fleetBreakdown(m.fleet, m.dashItems())
+	if !strings.Contains(got, "2 group") {
+		t.Fatalf("fleetBreakdown should count the 2 groups, got %q", got)
+	}
+	if !strings.Contains(got, "agent") || !strings.Contains(got, "shell") {
+		t.Fatalf("fleetBreakdown should split the kinds, got %q", got)
+	}
+	if got := fleetBreakdown(nil, nil); got != "" {
+		t.Fatalf("an empty fleet should yield an empty breakdown, got %q", got)
+	}
+}
+
+// TestGroupCardSparklineWhenActive checks a group card animates with its rolled-up
+// member's live sparkline while active, and stays still (chips only) when done.
+func TestGroupCardSparklineWhenActive(t *testing.T) {
+	m := baseModel()
+
+	const bars = "▂▃▅▇▆▃▁"
+	active := dashItem{kind: itemGroup, name: "api", members: []panel.Panel{{State: panel.Running, Spark: bars}}}
+	if !strings.Contains(m.renderGroupCard(active, false), bars) {
+		t.Fatal("an active group card should show its member's live sparkline")
+	}
+
+	done := dashItem{kind: itemGroup, name: "db", members: []panel.Panel{{State: panel.Exited, Spark: bars}}}
+	if strings.Contains(m.renderGroupCard(done, false), bars) {
+		t.Fatal("a done group card should not animate")
 	}
 }
 

@@ -659,6 +659,61 @@ func TestCloseGroupInOneCommand(t *testing.T) {
 	}
 }
 
+// TestCreateAgentPanelInWorkdir checks an agent panel runs its profile command
+// with args in the requested working directory, and that the snapshot carries the
+// agent kind and a workdir-named title. A stand-in command (sh -c pwd) prints the
+// directory it was launched in, standing in for a real agent CLI.
+func TestCreateAgentPanelInWorkdir(t *testing.T) {
+	c := startServer(t)
+	dir := t.TempDir()
+
+	if err := c.Send(proto.Command{
+		Action: "panel.create", Kind: proto.KindAgent,
+		Path: "/bin/sh", Args: []string{"-c", "pwd; sleep 30"}, Dir: dir,
+	}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	snap := recv(t, c)
+	if len(snap.Panels) != 1 {
+		t.Fatalf("expected one panel, got %+v", snap.Panels)
+	}
+	p := snap.Panels[0]
+	leaf := filepath.Base(dir)
+	if p.Kind != proto.KindAgent {
+		t.Fatalf("panel should be an agent, got kind %q", p.Kind)
+	}
+	if !strings.Contains(p.Title, leaf) {
+		t.Fatalf("agent title should name the workdir %q, got %q", leaf, p.Title)
+	}
+
+	// Attach and confirm the process actually ran in the workdir (its pwd output).
+	if err := c.Send(proto.Command{Action: "panel.attach", ID: p.ID}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case msg := <-c.Output:
+			if msg.ID == p.ID && strings.Contains(string(msg.Data), leaf) {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("agent output never showed the workdir leaf %q", leaf)
+		}
+	}
+}
+
+// TestCreateAgentPanelNeedsCommand checks an agent panel without a command errors.
+func TestCreateAgentPanelNeedsCommand(t *testing.T) {
+	c := startServer(t)
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: proto.KindAgent}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("an agent with no command should error, got %+v", msg)
+	}
+}
+
 // TestNamesAreTrimmed checks the server trims surrounding whitespace from group
 // and rename names, so " api " and "api" can never become two distinct work
 // items, and a whitespace-only name is rejected as empty (gap #9).

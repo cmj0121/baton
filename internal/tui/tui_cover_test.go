@@ -29,12 +29,12 @@ func TestViewRendersEveryMode(t *testing.T) {
 		name string
 		mut  func(*model)
 	}{
-		{"grid", func(m *model) { m.fleet = panel.Mock()[:3] }},
-		{"tree", func(m *model) { m.fleet = panel.Mock() }},
-		{"tree-scroll", func(m *model) { m.fleet = panel.Mock(); m.height = 20; m.cursor = 6 }},
+		{"grid", func(m *model) { m.fleet = sampleFleet()[:3] }},
+		{"tree", func(m *model) { m.fleet = sampleFleet() }},
+		{"tree-scroll", func(m *model) { m.fleet = sampleFleet(); m.height = 20; m.cursor = 6 }},
 		{"empty", func(m *model) { m.fleet = nil }},
-		{"keymap", func(m *model) { m.mode = modeKeyMap; m.fleet = panel.Mock()[:3] }},
-		{"help-dashboard", func(m *model) { m.mode = modeHelp; m.helpFrom = modeDashboard; m.fleet = panel.Mock()[:3] }},
+		{"keymap", func(m *model) { m.mode = modeKeyMap; m.fleet = sampleFleet()[:3] }},
+		{"help-dashboard", func(m *model) { m.mode = modeHelp; m.helpFrom = modeDashboard; m.fleet = sampleFleet()[:3] }},
 		{"help-group", func(m *model) { m.mode = modeHelp; m.helpFrom = modeGroupZoom; m.groupName = "api" }},
 		{"help-zoom", func(m *model) { m.mode = modeHelp; m.helpFrom = modeZoom }},
 		{"keymap-edit-prefix", func(m *model) { m.mode = modeKeyMap; m.editing = true; m.editIdx = editPrefix }},
@@ -45,9 +45,9 @@ func TestViewRendersEveryMode(t *testing.T) {
 		{"input-shell", func(m *model) { m.input = inputShellPath; m.inputBuf = "/bin/zsh" }},
 		{"input-new-panel", func(m *model) { m.input = inputNewPanelCmd; m.inputBuf = "/bin/sh" }},
 		{"zoom", func(m *model) { m.mode = modeZoom; m.zoomTitle = "shell #1" }},
-		{"prefix-armed", func(m *model) { m.fleet = panel.Mock()[:3]; m.prefix = true }},
-		{"error", func(m *model) { m.fleet = panel.Mock()[:3]; m.status = "error: boom" }},
-		{"narrow", func(m *model) { m.fleet = panel.Mock(); m.width = 40 }},
+		{"prefix-armed", func(m *model) { m.fleet = sampleFleet()[:3]; m.prefix = true }},
+		{"error", func(m *model) { m.fleet = sampleFleet()[:3]; m.status = "error: boom" }},
+		{"narrow", func(m *model) { m.fleet = sampleFleet(); m.width = 40 }},
 		{"quitting-detach", func(m *model) { m.quitting = true }},
 		{"quitting-restart", func(m *model) { m.quitting = true; m.restart = true }},
 		{"zero-size", func(m *model) { m.width = 0 }},
@@ -64,29 +64,13 @@ func TestViewRendersEveryMode(t *testing.T) {
 }
 
 func TestPreviewAcrossCursor(t *testing.T) {
-	// Walk the cursor over the whole fleet so every previewLines branch renders.
+	// Walk the cursor over the whole fleet so every preview-pane branch renders.
 	m := baseModel()
-	m.fleet = panel.Mock()
+	m.fleet = sampleFleet()
 	m.height = 40
 	for i := range m.fleet {
 		m.cursor = i
 		_ = m.View()
-	}
-}
-
-func TestPreviewLinesEveryShape(t *testing.T) {
-	shapes := []panel.Panel{
-		{State: panel.Attention},
-		{State: panel.Exited},
-		{Kind: panel.Shell, State: panel.Running},
-		{Kind: panel.Shell, State: panel.Idle},
-		{Kind: panel.Agent, State: panel.Idle},
-		{Kind: panel.Agent, State: panel.Running},
-	}
-	for _, p := range shapes {
-		if len(previewLines(p)) == 0 {
-			t.Fatalf("no preview lines for %+v", p)
-		}
 	}
 }
 
@@ -102,11 +86,6 @@ func TestSmallHelpers(t *testing.T) {
 	}
 	if spaced("AB") != "A B" {
 		t.Fatalf("spaced mismatch: %q", spaced("AB"))
-	}
-	for _, s := range []panel.State{panel.Attention, panel.Running, panel.Idle, panel.Spawning, panel.Exited} {
-		if sparkFor(s) == "" {
-			t.Fatalf("empty spark for %v", s)
-		}
 	}
 }
 
@@ -127,6 +106,28 @@ func TestApplyEventBranches(t *testing.T) {
 	m.applyEvent(proto.ServerMsg{Type: "error", Error: "boom"})
 	if m.status != "error: boom" {
 		t.Fatalf("error status = %q", m.status)
+	}
+}
+
+// TestApplyTelemetryMergesInPlace checks that a telemetry refresh updates live
+// fields of existing panels by id, but never adds or removes panels — so a stale
+// telemetry tick cannot resurrect a panel a structural snapshot already dropped.
+func TestApplyTelemetryMergesInPlace(t *testing.T) {
+	m := baseModel()
+	m.fleet = []panel.Panel{{ID: "1", Kind: panel.Agent, State: panel.Running, Activity: "running · 1s"}}
+
+	// A telemetry tick refreshes panel 1 and also carries a panel 2 the fleet no
+	// longer holds (e.g. built just before a close landed on the panels channel).
+	m.applyTelemetry(proto.ServerMsg{Type: "telemetry", Panels: []proto.Panel{
+		{ID: "1", State: "attention", Activity: "needs you · 12s", Spark: "▂▃▅▇"},
+		{ID: "2", State: "running", Activity: "running · 3s"},
+	}})
+
+	if len(m.fleet) != 1 {
+		t.Fatalf("telemetry must not change the panel set, got %d panels", len(m.fleet))
+	}
+	if m.fleet[0].State != panel.Attention || m.fleet[0].Activity != "needs you · 12s" || m.fleet[0].Spark != "▂▃▅▇" {
+		t.Fatalf("telemetry should refresh live fields in place, got %+v", m.fleet[0])
 	}
 }
 
@@ -165,7 +166,7 @@ func TestUpdateBranches(t *testing.T) {
 func TestRunActionsWithoutClient(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	base := func() model {
-		return model{mode: modeDashboard, fleet: panel.Mock(), prefixKey: "ctrl+t",
+		return model{mode: modeDashboard, fleet: sampleFleet(), prefixKey: "ctrl+t",
 			binds: append([]binding(nil), bindings...), confirmClose: true}
 	}
 
@@ -211,7 +212,7 @@ func TestRunActionsWithoutClient(t *testing.T) {
 	}
 
 	// editing a binding from a nil-binds model exercises copy-on-write.
-	cow := model{mode: modeKeyMap, fleet: panel.Mock(), prefixKey: "ctrl+t", cursor: 1}
+	cow := model{mode: modeKeyMap, fleet: sampleFleet(), prefixKey: "ctrl+t", cursor: 1}
 	cow = press(cow, "e", "z")
 	if cow.binds == nil || cow.binds[0].key != "z" {
 		t.Fatal("ensureBinds copy-on-write failed")
@@ -220,7 +221,7 @@ func TestRunActionsWithoutClient(t *testing.T) {
 
 func TestPanelConfigEditsShell(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	m := model{fleet: panel.Mock(), prefixKey: "ctrl+t",
+	m := model{fleet: sampleFleet(), prefixKey: "ctrl+t",
 		binds: append([]binding(nil), bindings...), confirmClose: true}
 
 	// C-t P opens the panel config tab; bare P no longer does.
@@ -263,7 +264,7 @@ func TestPanelConfigEditsShell(t *testing.T) {
 }
 
 func TestNewPanelFormPrefills(t *testing.T) {
-	m := model{fleet: panel.Mock(), prefixKey: "ctrl+t",
+	m := model{fleet: sampleFleet(), prefixKey: "ctrl+t",
 		binds: append([]binding(nil), bindings...), shellPath: "/bin/zsh"}
 
 	// prefix+n opens the new-panel popup prefilled with the default shell.
