@@ -229,7 +229,7 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "panel.list":
 		send(cc, s.panelsMsg())
 	case "panel.create":
-		if err := s.createPanel(cmd.Kind, cmd.Path); err != nil {
+		if err := s.createPanel(cmd.Kind, cmd.Path, cmd.Args, cmd.Dir); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
@@ -279,9 +279,11 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	}
 }
 
-// createPanel is a core action: it spawns the backing process (running path, or
-// the default shell when empty) and records the new panel in the fleet.
-func (s *Server) createPanel(kind, path string) error {
+// createPanel is a core action: it spawns the backing process and records the new
+// panel in the fleet. A shell panel runs path (or the default shell when empty);
+// an agent panel runs its profile command with args in dir, the working directory
+// the agent operates on.
+func (s *Server) createPanel(kind, path string, args []string, dir string) error {
 	if kind == "" {
 		kind = proto.KindShell
 	}
@@ -296,20 +298,23 @@ func (s *Server) createPanel(kind, path string) error {
 		if err := s.pty.Start(id, path); err != nil {
 			return err
 		}
+	case proto.KindAgent:
+		if path == "" {
+			return fmt.Errorf("an agent panel needs a command")
+		}
+		if err := s.pty.StartCmd(id, ptymgr.Spec{Command: path, Args: args, Dir: dir}); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("unknown panel kind %q", kind)
 	}
 
-	name := "shell"
-	if path != "" {
-		name = filepath.Base(path)
-	}
 	p := panel.Panel{
 		ID:       id,
 		Kind:     panel.ParseKind(kind),
-		Title:    fmt.Sprintf("%s #%s", name, id),
+		Title:    panelTitle(kind, path, dir, id),
 		State:    panel.Running,
-		Activity: "spawned",
+		Activity: panelActivity(kind, dir),
 	}
 	s.mu.Lock()
 	s.panels = append(s.panels, p)
@@ -317,6 +322,33 @@ func (s *Server) createPanel(kind, path string) error {
 
 	log.Info().Str("panel", p.Title).Msg("panel created")
 	return nil
+}
+
+// panelTitle is the human label for a new panel. An agent reads as
+// "<command> · <workdir>", e.g. "claude · baton", so its task and where it runs
+// are visible at a glance; a shell falls back to "<name> #<id>".
+func panelTitle(kind, path, dir, id string) string {
+	if kind == proto.KindAgent {
+		name := filepath.Base(path)
+		if dir != "" {
+			return fmt.Sprintf("%s · %s", name, filepath.Base(dir))
+		}
+		return fmt.Sprintf("%s #%s", name, id)
+	}
+	name := "shell"
+	if path != "" {
+		name = filepath.Base(path)
+	}
+	return fmt.Sprintf("%s #%s", name, id)
+}
+
+// panelActivity is the short status line a new panel starts with: an agent shows
+// its working directory, a shell just notes the spawn.
+func panelActivity(kind, dir string) string {
+	if kind == proto.KindAgent && dir != "" {
+		return "in " + dir
+	}
+	return "spawned"
 }
 
 // closePanels closes every listed panel and broadcasts once for the whole batch

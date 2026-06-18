@@ -43,18 +43,35 @@ func (m *Manager) OnOutput(fn func(id string, data []byte)) { m.onOutput = fn }
 // OnClose registers a callback fired when a panel's process exits on its own.
 func (m *Manager) OnClose(fn func(id string)) { m.onClose = fn }
 
+// Spec describes the process behind a panel: the binary, its arguments, and the
+// directory it runs in. The zero value (empty Command) launches the user's shell
+// in the inherited directory — the plain shell-panel case.
+type Spec struct {
+	Command string   // binary path; empty = the user's shell ($SHELL, then /bin/sh)
+	Args    []string // arguments, e.g. an agent profile's flags
+	Dir     string   // working directory; empty inherits the server's
+}
+
 // Start launches command (a binary path) under a new PTY for the given panel id.
-// An empty command falls back to the user's shell ($SHELL, then /bin/sh). Output
-// is streamed to the sink and kept in a small ring for replay; when the process
+// An empty command falls back to the user's shell. It is the simple shell-panel
+// entry; StartCmd carries arguments and a working directory for agent panels.
+func (m *Manager) Start(id, command string) error {
+	return m.StartCmd(id, Spec{Command: command})
+}
+
+// StartCmd launches spec under a new PTY for the given panel id. Output is
+// streamed to the sink and kept in a small ring for replay; when the process
 // exits its PTY is reaped but the ring is retained, so the final result can
 // still be shown until the panel is closed or purged.
-func (m *Manager) Start(id, command string) error {
+func (m *Manager) StartCmd(id string, spec Spec) error {
+	command := spec.Command
 	if command == "" {
 		command = DefaultShell()
 	}
 
-	cmd := exec.Command(command)
+	cmd := exec.Command(command, spec.Args...)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	cmd.Dir = spec.Dir // empty inherits the server's working directory
 
 	f, err := pty.Start(cmd)
 	if err != nil {

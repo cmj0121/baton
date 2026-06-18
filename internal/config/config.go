@@ -41,6 +41,21 @@ type Settings struct {
 // PanelDefaults configure how new panels are spawned.
 type PanelDefaults struct {
 	Shell string `yaml:"shell,omitempty"` // default shell binary path; empty = system shell
+
+	// DefaultAgent is the agent profile spawned by the new-agent action; empty
+	// means the built-in "claude" profile.
+	DefaultAgent string `yaml:"default-agent,omitempty"`
+
+	// Agents are the named agent profiles, e.g. {"claude": {command: "claude"}}.
+	// A built-in "claude" profile is always available unless overridden here.
+	Agents map[string]AgentProfile `yaml:"agents,omitempty"`
+}
+
+// AgentProfile is one named way to launch an agent: the CLI binary and its
+// arguments. The panel runs it directly as the panel's process.
+type AgentProfile struct {
+	Command string   `yaml:"command"`        // the agent CLI binary, e.g. "claude"
+	Args    []string `yaml:"args,omitempty"` // arguments passed on every spawn
 }
 
 // Load reads the config file. A missing file yields an empty Config and no

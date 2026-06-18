@@ -1,6 +1,7 @@
 package ptymgr
 
 import (
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -41,6 +42,42 @@ func TestStreamsOutputAndForwardsInput(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("did not see the echoed output")
+}
+
+// TestStartCmdRunsArgsInDir checks StartCmd honours the working directory and the
+// arguments — the agent-panel path: a command run in dir prints that dir.
+func TestStartCmdRunsArgsInDir(t *testing.T) {
+	dir := t.TempDir()
+	m := New()
+
+	var mu sync.Mutex
+	var got []byte
+	m.OnOutput(func(_ string, data []byte) {
+		mu.Lock()
+		got = append(got, data...)
+		mu.Unlock()
+	})
+
+	// `sh -c pwd` writes the working directory it was launched in, then exits.
+	if err := m.StartCmd("1", Spec{Command: "/bin/sh", Args: []string{"-c", "pwd"}, Dir: dir}); err != nil {
+		t.Fatalf("StartCmd: %v", err)
+	}
+	defer m.Stop("1")
+
+	// TempDir may live under a symlinked prefix (e.g. /var -> /private/var on
+	// macOS), so match on the unique leaf rather than the whole path.
+	leaf := filepath.Base(dir)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		seen := strings.Contains(string(got), leaf)
+		mu.Unlock()
+		if seen {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("output never showed the workdir leaf %q; got %q", leaf, string(got))
 }
 
 func TestOnCloseFiresOnExit(t *testing.T) {

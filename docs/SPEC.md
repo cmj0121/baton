@@ -16,12 +16,19 @@ You never juggle windows or tabs. You conduct from the dashboard, and you zoom i
 
 A panel is one PTY (pseudo-terminal) the server owns. There are two kinds:
 
-- **Agent panel** — runs an agent CLI directly as the panel's process (for example `claude` or `copilot`, per the default
-  settings). There is no shell and no shell prompt in between; the agent CLI _is_ the program the PTY runs.
+- **Agent panel** — runs an agent CLI directly as the panel's process. There is no shell and no shell prompt in between;
+  the agent CLI _is_ the program the PTY runs.
 - **Shell panel** — runs a plain host shell, for ad-hoc commands on the machine.
 
 Both are ordinary PTYs and share the lifecycle below; they differ only in what process they launch and in how loudly the
 Monitor flags them for your attention.
+
+**Agent profiles.** An agent panel is spawned from a named **profile** — a command and its arguments — run in a **working
+directory** you choose, the directory the agent operates on. **Claude** is the built-in profile (`claude`); more are
+defined under `panel.agents` in the config, with `panel.default-agent` naming the one the new-agent action spawns. The
+client resolves the profile and sends `panel.create` with the command, args, and workdir; the server starts the process
+there, and the panel's title reads `<command> · <workdir>` (e.g. `claude · baton`) so its task and place are visible at
+a glance.
 
 ### Lifecycle
 
