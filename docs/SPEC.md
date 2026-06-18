@@ -86,14 +86,22 @@ On the dashboard a work item collapses into a single card: a member count and a 
 member** (attention beats running beats spawning beats idle beats exited), so one card speaks for the whole task.
 
 **The group split.** Zooming a work item opens a split — every member rendered live in its own tile, all streaming at
-once. The split is an _overview you navigate_, not a surface you type into: `tab` moves the focus between tiles, `+`/`-`
-adjusts the column count, `x` removes the focused member from the group, `enter` drops into the focused panel's own
-single zoom (where keystrokes finally reach the program), and `d`/`esc` returns to the dashboard. From a zoomed member,
-the always-on `C-t g` escape pops back to the split. Because tiles never forward input, the navigation keys are never
-ambiguous with what a panel might want. Under the hood a single client attaches to every member at once; the server tags
-each output message with its panel id and the client demuxes it into the matching tile. The split reconciles on every
-snapshot — members added or removed elsewhere appear and disappear in place, an emptied group exits to the dashboard,
-and live tiles are capped so a very large group cannot spawn unbounded terminals.
+once. By default the split is an _overview you navigate_, not a surface you type into: `tab` moves the focus between
+tiles, `+`/`-` adjusts the column count, `x` removes the focused member from the group, `enter` drops into the focused
+panel's own single zoom, and `d`/`esc` returns to the dashboard. From a zoomed member, the always-on `C-t g` escape pops
+back to the split.
+
+**Interact mode.** Pressing `i` hands the keyboard to the focused tile so you can drive its program _in place_, without
+the full-screen zoom — the tile glows green and wears a keyboard badge, and every keystroke is forwarded to that panel.
+Like a zoom, the prefix is the only way out: `C-t i` (or `C-t g`) returns to navigation, `C-t d` leaves for the
+dashboard, `C-t q` detaches, and `C-t C-t` sends a literal prefix. Only the focused tile receives input; the others stay
+passive, so the navigation keys are never ambiguous with what a panel might want until you opt in. If the panel being
+typed into leaves the group, interact ends rather than silently retargeting the tile the focus falls onto.
+
+Under the hood a single client attaches to every member at once; the server tags each output message with its panel id
+and the client demuxes it into the matching tile, while each tile's input side is forwarded so interact can reach the
+PTY. The split reconciles on every snapshot — members added or removed elsewhere appear and disappear in place, an
+emptied group exits to the dashboard, and live tiles are capped so a very large group cannot spawn unbounded terminals.
 
 ## Architecture
 

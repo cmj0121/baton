@@ -117,6 +117,7 @@ type model struct {
 	groupName       string                      // work item being split-viewed (modeGroupZoom)
 	groupFocus      int                         // focused member tile within the split
 	groupArmed      bool                        // prefix pressed in the split, awaiting an escape
+	groupInteract   bool                        // keys drive the focused tile in place (i), no zoom
 	groupCols       int                         // tile columns; 0 = auto-fit to the window
 	groupEmus       map[string]*vt.SafeEmulator // live emulator per member tile
 	zoomGroupOrigin string                      // group to return to from a single zoom, "" if none
@@ -1426,11 +1427,13 @@ func (m model) helpView() string {
 		title = "GROUP VIEW"
 		rows = []helpRow{
 			{"Navigation", kc("tab") + " " + kc("S-tab"), "focus the next / previous panel"},
+			{"Navigation", kc(keyLabel(keyInteract)), "interact: type into the focused panel in place"},
 			{"Navigation", kc("enter"), "zoom the focused panel"},
 			{"Navigation", kc("+") + " " + kc("-"), "more / fewer columns"},
 			{"Work items", kc(keyLabel(keyRemove)), "remove the focused panel from the group"},
 			{"View", kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
 			{"View", kc(dash) + " " + kc("esc"), "back to the dashboard"},
+			{"View", kc(pfx) + " " + kc(keyLabel(keyInteract)), "stop interacting (while in interact)"},
 			{"View", kc(pfx) + " " + kc(dash), "dashboard (works in every view)"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), "edit the key map"},
 			{"Session", kc(pfx) + " " + kc(detach), "detach (server keeps running)"},
