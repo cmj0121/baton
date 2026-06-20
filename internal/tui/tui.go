@@ -115,6 +115,7 @@ type model struct {
 	input        inputPurpose                   // active text-input overlay, or inputNone
 	inputBuf     string                         // text typed into the overlay
 	helpFrom     mode                           // the view the key map (?) was opened from, to restore on esc
+	helpScroll   int                            // scroll offset for the read-only help list (it has no cursor)
 
 	renameID    string // panel id being renamed via inputRename ("" if a group)
 	renameGroup string // group being renamed via inputRename ("" if a panel)
@@ -672,9 +673,17 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "up", "k":
+		if m.mode == modeHelp { // the read-only help scrolls by its own offset
+			m.scrollHelp(-1)
+			return m, nil
+		}
 		m.move(-m.cols())
 		return m, nil
 	case "down", "j":
+		if m.mode == modeHelp {
+			m.scrollHelp(1)
+			return m, nil
+		}
 		m.move(m.cols())
 		return m, nil
 	case "left", "h":
@@ -966,8 +975,24 @@ func shellLabel(path string) string {
 func (m model) openHelp(from mode) model {
 	m.helpFrom = from
 	m.mode = modeHelp
+	m.helpScroll = 0 // open at the top
 	m.status = "keys"
 	return m
+}
+
+// scrollHelp moves the read-only help list by delta rows, clamped so the last row
+// never scrolls past the bottom. The help view has no cursor, so the arrows drive
+// this offset directly.
+func (m *model) scrollHelp(delta int) {
+	_, body := m.helpContent()
+	off := m.helpScroll + delta
+	if maxOff := len(body) - m.panelVisibleRows(helpReserved); off > maxOff {
+		off = maxOff
+	}
+	if off < 0 {
+		off = 0
+	}
+	m.helpScroll = off
 }
 
 // openEditMap shows the editable key map (C-t k), remembering the originating
@@ -1729,6 +1754,24 @@ func metaRow(label, value string, valColor lipgloss.Color) string {
 // helpView is the read-only key list for the current stage — the keys that view
 // responds to — shown when ? (or C-t ? in a zoom) is pressed.
 func (m model) helpView() string {
+	title, body := m.helpContent()
+	pfx := keyLabel(m.effPrefix())
+	legend := mutedStyle.Render("esc  back   ·   " + pfx + " " + keyLabel(m.bindingKey(actEditMap)) + "  edit")
+	return m.renderScrollPanel(scrollPanel{
+		title:    title + " KEYS",
+		body:     body,
+		footer:   []string{"", legend},
+		reserved: helpReserved,
+		anchor:   m.helpScroll, // read-only: the arrows drive this offset directly
+		centered: false,
+		clipHint: mutedStyle.Render("   ↑↓ scroll"),
+	})
+}
+
+// helpContent builds the read-only key list for the view help was opened from:
+// the section title and the category-grouped body rows (with subheaders), ready
+// for windowing. Shared by helpView and the help scroller's clamp.
+func (m model) helpContent() (title string, body []string) {
 	kc := func(s string) string { return keycapStyle.Render(s) }
 	pfx := keyLabel(m.effPrefix())
 	dash := keyLabel(m.bindingKey(actDashboard))
@@ -1738,7 +1781,6 @@ func (m model) helpView() string {
 	// every stage's list groups by category just like the editable key map.
 	type helpRow struct{ cat, keys, desc string }
 
-	var title string
 	var rows []helpRow
 	switch m.helpFrom {
 	case modeGroupZoom:
@@ -1792,7 +1834,6 @@ func (m model) helpView() string {
 	// same way and matches the editable key map's grouping.
 	keyCol := lipgloss.NewStyle().Width(20)
 	subhead := lipgloss.NewStyle().Foreground(colFaint).Bold(true)
-	out := []string{sectionStyle.Render(spaced(title + " KEYS"))}
 	for _, cat := range []string{"Navigation", "Panels", "Work items", "View", "Session"} {
 		shown := false
 		for _, r := range rows {
@@ -1800,14 +1841,13 @@ func (m model) helpView() string {
 				continue
 			}
 			if !shown {
-				out = append(out, "", "  "+subhead.Render(cat))
+				body = append(body, "", "  "+subhead.Render(cat))
 				shown = true
 			}
-			out = append(out, keyCol.Render(r.keys)+mutedStyle.Render(r.desc))
+			body = append(body, keyCol.Render(r.keys)+mutedStyle.Render(r.desc))
 		}
 	}
-	out = append(out, "", mutedStyle.Render("esc  back   ·   "+keyLabel(pfx)+" "+keyLabel(m.bindingKey(actEditMap))+"  edit"))
-	return configBox(lipgloss.JoinVertical(lipgloss.Left, out...))
+	return title, body
 }
 
 func (m model) keyMapView() string {
@@ -1827,8 +1867,12 @@ func (m model) keyMapView() string {
 
 	binds := m.keymap()
 	prefLbl := keyLabel(m.effPrefix())
-	rows := make([]string, 0, len(binds)+9)
-	rows = append(rows, sectionStyle.Render(spaced("KEY BINDINGS")), "")
+
+	// Build the scrollable body — the selectable rows and their section
+	// subheaders — tracking the rendered line the cursor rests on so the window
+	// can keep it in view on a short screen.
+	body := make([]string, 0, len(binds)+9)
+	selLine := 0
 
 	// Row 0: the leader/prefix key.
 	prefSel := m.cursor == 0
@@ -1840,7 +1884,10 @@ func (m model) keyMapView() string {
 	if m.editing && m.editIdx == editPrefix {
 		prefKeys = keycapHotStyle.Render("…type a key")
 	}
-	rows = append(rows, fmt.Sprintf("%s%s   %s", caret(prefSel), prefKeys, desc(prefSel, "prefix · leader key")))
+	body = append(body, fmt.Sprintf("%s%s   %s", caret(prefSel), prefKeys, desc(prefSel, "prefix · leader key")))
+	if prefSel {
+		selLine = len(body) - 1
+	}
 
 	// Rows 1..N: the bindings, under a sub-header per purpose group. Prefixed
 	// commands show as a [C-t][key] chord; the bare group verbs show as a single
@@ -1849,7 +1896,7 @@ func (m model) keyMapView() string {
 	prevCat := ""
 	for i, b := range binds {
 		if b.cat != prevCat {
-			rows = append(rows, "", "  "+subhead.Render(b.cat))
+			body = append(body, "", "  "+subhead.Render(b.cat))
 			prevCat = b.cat
 		}
 		selected := i+1 == m.cursor
@@ -1870,11 +1917,14 @@ func (m model) keyMapView() string {
 			}
 			keys = cap.Render(keyLabel(b.key))
 		}
-		rows = append(rows, fmt.Sprintf("%s%s   %s", caret(selected), keys, desc(selected, b.desc)))
+		body = append(body, fmt.Sprintf("%s%s   %s", caret(selected), keys, desc(selected, b.desc)))
+		if selected {
+			selLine = len(body) - 1
+		}
 	}
 
 	// Settings: one selectable toggle per row, after the prefix and bindings.
-	rows = append(rows, "", sectionStyle.Render(spaced("SETTINGS")), "")
+	body = append(body, "", sectionStyle.Render(spaced("SETTINGS")), "")
 	for i := 0; i < numSettings; i++ {
 		selected := m.cursor == len(binds)+1+i
 		on := m.settingValue(i)
@@ -1884,11 +1934,14 @@ func (m model) keyMapView() string {
 		if selected {
 			label = inkStyle.Render(settingLabel(i))
 		}
-		rows = append(rows, fmt.Sprintf("%s%s   %s", caret(selected), check, label))
+		body = append(body, fmt.Sprintf("%s%s   %s", caret(selected), check, label))
+		if selected {
+			selLine = len(body) - 1
+		}
 	}
 
-	// In-panel legend (the footer no longer carries key hints) and the
-	// negotiated protocol version, tucked here rather than the status bar.
+	// In-panel legend (the footer no longer carries key hints) and the negotiated
+	// protocol version, pinned below the scrolling body.
 	legendKey := lipgloss.NewStyle().Foreground(colCyan).Bold(true)
 	legend := mutedStyle.Render("↑↓ move") + "   " +
 		legendKey.Render("tab") + mutedStyle.Render(" section") + "   " +
@@ -1900,9 +1953,100 @@ func (m model) keyMapView() string {
 		ver = proto.ProtocolVersion
 	}
 	about := lipgloss.NewStyle().Foreground(colFaint).Render("protocol " + ver)
-	rows = append(rows, "", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(legend))), legend, about)
 
-	return configBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
+	return m.renderScrollPanel(scrollPanel{
+		title:    "KEY BINDINGS",
+		body:     body,
+		footer:   []string{"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(legend))), legend, about},
+		reserved: keyMapReserved,
+		anchor:   selLine,
+		centered: true,
+		clipHint: mutedStyle.Render(fmt.Sprintf("   %d/%d", m.cursor+1, len(binds)+1+numSettings)),
+	})
+}
+
+// The vertical chrome each overlay panel reserves around its scrollable body —
+// box border + padding, header, any hint/legend lines, and the cockpit footer —
+// so panelVisibleRows can size the body to never overflow the screen.
+const (
+	keyMapReserved      = 11 // header+blank, body, blank, rule, legend, about
+	panelConfigReserved = 12 // header+blank, body, blank, hint, blank, rule, legend
+	helpReserved        = 9  // header+blank, body, blank, legend
+)
+
+// panelVisibleRows is how many body rows an overlay panel shows before it
+// scrolls, after reserving `reserved` rows for its chrome and the footer. An
+// unsized model (the first frame, and unit tests) is treated as unbounded so the
+// whole list renders; a real height never drops below a few rows so the panel
+// stays usable on a tiny screen.
+func (m model) panelVisibleRows(reserved int) int {
+	if m.height <= 0 {
+		return 1 << 30
+	}
+	if v := m.height - reserved; v > 3 {
+		return v
+	}
+	return 3
+}
+
+// windowAround clips rows to a visible-row window centred on anchor (the selected
+// line), keeping it in view; it returns the rows unchanged (clipped=false) when
+// they already fit. The shared scroller for the cursor-driven overlay panels.
+func windowAround(rows []string, anchor, visible int) (shown []string, clipped bool) {
+	if visible >= len(rows) {
+		return rows, false
+	}
+	start, end := scrollWindow(anchor, len(rows), visible)
+	return rows[start:end], true
+}
+
+// windowFrom clips rows to a visible-row window starting at off, clamped so the
+// last row never scrolls past the bottom — for a read-only panel with no cursor.
+func windowFrom(rows []string, off, visible int) (shown []string, clipped bool) {
+	if visible >= len(rows) {
+		return rows, false
+	}
+	if maxOff := len(rows) - visible; off > maxOff {
+		off = maxOff
+	}
+	if off < 0 {
+		off = 0
+	}
+	return rows[off : off+visible], true
+}
+
+// scrollPanel is the shared layout for the cockpit's overlay popups — the key
+// map, the help list, and panel config. It pins a title and a footer (legend,
+// version, …) and windows the body to the screen height so a short terminal
+// scrolls by the arrows instead of overflowing. All three render through
+// renderScrollPanel so their chrome and scrolling stay identical.
+type scrollPanel struct {
+	title    string   // section header, shown spaced
+	body     []string // the scrollable rows
+	footer   []string // pinned lines below the body
+	reserved int      // vertical chrome to reserve when sizing the body
+	anchor   int      // the cursor line (centered) or the scroll offset (top)
+	centered bool     // keep anchor in view (cursor panels) vs. anchor-as-offset (help)
+	clipHint string   // appended to the title when the body is clipped
+}
+
+// renderScrollPanel windows p.body to the height and wraps it, the title, and the
+// footer in the shared configBox.
+func (m model) renderScrollPanel(p scrollPanel) string {
+	visible := m.panelVisibleRows(p.reserved)
+	body, clipped := windowFrom(p.body, p.anchor, visible)
+	if p.centered {
+		body, clipped = windowAround(p.body, p.anchor, visible)
+	}
+	header := sectionStyle.Render(spaced(p.title))
+	if clipped {
+		header += p.clipHint
+	}
+	out := make([]string, 0, len(body)+len(p.footer)+2)
+	out = append(out, header, "")
+	out = append(out, body...)
+	out = append(out, p.footer...)
+	return configBox(lipgloss.JoinVertical(lipgloss.Left, out...))
 }
 
 // configBox wraps a settings/overlay panel in the cockpit's bordered surface.
@@ -1915,8 +2059,8 @@ func configBox(body string) string {
 		Render(body)
 }
 
-// panelConfigView renders the panel-defaults tab. For now its one row is the
-// default shell that new panels run.
+// panelConfigView renders the panel-defaults tab: the default shell and the
+// per-panel replay buffer, one selectable row each.
 func (m model) panelConfigView() string {
 	row := func(idx int, label, value string) string {
 		caret := "  "
@@ -1929,19 +2073,28 @@ func (m model) panelConfigView() string {
 		return fmt.Sprintf("%s%-16s%s", caret, labelStyle.Render(label), val)
 	}
 
+	// One body line per row, so the cursor indexes it directly; the shared widget
+	// windows it so a tiny terminal scrolls via the arrows.
+	body := []string{
+		row(panelRowShell, "default shell", shellLabel(m.shellPath)),
+		row(panelRowReplayKB, "replay buffer", replayLabel(m.replayKB)),
+	}
 	legendKey := lipgloss.NewStyle().Foreground(colCyan).Bold(true)
 	legend := mutedStyle.Render("↑↓ move") + "   " +
 		legendKey.Render("e") + mutedStyle.Render(" edit") + "   " +
 		legendKey.Render("esc") + mutedStyle.Render(" back")
 
-	return configBox(lipgloss.JoinVertical(lipgloss.Left,
-		sectionStyle.Render(spaced("PANEL CONFIG")), "",
-		row(panelRowShell, "default shell", shellLabel(m.shellPath)),
-		row(panelRowReplayKB, "replay buffer", replayLabel(m.replayKB)),
-		"",
-		mutedStyle.Render("replay buffer seeds scrollback · change applies on server restart"),
-		"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(legend))), legend,
-	))
+	return m.renderScrollPanel(scrollPanel{
+		title: "PANEL CONFIG",
+		body:  body,
+		footer: []string{"",
+			mutedStyle.Render("replay buffer seeds scrollback · change applies on server restart"),
+			"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(legend))), legend},
+		reserved: panelConfigReserved,
+		anchor:   m.cursor,
+		centered: true,
+		clipHint: mutedStyle.Render(fmt.Sprintf("   %d/%d", m.cursor+1, numPanelConfigRows)),
+	})
 }
 
 // inputView renders the active text-input overlay as a centred popup.

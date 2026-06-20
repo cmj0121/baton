@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"net"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/panel"
@@ -391,5 +393,81 @@ func TestCommitReplayKB(t *testing.T) {
 	}
 	if m := base.commitReplayKB("-5"); m.replayKB != 256 || m.input != inputReplayKB {
 		t.Fatalf("a negative entry should be rejected, replayKB=%d input=%v", m.replayKB, m.input)
+	}
+}
+
+// TestKeyMapScrollsOnSmallScreen checks the key map windows its body on a short
+// terminal: the selected row stays visible, off-window rows are clipped, a
+// position counter appears, the legend stays pinned, and the box fits the height.
+func TestKeyMapScrollsOnSmallScreen(t *testing.T) {
+	total := len(bindings) + 1 + numSettings
+	m := model{mode: modeKeyMap, width: 90, height: 16,
+		binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t",
+		cursor: total - 1} // the last settings row (the bell toggle)
+
+	view := m.keyMapView()
+
+	if h := lipgloss.Height(view); h > m.height-1 {
+		t.Fatalf("key map box height %d should fit within %d", h, m.height-1)
+	}
+	if !strings.Contains(view, settingLabel(settingBell)) {
+		t.Fatal("the selected row should stay in view when scrolled")
+	}
+	if strings.Contains(view, "prefix · leader key") {
+		t.Fatal("the prefix row should be scrolled off the top")
+	}
+	if !strings.Contains(view, fmt.Sprintf("%d/%d", total, total)) {
+		t.Fatal("a clipped key map should show a position counter")
+	}
+	if !strings.Contains(view, "back") {
+		t.Fatal("the legend should stay pinned below the scrolling body")
+	}
+
+	// A tall screen shows everything with no counter.
+	full := model{mode: modeKeyMap, width: 90, height: 80,
+		binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}.keyMapView()
+	if !strings.Contains(full, "prefix · leader key") || !strings.Contains(full, settingLabel(settingBell)) {
+		t.Fatal("a tall screen should render the whole key map")
+	}
+	if strings.Contains(full, fmt.Sprintf("/%d", total)) {
+		t.Fatal("an unclipped key map should not show a position counter")
+	}
+}
+
+// TestHelpScrollsOnSmallScreen checks the read-only help list scrolls by the
+// arrows on a short screen: it fits the height, shows a scroll hint, reveals the
+// bottom when scrolled down, and clamps at both ends.
+func TestHelpScrollsOnSmallScreen(t *testing.T) {
+	m := model{mode: modeHelp, helpFrom: modeDashboard, width: 90, height: 14,
+		binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+
+	top := m.helpView()
+	if h := lipgloss.Height(top); h > m.height-1 {
+		t.Fatalf("help box height %d should fit within %d", h, m.height-1)
+	}
+	if !strings.Contains(top, "↑↓ scroll") {
+		t.Fatal("a clipped help list should show the scroll hint")
+	}
+	if !strings.Contains(top, "move") {
+		t.Fatal("the top of the help list should be visible at offset 0")
+	}
+
+	// Scroll to the bottom: a late row appears and a top row scrolls off.
+	for i := 0; i < 50; i++ {
+		m.scrollHelp(1)
+	}
+	bottom := m.helpView()
+	if !strings.Contains(bottom, "detach (server keeps running)") {
+		t.Fatal("scrolling down should reveal the bottom of the help list")
+	}
+	if strings.Contains(bottom, "clear the selection") {
+		t.Fatal("the top help rows should scroll off the window")
+	}
+
+	// Clamp: scrolling up at the top stays at 0.
+	m.helpScroll = 0
+	m.scrollHelp(-1)
+	if m.helpScroll != 0 {
+		t.Fatalf("scrolling up at the top should stay at 0, got %d", m.helpScroll)
 	}
 }
