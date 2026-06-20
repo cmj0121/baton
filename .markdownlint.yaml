@@ -2,3 +2,7 @@ MD013:
   line_length: 128
   code_blocks: false
   tables: false
+
+# Prettier owns table formatting; its unicode-width column math differs from
+# markdownlint's, so leave the alignment rule to prettier to avoid a tug-of-war.
+MD060: false

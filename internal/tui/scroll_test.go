@@ -65,8 +65,8 @@ func TestEmuWindowScrollback(t *testing.T) {
 	}
 }
 
-// TestZoomScrollKeys drives the zoom scrollback keys: shift+up/pgup walk back,
-// shift+down comes forward, and any program key snaps back to the live bottom.
+// TestZoomScrollKeys drives the zoom scroll mode: C-t [ enters it, then the
+// arrows and page keys navigate the scrollback and esc returns to the bottom.
 func TestZoomScrollKeys(t *testing.T) {
 	emu := vt.NewSafeEmulator(20, 4)
 	fillLines(emu, 30)
@@ -83,26 +83,35 @@ func TestZoomScrollKeys(t *testing.T) {
 	m := model{emu: emu, mode: modeZoom, zoomID: "1", width: 20, height: 5,
 		binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
 
-	step := func(k tea.KeyType) {
-		next, _ := m.handleZoomKey(tea.KeyMsg{Type: k})
-		m = next.(model)
+	// Enter scroll mode with the leader: C-t [.
+	next, _ := m.handleZoomKey(tea.KeyMsg{Type: tea.KeyCtrlT})
+	m = next.(model)
+	next, _ = m.handleZoomKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[")})
+	m = next.(model)
+	if !m.scrolling {
+		t.Fatal("C-t [ should enter scroll mode")
 	}
 
-	step(tea.KeyShiftUp)
+	// In scroll mode the keys navigate history (routed through handleScrollKey).
+	scroll := func(k tea.KeyMsg) {
+		next, _ := m.handleScrollKey(k)
+		m = next.(model)
+	}
+	scroll(tea.KeyMsg{Type: tea.KeyUp})
 	if m.scrollOff != 1 {
-		t.Fatalf("shift+up should scroll one line, off = %d", m.scrollOff)
+		t.Fatalf("↑ should scroll one line, off = %d", m.scrollOff)
 	}
 	page := m.scrollOff
-	step(tea.KeyPgUp)
+	scroll(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
 	if m.scrollOff <= page+1 {
-		t.Fatalf("pgup should scroll a page, off = %d", m.scrollOff)
+		t.Fatalf("b should page up, off = %d", m.scrollOff)
 	}
-	step(tea.KeyShiftDown)
-	// A printable key returns to the live bottom and drives the program.
-	next, _ := m.handleZoomKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
-	m = next.(model)
-	if m.scrollOff != 0 {
-		t.Fatalf("a program key should snap back to the bottom, off = %d", m.scrollOff)
+	scroll(tea.KeyMsg{Type: tea.KeyDown})
+
+	// esc leaves scroll mode and returns to the live bottom.
+	scroll(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.scrolling || m.scrollOff != 0 {
+		t.Fatalf("esc should exit scroll mode at the bottom, scrolling=%v off=%d", m.scrolling, m.scrollOff)
 	}
 }
 
@@ -115,16 +124,52 @@ func TestGroupScrollKeys(t *testing.T) {
 		groupEmus:  map[string]*vt.SafeEmulator{"A": emu},
 		groupFocus: 0, binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
 
-	next, _ := m.handleGroupZoomKey(tea.KeyMsg{Type: tea.KeyPgUp})
+	// Enter scroll mode (C-t [), then b pages the focused tile.
+	next, _ := m.handleGroupZoomKey(tea.KeyMsg{Type: tea.KeyCtrlT})
+	m = next.(model)
+	next, _ = m.handleGroupZoomKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[")})
+	m = next.(model)
+	if !m.scrolling {
+		t.Fatal("C-t [ should enter scroll mode in the group split")
+	}
+	next, _ = m.handleScrollKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
 	m = next.(model)
 	if m.scrollOff <= 0 {
-		t.Fatalf("pgup should scroll the focused tile, off = %d", m.scrollOff)
+		t.Fatalf("b should scroll the focused tile, off = %d", m.scrollOff)
 	}
 
-	// Moving the focus resets the scrollback to the new tile's live bottom.
-	next, _ = m.handleGroupZoomKey(tea.KeyMsg{Type: tea.KeyTab})
+	// esc leaves scroll mode at the live bottom.
+	next, _ = m.handleScrollKey(tea.KeyMsg{Type: tea.KeyEsc})
 	m = next.(model)
+	if m.scrolling || m.scrollOff != 0 {
+		t.Fatalf("esc should exit scroll mode, scrolling=%v off=%d", m.scrolling, m.scrollOff)
+	}
+}
+
+// TestScrollModeKeys covers in-mode navigation: g/G jump to the top and bottom,
+// and a stray key is ignored so a fat-finger never drops you out mid-scroll.
+func TestScrollModeKeys(t *testing.T) {
+	emu := vt.NewSafeEmulator(20, 6)
+	fillLines(emu, 40)
+	m := model{emu: emu, mode: modeZoom, width: 20, height: 8, scrolling: true,
+		binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+
+	scroll := func(r string) {
+		next, _ := m.handleScrollKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(r)})
+		m = next.(model)
+	}
+
+	scroll("g") // jump to the oldest line
+	top := m.scrollOff
+	if top == 0 {
+		t.Fatal("g should jump to the oldest line")
+	}
+	scroll("z") // a stray key is ignored — scroll mode holds, offset unchanged
+	if !m.scrolling || m.scrollOff != top {
+		t.Fatalf("a stray key should be ignored, scrolling=%v off=%d", m.scrolling, m.scrollOff)
+	}
+	scroll("G") // back to the live bottom
 	if m.scrollOff != 0 {
-		t.Fatalf("changing focus should reset scrollback, off = %d", m.scrollOff)
+		t.Fatalf("G should jump to the live bottom, off = %d", m.scrollOff)
 	}
 }

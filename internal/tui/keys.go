@@ -26,6 +26,7 @@ const (
 	keyHelp        = "?" // view the key list for the current view
 	keyEditMap     = "k" // edit the key map (prefix only: C-t k)
 	keyPanelConfig = "P" // shift+p
+	keyScroll      = "[" // enter scroll mode (prefix only: C-t [), tmux-style
 	keyRestart     = "S" // shift+s
 	keyDetach      = "q"
 
@@ -85,6 +86,7 @@ const (
 	actDashboard
 	actGroupView
 	actEditMap
+	actScroll
 )
 
 // isEscape reports whether an action is reached after the prefix rather than on a
@@ -92,7 +94,7 @@ const (
 // group-view jumps and the key-map editor work after the prefix in every mode;
 // panel config opens this way from command mode.
 func isEscape(a action) bool {
-	return a == actDashboard || a == actGroupView || a == actEditMap || a == actPanelConfig
+	return a == actDashboard || a == actGroupView || a == actEditMap || a == actPanelConfig || a == actScroll
 }
 
 // binding is one editable command: a stable name (used to persist the key), the
@@ -126,6 +128,7 @@ var bindings = []binding{
 	{"help", keyHelp, "view the keys for this view", actHelp, "View"},
 	{"key-map", keyEditMap, "edit the key map (prefix)", actEditMap, "View"},
 	{"panel-config", keyPanelConfig, "configure panel defaults (prefix)", actPanelConfig, "View"},
+	{"scroll", keyScroll, "scroll mode — line / page (prefix)", actScroll, "View"},
 	{"dashboard", keyDashboard, "jump to the dashboard (prefix)", actDashboard, "View"},
 	{"group-view", keyGroupView, "go to the group view (prefix)", actGroupView, "View"},
 

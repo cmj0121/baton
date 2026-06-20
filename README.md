@@ -35,13 +35,14 @@ Keys are modal: on the **dashboard** and in a **group** each action is a single 
 keystrokes drive the program, so a Baton action is the leader **`C-t`** then the key. Press **`?`** for the full,
 rebindable list of the current view.
 
-| Context         | Keys                                                                             |
-| --------------- | -------------------------------------------------------------------------------- |
-| After `C-t`     | `d` dashboard, `g` group, `k` key map, `q` detach                                |
-| Dashboard       | `hjkl` move, `S-←`/`S-→` reorder, `enter` open, `p` new panel, `A` new agent, `c` pick cmd, `w` close |
-| Dashboard group | `g` mark, `G` group, `a` add, `u` ungroup, `e` rename                            |
-| Group           | `tab` focus, `+`/`-` columns, `p` pin, `i` interact, `x` remove, `S-←`/`S-→` reorder, `S-↑`/`S-↓` scroll, `enter` zoom |
-| Zoom / interact | type to drive the program, `S-↑`/`S-↓`/`PgUp`/`PgDn` scroll, `C-t C-t` sends a literal `C-t` |
+| Context         | Keys                                                                                                               |
+| --------------- | ------------------------------------------------------------------------------------------------------------------ |
+| After `C-t`     | `d` dashboard, `g` group, `k` key map, `q` detach                                                                  |
+| Dashboard       | `hjkl` move, `S-←`/`S-→` reorder, `enter` open, `p` new panel, `A` new agent, `c` pick cmd, `w` close              |
+| Dashboard group | `g` mark, `G` group, `a` add, `u` ungroup, `e` rename                                                              |
+| Group           | `tab` focus, `+`/`-` columns, `p` pin, `i` interact, `x` remove, `S-←`/`S-→` reorder, `C-t [` scroll, `enter` zoom |
+| Zoom / interact | type to drive the program, `C-t [` scroll mode, `C-t C-t` literal `C-t`                                            |
+| Scroll mode     | `↑`/`↓` line, `b`/`Spc` (or `PgUp`/`PgDn`) page, `g`/`G` top/bottom, `esc`/`q` exit                                |
 
 Names stay unique unless you set `allow-name-conflict`.
 

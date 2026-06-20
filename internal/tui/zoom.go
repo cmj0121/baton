@@ -3,15 +3,43 @@ package tui
 import (
 	"fmt"
 	"io"
+	"runtime/debug"
 	"strings"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	vt "github.com/charmbracelet/x/vt"
+	"github.com/mattn/go-runewidth"
+	"github.com/rs/zerolog/log"
 
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/proto"
 )
+
+// writeEmu feeds program output into the emulator, isolating the cockpit from a
+// panic in the terminal parser: a single misbehaving program (or a parser edge
+// case) degrades its own panel rather than taking down the whole TUI. The stack
+// is logged so the underlying fault can be pinned down.
+func writeEmu(emu *vt.SafeEmulator, data []byte) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().Interface("panic", r).Bytes("stack", debug.Stack()).Msg("recovered an emulator write panic")
+		}
+	}()
+	_, _ = emu.Write(data)
+}
+
+// cellCond gives wcwidth-style cell widths — 2 for wide (CJK) glyphs, 1 for the
+// rest — independent of the user's locale, matching the emulator's own cell math.
+var cellCond = &runewidth.Condition{}
+
+// cellWidth is how many terminal cells a rune occupies (0 for a combining mark).
+func cellWidth(r rune) int {
+	if w := cellCond.RuneWidth(r); w >= 0 {
+		return w
+	}
+	return 0
+}
 
 // zoomFooter builds the coloured strip below the emulated panel: a brand cap, a
 // state cap (green live ZOOM, or grey EXITED for a finished program), a scrollback
@@ -19,7 +47,10 @@ import (
 // help hint, and — like every view — the host stats, clock, and connection status.
 func (m model) zoomFooter() string {
 	state := seg("◉ ZOOM", colInk, colGreen)
-	if m.zoomExited {
+	switch {
+	case m.scrolling:
+		state = seg("↕ SCROLL", colDark, colCyan)
+	case m.zoomExited:
 		state = seg("◼ EXITED", colDark, colMuted)
 	}
 	left := seg("◈ BATON", colDark, colBrand) + state + scrollSeg(m.scrollOff) + barBold.Render(" "+m.zoomTitle+" ")
@@ -129,7 +160,10 @@ func clipVisible(s string, width int) string {
 
 // overlayCursor inserts a reverse-video cell at visible column col of an
 // ANSI-styled line. Escape sequences are copied verbatim and don't count as
-// columns; if the cursor sits past the line's content the line is space-padded.
+// columns, and columns are measured in display cells — so a wide (CJK) glyph
+// advances two — keeping the cursor aligned on a line of full-width text (a
+// Chinese BBS like ptt.cc) rather than drifting left of where it belongs. If the
+// cursor sits past the line's content the line is space-padded.
 func overlayCursor(line string, col int) string {
 	if col < 0 {
 		return line
@@ -143,13 +177,16 @@ func overlayCursor(line string, col int) string {
 			i += n
 			continue
 		}
-		_, size := utf8.DecodeRuneInString(line[i:])
-		if vis == col {
+		r, size := utf8.DecodeRuneInString(line[i:])
+		w := cellWidth(r)
+		// The cursor lands on the glyph whose cell span covers col, so either cell
+		// of a wide glyph highlights the whole glyph.
+		if w > 0 && vis <= col && col < vis+w {
 			out.WriteString("\x1b[7m" + line[i:i+size] + "\x1b[27m")
 		} else {
 			out.WriteString(line[i : i+size])
 		}
-		vis++
+		vis += w
 		i += size
 	}
 	if vis <= col {

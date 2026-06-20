@@ -474,3 +474,23 @@ func TestHelpScrollsOnSmallScreen(t *testing.T) {
 		t.Fatalf("scrolling up at the top should stay at 0, got %d", m.helpScroll)
 	}
 }
+
+// TestHelpKeyColumnFits guards against an overcrowded key-hint cluster: the
+// keycaps in a help row must fit the 20-cell key column so they never overflow
+// into the description. The scroll row was the offender — four separate caps
+// (S-↑ S-↓ C-PgUp C-PgDn) blew past the column — so the combined caps are
+// checked directly here.
+func TestHelpKeyColumnFits(t *testing.T) {
+	const keyColWidth = 20
+	kc := func(s string) string { return keycapStyle.Render(s) }
+	clusters := []string{
+		kc("S-←→"),                    // reorder
+		kc("C-t") + " " + kc("["),     // scroll mode (leader)
+		kc("hjkl") + " " + kc("↑↓←→"), // dashboard move
+	}
+	for _, c := range clusters {
+		if w := lipgloss.Width(c); w > keyColWidth {
+			t.Errorf("key cluster overflows the %d-cell column (%d): %q", keyColWidth, w, c)
+		}
+	}
+}

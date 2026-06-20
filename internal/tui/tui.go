@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	vt "github.com/charmbracelet/x/vt"
+	"github.com/rs/zerolog/log"
 
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/config"
@@ -124,12 +126,14 @@ type model struct {
 	renameID    string // panel id being renamed via inputRename ("" if a group)
 	renameGroup string // group being renamed via inputRename ("" if a panel)
 
-	zoomID     string           // panel being zoomed (modeZoom)
-	zoomTitle  string           // its title, for the zoom footer
-	zoomArmed  bool             // prefix pressed inside a zoom, awaiting the verb
-	zoomExited bool             // the zoomed panel has exited — a read-only result view
-	emu        *vt.SafeEmulator // terminal emulator rendering the zoomed panel
-	scrollOff  int              // scrollback offset (lines above the live bottom) for the zoom / focused tile
+	zoomID       string           // panel being zoomed (modeZoom)
+	zoomTitle    string           // its title, for the zoom footer
+	zoomArmed    bool             // prefix pressed inside a zoom, awaiting the verb
+	zoomExited   bool             // the zoomed panel has exited — a read-only result view
+	emu          *vt.SafeEmulator // terminal emulator rendering the zoomed panel
+	scrollOff    int              // scrollback offset (lines above the live bottom) for the zoom / focused tile
+	scrolling    bool             // scroll mode (C-t [): arrows / page keys navigate history, keys are not sent to the program
+	cursorHidden *bool            // tracks the zoomed program's cursor visibility (DECTCEM); nil when not zooming
 
 	groupName       string                      // work item being split-viewed (modeGroupZoom)
 	groupFocus      int                         // focused member, indexing tiles then the tree list
@@ -383,11 +387,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case panelOutputMsg:
 		sm := proto.ServerMsg(msg)
 		if m.mode == modeZoom && m.emu != nil && sm.ID == m.zoomID {
-			_, _ = m.emu.Write(sm.Data)
+			writeEmu(m.emu, sm.Data)
 		}
 		if m.mode == modeGroupZoom {
 			if emu := m.groupEmus[sm.ID]; emu != nil {
-				_, _ = emu.Write(sm.Data) // demux by id into the member's tile
+				writeEmu(emu, sm.Data) // demux by id into the member's tile
 			}
 		}
 		return m, waitOutput(m.client.Output)
@@ -414,6 +418,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tick()
 
 	case tea.KeyMsg:
+		if m.scrolling { // scroll mode owns the keyboard until esc/q
+			return m.handleScrollKey(msg)
+		}
 		switch m.mode {
 		case modeZoom:
 			return m.handleZoomKey(msg)
@@ -1063,6 +1070,8 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		return m.openHelp(m.mode), nil
 	case actEditMap:
 		return m.openEditMap(m.mode), nil
+	case actScroll:
+		return m.enterScroll(), nil
 	case actPanelConfig:
 		m.mode = modePanelConfig
 		m.cursor = 0
@@ -1140,11 +1149,18 @@ func (m model) zoomInto(p panel.Panel) model {
 	m.zoomID = p.ID
 	m.zoomTitle = p.Title
 	m.zoomArmed = false
-	m.scrollOff = 0        // a fresh zoom opens at the live bottom
+	m.scrollOff = 0 // a fresh zoom opens at the live bottom
+	m.scrolling = false
 	m.zoomGroupOrigin = "" // a direct zoom; the group path sets this after
 	m.zoomExited = p.State == panel.Exited
+	m.cursorHidden = nil
 	if m.width > 0 && m.height > 1 {
 		m.emu = vt.NewSafeEmulator(m.width, m.zoomRows())
+		// Track the program's cursor visibility (DECTCEM) so a program that hides
+		// its cursor — vim, a BBS reader — does not get a phantom one drawn over it.
+		hidden := false
+		m.cursorHidden = &hidden
+		m.emu.SetCallbacks(vt.Callbacks{CursorVisibility: func(visible bool) { hidden = !visible }})
 		// Drain the emulator's input side (encoded keys + query replies) to the
 		// PTY. The goroutine ends when zoomDetach closes the emulator.
 		go zoomReader(m.emu, m.client, p.ID)
@@ -1181,6 +1197,8 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			case actEditMap: // C-t k → edit the key map
 				return m.openEditMap(modeZoom), nil
+			case actScroll: // C-t [ → scroll mode, reached on every terminal
+				return m.enterScroll(), nil
 			}
 			return m, nil
 		}
@@ -1196,16 +1214,9 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.zoomArmed = true
 		return m, nil
 	}
-	// Scrollback keys page through the panel's history without disturbing the
-	// program; every other key returns to the live bottom and drives it.
-	switch key {
-	case "shift+up", "pgup":
-		m.scrollEmu(m.emu, scrollStep(key, m.zoomRows()))
-		return m, nil
-	case "shift+down", "pgdown":
-		m.scrollEmu(m.emu, -scrollStep(key, m.zoomRows()))
-		return m, nil
-	}
+	// Every bare key drives the program — including PgUp/PgDn, which a full-screen
+	// reader (vim, a BBS like ptt.cc) redraws for itself. baton's own scrollback is
+	// on the leader above. A keystroke also returns the view to the live bottom.
 	m.scrollOff = 0
 	if m.emu != nil {
 		feedKey(m.emu, k)
@@ -1213,13 +1224,74 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// scrollStep is how far a scrollback key moves: a single line for the shift+arrow
-// keys, very nearly a full page (kept one line for context) for page up/down.
-func scrollStep(key string, rows int) int {
-	if key == "pgup" || key == "pgdown" {
-		return max(1, rows-1)
+// enterScroll starts scroll mode for the zoomed panel or the focused group tile:
+// a tmux-style copy mode where the arrows and page keys walk the history and no
+// key reaches the program. A no-op where there is nothing to scroll.
+func (m model) enterScroll() model {
+	if emu, _ := m.scrollTarget(); emu == nil {
+		m.status = "nothing to scroll here"
+		return m
 	}
-	return 1
+	m.scrolling = true
+	m.status = "scroll · ↑↓ line · b/space (or PgUp/PgDn) page · esc exits"
+	return m
+}
+
+// exitScroll leaves scroll mode and returns to the live bottom.
+func (m model) exitScroll() model {
+	m.scrolling = false
+	m.scrollOff = 0
+	m.status = ""
+	return m
+}
+
+// scrollTarget is the emulator scroll mode drives and how many rows tall it is:
+// the zoom's own emulator, or the focused group tile's. nil when neither applies
+// (e.g. the focus rests on a list row, or there is no client).
+func (m model) scrollTarget() (*vt.SafeEmulator, int) {
+	switch m.mode {
+	case modeZoom:
+		return m.emu, m.zoomRows()
+	case modeGroupZoom:
+		if p, ok := m.focusedMember(); ok && m.focusedIsTile() {
+			_, _, rows := m.tileGeometry()
+			return m.groupEmus[p.ID], rows
+		}
+	}
+	return nil, 0
+}
+
+// handleScrollKey drives scroll mode: arrows / k / j move a line, b / space /
+// PgUp / PgDn move a page, and esc or q leaves. Other keys are ignored so a
+// stray press never drops you out mid-scroll.
+func (m model) handleScrollKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	emu, rows := m.scrollTarget()
+	if emu == nil {
+		return m.exitScroll(), nil
+	}
+	page := max(1, rows-1)
+	switch k.String() {
+	case "up", "k":
+		m.scrollEmu(emu, 1)
+	case "down", "j":
+		m.scrollEmu(emu, -1)
+	case "b", "pgup", "ctrl+b":
+		m.scrollEmu(emu, page)
+	case " ", "pgdown", "ctrl+f":
+		m.scrollEmu(emu, -page)
+	case "g", "home":
+		m.scrollEmu(emu, 1<<30) // clamps to the oldest line
+	case "G", "end":
+		m.scrollEmu(emu, -(1 << 30)) // clamps to the live bottom
+	case "esc", "q":
+		return m.exitScroll(), nil
+	}
+	return m, nil
+}
+
+// cursorHiddenNow reports whether the zoomed program has hidden its cursor.
+func (m model) cursorHiddenNow() bool {
+	return m.cursorHidden != nil && *m.cursorHidden
 }
 
 // zoomDetach leaves the zoom, returning to a refreshed dashboard.
@@ -1229,6 +1301,8 @@ func (m model) zoomDetach() (tea.Model, tea.Cmd) {
 	m.mode = modeDashboard
 	m.emu = nil
 	m.scrollOff = 0
+	m.scrolling = false
+	m.cursorHidden = nil
 	m.zoomID, m.zoomTitle, m.zoomArmed, m.zoomExited, m.zoomGroupOrigin = "", "", false, false, ""
 	m.status = "dashboard"
 	if m.client != nil {
@@ -1426,7 +1500,21 @@ func (m model) cols() int {
 
 // --- rendering ---
 
-func (m model) View() string {
+// View renders the cockpit. It isolates the frame from a panic in the render of
+// untrusted program output (a misbehaving full-screen program, or an emulator
+// parser edge case): rather than crash the whole TUI, it logs the stack and shows
+// a recoverable placeholder so the next frame redraws clean.
+func (m model) View() (out string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().Interface("panic", r).Bytes("stack", debug.Stack()).Msg("recovered a render panic")
+			out = "baton: a render glitch was recovered — press any key to refresh\r\n"
+		}
+	}()
+	return m.render()
+}
+
+func (m model) render() string {
 	if m.quitting {
 		if m.restart {
 			return "baton: restarting the server…\n"
@@ -1480,9 +1568,10 @@ func (m model) zoomView() string {
 	lines := make([]string, rows)
 	if m.emu != nil {
 		lines = emuWindow(m.emu, m.width, rows, m.scrollOff)
-		// The cursor belongs to the live screen, so draw it only at the bottom; a
-		// scrolled-back view is history and carries no cursor.
-		if m.scrollOff == 0 {
+		// Draw the cursor only on the live bottom (a scrolled-back view is history),
+		// and only when the program has not hidden it — so a full-screen reader that
+		// turns the cursor off does not show a phantom block.
+		if m.scrollOff == 0 && !m.cursorHiddenNow() {
 			cur := m.emu.CursorPosition()
 			if cur.Y >= 0 && cur.Y < len(lines) {
 				lines[cur.Y] = overlayCursor(lines[cur.Y], cur.X)
@@ -1806,8 +1895,8 @@ func (m model) helpContent() (title string, body []string) {
 			{"Navigation", kc(keyLabel(keyInteract)), "interact: type into the focused panel in place"},
 			{"Navigation", kc("enter"), "zoom the focused panel"},
 			{"Navigation", kc("+") + " " + kc("-"), "more / fewer columns"},
-			{"Navigation", kc("S-←") + " " + kc("S-→"), "reorder the focused panel"},
-			{"Navigation", kc("S-↑") + " " + kc("S-↓") + " " + kc("PgUp") + kc("PgDn"), "scroll the focused panel's history"},
+			{"Navigation", kc("S-←→"), "reorder the focused panel"},
+			{"Navigation", kc(pfx) + " " + kc(keyScroll), "scroll mode · the focused panel (↑↓ line, b/Spc page)"},
 			{"Work items", kc(keyLabel(keyPin)), "pin / unpin the focused panel to a live tile"},
 			{"Work items", kc(keyLabel(keyRemove)), "remove the focused panel from the group"},
 			{"View", kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
@@ -1820,8 +1909,8 @@ func (m model) helpContent() (title string, body []string) {
 	case modeZoom:
 		title = "ZOOM"
 		rows = []helpRow{
-			{"Navigation", kc("type"), "drive the program directly"},
-			{"Navigation", kc("S-↑") + " " + kc("S-↓") + " " + kc("PgUp") + kc("PgDn"), "scroll back / forward through history"},
+			{"Navigation", kc("type"), "drive the program directly (PgUp/PgDn included)"},
+			{"Navigation", kc(pfx) + " " + kc(keyScroll), "scroll mode · ↑↓ line, b/Spc page, esc exits"},
 			{"Navigation", kc(pfx) + " " + kc(pfx), "send a literal " + pfx},
 			{"View", kc(pfx) + " " + kc(dash), "back to the dashboard"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actGroupView))), "back to the group view"},
@@ -1833,7 +1922,7 @@ func (m model) helpContent() (title string, body []string) {
 		title = "DASHBOARD"
 		rows = []helpRow{
 			{"Navigation", kc("hjkl") + " " + kc("↑↓←→"), "move"},
-			{"Navigation", kc("S-←") + " " + kc("S-→"), "reorder the selected item"},
+			{"Navigation", kc("S-←→"), "reorder the selected item"},
 			{"Navigation", kc("enter"), "open / zoom"},
 			{"Navigation", kc("esc"), "clear the selection"},
 		}

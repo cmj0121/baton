@@ -321,6 +321,8 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.exitGroupZoom()
 			case actEditMap:
 				return m.openEditMap(modeGroupZoom), nil
+			case actScroll: // C-t [ → scroll the focused tile's history
+				return m.enterScroll(), nil
 			}
 		}
 		if key == m.bindingKey(actDetach) { // C-t q detaches from the split too
@@ -346,10 +348,6 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab", "left", "h", "up", "k":
 		m.groupFocus = wrapIndex(m.groupFocus, -1, n)
 		m.scrollOff = 0
-	case "shift+up", "pgup":
-		return m.scrollFocusedTile(1, key), nil
-	case "shift+down", "pgdown":
-		return m.scrollFocusedTile(-1, key), nil
 	case "shift+left":
 		return m.reorderGroupMember(-1), nil
 	case "shift+right":
@@ -399,6 +397,8 @@ func (m model) handleGroupInteractKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.exitInteract(), nil
 			case actEditMap:
 				return m.openEditMap(modeGroupZoom), nil
+			case actScroll: // C-t [ → scroll the focused tile's history
+				return m.enterScroll(), nil
 			}
 			return m, nil
 		}
@@ -459,24 +459,6 @@ func (m model) feedFocused(k tea.KeyMsg) {
 	if emu := m.groupEmus[p.ID]; emu != nil {
 		feedKey(emu, k)
 	}
-}
-
-// scrollFocusedTile pages the focused tile's scrollback by dir (positive toward
-// older output): a single line for the shift+arrow keys, nearly a full page for
-// page up/down. It needs a live tile to scroll, so it nudges the user to pin a
-// tree-listed member first.
-func (m model) scrollFocusedTile(dir int, key string) model {
-	p, ok := m.focusedMember()
-	if !ok {
-		return m
-	}
-	if !m.focusedIsTile() {
-		m.status = fmt.Sprintf("%s is in the list — press %s to pin it first", p.Title, keyPin)
-		return m
-	}
-	_, _, rows := m.tileGeometry()
-	m.scrollEmu(m.groupEmus[p.ID], dir*scrollStep(key, rows))
-	return m
 }
 
 // togglePin pins or unpins the focused member. Pinning promotes a tree-listed
@@ -566,6 +548,7 @@ func (m *model) resetToDashboard(status string) {
 	m.groupInteract = false
 	m.groupPinned = nil
 	m.scrollOff = 0
+	m.scrolling = false
 	m.status = status
 }
 
@@ -590,6 +573,8 @@ func (m model) backToGroup() (tea.Model, tea.Cmd) {
 	m.groupArmed = false
 	m.groupInteract = false
 	m.scrollOff = 0
+	m.scrolling = false
+	m.cursorHidden = nil
 	m.emu = nil
 	m.zoomID, m.zoomTitle, m.zoomArmed, m.zoomExited, m.zoomGroupOrigin = "", "", false, false, ""
 	m.attachGroupMembers() // re-subscribe every tile's live stream
@@ -763,7 +748,10 @@ func (m model) tileBody(p panel.Panel, emuCols, emuRows int, focused, showCursor
 // host stats, clock, and connection status on the right.
 func (m model) groupZoomFooter() string {
 	mode := seg("▣ GROUP", colInk, colBlue)
-	if m.groupInteract {
+	switch {
+	case m.scrolling:
+		mode = seg("↕ SCROLL", colDark, colCyan)
+	case m.groupInteract:
 		mode = seg("⌨ INTERACT", colDark, colGreen) // typing into the focused tile
 	}
 	left := seg("◈ BATON", colDark, colBrand) +

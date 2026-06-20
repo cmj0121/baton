@@ -78,6 +78,9 @@ func TestOverlayCursor(t *testing.T) {
 		{"abc", 1, "a\x1b[7mb\x1b[27mc"},                             // mid-line
 		{"ab", 4, "ab  \x1b[7m \x1b[27m"},                            // past the end → padded
 		{"\x1b[31mX\x1b[0mY", 1, "\x1b[31mX\x1b[0m\x1b[7mY\x1b[27m"}, // escapes don't count as columns
+		{"中b", 0, "\x1b[7m中\x1b[27mb"},                               // cursor on a wide (2-cell) glyph
+		{"中b", 2, "中\x1b[7mb\x1b[27m"},                               // lands after the wide glyph, not drifted left
+		{"中b", 1, "\x1b[7m中\x1b[27mb"},                               // either cell of the wide glyph highlights it
 	}
 	for _, c := range cases {
 		if got := overlayCursor(c.line, c.col); got != c.want {
@@ -172,5 +175,80 @@ func TestZoomDetachKey(t *testing.T) {
 	m = next.(model)
 	if m.mode != modeDashboard {
 		t.Fatalf("prefix+d should detach, mode=%v", m.mode)
+	}
+}
+
+// TestZoomTracksCursorVisibility checks the DECTCEM callback wired up by zoomInto
+// flips the model's cursor-hidden flag as the program shows and hides its cursor.
+func TestZoomTracksCursorVisibility(t *testing.T) {
+	m := model{width: 20, height: 6, binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+	m = m.zoomInto(panel.Panel{ID: "1", Title: "x"})
+	if m.emu == nil {
+		t.Fatal("zoomInto should create an emulator")
+	}
+	if m.cursorHiddenNow() {
+		t.Fatal("the cursor should start visible")
+	}
+	_, _ = m.emu.Write([]byte("\x1b[?25l")) // program hides the cursor
+	if !m.cursorHiddenNow() {
+		t.Fatal("DECTCEM hide should flip the cursor-hidden flag")
+	}
+	_, _ = m.emu.Write([]byte("\x1b[?25h")) // program shows it again
+	if m.cursorHiddenNow() {
+		t.Fatal("DECTCEM show should clear the cursor-hidden flag")
+	}
+}
+
+// TestZoomViewHidesCursor proves the zoom view draws the cursor only while the
+// program keeps it visible.
+func TestZoomViewHidesCursor(t *testing.T) {
+	emu := vt.NewSafeEmulator(20, 5)
+	hidden := false
+	m := model{emu: emu, mode: modeZoom, width: 20, height: 6, cursorHidden: &hidden}
+	if !strings.Contains(m.zoomView(), "\x1b[7m") {
+		t.Fatal("a visible cursor should be drawn")
+	}
+	hidden = true
+	if strings.Contains(m.zoomView(), "\x1b[7m") {
+		t.Fatal("a hidden cursor should not be drawn")
+	}
+}
+
+// TestZoomBareKeysGoToProgram proves no bare key is stolen for scrollback — PgUp
+// and shift+up both reach the program (a BBS like ptt.cc or vim pages itself) —
+// while the leader (C-t b) drives baton's own scrollback.
+func TestZoomBareKeysGoToProgram(t *testing.T) {
+	emu := vt.NewSafeEmulator(20, 5)
+	fillLines(emu, 30) // scrollback exists
+	// Drain the input side so a passed-through key never blocks.
+	go func() {
+		buf := make([]byte, 64)
+		for {
+			if _, err := emu.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+	m := model{emu: emu, mode: modeZoom, zoomID: "1", width: 20, height: 6,
+		binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+
+	// Bare PgUp and bare shift+up both belong to the program — baton never scrolls
+	// on them (the Mac terminal that collapses shift+up to a plain up is harmless),
+	// and stays out of scroll mode.
+	for _, k := range []tea.KeyType{tea.KeyPgUp, tea.KeyShiftUp} {
+		n, _ := m.handleZoomKey(tea.KeyMsg{Type: k})
+		m = n.(model)
+		if m.scrollOff != 0 || m.scrolling {
+			t.Fatalf("%v should pass through to the program, not scroll baton", k)
+		}
+	}
+
+	// Scrollback is reached only through the leader's scroll mode: C-t [.
+	n, _ := m.handleZoomKey(tea.KeyMsg{Type: tea.KeyCtrlT})
+	m = n.(model)
+	n, _ = m.handleZoomKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[")})
+	m = n.(model)
+	if !m.scrolling {
+		t.Fatal("C-t [ should enter scroll mode")
 	}
 }
