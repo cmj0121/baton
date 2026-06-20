@@ -89,8 +89,12 @@ type model struct {
 	endpoint   string // where we are attached: "local", or a host/IP for remote
 	version    string // negotiated protocol version, surfaced in the key map
 
+	attnSeen    map[string]bool // panel ids currently flagged for attention, to fire the notification only on the rising edge
+	bellPending bool            // a panel just entered attention — ring the terminal bell on the next render
+
 	confirmClose      bool      // ask y/n before closing a panel (toggled in the key map)
 	allowNameConflict bool      // let two work items share a name (server enforces; kept to round-trip config)
+	bellEnabled       bool      // ring the terminal bell when a panel needs you (toggled in the key map)
 	pendingClose      bool      // a close is awaiting y/n confirmation
 	now               time.Time // wall clock shown in the footer, ticked every second
 
@@ -163,6 +167,7 @@ func New(c *client.Client) tea.Model {
 		endpoint:          c.Endpoint(),
 		confirmClose:      p.confirmClose,
 		allowNameConflict: p.allowNameConflict,
+		bellEnabled:       p.bellEnabled,
 		now:               time.Now(),
 		prefixKey:         p.prefix,
 		binds:             p.binds,
@@ -181,8 +186,32 @@ type rowKind int
 const (
 	rowPrefix  rowKind = iota // the leader key (row 0)
 	rowBinding                // a binding (rows 1..N)
-	rowSetting                // the confirm-on-close toggle (last row)
+	rowSetting                // a toggle in the settings block (the last rows)
 )
+
+// The settings block of the key map, one toggle per row in display order. idx
+// values are stable so keyMapRow, activate, and the renderer agree on them.
+const (
+	settingConfirmClose = iota // ask y/n before closing a panel
+	settingBell                // ring the bell when a panel needs you
+	numSettings
+)
+
+// settingLabel is the human label for a settings-block row.
+func settingLabel(idx int) string {
+	if idx == settingBell {
+		return "ring the bell when a panel needs you"
+	}
+	return "confirm before closing a panel"
+}
+
+// settingValue reports whether a settings-block toggle is currently on.
+func (m model) settingValue(idx int) bool {
+	if idx == settingBell {
+		return m.bellEnabled
+	}
+	return m.confirmClose
+}
 
 // keyMapRow resolves the current cursor to a key-map row: its kind and, for a
 // binding row, the binding's index. This is the single source of truth for the
@@ -194,7 +223,7 @@ func (m model) keyMapRow() (rowKind, int) {
 	case m.cursor <= len(m.keymap()):
 		return rowBinding, m.cursor - 1
 	default:
-		return rowSetting, 0
+		return rowSetting, m.cursor - len(m.keymap()) - 1
 	}
 }
 
@@ -338,7 +367,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case eventMsg:
 		m.applyEvent(proto.ServerMsg(msg))
-		return m, waitEvent(m.client.Events)
+		return m, tea.Batch(m.takeBell(), waitEvent(m.client.Events))
 
 	case panelOutputMsg:
 		sm := proto.ServerMsg(msg)
@@ -358,7 +387,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case telemetryEventMsg:
 		m.applyTelemetry(proto.ServerMsg(msg))
-		return m, waitTelemetry(m.client.Telemetry)
+		return m, tea.Batch(m.takeBell(), waitTelemetry(m.client.Telemetry))
 
 	case connClosedMsg:
 		m.status = "server closed the connection"
@@ -460,6 +489,7 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		if m.mode == modeGroupZoom {
 			m.reconcileGroupTiles(focusID)
 		}
+		m.refreshAttention()
 	case "stats":
 		m.cpuPct = sm.CPU
 		m.memUsed, m.memTotal = sm.MemUsed, sm.MemTotal
@@ -487,6 +517,62 @@ func (m *model) applyTelemetry(sm proto.ServerMsg) {
 			m.fleet[i].Spark = p.Spark
 		}
 	}
+	m.refreshAttention()
+}
+
+// refreshAttention fires a footer notification on the rising edge of a panel
+// entering the attention state — when the Monitor decides it needs you. It tracks
+// the set of panels currently flagged (attnSeen) so the pop fires once per entry,
+// not every tick a panel sits waiting; a panel that resolves and later needs you
+// again notifies afresh. The persistent count lives in the footer badge; this is
+// the one-shot nudge that names the panel the moment it calls for you. An error
+// status is left in place — it is not noise to bury under a notification.
+func (m *model) refreshAttention() {
+	cur := make(map[string]bool)
+	var fresh []string
+	for _, p := range m.fleet {
+		if p.State != panel.Attention {
+			continue
+		}
+		cur[p.ID] = true
+		if !m.attnSeen[p.ID] {
+			fresh = append(fresh, p.Title)
+		}
+	}
+	m.attnSeen = cur
+	if len(fresh) == 0 {
+		return
+	}
+	if m.bellEnabled {
+		m.bellPending = true // audible nudge on the rising edge, even when an error status hides the text
+	}
+	if strings.HasPrefix(m.status, "error") {
+		return
+	}
+	if len(fresh) == 1 {
+		m.status = "◆ " + fresh[0] + " needs you"
+	} else {
+		m.status = fmt.Sprintf("◆ %d panels need your attention", len(fresh))
+	}
+}
+
+// bell rings the terminal once by writing the BEL control byte to the tty. It is
+// emitted as a command so it rides bubbletea's own output cycle; BEL prints no
+// glyph and moves no cursor, so it never disturbs the alt-screen the cockpit
+// draws. Sent to stderr to stay off the renderer's stdout stream.
+func bell() tea.Msg {
+	_, _ = os.Stderr.WriteString("\a")
+	return nil
+}
+
+// takeBell returns the bell command once when a panel has just entered attention,
+// clearing the pending flag so the nudge sounds a single time per rising edge.
+func (m *model) takeBell() tea.Cmd {
+	if !m.bellPending {
+		return nil
+	}
+	m.bellPending = false
+	return bell
 }
 
 func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -912,8 +998,14 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 		case rowBinding:
 			return m.runAction(m.keymap()[idx].act)
 		case rowSetting:
-			m.confirmClose = !m.confirmClose
-			m.status = "confirm on close: " + onOff(m.confirmClose)
+			switch idx {
+			case settingBell:
+				m.bellEnabled = !m.bellEnabled
+				m.status = "bell: " + onOff(m.bellEnabled)
+			default:
+				m.confirmClose = !m.confirmClose
+				m.status = "confirm on close: " + onOff(m.confirmClose)
+			}
 			if err := m.saveConfig(); err != nil {
 				m.status = "toggled, but save failed: " + err.Error()
 			}
@@ -1117,7 +1209,7 @@ func wrapIndex(i, delta, n int) int {
 func (m model) itemCount() int {
 	switch m.mode {
 	case modeKeyMap:
-		return len(m.keymap()) + 2 // prefix row + bindings + the settings toggle
+		return len(m.keymap()) + 1 + numSettings // prefix row + bindings + the settings toggles
 	case modePanelConfig:
 		return 1 // the default-shell row
 	default:
@@ -1714,20 +1806,19 @@ func (m model) keyMapView() string {
 		rows = append(rows, fmt.Sprintf("%s%s   %s", caret(selected), keys, desc(selected, b.desc)))
 	}
 
-	// Settings: the confirm-on-close toggle, selectable as the last row.
-	selected := m.cursor == len(binds)+1
-	box := lipgloss.NewStyle().Foreground(colDark).Background(checkColor(m.confirmClose)).Bold(true).Padding(0, 1)
-	check := box.Render(onOff(m.confirmClose))
-	label := mutedStyle.Render("confirm before closing a panel")
-	if selected {
-		label = inkStyle.Render("confirm before closing a panel")
+	// Settings: one selectable toggle per row, after the prefix and bindings.
+	rows = append(rows, "", sectionStyle.Render(spaced("SETTINGS")), "")
+	for i := 0; i < numSettings; i++ {
+		selected := m.cursor == len(binds)+1+i
+		on := m.settingValue(i)
+		box := lipgloss.NewStyle().Foreground(colDark).Background(checkColor(on)).Bold(true).Padding(0, 1)
+		check := box.Render(onOff(on))
+		label := mutedStyle.Render(settingLabel(i))
+		if selected {
+			label = inkStyle.Render(settingLabel(i))
+		}
+		rows = append(rows, fmt.Sprintf("%s%s   %s", caret(selected), check, label))
 	}
-	rows = append(rows,
-		"",
-		sectionStyle.Render(spaced("SETTINGS")),
-		"",
-		fmt.Sprintf("%s%s   %s", caret(selected), check, label),
-	)
 
 	// In-panel legend (the footer no longer carries key hints) and the
 	// negotiated protocol version, tucked here rather than the status bar.
@@ -1848,10 +1939,29 @@ func (m model) footer() string {
 		mode = "PANEL CONFIG"
 	}
 	left := seg("◈ BATON", colDark, colBrand) + seg(mode, colInk, colBlue)
-	if n := m.countState(panel.Attention); n > 0 {
-		left += seg(fmt.Sprintf("◆ %d", n), colDark, states[panel.Attention].color)
-	}
 	return m.statusBar(left, m.helpHint())
+}
+
+// attentionBadge is the footer notification that some panel needs you: a red cap
+// carried by every view's status bar, so a panel asking for input is visible
+// whether you are on the dashboard, in a zoom, or in a group split. It names the
+// panel when exactly one waits, and counts them when several do. Empty when the
+// fleet is calm.
+func (m model) attentionBadge() string {
+	var names []string
+	for _, p := range m.fleet {
+		if p.State == panel.Attention {
+			names = append(names, p.Title)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	label := fmt.Sprintf("◆ %d need you", len(names))
+	if len(names) == 1 {
+		label = "◆ " + truncate(names[0], 16) + " needs you"
+	}
+	return seg(label, colDark, states[panel.Attention].color)
 }
 
 // statusBar composes a full-width footer for any view: the view's left caps, a
@@ -1871,7 +1981,7 @@ func (m model) statusBar(left, hint string) string {
 	if strings.HasPrefix(m.status, "error") {
 		statusBg = colRed
 	}
-	caps := prefixBadge + stats + clock
+	caps := prefixBadge + m.attentionBadge() + stats + clock
 	right := caps
 	if budget := m.width - lipgloss.Width(left) - lipgloss.Width(caps) - 4; budget > 0 {
 		right += seg("● "+truncate(m.status, budget), colInk, statusBg) // "● " + cap padding

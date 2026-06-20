@@ -139,6 +139,7 @@ type prefs struct {
 	binds             []binding
 	confirmClose      bool
 	allowNameConflict bool
+	bellEnabled       bool
 	shellPath         string
 	defaultAgent      string                         // agent profile the new-agent action spawns
 	agents            map[string]config.AgentProfile // user-configured agent profiles
@@ -161,7 +162,7 @@ func builtinAgent(name string) (config.AgentProfile, bool) {
 // any read error (so the cockpit always comes up). Defaults: prefix "ctrl+t",
 // confirm-on-close on, system shell.
 func loadPrefs() prefs {
-	p := prefs{prefix: keyPrefix, binds: append([]binding(nil), bindings...), confirmClose: true}
+	p := prefs{prefix: keyPrefix, binds: append([]binding(nil), bindings...), confirmClose: true, bellEnabled: true}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -180,6 +181,9 @@ func loadPrefs() prefs {
 	}
 	if cfg.Settings.AllowNameConflict != nil {
 		p.allowNameConflict = *cfg.Settings.AllowNameConflict
+	}
+	if cfg.Settings.Bell != nil {
+		p.bellEnabled = *cfg.Settings.Bell
 	}
 	p.shellPath = cfg.Panel.Shell
 	p.defaultAgent = cfg.Panel.DefaultAgent
@@ -208,12 +212,14 @@ func (m model) saveConfig() error {
 	}
 	confirmClose := m.confirmClose
 	allowNameConflict := m.allowNameConflict
+	bellEnabled := m.bellEnabled
 	return config.Config{
 		Prefix: prefix,
 		Keys:   keys,
 		Settings: config.Settings{
 			ConfirmClose:      &confirmClose,
 			AllowNameConflict: &allowNameConflict,
+			Bell:              &bellEnabled,
 		},
 		Panel: config.PanelDefaults{
 			Shell:        m.shellPath,

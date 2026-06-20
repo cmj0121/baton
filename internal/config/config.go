@@ -36,6 +36,10 @@ type Settings struct {
 	// AllowNameConflict lets two work items share a name. Unset or false keeps
 	// the default policy: panel titles and group names must be unique.
 	AllowNameConflict *bool `yaml:"allow-name-conflict,omitempty"`
+
+	// Bell rings the terminal when a panel enters the attention state. Unset
+	// defaults to on; set false to silence the audible nudge.
+	Bell *bool `yaml:"bell,omitempty"`
 }
 
 // PanelDefaults configure how new panels are spawned.
