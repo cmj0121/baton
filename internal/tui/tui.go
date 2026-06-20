@@ -109,6 +109,7 @@ type model struct {
 	editIdx   int       // binding being rebound; editPrefix means the leader key
 
 	shellPath    string                         // configured default shell binary path ("" = system shell)
+	workdir      string                         // configured default working directory for new panels ("" = home)
 	defaultAgent string                         // agent profile the new-agent action spawns ("" = claude)
 	agents       map[string]config.AgentProfile // user-configured agent profiles
 	replayKB     int                            // per-panel replay buffer in KiB, round-tripped so a save never drops it
@@ -176,6 +177,7 @@ func New(c *client.Client) tea.Model {
 		prefixKey:         p.prefix,
 		binds:             p.binds,
 		shellPath:         p.shellPath,
+		workdir:           p.workdir,
 		defaultAgent:      p.defaultAgent,
 		agents:            p.agents,
 		replayKB:          p.replayKB,
@@ -915,11 +917,15 @@ func (m model) spawnAgent(dir string) model {
 	return m
 }
 
-// workingDir is the client's current directory, the default workdir offered for a
-// new agent. Empty if it cannot be determined.
-func workingDir() string {
-	if wd, err := os.Getwd(); err == nil {
-		return wd
+// defaultWorkdir is the directory offered when spawning a panel: the user's
+// configured workdir, or their home — never the client's current directory, so a
+// new panel does not silently inherit wherever baton was launched from.
+func (m model) defaultWorkdir() string {
+	if m.workdir != "" {
+		return m.workdir
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return home
 	}
 	return ""
 }
@@ -1022,7 +1028,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.input = inputAgentDir
-		m.inputBuf = workingDir()
+		m.inputBuf = m.defaultWorkdir()
 		m.status = fmt.Sprintf("new %s agent · type the workdir, enter to spawn", name)
 	case actClose:
 		if it, ok := m.selectedItem(); !ok {

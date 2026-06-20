@@ -90,3 +90,17 @@ func TestDirLabel(t *testing.T) {
 		}
 	}
 }
+
+// TestDefaultWorkdir prefers the configured workdir and otherwise falls back to
+// home — never the client's current directory.
+func TestDefaultWorkdir(t *testing.T) {
+	if got := (model{workdir: "/projects"}).defaultWorkdir(); got != "/projects" {
+		t.Fatalf("configured workdir should win, got %q", got)
+	}
+	home, err := os.UserHomeDir()
+	if err == nil {
+		if got := (model{}).defaultWorkdir(); got != home {
+			t.Fatalf("an unset workdir should fall back to home %q, got %q", home, got)
+		}
+	}
+}

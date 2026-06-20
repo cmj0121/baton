@@ -46,6 +46,10 @@ type Settings struct {
 type PanelDefaults struct {
 	Shell string `yaml:"shell,omitempty"` // default shell binary path; empty = system shell
 
+	// Workdir is the directory new panels run in when none is given. Empty falls
+	// back to the user's home — never the directory the daemon was launched from.
+	Workdir string `yaml:"workdir,omitempty"`
+
 	// ReplayKB is the per-panel replay buffer in kibibytes — how much recent
 	// output the server keeps and replays when a frontend attaches, seeding the
 	// scrollback you can page through. Unset or zero uses the built-in default.

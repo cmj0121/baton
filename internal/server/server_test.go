@@ -928,3 +928,35 @@ func TestMovePanels(t *testing.T) {
 		t.Fatalf("move of an unknown id should error, got %+v", msg)
 	}
 }
+
+// TestShellPanelUsesDefaultDir confirms a shell panel with no directory runs in
+// the configured default workdir, not the directory the daemon was launched in.
+func TestShellPanelUsesDefaultDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "batonwd")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	c := startServer(t, server.WithDefaultDir(dir))
+
+	// /bin/pwd prints its working directory and exits, so the output reveals where
+	// the panel actually ran.
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: proto.KindShell, Path: "/bin/pwd"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	p := recv(t, c).Panels[0]
+	if err := c.Send(proto.Command{Action: "panel.attach", ID: p.ID}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	leaf := filepath.Base(dir) // a symlinked temp prefix keeps the leaf intact
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case msg := <-c.Output:
+			if msg.ID == p.ID && strings.Contains(string(msg.Data), leaf) {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("shell output never showed the default workdir leaf %q", leaf)
+		}
+	}
+}

@@ -39,8 +39,9 @@ type Server struct {
 	ln  net.Listener
 	pty *ptymgr.Manager
 
-	allowNameConflict bool // when false, panel titles and group names stay unique
-	replayBytes       int  // per-panel replay buffer; 0 keeps the ptymgr default
+	allowNameConflict bool   // when false, panel titles and group names stay unique
+	replayBytes       int    // per-panel replay buffer; 0 keeps the ptymgr default
+	defaultDir        string // workdir for a panel that asks for none; empty → the user's home
 
 	mu      sync.Mutex
 	seq     int
@@ -64,6 +65,13 @@ func WithAllowNameConflict(allow bool) Option {
 // keeps the ptymgr default.
 func WithReplayBytes(bytes int) Option {
 	return func(s *Server) { s.replayBytes = bytes }
+}
+
+// WithDefaultDir sets the working directory new panels run in when the request
+// names none. Empty keeps the fallback (the user's home), so a panel never
+// inherits the directory the daemon was launched from.
+func WithDefaultDir(dir string) Option {
+	return func(s *Server) { s.defaultDir = dir }
 }
 
 // New builds a server bound to ln. The fleet starts empty — panels appear only
@@ -387,11 +395,15 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 
 // createPanel is a core action: it spawns the backing process and records the new
 // panel in the fleet. A shell panel runs path (or the default shell when empty);
-// an agent panel runs its profile command with args in dir, the working directory
-// the agent operates on.
+// an agent panel runs its profile command with args. Both run in dir, the working
+// directory; an empty dir falls back to the configured default (then the user's
+// home), so a panel never inherits the directory the daemon was launched from.
 func (s *Server) createPanel(kind, path string, args []string, dir string) error {
 	if kind == "" {
 		kind = proto.KindShell
+	}
+	if dir == "" {
+		dir = s.defaultDir // empty still, so ptymgr falls back to the user's home
 	}
 
 	s.mu.Lock()
@@ -401,7 +413,7 @@ func (s *Server) createPanel(kind, path string, args []string, dir string) error
 
 	switch kind {
 	case proto.KindShell:
-		if err := s.pty.Start(id, path); err != nil {
+		if err := s.pty.StartCmd(id, ptymgr.Spec{Command: path, Dir: dir}); err != nil {
 			return err
 		}
 	case proto.KindAgent:

@@ -1,6 +1,7 @@
 package ptymgr
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -207,5 +208,20 @@ func TestRingCap(t *testing.T) {
 	}
 	if len(p.ring) != cap {
 		t.Fatalf("ring should be trimmed to the cap, len = %d want %d", len(p.ring), cap)
+	}
+}
+
+// TestPanelDir defaults an empty working directory to the user's home — never
+// the daemon's own cwd — and passes a given directory through unchanged.
+func TestPanelDir(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home dir: %v", err)
+	}
+	if got := panelDir(""); got != home {
+		t.Fatalf("empty dir should default to home %q, got %q", home, got)
+	}
+	if got := panelDir("/tmp/x"); got != "/tmp/x" {
+		t.Fatalf("a given dir should pass through, got %q", got)
 	}
 }

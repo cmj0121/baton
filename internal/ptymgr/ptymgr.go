@@ -68,12 +68,24 @@ func (m *Manager) OnOutput(fn func(id string, data []byte)) { m.onOutput = fn }
 func (m *Manager) OnClose(fn func(id string)) { m.onClose = fn }
 
 // Spec describes the process behind a panel: the binary, its arguments, and the
-// directory it runs in. The zero value (empty Command) launches the user's shell
-// in the inherited directory — the plain shell-panel case.
+// directory it runs in. The zero value (empty Command) launches the user's shell.
 type Spec struct {
 	Command string   // binary path; empty = the user's shell ($SHELL, then /bin/sh)
 	Args    []string // arguments, e.g. an agent profile's flags
-	Dir     string   // working directory; empty inherits the server's
+	Dir     string   // working directory; empty falls back to the user's home
+}
+
+// panelDir is the directory a panel runs in: the requested dir, or the user's
+// home when none is given. A panel never inherits the daemon's own working
+// directory (where baton happened to be launched).
+func panelDir(dir string) string {
+	if dir != "" {
+		return dir
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return home
+	}
+	return ""
 }
 
 // Start launches command (a binary path) under a new PTY for the given panel id.
@@ -95,7 +107,7 @@ func (m *Manager) StartCmd(id string, spec Spec) error {
 
 	cmd := exec.Command(command, spec.Args...)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
-	cmd.Dir = spec.Dir // empty inherits the server's working directory
+	cmd.Dir = panelDir(spec.Dir) // empty → home, never the daemon's cwd
 
 	f, err := pty.Start(cmd)
 	if err != nil {

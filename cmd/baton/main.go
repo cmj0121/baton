@@ -242,6 +242,9 @@ func runServer() error {
 		if cfg.Panel.ReplayKB > 0 {
 			opts = append(opts, server.WithReplayBytes(cfg.Panel.ReplayKB*1024))
 		}
+		if cfg.Panel.Workdir != "" {
+			opts = append(opts, server.WithDefaultDir(cfg.Panel.Workdir))
+		}
 	}
 
 	log.Info().Str("socket", sock).Int("pid", os.Getpid()).Msgf("baton %s listening", version)

@@ -141,6 +141,7 @@ type prefs struct {
 	allowNameConflict bool
 	bellEnabled       bool
 	shellPath         string
+	workdir           string                         // default working directory for new panels ("" = home)
 	defaultAgent      string                         // agent profile the new-agent action spawns
 	agents            map[string]config.AgentProfile // user-configured agent profiles
 	replayKB          int                            // per-panel replay buffer in KiB (0 = server default)
@@ -187,6 +188,7 @@ func loadPrefs() prefs {
 		p.bellEnabled = *cfg.Settings.Bell
 	}
 	p.shellPath = cfg.Panel.Shell
+	p.workdir = cfg.Panel.Workdir
 	p.defaultAgent = cfg.Panel.DefaultAgent
 	p.agents = cfg.Panel.Agents
 	p.replayKB = cfg.Panel.ReplayKB
@@ -225,6 +227,7 @@ func (m model) saveConfig() error {
 		},
 		Panel: config.PanelDefaults{
 			Shell:        m.shellPath,
+			Workdir:      m.workdir,
 			DefaultAgent: m.defaultAgent,
 			Agents:       m.agents, // round-trip the user's profiles so a save never drops them
 			ReplayKB:     m.replayKB,
