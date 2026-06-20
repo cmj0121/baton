@@ -35,14 +35,40 @@ Keys are modal: on the **dashboard** and in a **group** each action is a single 
 keystrokes drive the program, so a Baton action is the leader **`C-t`** then the key. Press **`?`** for the full,
 rebindable list of the current view.
 
-| Context         | Keys                                                                                                               |
-| --------------- | ------------------------------------------------------------------------------------------------------------------ |
-| After `C-t`     | `d` dashboard, `g` group, `k` key map, `q` detach                                                                  |
-| Dashboard       | `hjkl` move, `S-←`/`S-→` reorder, `enter` open, `p` new panel, `A` new agent, `c` pick cmd, `w` close              |
-| Dashboard group | `g` mark, `G` group, `a` add, `u` ungroup, `e` rename                                                              |
-| Group           | `tab` focus, `+`/`-` columns, `p` pin, `i` interact, `x` remove, `S-←`/`S-→` reorder, `C-t [` scroll, `enter` zoom |
-| Zoom / interact | type to drive the program, `C-t [` scroll mode, `C-t C-t` literal `C-t`                                            |
-| Scroll mode     | `↑`/`↓` line, `b`/`Spc` (or `PgUp`/`PgDn`) page, `g`/`G` top/bottom, `esc`/`q` exit                                |
+| Where                  | Key                         | Does                                     |
+| ---------------------- | --------------------------- | ---------------------------------------- |
+| Anywhere (after `C-t`) | `C-t d`                     | go to the dashboard                      |
+|                        | `C-t g`                     | go to the group view                     |
+|                        | `C-t [`                     | enter scroll mode                        |
+|                        | `C-t k`                     | edit the key map                         |
+|                        | `C-t P`                     | panel config (default shell, workdir, …) |
+|                        | `C-t q`                     | detach (server keeps running)            |
+| Dashboard              | `hjkl` / arrows             | move the cursor                          |
+|                        | `enter`                     | open / zoom the selection                |
+|                        | `p`                         | new shell panel                          |
+|                        | `A`                         | new agent panel                          |
+|                        | `c`                         | new panel (pick the command)             |
+|                        | `w`                         | close the selection                      |
+|                        | `x`                         | purge exited panels                      |
+|                        | `S-←` / `S-→`               | reorder the selected item                |
+|                        | `g`                         | mark / unmark a panel                    |
+|                        | `G`                         | group the marked panels                  |
+|                        | `a`                         | add marked panels to the selected group  |
+|                        | `u`                         | ungroup the selected work item           |
+|                        | `e`                         | rename the panel or group                |
+| Group view             | `tab`                       | focus the next panel                     |
+|                        | `+` / `-`                   | more / fewer columns                     |
+|                        | `p`                         | pin / unpin the focused panel            |
+|                        | `i`                         | interact (type into the focused tile)    |
+|                        | `x`                         | remove the focused panel from the group  |
+|                        | `S-←` / `S-→`               | reorder the focused panel                |
+|                        | `enter`                     | zoom the focused panel                   |
+| Zoom / interact        | type                        | drive the program directly               |
+|                        | `C-t C-t`                   | send a literal `C-t`                     |
+| Scroll mode (`C-t [`)  | `↑` / `↓` (`k`/`j`)         | scroll a line                            |
+|                        | `b` / `Spc` (`PgUp`/`PgDn`) | scroll a page                            |
+|                        | `g` / `G`                   | jump to top / bottom                     |
+|                        | `esc` / `q`                 | exit scroll mode                         |
 
 Names stay unique unless you set `allow-name-conflict`.
 
