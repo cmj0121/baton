@@ -156,8 +156,11 @@ func TestUpdateBranches(t *testing.T) {
 
 	m2, _ = m.Update(connClosedMsg{})
 	m = m2.(model)
-	if !m.quitting {
-		t.Fatal("conn-closed should quit")
+	if m.quitting {
+		t.Fatal("conn-closed should not quit — it alerts and stays up")
+	}
+	if !m.backendDown {
+		t.Fatal("conn-closed should flag the backend as down")
 	}
 
 	if _, cmd := m.Update(nil); cmd != nil {
@@ -309,9 +312,9 @@ func TestModelWithLiveServer(t *testing.T) {
 	}
 	defer func() { _ = c.Close() }()
 
-	tm := New(c)  // New + loadPrefs
-	_ = tm.Init() // Init
-	_ = tick()    // tick constructor
+	tm := New(c, "test") // New + loadPrefs
+	_ = tm.Init()        // Init
+	_ = tick()           // tick constructor
 	m := tm.(model)
 
 	// Pump the welcome + (empty) panels snapshot through Update.

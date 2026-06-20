@@ -50,12 +50,13 @@ type Panel struct {
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type    string  `json:"type"`              // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error"
-	Version string  `json:"version,omitempty"` // set on "welcome"
-	Error   string  `json:"error,omitempty"`   // set on "error"
-	Panels  []Panel `json:"panels,omitempty"`  // full snapshot on "panels"; live state/spark refresh on "telemetry"
-	ID      string  `json:"id,omitempty"`      // panel id on "output"
-	Data    []byte  `json:"data,omitempty"`    // pty output bytes on "output"
+	Type      string  `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error"
+	Version   string  `json:"version,omitempty"`    // protocol version, set on "welcome"
+	ServerVer string  `json:"server_ver,omitempty"` // the server's build version, set on "welcome"
+	Error     string  `json:"error,omitempty"`      // set on "error"
+	Panels    []Panel `json:"panels,omitempty"`     // full snapshot on "panels"; live state/spark refresh on "telemetry"
+	ID        string  `json:"id,omitempty"`         // panel id on "output"
+	Data      []byte  `json:"data,omitempty"`       // pty output bytes on "output"
 
 	// Host resource sample on "stats", measured on the server so the footer
 	// reflects the machine where the panels actually run.

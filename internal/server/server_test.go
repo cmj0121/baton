@@ -960,3 +960,17 @@ func TestShellPanelUsesDefaultDir(t *testing.T) {
 		}
 	}
 }
+
+// TestWelcomeCarriesServerVersion checks the server reports its build version in
+// the welcome so a frontend can show the backend version.
+func TestWelcomeCarriesServerVersion(t *testing.T) {
+	c := startServer(t, server.WithVersion("9.9.9"))
+	// startServer drained welcome+panels; re-hello to re-read the welcome.
+	if err := c.Send(proto.Command{Action: "hello"}); err != nil {
+		t.Fatalf("hello: %v", err)
+	}
+	got := recv(t, c)
+	if got.Type != "welcome" || got.ServerVer != "9.9.9" {
+		t.Fatalf("welcome should carry the server version, got %+v", got)
+	}
+}

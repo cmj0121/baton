@@ -85,10 +85,13 @@ type model struct {
 	marked map[string]bool // panel ids tagged for the next group (multi-select)
 	status string
 
-	lastStatus string // status seen on the previous tick, to detect when it settles
-	statusAge  int    // ticks the status has gone unchanged, for the transient fade
-	endpoint   string // where we are attached: "local", or a host/IP for remote
-	version    string // negotiated protocol version, surfaced in the key map
+	lastStatus  string // status seen on the previous tick, to detect when it settles
+	statusAge   int    // ticks the status has gone unchanged, for the transient fade
+	endpoint    string // where we are attached: "local", or a host/IP for remote
+	version     string // negotiated protocol version, surfaced in the key map
+	appVersion  string // this frontend's build version
+	serverVer   string // the backend's build version, learned from the welcome
+	backendDown bool   // the server connection dropped — the footer shows a red alert
 
 	attnSeen    map[string]bool // panel ids currently flagged for attention, to fire the notification only on the rising edge
 	bellPending bool            // a panel just entered attention — ring the terminal bell on the next render
@@ -163,10 +166,11 @@ func (m model) RestartRequested() bool { return m.restart }
 // New builds the TUI model around an attached client. The fleet starts empty and
 // is filled by the server's first snapshot, which arrives right after the hello
 // handshake — the server owns the panels now.
-func New(c *client.Client) tea.Model {
+func New(c *client.Client, appVersion string) tea.Model {
 	p := loadPrefs()
 	return model{
 		client:            c,
+		appVersion:        appVersion,
 		mode:              modeDashboard,
 		status:            "attaching…",
 		endpoint:          c.Endpoint(),
@@ -397,9 +401,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.takeBell(), waitTelemetry(m.client.Telemetry))
 
 	case connClosedMsg:
-		m.status = "server closed the connection"
-		m.quitting = true
-		return m, tea.Quit
+		// The backend dropped. Rather than vanish, stay up and alert in the footer
+		// so the user can see it and recover — C-t S restarts the daemon and
+		// reattaches, C-t q detaches. The clock tick keeps the cockpit rendering.
+		m.backendDown = true
+		m.status = "error: backend down — " + keyLabel(m.effPrefix()) + " S to restart"
+		return m, nil
 
 	case tickMsg:
 		m.now = time.Time(msg)
@@ -471,6 +478,8 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 	switch sm.Type {
 	case "welcome":
 		m.version = sm.Version
+		m.serverVer = sm.ServerVer
+		m.backendDown = false // a fresh welcome means the backend is live again
 		if sm.Version != proto.ProtocolVersion {
 			m.status = "error: server speaks " + sm.Version + ", client " + proto.ProtocolVersion
 		} else {
@@ -1438,6 +1447,7 @@ func (m model) View() string {
 		bannerStyle.Render(banner),
 		"",
 		subStyle.Render("a next-gen, agent-friendly terminal multiplexer"),
+		mutedStyle.Render(m.versionLine()),
 	)
 
 	var body string
@@ -1954,11 +1964,7 @@ func (m model) keyMapView() string {
 		legendKey.Render("e") + mutedStyle.Render(" edit") + "   " +
 		legendKey.Render("enter") + mutedStyle.Render(" run") + "   " +
 		legendKey.Render("esc") + mutedStyle.Render(" back")
-	ver := m.version
-	if ver == "" {
-		ver = proto.ProtocolVersion
-	}
-	about := lipgloss.NewStyle().Foreground(colFaint).Render("protocol " + ver)
+	about := lipgloss.NewStyle().Foreground(colFaint).Render(m.versionLine())
 
 	return m.renderScrollPanel(scrollPanel{
 		title:    "KEY BINDINGS",
@@ -2201,6 +2207,39 @@ func (m model) attentionBadge() string {
 // the connection status (green, red on error). The status is clipped to whatever
 // space is left and the hint drops when too narrow, so the strip never spills
 // onto a second line and swallows the footer.
+// outageCap is the footer alert shown in every view when the backend connection
+// has dropped: a loud red cap so it is obvious the cockpit is showing stale
+// state. Empty while the backend is live.
+func (m model) outageCap() string {
+	if !m.backendDown {
+		return ""
+	}
+	return seg("◼ BACKEND DOWN", colInk, colRed)
+}
+
+// frontendVersion is this build's version, defaulting to "dev" when unset (a
+// zero-value model in tests, or an unstamped build).
+func (m model) frontendVersion() string {
+	if m.appVersion != "" {
+		return m.appVersion
+	}
+	return "dev"
+}
+
+// versionLine summarises the build versions for the about line: this frontend,
+// the backend once the welcome lands, and the negotiated protocol.
+func (m model) versionLine() string {
+	ver := m.version
+	if ver == "" {
+		ver = proto.ProtocolVersion
+	}
+	parts := "baton " + m.frontendVersion()
+	if m.serverVer != "" {
+		parts += " · backend " + m.serverVer
+	}
+	return parts + " · protocol " + ver
+}
+
 func (m model) statusBar(left, hint string) string {
 	prefixBadge := ""
 	if m.prefix {
@@ -2213,7 +2252,7 @@ func (m model) statusBar(left, hint string) string {
 	if strings.HasPrefix(m.status, "error") {
 		statusBg = colRed
 	}
-	caps := prefixBadge + m.attentionBadge() + stats + clock
+	caps := prefixBadge + m.outageCap() + m.attentionBadge() + stats + clock
 	right := caps
 	if budget := m.width - lipgloss.Width(left) - lipgloss.Width(caps) - 4; budget > 0 {
 		right += seg("● "+truncate(m.status, budget), colInk, statusBg) // "● " + cap padding

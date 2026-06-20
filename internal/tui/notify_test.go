@@ -171,3 +171,52 @@ func TestAttentionBadgeInEveryFooter(t *testing.T) {
 		t.Fatal("a calm fleet should show no attention badge")
 	}
 }
+
+// TestBackendOutageAlert proves a dropped connection flags the backend down,
+// stays up (no quit), and shows a red alert cap in every view's footer — cleared
+// when a fresh welcome arrives.
+func TestBackendOutageAlert(t *testing.T) {
+	m := model{width: 120, height: 30, endpoint: "local", status: "dashboard",
+		groupName: "api", zoomTitle: "sh", binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+
+	// No alert while the backend is live.
+	if strings.Contains(m.footer(), "BACKEND DOWN") {
+		t.Fatal("a live backend should show no outage cap")
+	}
+
+	next, _ := m.Update(connClosedMsg{})
+	m = next.(model)
+	if m.quitting || !m.backendDown {
+		t.Fatalf("a dropped connection should alert, not quit: quitting=%v down=%v", m.quitting, m.backendDown)
+	}
+	for name, foot := range map[string]string{"dashboard": m.footer(), "zoom": m.zoomFooter(), "group": m.groupZoomFooter()} {
+		if !strings.Contains(foot, "BACKEND DOWN") {
+			t.Errorf("%s footer should carry the outage alert", name)
+		}
+	}
+
+	// A fresh welcome clears the alert.
+	m.applyEvent(proto.ServerMsg{Type: "welcome", Version: proto.ProtocolVersion, ServerVer: "9.9"})
+	if m.backendDown {
+		t.Fatal("a welcome should clear the outage flag")
+	}
+	if m.serverVer != "9.9" {
+		t.Fatalf("welcome should record the backend version, got %q", m.serverVer)
+	}
+}
+
+// TestVersionLine shows the frontend build, the backend once known, and the
+// protocol.
+func TestVersionLine(t *testing.T) {
+	m := model{appVersion: "1.2.3"}
+	if got := m.versionLine(); !strings.Contains(got, "baton 1.2.3") || !strings.Contains(got, "protocol "+proto.ProtocolVersion) {
+		t.Fatalf("version line = %q", got)
+	}
+	if strings.Contains(m.versionLine(), "backend") {
+		t.Fatal("no backend version should show before the welcome")
+	}
+	m.serverVer = "4.5.6"
+	if !strings.Contains(m.versionLine(), "backend 4.5.6") {
+		t.Fatalf("version line should include the backend once known, got %q", m.versionLine())
+	}
+}

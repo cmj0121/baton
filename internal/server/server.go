@@ -42,6 +42,7 @@ type Server struct {
 	allowNameConflict bool   // when false, panel titles and group names stay unique
 	replayBytes       int    // per-panel replay buffer; 0 keeps the ptymgr default
 	defaultDir        string // workdir for a panel that asks for none; empty → the user's home
+	version           string // the server's build version, reported in the welcome
 
 	mu      sync.Mutex
 	seq     int
@@ -72,6 +73,12 @@ func WithReplayBytes(bytes int) Option {
 // inherits the directory the daemon was launched from.
 func WithDefaultDir(dir string) Option {
 	return func(s *Server) { s.defaultDir = dir }
+}
+
+// WithVersion sets the server's build version, reported to a frontend in the
+// welcome so it can show the backend version and flag a mismatch.
+func WithVersion(v string) Option {
+	return func(s *Server) { s.version = v }
 }
 
 // New builds a server bound to ln. The fleet starts empty — panels appear only
@@ -331,7 +338,7 @@ func (s *Server) handle(conn net.Conn) {
 func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	switch cmd.Action {
 	case "hello":
-		send(cc, proto.ServerMsg{Type: "welcome", Version: proto.ProtocolVersion})
+		send(cc, proto.ServerMsg{Type: "welcome", Version: proto.ProtocolVersion, ServerVer: s.version})
 		send(cc, s.panelsMsg())
 		send(cc, statsMsg()) // seed the footer immediately, before the first tick
 	case "panel.list":
