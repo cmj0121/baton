@@ -143,6 +143,7 @@ type prefs struct {
 	shellPath         string
 	defaultAgent      string                         // agent profile the new-agent action spawns
 	agents            map[string]config.AgentProfile // user-configured agent profiles
+	replayKB          int                            // per-panel replay buffer in KiB (0 = server default)
 }
 
 // defaultAgentName is the built-in agent profile, used when none is configured —
@@ -188,6 +189,7 @@ func loadPrefs() prefs {
 	p.shellPath = cfg.Panel.Shell
 	p.defaultAgent = cfg.Panel.DefaultAgent
 	p.agents = cfg.Panel.Agents
+	p.replayKB = cfg.Panel.ReplayKB
 	return p
 }
 
@@ -225,6 +227,7 @@ func (m model) saveConfig() error {
 			Shell:        m.shellPath,
 			DefaultAgent: m.defaultAgent,
 			Agents:       m.agents, // round-trip the user's profiles so a save never drops them
+			ReplayKB:     m.replayKB,
 		},
 	}.Save()
 }

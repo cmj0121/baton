@@ -235,8 +235,13 @@ func runServer() error {
 	// Honour the user's naming-conflict policy from the shared config file; a
 	// missing or unreadable config keeps the strict default (unique names).
 	var opts []server.Option
-	if cfg, err := config.Load(); err == nil && cfg.Settings.AllowNameConflict != nil {
-		opts = append(opts, server.WithAllowNameConflict(*cfg.Settings.AllowNameConflict))
+	if cfg, err := config.Load(); err == nil {
+		if cfg.Settings.AllowNameConflict != nil {
+			opts = append(opts, server.WithAllowNameConflict(*cfg.Settings.AllowNameConflict))
+		}
+		if cfg.Panel.ReplayKB > 0 {
+			opts = append(opts, server.WithReplayBytes(cfg.Panel.ReplayKB*1024))
+		}
 	}
 
 	log.Info().Str("socket", sock).Int("pid", os.Getpid()).Msgf("baton %s listening", version)

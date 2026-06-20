@@ -10,7 +10,9 @@ Baton is keyboard-driven and has exactly two ways to look at your agents:
 - **Dashboard** — see everything at once. Navigate panels, spawn new ones, group them into work items, reorder them
   (`shift`+arrows), retire the dead ones.
 - **Zoom** — see one thing fully. Drive a single panel as if it were your only terminal, scroll back through its history
-  (`shift`+`↑`/`↓`, `PgUp`/`PgDn`) without disturbing the program, then pop back out to the dashboard.
+  (`shift`+`↑`/`↓`, `PgUp`/`PgDn`) without disturbing the program, then pop back out to the dashboard. How much history is
+  kept and replayed on attach is `panel.replay-kb` in the config (a larger value pages back further; full-screen programs
+  keep no scrollback).
 
 You never juggle windows or tabs. You conduct from the dashboard, and you zoom in only when a player needs you.
 
@@ -98,8 +100,8 @@ member** (attention beats running beats spawning beats idle beats exited), so on
 once. By default the split is an _overview you navigate_, not a surface you type into: `tab` moves the focus between
 tiles, `+`/`-` adjusts the column count, `shift`+`←`/`→` reorders the focused member within the group, `shift`+`↑`/`↓`
 (and `PgUp`/`PgDn`) scrolls the focused tile back through its history, `x` removes the focused member from the group,
-`enter` drops into the focused panel's own single zoom, and `d`/`esc` returns to the dashboard. From a zoomed member, the always-on `C-t g` escape pops
-back to the split.
+`enter` drops into the focused panel's own single zoom, and `d`/`esc` returns to the dashboard. From a zoomed member,
+the always-on `C-t g` escape pops back to the split.
 
 **Pinning, for crowded groups.** Live tiles are capped (`maxGroupTiles`) so a huge group cannot spawn unbounded
 terminals. Rather than stranding the overflow, the split shows the capped set of tiles beside a **tree list** of the

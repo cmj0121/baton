@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -110,6 +111,7 @@ type model struct {
 	shellPath    string                         // configured default shell binary path ("" = system shell)
 	defaultAgent string                         // agent profile the new-agent action spawns ("" = claude)
 	agents       map[string]config.AgentProfile // user-configured agent profiles
+	replayKB     int                            // per-panel replay buffer in KiB, round-tripped so a save never drops it
 	input        inputPurpose                   // active text-input overlay, or inputNone
 	inputBuf     string                         // text typed into the overlay
 	helpFrom     mode                           // the view the key map (?) was opened from, to restore on esc
@@ -144,6 +146,7 @@ type inputPurpose int
 const (
 	inputNone        inputPurpose = iota
 	inputShellPath                // editing the default shell in panel config
+	inputReplayKB                 // editing the per-panel replay buffer (KiB) in panel config
 	inputNewPanelCmd              // the prefix+n new-panel command popup
 	inputAgentDir                 // the workdir for a new agent panel
 	inputGroupName                // naming a new group from the marked panels
@@ -174,6 +177,7 @@ func New(c *client.Client) tea.Model {
 		shellPath:         p.shellPath,
 		defaultAgent:      p.defaultAgent,
 		agents:            p.agents,
+		replayKB:          p.replayKB,
 	}
 }
 
@@ -653,7 +657,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case modePanelConfig:
-			return m.editShellPath(), nil
+			return m.editPanelRow()
 		}
 	}
 
@@ -732,12 +736,73 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// The panel-config screen's rows, in display order; the cursor indexes them.
+const (
+	panelRowShell    = iota // the default shell new panels run
+	panelRowReplayKB        // the per-panel replay buffer (KiB)
+	numPanelConfigRows
+)
+
+// editPanelRow opens the editor for the selected panel-config row.
+func (m model) editPanelRow() (tea.Model, tea.Cmd) {
+	if m.cursor == panelRowReplayKB {
+		return m.editReplayKB(), nil
+	}
+	return m.editShellPath(), nil
+}
+
 // editShellPath opens the text-input overlay to edit the default shell, seeded
 // with the current value.
 func (m model) editShellPath() model {
 	m.input = inputShellPath
 	m.inputBuf = m.shellPath
 	m.status = "default shell · type a path (blank = system), enter to save"
+	return m
+}
+
+// editReplayKB opens the text-input overlay to edit the per-panel replay buffer,
+// seeded with the current value (blank when it is the server default).
+func (m model) editReplayKB() model {
+	m.input = inputReplayKB
+	m.inputBuf = ""
+	if m.replayKB > 0 {
+		m.inputBuf = strconv.Itoa(m.replayKB)
+	}
+	m.status = "replay buffer · KiB per panel (blank = default), enter to save"
+	return m
+}
+
+// replayLabel describes the configured replay buffer for the panel-config row; an
+// unset (zero) value reads as the server default.
+func replayLabel(kb int) string {
+	if kb <= 0 {
+		return "default"
+	}
+	return fmt.Sprintf("%d KiB", kb)
+}
+
+// commitReplayKB applies the typed replay-buffer size (KiB): blank clears it back
+// to the server default, a whole non-negative number sets it, and anything else
+// is rejected with the overlay left open on the attempt. The daemon reads this at
+// startup, so the new size lands on the next server restart, not the running one.
+func (m model) commitReplayKB(s string) model {
+	if s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil || n < 0 {
+			m.input = inputReplayKB // keep the overlay open with the attempt
+			m.inputBuf = s
+			m.status = "replay buffer · enter a whole number of KiB"
+			return m
+		}
+		m.replayKB = n
+	} else {
+		m.replayKB = 0 // back to the server default
+	}
+	if err := m.saveConfig(); err != nil {
+		m.status = "save failed: " + err.Error()
+		return m
+	}
+	m.status = "replay buffer · " + replayLabel(m.replayKB) + " · restart to apply"
 	return m
 }
 
@@ -776,6 +841,8 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "default shell · " + shellLabel(buf)
 		}
+	case inputReplayKB:
+		return m.commitReplayKB(buf), nil
 	case inputNewPanelCmd:
 		return m.spawnPanel(buf), nil
 	case inputAgentDir:
@@ -1013,7 +1080,7 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.mode == modePanelConfig {
-		return m.editShellPath(), nil // the only row is the default shell
+		return m.editPanelRow()
 	}
 	// Dashboard: zoom into the selected panel, or open the group's split.
 	if it, ok := m.selectedItem(); ok {
@@ -1211,7 +1278,7 @@ func (m model) itemCount() int {
 	case modeKeyMap:
 		return len(m.keymap()) + 1 + numSettings // prefix row + bindings + the settings toggles
 	case modePanelConfig:
-		return 1 // the default-shell row
+		return numPanelConfigRows // default shell + replay buffer
 	default:
 		return len(m.dashItems())
 	}
@@ -1851,14 +1918,16 @@ func configBox(body string) string {
 // panelConfigView renders the panel-defaults tab. For now its one row is the
 // default shell that new panels run.
 func (m model) panelConfigView() string {
-	caret := "  "
-	labelStyle := mutedStyle
-	if m.cursor == 0 {
-		caret = lipgloss.NewStyle().Foreground(colBrand).Bold(true).Render("▸ ")
-		labelStyle = inkStyle
+	row := func(idx int, label, value string) string {
+		caret := "  "
+		labelStyle := mutedStyle
+		if m.cursor == idx {
+			caret = lipgloss.NewStyle().Foreground(colBrand).Bold(true).Render("▸ ")
+			labelStyle = inkStyle
+		}
+		val := lipgloss.NewStyle().Foreground(colCyan).Render(value)
+		return fmt.Sprintf("%s%-16s%s", caret, labelStyle.Render(label), val)
 	}
-	value := lipgloss.NewStyle().Foreground(colCyan).Render(shellLabel(m.shellPath))
-	row := fmt.Sprintf("%s%-16s%s", caret, labelStyle.Render("default shell"), value)
 
 	legendKey := lipgloss.NewStyle().Foreground(colCyan).Bold(true)
 	legend := mutedStyle.Render("↑↓ move") + "   " +
@@ -1867,8 +1936,10 @@ func (m model) panelConfigView() string {
 
 	return configBox(lipgloss.JoinVertical(lipgloss.Left,
 		sectionStyle.Render(spaced("PANEL CONFIG")), "",
-		row, "",
-		mutedStyle.Render("C-t p spawns this · C-t n picks a command per panel"),
+		row(panelRowShell, "default shell", shellLabel(m.shellPath)),
+		row(panelRowReplayKB, "replay buffer", replayLabel(m.replayKB)),
+		"",
+		mutedStyle.Render("replay buffer seeds scrollback · change applies on server restart"),
 		"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(legend))), legend,
 	))
 }
@@ -1879,6 +1950,8 @@ func (m model) inputView() string {
 	switch m.input {
 	case inputShellPath:
 		title, prompt = "DEFAULT SHELL", "shell path  (blank = system default)"
+	case inputReplayKB:
+		title, prompt = "REPLAY BUFFER", "KiB of history per panel  (blank = default)"
 	case inputNewPanelCmd:
 		title, prompt, action = "NEW PANEL", "command to run  (blank = system shell)", "spawn"
 	case inputAgentDir:

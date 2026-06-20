@@ -40,6 +40,7 @@ type Server struct {
 	pty *ptymgr.Manager
 
 	allowNameConflict bool // when false, panel titles and group names stay unique
+	replayBytes       int  // per-panel replay buffer; 0 keeps the ptymgr default
 
 	mu      sync.Mutex
 	seq     int
@@ -58,18 +59,31 @@ func WithAllowNameConflict(allow bool) Option {
 	return func(s *Server) { s.allowNameConflict = allow }
 }
 
+// WithReplayBytes sets the per-panel replay buffer the server keeps and replays
+// to an attaching frontend, seeding the scrollback it can page through. Zero
+// keeps the ptymgr default.
+func WithReplayBytes(bytes int) Option {
+	return func(s *Server) { s.replayBytes = bytes }
+}
+
 // New builds a server bound to ln. The fleet starts empty — panels appear only
-// when the user spawns a real one.
+// when the user spawns a real one. Options are applied before the PTY manager is
+// built, so settings like the replay size reach it.
 func New(ln net.Listener, opts ...Option) *Server {
 	s := &Server{
 		ln:      ln,
-		pty:     ptymgr.New(),
 		clients: make(map[*clientConn]struct{}),
 		mon:     newMonitor(),
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
+
+	var pmOpts []ptymgr.Option
+	if s.replayBytes > 0 {
+		pmOpts = append(pmOpts, ptymgr.WithRingCap(s.replayBytes))
+	}
+	s.pty = ptymgr.New(pmOpts...)
 	s.pty.OnOutput(s.routeOutput)
 	s.pty.OnClose(s.onPanelExit)
 	return s

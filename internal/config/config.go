@@ -46,6 +46,11 @@ type Settings struct {
 type PanelDefaults struct {
 	Shell string `yaml:"shell,omitempty"` // default shell binary path; empty = system shell
 
+	// ReplayKB is the per-panel replay buffer in kibibytes — how much recent
+	// output the server keeps and replays when a frontend attaches, seeding the
+	// scrollback you can page through. Unset or zero uses the built-in default.
+	ReplayKB int `yaml:"replay-kb,omitempty"`
+
 	// DefaultAgent is the agent profile spawned by the new-agent action; empty
 	// means the built-in "claude" profile.
 	DefaultAgent string `yaml:"default-agent,omitempty"`

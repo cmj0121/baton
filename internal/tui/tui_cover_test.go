@@ -343,3 +343,53 @@ func TestModelWithLiveServer(t *testing.T) {
 		t.Fatalf("close should drop a panel, %d -> %d", before, len(m.fleet))
 	}
 }
+
+// TestPanelConfigEditsReplayBuffer drives the new replay-buffer row: navigate to
+// it, edit it, and confirm the value persists to the config.
+func TestPanelConfigEditsReplayBuffer(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := model{prefixKey: "ctrl+t", binds: append([]binding(nil), bindings...)}
+
+	m = press(m, "ctrl+t", "P")
+	if m.mode != modePanelConfig {
+		t.Fatalf("C-t P should open panel config, mode=%v", m.mode)
+	}
+	m = press(m, "down")
+	if m.cursor != panelRowReplayKB {
+		t.Fatalf("down should land on the replay row, cursor=%d", m.cursor)
+	}
+	m = press(m, "e")
+	if m.input != inputReplayKB {
+		t.Fatal("e should open the replay-buffer overlay")
+	}
+	for _, r := range "1024" {
+		m = press(m, string(r))
+	}
+	m = press(m, "enter")
+	if m.input != inputNone || m.replayKB != 1024 {
+		t.Fatalf("enter should save 1024, input=%v replayKB=%d", m.input, m.replayKB)
+	}
+	if got := loadPrefs().replayKB; got != 1024 {
+		t.Fatalf("replay-kb not persisted, got %d", got)
+	}
+}
+
+// TestCommitReplayKB covers the value rules: blank resets to the default, a whole
+// number sets it, and a non-number is rejected with the overlay kept open.
+func TestCommitReplayKB(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	base := model{replayKB: 256, prefixKey: "ctrl+t", binds: append([]binding(nil), bindings...)}
+
+	if got := base.commitReplayKB("").replayKB; got != 0 {
+		t.Fatalf("blank should reset to 0, got %d", got)
+	}
+	if got := base.commitReplayKB("512").replayKB; got != 512 {
+		t.Fatalf("512 should set, got %d", got)
+	}
+	if m := base.commitReplayKB("nope"); m.replayKB != 256 || m.input != inputReplayKB {
+		t.Fatalf("an invalid entry should keep the value and reopen the overlay, replayKB=%d input=%v", m.replayKB, m.input)
+	}
+	if m := base.commitReplayKB("-5"); m.replayKB != 256 || m.input != inputReplayKB {
+		t.Fatalf("a negative entry should be rejected, replayKB=%d input=%v", m.replayKB, m.input)
+	}
+}

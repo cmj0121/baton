@@ -186,3 +186,26 @@ func TestStartShellBadShellErrors(t *testing.T) {
 		t.Fatal("StartShell with a missing shell should error")
 	}
 }
+
+// TestRingCap covers the configurable replay buffer: the default, a custom cap
+// that trims the ring to its tail, and the floor on absurdly small values.
+func TestRingCap(t *testing.T) {
+	if New().ringCap != DefaultRingCap {
+		t.Fatalf("default ring cap = %d, want %d", New().ringCap, DefaultRingCap)
+	}
+	if got := New(WithRingCap(10)).ringCap; got != minRingCap {
+		t.Fatalf("a tiny cap should floor at %d, got %d", minRingCap, got)
+	}
+
+	// A custom cap above the floor keeps only the most recent bytes (the tail),
+	// which is exactly what replay-on-attach should hand a frontend.
+	const cap = 8 * 1024
+	m := New(WithRingCap(cap))
+	p := &pane{}
+	for i := 0; i < 10; i++ {
+		m.appendRing(p, make([]byte, 1000)) // 10000 bytes total, cap is 8192
+	}
+	if len(p.ring) != cap {
+		t.Fatalf("ring should be trimmed to the cap, len = %d want %d", len(p.ring), cap)
+	}
+}
