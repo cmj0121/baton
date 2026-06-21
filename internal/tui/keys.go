@@ -24,6 +24,7 @@ const (
 	keyClose       = "w"
 	keyPurge       = "x"
 	keySignal      = "s" // open the send-signal picker for the selection / panel / group
+	keySearch      = "f" // find: filter panels on the dashboard, search the scrollback in a zoom (C-t f)
 	keyHelp        = "?" // view the key list for the current view
 	keyEditMap     = "k" // edit the key map (prefix only: C-t k)
 	keyPanelConfig = "P" // shift+p
@@ -75,6 +76,7 @@ const (
 	actClose
 	actPurge
 	actSignal
+	actSearch
 	actHelp
 	actPanelConfig
 	actRestart
@@ -124,6 +126,7 @@ var bindings = []binding{
 	{"close", keyClose, "close the selected panel", actClose, "Panels"},
 	{"purge-exited", keyPurge, "purge all exited panels", actPurge, "Panels"},
 	{"signal", keySignal, "send a signal to the panel(s)", actSignal, "Panels"},
+	{"search", keySearch, "find panels · search the scrollback (zoom)", actSearch, "Panels"},
 
 	{"mark", keyMark, "mark a panel for grouping", actMark, "Work items"},
 	{"group", keyGroup, "group the marked panels", actGroup, "Work items"},

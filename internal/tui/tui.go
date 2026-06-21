@@ -130,6 +130,8 @@ type model struct {
 	renameID    string // panel id being renamed via inputRename ("" if a group)
 	renameGroup string // group being renamed via inputRename ("" if a panel)
 
+	filter string // dashboard panel filter (substring on titles / group names); "" shows the whole fleet
+
 	signalFrom    mode     // the view the signal picker was opened from, restored on esc / after sending
 	signalTargets []string // panel ids the chosen signal is delivered to
 	signalScope   string   // human label of the target(s), shown in the picker
@@ -170,6 +172,7 @@ const (
 	inputGroupName                // naming a new group from the marked panels
 	inputRename                   // renaming the selected panel or group
 	inputSignalName               // free-form signal name/number for the picker's "other…"
+	inputFilter                   // live dashboard panel filter (f)
 )
 
 // RestartRequested reports whether the cockpit exited because the user asked to
@@ -817,6 +820,11 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = ""
 			return m, nil
 		}
+		if m.mode == modeDashboard && m.filter != "" { // esc on the dashboard clears an applied filter first
+			m.filter, m.cursor = "", 0
+			m.status = "filter cleared"
+			return m, nil
+		}
 		if m.mode != modeDashboard {
 			return m.runAction(actDashboard)
 		}
@@ -906,6 +914,9 @@ func (m model) commitReplayKB(s string) model {
 func (m model) handleInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.Type {
 	case tea.KeyEsc:
+		if m.input == inputFilter { // esc out of the filter clears it back to the whole fleet
+			m.filter, m.cursor = "", 0
+		}
 		m.input, m.inputHint = inputNone, ""
 		m.status = "cancelled"
 	case tea.KeyEnter:
@@ -929,7 +940,21 @@ func (m model) handleInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inputBuf += string(k.Runes)
 		m.inputHint = ""
 	}
+	// The filter narrows the dashboard live as you type, so mirror the field into
+	// the filter and keep the cursor in range against the shrinking list.
+	if m.input == inputFilter {
+		m.filter, m.cursor = m.inputBuf, 0
+	}
 	return m, nil
+}
+
+// openFilter opens the live dashboard filter, seeded with the current filter so
+// reopening it lets you refine rather than restart.
+func (m model) openFilter() model {
+	m.input = inputFilter
+	m.inputBuf = m.filter
+	m.status = "filter · type to find panels · enter applies · esc clears"
+	return m
 }
 
 // inputIsPath reports whether an overlay edits a filesystem path, so tab
@@ -1051,6 +1076,13 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		return m.commitRename(buf), nil
 	case inputSignalName:
 		return m.commitOtherSignal(buf)
+	case inputFilter:
+		m.filter, m.cursor = buf, 0
+		if buf == "" {
+			m.status = "filter cleared"
+		} else {
+			m.status = "filter · " + buf
+		}
 	}
 	return m, nil
 }
@@ -1258,6 +1290,10 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 			scope = fmt.Sprintf("%s (%d panels)", it.name, len(ids))
 		}
 		return m.openSignalPicker(modeDashboard, ids, scope), nil
+	case actSearch:
+		// On the dashboard, f opens the live panel filter. In a zoom it is reached
+		// after the prefix (handleZoomKey) and searches the scrollback instead.
+		return m.openFilter(), nil
 	case actDashboard:
 		m.mode = modeDashboard
 		m.cursor = 0
@@ -1855,10 +1891,17 @@ func (m model) dashboardView() string {
 	items := m.dashItems() // built once and threaded through the render below
 	heading := sectionStyle.Render(spaced("FLEET")) +
 		mutedStyle.Render(fmt.Sprintf("   %d panel(s)  ", len(m.fleet))) + fleetBreakdown(m.fleet, items)
+	if m.filter != "" {
+		heading += "  " + seg("⌕ "+truncate(m.filter, 20), colDark, colCyan) +
+			mutedStyle.Render(fmt.Sprintf("  %d match(es)", len(items)))
+	}
 	summary := m.summaryStrip()
 	body := m.cardGrid(items)
 	if len(items) > treeThreshold {
 		body = m.treeAndPreview(items)
+	}
+	if m.filter != "" && len(items) == 0 {
+		body = mutedStyle.Render("no panels match \"" + truncate(m.filter, 24) + "\"  ·  esc clears the filter")
 	}
 	return lipgloss.JoinVertical(lipgloss.Center, heading, "", summary, "", body)
 }
@@ -2486,6 +2529,8 @@ func (m model) inputView() string {
 		title, prompt, action = "RENAME", "new name", "save"
 	case inputSignalName:
 		title, prompt, action = "SEND SIGNAL", "signal name or number  (e.g. WINCH, TSTP, 28)", "send"
+	case inputFilter:
+		title, prompt, action = "FIND PANELS", "filter by title or group  (live)", "apply"
 	}
 
 	field := lipgloss.NewStyle().Width(46).Foreground(colInk).Background(colSurface).Render("› " + m.inputBuf + "▌")

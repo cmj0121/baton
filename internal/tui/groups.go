@@ -49,7 +49,42 @@ func (m model) dashItems() []dashItem {
 		groupAt[p.Group] = len(items)
 		items = append(items, dashItem{kind: itemGroup, name: p.Group, members: []panel.Panel{p}})
 	}
-	return items
+	return filterItems(items, m.filter)
+}
+
+// filterItems narrows the dashboard to items matching the filter — a
+// case-insensitive substring on a panel's title, or a group's name or any
+// member's title (so a group surfaces when one of its panels matches). An empty
+// filter returns the list untouched.
+func filterItems(items []dashItem, filter string) []dashItem {
+	if filter == "" {
+		return items
+	}
+	lf := strings.ToLower(filter)
+	out := make([]dashItem, 0, len(items))
+	for _, it := range items {
+		if itemMatches(it, lf) {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// itemMatches reports whether a dashboard item matches the (already
+// lower-cased) filter.
+func itemMatches(it dashItem, lf string) bool {
+	if it.kind == itemPanel {
+		return strings.Contains(strings.ToLower(it.panel.Title), lf)
+	}
+	if strings.Contains(strings.ToLower(it.name), lf) {
+		return true
+	}
+	for _, p := range it.members {
+		if strings.Contains(strings.ToLower(p.Title), lf) {
+			return true
+		}
+	}
+	return false
 }
 
 // title is the label shown for an item on the dashboard.
