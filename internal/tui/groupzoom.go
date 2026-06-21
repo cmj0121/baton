@@ -761,7 +761,7 @@ func (m model) tileBody(p panel.Panel, emuCols, emuRows int, focused, showCursor
 	// the other tiles render their plain live bottom.
 	rows := emuWindow(emu, emuCols, emuRows, 0)
 	if focused {
-		rows = m.searchWindow(emu, emuCols, emuRows, m.scrollOff)
+		rows = m.scrollWindow(emu, emuCols, emuRows, m.scrollOff)
 	}
 	if showCursor && m.scrollOff == 0 {
 		cur := emu.CursorPosition()
@@ -781,6 +781,8 @@ func (m model) groupZoomFooter() string {
 	}
 	mode := seg("▣ GROUP", colInk, colBlue)
 	switch {
+	case m.copySelecting:
+		mode = seg("✄ SELECT", colDark, colCyan)
 	case m.searchActive():
 		mode = m.searchSeg()
 	case m.scrolling:

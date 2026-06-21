@@ -138,6 +138,9 @@ type model struct {
 	searchHits  []int          // combined scrollback+screen line indices matching the term, ascending
 	searchAt    int            // index into searchHits of the current match
 
+	copySelecting bool // a copy selection is being made in scroll mode (v marks the anchor)
+	copyAnchor    int  // combined line index the selection is anchored at; the span runs to the current top
+
 	signalFrom    mode     // the view the signal picker was opened from, restored on esc / after sending
 	signalTargets []string // panel ids the chosen signal is delivered to
 	signalScope   string   // human label of the target(s), shown in the picker
@@ -1505,7 +1508,8 @@ func (m model) enterScroll() model {
 		return m
 	}
 	m.scrolling = true
-	m.status = "scroll · ↑↓ line · b/space (or PgUp/PgDn) page · esc exits"
+	m.copySelecting = false // a fresh scroll session starts with no selection
+	m.status = "scroll · ↑↓ line · b/Spc page · v select · y copy · esc exits"
 	return m
 }
 
@@ -1514,6 +1518,7 @@ func (m model) enterScroll() model {
 func (m model) exitScroll() model {
 	m.scrolling = false
 	m.scrollOff = 0
+	m.copySelecting = false
 	m = m.clearSearch()
 	m.status = ""
 	return m
@@ -1561,6 +1566,10 @@ func (m model) handleScrollKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.gotoMatch(-1), nil
 	case "N": // previous search hit (newer)
 		return m.gotoMatch(1), nil
+	case "v": // mark / clear the copy selection anchor
+		return m.copyToggle(), nil
+	case "y": // copy the selection (or the visible page) to the clipboard
+		return m.yankSelection()
 	case "esc", "q":
 		return m.exitScroll(), nil
 	}
@@ -1890,7 +1899,7 @@ func (m model) zoomView() string {
 	rows := m.zoomRows()
 	lines := make([]string, rows)
 	if m.emu != nil {
-		lines = m.searchWindow(m.emu, m.width, rows, m.scrollOff)
+		lines = m.scrollWindow(m.emu, m.width, rows, m.scrollOff)
 		// Draw the cursor only on the live bottom (a scrolled-back view is history),
 		// and only when the program has not hidden it — so a full-screen reader that
 		// turns the cursor off does not show a phantom block.

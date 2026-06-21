@@ -51,6 +51,8 @@ func (m model) zoomFooter() string {
 	}
 	state := seg("◉ ZOOM", colInk, colGreen)
 	switch {
+	case m.copySelecting:
+		state = seg("✄ SELECT", colDark, colCyan)
 	case m.searchActive():
 		state = m.searchSeg()
 	case m.scrolling:
