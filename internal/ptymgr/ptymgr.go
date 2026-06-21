@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 
 	"github.com/creack/pty"
 )
@@ -24,6 +25,7 @@ const minRingCap = 4 * 1024
 // freed only when the panel is closed or purged.
 type pane struct {
 	f    *os.File
+	pid  int // child process id; with pty.Start it leads its own process group
 	ring []byte
 	dead bool // process exited: f is closed, ring retained for replay
 }
@@ -131,7 +133,7 @@ func (m *Manager) StartCmd(id string, spec Spec) error {
 		return err
 	}
 
-	p := &pane{f: f}
+	p := &pane{f: f, pid: cmd.Process.Pid}
 	m.mu.Lock()
 	m.ptys[id] = p
 	m.mu.Unlock()
@@ -225,6 +227,17 @@ func (m *Manager) livePane(id string) (*pane, bool) {
 func (m *Manager) Write(id string, data []byte) {
 	if p, live := m.livePane(id); live {
 		_, _ = p.f.Write(data)
+	}
+}
+
+// Signal delivers sig to a panel's process group, so it reaches the foreground
+// job inside the PTY the way a keyboard signal would (a Ctrl-C, a kill), not only
+// the shell that launched it. pty.Start makes the child a session leader, so its
+// pid is the group id and the negative-pid kill hits the whole group. A no-op for
+// an unknown or exited (dead) panel, or one with no recorded pid.
+func (m *Manager) Signal(id string, sig syscall.Signal) {
+	if p, live := m.livePane(id); live && p.pid > 0 {
+		_ = syscall.Kill(-p.pid, sig)
 	}
 }
 

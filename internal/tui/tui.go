@@ -73,6 +73,7 @@ const (
 	modeKeyMap         // the editable key map (C-t k)
 	modeHelp           // the read-only key list for a view (?)
 	modePanelConfig
+	modeSignal // the send-signal picker (s / C-t s)
 	modeZoom
 	modeGroupZoom
 )
@@ -127,6 +128,11 @@ type model struct {
 	renameID    string // panel id being renamed via inputRename ("" if a group)
 	renameGroup string // group being renamed via inputRename ("" if a panel)
 
+	signalFrom    mode     // the view the signal picker was opened from, restored on esc / after sending
+	signalTargets []string // panel ids the chosen signal is delivered to
+	signalScope   string   // human label of the target(s), shown in the picker
+	signalCursor  int      // highlighted row in the signal picker (last row is "other…")
+
 	zoomID       string           // panel being zoomed (modeZoom)
 	zoomTitle    string           // its title, for the zoom footer
 	zoomArmed    bool             // prefix pressed inside a zoom, awaiting the verb
@@ -161,6 +167,7 @@ const (
 	inputAgentDir                 // the workdir for a new agent panel
 	inputGroupName                // naming a new group from the marked panels
 	inputRename                   // renaming the selected panel or group
+	inputSignalName               // free-form signal name/number for the picker's "other…"
 )
 
 // RestartRequested reports whether the cockpit exited because the user asked to
@@ -614,6 +621,11 @@ func (m *model) takeBell() tea.Cmd {
 func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := k.String()
 
+	// The send-signal picker owns the keyboard until a signal is chosen or esc.
+	if m.mode == modeSignal {
+		return m.handleSignalKey(key)
+	}
+
 	// A text-input overlay is open: route the keystroke to it.
 	if m.input != inputNone {
 		return m.handleInput(k)
@@ -994,6 +1006,8 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		return m.commitGroup(buf), nil
 	case inputRename:
 		return m.commitRename(buf), nil
+	case inputSignalName:
+		return m.commitOtherSignal(buf)
 	}
 	return m, nil
 }
@@ -1178,6 +1192,29 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 			m.sendf(proto.Command{Action: "panel.purge"})
 			m.status = fmt.Sprintf("purging %d exited panel(s)", n)
 		}
+	case actSignal:
+		// From the dashboard the target is the selection: one panel, or every live
+		// member of a group folded into the selected card. Exited panels are left
+		// out, so the picker's count is what will actually be delivered.
+		it, ok := m.selectedItem()
+		if !ok {
+			m.status = "no panel to signal"
+			return m, nil
+		}
+		members := it.members
+		if it.kind == itemPanel {
+			members = []panel.Panel{it.panel}
+		}
+		ids := liveIDs(members)
+		if len(ids) == 0 {
+			m.status = "no live panel to signal"
+			return m, nil
+		}
+		scope := it.title()
+		if it.kind == itemGroup {
+			scope = fmt.Sprintf("%s (%d panels)", it.name, len(ids))
+		}
+		return m.openSignalPicker(modeDashboard, ids, scope), nil
 	case actDashboard:
 		m.mode = modeDashboard
 		m.cursor = 0
@@ -1334,6 +1371,13 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if b, ok := m.lookupCmd(key); ok && b.act == actReload { // C-t R → reload config
 			return m.runAction(actReload)
+		}
+		if b, ok := m.lookupCmd(key); ok && b.act == actSignal { // C-t s → signal this panel
+			if m.zoomExited {
+				m.status = "panel has exited — nothing to signal"
+				return m, nil
+			}
+			return m.openSignalPicker(modeZoom, []string{m.zoomID}, m.zoomTitle), nil
 		}
 		return m, nil
 	}
@@ -1675,6 +1719,8 @@ func (m model) render() string {
 		body = m.keyMapView()
 	case m.mode == modePanelConfig:
 		body = m.panelConfigView()
+	case m.mode == modeSignal:
+		body = m.signalPickerView()
 	default:
 		body = m.dashboardView()
 	}
@@ -2025,6 +2071,7 @@ func (m model) helpContent() (title string, body []string) {
 			{"Navigation", kc("S-←→"), "reorder the focused panel"},
 			{"Navigation", kc(pfx) + " " + kc(keyScroll), "scroll mode · the focused panel (↑↓ line, b/Spc page)"},
 			{"Work items", kc(keyLabel(keyPin)), "pin / unpin the focused panel to a live tile"},
+			{"Work items", kc(keyLabel(keySignal)) + " " + kc(keyLabel(keySignalAll)), "signal the focused panel · the whole group"},
 			{"Work items", kc(keyLabel(keyRemove)), "remove the focused panel from the group"},
 			{"View", kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
 			{"View", kc(dash) + " " + kc("esc"), "back to the dashboard"},
@@ -2040,6 +2087,7 @@ func (m model) helpContent() (title string, body []string) {
 			{"Navigation", kc("type"), "drive the program directly (PgUp/PgDn included)"},
 			{"Navigation", kc(pfx) + " " + kc(keyScroll), "scroll mode · ↑↓ line, b/Spc page, esc exits"},
 			{"Navigation", kc(pfx) + " " + kc(pfx), "send a literal " + pfx},
+			{"Panels", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actSignal))), "send a signal to this panel"},
 			{"View", kc(pfx) + " " + kc(dash), "back to the dashboard"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actGroupView))), "back to the group view"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
@@ -2343,6 +2391,8 @@ func (m model) inputView() string {
 		title, prompt, action = "NEW GROUP", "work-item name", "create"
 	case inputRename:
 		title, prompt, action = "RENAME", "new name", "save"
+	case inputSignalName:
+		title, prompt, action = "SEND SIGNAL", "signal name or number  (e.g. WINCH, TSTP, 28)", "send"
 	}
 
 	field := lipgloss.NewStyle().Width(46).Foreground(colInk).Background(colSurface).Render("› " + m.inputBuf + "▌")

@@ -20,6 +20,7 @@ import (
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/ptymgr"
+	"github.com/cmj0121/baton/internal/signals"
 )
 
 // statsInterval is how often the server samples host CPU/memory for the footer.
@@ -411,11 +412,18 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		}
 		s.broadcast(s.panelsMsg())
 	case "panel.pin", "panel.unpin":
-		if err := s.setPinned(pinTargets(cmd), cmd.Action == "panel.pin"); err != nil {
+		if err := s.setPinned(targetIDs(cmd), cmd.Action == "panel.pin"); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
 		s.broadcast(s.panelsMsg())
+	case "panel.signal":
+		// Delivering a signal does not change any panel struct; an exit it triggers
+		// flows back through onPanelExit, so there is nothing to broadcast here.
+		if err := s.signalPanels(targetIDs(cmd), cmd.Signal); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
 	case "server.reload":
 		// Re-read the config and apply it in place — the cockpit's reload action.
 		// The fleet keeps running; only the tunable settings change.
@@ -789,15 +797,49 @@ func (s *Server) movePanels(ids []string, index int) error {
 	return nil
 }
 
-// pinTargets is the panels a pin command addresses: the IDs list, falling back
-// to the single ID for a one-panel toggle.
-func pinTargets(cmd proto.Command) []string {
+// targetIDs is the panels a command addresses: the IDs list, falling back to the
+// single ID for a one-panel action. Shared by pin/unpin and signal.
+func targetIDs(cmd proto.Command) []string {
 	if len(cmd.IDs) > 0 {
 		return cmd.IDs
 	}
 	if cmd.ID != "" {
 		return []string{cmd.ID}
 	}
+	return nil
+}
+
+// signalPanels delivers the named signal to every listed panel's process group —
+// one command signals a whole group at once. The name (or number) must be one the
+// shared signals table resolves. Targets are validated against the fleet under the
+// lock; an exited panel is skipped — its process is gone, so signalling it would
+// be a silent no-op that still counted toward "sent". It errors only when no live
+// panel matched, so the cockpit's reported count is the count actually delivered.
+func (s *Server) signalPanels(ids []string, name string) error {
+	sig, ok := signals.Lookup(name)
+	if !ok {
+		return fmt.Errorf("unknown signal %q", name)
+	}
+	if len(ids) == 0 {
+		return fmt.Errorf("panel.signal needs at least one panel")
+	}
+
+	s.mu.Lock()
+	var targets []string
+	for _, id := range ids {
+		if i := s.indexLocked(id); i >= 0 && s.panels[i].State != panel.Exited {
+			targets = append(targets, id)
+		}
+	}
+	s.mu.Unlock()
+	if len(targets) == 0 {
+		return fmt.Errorf("no live panel matched the given ids")
+	}
+
+	for _, id := range targets {
+		s.pty.Signal(id, sig)
+	}
+	log.Info().Str("signal", name).Int("panels", len(targets)).Msg("signal sent")
 	return nil
 }
 

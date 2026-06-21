@@ -49,6 +49,19 @@ func kindCounts(panels []panel.Panel) (agents, shells int) {
 	return agents, shells
 }
 
+// liveIDs is the ids of the panels that still have a running process — exited
+// ones are dropped. It is what the signal picker targets, so the count it reports
+// is the count actually delivered, not panels whose process is already gone.
+func liveIDs(panels []panel.Panel) []string {
+	var ids []string
+	for _, p := range panels {
+		if p.State != panel.Exited {
+			ids = append(ids, p.ID)
+		}
+	}
+	return ids
+}
+
 // mergeFleet maps a server snapshot into the dashboard's panel model. The server
 // owns the fleet now, so this is a faithful translation — whatever it sends is
 // what the cockpit shows.

@@ -5,9 +5,37 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
+
+// TestSignalKillsProcessGroup checks Signal reaches a panel's process: a SIGKILL
+// ends the shell, and the close callback fires.
+func TestSignalKillsProcessGroup(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	m := New()
+	closed := make(chan string, 1)
+	m.OnClose(func(id string) { closed <- id })
+	if err := m.Start("1", ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer m.Stop("1")
+
+	m.Signal("1", syscall.SIGKILL)
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("SIGKILL should end the panel's process")
+	}
+}
+
+// TestSignalUnknownIDSafe confirms signalling an unknown or exited panel is a
+// harmless no-op rather than a panic.
+func TestSignalUnknownIDSafe(t *testing.T) {
+	m := New()
+	m.Signal("nope", syscall.SIGTERM) // must not panic
+}
 
 func TestStreamsOutputAndForwardsInput(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")

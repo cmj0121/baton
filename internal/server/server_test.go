@@ -1083,6 +1083,79 @@ func titleOf(panels []proto.Panel, id string) string {
 	return ""
 }
 
+// TestSignalPanel confirms a panel.signal command reaches the panel's process: a
+// SIGKILL ends it, the server marks it exited, and a bad signal or unknown id is
+// rejected.
+func TestSignalPanel(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	sock := filepath.Join(t.TempDir(), "baton.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() { _ = server.New(ln).Serve() }()
+
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	recv(t, c) // welcome
+	recv(t, c) // empty panels
+
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	id := recv(t, c).Panels[0].ID
+
+	// An unknown signal name is rejected.
+	if err := c.Send(proto.Command{Action: "panel.signal", IDs: []string{id}, Signal: "SIGBOGUS"}); err != nil {
+		t.Fatalf("bad signal: %v", err)
+	}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("an unknown signal should error, got %+v", msg)
+	}
+	// An unknown panel is rejected.
+	if err := c.Send(proto.Command{Action: "panel.signal", IDs: []string{"ghost"}, Signal: "SIGTERM"}); err != nil {
+		t.Fatalf("ghost signal: %v", err)
+	}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("signalling an unknown id should error, got %+v", msg)
+	}
+
+	// SIGKILL ends the process; the server broadcasts it exited.
+	if err := c.Send(proto.Command{Action: "panel.signal", IDs: []string{id}, Signal: "SIGKILL"}); err != nil {
+		t.Fatalf("kill: %v", err)
+	}
+	deadline := time.After(3 * time.Second)
+	exited := false
+	for !exited {
+		select {
+		case msg := <-c.Events:
+			if msg.Type != "panels" {
+				continue
+			}
+			for _, p := range msg.Panels {
+				if p.ID == id && p.State == "exited" {
+					exited = true
+				}
+			}
+		case <-deadline:
+			t.Fatal("panel was not marked exited after a SIGKILL")
+		}
+	}
+
+	// Signalling the now-exited panel is rejected — its process is gone, so it is
+	// not a live target and the count would otherwise be a lie.
+	if err := c.Send(proto.Command{Action: "panel.signal", IDs: []string{id}, Signal: "SIGTERM"}); err != nil {
+		t.Fatalf("signal exited: %v", err)
+	}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("signalling an exited panel should error, got %+v", msg)
+	}
+}
+
 // pinnedOf maps panel id to its Pinned flag, for asserting a snapshot.
 func pinnedOf(panels []proto.Panel) map[string]bool {
 	out := make(map[string]bool, len(panels))

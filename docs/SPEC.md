@@ -112,9 +112,21 @@ remaining members; `tab` walks the tiles and then the list as one ring, so every
 focused member: a pinned panel always holds a live tile (a `⊙` marks it), promoting it out of the list and demoting an
 auto-filled tile to keep the tile count at the cap. So you curate which of a busy group's panels stream live and which
 stay a compact, navigable list. From a list row, `enter` still zooms the panel and `x` still removes it; interact (`i`)
-needs a live tile, so it asks you to pin the panel first. Pins **persist across views**, so reopening a group brings
-back the tiles you pinned; and a group with exactly **one** pinned member treats it as the default — entering the group
-drops straight into that panel's zoom rather than a one-tile split (the prefix-`g` escape pops back to the split).
+needs a live tile, so it asks you to pin the panel first. Pins are **server-owned state** (`panel.pin` / `panel.unpin`),
+carried on the panel the server broadcasts — so they survive a frontend restart and are shared across clients. Reopening
+a group brings back the tiles you pinned; and a group with exactly **one** pinned member treats it as the default —
+entering the group drops straight into that panel's zoom rather than a one-tile split (the prefix-`g` escape pops back to
+the split).
+
+**Signals.** `s` opens a picker of the common signals (or `o` to type any name or number); the chosen one is sent over
+the socket (`panel.signal`) and delivered to the panel's whole process group, so it reaches the foreground job, not just
+the shell — though a child that daemonizes into its own group escapes it, and delivery is fire-and-forget (a trapped
+signal still reads as sent). The target follows the view: the selection on the dashboard, the focused member in the split
+(`s`) or every member (`S`), this panel in a zoom (`C-t s`). Exited panels are skipped on both sides, so the reported
+count is the count delivered. The name→signal table lives in one place (`internal/signals`), shared by the picker and the
+server, so the menu and the accepted set cannot drift. **Reload.** `C-t R` (or a `SIGHUP` to the daemon) re-reads the
+config in place — the name policy, default workdir, and replay buffer change under a running fleet, no restart, no panel
+lost.
 
 **Interact mode.** Pressing `i` hands the keyboard to the focused tile so you can drive its program _in place_, without
 the full-screen zoom — the tile glows green and wears a keyboard badge, and every keystroke is forwarded to that panel.

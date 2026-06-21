@@ -361,6 +361,22 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.adjustGroupCols(-1), nil
 	case keyPin:
 		return m.togglePin(), nil
+	case keySignal:
+		// Bare s signals the focused member, like the split's other keys (x, i,
+		// enter) act on the focus; S signals the whole group.
+		p, ok := m.focusedMember()
+		if !ok {
+			return m, nil
+		}
+		if p.State == panel.Exited {
+			m.status = p.Title + " has exited — nothing to signal"
+			return m, nil
+		}
+		return m.openSignalPicker(modeGroupZoom, []string{p.ID}, p.Title), nil
+	case keySignalAll:
+		ids := liveIDs(m.groupMembers())
+		scope := fmt.Sprintf("%s (%d panels)", m.groupName, len(ids))
+		return m.openSignalPicker(modeGroupZoom, ids, scope), nil
 	case keyRemove:
 		return m.removeFocusedMember(), nil
 	case keyInteract:

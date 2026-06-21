@@ -15,6 +15,7 @@ import (
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/server"
+	"github.com/cmj0121/baton/internal/signals"
 )
 
 // baseModel is a ready-to-render model with no live client.
@@ -44,6 +45,23 @@ func TestViewRendersEveryMode(t *testing.T) {
 		{"keymap-setting-off", func(m *model) { m.mode = modeKeyMap; m.confirmClose = false; m.cursor = len(bindings) + 1 }},
 		{"panel-config", func(m *model) { m.mode = modePanelConfig; m.shellPath = "/bin/zsh" }},
 		{"panel-config-default", func(m *model) { m.mode = modePanelConfig }},
+		{"signal-picker", func(m *model) {
+			m.mode = modeSignal
+			m.signalTargets = []string{"1"}
+			m.signalScope = "api (3 panels)"
+		}},
+		{"signal-picker-other", func(m *model) {
+			m.mode = modeSignal
+			m.signalTargets = []string{"1"}
+			m.signalScope = "shell #1"
+			m.signalCursor = len(signals.Choices) // cursor on the other… row
+		}},
+		{"signal-other-input", func(m *model) {
+			m.mode = modeSignal
+			m.input = inputSignalName
+			m.inputBuf = "WINCH"
+			m.signalScope = "shell #1"
+		}},
 		{"input-shell", func(m *model) { m.input = inputShellPath; m.inputBuf = "/bin/zsh" }},
 		{"input-new-panel", func(m *model) { m.input = inputNewPanelCmd; m.inputBuf = "/bin/sh" }},
 		{"zoom", func(m *model) { m.mode = modeZoom; m.zoomTitle = "shell #1" }},

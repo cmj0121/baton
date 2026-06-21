@@ -35,41 +35,45 @@ Keys are modal: on the **dashboard** and in a **group** each action is a single 
 keystrokes drive the program, so a Baton action is the leader **`C-t`** then the key. Press **`?`** for the full,
 rebindable list of the current view.
 
-| Where                  | Key                         | Does                                     |
-| ---------------------- | --------------------------- | ---------------------------------------- |
-| Anywhere (after `C-t`) | `C-t d`                     | go to the dashboard                      |
-|                        | `C-t g`                     | go to the group view                     |
-|                        | `C-t [`                     | enter scroll mode                        |
-|                        | `C-t k`                     | edit the key map                         |
-|                        | `C-t P`                     | panel config (default shell, workdir, …) |
-|                        | `C-t R`                     | reload config (backend + cockpit)        |
-|                        | `C-t q`                     | detach (server keeps running)            |
-| Dashboard              | `hjkl` / arrows             | move the cursor                          |
-|                        | `enter`                     | open / zoom the selection                |
-|                        | `p`                         | new shell panel                          |
-|                        | `A`                         | new agent panel                          |
-|                        | `c`                         | new panel (pick the command)             |
-|                        | `w`                         | close the selection                      |
-|                        | `x`                         | purge exited panels                      |
-|                        | `S-←` / `S-→`               | reorder the selected item                |
-|                        | `g`                         | mark / unmark a panel                    |
-|                        | `G`                         | group the marked panels                  |
-|                        | `a`                         | add marked panels to the selected group  |
-|                        | `u`                         | ungroup the selected work item           |
-|                        | `e`                         | rename the panel or group                |
-| Group view             | `tab`                       | focus the next panel                     |
-|                        | `+` / `-`                   | more / fewer columns                     |
-|                        | `p`                         | pin / unpin the focused panel            |
-|                        | `i`                         | interact (type into the focused tile)    |
-|                        | `x`                         | remove the focused panel from the group  |
-|                        | `S-←` / `S-→`               | reorder the focused panel                |
-|                        | `enter`                     | zoom the focused panel                   |
-| Zoom / interact        | type                        | drive the program directly               |
-|                        | `C-t C-t`                   | send a literal `C-t`                     |
-| Scroll mode (`C-t [`)  | `↑` / `↓` (`k`/`j`)         | scroll a line                            |
-|                        | `b` / `Spc` (`PgUp`/`PgDn`) | scroll a page                            |
-|                        | `g` / `G`                   | jump to top / bottom                     |
-|                        | `esc` / `q`                 | exit scroll mode                         |
+| Where                  | Key                         | Does                                      |
+| ---------------------- | --------------------------- | ----------------------------------------- |
+| Anywhere (after `C-t`) | `C-t d`                     | go to the dashboard                       |
+|                        | `C-t g`                     | go to the group view                      |
+|                        | `C-t [`                     | enter scroll mode                         |
+|                        | `C-t k`                     | edit the key map                          |
+|                        | `C-t P`                     | panel config (default shell, workdir, …)  |
+|                        | `C-t R`                     | reload config (backend + cockpit)         |
+|                        | `C-t q`                     | detach (server keeps running)             |
+| Dashboard              | `hjkl` / arrows             | move the cursor                           |
+|                        | `enter`                     | open / zoom the selection                 |
+|                        | `p`                         | new shell panel                           |
+|                        | `A`                         | new agent panel                           |
+|                        | `c`                         | new panel (pick the command)              |
+|                        | `w`                         | close the selection                       |
+|                        | `x`                         | purge exited panels                       |
+|                        | `s`                         | send a signal to the selection            |
+|                        | `S-←` / `S-→`               | reorder the selected item                 |
+|                        | `g`                         | mark / unmark a panel                     |
+|                        | `G`                         | group the marked panels                   |
+|                        | `a`                         | add marked panels to the selected group   |
+|                        | `u`                         | ungroup the selected work item            |
+|                        | `e`                         | rename the panel or group                 |
+| Group view             | `tab`                       | focus the next panel                      |
+|                        | `+` / `-`                   | more / fewer columns                      |
+|                        | `p`                         | pin / unpin the focused panel             |
+|                        | `s`                         | send a signal to the focused panel        |
+|                        | `S`                         | send a signal to every panel in the group |
+|                        | `i`                         | interact (type into the focused tile)     |
+|                        | `x`                         | remove the focused panel from the group   |
+|                        | `S-←` / `S-→`               | reorder the focused panel                 |
+|                        | `enter`                     | zoom the focused panel                    |
+| Zoom / interact        | type                        | drive the program directly                |
+|                        | `C-t C-t`                   | send a literal `C-t`                      |
+|                        | `C-t s`                     | send a signal to this panel               |
+| Scroll mode (`C-t [`)  | `↑` / `↓` (`k`/`j`)         | scroll a line                             |
+|                        | `b` / `Spc` (`PgUp`/`PgDn`) | scroll a page                             |
+|                        | `g` / `G`                   | jump to top / bottom                      |
+|                        | `esc` / `q`                 | exit scroll mode                          |
 
 Names stay unique unless you set `allow-name-conflict`.
 
@@ -77,6 +81,19 @@ Names stay unique unless you set `allow-name-conflict`.
 (name policy, default workdir, replay buffer) while the fleet keeps running, and
 the cockpit refreshes its own (key map, toggles, panel defaults). Sending the
 daemon `SIGHUP` (e.g. `kill -HUP $(cat ~/.baton/*.pid)`) does the backend half.
+
+`s` opens the signal picker — one keycap per signal (`SIGINT`, `SIGTERM`,
+`SIGKILL`, `SIGHUP`, `SIGQUIT`, `SIGUSR1`, `SIGUSR2`), `↑↓`+`enter` to choose, or
+`o` for **other…** to type any name or number (`WINCH`, `TSTP`, `28`). Target by
+view: the selection on the dashboard (a panel, or every live member of a group
+card), this panel in a zoom (`C-t s`), the focused panel in the split (`s`) or
+every member (`S`). Exited panels are skipped, so the count is what's delivered.
+
+The signal goes to the panel's whole **process group**, so it reaches the
+foreground job, not just the shell — but a child that daemonizes into its own
+group escapes it. Note this is the panel's `SIGHUP`, unrelated to baton's own
+`C-t R` config reload. Delivery is fire-and-forget: a process that traps or
+ignores a signal still shows as sent.
 
 ## Architecture
 

@@ -22,7 +22,7 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action string   `json:"action"`         // hello | panel.list | panel.create | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | server.reload
+	Action string   `json:"action"`         // hello | panel.list | panel.create | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.signal | server.reload
 	Kind   string   `json:"kind,omitempty"` // panel kind for "panel.create" (default "shell")
 	ID     string   `json:"id,omitempty"`   // target panel for close/attach/input/resize, or the panel to rename
 	Path   string   `json:"path,omitempty"` // init command (binary path) for "panel.create"; empty = default shell
@@ -31,10 +31,11 @@ type Command struct {
 	Data   []byte   `json:"data,omitempty"` // input bytes for "panel.input"
 	Rows   int      `json:"rows,omitempty"` // window size for "panel.resize"
 	Cols   int      `json:"cols,omitempty"`
-	IDs    []string `json:"ids,omitempty"`   // panels to group ("panel.group"), remove ("panel.ungroup"), close ("panel.close"), or move as a block ("panel.move")
-	Group  string   `json:"group,omitempty"` // group name to assign ("panel.group"), or the group to rename ("panel.rename")
-	Name   string   `json:"name,omitempty"`  // new name for "panel.rename" (a panel title or a group name)
-	Index  int      `json:"index,omitempty"` // destination index among the remaining panels for "panel.move"
+	IDs    []string `json:"ids,omitempty"`    // panels to group ("panel.group"), remove ("panel.ungroup"), close ("panel.close"), or move as a block ("panel.move")
+	Group  string   `json:"group,omitempty"`  // group name to assign ("panel.group"), or the group to rename ("panel.rename")
+	Name   string   `json:"name,omitempty"`   // new name for "panel.rename" (a panel title or a group name)
+	Index  int      `json:"index,omitempty"`  // destination index among the remaining panels for "panel.move"
+	Signal string   `json:"signal,omitempty"` // signal name to deliver for "panel.signal", e.g. "SIGINT"
 }
 
 // Panel is the server-side view of a single live terminal.
