@@ -141,8 +141,7 @@ type model struct {
 	groupArmed      bool                        // prefix pressed in the split, awaiting an escape
 	groupInteract   bool                        // keys drive the focused tile in place (i), no zoom
 	groupCols       int                         // tile columns; 0 = auto-fit to the window
-	groupPinned     map[string]bool             // member ids pinned to a live tile in this view (seeded from pinned on enter)
-	pinned          map[string]bool             // panel ids pinned, persisted across views so a group reopens with them shown
+	groupPinned     map[string]bool             // member ids pinned to a live tile, derived from the fleet's server-owned Pinned flags
 	groupEmus       map[string]*vt.SafeEmulator // live emulator per member tile
 	zoomGroupOrigin string                      // group to return to from a single zoom, "" if none
 
@@ -512,6 +511,9 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		}
 		m.pruneMarks()
 		if m.mode == modeGroupZoom {
+			// Re-derive the pin set from the fresh, server-owned flags before the
+			// tiles reconcile, so a pin toggled by another client lands here too.
+			m.groupPinned = pinsForMembers(m.groupMembers())
 			m.reconcileGroupTiles(focusID)
 		}
 		m.refreshAttention()

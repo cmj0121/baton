@@ -22,7 +22,7 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action string   `json:"action"`         // hello | panel.list | panel.create | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move
+	Action string   `json:"action"`         // hello | panel.list | panel.create | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin
 	Kind   string   `json:"kind,omitempty"` // panel kind for "panel.create" (default "shell")
 	ID     string   `json:"id,omitempty"`   // target panel for close/attach/input/resize, or the panel to rename
 	Path   string   `json:"path,omitempty"` // init command (binary path) for "panel.create"; empty = default shell
@@ -46,6 +46,7 @@ type Panel struct {
 	Group    string `json:"group,omitempty"`    // work item the panel belongs to, if any
 	Activity string `json:"activity,omitempty"` // short status line the Monitor keeps live
 	Spark    string `json:"spark,omitempty"`    // output-rate sparkline over the recent window
+	Pinned   bool   `json:"pinned,omitempty"`   // pinned to a live tile in its group's split view
 }
 
 // ServerMsg is broadcast or replied from the server to a client.

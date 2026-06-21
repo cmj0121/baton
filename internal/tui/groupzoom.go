@@ -464,8 +464,11 @@ func (m model) feedFocused(k tea.KeyMsg) {
 // togglePin pins or unpins the focused member. Pinning promotes a tree-listed
 // panel to a live streaming tile; unpinning demotes a tile back to the list when
 // the group is over the tile budget. The pin set is capped at maxGroupTiles, so
-// pinning beyond it is refused. Reconciling attaches or tears down the affected
-// tile and keeps the focus on the same panel.
+// pinning beyond it is refused. The server owns the pin flag, so each toggle is
+// sent on to it (and broadcast to every client); the local set is updated
+// optimistically so the tile reflows at once, then the next snapshot reconciles
+// it against the authoritative flags. Reconciling attaches or tears down the
+// affected tile and keeps the focus on the same panel.
 func (m model) togglePin() model {
 	p, ok := m.focusedMember()
 	if !ok {
@@ -474,14 +477,9 @@ func (m model) togglePin() model {
 	if m.groupPinned == nil {
 		m.groupPinned = map[string]bool{}
 	}
-	if m.pinned == nil {
-		m.pinned = map[string]bool{}
-	}
-	// Mirror every toggle into the persistent set, so the group reopens with the
-	// same panels pinned (and a lone pin auto-zooms on the next enter).
 	if m.groupPinned[p.ID] {
 		delete(m.groupPinned, p.ID)
-		delete(m.pinned, p.ID)
+		m.sendf(proto.Command{Action: "panel.unpin", IDs: []string{p.ID}})
 		m.status = "unpinned " + p.Title
 	} else {
 		if m.pinnedCount() >= maxGroupTiles {
@@ -489,7 +487,7 @@ func (m model) togglePin() model {
 			return m
 		}
 		m.groupPinned[p.ID] = true
-		m.pinned[p.ID] = true
+		m.sendf(proto.Command{Action: "panel.pin", IDs: []string{p.ID}})
 		m.status = "pinned " + p.Title
 	}
 	m.reconcileGroupTiles(p.ID) // attach/detach the affected tile, keep focus on p

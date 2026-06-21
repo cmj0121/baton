@@ -929,6 +929,70 @@ func TestMovePanels(t *testing.T) {
 	}
 }
 
+// TestPinPanels confirms the server owns the Pinned flag: a pin command sets it
+// on the named panels and broadcasts the change, unpin clears it, and an unknown
+// id errors.
+func TestPinPanels(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	sock := filepath.Join(t.TempDir(), "baton.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() { _ = server.New(ln).Serve() }()
+
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	recv(t, c) // welcome
+	recv(t, c) // empty panels
+
+	var ids []string
+	for range 2 {
+		if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		ids = append(ids, recv(t, c).Panels[len(ids)].ID)
+	}
+	a, b := ids[0], ids[1]
+
+	// Pin a: only a comes back pinned.
+	if err := c.Send(proto.Command{Action: "panel.pin", IDs: []string{a}}); err != nil {
+		t.Fatalf("pin a: %v", err)
+	}
+	if got := pinnedOf(recv(t, c).Panels); !got[a] || got[b] {
+		t.Fatalf("after pinning a: pinned=%v, want only %s", got, a)
+	}
+
+	// Unpin a: nothing pinned again.
+	if err := c.Send(proto.Command{Action: "panel.unpin", IDs: []string{a}}); err != nil {
+		t.Fatalf("unpin a: %v", err)
+	}
+	if got := pinnedOf(recv(t, c).Panels); got[a] {
+		t.Fatalf("after unpinning a: pinned=%v, want none", got)
+	}
+
+	// An unknown id matches nothing and errors.
+	if err := c.Send(proto.Command{Action: "panel.pin", IDs: []string{"ghost"}}); err != nil {
+		t.Fatalf("pin ghost: %v", err)
+	}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("pin of an unknown id should error, got %+v", msg)
+	}
+}
+
+// pinnedOf maps panel id to its Pinned flag, for asserting a snapshot.
+func pinnedOf(panels []proto.Panel) map[string]bool {
+	out := make(map[string]bool, len(panels))
+	for _, p := range panels {
+		out[p.ID] = p.Pinned
+	}
+	return out
+}
+
 // TestShellPanelUsesDefaultDir confirms a shell panel with no directory runs in
 // the configured default workdir, not the directory the daemon was launched in.
 func TestShellPanelUsesDefaultDir(t *testing.T) {

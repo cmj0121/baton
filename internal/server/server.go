@@ -387,6 +387,12 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			return
 		}
 		s.broadcast(s.panelsMsg())
+	case "panel.pin", "panel.unpin":
+		if err := s.setPinned(pinTargets(cmd), cmd.Action == "panel.pin"); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		s.broadcast(s.panelsMsg())
 	case "panel.attach":
 		s.attach(cc, cmd.ID)
 	case "panel.detach":
@@ -751,6 +757,48 @@ func (s *Server) movePanels(ids []string, index int) error {
 	s.panels = out
 
 	log.Info().Int("panels", len(block)).Int("index", index).Msg("panels reordered")
+	return nil
+}
+
+// pinTargets is the panels a pin command addresses: the IDs list, falling back
+// to the single ID for a one-panel toggle.
+func pinTargets(cmd proto.Command) []string {
+	if len(cmd.IDs) > 0 {
+		return cmd.IDs
+	}
+	if cmd.ID != "" {
+		return []string{cmd.ID}
+	}
+	return nil
+}
+
+// setPinned marks every listed panel pinned (or not), the server-owned flag the
+// group split reads to promote a member to a live tile. Pins live with the panel
+// here — the single source of truth — so they survive a frontend restart and are
+// shared across clients. Ids that match no panel are skipped; it errors only when
+// none matched.
+func (s *Server) setPinned(ids []string, pinned bool) error {
+	if len(ids) == 0 {
+		return fmt.Errorf("panel.pin needs at least one panel")
+	}
+	want := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for i := range s.panels {
+		if _, ok := want[s.panels[i].ID]; ok {
+			s.panels[i].Pinned = pinned
+			n++
+		}
+	}
+	if n == 0 {
+		return fmt.Errorf("no panel matched the given ids")
+	}
+	log.Info().Int("panels", n).Bool("pinned", pinned).Msg("panels pinned")
 	return nil
 }
 
