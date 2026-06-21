@@ -52,6 +52,7 @@ rebindable list of the current view.
 |                        | `w`                         | close the selection                       |
 |                        | `x`                         | purge exited panels                       |
 |                        | `s`                         | send a signal to the selection            |
+|                        | `f`                         | find — filter panels by title / group     |
 |                        | `S-←` / `S-→`               | reorder the selected item                 |
 |                        | `g`                         | mark / unmark a panel                     |
 |                        | `G`                         | group the marked panels                   |
@@ -70,9 +71,12 @@ rebindable list of the current view.
 | Zoom / interact        | type                        | drive the program directly                |
 |                        | `C-t C-t`                   | send a literal `C-t`                      |
 |                        | `C-t s`                     | send a signal to this panel               |
+|                        | `C-t f`                     | search the scrollback                     |
 | Scroll mode (`C-t [`)  | `↑` / `↓` (`k`/`j`)         | scroll a line                             |
 |                        | `b` / `Spc` (`PgUp`/`PgDn`) | scroll a page                             |
 |                        | `g` / `G`                   | jump to top / bottom                      |
+|                        | `v` / `y`                   | start a selection / copy to the clipboard |
+|                        | `n` / `N`                   | next / previous search match              |
 |                        | `esc` / `q`                 | exit scroll mode                          |
 
 Names stay unique unless you set `allow-name-conflict`.
@@ -94,6 +98,20 @@ foreground job, not just the shell — but a child that daemonizes into its own
 group escapes it. Note this is the panel's `SIGHUP`, unrelated to baton's own
 `C-t R` config reload. Delivery is fire-and-forget: a process that traps or
 ignores a signal still shows as sent.
+
+**Find, search, copy.** On the dashboard, **`f`** filters the fleet — type to keep
+only panels whose title or group (or a group member's title) matches; the heading
+shows the match count, `enter` keeps the filter and `esc` clears it. In a zoom (or
+over a focused group tile), **`C-t f`** searches the scrollback with a
+case-insensitive regular expression: the view jumps to the newest hit and holds
+in scroll mode with the match highlighted, and `n` / `N` walk older / newer
+matches. A term that is not a valid regexp is matched literally. In scroll mode, **`v`** marks a selection and **`y`**
+copies the selected lines — or, with no selection, the visible page — to the
+system clipboard via OSC52, so it works over SSH with no helper binary.
+
+**Mouse.** Off by default, so your terminal's own selection and copy stay
+available. Toggle it in the key map (`C-t k`, the settings block); once on, the
+wheel scrolls the scrollback in a zoom or tile and moves the dashboard selection.
 
 ## Architecture
 

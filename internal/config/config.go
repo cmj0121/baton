@@ -40,6 +40,11 @@ type Settings struct {
 	// Bell rings the terminal when a panel enters the attention state. Unset
 	// defaults to on; set false to silence the audible nudge.
 	Bell *bool `yaml:"bell,omitempty"`
+
+	// Mouse enables mouse reporting in the cockpit — the wheel scrolls the
+	// scrollback and moves the dashboard selection. Unset defaults to off, so
+	// the terminal's own selection and copy stay available until you opt in.
+	Mouse *bool `yaml:"mouse,omitempty"`
 }
 
 // PanelDefaults configure how new panels are spawned.

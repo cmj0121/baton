@@ -24,6 +24,7 @@ const (
 	keyClose       = "w"
 	keyPurge       = "x"
 	keySignal      = "s" // open the send-signal picker for the selection / panel / group
+	keySearch      = "f" // find: filter panels on the dashboard, search the scrollback in a zoom (C-t f)
 	keyHelp        = "?" // view the key list for the current view
 	keyEditMap     = "k" // edit the key map (prefix only: C-t k)
 	keyPanelConfig = "P" // shift+p
@@ -75,6 +76,7 @@ const (
 	actClose
 	actPurge
 	actSignal
+	actSearch
 	actHelp
 	actPanelConfig
 	actRestart
@@ -124,6 +126,7 @@ var bindings = []binding{
 	{"close", keyClose, "close the selected panel", actClose, "Panels"},
 	{"purge-exited", keyPurge, "purge all exited panels", actPurge, "Panels"},
 	{"signal", keySignal, "send a signal to the panel(s)", actSignal, "Panels"},
+	{"search", keySearch, "find panels · search the scrollback (zoom)", actSearch, "Panels"},
 
 	{"mark", keyMark, "mark a panel for grouping", actMark, "Work items"},
 	{"group", keyGroup, "group the marked panels", actGroup, "Work items"},
@@ -150,6 +153,7 @@ type prefs struct {
 	confirmClose      bool
 	allowNameConflict bool
 	bellEnabled       bool
+	mouseEnabled      bool // mouse reporting (wheel scroll + selection); default off
 	shellPath         string
 	workdir           string                         // default working directory for new panels ("" = home)
 	defaultAgent      string                         // agent profile the new-agent action spawns
@@ -197,6 +201,9 @@ func loadPrefs() prefs {
 	if cfg.Settings.Bell != nil {
 		p.bellEnabled = *cfg.Settings.Bell
 	}
+	if cfg.Settings.Mouse != nil {
+		p.mouseEnabled = *cfg.Settings.Mouse
+	}
 	p.shellPath = cfg.Panel.Shell
 	p.workdir = cfg.Panel.Workdir
 	p.defaultAgent = cfg.Panel.DefaultAgent
@@ -227,6 +234,7 @@ func (m model) saveConfig() error {
 	confirmClose := m.confirmClose
 	allowNameConflict := m.allowNameConflict
 	bellEnabled := m.bellEnabled
+	mouseEnabled := m.mouseEnabled
 	return config.Config{
 		Prefix: prefix,
 		Keys:   keys,
@@ -234,6 +242,7 @@ func (m model) saveConfig() error {
 			ConfirmClose:      &confirmClose,
 			AllowNameConflict: &allowNameConflict,
 			Bell:              &bellEnabled,
+			Mouse:             &mouseEnabled,
 		},
 		Panel: config.PanelDefaults{
 			Shell:        m.shellPath,

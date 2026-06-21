@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"slices"
 	"strconv"
@@ -102,6 +103,7 @@ type model struct {
 	confirmClose      bool      // ask y/n before closing a panel (toggled in the key map)
 	allowNameConflict bool      // let two work items share a name (server enforces; kept to round-trip config)
 	bellEnabled       bool      // ring the terminal bell when a panel needs you (toggled in the key map)
+	mouseEnabled      bool      // mouse reporting on — the wheel scrolls and moves the selection (toggled in the key map)
 	pendingClose      bool      // a close is awaiting y/n confirmation
 	pendingRestart    bool      // a force-restart is awaiting y/n confirmation
 	now               time.Time // wall clock shown in the footer, ticked every second
@@ -128,6 +130,16 @@ type model struct {
 
 	renameID    string // panel id being renamed via inputRename ("" if a group)
 	renameGroup string // group being renamed via inputRename ("" if a panel)
+
+	filter string // dashboard panel filter (substring on titles / group names); "" shows the whole fleet
+
+	searchQuery string         // active scrollback search term ("" = no search)
+	searchRe    *regexp.Regexp // compiled, case-insensitive matcher for searchQuery (nil = no search)
+	searchHits  []int          // combined scrollback+screen line indices matching the term, ascending
+	searchAt    int            // index into searchHits of the current match
+
+	copySelecting bool // a copy selection is being made in scroll mode (v marks the anchor)
+	copyAnchor    int  // combined line index the selection is anchored at; the span runs to the current top
 
 	signalFrom    mode     // the view the signal picker was opened from, restored on esc / after sending
 	signalTargets []string // panel ids the chosen signal is delivered to
@@ -169,6 +181,8 @@ const (
 	inputGroupName                // naming a new group from the marked panels
 	inputRename                   // renaming the selected panel or group
 	inputSignalName               // free-form signal name/number for the picker's "other…"
+	inputFilter                   // live dashboard panel filter (f)
+	inputSearch                   // scrollback search term in a zoom / group tile (C-t f)
 )
 
 // RestartRequested reports whether the cockpit exited because the user asked to
@@ -202,6 +216,7 @@ func (m model) applyPrefs(p prefs) model {
 	m.confirmClose = p.confirmClose
 	m.allowNameConflict = p.allowNameConflict
 	m.bellEnabled = p.bellEnabled
+	m.mouseEnabled = p.mouseEnabled
 	m.shellPath = p.shellPath
 	m.workdir = p.workdir
 	m.defaultAgent = p.defaultAgent
@@ -227,23 +242,32 @@ const (
 const (
 	settingConfirmClose = iota // ask y/n before closing a panel
 	settingBell                // ring the bell when a panel needs you
+	settingMouse               // enable mouse reporting (wheel scroll + selection)
 	numSettings
 )
 
 // settingLabel is the human label for a settings-block row.
 func settingLabel(idx int) string {
-	if idx == settingBell {
+	switch idx {
+	case settingBell:
 		return "ring the bell when a panel needs you"
+	case settingMouse:
+		return "enable the mouse (wheel scroll + selection)"
+	default:
+		return "confirm before closing a panel"
 	}
-	return "confirm before closing a panel"
 }
 
 // settingValue reports whether a settings-block toggle is currently on.
 func (m model) settingValue(idx int) bool {
-	if idx == settingBell {
+	switch idx {
+	case settingBell:
 		return m.bellEnabled
+	case settingMouse:
+		return m.mouseEnabled
+	default:
+		return m.confirmClose
 	}
-	return m.confirmClose
 }
 
 // keyMapRow resolves the current cursor to a key-map row: its kind and, for a
@@ -382,7 +406,21 @@ func tick() tea.Cmd {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), waitTelemetry(m.client.Telemetry), tick())
+	cmds := []tea.Cmd{waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), waitTelemetry(m.client.Telemetry), tick()}
+	if m.mouseEnabled {
+		cmds = append(cmds, tea.EnableMouseCellMotion) // honour the persisted mouse toggle on attach
+	}
+	return tea.Batch(cmds...)
+}
+
+// mouseCmd turns the terminal's mouse reporting on or off, matching the toggle.
+// Cell-motion mode reports clicks and the wheel without the noise of every
+// pointer move, which is all the cockpit's wheel handling needs.
+func mouseCmd(on bool) tea.Cmd {
+	if on {
+		return tea.EnableMouseCellMotion
+	}
+	return tea.DisableMouse
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -435,7 +473,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ageStatus()
 		return m, tick()
 
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
+
 	case tea.KeyMsg:
+		if m.input != inputNone { // a text-input overlay (incl. zoom search) captures keys in every mode
+			return m.handleInput(msg)
+		}
 		if m.scrolling { // scroll mode owns the keyboard until esc/q
 			return m.handleScrollKey(msg)
 		}
@@ -789,6 +833,11 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = ""
 			return m, nil
 		}
+		if m.mode == modeDashboard && m.filter != "" { // esc on the dashboard clears an applied filter first
+			m.filter, m.cursor = "", 0
+			m.status = "filter cleared"
+			return m, nil
+		}
 		if m.mode != modeDashboard {
 			return m.runAction(actDashboard)
 		}
@@ -878,6 +927,9 @@ func (m model) commitReplayKB(s string) model {
 func (m model) handleInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.Type {
 	case tea.KeyEsc:
+		if m.input == inputFilter { // esc out of the filter clears it back to the whole fleet
+			m.filter, m.cursor = "", 0
+		}
 		m.input, m.inputHint = inputNone, ""
 		m.status = "cancelled"
 	case tea.KeyEnter:
@@ -901,7 +953,21 @@ func (m model) handleInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inputBuf += string(k.Runes)
 		m.inputHint = ""
 	}
+	// The filter narrows the dashboard live as you type, so mirror the field into
+	// the filter and keep the cursor in range against the shrinking list.
+	if m.input == inputFilter {
+		m.filter, m.cursor = m.inputBuf, 0
+	}
 	return m, nil
+}
+
+// openFilter opens the live dashboard filter, seeded with the current filter so
+// reopening it lets you refine rather than restart.
+func (m model) openFilter() model {
+	m.input = inputFilter
+	m.inputBuf = m.filter
+	m.status = "filter · type to find panels · enter applies · esc clears"
+	return m
 }
 
 // inputIsPath reports whether an overlay edits a filesystem path, so tab
@@ -1023,6 +1089,15 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		return m.commitRename(buf), nil
 	case inputSignalName:
 		return m.commitOtherSignal(buf)
+	case inputFilter:
+		m.filter, m.cursor = buf, 0
+		if buf == "" {
+			m.status = "filter cleared"
+		} else {
+			m.status = "filter · " + buf
+		}
+	case inputSearch:
+		return m.runSearch(buf), nil
 	}
 	return m, nil
 }
@@ -1230,9 +1305,15 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 			scope = fmt.Sprintf("%s (%d panels)", it.name, len(ids))
 		}
 		return m.openSignalPicker(modeDashboard, ids, scope), nil
+	case actSearch:
+		// On the dashboard, f opens the live panel filter. In a zoom it is reached
+		// after the prefix (handleZoomKey) and searches the scrollback instead.
+		return m.openFilter(), nil
 	case actDashboard:
 		m.mode = modeDashboard
 		m.cursor = 0
+		m.scrolling, m.copySelecting = false, false // never carry scroll/copy state to the dashboard
+		m = m.clearSearch()
 		m.status = "dashboard"
 	case actHelp:
 		return m.openHelp(m.mode), nil
@@ -1257,7 +1338,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		m.sendf(proto.Command{Action: "server.reload"})
 		m = m.applyPrefs(loadPrefs())
 		m.status = "config reloaded · backend + cockpit"
-		return m, nil
+		return m, mouseCmd(m.mouseEnabled) // re-assert mouse reporting to match the reloaded toggle
 	case actDetach:
 		m.quitting = true
 		return m, tea.Quit
@@ -1291,10 +1372,15 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 		case rowBinding:
 			return m.runAction(m.keymap()[idx].act)
 		case rowSetting:
+			var cmd tea.Cmd
 			switch idx {
 			case settingBell:
 				m.bellEnabled = !m.bellEnabled
 				m.status = "bell: " + onOff(m.bellEnabled)
+			case settingMouse:
+				m.mouseEnabled = !m.mouseEnabled
+				m.status = "mouse: " + onOff(m.mouseEnabled)
+				cmd = mouseCmd(m.mouseEnabled) // flip the terminal's mouse reporting now
 			default:
 				m.confirmClose = !m.confirmClose
 				m.status = "confirm on close: " + onOff(m.confirmClose)
@@ -1302,6 +1388,7 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 			if err := m.saveConfig(); err != nil {
 				m.status = "toggled, but save failed: " + err.Error()
 			}
+			return m, cmd
 		}
 		return m, nil
 	}
@@ -1395,6 +1482,9 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m.openSignalPicker(modeZoom, []string{m.zoomID}, m.zoomTitle), nil
 		}
+		if b, ok := m.lookupCmd(key); ok && b.act == actSearch { // C-t f → search the scrollback
+			return m.openSearch(), nil
+		}
 		return m, nil
 	}
 	if key == m.effPrefix() {
@@ -1420,14 +1510,18 @@ func (m model) enterScroll() model {
 		return m
 	}
 	m.scrolling = true
-	m.status = "scroll · ↑↓ line · b/space (or PgUp/PgDn) page · esc exits"
+	m.copySelecting = false // a fresh scroll session starts with no selection
+	m.status = "scroll · ↑↓ line · b/Spc page · v select · y copy · esc exits"
 	return m
 }
 
-// exitScroll leaves scroll mode and returns to the live bottom.
+// exitScroll leaves scroll mode and returns to the live bottom, dropping any
+// active search along with it.
 func (m model) exitScroll() model {
 	m.scrolling = false
 	m.scrollOff = 0
+	m.copySelecting = false
+	m = m.clearSearch()
 	m.status = ""
 	return m
 }
@@ -1470,8 +1564,67 @@ func (m model) handleScrollKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.scrollEmu(emu, 1<<30) // clamps to the oldest line
 	case "G", "end":
 		m.scrollEmu(emu, -(1 << 30)) // clamps to the live bottom
+	case "n": // next search hit (older) — a no-op when no search is active
+		return m.gotoMatch(-1), nil
+	case "N": // previous search hit (newer)
+		return m.gotoMatch(1), nil
+	case "v": // mark / clear the copy selection anchor
+		return m.copyToggle(), nil
+	case "y": // copy the selection (or the visible page) to the clipboard
+		return m.yankSelection()
 	case "esc", "q":
 		return m.exitScroll(), nil
+	}
+	return m, nil
+}
+
+// mouseWheelLines is how many lines one wheel notch scrolls — a few at a time so
+// the wheel feels responsive without flying past the output.
+const mouseWheelLines = 3
+
+// handleMouse routes a mouse event. Only the wheel is wired: over a zoom or a
+// focused group tile it walks the scrollback (entering scroll mode on the way up
+// and leaving it once back at the live bottom), and everywhere else it steps the
+// selection like the arrow keys. The toggle is off by default, so these only fire
+// once the user has opted into mouse reporting. Non-wheel buttons are ignored, so
+// a stray click never disturbs the view.
+func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.input != inputNone {
+		return m, nil // a prompt (filter, search, rename…) owns the view — don't scroll behind it
+	}
+	if msg.Action != tea.MouseActionPress {
+		return m, nil
+	}
+	up := msg.Button == tea.MouseButtonWheelUp
+	down := msg.Button == tea.MouseButtonWheelDown
+	if !up && !down {
+		return m, nil
+	}
+	// Over a scrollable emulator the wheel drives the scrollback viewport.
+	if emu, _ := m.scrollTarget(); emu != nil && (m.mode == modeZoom || m.mode == modeGroupZoom) {
+		if up {
+			if !m.scrolling {
+				m = m.enterScroll() // wheel-up from the live bottom opens scroll mode
+			}
+			m.scrollEmu(emu, mouseWheelLines)
+		} else {
+			m.scrollEmu(emu, -mouseWheelLines)
+			if m.scrolling && m.scrollOff == 0 {
+				m = m.exitScroll() // wheeled back to the bottom: drop out of scroll mode
+			}
+		}
+		return m, nil
+	}
+	// In a zoom or split with nothing to scroll (no tile focused, no emulator yet),
+	// the wheel does nothing — it must never reach back and move the hidden dashboard.
+	if m.mode == modeZoom || m.mode == modeGroupZoom {
+		return m, nil
+	}
+	// Anywhere else the wheel steps the selection, like the arrow keys.
+	if up {
+		m.move(-1)
+	} else {
+		m.move(1)
 	}
 	return m, nil
 }
@@ -1489,6 +1642,8 @@ func (m model) zoomDetach() (tea.Model, tea.Cmd) {
 	m.emu = nil
 	m.scrollOff = 0
 	m.scrolling = false
+	m.copySelecting = false
+	m = m.clearSearch()
 	m.cursorHidden = nil
 	m.zoomID, m.zoomTitle, m.zoomArmed, m.zoomExited, m.zoomGroupOrigin = "", "", false, false, ""
 	m.status = "dashboard"
@@ -1756,7 +1911,7 @@ func (m model) zoomView() string {
 	rows := m.zoomRows()
 	lines := make([]string, rows)
 	if m.emu != nil {
-		lines = emuWindow(m.emu, m.width, rows, m.scrollOff)
+		lines = m.selectWindow(m.emu, m.width, rows, m.scrollOff)
 		// Draw the cursor only on the live bottom (a scrolled-back view is history),
 		// and only when the program has not hidden it — so a full-screen reader that
 		// turns the cursor off does not show a phantom block.
@@ -1778,10 +1933,17 @@ func (m model) dashboardView() string {
 	items := m.dashItems() // built once and threaded through the render below
 	heading := sectionStyle.Render(spaced("FLEET")) +
 		mutedStyle.Render(fmt.Sprintf("   %d panel(s)  ", len(m.fleet))) + fleetBreakdown(m.fleet, items)
+	if m.filter != "" {
+		heading += "  " + seg("⌕ "+truncate(m.filter, 20), colDark, colCyan) +
+			mutedStyle.Render(fmt.Sprintf("  %d match(es)", len(items)))
+	}
 	summary := m.summaryStrip()
 	body := m.cardGrid(items)
 	if len(items) > treeThreshold {
 		body = m.treeAndPreview(items)
+	}
+	if m.filter != "" && len(items) == 0 {
+		body = mutedStyle.Render("no panels match \"" + truncate(m.filter, 24) + "\"  ·  esc clears the filter")
 	}
 	return lipgloss.JoinVertical(lipgloss.Center, heading, "", summary, "", body)
 }
@@ -2086,6 +2248,7 @@ func (m model) helpContent() (title string, body []string) {
 			{"Navigation", kc("+") + " " + kc("-"), "more / fewer columns"},
 			{"Navigation", kc("S-←→"), "reorder the focused panel"},
 			{"Navigation", kc(pfx) + " " + kc(keyScroll), "scroll mode · the focused panel (↑↓ line, b/Spc page)"},
+			{"Navigation", kc(pfx) + " " + kc(keySearch), "search the focused panel · n older, N newer"},
 			{"Work items", kc(keyLabel(keyPin)), "pin / unpin the focused panel to a live tile"},
 			{"Work items", kc(keyLabel(keySignal)) + " " + kc(keyLabel(keySignalAll)), "signal the focused panel · the whole group"},
 			{"Work items", kc(keyLabel(keyRemove)), "remove the focused panel from the group"},
@@ -2102,6 +2265,7 @@ func (m model) helpContent() (title string, body []string) {
 		rows = []helpRow{
 			{"Navigation", kc("type"), "drive the program directly (PgUp/PgDn included)"},
 			{"Navigation", kc(pfx) + " " + kc(keyScroll), "scroll mode · ↑↓ line, b/Spc page, esc exits"},
+			{"Navigation", kc(pfx) + " " + kc(keySearch), "search the scrollback · n older, N newer"},
 			{"Navigation", kc(pfx) + " " + kc(pfx), "send a literal " + pfx},
 			{"Panels", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actSignal))), "send a signal to this panel"},
 			{"View", kc(pfx) + " " + kc(dash), "back to the dashboard"},
@@ -2409,6 +2573,10 @@ func (m model) inputView() string {
 		title, prompt, action = "RENAME", "new name", "save"
 	case inputSignalName:
 		title, prompt, action = "SEND SIGNAL", "signal name or number  (e.g. WINCH, TSTP, 28)", "send"
+	case inputFilter:
+		title, prompt, action = "FIND PANELS", "filter by title or group  (live)", "apply"
+	case inputSearch:
+		title, prompt, action = "SEARCH", "find in the scrollback", "find"
 	}
 
 	field := lipgloss.NewStyle().Width(46).Foreground(colInk).Background(colSurface).Render("› " + m.inputBuf + "▌")

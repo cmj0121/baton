@@ -46,8 +46,15 @@ func cellWidth(r rune) int {
 // marker when the view is scrolled off the live bottom, the panel title, the C-t ?
 // help hint, and — like every view — the host stats, clock, and connection status.
 func (m model) zoomFooter() string {
+	if m.input == inputSearch { // typing a find term: show it in the footer, screen stays visible
+		return m.searchPromptFooter()
+	}
 	state := seg("◉ ZOOM", colInk, colGreen)
 	switch {
+	case m.copySelecting:
+		state = seg("✄ SELECT", colDark, colCyan)
+	case m.searchActive():
+		state = m.searchSeg()
 	case m.scrolling:
 		state = seg("↕ SCROLL", colDark, colCyan)
 	case m.zoomExited:
