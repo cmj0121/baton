@@ -319,7 +319,10 @@ func (m model) commitRename(name string) model {
 }
 
 // zoomGroup opens the group's split view: the member tiles you navigate as a
-// unit before dropping into any one panel.
+// unit before dropping into any one panel. Pins persist across views, so the
+// split reopens with the panels you pinned already promoted to live tiles — and
+// when exactly one member is pinned it is treated as the group's default and the
+// split is skipped for that panel's own zoom.
 func (m model) zoomGroup(it dashItem) model {
 	m.mode = modeGroupZoom
 	m.groupName = it.name
@@ -327,11 +330,48 @@ func (m model) zoomGroup(it dashItem) model {
 	m.groupArmed = false
 	m.scrollOff = 0 // open at the live bottom
 	m.scrolling = false
-	m.groupCols = 0     // auto-fit until the user dials columns in
-	m.groupPinned = nil // pins are per-view; start from the default tile fill
+	m.groupCols = 0 // auto-fit until the user dials columns in
+	m.groupPinned = m.pinsForMembers(it.members)
+	if only, ok := singlePinned(it.members, m.groupPinned); ok {
+		m = m.zoomInto(only)
+		m.zoomGroupOrigin = it.name // prefix-g pops back to the split
+		m.status = fmt.Sprintf("group · %s · %s (pinned)", it.name, only.Title)
+		return m
+	}
 	m.attachGroupMembers()
 	m.status = fmt.Sprintf("group · %s (%d panels)", it.name, len(m.groupMembers()))
 	return m
+}
+
+// pinsForMembers builds a view's pin set from the persistent pins, limited to the
+// group's current members so a stale id from a closed panel never haunts a tile.
+func (m model) pinsForMembers(members []panel.Panel) map[string]bool {
+	if len(m.pinned) == 0 {
+		return nil
+	}
+	pins := map[string]bool{}
+	for _, p := range members {
+		if m.pinned[p.ID] {
+			pins[p.ID] = true
+		}
+	}
+	if len(pins) == 0 {
+		return nil
+	}
+	return pins
+}
+
+// singlePinned returns the lone pinned member when exactly one of the group's
+// members is pinned, so entering can drop straight into it.
+func singlePinned(members []panel.Panel, pins map[string]bool) (panel.Panel, bool) {
+	var only panel.Panel
+	n := 0
+	for _, p := range members {
+		if pins[p.ID] {
+			only, n = p, n+1
+		}
+	}
+	return only, n == 1
 }
 
 // renderGroupCard draws a work item as one card: a group glyph and name, the

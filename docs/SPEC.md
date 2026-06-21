@@ -112,7 +112,9 @@ remaining members; `tab` walks the tiles and then the list as one ring, so every
 focused member: a pinned panel always holds a live tile (a `⊙` marks it), promoting it out of the list and demoting an
 auto-filled tile to keep the tile count at the cap. So you curate which of a busy group's panels stream live and which
 stay a compact, navigable list. From a list row, `enter` still zooms the panel and `x` still removes it; interact (`i`)
-needs a live tile, so it asks you to pin the panel first. Pins are per-view and reset when you leave the split.
+needs a live tile, so it asks you to pin the panel first. Pins **persist across views**, so reopening a group brings
+back the tiles you pinned; and a group with exactly **one** pinned member treats it as the default — entering the group
+drops straight into that panel's zoom rather than a one-tile split (the prefix-`g` escape pops back to the split).
 
 **Interact mode.** Pressing `i` hands the keyboard to the focused tile so you can drive its program _in place_, without
 the full-screen zoom — the tile glows green and wears a keyboard badge, and every keystroke is forwarded to that panel.
