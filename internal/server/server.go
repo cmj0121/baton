@@ -28,6 +28,14 @@ import (
 // statsInterval is how often the server samples host CPU/memory for the footer.
 const statsInterval = 2 * time.Second
 
+// minVisible and maxVisible bound a group's visible count — how many members
+// stream as live tiles before the rest collapse into the summary tile. maxVisible
+// mirrors the TUI's old maxGroupTiles, the live-tile cap.
+const (
+	minVisible = 1
+	maxVisible = 16
+)
+
 // clientConn is one attached frontend. Outbound messages go through its buffered
 // channel so a slow client never stalls a broadcast. attached is the set of panel
 // ids this client is streaming (guarded by Server.mu) — one for a single zoom,
@@ -55,6 +63,11 @@ type Server struct {
 	clients map[*clientConn]struct{}
 	mon     *monitor               // lifecycle + telemetry bookkeeping, guarded by mu
 	specs   map[string]ptymgr.Spec // immutable spawn spec per panel id, for persistence + respawn (guarded by mu)
+
+	// groupShown is the per-group visible count — how many members stream as live
+	// tiles before the rest collapse into the summary tile. Keyed by group name;
+	// an absent or zero entry means "use the client default". Guarded by mu.
+	groupShown map[string]int
 
 	// Persistence. stateF is the snapshot path ("" disables persistence); dirty is
 	// a 1-deep "save pending" nudge the saverLoop drains; saveMu serializes the
@@ -106,11 +119,12 @@ func WithStateFile(path string) Option {
 // built, so settings like the replay size reach it.
 func New(ln net.Listener, opts ...Option) *Server {
 	s := &Server{
-		ln:      ln,
-		clients: make(map[*clientConn]struct{}),
-		mon:     newMonitor(),
-		specs:   make(map[string]ptymgr.Spec),
-		dirty:   make(chan struct{}, 1),
+		ln:         ln,
+		clients:    make(map[*clientConn]struct{}),
+		mon:        newMonitor(),
+		specs:      make(map[string]ptymgr.Spec),
+		groupShown: make(map[string]int),
+		dirty:      make(chan struct{}, 1),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -450,6 +464,12 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
+	case "group.show":
+		if err := s.setGroupShown(cmd.Group, cmd.Count); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		s.broadcastFleet()
 	case "server.reload":
 		// Re-read the config and apply it in place — the cockpit's reload action.
 		// The fleet keeps running; only the tunable settings change.
@@ -597,8 +617,14 @@ func (s *Server) snapshotState() state.State {
 			Spec:   state.Spec{Command: spec.Command, Args: spec.Args, Dir: spec.Dir},
 		}
 	}
-	// Groups (per-group visible counts) are a later unit; leave them empty.
-	return state.State{Seq: s.seq, LastBoot: s.bootTime, Panels: panels}
+	// Per-group view settings (the visible counts), keyed by name like the group.
+	groups := make([]state.GroupLayout, 0, len(s.groupShown))
+	for g, shown := range s.groupShown {
+		if shown != 0 {
+			groups = append(groups, state.GroupLayout{Group: g, Shown: shown})
+		}
+	}
+	return state.State{Seq: s.seq, LastBoot: s.bootTime, Panels: panels, Groups: groups}
 }
 
 // saveNow writes the current snapshot to disk now. saveMu serializes writers so two
@@ -657,6 +683,11 @@ func (s *Server) Restore() {
 	}
 	if max > s.seq {
 		s.seq = max // a new panel's id picks up past the highest restored one
+	}
+	for _, g := range st.Groups {
+		if g.Shown > 0 {
+			s.groupShown[g.Group] = g.Shown
+		}
 	}
 	log.Info().Int("panels", len(st.Panels)).Int("seq", s.seq).Msg("state restored")
 }
@@ -876,6 +907,10 @@ func (s *Server) ungroup(ids []string, name string) error {
 	if moved == 0 {
 		return fmt.Errorf("no panels in group %q", name)
 	}
+	// The whole group is gone; drop its visible count so the map stays tidy.
+	s.mu.Lock()
+	delete(s.groupShown, name)
+	s.mu.Unlock()
 	log.Info().Str("group", name).Int("panels", moved).Msg("group dissolved")
 	return nil
 }
@@ -933,6 +968,11 @@ func (s *Server) renameGroup(old, name string) error {
 	moved := s.setGroupLocked(func(p panel.Panel) bool { return p.Group == old }, name)
 	if moved == 0 {
 		return fmt.Errorf("no panels in group %q", old)
+	}
+	// Carry the visible count to the new name, keyed by name like the group itself.
+	if shown, ok := s.groupShown[old]; ok {
+		s.groupShown[name] = shown
+		delete(s.groupShown, old)
 	}
 	log.Info().Str("from", old).Str("to", name).Int("panels", moved).Msg("group renamed")
 	return nil
@@ -1062,6 +1102,25 @@ func (s *Server) setPinned(ids []string, pinned bool) error {
 	return nil
 }
 
+// setGroupShown records a group's visible count — how many members stream as
+// live tiles before the rest collapse into the summary tile. The count is clamped
+// to [minVisible, maxVisible]; an empty group name is rejected. The group need not
+// currently exist: a count may be set as the user curates, and a lingering entry is
+// harmless (lifecycle cleanup keeps the map tidy on dissolve/rename).
+func (s *Server) setGroupShown(group string, count int) error {
+	group = strings.TrimSpace(group)
+	if group == "" {
+		return fmt.Errorf("group.show needs a group")
+	}
+	count = max(minVisible, min(count, maxVisible))
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.groupShown[group] = count
+	log.Info().Str("group", group).Int("shown", count).Msg("group visible count set")
+	return nil
+}
+
 func (s *Server) panelsMsg() proto.ServerMsg {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1069,7 +1128,15 @@ func (s *Server) panelsMsg() proto.ServerMsg {
 	for i, p := range s.panels {
 		out[i] = p.ToProto()
 	}
-	return proto.ServerMsg{Type: "panels", Panels: out}
+	// Per-group view settings ride the snapshot, sorted by name for determinism.
+	groups := make([]proto.GroupView, 0, len(s.groupShown))
+	for g, shown := range s.groupShown {
+		if shown != 0 {
+			groups = append(groups, proto.GroupView{Group: g, Shown: shown})
+		}
+	}
+	slices.SortFunc(groups, func(a, b proto.GroupView) int { return strings.Compare(a.Group, b.Group) })
+	return proto.ServerMsg{Type: "panels", Panels: out, Groups: groups}
 }
 
 func (s *Server) addClient(cc *clientConn) {
