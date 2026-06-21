@@ -42,6 +42,7 @@ rebindable list of the current view.
 |                        | `C-t [`                     | enter scroll mode                        |
 |                        | `C-t k`                     | edit the key map                         |
 |                        | `C-t P`                     | panel config (default shell, workdir, …) |
+|                        | `C-t R`                     | reload config (backend + cockpit)        |
 |                        | `C-t q`                     | detach (server keeps running)            |
 | Dashboard              | `hjkl` / arrows             | move the cursor                          |
 |                        | `enter`                     | open / zoom the selection                |
@@ -71,6 +72,11 @@ rebindable list of the current view.
 |                        | `esc` / `q`                 | exit scroll mode                         |
 
 Names stay unique unless you set `allow-name-conflict`.
+
+`C-t R` reloads the config without a restart: the daemon re-reads its settings
+(name policy, default workdir, replay buffer) while the fleet keeps running, and
+the cockpit refreshes its own (key map, toggles, panel defaults). Sending the
+daemon `SIGHUP` (e.g. `kill -HUP $(cat ~/.baton/*.pid)`) does the backend half.
 
 ## Architecture
 

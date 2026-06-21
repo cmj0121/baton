@@ -984,6 +984,105 @@ func TestPinPanels(t *testing.T) {
 	}
 }
 
+// TestReloadAppliesSettings confirms Reload swaps the name-conflict policy on a
+// running server without restarting it: a rename rejected under the strict
+// default succeeds once a reload allows conflicts.
+func TestReloadAppliesSettings(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	sock := filepath.Join(t.TempDir(), "baton.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	srv := server.New(ln) // strict names by default
+	go func() { _ = srv.Serve() }()
+
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	recv(t, c) // welcome
+	recv(t, c) // empty panels
+
+	var ids []string
+	for range 2 {
+		if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		ids = append(ids, recv(t, c).Panels[len(ids)].ID)
+	}
+	a, b := ids[0], ids[1]
+
+	if err := c.Send(proto.Command{Action: "panel.rename", ID: a, Name: "dup"}); err != nil {
+		t.Fatalf("rename a: %v", err)
+	}
+	recv(t, c)
+	// Strict: renaming b onto a's title is rejected.
+	if err := c.Send(proto.Command{Action: "panel.rename", ID: b, Name: "dup"}); err != nil {
+		t.Fatalf("rename b strict: %v", err)
+	}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("a duplicate title should be rejected before reload, got %+v", msg)
+	}
+
+	// Hot-reload to allow name conflicts; the same rename now goes through.
+	srv.Reload(true, "", 0)
+	if err := c.Send(proto.Command{Action: "panel.rename", ID: b, Name: "dup"}); err != nil {
+		t.Fatalf("rename b after reload: %v", err)
+	}
+	msg := recv(t, c)
+	if msg.Type != "panels" {
+		t.Fatalf("after a reload allowing conflicts the rename should succeed, got %+v", msg)
+	}
+	if got := titleOf(msg.Panels, b); got != "dup" {
+		t.Fatalf("panel b should be renamed to dup, got %q", got)
+	}
+}
+
+// TestReloadCmdHook confirms a server.reload command fires the
+// OnReload hook — the in-cockpit reload that shares the SIGHUP routine.
+func TestReloadCmdHook(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "baton.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	srv := server.New(ln)
+	reloaded := make(chan struct{}, 1)
+	srv.OnReload(func() { reloaded <- struct{}{} })
+	go func() { _ = srv.Serve() }()
+
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	recv(t, c) // welcome
+	recv(t, c) // empty panels
+
+	if err := c.Send(proto.Command{Action: "server.reload"}); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	select {
+	case <-reloaded:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server.reload should fire the OnReload hook")
+	}
+}
+
+// titleOf returns the title of the panel with id, or "" if absent.
+func titleOf(panels []proto.Panel, id string) string {
+	for _, p := range panels {
+		if p.ID == id {
+			return p.Title
+		}
+	}
+	return ""
+}
+
 // pinnedOf maps panel id to its Pinned flag, for asserting a snapshot.
 func pinnedOf(panels []proto.Panel) map[string]bool {
 	out := make(map[string]bool, len(panels))

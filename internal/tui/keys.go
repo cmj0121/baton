@@ -28,6 +28,7 @@ const (
 	keyPanelConfig = "P" // shift+p
 	keyScroll      = "[" // enter scroll mode (prefix only: C-t [), tmux-style
 	keyRestart     = "S" // shift+s
+	keyReload      = "R" // shift+r — reload config (backend + cockpit), fleet kept
 	keyDetach      = "q"
 
 	keyMark    = "g" // mark / unmark the selected item
@@ -74,6 +75,7 @@ const (
 	actHelp
 	actPanelConfig
 	actRestart
+	actReload
 	actDetach
 
 	actMark
@@ -133,6 +135,7 @@ var bindings = []binding{
 	{"group-view", keyGroupView, "go to the group view (prefix)", actGroupView, "View"},
 
 	{"restart", keyRestart, "force-restart the server", actRestart, "Session"},
+	{"reload", keyReload, "reload config (backend + cockpit)", actReload, "Session"},
 	{"detach", keyDetach, "detach (server keeps running)", actDetach, "Session"},
 }
 

@@ -44,6 +44,8 @@ type Server struct {
 	defaultDir        string // workdir for a panel that asks for none; empty → the user's home
 	version           string // the server's build version, reported in the welcome
 
+	onReload func() // invoked on a server.reload command; re-reads config and Reloads
+
 	mu      sync.Mutex
 	seq     int
 	panels  []panel.Panel
@@ -102,6 +104,27 @@ func New(ln net.Listener, opts ...Option) *Server {
 	s.pty.OnOutput(s.routeOutput)
 	s.pty.OnClose(s.onPanelExit)
 	return s
+}
+
+// OnReload registers the handler a server.reload command runs — the in-cockpit
+// reload, which re-reads the config and calls Reload. It shares the routine the
+// SIGHUP path uses, so a cockpit reload and an external `kill -HUP` do the same
+// thing. Set it once, before Serve.
+func (s *Server) OnReload(fn func()) { s.onReload = fn }
+
+// Reload applies the hot-reloadable settings from a freshly read config without
+// restarting the daemon or disturbing a single live panel — the SIGHUP path. The
+// name-conflict policy, the default workdir, and the per-panel replay buffer can
+// all change under a running fleet; settings fixed at construction (the listener,
+// the build version) are left alone. A replayBytes of zero resets the buffer to
+// its built-in default.
+func (s *Server) Reload(allowNameConflict bool, defaultDir string, replayBytes int) {
+	s.mu.Lock()
+	s.allowNameConflict = allowNameConflict
+	s.defaultDir = defaultDir
+	s.mu.Unlock()
+	s.pty.SetRingCap(replayBytes)
+	log.Info().Bool("allow_name_conflict", allowNameConflict).Str("default_dir", defaultDir).Int("replay_bytes", replayBytes).Msg("settings reloaded")
 }
 
 // onPanelExit marks a panel exited when its process ends on its own, notifies
@@ -393,6 +416,12 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			return
 		}
 		s.broadcast(s.panelsMsg())
+	case "server.reload":
+		// Re-read the config and apply it in place — the cockpit's reload action.
+		// The fleet keeps running; only the tunable settings change.
+		if s.onReload != nil {
+			s.onReload()
+		}
 	case "panel.attach":
 		s.attach(cc, cmd.ID)
 	case "panel.detach":
@@ -415,13 +444,13 @@ func (s *Server) createPanel(kind, path string, args []string, dir string) error
 	if kind == "" {
 		kind = proto.KindShell
 	}
-	if dir == "" {
-		dir = s.defaultDir // empty still, so ptymgr falls back to the user's home
-	}
 
 	s.mu.Lock()
 	s.seq++
 	id := fmt.Sprintf("%d", s.seq)
+	if dir == "" {
+		dir = s.defaultDir // read under the lock so a SIGHUP reload cannot race it; empty still falls back to home
+	}
 	s.mu.Unlock()
 
 	switch kind {

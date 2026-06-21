@@ -48,6 +48,23 @@ func WithRingCap(bytes int) Option {
 	return func(m *Manager) { m.ringCap = bytes }
 }
 
+// SetRingCap changes the per-panel replay buffer size for output kept from here
+// on. A value at or below zero resets it to the built-in default; anything below
+// minRingCap is floored. Existing rings are trimmed to the new cap on their next
+// write, so a change takes hold under a running fleet without touching any live
+// process — the hot-reload path. Safe for concurrent use.
+func (m *Manager) SetRingCap(bytes int) {
+	switch {
+	case bytes <= 0:
+		bytes = DefaultRingCap
+	case bytes < minRingCap:
+		bytes = minRingCap
+	}
+	m.mu.Lock()
+	m.ringCap = bytes
+	m.mu.Unlock()
+}
+
 // New returns an empty manager. Without options the replay ring is DefaultRingCap.
 func New(opts ...Option) *Manager {
 	m := &Manager{ptys: make(map[string]*pane), ringCap: DefaultRingCap}

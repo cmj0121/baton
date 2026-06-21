@@ -232,26 +232,73 @@ func runServer() error {
 		os.Exit(0)
 	}()
 
-	// Honour the user's naming-conflict policy from the shared config file; a
-	// missing or unreadable config keeps the strict default (unique names).
-	opts := []server.Option{server.WithVersion(version)}
-	if cfg, err := config.Load(); err == nil {
-		if cfg.Settings.AllowNameConflict != nil {
-			opts = append(opts, server.WithAllowNameConflict(*cfg.Settings.AllowNameConflict))
-		}
-		if cfg.Panel.ReplayKB > 0 {
-			opts = append(opts, server.WithReplayBytes(cfg.Panel.ReplayKB*1024))
-		}
-		if cfg.Panel.Workdir != "" {
-			opts = append(opts, server.WithDefaultDir(cfg.Panel.Workdir))
-		}
+	// Honour the user's settings from the shared config file; a missing or
+	// unreadable config keeps the strict defaults (unique names, home workdir).
+	cfg, _ := config.Load()
+	rc := reloadableSettings(cfg)
+	opts := []server.Option{
+		server.WithVersion(version),
+		server.WithAllowNameConflict(rc.allowNameConflict),
+		server.WithDefaultDir(rc.defaultDir),
 	}
+	if rc.replayBytes > 0 {
+		opts = append(opts, server.WithReplayBytes(rc.replayBytes))
+	}
+	srv := server.New(ln, opts...)
+
+	// reload re-reads the config and applies the hot-reloadable settings to the
+	// live server, leaving the fleet running. Both reload paths share it: a
+	// cockpit server.reload command and an external SIGHUP do the same thing.
+	reload := func() {
+		cfg, err := config.Load()
+		if err != nil {
+			log.Warn().Err(err).Msg("config reload failed, keeping current settings")
+			return
+		}
+		rc := reloadableSettings(cfg)
+		srv.Reload(rc.allowNameConflict, rc.defaultDir, rc.replayBytes)
+	}
+	srv.OnReload(reload)
+
+	// SIGHUP is the conventional reload signal, so `kill -HUP $(cat pidfile)`
+	// picks up an edited config without a restart, just like the cockpit action.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	go func() {
+		for range hup {
+			reload()
+			log.Info().Msg("config reloaded on SIGHUP")
+		}
+	}()
 
 	log.Info().Str("socket", sock).Int("pid", os.Getpid()).Msgf("baton %s listening", version)
-	if err := server.New(ln, opts...).Serve(); err != nil {
+	if err := srv.Serve(); err != nil {
 		log.Info().Err(err).Msg("server stopped")
 	}
 	return nil
+}
+
+// reloadable holds the server settings that can change on a SIGHUP without
+// restarting the daemon: the only knobs both the initial options and the reload
+// path derive from the config, so the two can never drift.
+type reloadable struct {
+	allowNameConflict bool
+	defaultDir        string
+	replayBytes       int // 0 keeps the server's built-in replay default
+}
+
+// reloadableSettings projects a config onto the hot-reloadable settings, applying
+// the same defaults the server expects: strict names, the home workdir, and the
+// built-in replay buffer when the config leaves a field unset.
+func reloadableSettings(cfg config.Config) reloadable {
+	rc := reloadable{defaultDir: cfg.Panel.Workdir}
+	if cfg.Settings.AllowNameConflict != nil {
+		rc.allowNameConflict = *cfg.Settings.AllowNameConflict
+	}
+	if cfg.Panel.ReplayKB > 0 {
+		rc.replayBytes = cfg.Panel.ReplayKB * 1024
+	}
+	return rc
 }
 
 // runClient attaches a TUI cockpit to this session's server. If the cockpit

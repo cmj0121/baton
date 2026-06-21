@@ -22,7 +22,7 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action string   `json:"action"`         // hello | panel.list | panel.create | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin
+	Action string   `json:"action"`         // hello | panel.list | panel.create | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | server.reload
 	Kind   string   `json:"kind,omitempty"` // panel kind for "panel.create" (default "shell")
 	ID     string   `json:"id,omitempty"`   // target panel for close/attach/input/resize, or the panel to rename
 	Path   string   `json:"path,omitempty"` // init command (binary path) for "panel.create"; empty = default shell

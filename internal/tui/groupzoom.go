@@ -328,6 +328,9 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if key == m.bindingKey(actDetach) { // C-t q detaches from the split too
 			return m.runAction(actDetach)
 		}
+		if b, ok := m.lookupCmd(key); ok && b.act == actReload { // C-t R → reload config
+			return m.runAction(actReload)
+		}
 		return m, nil
 	}
 	if key == m.effPrefix() {

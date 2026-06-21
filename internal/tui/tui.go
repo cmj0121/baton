@@ -172,25 +172,34 @@ func (m model) RestartRequested() bool { return m.restart }
 // is filled by the server's first snapshot, which arrives right after the hello
 // handshake — the server owns the panels now.
 func New(c *client.Client, appVersion string) tea.Model {
-	p := loadPrefs()
-	return model{
-		client:            c,
-		appVersion:        appVersion,
-		mode:              modeDashboard,
-		status:            "attaching…",
-		endpoint:          c.Endpoint(),
-		confirmClose:      p.confirmClose,
-		allowNameConflict: p.allowNameConflict,
-		bellEnabled:       p.bellEnabled,
-		now:               time.Now(),
-		prefixKey:         p.prefix,
-		binds:             p.binds,
-		shellPath:         p.shellPath,
-		workdir:           p.workdir,
-		defaultAgent:      p.defaultAgent,
-		agents:            p.agents,
-		replayKB:          p.replayKB,
+	m := model{
+		client:     c,
+		appVersion: appVersion,
+		mode:       modeDashboard,
+		status:     "attaching…",
+		endpoint:   c.Endpoint(),
+		now:        time.Now(),
 	}
+	return m.applyPrefs(loadPrefs())
+}
+
+// applyPrefs overlays a freshly loaded prefs onto the model — the in-place client
+// reload. It refreshes only the settings the cockpit owns (the leader key, the
+// key map, the toggles, and the panel defaults); live view state — the mode, the
+// fleet, a zoom or split and its emulators — carries on untouched, so reloading
+// never disturbs what you are watching.
+func (m model) applyPrefs(p prefs) model {
+	m.prefixKey = p.prefix
+	m.binds = p.binds
+	m.confirmClose = p.confirmClose
+	m.allowNameConflict = p.allowNameConflict
+	m.bellEnabled = p.bellEnabled
+	m.shellPath = p.shellPath
+	m.workdir = p.workdir
+	m.defaultAgent = p.defaultAgent
+	m.agents = p.agents
+	m.replayKB = p.replayKB
+	return m
 }
 
 // editPrefix is the editIdx sentinel meaning the leader key is being rebound.
@@ -1188,6 +1197,14 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		m.status = "restarting the server…"
 		return m, tea.Quit
+	case actReload:
+		// Tell the daemon to re-read its config in place (the fleet keeps running),
+		// then re-read the cockpit's own prefs so the key map, toggles, and panel
+		// defaults all update live — no detach, no restart.
+		m.sendf(proto.Command{Action: "server.reload"})
+		m = m.applyPrefs(loadPrefs())
+		m.status = "config reloaded · backend + cockpit"
+		return m, nil
 	case actDetach:
 		m.quitting = true
 		return m, tea.Quit
@@ -1314,6 +1331,9 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if b, ok := m.lookupCmd(key); ok && b.act == actHelp { // C-t ? → the key list
 			return m.openHelp(modeZoom), nil
+		}
+		if b, ok := m.lookupCmd(key); ok && b.act == actReload { // C-t R → reload config
+			return m.runAction(actReload)
 		}
 		return m, nil
 	}
@@ -2011,6 +2031,7 @@ func (m model) helpContent() (title string, body []string) {
 			{"View", kc(pfx) + " " + kc(keyLabel(keyInteract)), "stop interacting (while in interact)"},
 			{"View", kc(pfx) + " " + kc(dash), "dashboard (works in every view)"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), "edit the key map"},
+			{"Session", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actReload))), "reload config (backend + cockpit)"},
 			{"Session", kc(pfx) + " " + kc(detach), "detach (server keeps running)"},
 		}
 	case modeZoom:
@@ -2023,6 +2044,7 @@ func (m model) helpContent() (title string, body []string) {
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actGroupView))), "back to the group view"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), "edit the key map"},
+			{"Session", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actReload))), "reload config (backend + cockpit)"},
 			{"Session", kc(pfx) + " " + kc(detach), "detach (server keeps running)"},
 		}
 	default: // dashboard — single keys for commands, C-t for the escapes
