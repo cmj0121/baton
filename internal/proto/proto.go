@@ -22,7 +22,7 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action string   `json:"action"`         // hello | panel.list | panel.create | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.resize | panel.group | panel.ungroup | panel.rename
+	Action string   `json:"action"`         // hello | panel.list | panel.create | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move
 	Kind   string   `json:"kind,omitempty"` // panel kind for "panel.create" (default "shell")
 	ID     string   `json:"id,omitempty"`   // target panel for close/attach/input/resize, or the panel to rename
 	Path   string   `json:"path,omitempty"` // init command (binary path) for "panel.create"; empty = default shell
@@ -31,9 +31,10 @@ type Command struct {
 	Data   []byte   `json:"data,omitempty"` // input bytes for "panel.input"
 	Rows   int      `json:"rows,omitempty"` // window size for "panel.resize"
 	Cols   int      `json:"cols,omitempty"`
-	IDs    []string `json:"ids,omitempty"`   // panels to group ("panel.group"), remove ("panel.ungroup"), or close ("panel.close")
+	IDs    []string `json:"ids,omitempty"`   // panels to group ("panel.group"), remove ("panel.ungroup"), close ("panel.close"), or move as a block ("panel.move")
 	Group  string   `json:"group,omitempty"` // group name to assign ("panel.group"), or the group to rename ("panel.rename")
 	Name   string   `json:"name,omitempty"`  // new name for "panel.rename" (a panel title or a group name)
+	Index  int      `json:"index,omitempty"` // destination index among the remaining panels for "panel.move"
 }
 
 // Panel is the server-side view of a single live terminal.
@@ -49,12 +50,13 @@ type Panel struct {
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type    string  `json:"type"`              // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error"
-	Version string  `json:"version,omitempty"` // set on "welcome"
-	Error   string  `json:"error,omitempty"`   // set on "error"
-	Panels  []Panel `json:"panels,omitempty"`  // full snapshot on "panels"; live state/spark refresh on "telemetry"
-	ID      string  `json:"id,omitempty"`      // panel id on "output"
-	Data    []byte  `json:"data,omitempty"`    // pty output bytes on "output"
+	Type      string  `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error"
+	Version   string  `json:"version,omitempty"`    // protocol version, set on "welcome"
+	ServerVer string  `json:"server_ver,omitempty"` // the server's build version, set on "welcome"
+	Error     string  `json:"error,omitempty"`      // set on "error"
+	Panels    []Panel `json:"panels,omitempty"`     // full snapshot on "panels"; live state/spark refresh on "telemetry"
+	ID        string  `json:"id,omitempty"`         // panel id on "output"
+	Data      []byte  `json:"data,omitempty"`       // pty output bytes on "output"
 
 	// Host resource sample on "stats", measured on the server so the footer
 	// reflects the machine where the panels actually run.

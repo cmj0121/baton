@@ -26,6 +26,7 @@ const (
 	keyHelp        = "?" // view the key list for the current view
 	keyEditMap     = "k" // edit the key map (prefix only: C-t k)
 	keyPanelConfig = "P" // shift+p
+	keyScroll      = "[" // enter scroll mode (prefix only: C-t [), tmux-style
 	keyRestart     = "S" // shift+s
 	keyDetach      = "q"
 
@@ -85,6 +86,7 @@ const (
 	actDashboard
 	actGroupView
 	actEditMap
+	actScroll
 )
 
 // isEscape reports whether an action is reached after the prefix rather than on a
@@ -92,7 +94,7 @@ const (
 // group-view jumps and the key-map editor work after the prefix in every mode;
 // panel config opens this way from command mode.
 func isEscape(a action) bool {
-	return a == actDashboard || a == actGroupView || a == actEditMap || a == actPanelConfig
+	return a == actDashboard || a == actGroupView || a == actEditMap || a == actPanelConfig || a == actScroll
 }
 
 // binding is one editable command: a stable name (used to persist the key), the
@@ -126,6 +128,7 @@ var bindings = []binding{
 	{"help", keyHelp, "view the keys for this view", actHelp, "View"},
 	{"key-map", keyEditMap, "edit the key map (prefix)", actEditMap, "View"},
 	{"panel-config", keyPanelConfig, "configure panel defaults (prefix)", actPanelConfig, "View"},
+	{"scroll", keyScroll, "scroll mode — line / page (prefix)", actScroll, "View"},
 	{"dashboard", keyDashboard, "jump to the dashboard (prefix)", actDashboard, "View"},
 	{"group-view", keyGroupView, "go to the group view (prefix)", actGroupView, "View"},
 
@@ -139,9 +142,12 @@ type prefs struct {
 	binds             []binding
 	confirmClose      bool
 	allowNameConflict bool
+	bellEnabled       bool
 	shellPath         string
+	workdir           string                         // default working directory for new panels ("" = home)
 	defaultAgent      string                         // agent profile the new-agent action spawns
 	agents            map[string]config.AgentProfile // user-configured agent profiles
+	replayKB          int                            // per-panel replay buffer in KiB (0 = server default)
 }
 
 // defaultAgentName is the built-in agent profile, used when none is configured —
@@ -161,7 +167,7 @@ func builtinAgent(name string) (config.AgentProfile, bool) {
 // any read error (so the cockpit always comes up). Defaults: prefix "ctrl+t",
 // confirm-on-close on, system shell.
 func loadPrefs() prefs {
-	p := prefs{prefix: keyPrefix, binds: append([]binding(nil), bindings...), confirmClose: true}
+	p := prefs{prefix: keyPrefix, binds: append([]binding(nil), bindings...), confirmClose: true, bellEnabled: true}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -181,9 +187,14 @@ func loadPrefs() prefs {
 	if cfg.Settings.AllowNameConflict != nil {
 		p.allowNameConflict = *cfg.Settings.AllowNameConflict
 	}
+	if cfg.Settings.Bell != nil {
+		p.bellEnabled = *cfg.Settings.Bell
+	}
 	p.shellPath = cfg.Panel.Shell
+	p.workdir = cfg.Panel.Workdir
 	p.defaultAgent = cfg.Panel.DefaultAgent
 	p.agents = cfg.Panel.Agents
+	p.replayKB = cfg.Panel.ReplayKB
 	return p
 }
 
@@ -208,17 +219,21 @@ func (m model) saveConfig() error {
 	}
 	confirmClose := m.confirmClose
 	allowNameConflict := m.allowNameConflict
+	bellEnabled := m.bellEnabled
 	return config.Config{
 		Prefix: prefix,
 		Keys:   keys,
 		Settings: config.Settings{
 			ConfirmClose:      &confirmClose,
 			AllowNameConflict: &allowNameConflict,
+			Bell:              &bellEnabled,
 		},
 		Panel: config.PanelDefaults{
 			Shell:        m.shellPath,
+			Workdir:      m.workdir,
 			DefaultAgent: m.defaultAgent,
 			Agents:       m.agents, // round-trip the user's profiles so a save never drops them
+			ReplayKB:     m.replayKB,
 		},
 	}.Save()
 }

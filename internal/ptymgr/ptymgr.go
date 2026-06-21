@@ -10,8 +10,14 @@ import (
 	"github.com/creack/pty"
 )
 
-// ringCap is how much recent output is kept per panel for replay on attach.
-const ringCap = 32 * 1024
+// DefaultRingCap is how much recent output is kept per panel for replay on
+// attach when none is configured. It seeds the scrollback a frontend can page
+// through, so it is generous; override it with WithRingCap.
+const DefaultRingCap = 256 * 1024
+
+// minRingCap floors the ring so replay and the Monitor's attention tail (which
+// reads the last attnTailBytes) always have something to work with.
+const minRingCap = 4 * 1024
 
 // pane is one PTY plus a ring buffer of its recent output. After the process
 // exits the pane is kept (dead) so its final output can still be replayed; it is
@@ -23,17 +29,35 @@ type pane struct {
 }
 
 // Manager tracks the live PTYs keyed by panel id and fans their output out
-// through a single sink.
+// through a single sink. ringCap is the per-panel replay buffer size, fixed at
+// construction.
 type Manager struct {
 	mu       sync.Mutex
 	ptys     map[string]*pane
+	ringCap  int
 	onOutput func(id string, data []byte)
 	onClose  func(id string)
 }
 
-// New returns an empty manager.
-func New() *Manager {
-	return &Manager{ptys: make(map[string]*pane)}
+// Option tunes a Manager at construction.
+type Option func(*Manager)
+
+// WithRingCap sets the per-panel replay buffer to bytes (floored at minRingCap),
+// the recent output replayed on attach to seed a frontend's scrollback.
+func WithRingCap(bytes int) Option {
+	return func(m *Manager) { m.ringCap = bytes }
+}
+
+// New returns an empty manager. Without options the replay ring is DefaultRingCap.
+func New(opts ...Option) *Manager {
+	m := &Manager{ptys: make(map[string]*pane), ringCap: DefaultRingCap}
+	for _, opt := range opts {
+		opt(m)
+	}
+	if m.ringCap < minRingCap {
+		m.ringCap = minRingCap
+	}
+	return m
 }
 
 // OnOutput registers the sink that receives every panel's output. Set it once,
@@ -44,12 +68,24 @@ func (m *Manager) OnOutput(fn func(id string, data []byte)) { m.onOutput = fn }
 func (m *Manager) OnClose(fn func(id string)) { m.onClose = fn }
 
 // Spec describes the process behind a panel: the binary, its arguments, and the
-// directory it runs in. The zero value (empty Command) launches the user's shell
-// in the inherited directory — the plain shell-panel case.
+// directory it runs in. The zero value (empty Command) launches the user's shell.
 type Spec struct {
 	Command string   // binary path; empty = the user's shell ($SHELL, then /bin/sh)
 	Args    []string // arguments, e.g. an agent profile's flags
-	Dir     string   // working directory; empty inherits the server's
+	Dir     string   // working directory; empty falls back to the user's home
+}
+
+// panelDir is the directory a panel runs in: the requested dir, or the user's
+// home when none is given. A panel never inherits the daemon's own working
+// directory (where baton happened to be launched).
+func panelDir(dir string) string {
+	if dir != "" {
+		return dir
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return home
+	}
+	return ""
 }
 
 // Start launches command (a binary path) under a new PTY for the given panel id.
@@ -71,7 +107,7 @@ func (m *Manager) StartCmd(id string, spec Spec) error {
 
 	cmd := exec.Command(command, spec.Args...)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
-	cmd.Dir = spec.Dir // empty inherits the server's working directory
+	cmd.Dir = panelDir(spec.Dir) // empty → home, never the daemon's cwd
 
 	f, err := pty.Start(cmd)
 	if err != nil {
@@ -124,8 +160,8 @@ func (m *Manager) markDead(id string) {
 func (m *Manager) appendRing(p *pane, chunk []byte) {
 	m.mu.Lock()
 	p.ring = append(p.ring, chunk...)
-	if len(p.ring) > ringCap {
-		p.ring = append([]byte(nil), p.ring[len(p.ring)-ringCap:]...)
+	if len(p.ring) > m.ringCap {
+		p.ring = append([]byte(nil), p.ring[len(p.ring)-m.ringCap:]...)
 	}
 	m.mu.Unlock()
 }

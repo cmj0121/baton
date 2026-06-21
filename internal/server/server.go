@@ -39,7 +39,10 @@ type Server struct {
 	ln  net.Listener
 	pty *ptymgr.Manager
 
-	allowNameConflict bool // when false, panel titles and group names stay unique
+	allowNameConflict bool   // when false, panel titles and group names stay unique
+	replayBytes       int    // per-panel replay buffer; 0 keeps the ptymgr default
+	defaultDir        string // workdir for a panel that asks for none; empty → the user's home
+	version           string // the server's build version, reported in the welcome
 
 	mu      sync.Mutex
 	seq     int
@@ -58,18 +61,44 @@ func WithAllowNameConflict(allow bool) Option {
 	return func(s *Server) { s.allowNameConflict = allow }
 }
 
+// WithReplayBytes sets the per-panel replay buffer the server keeps and replays
+// to an attaching frontend, seeding the scrollback it can page through. Zero
+// keeps the ptymgr default.
+func WithReplayBytes(bytes int) Option {
+	return func(s *Server) { s.replayBytes = bytes }
+}
+
+// WithDefaultDir sets the working directory new panels run in when the request
+// names none. Empty keeps the fallback (the user's home), so a panel never
+// inherits the directory the daemon was launched from.
+func WithDefaultDir(dir string) Option {
+	return func(s *Server) { s.defaultDir = dir }
+}
+
+// WithVersion sets the server's build version, reported to a frontend in the
+// welcome so it can show the backend version and flag a mismatch.
+func WithVersion(v string) Option {
+	return func(s *Server) { s.version = v }
+}
+
 // New builds a server bound to ln. The fleet starts empty — panels appear only
-// when the user spawns a real one.
+// when the user spawns a real one. Options are applied before the PTY manager is
+// built, so settings like the replay size reach it.
 func New(ln net.Listener, opts ...Option) *Server {
 	s := &Server{
 		ln:      ln,
-		pty:     ptymgr.New(),
 		clients: make(map[*clientConn]struct{}),
 		mon:     newMonitor(),
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
+
+	var pmOpts []ptymgr.Option
+	if s.replayBytes > 0 {
+		pmOpts = append(pmOpts, ptymgr.WithRingCap(s.replayBytes))
+	}
+	s.pty = ptymgr.New(pmOpts...)
 	s.pty.OnOutput(s.routeOutput)
 	s.pty.OnClose(s.onPanelExit)
 	return s
@@ -309,7 +338,7 @@ func (s *Server) handle(conn net.Conn) {
 func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	switch cmd.Action {
 	case "hello":
-		send(cc, proto.ServerMsg{Type: "welcome", Version: proto.ProtocolVersion})
+		send(cc, proto.ServerMsg{Type: "welcome", Version: proto.ProtocolVersion, ServerVer: s.version})
 		send(cc, s.panelsMsg())
 		send(cc, statsMsg()) // seed the footer immediately, before the first tick
 	case "panel.list":
@@ -352,6 +381,12 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			return
 		}
 		s.broadcast(s.panelsMsg())
+	case "panel.move":
+		if err := s.movePanels(cmd.IDs, cmd.Index); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		s.broadcast(s.panelsMsg())
 	case "panel.attach":
 		s.attach(cc, cmd.ID)
 	case "panel.detach":
@@ -367,11 +402,15 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 
 // createPanel is a core action: it spawns the backing process and records the new
 // panel in the fleet. A shell panel runs path (or the default shell when empty);
-// an agent panel runs its profile command with args in dir, the working directory
-// the agent operates on.
+// an agent panel runs its profile command with args. Both run in dir, the working
+// directory; an empty dir falls back to the configured default (then the user's
+// home), so a panel never inherits the directory the daemon was launched from.
 func (s *Server) createPanel(kind, path string, args []string, dir string) error {
 	if kind == "" {
 		kind = proto.KindShell
+	}
+	if dir == "" {
+		dir = s.defaultDir // empty still, so ptymgr falls back to the user's home
 	}
 
 	s.mu.Lock()
@@ -381,7 +420,7 @@ func (s *Server) createPanel(kind, path string, args []string, dir string) error
 
 	switch kind {
 	case proto.KindShell:
-		if err := s.pty.Start(id, path); err != nil {
+		if err := s.pty.StartCmd(id, ptymgr.Spec{Command: path, Dir: dir}); err != nil {
 			return err
 		}
 	case proto.KindAgent:
@@ -664,6 +703,54 @@ func (s *Server) renameGroup(old, name string) error {
 		return fmt.Errorf("no panels in group %q", old)
 	}
 	log.Info().Str("from", old).Str("to", name).Int("panels", moved).Msg("group renamed")
+	return nil
+}
+
+// movePanels is a core action that reorders the fleet: it lifts the panels named
+// in ids out as a block (keeping their current relative order) and reinserts them
+// at index among the remaining panels. Fleet order is the single source of truth
+// every frontend renders from — the dashboard's item order and a group's member
+// order both follow it — so reordering here moves items in every view at once and
+// for every attached client. The index is clamped into range; ids that match no
+// panel are ignored, and it errors only when none match. A moved group's members
+// land contiguously, which is a tidy side effect rather than a requirement.
+func (s *Server) movePanels(ids []string, index int) error {
+	if len(ids) == 0 {
+		return fmt.Errorf("panel.move needs at least one panel")
+	}
+	want := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	block := make([]panel.Panel, 0, len(ids))
+	rest := make([]panel.Panel, 0, len(s.panels))
+	for _, p := range s.panels {
+		if _, ok := want[p.ID]; ok {
+			block = append(block, p)
+		} else {
+			rest = append(rest, p)
+		}
+	}
+	if len(block) == 0 {
+		return fmt.Errorf("no panel matched the given ids")
+	}
+	if index < 0 {
+		index = 0
+	}
+	if index > len(rest) {
+		index = len(rest)
+	}
+
+	out := make([]panel.Panel, 0, len(s.panels))
+	out = append(out, rest[:index]...)
+	out = append(out, block...)
+	out = append(out, rest[index:]...)
+	s.panels = out
+
+	log.Info().Int("panels", len(block)).Int("index", index).Msg("panels reordered")
 	return nil
 }
 

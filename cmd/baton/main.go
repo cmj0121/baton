@@ -234,9 +234,17 @@ func runServer() error {
 
 	// Honour the user's naming-conflict policy from the shared config file; a
 	// missing or unreadable config keeps the strict default (unique names).
-	var opts []server.Option
-	if cfg, err := config.Load(); err == nil && cfg.Settings.AllowNameConflict != nil {
-		opts = append(opts, server.WithAllowNameConflict(*cfg.Settings.AllowNameConflict))
+	opts := []server.Option{server.WithVersion(version)}
+	if cfg, err := config.Load(); err == nil {
+		if cfg.Settings.AllowNameConflict != nil {
+			opts = append(opts, server.WithAllowNameConflict(*cfg.Settings.AllowNameConflict))
+		}
+		if cfg.Panel.ReplayKB > 0 {
+			opts = append(opts, server.WithReplayBytes(cfg.Panel.ReplayKB*1024))
+		}
+		if cfg.Panel.Workdir != "" {
+			opts = append(opts, server.WithDefaultDir(cfg.Panel.Workdir))
+		}
 	}
 
 	log.Info().Str("socket", sock).Int("pid", os.Getpid()).Msgf("baton %s listening", version)
@@ -257,7 +265,7 @@ func runClient(verbose int, logPath string) error {
 			return fmt.Errorf("attach to baton server at %s: %w", sock, err)
 		}
 
-		final, runErr := tea.NewProgram(tui.New(c), tea.WithAltScreen()).Run()
+		final, runErr := tea.NewProgram(tui.New(c, version), tea.WithAltScreen()).Run()
 		_ = c.Close()
 		if runErr != nil {
 			return fmt.Errorf("tui: %w", runErr)

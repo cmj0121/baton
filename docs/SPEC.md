@@ -7,8 +7,14 @@ this document covers how the pieces fit together.
 
 Baton is keyboard-driven and has exactly two ways to look at your agents:
 
-- **Dashboard** — see everything at once. Navigate panels, spawn new ones, group them into work items, retire the dead ones.
-- **Zoom** — see one thing fully. Drive a single panel as if it were your only terminal, then pop back out to the dashboard.
+- **Dashboard** — see everything at once. Navigate panels, spawn new ones, group them into work items, reorder them
+  (`shift`+arrows), retire the dead ones.
+- **Zoom** — see one thing fully. Drive a single panel as if it were your only terminal; `C-t [` opens a tmux-style
+  scroll mode (`↑`/`↓` a line, `b`/`space` or `PgUp`/`PgDn` a page, `g`/`G` top/bottom, `esc` exits) to read back through
+  its history. Every bare key drives the program (vim, a BBS), never baton, so the leader works on any terminal — then
+  pop back out to the dashboard. How much history is
+  kept and replayed on attach is `panel.replay-kb` in the config (a larger value pages back further; full-screen programs
+  keep no scrollback).
 
 You never juggle windows or tabs. You conduct from the dashboard, and you zoom in only when a player needs you.
 
@@ -94,9 +100,11 @@ member** (attention beats running beats spawning beats idle beats exited), so on
 
 **The group split.** Zooming a work item opens a split — every member rendered live in its own tile, all streaming at
 once. By default the split is an _overview you navigate_, not a surface you type into: `tab` moves the focus between
-tiles, `+`/`-` adjusts the column count, `x` removes the focused member from the group, `enter` drops into the focused
-panel's own single zoom, and `d`/`esc` returns to the dashboard. From a zoomed member, the always-on `C-t g` escape pops
-back to the split.
+tiles, `+`/`-` adjusts the column count, `shift`+`←`/`→` reorders the focused member within the group, `C-t [` opens
+scroll mode on the focused tile, `x` removes the focused
+member from the group, `enter` drops into the focused panel's own single zoom, and `d`/`esc` returns to the dashboard.
+From a zoomed member,
+the always-on `C-t g` escape pops back to the split.
 
 **Pinning, for crowded groups.** Live tiles are capped (`maxGroupTiles`) so a huge group cannot spawn unbounded
 terminals. Rather than stranding the overflow, the split shows the capped set of tiles beside a **tree list** of the
@@ -104,7 +112,9 @@ remaining members; `tab` walks the tiles and then the list as one ring, so every
 focused member: a pinned panel always holds a live tile (a `⊙` marks it), promoting it out of the list and demoting an
 auto-filled tile to keep the tile count at the cap. So you curate which of a busy group's panels stream live and which
 stay a compact, navigable list. From a list row, `enter` still zooms the panel and `x` still removes it; interact (`i`)
-needs a live tile, so it asks you to pin the panel first. Pins are per-view and reset when you leave the split.
+needs a live tile, so it asks you to pin the panel first. Pins **persist across views**, so reopening a group brings
+back the tiles you pinned; and a group with exactly **one** pinned member treats it as the default — entering the group
+drops straight into that panel's zoom rather than a one-tile split (the prefix-`g` escape pops back to the split).
 
 **Interact mode.** Pressing `i` hands the keyboard to the focused tile so you can drive its program _in place_, without
 the full-screen zoom — the tile glows green and wears a keyboard badge, and every keystroke is forwarded to that panel.

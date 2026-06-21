@@ -1,6 +1,7 @@
 package ptymgr
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -184,5 +185,43 @@ func TestStartShellBadShellErrors(t *testing.T) {
 	if err := m.StartShell("x"); err == nil {
 		m.Stop("x")
 		t.Fatal("StartShell with a missing shell should error")
+	}
+}
+
+// TestRingCap covers the configurable replay buffer: the default, a custom cap
+// that trims the ring to its tail, and the floor on absurdly small values.
+func TestRingCap(t *testing.T) {
+	if New().ringCap != DefaultRingCap {
+		t.Fatalf("default ring cap = %d, want %d", New().ringCap, DefaultRingCap)
+	}
+	if got := New(WithRingCap(10)).ringCap; got != minRingCap {
+		t.Fatalf("a tiny cap should floor at %d, got %d", minRingCap, got)
+	}
+
+	// A custom cap above the floor keeps only the most recent bytes (the tail),
+	// which is exactly what replay-on-attach should hand a frontend.
+	const cap = 8 * 1024
+	m := New(WithRingCap(cap))
+	p := &pane{}
+	for i := 0; i < 10; i++ {
+		m.appendRing(p, make([]byte, 1000)) // 10000 bytes total, cap is 8192
+	}
+	if len(p.ring) != cap {
+		t.Fatalf("ring should be trimmed to the cap, len = %d want %d", len(p.ring), cap)
+	}
+}
+
+// TestPanelDir defaults an empty working directory to the user's home — never
+// the daemon's own cwd — and passes a given directory through unchanged.
+func TestPanelDir(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home dir: %v", err)
+	}
+	if got := panelDir(""); got != home {
+		t.Fatalf("empty dir should default to home %q, got %q", home, got)
+	}
+	if got := panelDir("/tmp/x"); got != "/tmp/x" {
+		t.Fatalf("a given dir should pass through, got %q", got)
 	}
 }

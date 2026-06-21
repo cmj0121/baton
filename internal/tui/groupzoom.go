@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -322,6 +321,8 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.exitGroupZoom()
 			case actEditMap:
 				return m.openEditMap(modeGroupZoom), nil
+			case actScroll: // C-t [ → scroll the focused tile's history
+				return m.enterScroll(), nil
 			}
 		}
 		if key == m.bindingKey(actDetach) { // C-t q detaches from the split too
@@ -343,8 +344,14 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key {
 	case "tab", "right", "l", "down", "j":
 		m.groupFocus = wrapIndex(m.groupFocus, 1, n)
+		m.scrollOff = 0 // scrollback follows the focus; a new tile starts at its bottom
 	case "shift+tab", "left", "h", "up", "k":
 		m.groupFocus = wrapIndex(m.groupFocus, -1, n)
+		m.scrollOff = 0
+	case "shift+left":
+		return m.reorderGroupMember(-1), nil
+	case "shift+right":
+		return m.reorderGroupMember(1), nil
 	case "+", "=":
 		return m.adjustGroupCols(1), nil
 	case "-", "_":
@@ -390,6 +397,8 @@ func (m model) handleGroupInteractKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.exitInteract(), nil
 			case actEditMap:
 				return m.openEditMap(modeGroupZoom), nil
+			case actScroll: // C-t [ → scroll the focused tile's history
+				return m.enterScroll(), nil
 			}
 			return m, nil
 		}
@@ -402,6 +411,7 @@ func (m model) handleGroupInteractKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.groupArmed = true
 		return m, nil
 	}
+	m.scrollOff = 0 // driving the program returns the tile to its live bottom
 	m.feedFocused(k)
 	return m, nil
 }
@@ -425,6 +435,7 @@ func (m model) enterInteract() model {
 	}
 	m.groupInteract = true
 	m.groupArmed = false
+	m.scrollOff = 0 // typing happens at the live bottom
 	m.status = fmt.Sprintf("interact · %s · %s %s to stop", p.Title, keyLabel(m.effPrefix()), keyInteract)
 	return m
 }
@@ -463,8 +474,14 @@ func (m model) togglePin() model {
 	if m.groupPinned == nil {
 		m.groupPinned = map[string]bool{}
 	}
+	if m.pinned == nil {
+		m.pinned = map[string]bool{}
+	}
+	// Mirror every toggle into the persistent set, so the group reopens with the
+	// same panels pinned (and a lone pin auto-zooms on the next enter).
 	if m.groupPinned[p.ID] {
 		delete(m.groupPinned, p.ID)
+		delete(m.pinned, p.ID)
 		m.status = "unpinned " + p.Title
 	} else {
 		if m.pinnedCount() >= maxGroupTiles {
@@ -472,6 +489,7 @@ func (m model) togglePin() model {
 			return m
 		}
 		m.groupPinned[p.ID] = true
+		m.pinned[p.ID] = true
 		m.status = "pinned " + p.Title
 	}
 	m.reconcileGroupTiles(p.ID) // attach/detach the affected tile, keep focus on p
@@ -536,6 +554,8 @@ func (m *model) resetToDashboard(status string) {
 	m.groupArmed = false
 	m.groupInteract = false
 	m.groupPinned = nil
+	m.scrollOff = 0
+	m.scrolling = false
 	m.status = status
 }
 
@@ -559,6 +579,9 @@ func (m model) backToGroup() (tea.Model, tea.Cmd) {
 	m.groupName = m.zoomGroupOrigin
 	m.groupArmed = false
 	m.groupInteract = false
+	m.scrollOff = 0
+	m.scrolling = false
+	m.cursorHidden = nil
 	m.emu = nil
 	m.zoomID, m.zoomTitle, m.zoomArmed, m.zoomExited, m.zoomGroupOrigin = "", "", false, false, ""
 	m.attachGroupMembers() // re-subscribe every tile's live stream
@@ -693,26 +716,32 @@ func (m model) renderTile(p panel.Panel, focused bool, emuCols, emuRows int) str
 
 	return box.Render(lipgloss.JoinVertical(lipgloss.Left,
 		head,
-		lipgloss.JoinVertical(lipgloss.Left, m.tileBody(p, emuCols, emuRows, interacting)...),
+		lipgloss.JoinVertical(lipgloss.Left, m.tileBody(p, emuCols, emuRows, focused, interacting)...),
 	))
 }
 
 // tileBody is a tile's content rows, always exactly emuRows tall: the member's
 // live screen when it is streaming, or a one-line activity note before output
-// lands (and when there is no client, as in tests). When showCursor is set — the
-// tile being interacted with — a reverse-video cell is drawn at the emulator's
-// cursor, so you can see where your typing lands, exactly as the single zoom does.
-func (m model) tileBody(p panel.Panel, emuCols, emuRows int, showCursor bool) []string {
+// lands (and when there is no client, as in tests). The focused tile honours the
+// scrollback offset, so its history scrolls in place while the other tiles stay
+// at their live bottom. When showCursor is set — the tile being interacted with,
+// and not scrolled back — a reverse-video cell is drawn at the emulator's cursor,
+// so you can see where your typing lands, exactly as the single zoom does.
+func (m model) tileBody(p panel.Panel, emuCols, emuRows int, focused, showCursor bool) []string {
 	emu := m.groupEmus[p.ID]
-	var src []string
-	if emu != nil {
-		src = strings.Split(emu.Render(), "\n")
-	} else if p.Activity != "" {
-		src = []string{mutedStyle.Render(truncate(p.Activity, emuCols))}
+	if emu == nil {
+		rows := make([]string, emuRows) // pad to a fixed tile height
+		if p.Activity != "" && len(rows) > 0 {
+			rows[0] = mutedStyle.Render(truncate(p.Activity, emuCols))
+		}
+		return rows
 	}
-	rows := make([]string, emuRows) // pad/clip to a fixed tile height; copy stops at min
-	copy(rows, src)
-	if showCursor && emu != nil {
+	off := 0
+	if focused {
+		off = m.scrollOff
+	}
+	rows := emuWindow(emu, emuCols, emuRows, off)
+	if showCursor && off == 0 {
 		cur := emu.CursorPosition()
 		if cur.Y >= 0 && cur.Y < len(rows) {
 			rows[cur.Y] = overlayCursor(rows[cur.Y], cur.X)
@@ -726,11 +755,15 @@ func (m model) tileBody(p panel.Panel, emuCols, emuRows int, showCursor bool) []
 // host stats, clock, and connection status on the right.
 func (m model) groupZoomFooter() string {
 	mode := seg("▣ GROUP", colInk, colBlue)
-	if m.groupInteract {
+	switch {
+	case m.scrolling:
+		mode = seg("↕ SCROLL", colDark, colCyan)
+	case m.groupInteract:
 		mode = seg("⌨ INTERACT", colDark, colGreen) // typing into the focused tile
 	}
 	left := seg("◈ BATON", colDark, colBrand) +
 		mode +
-		seg(truncate(m.groupName, 24), colDark, colBrandHi)
+		seg(truncate(m.groupName, 24), colDark, colBrandHi) +
+		scrollSeg(m.scrollOff)
 	return m.statusBar(left, m.helpHint())
 }
