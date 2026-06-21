@@ -102,6 +102,7 @@ type model struct {
 	confirmClose      bool      // ask y/n before closing a panel (toggled in the key map)
 	allowNameConflict bool      // let two work items share a name (server enforces; kept to round-trip config)
 	bellEnabled       bool      // ring the terminal bell when a panel needs you (toggled in the key map)
+	mouseEnabled      bool      // mouse reporting on — the wheel scrolls and moves the selection (toggled in the key map)
 	pendingClose      bool      // a close is awaiting y/n confirmation
 	pendingRestart    bool      // a force-restart is awaiting y/n confirmation
 	now               time.Time // wall clock shown in the footer, ticked every second
@@ -202,6 +203,7 @@ func (m model) applyPrefs(p prefs) model {
 	m.confirmClose = p.confirmClose
 	m.allowNameConflict = p.allowNameConflict
 	m.bellEnabled = p.bellEnabled
+	m.mouseEnabled = p.mouseEnabled
 	m.shellPath = p.shellPath
 	m.workdir = p.workdir
 	m.defaultAgent = p.defaultAgent
@@ -227,23 +229,32 @@ const (
 const (
 	settingConfirmClose = iota // ask y/n before closing a panel
 	settingBell                // ring the bell when a panel needs you
+	settingMouse               // enable mouse reporting (wheel scroll + selection)
 	numSettings
 )
 
 // settingLabel is the human label for a settings-block row.
 func settingLabel(idx int) string {
-	if idx == settingBell {
+	switch idx {
+	case settingBell:
 		return "ring the bell when a panel needs you"
+	case settingMouse:
+		return "enable the mouse (wheel scroll + selection)"
+	default:
+		return "confirm before closing a panel"
 	}
-	return "confirm before closing a panel"
 }
 
 // settingValue reports whether a settings-block toggle is currently on.
 func (m model) settingValue(idx int) bool {
-	if idx == settingBell {
+	switch idx {
+	case settingBell:
 		return m.bellEnabled
+	case settingMouse:
+		return m.mouseEnabled
+	default:
+		return m.confirmClose
 	}
-	return m.confirmClose
 }
 
 // keyMapRow resolves the current cursor to a key-map row: its kind and, for a
@@ -382,7 +393,21 @@ func tick() tea.Cmd {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), waitTelemetry(m.client.Telemetry), tick())
+	cmds := []tea.Cmd{waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), waitTelemetry(m.client.Telemetry), tick()}
+	if m.mouseEnabled {
+		cmds = append(cmds, tea.EnableMouseCellMotion) // honour the persisted mouse toggle on attach
+	}
+	return tea.Batch(cmds...)
+}
+
+// mouseCmd turns the terminal's mouse reporting on or off, matching the toggle.
+// Cell-motion mode reports clicks and the wheel without the noise of every
+// pointer move, which is all the cockpit's wheel handling needs.
+func mouseCmd(on bool) tea.Cmd {
+	if on {
+		return tea.EnableMouseCellMotion
+	}
+	return tea.DisableMouse
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -434,6 +459,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.now = time.Time(msg)
 		m.ageStatus()
 		return m, tick()
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 
 	case tea.KeyMsg:
 		if m.scrolling { // scroll mode owns the keyboard until esc/q
@@ -1257,7 +1285,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		m.sendf(proto.Command{Action: "server.reload"})
 		m = m.applyPrefs(loadPrefs())
 		m.status = "config reloaded · backend + cockpit"
-		return m, nil
+		return m, mouseCmd(m.mouseEnabled) // re-assert mouse reporting to match the reloaded toggle
 	case actDetach:
 		m.quitting = true
 		return m, tea.Quit
@@ -1291,10 +1319,15 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 		case rowBinding:
 			return m.runAction(m.keymap()[idx].act)
 		case rowSetting:
+			var cmd tea.Cmd
 			switch idx {
 			case settingBell:
 				m.bellEnabled = !m.bellEnabled
 				m.status = "bell: " + onOff(m.bellEnabled)
+			case settingMouse:
+				m.mouseEnabled = !m.mouseEnabled
+				m.status = "mouse: " + onOff(m.mouseEnabled)
+				cmd = mouseCmd(m.mouseEnabled) // flip the terminal's mouse reporting now
 			default:
 				m.confirmClose = !m.confirmClose
 				m.status = "confirm on close: " + onOff(m.confirmClose)
@@ -1302,6 +1335,7 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 			if err := m.saveConfig(); err != nil {
 				m.status = "toggled, but save failed: " + err.Error()
 			}
+			return m, cmd
 		}
 		return m, nil
 	}
@@ -1472,6 +1506,49 @@ func (m model) handleScrollKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.scrollEmu(emu, -(1 << 30)) // clamps to the live bottom
 	case "esc", "q":
 		return m.exitScroll(), nil
+	}
+	return m, nil
+}
+
+// mouseWheelLines is how many lines one wheel notch scrolls — a few at a time so
+// the wheel feels responsive without flying past the output.
+const mouseWheelLines = 3
+
+// handleMouse routes a mouse event. Only the wheel is wired: over a zoom or a
+// focused group tile it walks the scrollback (entering scroll mode on the way up
+// and leaving it once back at the live bottom), and everywhere else it steps the
+// selection like the arrow keys. The toggle is off by default, so these only fire
+// once the user has opted into mouse reporting. Non-wheel buttons are ignored, so
+// a stray click never disturbs the view.
+func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if msg.Action != tea.MouseActionPress {
+		return m, nil
+	}
+	up := msg.Button == tea.MouseButtonWheelUp
+	down := msg.Button == tea.MouseButtonWheelDown
+	if !up && !down {
+		return m, nil
+	}
+	// Over a scrollable emulator the wheel drives the scrollback viewport.
+	if emu, _ := m.scrollTarget(); emu != nil && (m.mode == modeZoom || m.mode == modeGroupZoom) {
+		if up {
+			if !m.scrolling {
+				m = m.enterScroll() // wheel-up from the live bottom opens scroll mode
+			}
+			m.scrollEmu(emu, mouseWheelLines)
+		} else {
+			m.scrollEmu(emu, -mouseWheelLines)
+			if m.scrolling && m.scrollOff == 0 {
+				m = m.exitScroll() // wheeled back to the bottom: drop out of scroll mode
+			}
+		}
+		return m, nil
+	}
+	// Anywhere else the wheel steps the selection, like the arrow keys.
+	if up {
+		m.move(-1)
+	} else {
+		m.move(1)
 	}
 	return m, nil
 }
