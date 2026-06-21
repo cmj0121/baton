@@ -103,6 +103,7 @@ type model struct {
 	allowNameConflict bool      // let two work items share a name (server enforces; kept to round-trip config)
 	bellEnabled       bool      // ring the terminal bell when a panel needs you (toggled in the key map)
 	pendingClose      bool      // a close is awaiting y/n confirmation
+	pendingRestart    bool      // a force-restart is awaiting y/n confirmation
 	now               time.Time // wall clock shown in the footer, ticked every second
 
 	cpuPct   float64 // system-wide CPU load %, sampled each tick for the footer
@@ -664,6 +665,20 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "close cancelled"
 		}
+		return m, nil
+	}
+
+	// A force-restart is waiting on a y/n answer. It tears down the daemon and the
+	// whole fleet, so it always confirms; only an explicit yes goes through.
+	if m.pendingRestart {
+		m.pendingRestart = false
+		if key == "y" || key == "enter" {
+			m.restart = true
+			m.quitting = true
+			m.status = "restarting the server…"
+			return m, tea.Quit
+		}
+		m.status = "restart cancelled"
 		return m, nil
 	}
 
@@ -1230,10 +1245,11 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		m.cursor = 0
 		m.status = "panel config"
 	case actRestart:
-		m.restart = true
-		m.quitting = true
-		m.status = "restarting the server…"
-		return m, tea.Quit
+		// A force-restart stops the daemon and starts a fresh one, ending every
+		// panel it owns — so confirm before pulling the rug.
+		m.pendingRestart = true
+		m.status = "force-restart the server? this ends every panel · (y/n)"
+		return m, nil
 	case actReload:
 		// Tell the daemon to re-read its config in place (the fleet keeps running),
 		// then re-read the cockpit's own prefs so the key map, toggles, and panel

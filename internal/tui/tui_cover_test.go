@@ -201,8 +201,8 @@ func TestRunActionsWithoutClient(t *testing.T) {
 	if m.mode != modeHelp {
 		t.Fatal("? should open the key list")
 	}
-	if m := press(base(), "S"); !m.restart {
-		t.Fatal("S should request a restart")
+	if m := press(base(), "S", "y"); !m.restart {
+		t.Fatal("S then y should request a restart")
 	}
 	if m := press(base(), "q"); !m.quitting {
 		t.Fatal("q should quit")

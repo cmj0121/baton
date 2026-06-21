@@ -254,13 +254,35 @@ func TestRestartBindingFlagsRestart(t *testing.T) {
 		t.Fatal("a fresh model should not request a restart")
 	}
 
-	// prefix + S (shift+s) asks for a force-restart and quits.
+	// S arms a confirmation — it does not restart or quit yet.
 	m = press(m, "S")
-	if !m.restart || !m.RestartRequested() {
-		t.Fatal("prefix+S should flag a restart")
+	if !m.pendingRestart {
+		t.Fatal("S should arm the restart confirmation")
 	}
-	if !m.quitting {
-		t.Fatal("a restart should quit the cockpit so the runner can relaunch")
+	if m.restart || m.quitting {
+		t.Fatal("a restart must not fire before the user confirms")
+	}
+
+	// y confirms: the cockpit flags a restart and quits so the runner relaunches.
+	m = press(m, "y")
+	if !m.restart || !m.RestartRequested() || !m.quitting {
+		t.Fatal("y should confirm the force-restart and quit")
+	}
+}
+
+// TestRestartConfirmationCancels checks any non-yes key aborts the restart.
+func TestRestartConfirmationCancels(t *testing.T) {
+	m := model{mode: modeDashboard, fleet: sampleFleet()}
+	m = press(m, "S")
+	if !m.pendingRestart {
+		t.Fatal("S should arm the restart confirmation")
+	}
+	m = press(m, "n")
+	if m.pendingRestart || m.restart || m.quitting {
+		t.Fatal("n should cancel the restart cleanly")
+	}
+	if m.status != "restart cancelled" {
+		t.Fatalf("expected a cancellation status, got %q", m.status)
 	}
 }
 
