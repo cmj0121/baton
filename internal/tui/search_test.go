@@ -198,6 +198,32 @@ func TestSearchClearsOnExitScroll(t *testing.T) {
 	}
 }
 
+// TestUpdateRoutesSearchPrompt proves the lifted input routing in Update: while a
+// search prompt is open in a zoom, a real key event reaches handleInput (the text
+// field) rather than handleZoomKey (the program). When no overlay is open, keys
+// still reach the scroll handler.
+func TestUpdateRoutesSearchPrompt(t *testing.T) {
+	m := searchModel(t, 5)
+	m.binds = append([]binding(nil), bindings...)
+	m.prefixKey = "ctrl+t"
+	m.input = inputSearch // a find prompt is open in the zoom
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	m = next.(model)
+	if m.inputBuf != "x" {
+		t.Fatalf("a key with the prompt open should type into the field, buf=%q", m.inputBuf)
+	}
+
+	// With no overlay open but scrolling, a key reaches the scroll handler.
+	m.input = inputNone
+	m.scrolling = true
+	m.scrollOff = 0
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if next.(model).scrollOff != 1 {
+		t.Fatalf("with no overlay, a key should reach the scroll handler, off=%d", next.(model).scrollOff)
+	}
+}
+
 // TestSearchOpensFromZoom proves C-t f arms the find prompt in a zoom.
 func TestSearchOpensFromZoom(t *testing.T) {
 	m := searchModel(t, 5)

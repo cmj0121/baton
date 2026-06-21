@@ -84,6 +84,31 @@ func TestMouseWheelZoomScroll(t *testing.T) {
 	}
 }
 
+// TestMouseWheelInZoomNoFallthrough proves a wheel in a zoom with nothing to
+// scroll (no emulator yet) never reaches back to move the hidden dashboard.
+func TestMouseWheelInZoomNoFallthrough(t *testing.T) {
+	m := model{mode: modeZoom, mouseEnabled: true, emu: nil, fleet: []panel.Panel{{ID: "a"}, {ID: "b"}}}
+	m.cursor = 0
+	for _, b := range []tea.MouseButton{tea.MouseButtonWheelDown, tea.MouseButtonWheelUp} {
+		next, _ := m.handleMouse(wheel(b))
+		if next.(model).cursor != 0 {
+			t.Fatal("a wheel in a zoom must not move the dashboard cursor")
+		}
+	}
+}
+
+// TestMouseIgnoredWithOverlay proves the wheel is inert while an input overlay
+// (filter, search, rename…) is open, so it never scrolls behind a prompt.
+func TestMouseIgnoredWithOverlay(t *testing.T) {
+	m := model{mode: modeDashboard, mouseEnabled: true, input: inputFilter,
+		fleet: []panel.Panel{{ID: "a"}, {ID: "b"}, {ID: "c"}}}
+	m.cursor = 1
+	next, _ := m.handleMouse(wheel(tea.MouseButtonWheelDown))
+	if next.(model).cursor != 1 {
+		t.Fatal("the wheel should be ignored while an input overlay is open")
+	}
+}
+
 // TestMouseNonWheelIgnored proves a click (non-wheel press) leaves the view be,
 // so a stray button never disturbs the selection or the scroll.
 func TestMouseNonWheelIgnored(t *testing.T) {

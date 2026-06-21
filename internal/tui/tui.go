@@ -1312,6 +1312,8 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 	case actDashboard:
 		m.mode = modeDashboard
 		m.cursor = 0
+		m.scrolling, m.copySelecting = false, false // never carry scroll/copy state to the dashboard
+		m = m.clearSearch()
 		m.status = "dashboard"
 	case actHelp:
 		return m.openHelp(m.mode), nil
@@ -1587,6 +1589,9 @@ const mouseWheelLines = 3
 // once the user has opted into mouse reporting. Non-wheel buttons are ignored, so
 // a stray click never disturbs the view.
 func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.input != inputNone {
+		return m, nil // a prompt (filter, search, rename…) owns the view — don't scroll behind it
+	}
 	if msg.Action != tea.MouseActionPress {
 		return m, nil
 	}
@@ -1608,6 +1613,11 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				m = m.exitScroll() // wheeled back to the bottom: drop out of scroll mode
 			}
 		}
+		return m, nil
+	}
+	// In a zoom or split with nothing to scroll (no tile focused, no emulator yet),
+	// the wheel does nothing — it must never reach back and move the hidden dashboard.
+	if m.mode == modeZoom || m.mode == modeGroupZoom {
 		return m, nil
 	}
 	// Anywhere else the wheel steps the selection, like the arrow keys.
@@ -1632,6 +1642,8 @@ func (m model) zoomDetach() (tea.Model, tea.Cmd) {
 	m.emu = nil
 	m.scrollOff = 0
 	m.scrolling = false
+	m.copySelecting = false
+	m = m.clearSearch()
 	m.cursorHidden = nil
 	m.zoomID, m.zoomTitle, m.zoomArmed, m.zoomExited, m.zoomGroupOrigin = "", "", false, false, ""
 	m.status = "dashboard"
@@ -1899,7 +1911,7 @@ func (m model) zoomView() string {
 	rows := m.zoomRows()
 	lines := make([]string, rows)
 	if m.emu != nil {
-		lines = m.scrollWindow(m.emu, m.width, rows, m.scrollOff)
+		lines = m.selectWindow(m.emu, m.width, rows, m.scrollOff)
 		// Draw the cursor only on the live bottom (a scrolled-back view is history),
 		// and only when the program has not hidden it — so a full-screen reader that
 		// turns the cursor off does not show a phantom block.

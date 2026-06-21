@@ -41,6 +41,13 @@ func (m model) openSearch() model {
 // runSearch matches query against the target's scrollback and screen, lands on
 // the newest hit, and holds the view in scroll mode so n / N can walk the rest.
 // An empty term clears any active search; no hit leaves the view where it was.
+//
+// Hits are absolute line indices captured here. Lines already in the scrollback
+// keep their index, so a search over history stays accurate; only matches on the
+// live screen can drift if a noisy program keeps emitting while the search is
+// open (the screen rows reindex as they roll into the scrollback). Every consumer
+// bounds-checks, so the worst case is a stale highlight, never a crash — search is
+// meant for an idle or exited panel, which is the common case.
 func (m model) runSearch(query string) model {
 	emu, _ := m.scrollTarget()
 	if emu == nil {
@@ -61,7 +68,7 @@ func (m model) runSearch(query string) model {
 		}
 	}
 	if len(hits) == 0 {
-		m.searchQuery, m.searchHits, m.searchAt = "", nil, 0
+		m = m.clearSearch() // drop any prior hits; a failed search leaves nothing active
 		m.status = fmt.Sprintf("no match for %q", query)
 		return m
 	}
@@ -186,11 +193,7 @@ func (m model) searchWindow(emu *vt.SafeEmulator, cols, rows, off int) []string 
 	if !m.searchActive() || emu == nil {
 		return lines
 	}
-	sbLen := emu.ScrollbackLen()
-	if off > sbLen {
-		off = sbLen
-	}
-	start := sbLen - off // top of the window in the combined index space
+	start := windowStart(emu.ScrollbackLen(), off) // top of the window in the combined index space
 	plain, _ := combinedPlain(emu)
 
 	hit := make(map[int]bool, len(m.searchHits))

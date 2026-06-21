@@ -576,6 +576,8 @@ func (m *model) resetToDashboard(status string) {
 	m.groupPinned = nil
 	m.scrollOff = 0
 	m.scrolling = false
+	m.copySelecting = false
+	*m = m.clearSearch()
 	m.status = status
 }
 
@@ -761,7 +763,7 @@ func (m model) tileBody(p panel.Panel, emuCols, emuRows int, focused, showCursor
 	// the other tiles render their plain live bottom.
 	rows := emuWindow(emu, emuCols, emuRows, 0)
 	if focused {
-		rows = m.scrollWindow(emu, emuCols, emuRows, m.scrollOff)
+		rows = m.selectWindow(emu, emuCols, emuRows, m.scrollOff)
 	}
 	if showCursor && m.scrollOff == 0 {
 		cur := emu.CursorPosition()

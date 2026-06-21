@@ -39,8 +39,12 @@ func (m model) copyToggle() model {
 // topVisibleLine is the combined scrollback+screen index of the line at the top
 // of the current scroll window.
 func (m model) topVisibleLine(emu *vt.SafeEmulator) int {
-	sbLen := emu.ScrollbackLen()
-	off := m.scrollOff
+	return windowStart(emu.ScrollbackLen(), m.scrollOff)
+}
+
+// windowStart maps a scroll offset to the combined scrollback+screen index of the
+// line at the top of that window, clamping the offset to the buffer depth.
+func windowStart(sbLen, off int) int {
 	if off > sbLen {
 		off = sbLen
 	}
@@ -88,7 +92,9 @@ func (m model) yankSelection() (tea.Model, tea.Cmd) {
 		m.status = "nothing to copy"
 		return m, nil
 	}
-	text := strings.TrimRight(strings.Join(plain[lo:hi+1], "\n"), "\n") + "\n"
+	// Drop trailing blank rows (a page copy at the live bottom picks up empty screen
+	// lines) but keep one closing newline so the paste lands on its own line.
+	text := strings.TrimRight(strings.Join(plain[lo:hi+1], "\n"), " \t\n") + "\n"
 	n := hi - lo + 1
 	m = m.exitScroll() // a yank ends copy mode and returns to the live bottom
 	m.status = fmt.Sprintf("copied %d line(s) to the clipboard", n)
@@ -107,20 +113,16 @@ func clipboardCmd(text string) tea.Cmd {
 	}
 }
 
-// scrollWindow renders a scroll window with both the search highlight and the
+// selectWindow renders a scroll window with both the search highlight and the
 // copy selection applied — selection takes visual priority, drawn as a
 // reverse-video band over the lines that y would copy. Outside scroll mode it is
 // just the search window (itself emuWindow when no search is active).
-func (m model) scrollWindow(emu *vt.SafeEmulator, cols, rows, off int) []string {
+func (m model) selectWindow(emu *vt.SafeEmulator, cols, rows, off int) []string {
 	lines := m.searchWindow(emu, cols, rows, off)
 	if !m.copySelecting || emu == nil {
 		return lines
 	}
-	sbLen := emu.ScrollbackLen()
-	if off > sbLen {
-		off = sbLen
-	}
-	start := sbLen - off
+	start := windowStart(emu.ScrollbackLen(), off)
 	plain, _ := combinedPlain(emu)
 	lo, hi := m.copyAnchor, start
 	if lo > hi {
