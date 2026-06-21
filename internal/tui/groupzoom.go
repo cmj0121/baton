@@ -331,6 +331,9 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if b, ok := m.lookupCmd(key); ok && b.act == actReload { // C-t R → reload config
 			return m.runAction(actReload)
 		}
+		if b, ok := m.lookupCmd(key); ok && b.act == actSearch { // C-t f → search the focused tile's scrollback
+			return m.openSearch(), nil
+		}
 		return m, nil
 	}
 	if key == m.effPrefix() {
@@ -753,12 +756,14 @@ func (m model) tileBody(p panel.Panel, emuCols, emuRows int, focused, showCursor
 		}
 		return rows
 	}
-	off := 0
+	// Only the focused tile owns the scroll offset and the search highlight; the hit
+	// indices are computed against its emulator, so searchWindow applies there and
+	// the other tiles render their plain live bottom.
+	rows := emuWindow(emu, emuCols, emuRows, 0)
 	if focused {
-		off = m.scrollOff
+		rows = m.searchWindow(emu, emuCols, emuRows, m.scrollOff)
 	}
-	rows := emuWindow(emu, emuCols, emuRows, off)
-	if showCursor && off == 0 {
+	if showCursor && m.scrollOff == 0 {
 		cur := emu.CursorPosition()
 		if cur.Y >= 0 && cur.Y < len(rows) {
 			rows[cur.Y] = overlayCursor(rows[cur.Y], cur.X)
@@ -771,8 +776,13 @@ func (m model) tileBody(p panel.Panel, emuCols, emuRows int, focused, showCursor
 // work-item name on the left, the ? help hint in the middle, and the shared
 // host stats, clock, and connection status on the right.
 func (m model) groupZoomFooter() string {
+	if m.input == inputSearch { // typing a find term over the focused tile
+		return m.searchPromptFooter()
+	}
 	mode := seg("▣ GROUP", colInk, colBlue)
 	switch {
+	case m.searchActive():
+		mode = m.searchSeg()
 	case m.scrolling:
 		mode = seg("↕ SCROLL", colDark, colCyan)
 	case m.groupInteract:

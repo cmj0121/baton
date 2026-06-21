@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"slices"
 	"strconv"
@@ -132,6 +133,11 @@ type model struct {
 
 	filter string // dashboard panel filter (substring on titles / group names); "" shows the whole fleet
 
+	searchQuery string         // active scrollback search term ("" = no search)
+	searchRe    *regexp.Regexp // compiled, case-insensitive matcher for searchQuery (nil = no search)
+	searchHits  []int          // combined scrollback+screen line indices matching the term, ascending
+	searchAt    int            // index into searchHits of the current match
+
 	signalFrom    mode     // the view the signal picker was opened from, restored on esc / after sending
 	signalTargets []string // panel ids the chosen signal is delivered to
 	signalScope   string   // human label of the target(s), shown in the picker
@@ -173,6 +179,7 @@ const (
 	inputRename                   // renaming the selected panel or group
 	inputSignalName               // free-form signal name/number for the picker's "other…"
 	inputFilter                   // live dashboard panel filter (f)
+	inputSearch                   // scrollback search term in a zoom / group tile (C-t f)
 )
 
 // RestartRequested reports whether the cockpit exited because the user asked to
@@ -467,6 +474,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouse(msg)
 
 	case tea.KeyMsg:
+		if m.input != inputNone { // a text-input overlay (incl. zoom search) captures keys in every mode
+			return m.handleInput(msg)
+		}
 		if m.scrolling { // scroll mode owns the keyboard until esc/q
 			return m.handleScrollKey(msg)
 		}
@@ -1083,6 +1093,8 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "filter · " + buf
 		}
+	case inputSearch:
+		return m.runSearch(buf), nil
 	}
 	return m, nil
 }
@@ -1465,6 +1477,9 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m.openSignalPicker(modeZoom, []string{m.zoomID}, m.zoomTitle), nil
 		}
+		if b, ok := m.lookupCmd(key); ok && b.act == actSearch { // C-t f → search the scrollback
+			return m.openSearch(), nil
+		}
 		return m, nil
 	}
 	if key == m.effPrefix() {
@@ -1494,10 +1509,12 @@ func (m model) enterScroll() model {
 	return m
 }
 
-// exitScroll leaves scroll mode and returns to the live bottom.
+// exitScroll leaves scroll mode and returns to the live bottom, dropping any
+// active search along with it.
 func (m model) exitScroll() model {
 	m.scrolling = false
 	m.scrollOff = 0
+	m = m.clearSearch()
 	m.status = ""
 	return m
 }
@@ -1540,6 +1557,10 @@ func (m model) handleScrollKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.scrollEmu(emu, 1<<30) // clamps to the oldest line
 	case "G", "end":
 		m.scrollEmu(emu, -(1 << 30)) // clamps to the live bottom
+	case "n": // next search hit (older) — a no-op when no search is active
+		return m.gotoMatch(-1), nil
+	case "N": // previous search hit (newer)
+		return m.gotoMatch(1), nil
 	case "esc", "q":
 		return m.exitScroll(), nil
 	}
@@ -1869,7 +1890,7 @@ func (m model) zoomView() string {
 	rows := m.zoomRows()
 	lines := make([]string, rows)
 	if m.emu != nil {
-		lines = emuWindow(m.emu, m.width, rows, m.scrollOff)
+		lines = m.searchWindow(m.emu, m.width, rows, m.scrollOff)
 		// Draw the cursor only on the live bottom (a scrolled-back view is history),
 		// and only when the program has not hidden it — so a full-screen reader that
 		// turns the cursor off does not show a phantom block.
@@ -2206,6 +2227,7 @@ func (m model) helpContent() (title string, body []string) {
 			{"Navigation", kc("+") + " " + kc("-"), "more / fewer columns"},
 			{"Navigation", kc("S-←→"), "reorder the focused panel"},
 			{"Navigation", kc(pfx) + " " + kc(keyScroll), "scroll mode · the focused panel (↑↓ line, b/Spc page)"},
+			{"Navigation", kc(pfx) + " " + kc(keySearch), "search the focused panel · n older, N newer"},
 			{"Work items", kc(keyLabel(keyPin)), "pin / unpin the focused panel to a live tile"},
 			{"Work items", kc(keyLabel(keySignal)) + " " + kc(keyLabel(keySignalAll)), "signal the focused panel · the whole group"},
 			{"Work items", kc(keyLabel(keyRemove)), "remove the focused panel from the group"},
@@ -2222,6 +2244,7 @@ func (m model) helpContent() (title string, body []string) {
 		rows = []helpRow{
 			{"Navigation", kc("type"), "drive the program directly (PgUp/PgDn included)"},
 			{"Navigation", kc(pfx) + " " + kc(keyScroll), "scroll mode · ↑↓ line, b/Spc page, esc exits"},
+			{"Navigation", kc(pfx) + " " + kc(keySearch), "search the scrollback · n older, N newer"},
 			{"Navigation", kc(pfx) + " " + kc(pfx), "send a literal " + pfx},
 			{"Panels", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actSignal))), "send a signal to this panel"},
 			{"View", kc(pfx) + " " + kc(dash), "back to the dashboard"},
@@ -2531,6 +2554,8 @@ func (m model) inputView() string {
 		title, prompt, action = "SEND SIGNAL", "signal name or number  (e.g. WINCH, TSTP, 28)", "send"
 	case inputFilter:
 		title, prompt, action = "FIND PANELS", "filter by title or group  (live)", "apply"
+	case inputSearch:
+		title, prompt, action = "SEARCH", "find in the scrollback", "find"
 	}
 
 	field := lipgloss.NewStyle().Width(46).Foreground(colInk).Background(colSurface).Render("› " + m.inputBuf + "▌")
