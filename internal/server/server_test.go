@@ -929,6 +929,242 @@ func TestMovePanels(t *testing.T) {
 	}
 }
 
+// TestPinPanels confirms the server owns the Pinned flag: a pin command sets it
+// on the named panels and broadcasts the change, unpin clears it, and an unknown
+// id errors.
+func TestPinPanels(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	sock := filepath.Join(t.TempDir(), "baton.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() { _ = server.New(ln).Serve() }()
+
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	recv(t, c) // welcome
+	recv(t, c) // empty panels
+
+	var ids []string
+	for range 2 {
+		if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		ids = append(ids, recv(t, c).Panels[len(ids)].ID)
+	}
+	a, b := ids[0], ids[1]
+
+	// Pin a: only a comes back pinned.
+	if err := c.Send(proto.Command{Action: "panel.pin", IDs: []string{a}}); err != nil {
+		t.Fatalf("pin a: %v", err)
+	}
+	if got := pinnedOf(recv(t, c).Panels); !got[a] || got[b] {
+		t.Fatalf("after pinning a: pinned=%v, want only %s", got, a)
+	}
+
+	// Unpin a: nothing pinned again.
+	if err := c.Send(proto.Command{Action: "panel.unpin", IDs: []string{a}}); err != nil {
+		t.Fatalf("unpin a: %v", err)
+	}
+	if got := pinnedOf(recv(t, c).Panels); got[a] {
+		t.Fatalf("after unpinning a: pinned=%v, want none", got)
+	}
+
+	// An unknown id matches nothing and errors.
+	if err := c.Send(proto.Command{Action: "panel.pin", IDs: []string{"ghost"}}); err != nil {
+		t.Fatalf("pin ghost: %v", err)
+	}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("pin of an unknown id should error, got %+v", msg)
+	}
+}
+
+// TestReloadAppliesSettings confirms Reload swaps the name-conflict policy on a
+// running server without restarting it: a rename rejected under the strict
+// default succeeds once a reload allows conflicts.
+func TestReloadAppliesSettings(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	sock := filepath.Join(t.TempDir(), "baton.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	srv := server.New(ln) // strict names by default
+	go func() { _ = srv.Serve() }()
+
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	recv(t, c) // welcome
+	recv(t, c) // empty panels
+
+	var ids []string
+	for range 2 {
+		if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		ids = append(ids, recv(t, c).Panels[len(ids)].ID)
+	}
+	a, b := ids[0], ids[1]
+
+	if err := c.Send(proto.Command{Action: "panel.rename", ID: a, Name: "dup"}); err != nil {
+		t.Fatalf("rename a: %v", err)
+	}
+	recv(t, c)
+	// Strict: renaming b onto a's title is rejected.
+	if err := c.Send(proto.Command{Action: "panel.rename", ID: b, Name: "dup"}); err != nil {
+		t.Fatalf("rename b strict: %v", err)
+	}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("a duplicate title should be rejected before reload, got %+v", msg)
+	}
+
+	// Hot-reload to allow name conflicts; the same rename now goes through.
+	srv.Reload(true, "", 0)
+	if err := c.Send(proto.Command{Action: "panel.rename", ID: b, Name: "dup"}); err != nil {
+		t.Fatalf("rename b after reload: %v", err)
+	}
+	msg := recv(t, c)
+	if msg.Type != "panels" {
+		t.Fatalf("after a reload allowing conflicts the rename should succeed, got %+v", msg)
+	}
+	if got := titleOf(msg.Panels, b); got != "dup" {
+		t.Fatalf("panel b should be renamed to dup, got %q", got)
+	}
+}
+
+// TestReloadCmdHook confirms a server.reload command fires the
+// OnReload hook — the in-cockpit reload that shares the SIGHUP routine.
+func TestReloadCmdHook(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "baton.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	srv := server.New(ln)
+	reloaded := make(chan struct{}, 1)
+	srv.OnReload(func() { reloaded <- struct{}{} })
+	go func() { _ = srv.Serve() }()
+
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	recv(t, c) // welcome
+	recv(t, c) // empty panels
+
+	if err := c.Send(proto.Command{Action: "server.reload"}); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	select {
+	case <-reloaded:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server.reload should fire the OnReload hook")
+	}
+}
+
+// titleOf returns the title of the panel with id, or "" if absent.
+func titleOf(panels []proto.Panel, id string) string {
+	for _, p := range panels {
+		if p.ID == id {
+			return p.Title
+		}
+	}
+	return ""
+}
+
+// TestSignalPanel confirms a panel.signal command reaches the panel's process: a
+// SIGKILL ends it, the server marks it exited, and a bad signal or unknown id is
+// rejected.
+func TestSignalPanel(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	sock := filepath.Join(t.TempDir(), "baton.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() { _ = server.New(ln).Serve() }()
+
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	recv(t, c) // welcome
+	recv(t, c) // empty panels
+
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	id := recv(t, c).Panels[0].ID
+
+	// An unknown signal name is rejected.
+	if err := c.Send(proto.Command{Action: "panel.signal", IDs: []string{id}, Signal: "SIGBOGUS"}); err != nil {
+		t.Fatalf("bad signal: %v", err)
+	}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("an unknown signal should error, got %+v", msg)
+	}
+	// An unknown panel is rejected.
+	if err := c.Send(proto.Command{Action: "panel.signal", IDs: []string{"ghost"}, Signal: "SIGTERM"}); err != nil {
+		t.Fatalf("ghost signal: %v", err)
+	}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("signalling an unknown id should error, got %+v", msg)
+	}
+
+	// SIGKILL ends the process; the server broadcasts it exited.
+	if err := c.Send(proto.Command{Action: "panel.signal", IDs: []string{id}, Signal: "SIGKILL"}); err != nil {
+		t.Fatalf("kill: %v", err)
+	}
+	deadline := time.After(3 * time.Second)
+	exited := false
+	for !exited {
+		select {
+		case msg := <-c.Events:
+			if msg.Type != "panels" {
+				continue
+			}
+			for _, p := range msg.Panels {
+				if p.ID == id && p.State == "exited" {
+					exited = true
+				}
+			}
+		case <-deadline:
+			t.Fatal("panel was not marked exited after a SIGKILL")
+		}
+	}
+
+	// Signalling the now-exited panel is rejected — its process is gone, so it is
+	// not a live target and the count would otherwise be a lie.
+	if err := c.Send(proto.Command{Action: "panel.signal", IDs: []string{id}, Signal: "SIGTERM"}); err != nil {
+		t.Fatalf("signal exited: %v", err)
+	}
+	if msg := recv(t, c); msg.Type != "error" {
+		t.Fatalf("signalling an exited panel should error, got %+v", msg)
+	}
+}
+
+// pinnedOf maps panel id to its Pinned flag, for asserting a snapshot.
+func pinnedOf(panels []proto.Panel) map[string]bool {
+	out := make(map[string]bool, len(panels))
+	for _, p := range panels {
+		out[p.ID] = p.Pinned
+	}
+	return out
+}
+
 // TestShellPanelUsesDefaultDir confirms a shell panel with no directory runs in
 // the configured default workdir, not the directory the daemon was launched in.
 func TestShellPanelUsesDefaultDir(t *testing.T) {

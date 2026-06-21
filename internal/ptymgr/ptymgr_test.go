@@ -5,9 +5,37 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
+
+// TestSignalKillsProcessGroup checks Signal reaches a panel's process: a SIGKILL
+// ends the shell, and the close callback fires.
+func TestSignalKillsProcessGroup(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	m := New()
+	closed := make(chan string, 1)
+	m.OnClose(func(id string) { closed <- id })
+	if err := m.Start("1", ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer m.Stop("1")
+
+	m.Signal("1", syscall.SIGKILL)
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("SIGKILL should end the panel's process")
+	}
+}
+
+// TestSignalUnknownIDSafe confirms signalling an unknown or exited panel is a
+// harmless no-op rather than a panic.
+func TestSignalUnknownIDSafe(t *testing.T) {
+	m := New()
+	m.Signal("nope", syscall.SIGTERM) // must not panic
+}
 
 func TestStreamsOutputAndForwardsInput(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
@@ -43,6 +71,49 @@ func TestStreamsOutputAndForwardsInput(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("did not see the echoed output")
+}
+
+// TestSetRingCapTrimsLiveRing checks SetRingCap shrinks the replay buffer under a
+// running fleet: a process keeps streaming, and once its retained output crosses
+// the new, smaller cap the snapshot is trimmed to it — the hot-reload path, no
+// restart.
+func TestSetRingCapTrimsLiveRing(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	m := New() // starts at DefaultRingCap
+	if err := m.Start("1", ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer m.Stop("1")
+
+	// Shrink the buffer well below the default, then drive enough output past it.
+	m.SetRingCap(minRingCap)
+	m.Resize("1", 24, 80)
+	m.Write("1", []byte("for i in $(seq 1 5000); do echo ring-line-$i; done\n"))
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if n := len(m.Snapshot("1")); n > minRingCap*2 {
+			t.Fatalf("ring should be trimmed to the new cap, held %d bytes", n)
+		} else if strings.Contains(string(m.Snapshot("1")), "ring-line-5000") {
+			return // streamed under the smaller cap, trimmed to it
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("did not see the tail output under the shrunken ring")
+}
+
+// TestSetRingCapResetsToDefault checks a non-positive cap restores the built-in
+// default and a tiny cap is floored at minRingCap.
+func TestSetRingCapResetsToDefault(t *testing.T) {
+	m := New()
+	m.SetRingCap(8)
+	if m.ringCap != minRingCap {
+		t.Fatalf("a tiny cap should floor at minRingCap, got %d", m.ringCap)
+	}
+	m.SetRingCap(0)
+	if m.ringCap != DefaultRingCap {
+		t.Fatalf("a zero cap should reset to DefaultRingCap, got %d", m.ringCap)
+	}
 }
 
 // TestStartCmdRunsArgsInDir checks StartCmd honours the working directory and the

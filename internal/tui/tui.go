@@ -73,6 +73,7 @@ const (
 	modeKeyMap         // the editable key map (C-t k)
 	modeHelp           // the read-only key list for a view (?)
 	modePanelConfig
+	modeSignal // the send-signal picker (s / C-t s)
 	modeZoom
 	modeGroupZoom
 )
@@ -102,6 +103,7 @@ type model struct {
 	allowNameConflict bool      // let two work items share a name (server enforces; kept to round-trip config)
 	bellEnabled       bool      // ring the terminal bell when a panel needs you (toggled in the key map)
 	pendingClose      bool      // a close is awaiting y/n confirmation
+	pendingRestart    bool      // a force-restart is awaiting y/n confirmation
 	now               time.Time // wall clock shown in the footer, ticked every second
 
 	cpuPct   float64 // system-wide CPU load %, sampled each tick for the footer
@@ -127,6 +129,11 @@ type model struct {
 	renameID    string // panel id being renamed via inputRename ("" if a group)
 	renameGroup string // group being renamed via inputRename ("" if a panel)
 
+	signalFrom    mode     // the view the signal picker was opened from, restored on esc / after sending
+	signalTargets []string // panel ids the chosen signal is delivered to
+	signalScope   string   // human label of the target(s), shown in the picker
+	signalCursor  int      // highlighted row in the signal picker (last row is "other…")
+
 	zoomID       string           // panel being zoomed (modeZoom)
 	zoomTitle    string           // its title, for the zoom footer
 	zoomArmed    bool             // prefix pressed inside a zoom, awaiting the verb
@@ -141,8 +148,7 @@ type model struct {
 	groupArmed      bool                        // prefix pressed in the split, awaiting an escape
 	groupInteract   bool                        // keys drive the focused tile in place (i), no zoom
 	groupCols       int                         // tile columns; 0 = auto-fit to the window
-	groupPinned     map[string]bool             // member ids pinned to a live tile in this view (seeded from pinned on enter)
-	pinned          map[string]bool             // panel ids pinned, persisted across views so a group reopens with them shown
+	groupPinned     map[string]bool             // member ids pinned to a live tile, derived from the fleet's server-owned Pinned flags
 	groupEmus       map[string]*vt.SafeEmulator // live emulator per member tile
 	zoomGroupOrigin string                      // group to return to from a single zoom, "" if none
 
@@ -162,6 +168,7 @@ const (
 	inputAgentDir                 // the workdir for a new agent panel
 	inputGroupName                // naming a new group from the marked panels
 	inputRename                   // renaming the selected panel or group
+	inputSignalName               // free-form signal name/number for the picker's "other…"
 )
 
 // RestartRequested reports whether the cockpit exited because the user asked to
@@ -173,25 +180,34 @@ func (m model) RestartRequested() bool { return m.restart }
 // is filled by the server's first snapshot, which arrives right after the hello
 // handshake — the server owns the panels now.
 func New(c *client.Client, appVersion string) tea.Model {
-	p := loadPrefs()
-	return model{
-		client:            c,
-		appVersion:        appVersion,
-		mode:              modeDashboard,
-		status:            "attaching…",
-		endpoint:          c.Endpoint(),
-		confirmClose:      p.confirmClose,
-		allowNameConflict: p.allowNameConflict,
-		bellEnabled:       p.bellEnabled,
-		now:               time.Now(),
-		prefixKey:         p.prefix,
-		binds:             p.binds,
-		shellPath:         p.shellPath,
-		workdir:           p.workdir,
-		defaultAgent:      p.defaultAgent,
-		agents:            p.agents,
-		replayKB:          p.replayKB,
+	m := model{
+		client:     c,
+		appVersion: appVersion,
+		mode:       modeDashboard,
+		status:     "attaching…",
+		endpoint:   c.Endpoint(),
+		now:        time.Now(),
 	}
+	return m.applyPrefs(loadPrefs())
+}
+
+// applyPrefs overlays a freshly loaded prefs onto the model — the in-place client
+// reload. It refreshes only the settings the cockpit owns (the leader key, the
+// key map, the toggles, and the panel defaults); live view state — the mode, the
+// fleet, a zoom or split and its emulators — carries on untouched, so reloading
+// never disturbs what you are watching.
+func (m model) applyPrefs(p prefs) model {
+	m.prefixKey = p.prefix
+	m.binds = p.binds
+	m.confirmClose = p.confirmClose
+	m.allowNameConflict = p.allowNameConflict
+	m.bellEnabled = p.bellEnabled
+	m.shellPath = p.shellPath
+	m.workdir = p.workdir
+	m.defaultAgent = p.defaultAgent
+	m.agents = p.agents
+	m.replayKB = p.replayKB
+	return m
 }
 
 // editPrefix is the editIdx sentinel meaning the leader key is being rebound.
@@ -512,6 +528,9 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		}
 		m.pruneMarks()
 		if m.mode == modeGroupZoom {
+			// Re-derive the pin set from the fresh, server-owned flags before the
+			// tiles reconcile, so a pin toggled by another client lands here too.
+			m.groupPinned = pinsForMembers(m.groupMembers())
 			m.reconcileGroupTiles(focusID)
 		}
 		m.refreshAttention()
@@ -603,6 +622,11 @@ func (m *model) takeBell() tea.Cmd {
 func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := k.String()
 
+	// The send-signal picker owns the keyboard until a signal is chosen or esc.
+	if m.mode == modeSignal {
+		return m.handleSignalKey(key)
+	}
+
 	// A text-input overlay is open: route the keystroke to it.
 	if m.input != inputNone {
 		return m.handleInput(k)
@@ -641,6 +665,20 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "close cancelled"
 		}
+		return m, nil
+	}
+
+	// A force-restart is waiting on a y/n answer. It tears down the daemon and the
+	// whole fleet, so it always confirms; only an explicit yes goes through.
+	if m.pendingRestart {
+		m.pendingRestart = false
+		if key == "y" || key == "enter" {
+			m.restart = true
+			m.quitting = true
+			m.status = "restarting the server…"
+			return m, tea.Quit
+		}
+		m.status = "restart cancelled"
 		return m, nil
 	}
 
@@ -983,6 +1021,8 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		return m.commitGroup(buf), nil
 	case inputRename:
 		return m.commitRename(buf), nil
+	case inputSignalName:
+		return m.commitOtherSignal(buf)
 	}
 	return m, nil
 }
@@ -1167,6 +1207,29 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 			m.sendf(proto.Command{Action: "panel.purge"})
 			m.status = fmt.Sprintf("purging %d exited panel(s)", n)
 		}
+	case actSignal:
+		// From the dashboard the target is the selection: one panel, or every live
+		// member of a group folded into the selected card. Exited panels are left
+		// out, so the picker's count is what will actually be delivered.
+		it, ok := m.selectedItem()
+		if !ok {
+			m.status = "no panel to signal"
+			return m, nil
+		}
+		members := it.members
+		if it.kind == itemPanel {
+			members = []panel.Panel{it.panel}
+		}
+		ids := liveIDs(members)
+		if len(ids) == 0 {
+			m.status = "no live panel to signal"
+			return m, nil
+		}
+		scope := it.title()
+		if it.kind == itemGroup {
+			scope = fmt.Sprintf("%s (%d panels)", it.name, len(ids))
+		}
+		return m.openSignalPicker(modeDashboard, ids, scope), nil
 	case actDashboard:
 		m.mode = modeDashboard
 		m.cursor = 0
@@ -1182,10 +1245,19 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		m.cursor = 0
 		m.status = "panel config"
 	case actRestart:
-		m.restart = true
-		m.quitting = true
-		m.status = "restarting the server…"
-		return m, tea.Quit
+		// A force-restart stops the daemon and starts a fresh one, ending every
+		// panel it owns — so confirm before pulling the rug.
+		m.pendingRestart = true
+		m.status = "force-restart the server? this ends every panel · (y/n)"
+		return m, nil
+	case actReload:
+		// Tell the daemon to re-read its config in place (the fleet keeps running),
+		// then re-read the cockpit's own prefs so the key map, toggles, and panel
+		// defaults all update live — no detach, no restart.
+		m.sendf(proto.Command{Action: "server.reload"})
+		m = m.applyPrefs(loadPrefs())
+		m.status = "config reloaded · backend + cockpit"
+		return m, nil
 	case actDetach:
 		m.quitting = true
 		return m, tea.Quit
@@ -1312,6 +1384,16 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if b, ok := m.lookupCmd(key); ok && b.act == actHelp { // C-t ? → the key list
 			return m.openHelp(modeZoom), nil
+		}
+		if b, ok := m.lookupCmd(key); ok && b.act == actReload { // C-t R → reload config
+			return m.runAction(actReload)
+		}
+		if b, ok := m.lookupCmd(key); ok && b.act == actSignal { // C-t s → signal this panel
+			if m.zoomExited {
+				m.status = "panel has exited — nothing to signal"
+				return m, nil
+			}
+			return m.openSignalPicker(modeZoom, []string{m.zoomID}, m.zoomTitle), nil
 		}
 		return m, nil
 	}
@@ -1653,6 +1735,8 @@ func (m model) render() string {
 		body = m.keyMapView()
 	case m.mode == modePanelConfig:
 		body = m.panelConfigView()
+	case m.mode == modeSignal:
+		body = m.signalPickerView()
 	default:
 		body = m.dashboardView()
 	}
@@ -2003,12 +2087,14 @@ func (m model) helpContent() (title string, body []string) {
 			{"Navigation", kc("S-←→"), "reorder the focused panel"},
 			{"Navigation", kc(pfx) + " " + kc(keyScroll), "scroll mode · the focused panel (↑↓ line, b/Spc page)"},
 			{"Work items", kc(keyLabel(keyPin)), "pin / unpin the focused panel to a live tile"},
+			{"Work items", kc(keyLabel(keySignal)) + " " + kc(keyLabel(keySignalAll)), "signal the focused panel · the whole group"},
 			{"Work items", kc(keyLabel(keyRemove)), "remove the focused panel from the group"},
 			{"View", kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
 			{"View", kc(dash) + " " + kc("esc"), "back to the dashboard"},
 			{"View", kc(pfx) + " " + kc(keyLabel(keyInteract)), "stop interacting (while in interact)"},
 			{"View", kc(pfx) + " " + kc(dash), "dashboard (works in every view)"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), "edit the key map"},
+			{"Session", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actReload))), "reload config (backend + cockpit)"},
 			{"Session", kc(pfx) + " " + kc(detach), "detach (server keeps running)"},
 		}
 	case modeZoom:
@@ -2017,10 +2103,12 @@ func (m model) helpContent() (title string, body []string) {
 			{"Navigation", kc("type"), "drive the program directly (PgUp/PgDn included)"},
 			{"Navigation", kc(pfx) + " " + kc(keyScroll), "scroll mode · ↑↓ line, b/Spc page, esc exits"},
 			{"Navigation", kc(pfx) + " " + kc(pfx), "send a literal " + pfx},
+			{"Panels", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actSignal))), "send a signal to this panel"},
 			{"View", kc(pfx) + " " + kc(dash), "back to the dashboard"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actGroupView))), "back to the group view"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), "edit the key map"},
+			{"Session", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actReload))), "reload config (backend + cockpit)"},
 			{"Session", kc(pfx) + " " + kc(detach), "detach (server keeps running)"},
 		}
 	default: // dashboard — single keys for commands, C-t for the escapes
@@ -2319,6 +2407,8 @@ func (m model) inputView() string {
 		title, prompt, action = "NEW GROUP", "work-item name", "create"
 	case inputRename:
 		title, prompt, action = "RENAME", "new name", "save"
+	case inputSignalName:
+		title, prompt, action = "SEND SIGNAL", "signal name or number  (e.g. WINCH, TSTP, 28)", "send"
 	}
 
 	field := lipgloss.NewStyle().Width(46).Foreground(colInk).Background(colSurface).Render("› " + m.inputBuf + "▌")

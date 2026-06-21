@@ -91,6 +91,11 @@ type Panel struct {
 
 	Activity string // short status line, e.g. "running · 3m"
 	Spark    string // output-rate sparkline over the recent window, e.g. "▂▃▅▇▆▃▁"
+
+	// Pinned marks the panel as promoted to a live tile in its group's split
+	// view. The server owns the flag and reports it to every frontend, so a pin
+	// survives a frontend restart and is shared across clients.
+	Pinned bool
 }
 
 // IsAgent reports whether the panel runs an agent CLI rather than a shell.
@@ -106,6 +111,7 @@ func FromProto(p proto.Panel) Panel {
 		Group:    p.Group,
 		Activity: p.Activity,
 		Spark:    p.Spark,
+		Pinned:   p.Pinned,
 	}
 }
 
@@ -119,5 +125,6 @@ func (p Panel) ToProto() proto.Panel {
 		Group:    p.Group,
 		Activity: p.Activity,
 		Spark:    p.Spark,
+		Pinned:   p.Pinned,
 	}
 }

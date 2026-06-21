@@ -331,7 +331,7 @@ func (m model) zoomGroup(it dashItem) model {
 	m.scrollOff = 0 // open at the live bottom
 	m.scrolling = false
 	m.groupCols = 0 // auto-fit until the user dials columns in
-	m.groupPinned = m.pinsForMembers(it.members)
+	m.groupPinned = pinsForMembers(it.members)
 	if only, ok := singlePinned(it.members, m.groupPinned); ok {
 		m = m.zoomInto(only)
 		m.zoomGroupOrigin = it.name // prefix-g pops back to the split
@@ -343,15 +343,13 @@ func (m model) zoomGroup(it dashItem) model {
 	return m
 }
 
-// pinsForMembers builds a view's pin set from the persistent pins, limited to the
-// group's current members so a stale id from a closed panel never haunts a tile.
-func (m model) pinsForMembers(members []panel.Panel) map[string]bool {
-	if len(m.pinned) == 0 {
-		return nil
-	}
+// pinsForMembers builds a view's pin set from the members' server-owned Pinned
+// flags. The set is keyed by id and confined to the given members, so a stale id
+// from a closed panel never haunts a tile.
+func pinsForMembers(members []panel.Panel) map[string]bool {
 	pins := map[string]bool{}
 	for _, p := range members {
-		if m.pinned[p.ID] {
+		if p.Pinned {
 			pins[p.ID] = true
 		}
 	}

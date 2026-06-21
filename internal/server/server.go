@@ -20,6 +20,7 @@ import (
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/ptymgr"
+	"github.com/cmj0121/baton/internal/signals"
 )
 
 // statsInterval is how often the server samples host CPU/memory for the footer.
@@ -43,6 +44,8 @@ type Server struct {
 	replayBytes       int    // per-panel replay buffer; 0 keeps the ptymgr default
 	defaultDir        string // workdir for a panel that asks for none; empty → the user's home
 	version           string // the server's build version, reported in the welcome
+
+	onReload func() // invoked on a server.reload command; re-reads config and Reloads
 
 	mu      sync.Mutex
 	seq     int
@@ -102,6 +105,27 @@ func New(ln net.Listener, opts ...Option) *Server {
 	s.pty.OnOutput(s.routeOutput)
 	s.pty.OnClose(s.onPanelExit)
 	return s
+}
+
+// OnReload registers the handler a server.reload command runs — the in-cockpit
+// reload, which re-reads the config and calls Reload. It shares the routine the
+// SIGHUP path uses, so a cockpit reload and an external `kill -HUP` do the same
+// thing. Set it once, before Serve.
+func (s *Server) OnReload(fn func()) { s.onReload = fn }
+
+// Reload applies the hot-reloadable settings from a freshly read config without
+// restarting the daemon or disturbing a single live panel — the SIGHUP path. The
+// name-conflict policy, the default workdir, and the per-panel replay buffer can
+// all change under a running fleet; settings fixed at construction (the listener,
+// the build version) are left alone. A replayBytes of zero resets the buffer to
+// its built-in default.
+func (s *Server) Reload(allowNameConflict bool, defaultDir string, replayBytes int) {
+	s.mu.Lock()
+	s.allowNameConflict = allowNameConflict
+	s.defaultDir = defaultDir
+	s.mu.Unlock()
+	s.pty.SetRingCap(replayBytes)
+	log.Info().Bool("allow_name_conflict", allowNameConflict).Str("default_dir", defaultDir).Int("replay_bytes", replayBytes).Msg("settings reloaded")
 }
 
 // onPanelExit marks a panel exited when its process ends on its own, notifies
@@ -387,6 +411,25 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			return
 		}
 		s.broadcast(s.panelsMsg())
+	case "panel.pin", "panel.unpin":
+		if err := s.setPinned(targetIDs(cmd), cmd.Action == "panel.pin"); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		s.broadcast(s.panelsMsg())
+	case "panel.signal":
+		// Delivering a signal does not change any panel struct; an exit it triggers
+		// flows back through onPanelExit, so there is nothing to broadcast here.
+		if err := s.signalPanels(targetIDs(cmd), cmd.Signal); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+	case "server.reload":
+		// Re-read the config and apply it in place — the cockpit's reload action.
+		// The fleet keeps running; only the tunable settings change.
+		if s.onReload != nil {
+			s.onReload()
+		}
 	case "panel.attach":
 		s.attach(cc, cmd.ID)
 	case "panel.detach":
@@ -409,13 +452,13 @@ func (s *Server) createPanel(kind, path string, args []string, dir string) error
 	if kind == "" {
 		kind = proto.KindShell
 	}
-	if dir == "" {
-		dir = s.defaultDir // empty still, so ptymgr falls back to the user's home
-	}
 
 	s.mu.Lock()
 	s.seq++
 	id := fmt.Sprintf("%d", s.seq)
+	if dir == "" {
+		dir = s.defaultDir // read under the lock so a SIGHUP reload cannot race it; empty still falls back to home
+	}
 	s.mu.Unlock()
 
 	switch kind {
@@ -751,6 +794,82 @@ func (s *Server) movePanels(ids []string, index int) error {
 	s.panels = out
 
 	log.Info().Int("panels", len(block)).Int("index", index).Msg("panels reordered")
+	return nil
+}
+
+// targetIDs is the panels a command addresses: the IDs list, falling back to the
+// single ID for a one-panel action. Shared by pin/unpin and signal.
+func targetIDs(cmd proto.Command) []string {
+	if len(cmd.IDs) > 0 {
+		return cmd.IDs
+	}
+	if cmd.ID != "" {
+		return []string{cmd.ID}
+	}
+	return nil
+}
+
+// signalPanels delivers the named signal to every listed panel's process group —
+// one command signals a whole group at once. The name (or number) must be one the
+// shared signals table resolves. Targets are validated against the fleet under the
+// lock; an exited panel is skipped — its process is gone, so signalling it would
+// be a silent no-op that still counted toward "sent". It errors only when no live
+// panel matched, so the cockpit's reported count is the count actually delivered.
+func (s *Server) signalPanels(ids []string, name string) error {
+	sig, ok := signals.Lookup(name)
+	if !ok {
+		return fmt.Errorf("unknown signal %q", name)
+	}
+	if len(ids) == 0 {
+		return fmt.Errorf("panel.signal needs at least one panel")
+	}
+
+	s.mu.Lock()
+	var targets []string
+	for _, id := range ids {
+		if i := s.indexLocked(id); i >= 0 && s.panels[i].State != panel.Exited {
+			targets = append(targets, id)
+		}
+	}
+	s.mu.Unlock()
+	if len(targets) == 0 {
+		return fmt.Errorf("no live panel matched the given ids")
+	}
+
+	for _, id := range targets {
+		s.pty.Signal(id, sig)
+	}
+	log.Info().Str("signal", name).Int("panels", len(targets)).Msg("signal sent")
+	return nil
+}
+
+// setPinned marks every listed panel pinned (or not), the server-owned flag the
+// group split reads to promote a member to a live tile. Pins live with the panel
+// here — the single source of truth — so they survive a frontend restart and are
+// shared across clients. Ids that match no panel are skipped; it errors only when
+// none matched.
+func (s *Server) setPinned(ids []string, pinned bool) error {
+	if len(ids) == 0 {
+		return fmt.Errorf("panel.pin needs at least one panel")
+	}
+	want := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for i := range s.panels {
+		if _, ok := want[s.panels[i].ID]; ok {
+			s.panels[i].Pinned = pinned
+			n++
+		}
+	}
+	if n == 0 {
+		return fmt.Errorf("no panel matched the given ids")
+	}
+	log.Info().Int("panels", n).Bool("pinned", pinned).Msg("panels pinned")
 	return nil
 }
 

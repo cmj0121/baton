@@ -23,11 +23,13 @@ const (
 	keyNewAgent    = "A" // spawn an agent panel (shift+a)
 	keyClose       = "w"
 	keyPurge       = "x"
+	keySignal      = "s" // open the send-signal picker for the selection / panel / group
 	keyHelp        = "?" // view the key list for the current view
 	keyEditMap     = "k" // edit the key map (prefix only: C-t k)
 	keyPanelConfig = "P" // shift+p
 	keyScroll      = "[" // enter scroll mode (prefix only: C-t [), tmux-style
 	keyRestart     = "S" // shift+s
+	keyReload      = "R" // shift+r — reload config (backend + cockpit), fleet kept
 	keyDetach      = "q"
 
 	keyMark    = "g" // mark / unmark the selected item
@@ -40,9 +42,10 @@ const (
 	keyDashboard = "d" // C-t d → the dashboard
 	keyGroupView = "g" // C-t g → the group view (the split, or back from a zoom)
 
-	keyRemove   = "x" // in the group split: remove the focused member from the group
-	keyInteract = "i" // in the group split: drive the focused tile in place, no zoom
-	keyPin      = "p" // in the group split: pin/unpin the focused member to a live tile
+	keyRemove    = "x" // in the group split: remove the focused member from the group
+	keyInteract  = "i" // in the group split: drive the focused tile in place, no zoom
+	keyPin       = "p" // in the group split: pin/unpin the focused member to a live tile
+	keySignalAll = "S" // in the group split: signal every member (bare s signals the focused one)
 
 	keyCtrlC = "ctrl+c" // captured in command mode — exit is the detach binding only
 	keyCtrlE = "ctrl+e" // captured in command mode — exit is the detach binding only
@@ -71,9 +74,11 @@ const (
 	actNewAgent
 	actClose
 	actPurge
+	actSignal
 	actHelp
 	actPanelConfig
 	actRestart
+	actReload
 	actDetach
 
 	actMark
@@ -118,6 +123,7 @@ var bindings = []binding{
 	{"new-agent", keyNewAgent, "spawn an agent panel in a workdir", actNewAgent, "Panels"},
 	{"close", keyClose, "close the selected panel", actClose, "Panels"},
 	{"purge-exited", keyPurge, "purge all exited panels", actPurge, "Panels"},
+	{"signal", keySignal, "send a signal to the panel(s)", actSignal, "Panels"},
 
 	{"mark", keyMark, "mark a panel for grouping", actMark, "Work items"},
 	{"group", keyGroup, "group the marked panels", actGroup, "Work items"},
@@ -133,6 +139,7 @@ var bindings = []binding{
 	{"group-view", keyGroupView, "go to the group view (prefix)", actGroupView, "View"},
 
 	{"restart", keyRestart, "force-restart the server", actRestart, "Session"},
+	{"reload", keyReload, "reload config (backend + cockpit)", actReload, "Session"},
 	{"detach", keyDetach, "detach (server keeps running)", actDetach, "Session"},
 }
 
