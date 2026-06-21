@@ -128,6 +128,18 @@ server, so the menu and the accepted set cannot drift. **Reload.** `C-t R` (or a
 config in place — the name policy, default workdir, and replay buffer change under a running fleet, no restart, no panel
 lost.
 
+**Persistence and respawn.** The daemon survives its own restart. On every structural change it writes the fleet to a
+per-session **state file** (`internal/state`, derived from the socket path like the pid file, one daemon-per-session) —
+each panel's immutable spawn spec (command, args, workdir), group membership, pins, order, the id counter, and each
+group's visible-tile count. Writes are coalesced through a one-deep dirty channel and flushed off the hot lock by a saver
+goroutine; the `SIGINT`/`SIGTERM` handler calls `SaveNow` before exit, so the last action survives a clean shutdown even
+though `os.Exit` skips the saver. Saves are atomic and durable (temp file, fsync, rename, fsync the parent dir); a load
+never hard-fails boot — a missing file is a clean first run, and an unparsable or newer-schema file is renamed aside
+(`.corrupt-<ts>`) rather than wedging the daemon. Restore is deliberately **inert**: every panel comes back as an exited
+dead slot, no process auto-respawned (shells or agents alike), and the id counter resumes past the highest restored id so
+a new panel can never collide. The `panel.respawn` action (the dashboard `r` key) re-runs one on demand from its retained
+spec; closing or purging a panel drops its spec for good.
+
 **Interact mode.** Pressing `i` hands the keyboard to the focused tile so you can drive its program _in place_, without
 the full-screen zoom — the tile glows green and wears a keyboard badge, and every keystroke is forwarded to that panel.
 Like a zoom, the prefix is the only way out: `C-t i` (or `C-t g`) returns to navigation, `C-t d` leaves for the

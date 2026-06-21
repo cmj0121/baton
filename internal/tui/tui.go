@@ -1275,6 +1275,19 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		} else {
 			m.closeSelected()
 		}
+	case actRespawn:
+		// Re-run the focused panel when it is a restored (or crashed) dead slot. Only a
+		// single exited panel is a valid target; a group card or a live panel is not.
+		it, ok := m.selectedItem()
+		switch {
+		case !ok || it.kind != itemPanel:
+			m.status = "no panel to re-run"
+		case it.panel.State != panel.Exited:
+			m.status = "panel is still running"
+		default:
+			m.sendf(proto.Command{Action: "panel.respawn", ID: it.panel.ID})
+			m.status = "re-running " + it.panel.Title
+		}
 	case actPurge:
 		if n := m.countState(panel.Exited); n == 0 {
 			m.status = "no exited panels to purge"

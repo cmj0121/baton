@@ -204,6 +204,25 @@ func runServer() error {
 		log.Warn().Err(err).Str("pid_file", pidPath).Msg("could not write pid file")
 	}
 
+	// Honour the user's settings from the shared config file; a missing or
+	// unreadable config keeps the strict defaults (unique names, home workdir).
+	// Build the server before the cleanup/signal wiring, so the shutdown handler
+	// can flush the final fleet/layout snapshot through it.
+	cfg, _ := config.Load()
+	rc := reloadableSettings(cfg)
+	stateF := paths.StateFile(sock)
+	opts := []server.Option{
+		server.WithVersion(version),
+		server.WithAllowNameConflict(rc.allowNameConflict),
+		server.WithDefaultDir(rc.defaultDir),
+		server.WithStateFile(stateF),
+	}
+	if rc.replayBytes > 0 {
+		opts = append(opts, server.WithReplayBytes(rc.replayBytes))
+	}
+	srv := server.New(ln, opts...)
+	srv.Restore() // seed the fleet from the last snapshot (all as exited dead slots) before serving
+
 	// Tidy the socket and PID file on the way out, whichever path gets us there:
 	// a SIGINT/SIGTERM (the usual stop, and what baton --force / restart send) or
 	// the server loop returning on its own. sync.Once keeps it to exactly one run
@@ -228,23 +247,10 @@ func runServer() error {
 	go func() {
 		<-sigs
 		log.Info().Msg("shutting down")
+		srv.SaveNow() // flush the last layout before os.Exit skips the saverLoop and the defers
 		cleanup()
 		os.Exit(0)
 	}()
-
-	// Honour the user's settings from the shared config file; a missing or
-	// unreadable config keeps the strict defaults (unique names, home workdir).
-	cfg, _ := config.Load()
-	rc := reloadableSettings(cfg)
-	opts := []server.Option{
-		server.WithVersion(version),
-		server.WithAllowNameConflict(rc.allowNameConflict),
-		server.WithDefaultDir(rc.defaultDir),
-	}
-	if rc.replayBytes > 0 {
-		opts = append(opts, server.WithReplayBytes(rc.replayBytes))
-	}
-	srv := server.New(ln, opts...)
 
 	// reload re-reads the config and applies the hot-reloadable settings to the
 	// live server, leaving the fleet running. Both reload paths share it: a

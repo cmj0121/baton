@@ -50,6 +50,7 @@ rebindable list of the current view.
 |                        | `A`                         | new agent panel                           |
 |                        | `c`                         | new panel (pick the command)              |
 |                        | `w`                         | close the selection                       |
+|                        | `r`                         | re-run the selected exited panel          |
 |                        | `x`                         | purge exited panels                       |
 |                        | `s`                         | send a signal to the selection            |
 |                        | `f`                         | find — filter panels by title / group     |
@@ -112,6 +113,16 @@ system clipboard via OSC52, so it works over SSH with no helper binary.
 **Mouse.** Off by default, so your terminal's own selection and copy stay
 available. Toggle it in the key map (`C-t k`, the settings block); once on, the
 wheel scrolls the scrollback in a zoom or tile and moves the dashboard selection.
+
+**Layout, restart, respawn.** Baton remembers its fleet. The daemon writes the
+layout — each panel's spawn spec (command, args, workdir), group membership,
+pins, order, and every group's visible-tile count — to a per-session state file
+on each change, and rebuilds it on the next start. Restore is inert: panels come
+back as **exited dead slots**, never auto-respawned (shells included). Press
+**`r`** on the dashboard to re-run the selected exited panel from its retained
+spec; closing or purging a panel drops its spec for good. The state file lives
+beside the socket and pid file, so one daemon-per-session owns one layout; an
+unreadable or newer-schema file is renamed aside rather than wedging the daemon.
 
 ## Architecture
 
