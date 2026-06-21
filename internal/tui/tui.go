@@ -120,6 +120,7 @@ type model struct {
 	replayKB     int                            // per-panel replay buffer in KiB, round-tripped so a save never drops it
 	input        inputPurpose                   // active text-input overlay, or inputNone
 	inputBuf     string                         // text typed into the overlay
+	inputHint    string                         // path-completion hint shown under the field (tab), cleared on edit
 	helpFrom     mode                           // the view the key map (?) was opened from, to restore on esc
 	helpScroll   int                            // scroll offset for the read-only help list (it has no cursor)
 
@@ -140,7 +141,8 @@ type model struct {
 	groupArmed      bool                        // prefix pressed in the split, awaiting an escape
 	groupInteract   bool                        // keys drive the focused tile in place (i), no zoom
 	groupCols       int                         // tile columns; 0 = auto-fit to the window
-	groupPinned     map[string]bool             // member ids the user pinned to a live tile in this view
+	groupPinned     map[string]bool             // member ids pinned to a live tile in this view (seeded from pinned on enter)
+	pinned          map[string]bool             // panel ids pinned, persisted across views so a group reopens with them shown
 	groupEmus       map[string]*vt.SafeEmulator // live emulator per member tile
 	zoomGroupOrigin string                      // group to return to from a single zoom, "" if none
 
@@ -838,7 +840,7 @@ func (m model) commitReplayKB(s string) model {
 func (m model) handleInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.Type {
 	case tea.KeyEsc:
-		m.input = inputNone
+		m.input, m.inputHint = inputNone, ""
 		m.status = "cancelled"
 	case tea.KeyEnter:
 		return m.commitInput()
@@ -846,19 +848,122 @@ func (m model) handleInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if r := []rune(m.inputBuf); len(r) > 0 {
 			m.inputBuf = string(r[:len(r)-1])
 		}
+		m.inputHint = ""
+	case tea.KeyCtrlB: // delete the word (path segment) before the cursor
+		m.inputBuf = deleteLastWord(m.inputBuf)
+		m.inputHint = ""
+	case tea.KeyTab: // complete a path input toward an existing directory entry
+		if inputIsPath(m.input) {
+			m.inputBuf, m.inputHint = completePath(m.inputBuf)
+		}
 	case tea.KeySpace:
 		m.inputBuf += " "
+		m.inputHint = ""
 	case tea.KeyRunes:
 		m.inputBuf += string(k.Runes)
+		m.inputHint = ""
 	}
 	return m, nil
+}
+
+// inputIsPath reports whether an overlay edits a filesystem path, so tab
+// completion applies — the new-agent workdir, a new panel's command, and the
+// default shell are all paths; group and rename names are not.
+func inputIsPath(p inputPurpose) bool {
+	switch p {
+	case inputAgentDir, inputNewPanelCmd, inputShellPath:
+		return true
+	}
+	return false
+}
+
+// deleteLastWord trims trailing spaces, then one trailing path separator, then
+// the run up to the previous separator — so Ctrl-B clears a path segment (or a
+// word) at a time, leaving the separator before it in place.
+func deleteLastWord(s string) string {
+	r := []rune(s)
+	i := len(r)
+	for i > 0 && r[i-1] == ' ' {
+		i--
+	}
+	if i > 0 && r[i-1] == '/' {
+		i--
+	}
+	for i > 0 && r[i-1] != ' ' && r[i-1] != '/' {
+		i--
+	}
+	return string(r[:i])
+}
+
+// completePath extends a typed path toward the directory entries that match its
+// final segment. One match completes in full (a directory gains a trailing "/");
+// several share their longest common prefix and the candidates become the hint.
+// It returns the (possibly unchanged) text and a hint to show under the field.
+func completePath(in string) (string, string) {
+	expanded := in
+	if home, err := os.UserHomeDir(); err == nil {
+		switch {
+		case in == "~":
+			expanded = home
+		case strings.HasPrefix(in, "~/"):
+			expanded = filepath.Join(home, in[2:])
+		}
+	}
+
+	dir, base := filepath.Split(expanded)
+	if dir == "" {
+		dir = "."
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return in, "no such directory"
+	}
+	var names []string
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, base) {
+			continue
+		}
+		if e.IsDir() {
+			name += "/"
+		}
+		names = append(names, name)
+	}
+	// The last segment is byte-identical in `in` and `expanded` (only the leading
+	// ~ expands), so its length locates the typed prefix to re-attach.
+	prefix := in[:len(in)-len(base)]
+	switch len(names) {
+	case 0:
+		return in, "no match"
+	case 1:
+		return prefix + names[0], names[0]
+	default:
+		return prefix + longestCommonPrefix(names), strings.Join(names, "  ")
+	}
+}
+
+// longestCommonPrefix returns the longest string that prefixes every entry.
+func longestCommonPrefix(ss []string) string {
+	if len(ss) == 0 {
+		return ""
+	}
+	p := ss[0]
+	for _, s := range ss[1:] {
+		for !strings.HasPrefix(s, p) {
+			p = p[:len(p)-1]
+			if p == "" {
+				return ""
+			}
+		}
+	}
+	return p
 }
 
 // commitInput applies the typed text to whatever opened the overlay.
 func (m model) commitInput() (tea.Model, tea.Cmd) {
 	buf := strings.TrimSpace(m.inputBuf)
 	purpose := m.input
-	m.input = inputNone
+	m.input, m.inputHint = inputNone, ""
 
 	switch purpose {
 	case inputShellPath:
@@ -2220,12 +2325,17 @@ func (m model) inputView() string {
 	legendKey := lipgloss.NewStyle().Foreground(colCyan).Bold(true)
 	legend := legendKey.Render("enter") + mutedStyle.Render(" "+action) + "   " +
 		legendKey.Render("esc") + mutedStyle.Render(" cancel")
+	if inputIsPath(m.input) {
+		legend += "   " + legendKey.Render("tab") + mutedStyle.Render(" complete") +
+			"   " + legendKey.Render("C-b") + mutedStyle.Render(" del word")
+	}
 
-	return configBox(lipgloss.JoinVertical(lipgloss.Left,
-		sectionStyle.Render(spaced(title)), "",
-		mutedStyle.Render(prompt), field,
-		"", legend,
-	))
+	rows := []string{sectionStyle.Render(spaced(title)), "", mutedStyle.Render(prompt), field}
+	if m.inputHint != "" {
+		rows = append(rows, lipgloss.NewStyle().Foreground(colCyan).Width(46).Render(truncate(m.inputHint, 46)))
+	}
+	rows = append(rows, "", legend)
+	return configBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
 
 // onOff renders a boolean as a fixed-width ON/OFF label.
