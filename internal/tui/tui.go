@@ -77,6 +77,7 @@ const (
 	modePanelConfig
 	modeSignal  // the send-signal picker (s / C-t s)
 	modeCommand // the plugin command picker (C-t c)
+	modeGit     // the git menu (C-t g in a zoom)
 	modeZoom
 	modeGroupZoom
 )
@@ -154,6 +155,17 @@ type model struct {
 	commandCursor  int                   // highlighted row in the command picker
 	pluginFooter   string                // a plugin-set persistent footer segment (baton.footer), shown in every view's footer
 
+	// The git menu (C-t g in a zoom, zoom-only). gitTarget is the agent it acts on,
+	// captured at open; gitFrom is the zoom it returns to; gitCursor is the
+	// highlighted row. A confirm (push, worktree-remove) parks in gitConfirm with the
+	// op and, for remove, the path to act on.
+	gitFrom       mode
+	gitTarget     panel.Panel
+	gitCursor     int
+	gitConfirm    bool
+	gitConfirmOp  string // "push" | "remove" — the op awaiting a y/n
+	gitRemovePath string // the worktree path a confirmed remove targets
+
 	zoomID           string           // panel being zoomed (modeZoom)
 	zoomTitle        string           // its title, for the zoom footer
 	zoomEphemeral    bool             // the current zoom is a transient diff panel — dismissing it closes the panel server-side
@@ -194,6 +206,9 @@ const (
 	inputSignalName               // free-form signal name/number for the picker's "other…"
 	inputFilter                   // live dashboard panel filter (f)
 	inputSearch                   // scrollback search term in a zoom / group tile (C-t f)
+	inputGitBranch                // new branch name for the git menu (b)
+	inputGitWorktree              // new-worktree branch name for the git menu (w)
+	inputGitRemove                // worktree path to remove for the git menu (x)
 )
 
 // RestartRequested reports whether the cockpit exited because the user asked to
@@ -741,6 +756,11 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleCommandKey(key)
 	}
 
+	// The git menu owns the keyboard until an op fires, a confirm answers, or esc.
+	if m.mode == modeGit {
+		return m.handleGitKey(key)
+	}
+
 	// A text-input overlay is open: route the keystroke to it.
 	if m.input != inputNone {
 		return m.handleInput(k)
@@ -1168,6 +1188,12 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		}
 	case inputSearch:
 		return m.runSearch(buf), nil
+	case inputGitBranch:
+		return m.commitGitBranch(buf)
+	case inputGitWorktree:
+		return m.commitGitWorktree(buf)
+	case inputGitRemove:
+		return m.commitGitRemove(buf)
 	}
 	return m, nil
 }
@@ -1658,6 +1684,9 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if b, ok := m.lookupCmd(key); ok && b.act == actBack { // C-t b → back one level
 			return m.runAction(actBack)
 		}
+		if key == keyGitMenu { // C-t g → the git menu, on the zoomed agent panel
+			return m.openGitPicker()
+		}
 		return m, nil
 	}
 	if key == m.effPrefix() {
@@ -2073,6 +2102,8 @@ func (m model) render() string {
 		body = m.signalPickerView()
 	case m.mode == modeCommand:
 		body = m.commandPickerView()
+	case m.mode == modeGit:
+		body = m.gitPickerView()
 	default:
 		body = m.dashboardView()
 	}
@@ -2758,6 +2789,12 @@ func (m model) inputView() string {
 		title, prompt, action = "FIND PANELS", "filter by title or group  (live)", "apply"
 	case inputSearch:
 		title, prompt, action = "SEARCH", "find in the scrollback", "find"
+	case inputGitBranch:
+		title, prompt, action = "NEW BRANCH", "branch name  (git checkout -b)", "create"
+	case inputGitWorktree:
+		title, prompt, action = "NEW WORKTREE", "branch name  (worktree + agent)", "create"
+	case inputGitRemove:
+		title, prompt, action = "REMOVE WORKTREE", "worktree path  (then confirm)", "next"
 	}
 
 	field := lipgloss.NewStyle().Width(46).Foreground(colInk).Background(colSurface).Render("› " + m.inputBuf + "▌")

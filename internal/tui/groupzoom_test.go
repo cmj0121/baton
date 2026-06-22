@@ -89,14 +89,19 @@ func TestGroupZoomEnterAndBack(t *testing.T) {
 		t.Fatalf("enter should zoom member 3 with group origin, got mode=%v id=%q origin=%q", m.mode, m.zoomID, m.zoomGroupOrigin)
 	}
 
-	// prefix+g no longer leaves a zoom — the group-view escape is gone, and back
-	// (prefix+b) is the way out. A stray prefix+g just stays put.
+	// prefix+g no longer leaves a zoom — the freed C-t g slot now opens the git
+	// menu on the zoomed agent. esc closes it back to the zoom.
 	nm, _ = m.handleZoomKey(key("ctrl+t")) // arm the prefix
 	m = nm.(model)
 	nm, _ = m.handleZoomKey(key("g"))
 	m = nm.(model)
+	if m.mode != modeGit {
+		t.Fatalf("prefix+g should open the git menu, got mode=%v", m.mode)
+	}
+	nm, _ = m.handleGitKey("esc")
+	m = nm.(model)
 	if m.mode != modeZoom {
-		t.Fatalf("prefix+g should no longer leave the zoom, got mode=%v", m.mode)
+		t.Fatalf("esc should close the git menu back to the zoom, got mode=%v", m.mode)
 	}
 
 	// prefix+b (back) pops back to the group split and forgets the origin.
