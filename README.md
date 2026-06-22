@@ -42,6 +42,7 @@ rebindable list of the current view.
 |                        | `C-t g`                     | go to the group view                      |
 |                        | `C-t [`                     | enter scroll mode                         |
 |                        | `C-t k`                     | edit the key map                          |
+|                        | `C-t c`                     | open the plugin command picker            |
 |                        | `C-t P`                     | panel config (default shell, workdir, …)  |
 |                        | `C-t R`                     | reload config (backend + cockpit)         |
 |                        | `C-t D`                     | diff the selected agent panel             |
@@ -176,6 +177,12 @@ A headless **baton server** (a background daemon) owns all state and every termi
 single Unix domain socket — commands up, events down — so you detach and reattach without losing a thing.
 
 See [docs/SPEC.md](docs/SPEC.md) for the full diagram and interaction model.
+
+## Plugins
+
+A single Lua file (`$HOME/.baton/plug-in.lua`) reshapes baton to your workflow: react to lifecycle events (ping you when
+an agent needs you, chain the next step when one finishes), drive the fleet, add your own commands, and set config — all
+through one `baton` object. See [docs/PLUGIN.md](docs/PLUGIN.md).
 
 ## DDD (Dream-Driven Development)
 
