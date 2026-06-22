@@ -254,6 +254,60 @@ func TestWriteResizeSnapshotUnknownIDSafe(t *testing.T) {
 	}
 }
 
+// TestWriteResizeStopOnClosedFDSafe drives the error branches now that the
+// manager logs instead of discarding: a pane whose master fd is already closed
+// makes Write/Resize/Stop's Close fail, yet each must still return normally and
+// stay a no-op for the caller (best-effort, logged-only). We register the pane on
+// a live (not dead) manager so livePane lets Write/Resize through to the closed
+// fd, which is exactly the failure they must swallow.
+func TestWriteResizeStopOnClosedFDSafe(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	_ = r.Close()
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing write end: %v", err)
+	}
+
+	m := New()
+	// A live pane backed by an already-closed file: livePane returns it (not
+	// dead), so the PTY ops run and hit the closed-fd error path.
+	m.ptys["x"] = &pane{f: w, pid: 0}
+
+	m.Write("x", []byte("data")) // Write on closed fd → logged, no panic
+	m.Resize("x", 24, 80)        // Setsize on closed fd → logged, no panic
+	m.Stop("x")                  // remove's Close on closed fd → logged, no panic
+
+	if _, ok := m.livePane("x"); ok {
+		t.Fatal("Stop should have removed the pane even when Close failed")
+	}
+}
+
+// TestMarkDeadCloseErrorSafe confirms markDead survives a Close failure: the
+// pane is still flagged dead (output retained for replay) and no panic escapes.
+func TestMarkDeadCloseErrorSafe(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	_ = r.Close()
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing write end: %v", err)
+	}
+
+	m := New()
+	m.ptys["x"] = &pane{f: w, pid: 0}
+	m.markDead("x") // Close on closed fd → logged, pane marked dead
+
+	m.mu.Lock()
+	dead := m.ptys["x"].dead
+	m.mu.Unlock()
+	if !dead {
+		t.Fatal("markDead should flag the pane dead even when Close failed")
+	}
+}
+
 func TestStartAndStopShell(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	m := New()
