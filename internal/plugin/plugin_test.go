@@ -18,44 +18,153 @@ type spawnRec struct {
 	args                      []string
 }
 
+// groupRec is one recorded ids+name pair (baton.group / baton.ungroup).
+type groupRec struct {
+	ids  []string
+	name string
+}
+
+// renameRec is one recorded baton.rename.
+type renameRec struct {
+	id, group, name string
+}
+
+// moveRec is one recorded baton.move.
+type moveRec struct {
+	ids   []string
+	index int
+}
+
+// pinRec is one recorded baton.pin / baton.unpin.
+type pinRec struct {
+	ids    []string
+	pinned bool
+}
+
+// signalRec is one recorded baton.signal.
+type signalRec struct {
+	ids  []string
+	name string
+}
+
+// groupShowRec is one recorded baton.group_show.
+type groupShowRec struct {
+	name  string
+	count int
+}
+
 // fakeHost is a stand-in for *server.Server: it records what the baton.* calls
-// drive, so a test can assert the Lua surface lands on the host.
+// drive, so a test can assert the Lua surface lands on the host. Every method
+// records its received arguments; the err* / ret* fields let a test steer the
+// return so it can also assert the failure (nil, msg) and read marshaling paths.
 type fakeHost struct {
-	mu       sync.Mutex
-	spawned  []spawnRec
-	closed   [][]string
-	signals  []string
-	notified []string
-	footer   string
-	panels   []proto.Panel
+	mu sync.Mutex
+
+	spawned    []spawnRec
+	closed     [][]string
+	respawned  []string
+	purgeCalls int
+	signals    []signalRec
+	groups     []groupRec
+	ungroups   []groupRec
+	renames    []renameRec
+	moves      []moveRec
+	pins       []pinRec
+	groupShows []groupShowRec
+	notified   []string
+	footer     string
+
+	// return-value control.
+	panels       []proto.Panel
+	groupViews   []proto.GroupView
+	purgeN       int
+	spawnID      string
+	spawnErr     error
+	closeErr     error
+	respawnErr   error
+	signalErr    error
+	groupErr     error
+	ungroupErr   error
+	renameErr    error
+	moveErr      error
+	pinErr       error
+	groupShowErr error
 }
 
 func (h *fakeHost) Spawn(kind, command string, args []string, dir, group string) (string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.spawned = append(h.spawned, spawnRec{kind, command, dir, group, args})
-	return "p1", nil
+	id := h.spawnID
+	if id == "" {
+		id = "p1"
+	}
+	return id, h.spawnErr
 }
 func (h *fakeHost) Close(ids []string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.closed = append(h.closed, ids)
-	return nil
+	return h.closeErr
 }
-func (h *fakeHost) Respawn(string) error                { return nil }
-func (h *fakeHost) Purge() int                          { return 0 }
-func (h *fakeHost) Group([]string, string) error        { return nil }
-func (h *fakeHost) Ungroup([]string, string) error      { return nil }
-func (h *fakeHost) Rename(string, string, string) error { return nil }
-func (h *fakeHost) Move([]string, int) error            { return nil }
-func (h *fakeHost) SetPinned([]string, bool) error      { return nil }
-func (h *fakeHost) GroupShow(string, int) error         { return nil }
-func (h *fakeHost) GroupInfos() []proto.GroupView       { return nil }
+func (h *fakeHost) Respawn(id string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.respawned = append(h.respawned, id)
+	return h.respawnErr
+}
+func (h *fakeHost) Purge() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.purgeCalls++
+	return h.purgeN
+}
+func (h *fakeHost) Group(ids []string, name string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.groups = append(h.groups, groupRec{ids, name})
+	return h.groupErr
+}
+func (h *fakeHost) Ungroup(ids []string, name string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.ungroups = append(h.ungroups, groupRec{ids, name})
+	return h.ungroupErr
+}
+func (h *fakeHost) Rename(id, group, name string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.renames = append(h.renames, renameRec{id, group, name})
+	return h.renameErr
+}
+func (h *fakeHost) Move(ids []string, index int) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.moves = append(h.moves, moveRec{ids, index})
+	return h.moveErr
+}
+func (h *fakeHost) SetPinned(ids []string, pinned bool) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pins = append(h.pins, pinRec{ids, pinned})
+	return h.pinErr
+}
+func (h *fakeHost) GroupShow(name string, count int) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.groupShows = append(h.groupShows, groupShowRec{name, count})
+	return h.groupShowErr
+}
+func (h *fakeHost) GroupInfos() []proto.GroupView {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.groupViews
+}
 func (h *fakeHost) Signal(ids []string, name string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.signals = append(h.signals, name)
-	return nil
+	h.signals = append(h.signals, signalRec{ids, name})
+	return h.signalErr
 }
 func (h *fakeHost) Notify(msg string) {
 	h.mu.Lock()
