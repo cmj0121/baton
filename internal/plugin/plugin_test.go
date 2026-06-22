@@ -26,6 +26,7 @@ type fakeHost struct {
 	closed   [][]string
 	signals  []string
 	notified []string
+	footer   string
 	panels   []proto.Panel
 }
 
@@ -61,6 +62,11 @@ func (h *fakeHost) Notify(msg string) {
 	defer h.mu.Unlock()
 	h.notified = append(h.notified, msg)
 }
+func (h *fakeHost) SetFooter(text string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.footer = text
+}
 func (h *fakeHost) PanelInfos() []proto.Panel {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -71,6 +77,12 @@ func (h *fakeHost) notifies() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return append([]string(nil), h.notified...)
+}
+
+func (h *fakeHost) footerText() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.footer
 }
 
 // writeLua writes src to a temp .lua file and returns its path.
@@ -232,6 +244,32 @@ func TestMissingFileIsCleanNoop(t *testing.T) {
 	if len(res.Commands) != 0 || res.WantOutput {
 		t.Errorf("missing file should register nothing: %+v want=%v", res.Commands, res.WantOutput)
 	}
+}
+
+// TestTokenFooterExample loads the shipped example plugin, feeds it agent output
+// carrying a token count, and checks it sets the footer — validating both
+// baton.footer and that the example file stays correct.
+func TestTokenFooterExample(t *testing.T) {
+	h := &fakeHost{}
+	p := plugin.New(h)
+	defer p.Close()
+
+	res, err := p.Load("../../examples/token-footer.lua", config.Config{})
+	if err != nil {
+		t.Fatalf("load example: %v", err)
+	}
+	if !res.WantOutput {
+		t.Fatal("the token example registers panel.output, so WantOutput must be true")
+	}
+
+	// Two panels report token counts; the footer shows their sum.
+	p.Dispatch("panel.output", map[string]any{"id": "1", "data": "\x1b[32mused 12,345 tokens\x1b[0m"})
+	p.Dispatch("panel.output", map[string]any{"id": "2", "data": "100 tokens so far"})
+	waitFor(t, func() bool { return h.footerText() == "⊙ 12445 tok" })
+
+	// When a panel exits, its tally drops from the total.
+	p.Dispatch("panel.exit", map[string]any{"id": "1"})
+	waitFor(t, func() bool { return h.footerText() == "⊙ 100 tok" })
 }
 
 // TestLoadErrorIsNonFatal checks a Lua syntax error returns an error but still yields

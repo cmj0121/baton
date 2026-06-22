@@ -83,6 +83,7 @@ type Server struct {
 	onRunCommand func(name string) error
 	clientConfig json.RawMessage
 	pluginCmds   []proto.PluginCommand
+	footerText   string // a plugin-set persistent footer segment (baton.footer); carried on config + pushed live
 
 	mu      sync.Mutex
 	seq     int
@@ -567,9 +568,9 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		// fill its command picker. Empty until a plugin sets them — the client then
 		// just keeps its local config.
 		s.mu.Lock()
-		cfg, cmds := s.clientConfig, s.pluginCmds
+		cfg, cmds, footer := s.clientConfig, s.pluginCmds, s.footerText
 		s.mu.Unlock()
-		send(cc, proto.ServerMsg{Type: "config", Config: cfg, Commands: cmds})
+		send(cc, proto.ServerMsg{Type: "config", Config: cfg, Commands: cmds, Footer: footer})
 	case "command.run":
 		// Invoke a plugin-registered command by name on the Lua worker. The run is
 		// fire-and-forget from the wire's view; any fleet change it makes broadcasts

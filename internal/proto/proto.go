@@ -69,11 +69,12 @@ type PluginCommand struct {
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "diff" | "notice" | "config"
+	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "diff" | "notice" | "config" | "footer"
 	Version   string      `json:"version,omitempty"`    // protocol version, set on "welcome"
 	ServerVer string      `json:"server_ver,omitempty"` // the server's build version, set on "welcome"
 	Error     string      `json:"error,omitempty"`      // set on "error"
 	Notice    string      `json:"notice,omitempty"`     // a plugin-originated transient notice, set on "notice"
+	Footer    string      `json:"footer,omitempty"`     // a plugin-set persistent footer segment, set on "footer" and carried on "config"; empty clears it
 	Panels    []Panel     `json:"panels,omitempty"`     // full snapshot on "panels"; live state/spark refresh on "telemetry"
 	Groups    []GroupView `json:"groups,omitempty"`     // per-group view settings on the "panels" snapshot, alongside Panels
 	ID        string      `json:"id,omitempty"`         // panel id on "output"; the new ephemeral diff panel id on "diff"

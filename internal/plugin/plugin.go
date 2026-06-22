@@ -42,6 +42,7 @@ type Host interface {
 	PanelInfos() []proto.Panel
 	GroupInfos() []proto.GroupView
 	Notify(msg string)
+	SetFooter(text string)
 }
 
 // LoadResult is what a load produced for the daemon to apply: the merged effective

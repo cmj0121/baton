@@ -158,8 +158,42 @@ baton.bind("D", "diff")   -- key → action, client-side binding
 ### Utilities
 
 - `baton.log(level, msg)` — into the daemon log (`info` / `warn` / `debug` / `error`).
-- `baton.notify(msg)` — surface a transient notice to attached cockpits (a toast / bell).
+- `baton.notify(msg)` — surface a **transient** notice to attached cockpits (a toast on the footer status line).
+- `baton.footer(text)` — set a **persistent** footer segment shown in every cockpit; `""` clears it. Unlike a notice it
+  does not fade, so it suits a live readout (a token counter, a build status). The daemon holds the latest value and
+  hands it to a freshly attaching cockpit, so it is the same on every client.
 - The Lua standard library is available, so `os`, `io`, `string`, and friends are in reach (see _Trust_ below).
+
+## Example: used tokens in the footer
+
+A complete plugin lives at [`examples/token-footer.lua`](../examples/token-footer.lua). It watches agent output for a
+token count and shows the fleet-wide total in the footer — the headline use of `panel.output` + `baton.footer`:
+
+```lua
+local used = {} -- panel id -> last token count
+local last = -1
+local function redraw()
+  local total = 0
+  for _, n in pairs(used) do total = total + n end
+  if total ~= last then
+    last = total
+    baton.footer(total > 0 and string.format("⊙ %d tok", total) or "")
+  end
+end
+
+baton.on("panel.output", function(p)
+  for m in p.data:gmatch("(%d[%d,]*)%s*tokens") do  -- adjust the pattern to your agent
+    used[p.id] = tonumber((m:gsub(",", "")))
+  end
+  redraw()
+end)
+
+baton.on("panel.exit", function(p) used[p.id] = nil; redraw() end)
+```
+
+Copy it to `$HOME/.baton/plug-in.lua`, reload with `C-t R`, and the footer carries `⊙ N tok` as your agents work. The
+file itself strips ANSI escapes and only repaints when the total moves; tune `TOKEN_PATTERN` to match how your agent
+prints usage.
 
 ## Config: YAML and Lua together
 

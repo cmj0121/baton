@@ -152,6 +152,7 @@ type model struct {
 	pluginCommands []proto.PluginCommand // commands a Lua plugin registered, pushed by the daemon (config.get); shown in the command picker
 	commandFrom    mode                  // the view the command picker was opened from, restored on esc
 	commandCursor  int                   // highlighted row in the command picker
+	pluginFooter   string                // a plugin-set persistent footer segment (baton.footer), shown in every view's footer
 
 	zoomID           string           // panel being zoomed (modeZoom)
 	zoomTitle        string           // its title, for the zoom footer
@@ -378,6 +379,7 @@ type panelOutputMsg proto.ServerMsg
 type statsEventMsg proto.ServerMsg
 type telemetryEventMsg proto.ServerMsg
 type configEventMsg proto.ServerMsg
+type footerEventMsg proto.ServerMsg
 type connClosedMsg struct{}
 type tickMsg time.Time
 
@@ -416,13 +418,17 @@ func waitConfig(ch chan proto.ServerMsg) tea.Cmd {
 	return waitMsg(ch, func(m proto.ServerMsg) tea.Msg { return configEventMsg(m) })
 }
 
+func waitFooter(ch chan proto.ServerMsg) tea.Cmd {
+	return waitMsg(ch, func(m proto.ServerMsg) tea.Msg { return footerEventMsg(m) })
+}
+
 // tick drives the footer clock, firing once a second.
 func tick() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
 func (m model) Init() tea.Cmd {
-	cmds := []tea.Cmd{waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), waitTelemetry(m.client.Telemetry), waitConfig(m.client.Config), tick()}
+	cmds := []tea.Cmd{waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), waitTelemetry(m.client.Telemetry), waitConfig(m.client.Config), waitFooter(m.client.Footer), tick()}
 	if m.mouseEnabled {
 		cmds = append(cmds, tea.EnableMouseCellMotion) // honour the persisted mouse toggle on attach
 	}
@@ -479,6 +485,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case configEventMsg:
 		m.applyEvent(proto.ServerMsg(msg))
 		return m, waitConfig(m.client.Config)
+
+	case footerEventMsg:
+		m.applyEvent(proto.ServerMsg(msg))
+		return m, waitFooter(m.client.Footer)
 
 	case connClosedMsg:
 		// The backend dropped. Rather than vanish, stay up and alert in the footer
@@ -629,6 +639,9 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 			}
 		}
 		m.pluginCommands = sm.Commands
+		m.pluginFooter = sm.Footer // current footer value, so a fresh attach shows it immediately
+	case "footer":
+		m.pluginFooter = sm.Footer
 	case "notice":
 		// A plugin-originated toast (baton.notify). It rides the transient status line
 		// and fades like any other one-off message.
@@ -2823,6 +2836,16 @@ func (m model) outageCap() string {
 	return seg("◼ BACKEND DOWN", colInk, colRed)
 }
 
+// pluginFooterCap renders the plugin's persistent footer segment (baton.footer),
+// e.g. a live token counter. Empty when no plugin set one, so the footer is
+// unchanged until a plugin opts in. Clipped so a long string never breaks the strip.
+func (m model) pluginFooterCap() string {
+	if m.pluginFooter == "" {
+		return ""
+	}
+	return seg(truncate(m.pluginFooter, 32), colDark, colBrandHi)
+}
+
 // frontendVersion is this build's version, defaulting to "dev" when unset (a
 // zero-value model in tests, or an unstamped build).
 func (m model) frontendVersion() string {
@@ -2858,7 +2881,7 @@ func (m model) statusBar(left, hint string) string {
 	if strings.HasPrefix(m.status, "error") {
 		statusBg = colRed
 	}
-	caps := prefixBadge + m.outageCap() + m.attentionBadge() + stats + clock
+	caps := prefixBadge + m.outageCap() + m.attentionBadge() + m.pluginFooterCap() + stats + clock
 	right := caps
 	if budget := m.width - lipgloss.Width(left) - lipgloss.Width(caps) - 4; budget > 0 {
 		right += seg("● "+truncate(m.status, budget), colInk, statusBg) // "● " + cap padding

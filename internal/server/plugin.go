@@ -77,9 +77,19 @@ func (s *Server) SetPluginCommands(cmds []proto.PluginCommand) {
 // commands without reattaching.
 func (s *Server) PushConfig() {
 	s.mu.Lock()
-	msg := proto.ServerMsg{Type: "config", Config: s.clientConfig, Commands: s.pluginCmds}
+	msg := proto.ServerMsg{Type: "config", Config: s.clientConfig, Commands: s.pluginCmds, Footer: s.footerText}
 	s.mu.Unlock()
 	s.broadcast(msg)
+}
+
+// SetFooter sets the persistent footer segment a plugin shows (baton.footer) and
+// pushes it live to every attached cockpit. An empty string clears it. It is held so
+// a freshly attaching client gets the current value on its config snapshot.
+func (s *Server) SetFooter(text string) {
+	s.mu.Lock()
+	s.footerText = text
+	s.mu.Unlock()
+	s.broadcast(proto.ServerMsg{Type: "footer", Footer: text})
 }
 
 // Notify surfaces a transient notice to every attached cockpit — the backing of the

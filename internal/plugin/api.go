@@ -50,6 +50,7 @@ func (p *Plugin) registerAPI(L *lua.LState) {
 		// utilities
 		"log":    p.luaLog,
 		"notify": p.luaNotify,
+		"footer": p.luaFooter,
 	}
 	for name, fn := range fns {
 		t.RawSetString(name, L.NewFunction(fn))
@@ -267,6 +268,12 @@ func (p *Plugin) luaLog(L *lua.LState) int {
 
 func (p *Plugin) luaNotify(L *lua.LState) int {
 	p.host.Notify(L.CheckString(1))
+	return 0
+}
+
+// luaFooter sets the persistent footer segment; an empty string clears it.
+func (p *Plugin) luaFooter(L *lua.LState) int {
+	p.host.SetFooter(L.CheckString(1))
 	return 0
 }
 
