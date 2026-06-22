@@ -10,6 +10,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -29,6 +30,7 @@ import (
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/paths"
+	"github.com/cmj0121/baton/internal/plugin"
 	"github.com/cmj0121/baton/internal/server"
 	"github.com/cmj0121/baton/internal/tui"
 )
@@ -42,6 +44,7 @@ const daemonEnv = "BATON_DAEMON"
 // CLI is the entire baton command-line surface: a few flags, no commands.
 type CLI struct {
 	Log     string           `short:"l" name:"log" placeholder:"FILE" help:"Write logs to FILE (default: $HOME/.baton/baton.log)."`
+	Plugin  string           `short:"p" name:"plugin" placeholder:"FILE" help:"Load the Lua plugin from FILE (default: $HOME/.baton/plug-in.lua)."`
 	Verbose int              `short:"v" type:"counter" help:"Increase log verbosity (-v debug, -vv trace)."`
 	Force   bool             `short:"f" name:"force" help:"Force-stop any running server for this session and start a fresh one before attaching."`
 	Version kong.VersionFlag `short:"V" help:"Print the version and quit."`
@@ -67,21 +70,22 @@ func main() {
 		kctx.FatalIfErrorf(runServer())
 		return
 	}
-	kctx.FatalIfErrorf(attach(cli.Verbose, logPath, cli.Force))
+	kctx.FatalIfErrorf(attach(cli.Verbose, logPath, cli.Plugin, cli.Force))
 }
 
 // attach starts the session's server if needed, then runs the cockpit. With
-// force, any running server is stopped first so the session comes up fresh.
-func attach(verbose int, logPath string, force bool) error {
+// force, any running server is stopped first so the session comes up fresh. An
+// explicit plugin path is handed to the daemon child through BATON_PLUGIN.
+func attach(verbose int, logPath, pluginPath string, force bool) error {
 	if force {
 		if err := stopDaemon(paths.Socket()); err != nil {
 			return err
 		}
 	}
-	if err := startDaemon(verbose, logPath); err != nil {
+	if err := startDaemon(verbose, logPath, pluginPath); err != nil {
 		return err
 	}
-	return runClient(verbose, logPath)
+	return runClient(verbose, logPath, pluginPath)
 }
 
 // stopDaemon force-stops this session's running daemon, if any, and waits for it
@@ -137,7 +141,7 @@ func setupLogger(verbosity int, logPath string) error {
 
 // startDaemon ensures this session's server is running, launching it in the
 // background if not. Exactly one server runs per login session (one socket).
-func startDaemon(verbose int, logPath string) error {
+func startDaemon(verbose int, logPath, pluginPath string) error {
 	sock := paths.Socket()
 	if alive(sock) {
 		log.Debug().Str("socket", sock).Msg("daemon already running")
@@ -168,6 +172,11 @@ func startDaemon(verbose int, logPath string) error {
 	}
 	proc := exec.Command(exe, args...)
 	proc.Env = append(os.Environ(), daemonEnv+"=1", "BATON_SOCK="+sock)
+	if pluginPath != "" {
+		// The child re-sessions itself and cannot see the parent's flags; carry an
+		// explicit --plugin choice across the re-exec the way BATON_SOCK is carried.
+		proc.Env = append(proc.Env, "BATON_PLUGIN="+pluginPath)
+	}
 	proc.Stdout = logf
 	proc.Stderr = logf
 	proc.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // detach into its own session
@@ -224,6 +233,42 @@ func runServer() error {
 	srv := server.New(ln, opts...)
 	srv.Restore() // seed the fleet from the last snapshot (all as exited dead slots) before serving
 
+	// The Lua plugin subsystem (docs/PLUGIN.md). Wire the server's event sink and
+	// command runner to the plugin's worker before the first load, so a hook a
+	// load-time action triggers is delivered and a command the picker invokes runs.
+	plug := plugin.New(srv)
+	defer plug.Close()
+	srv.SetEventSink(plug.Dispatch)
+	srv.SetRunCommand(plug.RunCommand)
+	pluginPath := paths.PluginFile()
+
+	// applyConfig re-reads the YAML config, (re)runs the plugin on top of it, and
+	// applies the merged effective config: the hot-reloadable server settings, the
+	// output-event gate, the config/commands served to frontends. broadcast pushes
+	// the refreshed config to open cockpits — set on a reload, skipped on first boot
+	// when no client is attached yet.
+	applyConfig := func(broadcast bool) {
+		cfg, err := config.Load()
+		if err != nil {
+			log.Warn().Err(err).Msg("config load failed, using defaults as the plugin base")
+		}
+		res, perr := plug.Load(pluginPath, cfg)
+		if perr != nil {
+			log.Warn().Err(perr).Msg("plugin load error, continuing with what loaded")
+		}
+		rc := reloadableSettings(res.Config)
+		srv.Reload(rc.allowNameConflict, rc.defaultDir, rc.replayBytes, rc.diffCommand)
+		srv.SetOutputEvents(res.WantOutput)
+		if data, mErr := json.Marshal(res.Config); mErr == nil {
+			srv.SetClientConfig(data)
+		}
+		srv.SetPluginCommands(res.Commands)
+		if broadcast {
+			srv.PushConfig()
+		}
+	}
+	applyConfig(false) // before Serve: settle settings, config, and commands from the plugin
+
 	// Tidy the socket and PID file on the way out, whichever path gets us there:
 	// a SIGINT/SIGTERM (the usual stop, and what baton --force / restart send) or
 	// the server loop returning on its own. sync.Once keeps it to exactly one run
@@ -254,18 +299,11 @@ func runServer() error {
 		os.Exit(0)
 	}()
 
-	// reload re-reads the config and applies the hot-reloadable settings to the
-	// live server, leaving the fleet running. Both reload paths share it: a
+	// reload re-reads the config, re-runs the plugin, and applies the hot-reloadable
+	// settings to the live server, leaving the fleet running — then pushes the
+	// refreshed config and commands to open cockpits. Both reload paths share it: a
 	// cockpit server.reload command and an external SIGHUP do the same thing.
-	reload := func() {
-		cfg, err := config.Load()
-		if err != nil {
-			log.Warn().Err(err).Msg("config reload failed, keeping current settings")
-			return
-		}
-		rc := reloadableSettings(cfg)
-		srv.Reload(rc.allowNameConflict, rc.defaultDir, rc.replayBytes, rc.diffCommand)
-	}
+	reload := func() { applyConfig(true) }
 	srv.OnReload(reload)
 
 	// SIGHUP is the conventional reload signal, so `kill -HUP $(cat pidfile)`
@@ -314,7 +352,7 @@ func reloadableSettings(cfg config.Config) reloadable {
 // runClient attaches a TUI cockpit to this session's server. If the cockpit
 // exits asking for a restart (the prefix+S binding), it force-stops the daemon,
 // starts a fresh one, and re-attaches.
-func runClient(verbose int, logPath string) error {
+func runClient(verbose int, logPath, pluginPath string) error {
 	sock := paths.Socket()
 	for {
 		c, err := client.Dial(sock)
@@ -335,7 +373,7 @@ func runClient(verbose int, logPath string) error {
 		if err := stopDaemon(sock); err != nil {
 			return err
 		}
-		if err := startDaemon(verbose, logPath); err != nil {
+		if err := startDaemon(verbose, logPath, pluginPath); err != nil {
 			return err
 		}
 	}

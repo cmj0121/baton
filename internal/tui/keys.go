@@ -44,6 +44,7 @@ const (
 	// The two universal escapes, bound to the prefix in every mode.
 	keyDashboard = "d" // C-t d → the dashboard
 	keyGroupView = "g" // C-t g → the group view (the split, or back from a zoom)
+	keyCommands  = "c" // C-t c → the plugin command picker
 
 	keyRemove    = "x" // in the group split: remove the focused member from the group
 	keyInteract  = "i" // in the group split: drive the focused tile in place, no zoom
@@ -98,6 +99,7 @@ const (
 	actGroupView
 	actEditMap
 	actScroll
+	actCommands
 )
 
 // isEscape reports whether an action is reached after the prefix rather than on a
@@ -105,7 +107,7 @@ const (
 // group-view jumps and the key-map editor work after the prefix in every mode;
 // panel config opens this way from command mode.
 func isEscape(a action) bool {
-	return a == actDashboard || a == actGroupView || a == actEditMap || a == actPanelConfig || a == actScroll
+	return a == actDashboard || a == actGroupView || a == actEditMap || a == actPanelConfig || a == actScroll || a == actCommands
 }
 
 // binding is one editable command: a stable name (used to persist the key), the
@@ -146,6 +148,7 @@ var bindings = []binding{
 	{"scroll", keyScroll, "scroll mode — line / page (prefix)", actScroll, "View"},
 	{"dashboard", keyDashboard, "jump to the dashboard (prefix)", actDashboard, "View"},
 	{"group-view", keyGroupView, "go to the group view (prefix)", actGroupView, "View"},
+	{"commands", keyCommands, "open the plugin command picker (prefix)", actCommands, "View"},
 
 	{"restart", keyRestart, "force-restart the server", actRestart, "Session"},
 	{"reload", keyReload, "reload config (backend + cockpit)", actReload, "Session"},
@@ -183,14 +186,20 @@ func builtinAgent(name string) (config.AgentProfile, bool) {
 
 // loadPrefs reads the config file, returning defaults for anything missing or on
 // any read error (so the cockpit always comes up). Defaults: prefix "ctrl+t",
-// confirm-on-close on, system shell.
+// confirm-on-close on, system shell. It is the cockpit's bootstrap; the daemon then
+// pushes its merged effective config (config.get → prefsFromConfig), which wins.
 func loadPrefs() prefs {
+	cfg, _ := config.Load() // a read error yields a zero cfg → all defaults below
+	return prefsFromConfig(cfg)
+}
+
+// prefsFromConfig projects a config onto the cockpit prefs, layering the file's
+// values over the built-in defaults. Shared by the local bootstrap (loadPrefs) and
+// the daemon-pushed config (the "config" event), so the two can never map a field
+// differently.
+func prefsFromConfig(cfg config.Config) prefs {
 	p := prefs{prefix: keyPrefix, binds: append([]binding(nil), bindings...), confirmClose: true, bellEnabled: true}
 
-	cfg, err := config.Load()
-	if err != nil {
-		return p
-	}
 	if cfg.Prefix != "" {
 		p.prefix = cfg.Prefix
 	}

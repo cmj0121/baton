@@ -3,6 +3,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -74,7 +75,8 @@ const (
 	modeKeyMap         // the editable key map (C-t k)
 	modeHelp           // the read-only key list for a view (?)
 	modePanelConfig
-	modeSignal // the send-signal picker (s / C-t s)
+	modeSignal  // the send-signal picker (s / C-t s)
+	modeCommand // the plugin command picker (C-t c)
 	modeZoom
 	modeGroupZoom
 )
@@ -146,6 +148,10 @@ type model struct {
 	signalTargets []string // panel ids the chosen signal is delivered to
 	signalScope   string   // human label of the target(s), shown in the picker
 	signalCursor  int      // highlighted row in the signal picker (last row is "other…")
+
+	pluginCommands []proto.PluginCommand // commands a Lua plugin registered, pushed by the daemon (config.get); shown in the command picker
+	commandFrom    mode                  // the view the command picker was opened from, restored on esc
+	commandCursor  int                   // highlighted row in the command picker
 
 	zoomID           string           // panel being zoomed (modeZoom)
 	zoomTitle        string           // its title, for the zoom footer
@@ -371,6 +377,7 @@ type eventMsg proto.ServerMsg
 type panelOutputMsg proto.ServerMsg
 type statsEventMsg proto.ServerMsg
 type telemetryEventMsg proto.ServerMsg
+type configEventMsg proto.ServerMsg
 type connClosedMsg struct{}
 type tickMsg time.Time
 
@@ -405,13 +412,17 @@ func waitTelemetry(ch chan proto.ServerMsg) tea.Cmd {
 	return waitMsg(ch, func(m proto.ServerMsg) tea.Msg { return telemetryEventMsg(m) })
 }
 
+func waitConfig(ch chan proto.ServerMsg) tea.Cmd {
+	return waitMsg(ch, func(m proto.ServerMsg) tea.Msg { return configEventMsg(m) })
+}
+
 // tick drives the footer clock, firing once a second.
 func tick() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
 func (m model) Init() tea.Cmd {
-	cmds := []tea.Cmd{waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), waitTelemetry(m.client.Telemetry), tick()}
+	cmds := []tea.Cmd{waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), waitTelemetry(m.client.Telemetry), waitConfig(m.client.Config), tick()}
 	if m.mouseEnabled {
 		cmds = append(cmds, tea.EnableMouseCellMotion) // honour the persisted mouse toggle on attach
 	}
@@ -464,6 +475,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case telemetryEventMsg:
 		m.applyTelemetry(proto.ServerMsg(msg))
 		return m, tea.Batch(m.takeBell(), waitTelemetry(m.client.Telemetry))
+
+	case configEventMsg:
+		m.applyEvent(proto.ServerMsg(msg))
+		return m, waitConfig(m.client.Config)
 
 	case connClosedMsg:
 		// The backend dropped. Rather than vanish, stay up and alert in the footer
@@ -602,6 +617,22 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		m.pendingDiffTitle = ""
 		*m = m.zoomInto(panel.Panel{ID: sm.ID, Title: title, State: panel.Running})
 		m.zoomEphemeral = true
+	case "config":
+		// The daemon pushed its merged effective config (defaults <- YAML <- plugin)
+		// and the plugin command list. Apply the config over the cockpit's own and
+		// refresh the picker; a malformed blob is ignored so a bad plugin never wedges
+		// the frontend. Live view state is untouched, like the C-t R in-place reload.
+		if len(sm.Config) > 0 {
+			var cfg config.Config
+			if err := json.Unmarshal(sm.Config, &cfg); err == nil {
+				*m = m.applyPrefs(prefsFromConfig(cfg))
+			}
+		}
+		m.pluginCommands = sm.Commands
+	case "notice":
+		// A plugin-originated toast (baton.notify). It rides the transient status line
+		// and fades like any other one-off message.
+		m.status = sm.Notice
 	case "error":
 		m.status = "error: " + sm.Error
 	}
@@ -690,6 +721,11 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// The send-signal picker owns the keyboard until a signal is chosen or esc.
 	if m.mode == modeSignal {
 		return m.handleSignalKey(key)
+	}
+
+	// The plugin command picker owns the keyboard until a command runs or esc.
+	if m.mode == modeCommand {
+		return m.handleCommandKey(key)
 	}
 
 	// A text-input overlay is open: route the keystroke to it.
@@ -1417,6 +1453,8 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		return m.startRename(), nil
 	case actGroupView:
 		return m.enterGroupView()
+	case actCommands:
+		return m.openCommandPicker(m.mode), nil
 	}
 	return m, nil
 }
@@ -2001,6 +2039,8 @@ func (m model) render() string {
 		body = m.panelConfigView()
 	case m.mode == modeSignal:
 		body = m.signalPickerView()
+	case m.mode == modeCommand:
+		body = m.commandPickerView()
 	default:
 		body = m.dashboardView()
 	}

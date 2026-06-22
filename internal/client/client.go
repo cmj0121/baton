@@ -26,6 +26,10 @@ type Client struct {
 	Output    chan proto.ServerMsg
 	Stats     chan proto.ServerMsg
 	Telemetry chan proto.ServerMsg
+	// Config delivers the merged effective config + plugin commands (config.get and
+	// reload pushes). It rides its own channel so it never interleaves with the
+	// structural panel stream a frontend counts on.
+	Config chan proto.ServerMsg
 }
 
 // Dial connects to the server at socket, says hello, and starts reading events.
@@ -42,6 +46,7 @@ func Dial(socket string) (*Client, error) {
 		Output:    make(chan proto.ServerMsg, proto.EventBufferSize),
 		Stats:     make(chan proto.ServerMsg, proto.EventBufferSize),
 		Telemetry: make(chan proto.ServerMsg, proto.EventBufferSize),
+		Config:    make(chan proto.ServerMsg, proto.EventBufferSize),
 	}
 	go c.readLoop()
 
@@ -49,6 +54,11 @@ func Dial(socket string) (*Client, error) {
 		_ = conn.Close()
 		return nil, err
 	}
+	// Ask for the merged effective config (defaults <- YAML <- plugin) and the plugin
+	// command list, so the cockpit applies any plugin keymaps/toggles and fills its
+	// command picker. A failure here is non-fatal — the cockpit keeps its local
+	// config and just misses plugin overrides.
+	_ = c.Send(proto.Command{Action: "config.get"})
 	return c, nil
 }
 
@@ -84,6 +94,7 @@ func (c *Client) readLoop() {
 	defer close(c.Output)
 	defer close(c.Stats)
 	defer close(c.Telemetry)
+	defer close(c.Config)
 	dec := json.NewDecoder(c.conn)
 	for {
 		var msg proto.ServerMsg
@@ -107,6 +118,10 @@ func (c *Client) readLoop() {
 			case c.Telemetry <- msg:
 			default:
 			}
+		case "config":
+			// Config/commands ride their own channel so they never interleave with the
+			// structural panel snapshots a frontend counts.
+			c.Config <- msg
 		default:
 			c.Events <- msg
 		}

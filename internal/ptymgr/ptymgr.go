@@ -38,7 +38,7 @@ type Manager struct {
 	ptys     map[string]*pane
 	ringCap  int
 	onOutput func(id string, data []byte)
-	onClose  func(id string)
+	onClose  func(id string, exitCode int)
 }
 
 // Option tunes a Manager at construction.
@@ -83,8 +83,10 @@ func New(opts ...Option) *Manager {
 // before any panels are started.
 func (m *Manager) OnOutput(fn func(id string, data []byte)) { m.onOutput = fn }
 
-// OnClose registers a callback fired when a panel's process exits on its own.
-func (m *Manager) OnClose(fn func(id string)) { m.onClose = fn }
+// OnClose registers a callback fired when a panel's process exits on its own. It
+// carries the process exit code: 0 on a clean exit, the status code on a non-zero
+// exit, and -1 when the wait failed for a reason other than an exit status.
+func (m *Manager) OnClose(fn func(id string, exitCode int)) { m.onClose = fn }
 
 // Spec describes the process behind a panel: the binary, its arguments, and the
 // directory it runs in. The zero value (empty Command) launches the user's shell.
@@ -160,10 +162,17 @@ func (m *Manager) pump(id string, p *pane, cmd *exec.Cmd) {
 			break
 		}
 	}
-	_ = cmd.Wait()
+	exitCode := 0
+	if err := cmd.Wait(); err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			exitCode = ee.ExitCode()
+		} else {
+			exitCode = -1 // waited, but the failure was not an exit status
+		}
+	}
 	m.markDead(id)
 	if m.onClose != nil {
-		m.onClose(id)
+		m.onClose(id, exitCode)
 	}
 }
 

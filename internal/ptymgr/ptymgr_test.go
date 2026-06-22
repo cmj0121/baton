@@ -16,7 +16,7 @@ func TestSignalKillsProcessGroup(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	m := New()
 	closed := make(chan string, 1)
-	m.OnClose(func(id string) { closed <- id })
+	m.OnClose(func(id string, _ int) { closed <- id })
 	if err := m.Start("1", ""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestKillAllKillsEveryLivePanel(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	m := New()
 	closed := make(chan string, 3)
-	m.OnClose(func(id string) { closed <- id })
+	m.OnClose(func(id string, _ int) { closed <- id })
 	for _, id := range []string{"1", "2", "3"} {
 		if err := m.Start(id, ""); err != nil {
 			t.Fatalf("Start %s: %v", id, err)
@@ -196,7 +196,7 @@ func TestOnCloseFiresOnExit(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	m := New()
 	closed := make(chan string, 1)
-	m.OnClose(func(id string) { closed <- id })
+	m.OnClose(func(id string, _ int) { closed <- id })
 
 	if err := m.Start("1", ""); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -217,7 +217,7 @@ func TestSnapshotSurvivesExit(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	m := New()
 	closed := make(chan string, 1)
-	m.OnClose(func(id string) { closed <- id })
+	m.OnClose(func(id string, _ int) { closed <- id })
 
 	if err := m.Start("1", ""); err != nil {
 		t.Fatalf("Start: %v", err)

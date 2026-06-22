@@ -49,6 +49,16 @@ func ConfigFile() string {
 	return filepath.Join(os.Getenv("HOME"), ".baton", "config")
 }
 
+// PluginFile is the user's Lua plugin ($HOME/.baton/plug-in.lua). BATON_PLUGIN
+// overrides it (and is how the daemon child inherits an explicit --plugin choice
+// across the re-exec, since it re-sessions itself).
+func PluginFile() string {
+	if v := os.Getenv("BATON_PLUGIN"); v != "" {
+		return v
+	}
+	return filepath.Join(os.Getenv("HOME"), ".baton", "plug-in.lua")
+}
+
 // EnsureDir creates the directory that holds the given file, with private perms.
 func EnsureDir(file string) error {
 	return os.MkdirAll(filepath.Dir(file), 0o700)
