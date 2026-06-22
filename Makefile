@@ -1,6 +1,6 @@
 SUBDIR :=
 
-.PHONY: all clean lint test run build install uninstall upgrade help $(SUBDIR)
+.PHONY: all clean lint test test-race cover ci run build install uninstall upgrade help $(SUBDIR)
 
 # strip the symbol table (-s) and DWARF debug info (-w), and trim absolute paths,
 # to keep the release binary small and reproducible.
@@ -24,6 +24,14 @@ lint:				# run the go linters
 
 test:				# run test
 	go test ./...
+
+test-race:			# run test with the race detector
+	go test -race ./...
+
+cover:				# run race+coverage and gate each package at 80%
+	./scripts/coverage-gate.sh 80
+
+ci: build lint cover	# local mirror of the CI pipeline (build -> lint -> cover)
 
 run:				# run in the local environment
 	go run ./cmd/baton

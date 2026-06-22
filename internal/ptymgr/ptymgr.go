@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/creack/pty"
+	"github.com/rs/zerolog/log"
 )
 
 // DefaultRingCap is how much recent output is kept per panel for replay on
@@ -183,7 +184,9 @@ func (m *Manager) pump(id string, p *pane, cmd *exec.Cmd) {
 func (m *Manager) markDead(id string) {
 	m.mu.Lock()
 	if p, ok := m.ptys[id]; ok {
-		_ = p.f.Close()
+		if err := p.f.Close(); err != nil {
+			log.Warn().Str("id", id).Err(err).Msg("ptymgr: closing PTY on exit failed")
+		}
 		p.dead = true
 	}
 	m.mu.Unlock()
@@ -239,7 +242,9 @@ func (m *Manager) livePane(id string) (*pane, bool) {
 // exited (dead) panel.
 func (m *Manager) Write(id string, data []byte) {
 	if p, live := m.livePane(id); live {
-		_, _ = p.f.Write(data)
+		if _, err := p.f.Write(data); err != nil {
+			log.Warn().Str("id", id).Int("bytes", len(data)).Err(err).Msg("ptymgr: writing input to PTY failed")
+		}
 	}
 }
 
@@ -250,7 +255,9 @@ func (m *Manager) Write(id string, data []byte) {
 // an unknown or exited (dead) panel, or one with no recorded pid.
 func (m *Manager) Signal(id string, sig syscall.Signal) {
 	if p, live := m.livePane(id); live && p.pid > 0 {
-		_ = syscall.Kill(-p.pid, sig)
+		if err := syscall.Kill(-p.pid, sig); err != nil {
+			log.Warn().Str("id", id).Int("pid", p.pid).Str("signal", sig.String()).Err(err).Msg("ptymgr: signalling panel process group failed")
+		}
 	}
 }
 
@@ -270,7 +277,9 @@ func (m *Manager) KillAll(sig syscall.Signal) int {
 	}
 	m.mu.Unlock()
 	for _, pid := range pids {
-		_ = syscall.Kill(-pid, sig)
+		if err := syscall.Kill(-pid, sig); err != nil {
+			log.Warn().Int("pid", pid).Str("signal", sig.String()).Err(err).Msg("ptymgr: shutdown signal to process group failed")
+		}
 	}
 	return len(pids)
 }
@@ -279,7 +288,9 @@ func (m *Manager) KillAll(sig syscall.Signal) int {
 // (dead) panel.
 func (m *Manager) Resize(id string, rows, cols int) {
 	if p, live := m.livePane(id); live {
-		_ = pty.Setsize(p.f, &pty.Winsize{Rows: clampCell(rows), Cols: clampCell(cols)})
+		if err := pty.Setsize(p.f, &pty.Winsize{Rows: clampCell(rows), Cols: clampCell(cols)}); err != nil {
+			log.Warn().Str("id", id).Int("rows", rows).Int("cols", cols).Err(err).Msg("ptymgr: resizing PTY failed")
+		}
 	}
 }
 
@@ -294,7 +305,9 @@ func (m *Manager) Stop(id string) { m.remove(id) }
 func (m *Manager) remove(id string) {
 	m.mu.Lock()
 	if p, ok := m.ptys[id]; ok {
-		_ = p.f.Close()
+		if err := p.f.Close(); err != nil {
+			log.Warn().Str("id", id).Err(err).Msg("ptymgr: closing PTY on remove failed")
+		}
 		delete(m.ptys, id)
 	}
 	m.mu.Unlock()

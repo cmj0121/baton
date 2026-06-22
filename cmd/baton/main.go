@@ -59,18 +59,31 @@ func main() {
 		kong.Vars{"version": version},
 	)
 
-	logPath := cli.Log
-	if logPath == "" {
-		logPath = paths.LogFile()
-	}
+	logPath := resolveLogPath(cli.Log)
 	kctx.FatalIfErrorf(setupLogger(cli.Verbose, logPath))
 
 	// The daemon child re-executes this same binary with daemonEnv set.
-	if os.Getenv(daemonEnv) == "1" {
+	if isDaemonChild() {
 		kctx.FatalIfErrorf(runServer())
 		return
 	}
 	kctx.FatalIfErrorf(attach(cli.Verbose, logPath, cli.Plugin, cli.Force))
+}
+
+// resolveLogPath picks the log file: the explicit --log flag when set, otherwise
+// the per-session default. An empty flag means "use the default".
+func resolveLogPath(flag string) string {
+	if flag != "" {
+		return flag
+	}
+	return paths.LogFile()
+}
+
+// isDaemonChild reports whether this process is the re-executed daemon child
+// (marked by daemonEnv=1) that runs the server loop rather than attaching a
+// cockpit.
+func isDaemonChild() bool {
+	return os.Getenv(daemonEnv) == "1"
 }
 
 // attach starts the session's server if needed, then runs the cockpit. With
@@ -97,13 +110,9 @@ func stopDaemon(sock string) error {
 	}
 
 	pidPath := paths.PidFile(sock)
-	data, err := os.ReadFile(pidPath)
+	pid, err := readPidFile(pidPath)
 	if err != nil {
-		return fmt.Errorf("find daemon pid (%s): %w", pidPath, err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		return fmt.Errorf("parse daemon pid from %s: %w", pidPath, err)
+		return err
 	}
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
 		return fmt.Errorf("signal daemon %d: %w", pid, err)
@@ -166,17 +175,8 @@ func startDaemon(verbose int, logPath, pluginPath string) error {
 
 	// Re-exec ourselves as the daemon, pinned to this session's socket and log
 	// file and carrying the same verbosity.
-	args := []string{"--log", logPath}
-	for range verbose {
-		args = append(args, "-v")
-	}
-	proc := exec.Command(exe, args...)
-	proc.Env = append(os.Environ(), daemonEnv+"=1", "BATON_SOCK="+sock)
-	if pluginPath != "" {
-		// The child re-sessions itself and cannot see the parent's flags; carry an
-		// explicit --plugin choice across the re-exec the way BATON_SOCK is carried.
-		proc.Env = append(proc.Env, "BATON_PLUGIN="+pluginPath)
-	}
+	proc := exec.Command(exe, daemonArgs(logPath, verbose)...)
+	proc.Env = daemonEnviron(os.Environ(), sock, pluginPath)
 	proc.Stdout = logf
 	proc.Stderr = logf
 	proc.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // detach into its own session
@@ -205,21 +205,14 @@ func runServer() error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", sock, err)
 	}
+	return runServerOn(ln, sock)
+}
 
-	// Record the PID so clients can force-stop this daemon (baton --force / the
-	// in-TUI restart). Non-fatal if it cannot be written.
-	pidPath := paths.PidFile(sock)
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
-		log.Warn().Err(err).Str("pid_file", pidPath).Msg("could not write pid file")
-	}
-
-	// Honour the user's settings from the shared config file; a missing or
-	// unreadable config keeps the strict defaults (unique names, home workdir).
-	// Build the server before the cleanup/signal wiring, so the shutdown handler
-	// can flush the final fleet/layout snapshot through it.
-	cfg, _ := config.Load()
-	rc := reloadableSettings(cfg)
-	stateF := paths.StateFile(sock)
+// buildServerOptions projects the hot-reloadable settings and the per-session
+// state file onto the server's construction options. The replay-buffer option is
+// added only when the config sets a positive size, leaving the server's built-in
+// default in place otherwise.
+func buildServerOptions(rc reloadable, stateF string) []server.Option {
 	opts := []server.Option{
 		server.WithVersion(version),
 		server.WithAllowNameConflict(rc.allowNameConflict),
@@ -232,7 +225,31 @@ func runServer() error {
 	if rc.replayBytes > 0 {
 		opts = append(opts, server.WithReplayBytes(rc.replayBytes))
 	}
-	srv := server.New(ln, opts...)
+	return opts
+}
+
+// runServerOn runs the long-lived server loop on an already-bound listener for
+// the given socket path. It is the body of runServer, split out so the loop can
+// be driven without re-binding the socket: it records the PID, builds the server
+// from the effective config, wires the plugin and the signal-driven
+// shutdown/reload, and serves until the listener closes. It returns when Serve
+// returns on its own; a SIGINT/SIGTERM instead tidies up and exits the process.
+func runServerOn(ln net.Listener, sock string) error {
+	// Record the PID so clients can force-stop this daemon (baton --force / the
+	// in-TUI restart). Non-fatal if it cannot be written.
+	pidPath := paths.PidFile(sock)
+	if err := writePidFile(pidPath, os.Getpid()); err != nil {
+		log.Warn().Err(err).Str("pid_file", pidPath).Msg("could not write pid file")
+	}
+
+	// Honour the user's settings from the shared config file; a missing or
+	// unreadable config keeps the strict defaults (unique names, home workdir).
+	// Build the server before the cleanup/signal wiring, so the shutdown handler
+	// can flush the final fleet/layout snapshot through it.
+	cfg, _ := config.Load()
+	rc := reloadableSettings(cfg)
+	stateF := paths.StateFile(sock)
+	srv := server.New(ln, buildServerOptions(rc, stateF)...)
 	srv.Restore() // seed the fleet from the last snapshot (all as exited dead slots) before serving
 
 	// The Lua plugin subsystem (docs/PLUGIN.md). Wire the server's event sink and
@@ -370,8 +387,7 @@ func runClient(verbose int, logPath, pluginPath string) error {
 			return fmt.Errorf("tui: %w", runErr)
 		}
 
-		r, ok := final.(interface{ RestartRequested() bool })
-		if !ok || !r.RestartRequested() {
+		if !restartRequested(final) {
 			return nil
 		}
 		if err := stopDaemon(sock); err != nil {
@@ -417,4 +433,76 @@ func waitFor(cond func() bool, tries int, gap time.Duration) bool {
 		time.Sleep(gap)
 	}
 	return cond()
+}
+
+// parsePid parses a PID written to a PID file, accepting only a positive decimal
+// integer. It rejects empty/blank input, non-numeric garbage, and non-positive
+// values (zero or negative), which never name a real process and would otherwise
+// be passed to syscall.Kill — where 0 and negatives address process groups, not
+// the daemon we mean to stop.
+func parsePid(s string) (int, error) {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return 0, fmt.Errorf("empty pid")
+	}
+	pid, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return 0, fmt.Errorf("parse pid %q: %w", trimmed, err)
+	}
+	if pid <= 0 {
+		return 0, fmt.Errorf("invalid pid %d: must be positive", pid)
+	}
+	return pid, nil
+}
+
+// readPidFile reads and validates the daemon PID recorded at path. It fails if
+// the file is missing/unreadable or holds anything other than a positive integer
+// (see parsePid).
+func readPidFile(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, fmt.Errorf("find daemon pid (%s): %w", path, err)
+	}
+	pid, err := parsePid(string(data))
+	if err != nil {
+		return 0, fmt.Errorf("parse daemon pid from %s: %w", path, err)
+	}
+	return pid, nil
+}
+
+// writePidFile records pid at path with owner-only permissions, the way the
+// daemon advertises itself for force-stop and reload.
+func writePidFile(path string, pid int) error {
+	return os.WriteFile(path, []byte(strconv.Itoa(pid)), 0o600)
+}
+
+// daemonArgs builds the command-line arguments for the re-executed daemon child:
+// the pinned --log file and the same -v verbosity the parent was given.
+func daemonArgs(logPath string, verbose int) []string {
+	args := []string{"--log", logPath}
+	for range verbose {
+		args = append(args, "-v")
+	}
+	return args
+}
+
+// daemonEnviron builds the environment for the re-executed daemon child from a
+// base environment (normally os.Environ()): it marks the child with daemonEnv=1
+// and pins it to this session's socket. A non-empty pluginPath is carried across
+// the re-exec via BATON_PLUGIN, because the re-sessioned child cannot see the
+// parent's --plugin flag.
+func daemonEnviron(base []string, sock, pluginPath string) []string {
+	env := append(append([]string{}, base...), daemonEnv+"=1", "BATON_SOCK="+sock)
+	if pluginPath != "" {
+		env = append(env, "BATON_PLUGIN="+pluginPath)
+	}
+	return env
+}
+
+// restartRequested reports whether the cockpit's final model asked for a daemon
+// restart (the prefix+S binding). A model that does not expose RestartRequested,
+// or returns false, means a normal exit.
+func restartRequested(final tea.Model) bool {
+	r, ok := final.(interface{ RestartRequested() bool })
+	return ok && r.RestartRequested()
 }

@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # track the toolchain declared in go.mod so CI and go.mod never drift.
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Lint (golangci-lint v2)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          # pinned to a concrete v2.x so a new release can't break the build.
+          version: v2.1.6
+
+      - name: Coverage gate (race + per-package 80%)
+        # run the exact same gate the Makefile uses, so CI == local.
+        run: make cover
