@@ -24,8 +24,9 @@ You drive Baton through three views, moving between them with a keystroke:
 
 - **Dashboard** — mission control. A live grid (a tree once it gets crowded) of every panel with its status and a
   preview. Here you navigate, spawn and close panels, and group them into work items.
-- **Group** — a work item's live split: its panels tiled side by side, all streaming at once. Pin a few to watch large
-  while the rest stay a navigable list, drive the focused one in place with **`i`**, or **`enter`** to drop into it.
+- **Group** — a work item's live split: its panels tiled side by side, all streaming at once. The first few stream as
+  live tiles; the rest fold into a single **summary tile** you can zoom into. Pin a few to keep them always-on, drive the
+  focused one in place with **`i`**, or **`enter`** to drop into it.
 - **Zoom** — one panel as your only terminal. Keystrokes go straight to the program; the leader **`C-t`** is how you act
   or step back out.
 
@@ -61,7 +62,7 @@ rebindable list of the current view.
 |                        | `u`                         | ungroup the selected work item            |
 |                        | `e`                         | rename the panel or group                 |
 | Group view             | `tab`                       | focus the next panel                      |
-|                        | `+` / `-`                   | more / fewer columns                      |
+|                        | `+` / `-`                   | show more / fewer live tiles              |
 |                        | `p`                         | pin / unpin the focused panel             |
 |                        | `s`                         | send a signal to the focused panel        |
 |                        | `S`                         | send a signal to every panel in the group |
@@ -113,6 +114,14 @@ system clipboard via OSC52, so it works over SSH with no helper binary.
 **Mouse.** Off by default, so your terminal's own selection and copy stay
 available. Toggle it in the key map (`C-t k`, the settings block); once on, the
 wheel scrolls the scrollback in a zoom or tile and moves the dashboard selection.
+
+**Split & summary.** In a group, **`+`** / **`-`** dial how many members stream
+as live tiles — server-owned, clamped to `1`–`16`, and remembered across a
+restart. Pinned members are always tiles. Everyone past that count folds into one
+**summary tile**: a rollup of the hidden members' count, their per-state
+breakdown, and the most urgent activity line. Focus it and press **`enter`** to
+zoom into a sub-grid of just those collapsed members; **`esc`** returns to the
+parent group, not the dashboard.
 
 **Layout, restart, respawn.** Baton remembers its fleet. The daemon writes the
 layout — each panel's spawn spec (command, args, workdir), group membership,

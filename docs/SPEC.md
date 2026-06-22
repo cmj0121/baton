@@ -100,23 +100,28 @@ member** (attention beats running beats spawning beats idle beats exited), so on
 
 **The group split.** Zooming a work item opens a split — every member rendered live in its own tile, all streaming at
 once. By default the split is an _overview you navigate_, not a surface you type into: `tab` moves the focus between
-tiles, `+`/`-` adjusts the column count, `shift`+`←`/`→` reorders the focused member within the group, `C-t [` opens
-scroll mode on the focused tile, `x` removes the focused
+tiles, `+`/`-` dials how many members stream live (see below), `shift`+`←`/`→` reorders the focused member within the
+group, `C-t [` opens scroll mode on the focused tile, `x` removes the focused
 member from the group, `enter` drops into the focused panel's own single zoom, and `d`/`esc` returns to the dashboard.
 From a zoomed member,
 the always-on `C-t g` escape pops back to the split.
 
-**Pinning, for crowded groups.** Live tiles are capped (`maxGroupTiles`) so a huge group cannot spawn unbounded
-terminals. Rather than stranding the overflow, the split shows the capped set of tiles beside a **tree list** of the
-remaining members; `tab` walks the tiles and then the list as one ring, so every member is reachable. `p` **pins** the
-focused member: a pinned panel always holds a live tile (a `⊙` marks it), promoting it out of the list and demoting an
-auto-filled tile to keep the tile count at the cap. So you curate which of a busy group's panels stream live and which
-stay a compact, navigable list. From a list row, `enter` still zooms the panel and `x` still removes it; interact (`i`)
-needs a live tile, so it asks you to pin the panel first. Pins are **server-owned state** (`panel.pin` / `panel.unpin`),
-carried on the panel the server broadcasts — so they survive a frontend restart and are shared across clients. Reopening
-a group brings back the tiles you pinned; and a group with exactly **one** pinned member treats it as the default —
-entering the group drops straight into that panel's zoom rather than a one-tile split (the prefix-`g` escape pops back to
-the split).
+**Visible count and the summary tile.** A group streams its first **N** members as live tiles; `+` / `-` dial N, which
+is **server-owned state** (`group.show`, carried on the snapshot as the group's `Shown`), clamped to `[1, maxGroupTiles]`
+and persisted, so the split reopens the way you left it. Rather than stranding the rest, every member past N folds into a
+single **summary tile** — the last cell of the even grid — that rolls up the hidden members: their count, a per-state
+breakdown, and the most urgent activity line. `tab` walks the live tiles and then the summary slot as one ring. Focus the
+summary and `enter` zooms it into a **sub-grid of just the collapsed members**; `esc` returns to the parent group, not the
+dashboard, and the pin/interact/signal/remove keys no-op on the summary with a hint.
+
+**Pinning, for crowded groups.** `p` **pins** the focused member: a pinned panel always holds a live tile (a `⊙` marks
+it), promoting it ahead of the auto-filled tiles. So you curate which of a busy group's panels stream live and which fold
+into the summary. Pins are **server-owned state** (`panel.pin` / `panel.unpin`), carried on the panel the server
+broadcasts — so they survive a frontend restart and are shared across clients. The pin set is re-derived from the parent
+group's full membership on every snapshot, so a refresh arriving while the summary sub-view is open does not wipe your
+curation. Reopening a group brings back the tiles you pinned; and a group with exactly **one** pinned member treats it as
+the default — entering the group drops straight into that panel's zoom rather than a one-tile split (the prefix-`g` escape
+pops back to the split).
 
 **Signals.** `s` opens a picker of the common signals (or `o` to type any name or number); the chosen one is sent over
 the socket (`panel.signal`) and delivered to the panel's whole process group, so it reaches the foreground job, not just

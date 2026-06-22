@@ -156,10 +156,11 @@ type model struct {
 	cursorHidden *bool            // tracks the zoomed program's cursor visibility (DECTCEM); nil when not zooming
 
 	groupName       string                      // work item being split-viewed (modeGroupZoom)
-	groupFocus      int                         // focused member, indexing tiles then the tree list
+	groupFocus      int                         // focused member, indexing tiles then the summary slot
 	groupArmed      bool                        // prefix pressed in the split, awaiting an escape
 	groupInteract   bool                        // keys drive the focused tile in place (i), no zoom
-	groupCols       int                         // tile columns; 0 = auto-fit to the window
+	groupShown      map[string]int              // per-group visible-tile count N, server-owned via the snapshot's Groups
+	summaryScope    bool                        // the split is scoped to a group's collapsed (summarised) members
 	groupPinned     map[string]bool             // member ids pinned to a live tile, derived from the fleet's server-owned Pinned flags
 	groupEmus       map[string]*vt.SafeEmulator // live emulator per member tile
 	zoomGroupOrigin string                      // group to return to from a single zoom, "" if none
@@ -565,6 +566,7 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 			selKind, selID, selGroup, hadSel = m.selectedKey()
 		}
 		m.fleet = mergeFleet(sm.Panels)
+		m.groupShown = shownForGroups(sm.Groups)
 		if onDash {
 			m.restoreCursor(selKind, selID, selGroup, hadSel)
 		} else {
@@ -574,7 +576,11 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		if m.mode == modeGroupZoom {
 			// Re-derive the pin set from the fresh, server-owned flags before the
 			// tiles reconcile, so a pin toggled by another client lands here too.
-			m.groupPinned = pinsForMembers(m.groupMembers())
+			// Read the parent group's FULL membership (fleetGroup), never the
+			// scope-narrowed groupMembers: in summary scope the latter is only the
+			// collapsed half, so deriving from it would drop the pinned tiles'
+			// flags and silently revert the user's curation on exit.
+			m.groupPinned = pinsForMembers(m.fleetGroup())
 			m.reconcileGroupTiles(focusID)
 		}
 		m.refreshAttention()
@@ -1547,7 +1553,7 @@ func (m model) scrollTarget() (*vt.SafeEmulator, int) {
 	case modeZoom:
 		return m.emu, m.zoomRows()
 	case modeGroupZoom:
-		if p, ok := m.focusedMember(); ok && m.focusedIsTile() {
+		if p, ok := m.focusedMember(); ok {
 			_, _, rows := m.tileGeometry()
 			return m.groupEmus[p.ID], rows
 		}
@@ -2258,7 +2264,7 @@ func (m model) helpContent() (title string, body []string) {
 			{"Navigation", kc("tab") + " " + kc("S-tab"), "focus the next / previous panel"},
 			{"Navigation", kc(keyLabel(keyInteract)), "interact: type into the focused panel in place"},
 			{"Navigation", kc("enter"), "zoom the focused panel"},
-			{"Navigation", kc("+") + " " + kc("-"), "more / fewer columns"},
+			{"Navigation", kc("+") + " " + kc("-"), "show more / fewer live tiles"},
 			{"Navigation", kc("S-←→"), "reorder the focused panel"},
 			{"Navigation", kc(pfx) + " " + kc(keyScroll), "scroll mode · the focused panel (↑↓ line, b/Spc page)"},
 			{"Navigation", kc(pfx) + " " + kc(keySearch), "search the focused panel · n older, N newer"},

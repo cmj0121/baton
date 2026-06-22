@@ -378,7 +378,7 @@ func TestLiveMembersCap(t *testing.T) {
 	if got := len(m.groupMembers()); got != maxGroupTiles+5 {
 		t.Fatalf("the group should keep all %d members, got %d", maxGroupTiles+5, got)
 	}
-	if got := len(m.liveMembers()); got != maxGroupTiles {
+	if got := len(m.tileMembers()); got != maxGroupTiles {
 		t.Fatalf("live tiles should cap at %d, got %d", maxGroupTiles, got)
 	}
 }
@@ -397,40 +397,39 @@ func bigGroup(name string, n int) []panel.Panel {
 
 // TestGroupPinCuratesTiles checks that pinning over-cap switches the split to the
 // pinned set: the pinned panel becomes the only tile and everyone else, including
-// the formerly-auto-filled tiles, moves to the list. Unpinning restores the
-// default fill.
+// the formerly-auto-filled tiles, collapses into the summary. Unpinning restores
+// the default fill.
 func TestGroupPinCuratesTiles(t *testing.T) {
 	m := baseModel()
-	m.fleet = bigGroup("big", maxGroupTiles+4) // a..t: default tiles a..p, list q..t
+	m.fleet = bigGroup("big", maxGroupTiles+4) // a..t: default tiles a..p, collapsed q..t
 	m = m.zoomGroup(m.dashItems()[0])
 
-	tiles, tree := m.splitMembers()
-	if indexOfMember(tiles, "q") >= 0 || indexOfMember(tree, "q") < 0 {
-		t.Fatal("q should start in the list, not a tile")
+	tiles, collapsed := m.splitMembers()
+	if indexOfMember(tiles, "q") >= 0 || indexOfMember(collapsed, "q") < 0 {
+		t.Fatal("q should start collapsed, not a tile")
 	}
 
-	// Focus q (first list row) and pin it: the grid collapses to just q.
-	m.groupFocus = maxGroupTiles
-	m = m.togglePin()
-	if !m.groupPinned["q"] {
-		t.Fatal("q should be pinned")
-	}
+	// Pin q (a collapsed member) — the grid curates to just the pinned set. (The
+	// real keystroke path through the summary scope is covered by
+	// TestGroupPinCapRefused; here we drive the pin set directly.)
+	m.groupPinned = map[string]bool{"q": true}
+	m.reconcileGroupTiles("")
 	tiles, _ = m.splitMembers()
 	if len(tiles) != 1 || indexOfMember(tiles, "q") < 0 {
 		t.Fatalf("the only tile should be the pinned q, got %v", ids(tiles))
 	}
-	if disp := m.displayedMembers(); len(disp) != maxGroupTiles+4 {
-		t.Fatalf("every member should still be reachable, got %d", len(disp))
+	// Every member is still reachable: the one tile plus the summary slot folding
+	// the other 19, so focus walks 2 slots.
+	if got := m.focusCount(); got != 2 {
+		t.Fatalf("focus should walk the tile + summary slot (2), got %d", got)
 	}
 
-	// Reconcile keeps the focus on q; unpinning restores the default fill.
-	m = m.togglePin()
-	if m.groupPinned["q"] {
-		t.Fatal("unpinning should clear q's pin")
-	}
+	// Unpinning restores the default fill with q back in the collapsed set.
+	delete(m.groupPinned, "q")
+	m.reconcileGroupTiles("")
 	tiles, _ = m.splitMembers()
 	if len(tiles) != maxGroupTiles || indexOfMember(tiles, "q") >= 0 {
-		t.Fatal("unpinning should restore the default fill with q back in the list")
+		t.Fatal("unpinning should restore the default fill with q back in the summary")
 	}
 }
 
@@ -443,7 +442,9 @@ func ids(ps []panel.Panel) []string {
 	return out
 }
 
-// TestGroupPinCapRefused checks the pin set cannot exceed maxGroupTiles.
+// TestGroupPinCapRefused checks the pin set cannot exceed maxGroupTiles. With the
+// cap's worth already pinned, an unpinned collapsed member — reached through the
+// summary scope, where it shows as a tile — cannot be pinned too.
 func TestGroupPinCapRefused(t *testing.T) {
 	m := baseModel()
 	m.fleet = bigGroup("big", maxGroupTiles+4)
@@ -453,7 +454,13 @@ func TestGroupPinCapRefused(t *testing.T) {
 		m.groupPinned[string(rune('a'+i))] = true // pin the cap's worth
 	}
 
-	m.groupFocus = len(m.displayedMembers()) - 1 // a tree row
+	// q..t are the unpinned, collapsed members; open the summary scope so they show
+	// as tiles, then focus the first and try to pin it.
+	m.summaryScope = true
+	m.groupFocus = 0
+	if p, ok := m.focusedMember(); !ok || p.ID != "q" {
+		t.Fatalf("summary scope should focus the first collapsed member q, got %q ok=%v", p.ID, ok)
+	}
 	before := m.pinnedCount()
 	m = m.togglePin()
 	if m.pinnedCount() != before {
@@ -464,72 +471,142 @@ func TestGroupPinCapRefused(t *testing.T) {
 	}
 }
 
-// TestInteractOnTreeMemberHintsToPin checks interact refuses a tree-listed member
-// and points the user at pinning it first.
-func TestInteractOnTreeMemberHintsToPin(t *testing.T) {
+// TestPinsSurviveSnapshotInSummaryScope is a regression test: a "panels" snapshot
+// landing while the summary sub-view is open used to rebuild the pin set from the
+// scope-narrowed members (the collapsed half), dropping the pinned tiles' flags and
+// reverting the user's curation on exit. The pin set must derive from the parent
+// group's FULL membership regardless of scope.
+func TestPinsSurviveSnapshotInSummaryScope(t *testing.T) {
 	m := baseModel()
-	m.fleet = bigGroup("big", maxGroupTiles+4)
+	m.fleet = bigGroup("big", maxGroupTiles+4) // a..t
 	m = m.zoomGroup(m.dashItems()[0])
-	m.groupFocus = maxGroupTiles // first tree row
 
-	got := m.enterInteract()
-	if got.groupInteract {
-		t.Fatal("interact should not start on a tree member")
+	// Curate: pin a and b, so the group shows just those tiles and folds the rest.
+	m.groupPinned = map[string]bool{"a": true, "b": true}
+	m.reconcileGroupTiles("")
+
+	// Open the summary sub-view (scoped to the collapsed half), then a server
+	// snapshot lands carrying the authoritative pins for a and b.
+	m.summaryScope = true
+	ps := make([]proto.Panel, len(m.fleet))
+	for i, p := range m.fleet {
+		ps[i] = proto.Panel{ID: p.ID, Kind: p.Kind.String(), Title: p.Title, State: p.State.String(), Group: "big", Pinned: p.ID == "a" || p.ID == "b"}
 	}
-	if !strings.Contains(got.status, "pin") {
-		t.Fatalf("should hint to pin first, got %q", got.status)
+	m.applyEvent(proto.ServerMsg{Type: "panels", Panels: ps})
+
+	if !m.groupPinned["a"] || !m.groupPinned["b"] || len(m.groupPinned) != 2 {
+		t.Fatalf("pins must survive a snapshot during summary scope, got %v", m.groupPinned)
 	}
 }
 
-// TestGroupTreePaneRenders checks the overflow tree pane is drawn for a large
-// group.
-func TestGroupTreePaneRenders(t *testing.T) {
+// TestInteractOnSummaryNoOps checks interact (and the other member actions) refuse
+// the summary slot with a hint, since it is not a live panel.
+func TestInteractOnSummaryNoOps(t *testing.T) {
 	m := baseModel()
-	m.fleet = bigGroup("big", maxGroupTiles+4)
+	m.fleet = bigGroup("big", maxGroupTiles+4) // 16 tiles + 4 collapsed
 	m = m.zoomGroup(m.dashItems()[0])
-	m.groupFocus = maxGroupTiles + 1 // a tree row, so the pane lights a row
-	if !strings.Contains(m.groupZoomView(), "L I S T") {
-		t.Fatal("the split should render the tree (LIST) pane for the overflow")
+	m.groupFocus = maxGroupTiles // the summary slot, just past the last tile
+	if !m.focusedIsSummary() {
+		t.Fatalf("focus %d should rest on the summary slot", m.groupFocus)
+	}
+
+	for _, k := range []string{keyInteract, keyPin, keySignal, keyRemove} {
+		nm, _ := m.handleGroupZoomKey(key(k))
+		got := nm.(model)
+		if got.groupInteract {
+			t.Fatalf("%q should not start interact on the summary", k)
+		}
+		if !strings.Contains(got.status, "summary") {
+			t.Fatalf("%q on the summary should hint, got %q", k, got.status)
+		}
 	}
 }
 
-// TestGroupSplitCapsVisibleTiles checks a large group streams at most
-// maxGroupTiles live tiles, files the rest into the tree list, and says so in the
-// header (gaps #2/#3, and the overflow is now reachable rather than stranded).
+// TestSummaryTileRenders checks the summary tile is drawn for a large group, with
+// its "+N more" rollup header in place of the old tree pane.
+func TestSummaryTileRenders(t *testing.T) {
+	m := baseModel()
+	m.fleet = bigGroup("big", maxGroupTiles+4)
+	m = m.zoomGroup(m.dashItems()[0])
+	m.groupFocus = maxGroupTiles // the summary slot, so it glows focused
+	if !strings.Contains(m.groupZoomView(), "+4 more") {
+		t.Fatal("the split should render the summary tile rolling up the collapsed members")
+	}
+}
+
+// TestGroupSplitCapsVisibleTiles checks a large group streams at most N live tiles
+// (default maxGroupTiles), folds the rest into the summary, and says so in the
+// header.
 func TestGroupSplitCapsVisibleTiles(t *testing.T) {
 	m := baseModel()
 	m.fleet = bigGroup("big", maxGroupTiles+4)
 	m = m.zoomGroup(m.dashItems()[0])
 
-	tiles, tree := m.splitMembers()
+	tiles, collapsed := m.splitMembers()
 	if len(tiles) != maxGroupTiles {
 		t.Fatalf("live tiles should cap at %d, got %d", maxGroupTiles, len(tiles))
 	}
-	if len(tree) != 4 {
-		t.Fatalf("the 4 overflow members should be in the tree, got %d", len(tree))
+	if len(collapsed) != 4 {
+		t.Fatalf("the 4 overflow members should be collapsed, got %d", len(collapsed))
 	}
 	view := m.groupZoomView()
-	if !strings.Contains(view, "16 live · 4 in list") {
-		t.Fatalf("the header should report the live/list split, got:\n%s", view)
+	if !strings.Contains(view, "16 live · 4 summarised") {
+		t.Fatalf("the header should report the live/summarised split, got:\n%s", view)
 	}
 }
 
-// TestGroupSplitFocusReachesTree checks focus now walks every member — the live
-// tiles and then the tree overflow — so a large group's tail is reachable.
-func TestGroupSplitFocusReachesTree(t *testing.T) {
+// TestGroupSplitFocusReachesSummary checks focus walks the live tiles then the
+// summary slot — so a large group's overflow is reachable through the summary.
+func TestGroupSplitFocusReachesSummary(t *testing.T) {
 	m := baseModel()
-	m.fleet = bigGroup("big", maxGroupTiles+4) // 16 tiles + 4 in the tree
+	m.fleet = bigGroup("big", maxGroupTiles+4) // 16 tiles + the summary slot
 	m = m.zoomGroup(m.dashItems()[0])
 
-	// shift+tab from the first member wraps to the very last tree row, not the
-	// last tile.
+	// shift+tab from the first tile wraps to the summary slot, just past the last tile.
 	nm, _ := m.handleGroupZoomKey(key("shift+tab"))
 	m = nm.(model)
-	if m.groupFocus != maxGroupTiles+3 {
-		t.Fatalf("focus should wrap to the last member (%d), got %d", maxGroupTiles+3, m.groupFocus)
+	if m.groupFocus != maxGroupTiles {
+		t.Fatalf("focus should wrap to the summary slot (%d), got %d", maxGroupTiles, m.groupFocus)
 	}
-	if m.focusedIsTile() {
-		t.Fatal("the last member is in the tree, so the focus should not be on a tile")
+	if _, ok := m.focusedMember(); ok {
+		t.Fatal("the summary slot is not a tile, so the focus should not resolve to a member")
+	}
+	if !m.focusedIsSummary() {
+		t.Fatal("the focus should rest on the summary slot")
+	}
+}
+
+// TestEnterSummaryScope checks enter on the summary slot opens the collapsed
+// members as their own grid (summaryScope), and esc returns to the parent group.
+func TestEnterSummaryScope(t *testing.T) {
+	m := baseModel()
+	m.fleet = bigGroup("big", maxGroupTiles+4) // 16 tiles + 4 collapsed
+	m = m.zoomGroup(m.dashItems()[0])
+	m.groupFocus = maxGroupTiles // the summary slot
+
+	nm, _ := m.handleGroupZoomKey(key("enter"))
+	m = nm.(model)
+	if !m.summaryScope {
+		t.Fatal("enter on the summary should enter the summary scope")
+	}
+	if m.mode != modeGroupZoom || m.groupName != "big" {
+		t.Fatalf("the sub-view should stay in the split scoped to big, got mode=%v group=%q", m.mode, m.groupName)
+	}
+	// The scoped view shows exactly the parent's 4 collapsed members as tiles, with
+	// no further summary.
+	tiles, collapsed := m.splitMembers()
+	if len(tiles) != 4 || len(collapsed) != 0 {
+		t.Fatalf("the summary scope should show the 4 collapsed members as tiles, got %d + %d", len(tiles), len(collapsed))
+	}
+
+	// esc returns to the parent group view, not the dashboard.
+	nm, _ = m.handleGroupZoomKey(key("esc"))
+	m = nm.(model)
+	if m.summaryScope {
+		t.Fatal("esc should clear the summary scope")
+	}
+	if m.mode != modeGroupZoom || m.groupName != "big" {
+		t.Fatalf("esc from the sub-view should return to the parent group, got mode=%v group=%q", m.mode, m.groupName)
 	}
 }
 
@@ -823,61 +900,53 @@ func TestGroupZoomResizeReflows(t *testing.T) {
 	}
 }
 
-func TestGroupColumnsAdjust(t *testing.T) {
+// TestAdjustGroupShown checks that + / - dial the group's visible-tile count N:
+// the local groupShown updates optimistically and a clamped group.show command is
+// sent for the server to own and broadcast.
+func TestAdjustGroupShown(t *testing.T) {
+	c, cmds := recordingServer(t)
 	m := baseModel()
-	// Width 60: auto-fit starts at one column, and the width floor still allows up
-	// to one column per member, so + steps up to the 3-member cap.
-	m.width, m.height = 60, 30
-	m.fleet = groupedFleet()
-	m = m.zoomGroup(m.dashItems()[0]) // api, 3 members
+	m.client = c
+	m.fleet = bigGroup("big", maxGroupTiles+4) // 20 members; default N = 16
+	m = m.zoomGroup(m.dashItems()[0])
 
-	cols := func() int { c, _, _ := m.tileGeometry(); return c }
-	step := func(k string) { nm, _ := m.handleGroupZoomKey(key(k)); m = nm.(model) }
+	step := func(k string) {
+		nm, _ := m.handleGroupZoomKey(key(k))
+		m = nm.(model)
+	}
 
-	if start := cols(); start != 1 {
-		t.Fatalf("auto layout at width 60 should be 1 column, got %d", start)
+	// - drops N to 15; the command carries the clamped count and groupShown follows.
+	step("-")
+	if got := m.groupShown["big"]; got != maxGroupTiles-1 {
+		t.Fatalf("- should set groupShown[big] to %d, got %d", maxGroupTiles-1, got)
 	}
-	step("+")
-	if cols() != 2 {
-		t.Fatalf("+ should widen to 2 columns, got %d", cols())
+	cmd := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "group.show" })
+	if cmd.Group != "big" || cmd.Count != maxGroupTiles-1 {
+		t.Fatalf("group.show should target big with count %d, got %+v", maxGroupTiles-1, cmd)
 	}
-	// Dial all the way up: the column count clamps at one per member (3 here).
-	for i := 0; i < 5; i++ {
+	if tiles, collapsed := m.splitMembers(); len(tiles) != maxGroupTiles-1 || len(collapsed) != 5 {
+		t.Fatalf("N=15 should leave 15 tiles + 5 collapsed, got %d + %d", len(tiles), len(collapsed))
+	}
+
+	// + cannot exceed the hard cap: from 15, three + steps clamp at maxGroupTiles.
+	for i := 0; i < 3; i++ {
 		step("+")
 	}
-	if cols() != 3 {
-		t.Fatalf("+ should clamp at the member count (3), got %d", cols())
-	}
-	step("-")
-	if cols() != 2 {
-		t.Fatalf("- should narrow back to 2 columns, got %d", cols())
+	if got := m.groupShown["big"]; got != maxGroupTiles {
+		t.Fatalf("+ should clamp N at the cap %d, got %d", maxGroupTiles, got)
 	}
 }
 
-// TestGroupColumnsWidthFloor checks that dialling columns up cannot shrink tiles
-// below the width floor: on a narrow screen the column count caps well under the
-// member count, so the grid never collapses into unreadable slivers (gap #7).
-func TestGroupColumnsWidthFloor(t *testing.T) {
+// TestAdjustGroupShownClampsLow checks N never drops below 1.
+func TestAdjustGroupShownClampsLow(t *testing.T) {
 	m := baseModel()
-	m.width, m.height = 40, 20 // narrow: the floor binds before the member count
-	m.fleet = nil
-	for i := 0; i < 6; i++ { // a 6-member group, more than the floor allows
-		m.fleet = append(m.fleet, panel.Panel{
-			ID: string(rune('a' + i)), Title: "p", State: panel.Running, Group: "wide",
-		})
-	}
-	m = m.zoomGroup(m.dashItems()[0])
+	m.fleet = groupedFleet()
+	m = m.zoomGroup(m.dashItems()[0]) // api, 3 members; default N = 16
+	m.groupShown = map[string]int{"api": 1}
 
-	cols := func() int { c, _, _ := m.tileGeometry(); return c }
-	for i := 0; i < 10; i++ { // hammer + far past any sane column count
-		nm, _ := m.handleGroupZoomKey(key("+"))
-		m = nm.(model)
-	}
-	floorCols := max(1, (m.width+gtileGap)/(gtileFloorW+gtileGap))
-	if got := cols(); got != floorCols {
-		t.Fatalf("+ should clamp at the width floor (%d cols) on a narrow screen, got %d", floorCols, got)
-	}
-	if got := cols(); got >= len(m.groupMembers()) {
-		t.Fatalf("the floor should cap below the 6-member count, got %d columns", got)
+	nm, _ := m.handleGroupZoomKey(key("-"))
+	m = nm.(model)
+	if got := m.groupShown["api"]; got != 1 {
+		t.Fatalf("- should clamp N at 1, got %d", got)
 	}
 }

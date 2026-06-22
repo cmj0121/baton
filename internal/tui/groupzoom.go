@@ -19,13 +19,12 @@ import (
 const (
 	gtileGap        = 1  // space reserved to the right of each tile
 	gtileMinW       = 32 // preferred minimum tile width, deciding the column count
-	gtileFloorW     = 16 // hard floor on a tile's width when the user dials columns up
 	groupHeaderRows = 2  // header line + blank above the grid in groupZoomView
-	groupTreeWidth  = 26 // outer width of the tree pane listing the unpinned members
 
 	// maxGroupTiles caps how many members stream live at once, bounding the PTYs,
-	// emulators, and drain goroutines a single huge group can spin up. Members
-	// past the cap still render from their preview tail.
+	// emulators, and drain goroutines a single huge group can spin up. It is both
+	// the hard ceiling on the visible count N and the default N before the user
+	// dials it. Members past the cap fold into the summary tile.
 	maxGroupTiles = 16
 )
 
@@ -50,23 +49,20 @@ func tileGeometry(n, w, h, want int) (cols, emuCols, emuRows int) {
 	return cols, emuCols, emuRows
 }
 
-// gridWidth is the width left for the tile grid, after reserving the tree pane
-// when the group has any unpinned members listed there.
-func (m model) gridWidth() int {
-	_, tree := m.splitMembers()
-	if len(tree) > 0 {
-		return max(1, m.width-groupTreeWidth-1)
-	}
-	return m.width
+// tileGeometry resolves the split's layout from the current model dimensions,
+// reserving the footer bar (one row) and the header. Columns always auto-fit the
+// full width (want == 0). The cell count is the live tiles plus the summary tile
+// when there are collapsed members, so the even grid sizes every cell — summary
+// included — alike.
+func (m model) tileGeometry() (cols, emuCols, emuRows int) {
+	return tileGeometry(m.gridCells(), m.width, m.height-1-groupHeaderRows, 0)
 }
 
-// tileGeometry resolves the split's layout from the current model dimensions,
-// reserving the footer bar (one row), the header, and the tree pane, honouring
-// any column override the user has dialled in. It lays out only the live tiles,
-// so a huge group never shrinks the grid into unreadable slivers — its overflow
-// lives in the tree list instead.
-func (m model) tileGeometry() (cols, emuCols, emuRows int) {
-	return tileGeometry(len(m.tileMembers()), m.gridWidth(), m.height-1-groupHeaderRows, m.groupCols)
+// gridCells is how many cells the even grid lays out: one per focus slot (the
+// live tiles plus the summary tile when any member is collapsed), floored at one
+// so geometry never divides by zero on an empty split.
+func (m model) gridCells() int {
+	return max(1, m.focusCount())
 }
 
 // attachGroupMembers opens a live emulator for every member of the group and
@@ -80,7 +76,7 @@ func (m *model) attachGroupMembers() {
 	}
 	_, emuCols, emuRows := m.tileGeometry()
 	m.groupEmus = make(map[string]*vt.SafeEmulator)
-	for _, p := range m.liveMembers() {
+	for _, p := range m.tileMembers() {
 		m.attachTile(p, emuCols, emuRows)
 	}
 }
@@ -98,64 +94,80 @@ func (m *model) attachTile(p panel.Panel, emuCols, emuRows int) {
 	m.sendf(proto.Command{Action: "panel.attach", ID: p.ID})
 }
 
-// splitMembers partitions the group into the live tiles and the tree list, in
-// fleet order, from a single fleet scan:
-//
-//   - A group that fits the cap is all tiles, no list — pins do not matter.
-//   - Over the cap, if the user has pinned any panels, those pinned panels are
-//     the tiles and everyone else is the list, so you curate a few to watch live.
-//   - Over the cap with no pins, the first maxGroupTiles are tiles and the rest
-//     fall into the list — a sensible default before any curation.
-func (m model) splitMembers() (tiles, tree []panel.Panel) {
-	all := m.groupMembers()
-	if len(all) <= maxGroupTiles {
-		return all, nil // everything fits as tiles; pins are moot
+// groupShownN is the group's visible-tile count N: how many members stream as
+// live tiles before the rest fold into the summary tile. It comes from the
+// snapshot's per-group Shown (carried in m.groupShown), defaulting to
+// maxGroupTiles when the server has not set one, and is clamped to [1,
+// maxGroupTiles] so it can never ask for more tiles than the hard cap allows.
+func (m model) groupShownN() int {
+	n, ok := m.groupShown[m.groupName]
+	if !ok {
+		n = maxGroupTiles
 	}
-	pins := 0
-	for _, p := range all {
-		if m.groupPinned[p.ID] {
-			pins++
-		}
-	}
-	for i, p := range all {
-		switch {
-		case pins > 0:
-			if m.groupPinned[p.ID] {
-				tiles = append(tiles, p)
-			} else {
-				tree = append(tree, p)
-			}
-		case i < maxGroupTiles:
-			tiles = append(tiles, p)
-		default:
-			tree = append(tree, p)
-		}
-	}
-	return tiles, tree
+	return max(1, min(n, maxGroupTiles))
 }
 
-// tileMembers is the subset of the group that holds a live tile emulator.
+// splitMembers partitions the group into the live tiles and the collapsed
+// members (folded into the summary tile), in fleet order, from a single fleet
+// scan. N is the group's visible count (groupShownN):
+//
+//   - len(all) <= N → everything is a tile, nothing collapsed; pins are moot.
+//   - over N with any pins → the pinned panels are the tiles and everyone else
+//     collapses, so you curate a few to watch live and summarise the rest.
+//   - over N with no pins → the first N are tiles and the rest collapse, the
+//     sensible default before any curation.
+//
+// In the summary sub-view (summaryScope) groupMembers already returns just the
+// collapsed set, so every member shows as a tile (capped at maxGroupTiles) and
+// nothing collapses again — no nested summary.
+func (m model) splitMembers() (tiles, collapsed []panel.Panel) {
+	if m.summaryScope {
+		// The sub-view shows the collapsed set (groupMembers is already scoped to it)
+		// as tiles, capped at the hard ceiling; any remainder past the cap is noted
+		// in the status and never re-summarised — no nested summary.
+		all := m.groupMembers()
+		if len(all) > maxGroupTiles {
+			return all[:maxGroupTiles], nil
+		}
+		return all, nil
+	}
+	return m.partitionGroup()
+}
+
+// tileMembers is the group's live tiles in focus order — the panels that hold a
+// live emulator. The summary tile, when present, is not a panel: it occupies one
+// extra focus slot AFTER these (see focusCount / focusedIsSummary), so the cursor
+// walks tiles[0..n) then the summary.
 func (m model) tileMembers() []panel.Panel {
 	tiles, _ := m.splitMembers()
 	return tiles
 }
 
-// liveMembers is an alias for tileMembers — the panels with a live emulator.
-func (m model) liveMembers() []panel.Panel { return m.tileMembers() }
-
-// displayedMembers is every member in the order the focus walks them: the live
-// tiles first, then the tree list. The cursor indexes into this.
-func (m model) displayedMembers() []panel.Panel {
-	tiles, tree := m.splitMembers()
-	out := make([]panel.Panel, 0, len(tiles)+len(tree))
-	out = append(out, tiles...)
-	return append(out, tree...)
+// focusCount is how many slots the focus walks: the live tiles, plus one for the
+// summary tile when any member is collapsed. tab / shift-tab wrap over this.
+func (m model) focusCount() int {
+	tiles, collapsed := m.splitMembers()
+	n := len(tiles)
+	if len(collapsed) > 0 {
+		n++ // the summary slot sits after the last tile
+	}
+	return n
 }
 
-// pinnedCount is how many of the group's members are pinned to a live tile.
+// focusedIsSummary reports whether the focus rests on the summary tile — the
+// extra slot past the last live tile, present only when some member is collapsed.
+// The pin / interact / signal / remove actions no-op on it, and enter zooms it.
+func (m model) focusedIsSummary() bool {
+	tiles, collapsed := m.splitMembers()
+	return len(collapsed) > 0 && m.groupFocus == len(tiles)
+}
+
+// pinnedCount is how many of the parent group's members are pinned to a live
+// tile. It counts the full group (fleetGroup), not the scoped view, so the pin cap
+// holds the same in the summary sub-view as in the group view.
 func (m model) pinnedCount() int {
 	n := 0
-	for _, p := range m.groupMembers() {
+	for _, p := range m.fleetGroup() {
 		if m.groupPinned[p.ID] {
 			n++
 		}
@@ -163,21 +175,15 @@ func (m model) pinnedCount() int {
 	return n
 }
 
-// focusedMember resolves the focus to its member — a tile or a tree row —
-// reporting false when out of range. The single bounds check the pin, interact,
-// remove, and zoom actions share.
+// focusedMember resolves the focus to its tile's panel, reporting false when the
+// focus is out of range OR rests on the summary slot (which is not a panel). The
+// single bounds check the pin, interact, remove, signal, and zoom actions share.
 func (m model) focusedMember() (panel.Panel, bool) {
-	disp := m.displayedMembers()
-	if m.groupFocus < 0 || m.groupFocus >= len(disp) {
+	tiles := m.tileMembers()
+	if m.groupFocus < 0 || m.groupFocus >= len(tiles) {
 		return panel.Panel{}, false
 	}
-	return disp[m.groupFocus], true
-}
-
-// focusedIsTile reports whether the focus currently rests on a live tile (rather
-// than a tree row) — the gate for interact, which needs a streaming emulator.
-func (m model) focusedIsTile() bool {
-	return m.groupFocus >= 0 && m.groupFocus < len(m.tileMembers())
+	return tiles[m.groupFocus], true
 }
 
 // focusedMemberID is the id of the panel the focus rests on, read before a
@@ -197,8 +203,8 @@ func (m model) focusedMemberID() string {
 // keeps the focus on the same panel (by id) across both regions. A no-op without
 // a client. focusID is the panel the focus rested on before the change.
 func (m *model) reconcileGroupTiles(focusID string) {
-	tiles, tree := m.splitMembers()
-	if len(tiles)+len(tree) == 0 {
+	tiles, collapsed := m.splitMembers()
+	if len(tiles)+len(collapsed) == 0 {
 		// The group dissolved or lost its last panel: leave for the dashboard.
 		m.resetToDashboard("group emptied · dashboard")
 		return
@@ -238,16 +244,17 @@ func (m *model) reconcileGroupTiles(focusID string) {
 			m.resizeGroupTiles()
 		}
 	}
-	// Keep the focus on the same panel by id across tiles and tree; fall back to
-	// clamping into range when that panel left the group entirely.
-	disp := m.displayedMembers()
-	if idx := indexOfMember(disp, focusID); idx >= 0 {
+	// Keep the focus on the same tile by id; fall back to clamping into range
+	// (tiles plus the summary slot) when that panel left the tile set — it may have
+	// been removed, or folded into the summary, in which case the focus lands on the
+	// nearest remaining slot rather than off the end.
+	if idx := indexOfMember(tiles, focusID); idx >= 0 {
 		m.groupFocus = idx
 	} else {
-		m.groupFocus = max(0, min(m.groupFocus, len(disp)-1))
+		m.groupFocus = max(0, min(m.groupFocus, m.focusCount()-1))
 	}
 	// Interact needs a live tile: stop if the panel being typed into (focusID) is
-	// no longer one — removed, or demoted to the tree — so keys never land on
+	// no longer one — removed, or folded into the summary — so keys never land on
 	// whatever panel the focus clamped onto instead.
 	if m.groupInteract && indexOfMember(tiles, focusID) < 0 {
 		m.groupInteract = false
@@ -290,9 +297,21 @@ func (m *model) closeGroupEmus() {
 	m.groupEmus = nil
 }
 
-// groupMembers is the panels of the group currently being split-viewed, in fleet
-// order.
+// groupMembers is the panels the split currently navigates, in fleet order. In
+// the normal view it is every member of m.groupName; in the summary sub-view
+// (summaryScope) it is just the parent group's collapsed set, so the same tile
+// machinery lays the summarised members out as their own grid.
 func (m model) groupMembers() []panel.Panel {
+	if m.summaryScope {
+		_, collapsed := m.partitionGroup()
+		return collapsed
+	}
+	return m.fleetGroup()
+}
+
+// fleetGroup is the raw panels of m.groupName in fleet order — the parent group's
+// full membership, before any tile/summary partition.
+func (m model) fleetGroup() []panel.Panel {
 	var out []panel.Panel
 	for _, p := range m.fleet {
 		if p.Group == m.groupName {
@@ -300,6 +319,40 @@ func (m model) groupMembers() []panel.Panel {
 		}
 	}
 	return out
+}
+
+// partitionGroup splits the parent group's full membership into the live tiles
+// and the collapsed (summarised) set, by the same N/pins rules splitMembers
+// applies — but always against the raw fleetGroup, never the scoped view. It is
+// the seam the summary sub-view reuses: entering the summary scopes the view to
+// the collapsed half this returns, without splitMembers recursing on itself.
+func (m model) partitionGroup() (tiles, collapsed []panel.Panel) {
+	all := m.fleetGroup()
+	n := m.groupShownN()
+	if len(all) <= n {
+		return all, nil
+	}
+	pins := 0
+	for _, p := range all {
+		if m.groupPinned[p.ID] {
+			pins++
+		}
+	}
+	for i, p := range all {
+		switch {
+		case pins > 0:
+			if m.groupPinned[p.ID] {
+				tiles = append(tiles, p)
+			} else {
+				collapsed = append(collapsed, p)
+			}
+		case i < n:
+			tiles = append(tiles, p)
+		default:
+			collapsed = append(collapsed, p)
+		}
+	}
+	return tiles, collapsed
 }
 
 // handleGroupZoomKey drives the split: cycle the focused tile, zoom into it, or
@@ -340,13 +393,27 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.groupArmed = true
 		return m, nil
 	}
-	// Bare single keys drive the split. The dashboard key (d) and esc leave.
+	// Bare single keys drive the split. The dashboard key (d) and esc leave: from
+	// the summary sub-view they return to the parent group, otherwise to the
+	// dashboard.
 	if key == m.bindingKey(actDashboard) || key == "esc" {
+		if m.summaryScope {
+			return m.exitSummaryScope(), nil
+		}
 		return m.exitGroupZoom()
 	}
-	// Focus walks every member — the live tiles first, then the tree list — so a
-	// large group's overflow is reachable, not stranded.
-	n := len(m.displayedMembers())
+	// Focus walks the live tiles then the summary slot (when present), so a large
+	// group's overflow is reachable through the summary, not stranded.
+	n := m.focusCount()
+	// The per-member actions need a real panel under the focus; on the summary slot
+	// (which is not a panel) they no-op with a hint rather than acting on nothing.
+	if m.focusedIsSummary() {
+		switch key {
+		case keyPin, keySignal, keyRemove, keyInteract:
+			m.status = "not available on the summary"
+			return m, nil
+		}
+	}
 	switch key {
 	case "tab", "right", "l", "down", "j":
 		m.groupFocus = wrapIndex(m.groupFocus, 1, n)
@@ -359,9 +426,9 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+right":
 		return m.reorderGroupMember(1), nil
 	case "+", "=":
-		return m.adjustGroupCols(1), nil
+		return m.adjustGroupShown(1), nil
 	case "-", "_":
-		return m.adjustGroupCols(-1), nil
+		return m.adjustGroupShown(-1), nil
 	case keyPin:
 		return m.togglePin(), nil
 	case keySignal:
@@ -390,6 +457,9 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Captured like on the dashboard: the split exits only via detach.
 		m.status = m.exitHint()
 	case "enter":
+		if m.focusedIsSummary() {
+			return m.enterSummaryScope(), nil
+		}
 		return m.zoomFocusedMember()
 	}
 	return m, nil
@@ -440,15 +510,11 @@ func (m model) handleGroupInteractKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // enterInteract hands the keyboard to the focused tile so it can be driven in
 // place, without dropping into a full single-panel zoom. It needs a live tile to
-// type into, so it hints to pin a tree-listed panel first, and is a no-op on a
-// preview-only (no client) or out-of-range focus.
+// type into, so it is a no-op on a preview-only (no client) or out-of-range focus
+// (the caller already guards the summary slot, which is not a panel).
 func (m model) enterInteract() model {
 	p, ok := m.focusedMember()
 	if !ok {
-		return m
-	}
-	if !m.focusedIsTile() {
-		m.status = fmt.Sprintf("%s is in the list — press %s to pin it first", p.Title, keyPin)
 		return m
 	}
 	if m.groupEmus[p.ID] == nil {
@@ -529,19 +595,65 @@ func (m model) removeFocusedMember() model {
 	return m
 }
 
-// adjustGroupCols nudges the tile column count by delta (clamped to one column up
-// to one per member), pins it as an explicit override, and refits the tiles to
-// the new layout.
-func (m model) adjustGroupCols(delta int) model {
-	cols, _, _ := m.tileGeometry() // the current effective column count
-	// Cap columns at one per live tile and at whatever keeps a tile above the
-	// width floor, so dialling up never collapses the grid into unreadable slivers.
-	// Use the grid's own width, which the tree pane narrows when it is shown.
-	floorCols := max(1, (m.gridWidth()+gtileGap)/(gtileFloorW+gtileGap))
-	maxCols := min(len(m.liveMembers()), floorCols)
-	m.groupCols = max(1, min(cols+delta, maxCols))
-	m.resizeGroupTiles()
-	m.status = fmt.Sprintf("group · %d column(s)", m.groupCols)
+// adjustGroupShown nudges the group's visible-tile count N by delta, clamped to
+// [1, maxGroupTiles]. The new N is set optimistically in m.groupShown for instant
+// feedback (the grid reflows at once, summarising the spillover), then sent to the
+// server as group.show so it owns the count and broadcasts it to every client; the
+// next snapshot reconciles the local guess against the authoritative value. A
+// no-op in the summary sub-view, which shows a fixed scoped set, not a dialled one.
+func (m model) adjustGroupShown(delta int) model {
+	if m.summaryScope {
+		return m // the sub-view's tile set is the parent's collapsed half, not dialled
+	}
+	newN := max(1, min(m.groupShownN()+delta, maxGroupTiles))
+	if m.groupShown == nil {
+		m.groupShown = map[string]int{}
+	}
+	m.groupShown[m.groupName] = newN
+	m.sendf(proto.Command{Action: "group.show", Group: m.groupName, Count: newN})
+	m.status = fmt.Sprintf("group · %d shown", newN)
+	return m
+}
+
+// enterSummaryScope opens the collapsed (summarised) members as their own even
+// grid: it detaches the current tiles, scopes the view to the parent group's
+// collapsed half (summaryScope), resets the focus, and re-attaches a tile per
+// summarised member. The parent stays in m.groupName so esc / the dashboard key
+// pop back to it. A no-op without a collapsed set to scope into.
+func (m model) enterSummaryScope() model {
+	_, collapsed := m.splitMembers()
+	if len(collapsed) == 0 {
+		return m
+	}
+	parent := m.groupName
+	m.sendf(proto.Command{Action: "panel.detach"}) // detach the parent's tiles
+	m.closeGroupEmus()
+	m.groupInteract = false
+	m.summaryScope = true
+	m.groupFocus = 0
+	m.scrollOff = 0
+	m.attachGroupMembers() // re-attach, now over the scoped collapsed set
+	shown := m.tileMembers()
+	status := fmt.Sprintf("summary · %s (%d panels)", parent, len(collapsed))
+	if len(collapsed) > len(shown) {
+		status += fmt.Sprintf(" · showing first %d", len(shown))
+	}
+	m.status = status
+	return m
+}
+
+// exitSummaryScope returns from the summary sub-view to the parent group view: it
+// detaches the scoped tiles, clears summaryScope, resets the focus, and re-attaches
+// the parent group's own tiles.
+func (m model) exitSummaryScope() model {
+	m.sendf(proto.Command{Action: "panel.detach"}) // detach the scoped tiles
+	m.closeGroupEmus()
+	m.groupInteract = false
+	m.summaryScope = false
+	m.groupFocus = 0
+	m.scrollOff = 0
+	m.attachGroupMembers() // re-attach the parent group's tiles
+	m.status = "group · " + m.groupName
 	return m
 }
 
@@ -573,6 +685,7 @@ func (m *model) resetToDashboard(status string) {
 	m.groupFocus = 0
 	m.groupArmed = false
 	m.groupInteract = false
+	m.summaryScope = false
 	m.groupPinned = nil
 	m.scrollOff = 0
 	m.scrolling = false
@@ -601,6 +714,8 @@ func (m model) backToGroup() (tea.Model, tea.Cmd) {
 	m.groupName = m.zoomGroupOrigin
 	m.groupArmed = false
 	m.groupInteract = false
+	m.summaryScope = false // BIND-g lands on the parent group, never the summary sub-view
+	m.groupFocus = 0
 	m.scrollOff = 0
 	m.scrolling = false
 	m.cursorHidden = nil
@@ -611,73 +726,95 @@ func (m model) backToGroup() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// groupZoomView renders the split: a header, the grid of live member tiles, the
-// tree pane listing the unpinned overflow when there is any, and a footer pinned
-// to the last line.
+// groupZoomView renders the split: a header, an even grid of live member tiles —
+// with one extra summary tile as the last cell when some members are collapsed —
+// and a footer pinned to the last line. In the summary sub-view the header names
+// the parent and there is no summary tile (the scoped set shows in full).
 func (m model) groupZoomView() string {
-	tiles, tree := m.splitMembers()
-	members := append(append([]panel.Panel{}, tiles...), tree...)
-	header := sectionStyle.Render(spaced("GROUP")) + "  " +
+	tiles, collapsed := m.splitMembers()
+	caption := "GROUP"
+	if m.summaryScope {
+		caption = "SUMMARY"
+	}
+	header := sectionStyle.Render(spaced(caption)) + "  " +
 		lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(m.groupName) +
-		mutedStyle.Render(fmt.Sprintf("   %d panel(s)  ", len(members))) + kindBreakdown(members)
-	if len(tree) > 0 {
+		mutedStyle.Render(fmt.Sprintf("   %d panel(s)  ", len(tiles))) + kindBreakdown(tiles)
+	if len(collapsed) > 0 {
 		header += lipgloss.NewStyle().Foreground(states[panel.Idle].color).
-			Render(fmt.Sprintf("   · %d live · %d in list", len(tiles), len(tree)))
+			Render(fmt.Sprintf("   · %d live · %d summarised", len(tiles), len(collapsed)))
 	}
 
 	cols, emuCols, emuRows := m.tileGeometry()
-	rendered := make([]string, len(tiles))
+	// Render the live tiles, then append the summary tile as the last grid cell so
+	// the even grid sizes it like any other tile. Its focus slot is len(tiles).
+	rendered := make([]string, 0, len(tiles)+1)
 	for i, p := range tiles {
-		rendered[i] = m.renderTile(p, i == m.groupFocus, emuCols, emuRows)
+		rendered = append(rendered, m.renderTile(p, i == m.groupFocus, emuCols, emuRows))
+	}
+	if len(collapsed) > 0 {
+		// The summary slot sits just past the last tile; reuse the partition already
+		// in scope rather than recomputing it through focusedIsSummary.
+		summaryFocused := m.groupFocus == len(tiles)
+		rendered = append(rendered, m.renderSummaryTile(collapsed, summaryFocused, emuCols, emuRows))
 	}
 	grid := tileGrid(rendered, cols)
-
-	if len(tree) > 0 {
-		// The focus index within the tree (after the tiles), or < 0 on a tile.
-		pane := m.renderGroupTree(tree, m.groupFocus-len(tiles), lipgloss.Height(grid))
-		grid = lipgloss.JoinHorizontal(lipgloss.Top, grid, " ", pane)
-	}
 
 	body := lipgloss.JoinVertical(lipgloss.Left, header, "", grid)
 	placed := lipgloss.Place(m.width, m.height-1, lipgloss.Left, lipgloss.Top, body)
 	return placed + "\n" + m.groupZoomFooter()
 }
 
-// renderGroupTree draws the right-hand pane listing the group's unpinned members
-// — the overflow without a live tile — as a compact, scrollable list with the
-// focused row lit. focusIdx is the focused row within the tree, or < 0 when the
-// focus rests on a tile. The pane is sized to the grid's height so the two align.
-func (m model) renderGroupTree(tree []panel.Panel, focusIdx, height int) string {
-	inner := groupTreeWidth - 4 // border (2) + padding (2)
-	head := sectionStyle.Render(spaced("LIST")) + mutedStyle.Render(fmt.Sprintf(" %d", len(tree)))
-
-	// Reserve the header, a blank, a blank, and the hint; scroll the rest.
-	visible := max(1, height-6)
-	start, end := scrollWindow(max(0, focusIdx), len(tree), visible)
-
-	rows := []string{head, ""}
-	for i := start; i < end; i++ {
-		p := tree[i]
-		info := states[p.State]
-		led := lipgloss.NewStyle().Foreground(info.color).Render(info.led)
-		name := truncate(p.Title, inner-2)
-		style := lipgloss.NewStyle().Width(inner)
-		if i == focusIdx {
-			style = style.Foreground(colDark).Background(colBrand).Bold(true)
-		} else {
-			style = style.Foreground(colInk)
-		}
-		rows = append(rows, style.Render(led+" "+name))
+// renderSummaryTile draws the rollup of the collapsed members as one tile in the
+// even grid: a "+N more" header, a per-state breakdown in the state LED colours,
+// and the most-urgent member's activity line — so the spillover is legible at a
+// glance and one enter away. It matches renderTile's box (size, padding, brand
+// glow when focused) so it sits flush as the grid's last cell.
+func (m model) renderSummaryTile(collapsed []panel.Panel, focused bool, emuCols, emuRows int) string {
+	border := colFaint
+	titleColor := colInk
+	if focused {
+		border = colBrand
+		titleColor = colBrandHi
 	}
-	rows = append(rows, "", mutedStyle.Render(fmt.Sprintf("%s pin · enter zoom", keyPin)))
 
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colFaint).
+	glyph := lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render("▦")
+	head := glyph + " " + lipgloss.NewStyle().Foreground(titleColor).Bold(true).
+		Render(truncate(fmt.Sprintf("+%d more", len(collapsed)), max(1, emuCols-2)))
+
+	// The body, padded to exactly emuRows so the summary tile is the same height as
+	// every other cell: the per-state chips, then the most-urgent activity line.
+	body := make([]string, emuRows)
+	if emuRows > 0 {
+		body[0] = truncate(groupCountChips(collapsed), emuCols)
+	}
+	if emuRows > 1 {
+		if act := mostUrgentActivity(collapsed); act != "" {
+			body[1] = mutedStyle.Render(truncate(act, emuCols))
+		}
+	}
+
+	box := lipgloss.NewStyle().
+		Width(emuCols+2). // inner content + padding; the border adds the last 2
 		Padding(0, 1).
-		Width(groupTreeWidth - 2).
-		Height(max(1, height-2)). // the border adds the 2 rows back, matching the grid
-		Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
+		MarginRight(gtileGap).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(border)
+	return box.Render(lipgloss.JoinVertical(lipgloss.Left, head,
+		lipgloss.JoinVertical(lipgloss.Left, body...)))
+}
+
+// mostUrgentActivity is the activity line of the most pressing collapsed member,
+// by the same urgency order the summary chips use (attention > running > spawning
+// > idle > exited). Empty when no such member carries an activity line yet.
+func mostUrgentActivity(members []panel.Panel) string {
+	for _, st := range stateOrder {
+		for _, p := range members {
+			if p.State == st && p.Activity != "" {
+				return fmt.Sprintf("%s · %s", p.Title, p.Activity)
+			}
+		}
+	}
+	return ""
 }
 
 // tileGrid arranges rendered tiles into rows of at most cols columns.
@@ -782,6 +919,9 @@ func (m model) groupZoomFooter() string {
 		return m.searchPromptFooter()
 	}
 	mode := seg("▣ GROUP", colInk, colBlue)
+	if m.summaryScope {
+		mode = seg("▦ SUMMARY", colDark, colBrandHi) // scoped to the parent's summarised members
+	}
 	switch {
 	case m.copySelecting:
 		mode = seg("✄ SELECT", colDark, colCyan)
