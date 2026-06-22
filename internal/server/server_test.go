@@ -1028,7 +1028,7 @@ func TestReloadAppliesSettings(t *testing.T) {
 	}
 
 	// Hot-reload to allow name conflicts; the same rename now goes through.
-	srv.Reload(true, "", 0)
+	srv.Reload(true, "", 0, "")
 	if err := c.Send(proto.Command{Action: "panel.rename", ID: b, Name: "dup"}); err != nil {
 		t.Fatalf("rename b after reload: %v", err)
 	}

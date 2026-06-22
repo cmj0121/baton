@@ -329,10 +329,10 @@ func TestPanelDir(t *testing.T) {
 	if err != nil {
 		t.Skipf("no home dir: %v", err)
 	}
-	if got := panelDir(""); got != home {
+	if got := PanelDir(""); got != home {
 		t.Fatalf("empty dir should default to home %q, got %q", home, got)
 	}
-	if got := panelDir("/tmp/x"); got != "/tmp/x" {
+	if got := PanelDir("/tmp/x"); got != "/tmp/x" {
 		t.Fatalf("a given dir should pass through, got %q", got)
 	}
 }

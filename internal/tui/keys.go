@@ -26,6 +26,7 @@ const (
 	keyPurge       = "x"
 	keySignal      = "s" // open the send-signal picker for the selection / panel / group
 	keySearch      = "f" // find: filter panels on the dashboard, search the scrollback in a zoom (C-t f)
+	keyDiff        = "D" // show the work-tree diff of the focused agent panel (shift+d; C-t D in a zoom)
 	keyHelp        = "?" // view the key list for the current view
 	keyEditMap     = "k" // edit the key map (prefix only: C-t k)
 	keyPanelConfig = "P" // shift+p
@@ -79,6 +80,7 @@ const (
 	actPurge
 	actSignal
 	actSearch
+	actDiff
 	actHelp
 	actPanelConfig
 	actRestart
@@ -130,6 +132,7 @@ var bindings = []binding{
 	{"purge-exited", keyPurge, "purge all exited panels", actPurge, "Panels"},
 	{"signal", keySignal, "send a signal to the panel(s)", actSignal, "Panels"},
 	{"search", keySearch, "find panels · search the scrollback (zoom)", actSearch, "Panels"},
+	{"diff", keyDiff, "show the work-tree diff (agent panel)", actDiff, "Panels"},
 
 	{"mark", keyMark, "mark a panel for grouping", actMark, "Work items"},
 	{"group", keyGroup, "group the marked panels", actGroup, "Work items"},
@@ -162,6 +165,7 @@ type prefs struct {
 	defaultAgent      string                         // agent profile the new-agent action spawns
 	agents            map[string]config.AgentProfile // user-configured agent profiles
 	replayKB          int                            // per-panel replay buffer in KiB (0 = server default)
+	diffCommand       string                         // explicit diff command for the agent diff pop-up ("" = git diff.tool then a built-in diff)
 }
 
 // defaultAgentName is the built-in agent profile, used when none is configured —
@@ -212,6 +216,7 @@ func loadPrefs() prefs {
 	p.defaultAgent = cfg.Panel.DefaultAgent
 	p.agents = cfg.Panel.Agents
 	p.replayKB = cfg.Panel.ReplayKB
+	p.diffCommand = cfg.Panel.DiffCommand
 	return p
 }
 
@@ -253,6 +258,7 @@ func (m model) saveConfig() error {
 			DefaultAgent: m.defaultAgent,
 			Agents:       m.agents, // round-trip the user's profiles so a save never drops them
 			ReplayKB:     m.replayKB,
+			DiffCommand:  m.diffCommand,
 		},
 	}.Save()
 }

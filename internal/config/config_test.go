@@ -62,7 +62,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		Prefix:   "ctrl+a",
 		Keys:     map[string]string{"new-panel": "x", "close": "W"},
 		Settings: Settings{ConfirmClose: &off},
-		Panel:    PanelDefaults{Shell: "/bin/zsh", Workdir: "/work", ReplayKB: 512},
+		Panel:    PanelDefaults{Shell: "/bin/zsh", Workdir: "/work", ReplayKB: 512, DiffCommand: "delta"},
 	}
 	if err := want.Save(); err != nil {
 		t.Fatalf("save: %v", err)
@@ -85,6 +85,9 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if got.Panel.Workdir != "/work" {
 		t.Fatalf("workdir should round-trip, got %q", got.Panel.Workdir)
+	}
+	if got.Panel.DiffCommand != "delta" {
+		t.Fatalf("diff-command should round-trip, got %q", got.Panel.DiffCommand)
 	}
 }
 

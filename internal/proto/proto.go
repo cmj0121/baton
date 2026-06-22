@@ -22,9 +22,9 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action string   `json:"action"`         // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.signal | group.show | server.reload
+	Action string   `json:"action"`         // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.signal | panel.diff | group.show | server.reload
 	Kind   string   `json:"kind,omitempty"` // panel kind for "panel.create" (default "shell")
-	ID     string   `json:"id,omitempty"`   // target panel for close/attach/input/resize, or the panel to rename
+	ID     string   `json:"id,omitempty"`   // target panel for close/attach/input/resize/diff, or the panel to rename
 	Path   string   `json:"path,omitempty"` // init command (binary path) for "panel.create"; empty = default shell
 	Args   []string `json:"args,omitempty"` // command arguments for "panel.create" (an agent profile's args)
 	Dir    string   `json:"dir,omitempty"`  // working directory the new panel's process runs in ("panel.create")
@@ -60,13 +60,13 @@ type Panel struct {
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error"
+	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "diff"
 	Version   string      `json:"version,omitempty"`    // protocol version, set on "welcome"
 	ServerVer string      `json:"server_ver,omitempty"` // the server's build version, set on "welcome"
 	Error     string      `json:"error,omitempty"`      // set on "error"
 	Panels    []Panel     `json:"panels,omitempty"`     // full snapshot on "panels"; live state/spark refresh on "telemetry"
 	Groups    []GroupView `json:"groups,omitempty"`     // per-group view settings on the "panels" snapshot, alongside Panels
-	ID        string      `json:"id,omitempty"`         // panel id on "output"
+	ID        string      `json:"id,omitempty"`         // panel id on "output"; the new ephemeral diff panel id on "diff"
 	Data      []byte      `json:"data,omitempty"`       // pty output bytes on "output"
 
 	// Host resource sample on "stats", measured on the server so the footer

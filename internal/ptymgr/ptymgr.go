@@ -94,10 +94,12 @@ type Spec struct {
 	Dir     string   // working directory; empty falls back to the user's home
 }
 
-// panelDir is the directory a panel runs in: the requested dir, or the user's
+// PanelDir is the directory a panel runs in: the requested dir, or the user's
 // home when none is given. A panel never inherits the daemon's own working
-// directory (where baton happened to be launched).
-func panelDir(dir string) string {
+// directory (where baton happened to be launched). It is exported so a caller
+// that needs the same effective workdir before a spawn (e.g. the diff pop-up
+// resolving an agent's git tree) resolves it identically to StartCmd.
+func PanelDir(dir string) string {
 	if dir != "" {
 		return dir
 	}
@@ -126,7 +128,7 @@ func (m *Manager) StartCmd(id string, spec Spec) error {
 
 	cmd := exec.Command(command, spec.Args...)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
-	cmd.Dir = panelDir(spec.Dir) // empty → home, never the daemon's cwd
+	cmd.Dir = PanelDir(spec.Dir) // empty → home, never the daemon's cwd
 
 	f, err := pty.Start(cmd)
 	if err != nil {
