@@ -28,6 +28,14 @@ func PidFile(socket string) string {
 	return strings.TrimSuffix(socket, ".sock") + ".pid"
 }
 
+// StateFile returns the persisted fleet/layout snapshot that pairs with the
+// given socket. Like PidFile it is derived from the socket path, so one
+// daemon-per-session owns one state file and the daemon child resolves the same
+// path from BATON_SOCK after it re-sessions itself.
+func StateFile(socket string) string {
+	return strings.TrimSuffix(socket, ".sock") + ".state.json"
+}
+
 // LogFile is the default log file ($HOME/.baton/baton.log), used when --log is
 // not given. One server runs per login session, so it needs no per-instance
 // suffix.

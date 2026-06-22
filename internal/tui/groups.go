@@ -365,7 +365,7 @@ func (m model) zoomGroup(it dashItem) model {
 	m.groupArmed = false
 	m.scrollOff = 0 // open at the live bottom
 	m.scrolling = false
-	m.groupCols = 0 // auto-fit until the user dials columns in
+	m.summaryScope = false // always open on the group itself, never a stale sub-view
 	m.groupPinned = pinsForMembers(it.members)
 	if only, ok := singlePinned(it.members, m.groupPinned); ok {
 		m = m.zoomInto(only)
@@ -392,6 +392,26 @@ func pinsForMembers(members []panel.Panel) map[string]bool {
 		return nil
 	}
 	return pins
+}
+
+// shownForGroups builds the per-group visible-tile count map from a snapshot's
+// GroupView entries, keyed by group name. Only groups the server reports a count
+// for appear; groups absent from the map fall back to the default N in
+// groupShownN, so a fresh group or one the server has not annotated still works.
+func shownForGroups(groups []proto.GroupView) map[string]int {
+	if len(groups) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(groups))
+	for _, g := range groups {
+		if g.Shown > 0 {
+			out[g.Group] = g.Shown
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // singlePinned returns the lone pinned member when exactly one of the group's

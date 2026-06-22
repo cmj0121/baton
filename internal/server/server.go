@@ -9,6 +9,7 @@ import (
 	"net"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,10 +22,19 @@ import (
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/ptymgr"
 	"github.com/cmj0121/baton/internal/signals"
+	"github.com/cmj0121/baton/internal/state"
 )
 
 // statsInterval is how often the server samples host CPU/memory for the footer.
 const statsInterval = 2 * time.Second
+
+// minVisible and maxVisible bound a group's visible count — how many members
+// stream as live tiles before the rest collapse into the summary tile. maxVisible
+// mirrors the TUI's old maxGroupTiles, the live-tile cap.
+const (
+	minVisible = 1
+	maxVisible = 16
+)
 
 // clientConn is one attached frontend. Outbound messages go through its buffered
 // channel so a slow client never stalls a broadcast. attached is the set of panel
@@ -51,7 +61,21 @@ type Server struct {
 	seq     int
 	panels  []panel.Panel
 	clients map[*clientConn]struct{}
-	mon     *monitor // lifecycle + telemetry bookkeeping, guarded by mu
+	mon     *monitor               // lifecycle + telemetry bookkeeping, guarded by mu
+	specs   map[string]ptymgr.Spec // immutable spawn spec per panel id, for persistence + respawn (guarded by mu)
+
+	// groupShown is the per-group visible count — how many members stream as live
+	// tiles before the rest collapse into the summary tile. Keyed by group name;
+	// an absent or zero entry means "use the client default". Guarded by mu.
+	groupShown map[string]int
+
+	// Persistence. stateF is the snapshot path ("" disables persistence); dirty is
+	// a 1-deep "save pending" nudge the saverLoop drains; saveMu serializes the
+	// disk writes; bootTime is when this server (re)booted, persisted as LastBoot.
+	stateF   string
+	dirty    chan struct{}
+	saveMu   sync.Mutex
+	bootTime time.Time
 }
 
 // Option tunes a Server at construction. Options keep New's signature stable as
@@ -84,14 +108,23 @@ func WithVersion(v string) Option {
 	return func(s *Server) { s.version = v }
 }
 
+// WithStateFile points the server at the snapshot it persists the fleet/layout
+// to and restores from on boot. An empty path disables persistence entirely.
+func WithStateFile(path string) Option {
+	return func(s *Server) { s.stateF = path }
+}
+
 // New builds a server bound to ln. The fleet starts empty — panels appear only
 // when the user spawns a real one. Options are applied before the PTY manager is
 // built, so settings like the replay size reach it.
 func New(ln net.Listener, opts ...Option) *Server {
 	s := &Server{
-		ln:      ln,
-		clients: make(map[*clientConn]struct{}),
-		mon:     newMonitor(),
+		ln:         ln,
+		clients:    make(map[*clientConn]struct{}),
+		mon:        newMonitor(),
+		specs:      make(map[string]ptymgr.Spec),
+		groupShown: make(map[string]int),
+		dirty:      make(chan struct{}, 1),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -225,6 +258,7 @@ func (s *Server) Serve() error {
 	defer close(stop)
 	go s.statsLoop(stop)
 	go s.monitorLoop(stop)
+	go s.saverLoop(stop)
 
 	for {
 		conn, err := s.ln.Accept()
@@ -372,7 +406,13 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
-		s.broadcast(s.panelsMsg())
+		s.broadcastFleet()
+	case "panel.respawn":
+		if err := s.respawnPanel(cmd.ID); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		s.broadcastFleet()
 	case "panel.close":
 		ids := cmd.IDs
 		if len(ids) == 0 && cmd.ID != "" {
@@ -382,41 +422,41 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
-		s.broadcast(s.panelsMsg())
+		s.broadcastFleet()
 	case "panel.purge":
 		if s.purgeExited() > 0 {
-			s.broadcast(s.panelsMsg())
+			s.broadcastFleet()
 		}
 	case "panel.group":
 		if err := s.groupPanels(cmd.IDs, cmd.Group); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
-		s.broadcast(s.panelsMsg())
+		s.broadcastFleet()
 	case "panel.ungroup":
 		if err := s.ungroup(cmd.IDs, cmd.Group); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
-		s.broadcast(s.panelsMsg())
+		s.broadcastFleet()
 	case "panel.rename":
 		if err := s.rename(cmd.ID, cmd.Group, cmd.Name); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
-		s.broadcast(s.panelsMsg())
+		s.broadcastFleet()
 	case "panel.move":
 		if err := s.movePanels(cmd.IDs, cmd.Index); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
-		s.broadcast(s.panelsMsg())
+		s.broadcastFleet()
 	case "panel.pin", "panel.unpin":
 		if err := s.setPinned(targetIDs(cmd), cmd.Action == "panel.pin"); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
-		s.broadcast(s.panelsMsg())
+		s.broadcastFleet()
 	case "panel.signal":
 		// Delivering a signal does not change any panel struct; an exit it triggers
 		// flows back through onPanelExit, so there is nothing to broadcast here.
@@ -424,6 +464,12 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
+	case "group.show":
+		if err := s.setGroupShown(cmd.Group, cmd.Count); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		s.broadcastFleet()
 	case "server.reload":
 		// Re-read the config and apply it in place — the cockpit's reload action.
 		// The fleet keeps running; only the tunable settings change.
@@ -461,20 +507,23 @@ func (s *Server) createPanel(kind, path string, args []string, dir string) error
 	}
 	s.mu.Unlock()
 
+	// Build the spawn spec once, then use the same value to start the PTY and to
+	// stash for respawn — so a restored panel re-runs with exactly what launched it
+	// (a shell carries no args; an agent does).
+	var spec ptymgr.Spec
 	switch kind {
 	case proto.KindShell:
-		if err := s.pty.StartCmd(id, ptymgr.Spec{Command: path, Dir: dir}); err != nil {
-			return err
-		}
+		spec = ptymgr.Spec{Command: path, Dir: dir}
 	case proto.KindAgent:
 		if path == "" {
 			return fmt.Errorf("an agent panel needs a command")
 		}
-		if err := s.pty.StartCmd(id, ptymgr.Spec{Command: path, Args: args, Dir: dir}); err != nil {
-			return err
-		}
+		spec = ptymgr.Spec{Command: path, Args: args, Dir: dir}
 	default:
 		return fmt.Errorf("unknown panel kind %q", kind)
+	}
+	if err := s.pty.StartCmd(id, spec); err != nil {
+		return err
 	}
 
 	p := panel.Panel{
@@ -486,7 +535,8 @@ func (s *Server) createPanel(kind, path string, args []string, dir string) error
 	}
 	s.mu.Lock()
 	s.panels = append(s.panels, p)
-	s.mon.spawned(id) // start the Monitor's clock; first output wakes it to running
+	s.specs[id] = spec // the exact spec StartCmd launched, so respawn reproduces it
+	s.mon.spawned(id)  // start the Monitor's clock; first output wakes it to running
 	s.mu.Unlock()
 
 	log.Info().Str("panel", p.Title).Msg("panel created")
@@ -509,6 +559,174 @@ func panelTitle(kind, path, dir, id string) string {
 		name = filepath.Base(path)
 	}
 	return fmt.Sprintf("%s #%s", name, id)
+}
+
+// broadcastFleet pushes the current fleet snapshot to every client and marks the
+// persisted state dirty — the two halves of "the fleet structurally changed":
+// tell clients now, flush to disk soon. Every structural mutation ends here, so a
+// new mutation path cannot announce a change yet silently forget to persist it.
+// Non-structural live updates (a panel's exit, telemetry) call broadcast directly,
+// since they restore identically and need no save.
+func (s *Server) broadcastFleet() {
+	s.broadcast(s.panelsMsg())
+	s.markDirty()
+}
+
+// markDirty nudges the saverLoop to flush the current fleet/layout to disk. It is
+// called after each successful structural mutation. The dirty channel is 1-deep, so
+// a burst of mutations coalesces into a single save; a no-op when persistence is off.
+func (s *Server) markDirty() {
+	if s.stateF == "" {
+		return
+	}
+	select {
+	case s.dirty <- struct{}{}:
+	default:
+	}
+}
+
+// saverLoop persists the fleet/layout whenever a mutation marks the state dirty.
+// It stops when Serve returns. The shutdown path flushes a final snapshot
+// synchronously (SaveNow), since os.Exit kills this loop before it can drain.
+func (s *Server) saverLoop(stop <-chan struct{}) {
+	for {
+		select {
+		case <-stop:
+			return
+		case <-s.dirty:
+			s.saveNow()
+		}
+	}
+}
+
+// snapshotState builds the persisted snapshot from the live fleet. It briefly
+// acquires s.mu just to read; the caller must not hold it. The disk write is the
+// caller's job (saveNow), kept off the lock.
+func (s *Server) snapshotState() state.State {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	panels := make([]state.PanelState, len(s.panels))
+	for i, p := range s.panels {
+		spec := s.specs[p.ID]
+		panels[i] = state.PanelState{
+			ID:     p.ID,
+			Kind:   p.Kind.String(),
+			Title:  p.Title,
+			Group:  p.Group,
+			Pinned: p.Pinned,
+			Spec:   state.Spec{Command: spec.Command, Args: spec.Args, Dir: spec.Dir},
+		}
+	}
+	// Per-group view settings (the visible counts), keyed by name like the group.
+	groups := make([]state.GroupLayout, 0, len(s.groupShown))
+	for g, shown := range s.groupShown {
+		if shown != 0 {
+			groups = append(groups, state.GroupLayout{Group: g, Shown: shown})
+		}
+	}
+	return state.State{Seq: s.seq, LastBoot: s.bootTime, Panels: panels, Groups: groups}
+}
+
+// saveNow writes the current snapshot to disk now. saveMu serializes writers so two
+// saves never interleave; the snapshot is built under s.mu, then released before the
+// disk I/O so a slow write never stalls a command. A write error is logged, never fatal.
+func (s *Server) saveNow() {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	st := s.snapshotState() // builds under s.mu, then releases it
+	if err := st.Save(s.stateF); err != nil {
+		log.Warn().Err(err).Str("state_file", s.stateF).Msg("could not save state")
+	}
+}
+
+// SaveNow flushes the current fleet/layout to disk synchronously. The daemon's
+// shutdown path calls it before os.Exit, which would otherwise skip the final save.
+// A no-op when persistence is off.
+func (s *Server) SaveNow() {
+	if s.stateF == "" {
+		return
+	}
+	s.saveNow()
+}
+
+// Restore loads the persisted fleet/layout and seeds the server with it before
+// Serve. Every restored panel comes back as an Exited dead-slot placeholder: no
+// process is auto-respawned, for shells or agents alike — a manual panel.respawn
+// re-runs one on demand. The id counter is restored (and bumped past the highest
+// restored id) so a new panel can never collide with a dead slot. Call it once,
+// before Serve; a no-op when persistence is off.
+func (s *Server) Restore() {
+	if s.stateF == "" {
+		return
+	}
+	st, _ := state.Load(s.stateF) // Load never hard-fails: a bad file yields an empty State
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bootTime = time.Now()
+	s.seq = st.Seq
+	max := s.seq
+	for _, ps := range st.Panels {
+		s.panels = append(s.panels, panel.Panel{
+			ID:       ps.ID,
+			Kind:     panel.ParseKind(ps.Kind),
+			Title:    ps.Title,
+			Group:    ps.Group,
+			Pinned:   ps.Pinned,
+			State:    panel.Exited,
+			Activity: "restored · press r to re-run",
+		})
+		s.specs[ps.ID] = ptymgr.Spec{Command: ps.Spec.Command, Args: ps.Spec.Args, Dir: ps.Spec.Dir}
+		if n, err := strconv.Atoi(ps.ID); err == nil && n > max {
+			max = n
+		}
+	}
+	if max > s.seq {
+		s.seq = max // a new panel's id picks up past the highest restored one
+	}
+	for _, g := range st.Groups {
+		if g.Shown > 0 {
+			s.groupShown[g.Group] = g.Shown
+		}
+	}
+	log.Info().Int("panels", len(st.Panels)).Int("seq", s.seq).Msg("state restored")
+}
+
+// respawnPanel re-runs the backing process of an exited panel from its frozen spawn
+// spec. It is the manual counterpart to the no-auto-respawn restore: only an Exited
+// panel with a recorded spec can be re-run. The lock is dropped around StartCmd (which
+// may block), mirroring createPanel, then re-taken to flip the panel back to Spawning.
+func (s *Server) respawnPanel(id string) error {
+	s.mu.Lock()
+	idx := s.indexLocked(id)
+	if idx < 0 {
+		s.mu.Unlock()
+		return fmt.Errorf("no panel with id %q", id)
+	}
+	if s.panels[idx].State != panel.Exited {
+		s.mu.Unlock()
+		return fmt.Errorf("panel is still running")
+	}
+	spec, ok := s.specs[id]
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("nothing to re-run")
+	}
+
+	if err := s.pty.StartCmd(id, spec); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	if i := s.indexLocked(id); i >= 0 {
+		s.panels[i].State = panel.Spawning
+		s.panels[i].Activity = activityText(panel.Spawning, 0)
+		s.mon.spawned(id) // restart the Monitor's clock; first output wakes it to running
+	}
+	s.mu.Unlock()
+
+	log.Info().Str("panel", id).Msg("panel re-run")
+	return nil
 }
 
 // closePanels closes every listed panel and broadcasts once for the whole batch
@@ -553,6 +771,7 @@ func (s *Server) closePanel(id string) error {
 	title := s.panels[idx].Title
 	s.panels = slices.Delete(s.panels, idx, idx+1)
 	s.mon.forget(id)
+	delete(s.specs, id) // the panel is gone for good; drop its retained spawn spec
 	s.mu.Unlock()
 
 	s.pty.Stop(id) // no-op for a panel with no live process
@@ -570,6 +789,7 @@ func (s *Server) purgeExited() int {
 		if p.State == panel.Exited {
 			gone = append(gone, p.ID)
 			s.mon.forget(p.ID)
+			delete(s.specs, p.ID) // purged for good; drop its retained spawn spec
 			continue
 		}
 		kept = append(kept, p)
@@ -687,6 +907,10 @@ func (s *Server) ungroup(ids []string, name string) error {
 	if moved == 0 {
 		return fmt.Errorf("no panels in group %q", name)
 	}
+	// The whole group is gone; drop its visible count so the map stays tidy.
+	s.mu.Lock()
+	delete(s.groupShown, name)
+	s.mu.Unlock()
 	log.Info().Str("group", name).Int("panels", moved).Msg("group dissolved")
 	return nil
 }
@@ -744,6 +968,11 @@ func (s *Server) renameGroup(old, name string) error {
 	moved := s.setGroupLocked(func(p panel.Panel) bool { return p.Group == old }, name)
 	if moved == 0 {
 		return fmt.Errorf("no panels in group %q", old)
+	}
+	// Carry the visible count to the new name, keyed by name like the group itself.
+	if shown, ok := s.groupShown[old]; ok {
+		s.groupShown[name] = shown
+		delete(s.groupShown, old)
 	}
 	log.Info().Str("from", old).Str("to", name).Int("panels", moved).Msg("group renamed")
 	return nil
@@ -873,6 +1102,25 @@ func (s *Server) setPinned(ids []string, pinned bool) error {
 	return nil
 }
 
+// setGroupShown records a group's visible count — how many members stream as
+// live tiles before the rest collapse into the summary tile. The count is clamped
+// to [minVisible, maxVisible]; an empty group name is rejected. The group need not
+// currently exist: a count may be set as the user curates, and a lingering entry is
+// harmless (lifecycle cleanup keeps the map tidy on dissolve/rename).
+func (s *Server) setGroupShown(group string, count int) error {
+	group = strings.TrimSpace(group)
+	if group == "" {
+		return fmt.Errorf("group.show needs a group")
+	}
+	count = max(minVisible, min(count, maxVisible))
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.groupShown[group] = count
+	log.Info().Str("group", group).Int("shown", count).Msg("group visible count set")
+	return nil
+}
+
 func (s *Server) panelsMsg() proto.ServerMsg {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -880,7 +1128,15 @@ func (s *Server) panelsMsg() proto.ServerMsg {
 	for i, p := range s.panels {
 		out[i] = p.ToProto()
 	}
-	return proto.ServerMsg{Type: "panels", Panels: out}
+	// Per-group view settings ride the snapshot, sorted by name for determinism.
+	groups := make([]proto.GroupView, 0, len(s.groupShown))
+	for g, shown := range s.groupShown {
+		if shown != 0 {
+			groups = append(groups, proto.GroupView{Group: g, Shown: shown})
+		}
+	}
+	slices.SortFunc(groups, func(a, b proto.GroupView) int { return strings.Compare(a.Group, b.Group) })
+	return proto.ServerMsg{Type: "panels", Panels: out, Groups: groups}
 }
 
 func (s *Server) addClient(cc *clientConn) {

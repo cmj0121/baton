@@ -6,7 +6,7 @@
 package proto
 
 // ProtocolVersion is negotiated on connect. Bump it on breaking wire changes.
-const ProtocolVersion = "baton/0"
+const ProtocolVersion = "baton/1"
 
 // Panel kinds carried on the wire.
 const (
@@ -22,7 +22,7 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action string   `json:"action"`         // hello | panel.list | panel.create | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.signal | server.reload
+	Action string   `json:"action"`         // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.signal | group.show | server.reload
 	Kind   string   `json:"kind,omitempty"` // panel kind for "panel.create" (default "shell")
 	ID     string   `json:"id,omitempty"`   // target panel for close/attach/input/resize, or the panel to rename
 	Path   string   `json:"path,omitempty"` // init command (binary path) for "panel.create"; empty = default shell
@@ -36,6 +36,14 @@ type Command struct {
 	Name   string   `json:"name,omitempty"`   // new name for "panel.rename" (a panel title or a group name)
 	Index  int      `json:"index,omitempty"`  // destination index among the remaining panels for "panel.move"
 	Signal string   `json:"signal,omitempty"` // signal name to deliver for "panel.signal", e.g. "SIGINT"
+	Count  int      `json:"count,omitempty"`  // absolute visible count for "group.show": how many members stream as live tiles
+}
+
+// GroupView carries a group's view settings on a snapshot: Shown is how many
+// members stream as live tiles before the rest collapse into the summary tile.
+type GroupView struct {
+	Group string `json:"group"`
+	Shown int    `json:"shown,omitempty"`
 }
 
 // Panel is the server-side view of a single live terminal.
@@ -52,13 +60,14 @@ type Panel struct {
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type      string  `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error"
-	Version   string  `json:"version,omitempty"`    // protocol version, set on "welcome"
-	ServerVer string  `json:"server_ver,omitempty"` // the server's build version, set on "welcome"
-	Error     string  `json:"error,omitempty"`      // set on "error"
-	Panels    []Panel `json:"panels,omitempty"`     // full snapshot on "panels"; live state/spark refresh on "telemetry"
-	ID        string  `json:"id,omitempty"`         // panel id on "output"
-	Data      []byte  `json:"data,omitempty"`       // pty output bytes on "output"
+	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error"
+	Version   string      `json:"version,omitempty"`    // protocol version, set on "welcome"
+	ServerVer string      `json:"server_ver,omitempty"` // the server's build version, set on "welcome"
+	Error     string      `json:"error,omitempty"`      // set on "error"
+	Panels    []Panel     `json:"panels,omitempty"`     // full snapshot on "panels"; live state/spark refresh on "telemetry"
+	Groups    []GroupView `json:"groups,omitempty"`     // per-group view settings on the "panels" snapshot, alongside Panels
+	ID        string      `json:"id,omitempty"`         // panel id on "output"
+	Data      []byte      `json:"data,omitempty"`       // pty output bytes on "output"
 
 	// Host resource sample on "stats", measured on the server so the footer
 	// reflects the machine where the panels actually run.
