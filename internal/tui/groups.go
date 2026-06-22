@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/cmj0121/baton/internal/panel"
@@ -290,16 +289,6 @@ func (m model) addMarkedToGroup() model {
 	return m
 }
 
-// enterGroupView opens the selected group's split (the C-t g escape from the
-// dashboard).
-func (m model) enterGroupView() (tea.Model, tea.Cmd) {
-	if it, ok := m.selectedItem(); ok && it.kind == itemGroup {
-		return m.zoomGroup(it), nil
-	}
-	m.status = "select a group to view"
-	return m, nil
-}
-
 // ungroupSelected dissolves the selected work item, returning its panels to the
 // dashboard as lone cards. It is a no-op on a lone panel.
 func (m model) ungroupSelected() model {
@@ -379,7 +368,7 @@ func (m model) zoomGroup(it dashItem) model {
 	m.groupPinned = pinsForMembers(it.members)
 	if only, ok := singlePinned(it.members, m.groupPinned); ok {
 		m = m.zoomInto(only)
-		m.zoomGroupOrigin = it.name // prefix-g pops back to the split
+		m.zoomGroupOrigin = it.name // back (C-t b) pops back to the split
 		m.status = fmt.Sprintf("group · %s · %s (pinned)", it.name, only.Title)
 		return m
 	}

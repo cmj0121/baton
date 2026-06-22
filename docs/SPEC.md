@@ -105,7 +105,10 @@ group, `C-t [` opens scroll mode on the focused tile, `x` removes the focused
 member from the group, `D` diffs the focused agent member, `enter` drops into the focused panel's own single zoom, and
 `d`/`esc` returns to the dashboard.
 From a zoomed member,
-the always-on `C-t g` escape pops back to the split.
+**back** (`C-t b`) pops back to the split it was launched from. Back is the one key that pops a level wherever you are
+— a zoom to its split (or to the dashboard, if it was opened straight from there), the split to the dashboard, the
+summary sub-view to the parent group. There is no separate group-view escape: you enter a group with `enter` on its card
+and leave with back.
 
 **Visible count and the summary tile.** A group streams its first **N** members as live tiles; `+` / `-` dial N, which
 is **server-owned state** (`group.show`, carried on the snapshot as the group's `Shown`), clamped to `[1, maxGroupTiles]`
@@ -121,7 +124,7 @@ into the summary. Pins are **server-owned state** (`panel.pin` / `panel.unpin`),
 broadcasts — so they survive a frontend restart and are shared across clients. The pin set is re-derived from the parent
 group's full membership on every snapshot, so a refresh arriving while the summary sub-view is open does not wipe your
 curation. Reopening a group brings back the tiles you pinned; and a group with exactly **one** pinned member treats it as
-the default — entering the group drops straight into that panel's zoom rather than a one-tile split (the prefix-`g` escape
+the default — entering the group drops straight into that panel's zoom rather than a one-tile split (**back**, `C-t b`,
 pops back to the split).
 
 **Signals.** `s` opens a picker of the common signals (or `o` to type any name or number); the chosen one is sent over
@@ -178,7 +181,7 @@ spec; closing or purging a panel drops its spec for good.
 
 **Interact mode.** Pressing `i` hands the keyboard to the focused tile so you can drive its program _in place_, without
 the full-screen zoom — the tile glows green and wears a keyboard badge, and every keystroke is forwarded to that panel.
-Like a zoom, the prefix is the only way out: `C-t i` (or `C-t g`) returns to navigation, `C-t d` leaves for the
+Like a zoom, the prefix is the only way out: `C-t i` returns to navigation, `C-t d` leaves for the
 dashboard, `C-t q` detaches, and `C-t C-t` sends a literal prefix. Only the focused tile receives input; the others stay
 passive, so the navigation keys are never ambiguous with what a panel might want until you opt in. If the panel being
 typed into leaves the group, interact ends rather than silently retargeting the tile the focus falls onto.

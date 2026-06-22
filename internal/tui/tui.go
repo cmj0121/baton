@@ -1464,10 +1464,28 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		return m.ungroupSelected(), nil
 	case actRename:
 		return m.startRename(), nil
-	case actGroupView:
-		return m.enterGroupView()
 	case actCommands:
 		return m.openCommandPicker(m.mode), nil
+	case actBack:
+		// Pop one level of the view hierarchy. A zoom returns to the split it was
+		// launched from, or to the dashboard when it was opened straight from there.
+		// The split returns to the dashboard, or to the parent group from the summary
+		// sub-view. The dashboard is the root, so it just says so.
+		switch m.mode {
+		case modeZoom:
+			if m.zoomGroupOrigin != "" {
+				return m.backToGroup()
+			}
+			return m.zoomDetach()
+		case modeGroupZoom:
+			if m.summaryScope {
+				return m.exitSummaryScope(), nil
+			}
+			return m.exitGroupZoom()
+		default:
+			m.status = "already at the dashboard"
+			return m, nil
+		}
 	}
 	return m, nil
 }
@@ -1590,15 +1608,13 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			switch b.act {
 			case actDashboard: // C-t d → dashboard, always
 				return m.zoomDetach()
-			case actGroupView: // C-t g → back to the split it came from
-				if m.zoomGroupOrigin != "" {
-					return m.backToGroup()
-				}
 			case actEditMap: // C-t k → edit the key map
 				return m.openEditMap(modeZoom), nil
 			case actScroll: // C-t [ → scroll mode, reached on every terminal
 				return m.enterScroll(), nil
 			}
+			// back (C-t b) is what leaves a zoom — it returns to the split it came
+			// from, or the dashboard. Any other escape no-ops here.
 			return m, nil
 		}
 		if key == m.bindingKey(actDetach) { // C-t q detaches from a zoom too
@@ -1638,6 +1654,9 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.requestDiff(p)
 			return m, nil
+		}
+		if b, ok := m.lookupCmd(key); ok && b.act == actBack { // C-t b → back one level
+			return m.runAction(actBack)
 		}
 		return m, nil
 	}
@@ -2415,7 +2434,7 @@ func (m model) helpContent() (title string, body []string) {
 			{"Work items", kc(keyLabel(keySignal)) + " " + kc(keyLabel(keySignalAll)), "signal the focused panel · the whole group"},
 			{"Work items", kc(keyLabel(keyRemove)), "remove the focused panel from the group"},
 			{"View", kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
-			{"View", kc(dash) + " " + kc("esc"), "back to the dashboard"},
+			{"View", kc(keyLabel(m.bindingKey(actBack))) + " " + kc(dash) + " " + kc("esc"), "back to the dashboard"},
 			{"View", kc(pfx) + " " + kc(keyLabel(keyInteract)), "stop interacting (while in interact)"},
 			{"View", kc(pfx) + " " + kc(dash), "dashboard (works in every view)"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), "edit the key map"},
@@ -2430,8 +2449,8 @@ func (m model) helpContent() (title string, body []string) {
 			{"Navigation", kc(pfx) + " " + kc(keySearch), "search the scrollback · n older, N newer"},
 			{"Navigation", kc(pfx) + " " + kc(pfx), "send a literal " + pfx},
 			{"Panels", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actSignal))), "send a signal to this panel"},
-			{"View", kc(pfx) + " " + kc(dash), "back to the dashboard"},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actGroupView))), "back to the group view"},
+			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actBack))), "back one level (to the split / dashboard)"},
+			{"View", kc(pfx) + " " + kc(dash), "straight to the dashboard"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), "edit the key map"},
 			{"Session", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actReload))), "reload config (backend + cockpit)"},

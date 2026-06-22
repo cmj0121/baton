@@ -459,9 +459,9 @@ func TestGroupOverlaysRender(t *testing.T) {
 
 func TestKeyMapIncludesGroupVerbs(t *testing.T) {
 	// The group verbs are editable bindings, so they show in the key map. The
-	// dashboard verbs are single-key commands; dashboard/group-view are escapes.
+	// dashboard verbs are single-key commands; dashboard is a prefix escape.
 	wantCmd := map[string]bool{"mark": true, "group": true, "add": true, "ungroup": true, "rename": true}
-	wantEscape := map[string]bool{"dashboard": true, "group-view": true}
+	wantEscape := map[string]bool{"dashboard": true}
 	for _, b := range bindings {
 		switch {
 		case wantCmd[b.name]:
@@ -554,11 +554,12 @@ func TestCommandAndEscapeKeys(t *testing.T) {
 	if got := press(m, "ctrl+t", "k"); got.mode != modeKeyMap {
 		t.Fatal("C-t k should open the editable key map")
 	}
-	// The escape C-t g enters the selected group's split.
+	// enter on a group card opens its split — the leader-level C-t g group-view
+	// escape is gone (back, C-t b, handles returning; enter handles going in).
 	m.cursor = 0 // the api group
-	got := press(m, "ctrl+t", "g")
+	got := press(m, "enter")
 	if got.mode != modeGroupZoom || got.groupName != "api" {
-		t.Fatalf("C-t g should enter the group split, got mode=%v name=%q", got.mode, got.groupName)
+		t.Fatalf("enter on a group card should enter the split, got mode=%v name=%q", got.mode, got.groupName)
 	}
 	// C-t d leaves the split for the dashboard.
 	g2, _ := got.handleGroupZoomKey(key("ctrl+t"))
@@ -593,14 +594,6 @@ func TestAddMarkedToGroup(t *testing.T) {
 	if got := press(lone, keyAdd); !strings.Contains(got.status, "select a group") {
 		t.Fatalf("add on a non-group should hint, got %q", got.status)
 	}
-
-	// enterGroupView on a lone panel hints too.
-	if _, ok := lone.selectedItem(); ok {
-		got, _ := lone.enterGroupView()
-		if !strings.Contains(got.(model).status, "select a group") {
-			t.Fatalf("group view on a non-group should hint, got %q", got.(model).status)
-		}
-	}
 }
 
 func TestHelpContextAndZoomFooter(t *testing.T) {
@@ -621,7 +614,7 @@ func TestHelpContextAndZoomFooter(t *testing.T) {
 		t.Fatalf("? in the split should open context help, got mode=%v from=%v", gm.mode, gm.helpFrom)
 	}
 	if !strings.Contains(gm.helpView(), "remove the focused panel") {
-		t.Fatal("the split help should list the group-view keys")
+		t.Fatal("the split help should list the group-split keys")
 	}
 	back, _ := gm.handleKey(key("esc"))
 	if back.(model).mode != modeGroupZoom {

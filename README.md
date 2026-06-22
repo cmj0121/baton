@@ -39,7 +39,7 @@ rebindable list of the current view.
 | Where                  | Key                         | Does                                      |
 | ---------------------- | --------------------------- | ----------------------------------------- |
 | Anywhere (after `C-t`) | `C-t d`                     | go to the dashboard                       |
-|                        | `C-t g`                     | go to the group view                      |
+|                        | `C-t b`                     | back one level (zoom → group → dashboard) |
 |                        | `C-t [`                     | enter scroll mode                         |
 |                        | `C-t k`                     | edit the key map                          |
 |                        | `C-t c`                     | open the plugin command picker            |
@@ -73,8 +73,10 @@ rebindable list of the current view.
 |                        | `x`                         | remove the focused panel from the group   |
 |                        | `S-←` / `S-→`               | reorder the focused panel                 |
 |                        | `D`                         | diff the focused agent panel              |
+|                        | `b`                         | back to the dashboard                     |
 |                        | `enter`                     | zoom the focused panel                    |
 | Zoom / interact        | type                        | drive the program directly                |
+|                        | `C-t b`                     | back to the group / dashboard             |
 |                        | `C-t C-t`                   | send a literal `C-t`                      |
 |                        | `C-t s`                     | send a signal to this panel               |
 |                        | `C-t f`                     | search the scrollback                     |
