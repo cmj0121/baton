@@ -297,7 +297,10 @@ func (s *Server) attach(cc *clientConn, id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if snap := s.pty.Snapshot(id); len(snap) > 0 {
-		send(cc, proto.ServerMsg{Type: "output", ID: id, Data: snap})
+		// Strip query sequences from the replay so the attaching emulator does not
+		// re-answer the program's old terminal queries — those late replies would be
+		// injected as input and echo as garbage at a prompt. Live output is untouched.
+		send(cc, proto.ServerMsg{Type: "output", ID: id, Data: stripReplayQueries(snap)})
 	}
 	cc.attached[id] = true
 }
