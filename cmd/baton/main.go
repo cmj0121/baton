@@ -247,7 +247,8 @@ func runServer() error {
 	go func() {
 		<-sigs
 		log.Info().Msg("shutting down")
-		srv.SaveNow() // flush the last layout before os.Exit skips the saverLoop and the defers
+		srv.SaveNow()  // flush the last layout before os.Exit skips the saverLoop and the defers
+		srv.Shutdown() // SIGKILL every live panel's process group so no child outlives the daemon
 		cleanup()
 		os.Exit(0)
 	}()
@@ -281,6 +282,7 @@ func runServer() error {
 	if err := srv.Serve(); err != nil {
 		log.Info().Err(err).Msg("server stopped")
 	}
+	srv.Shutdown() // if Serve returns on its own (listener closed), still reap the panels
 	return nil
 }
 

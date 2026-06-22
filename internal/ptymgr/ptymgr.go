@@ -241,6 +241,27 @@ func (m *Manager) Signal(id string, sig syscall.Signal) {
 	}
 }
 
+// KillAll delivers sig to every live panel's process group — the daemon's
+// shutdown sweep, so no child process outlives baton. Like Signal it targets the
+// group (negative pid), so the foreground job dies with its shell, not just the
+// shell; dead (already-exited) panes are skipped. The pids are collected under
+// the lock and signalled after releasing it, so a slow kill never blocks the
+// manager. Returns how many process groups were signalled.
+func (m *Manager) KillAll(sig syscall.Signal) int {
+	m.mu.Lock()
+	pids := make([]int, 0, len(m.ptys))
+	for _, p := range m.ptys {
+		if !p.dead && p.pid > 0 {
+			pids = append(pids, p.pid)
+		}
+	}
+	m.mu.Unlock()
+	for _, pid := range pids {
+		_ = syscall.Kill(-pid, sig)
+	}
+	return len(pids)
+}
+
 // Resize sets a panel's window size (in cells). A no-op for an unknown or exited
 // (dead) panel.
 func (m *Manager) Resize(id string, rows, cols int) {
