@@ -21,6 +21,7 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 
 	"github.com/cmj0121/baton/internal/gitdiff"
+	"github.com/cmj0121/baton/internal/gitops"
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/ptymgr"
@@ -67,6 +68,8 @@ type Server struct {
 	replayBytes       int    // per-panel replay buffer; 0 keeps the ptymgr default
 	defaultDir        string // workdir for a panel that asks for none; empty → the user's home
 	diffCommand       string // explicit diff command for the agent diff pop-up; empty → git diff.tool then a built-in diff
+	editor            string // commit editor for the git menu (GIT_EDITOR); empty → git's own editor chain
+	worktreeDir       string // base dir for new git-menu worktrees; empty → a sibling of the agent's repo
 	version           string // the server's build version, reported in the welcome
 
 	onReload func() // invoked on a server.reload command; re-reads config and Reloads
@@ -145,6 +148,20 @@ func WithDiffCommand(cmd string) Option {
 	return func(s *Server) { s.diffCommand = cmd }
 }
 
+// WithEditor sets the commit editor the git menu's commit op opens (injected as
+// GIT_EDITOR). Empty lets git use its own GIT_EDITOR / core.editor / EDITOR / vi
+// chain.
+func WithEditor(cmd string) Option {
+	return func(s *Server) { s.editor = cmd }
+}
+
+// WithWorktreeDir sets the base directory new git-menu worktrees are created
+// under. Empty defaults to a sibling "<repo>-worktrees/<branch>" of the agent's
+// repo.
+func WithWorktreeDir(dir string) Option {
+	return func(s *Server) { s.worktreeDir = dir }
+}
+
 // WithVersion sets the server's build version, reported to a frontend in the
 // welcome so it can show the backend version and flag a mismatch.
 func WithVersion(v string) Option {
@@ -196,14 +213,16 @@ func (s *Server) OnReload(fn func()) { s.onReload = fn }
 // all change under a running fleet; settings fixed at construction (the listener,
 // the build version) are left alone. A replayBytes of zero resets the buffer to
 // its built-in default.
-func (s *Server) Reload(allowNameConflict bool, defaultDir string, replayBytes int, diffCommand string) {
+func (s *Server) Reload(allowNameConflict bool, defaultDir string, replayBytes int, diffCommand, editor, worktreeDir string) {
 	s.mu.Lock()
 	s.allowNameConflict = allowNameConflict
 	s.defaultDir = defaultDir
 	s.diffCommand = diffCommand
+	s.editor = editor
+	s.worktreeDir = worktreeDir
 	s.mu.Unlock()
 	s.pty.SetRingCap(replayBytes)
-	log.Info().Bool("allow_name_conflict", allowNameConflict).Str("default_dir", defaultDir).Int("replay_bytes", replayBytes).Str("diff_command", diffCommand).Msg("settings reloaded")
+	log.Info().Bool("allow_name_conflict", allowNameConflict).Str("default_dir", defaultDir).Int("replay_bytes", replayBytes).Str("diff_command", diffCommand).Str("editor", editor).Str("worktree_dir", worktreeDir).Msg("settings reloaded")
 }
 
 // onPanelExit marks a panel exited when its process ends on its own, notifies
@@ -550,10 +569,19 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		}
 	case "panel.diff":
 		// Open a transient diff panel for the target agent. openDiff sends its own
-		// "diff" reply on success; on failure we surface the reason as an error. It
+		// "ephemeral" reply on success; on failure we surface the reason as an error. It
 		// is deliberately NOT broadcastFleet'd — the diff panel is ephemeral and must
 		// never reach the dashboard or the persisted state.
 		if err := s.openDiff(cc, cmd.ID); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+	case "panel.git":
+		// Run a git-menu op for the target agent. The output ops spawn a transient
+		// panel (openGit replies "ephemeral" so the client auto-zooms it); worktree-add is
+		// a real fleet change (broadcasts); worktree-remove confirms with a notice.
+		// Any failure surfaces as an error, like panel.diff.
+		if err := s.runGit(cc, cmd); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
@@ -938,79 +966,219 @@ func (s *Server) closePanel(id string) error {
 // out of both the dashboard snapshot (panelsMsg) and the persisted state
 // (snapshotState) for free — it is tracked only in s.ephemeral (server-wide) and
 // cc.ephemeral (the owning conn, for disconnect cleanup). On success it replies
-// {type:"diff", id:"diff:<n>"} so the client can auto-zoom it.
+// {type:"ephemeral", id:"diff:<n>"} so the client can auto-zoom it.
 //
 // The git probes (work-tree check, change check, command resolution) run with
 // s.mu released — they shell out and must never hold the server lock.
 func (s *Server) openDiff(cc *clientConn, targetID string) error {
-	s.mu.Lock()
-	idx := s.indexLocked(targetID)
-	if idx < 0 {
-		s.mu.Unlock()
-		err := fmt.Errorf("no panel with id %q", targetID)
-		log.Warn().Str("target", targetID).Err(err).Msg("diff rejected")
-		return err
-	}
-	kind := s.panels[idx].Kind
-	dir := s.specs[targetID].Dir
-	s.mu.Unlock()
+	diffCommand := s.snapDiffCommand()
+	return s.openEphemeral(cc, targetID, "diff", func(dir string) (string, []string, []string, error) {
+		if !gitdiff.IsWorkTree(dir) {
+			return "", nil, nil, fmt.Errorf("not a git repository: %s", dir)
+		}
+		if !gitdiff.HasChanges(dir) {
+			return "", nil, nil, fmt.Errorf("no uncommitted changes")
+		}
+		name, args := gitdiff.ResolveCommand(dir, diffCommand)
+		return name, args, nil, nil
+	})
+}
 
-	// Authoritative agent-only gate. The client gates this too for UX, but the
-	// server is the source of truth; relaxing the feature to shells is this one
-	// line. Log the rejection at Warn so the error reply has a server-side trace,
-	// matching createPanel/closePanel's Info-level visibility.
-	if kind != panel.Agent {
-		err := fmt.Errorf("diff is available on agent panels")
-		log.Warn().Str("target", targetID).Err(err).Msg("diff rejected")
+// runGit dispatches a panel.git op for the target agent. The output-producing ops
+// (status/log/add/commit/push/branch/worktree-list) spawn a transient panel via
+// openGit; worktree-add creates a tree and spawns an agent in it (a fleet change,
+// so it broadcasts); worktree-remove runs synchronously and confirms with a notice.
+func (s *Server) runGit(cc *clientConn, cmd proto.Command) error {
+	switch op := gitops.Op(cmd.Git); op {
+	case gitops.OpWorktreeAdd:
+		if err := s.gitWorktreeAdd(cmd.ID, cmd.Name); err != nil {
+			return err
+		}
+		s.broadcastFleet()
+		return nil
+	case gitops.OpWorktreeRemove:
+		if err := s.gitWorktreeRemove(cmd.ID, cmd.Dir); err != nil {
+			return err
+		}
+		send(cc, proto.ServerMsg{Type: "notice", Notice: "worktree removed: " + cmd.Dir})
+		return nil
+	default:
+		return s.openGit(cc, cmd.ID, op, cmd.Name)
+	}
+}
+
+// openGit spawns a transient panel running an output-producing git op in the target
+// agent's workdir, resolved by the gitops layer with the configured commit editor.
+func (s *Server) openGit(cc *clientConn, targetID string, op gitops.Op, arg string) error {
+	editor := s.snapEditor()
+	return s.openEphemeral(cc, targetID, "git", func(dir string) (string, []string, []string, error) {
+		return gitops.Resolve(op, dir, arg, editor)
+	})
+}
+
+// ephemeralResolver produces the command (executable, args, extra env) a transient
+// panel runs in the agent's resolved workdir, or an error explaining why not.
+type ephemeralResolver func(dir string) (name string, args, env []string, err error)
+
+// openEphemeral spawns a transient, auto-zoomed PTY for the agent panel targetID,
+// running the command resolve produces in the agent's workdir. It is the shared
+// engine behind the diff and git menus: the panel is never appended to s.panels or
+// s.specs, so it stays out of the dashboard snapshot (panelsMsg) and the persisted
+// state (snapshotState), tracked only in s.ephemeral (and the owning conn, for
+// disconnect cleanup). label names the action for the log and the ephemeral id
+// prefix. On success it replies {type:"ephemeral", id:"<label>:<n>"} so the client
+// auto-zooms it. The git probes run with s.mu released — they shell out and must
+// never hold the server lock.
+func (s *Server) openEphemeral(cc *clientConn, targetID, label string, resolve ephemeralResolver) error {
+	spec, err := s.agentTargetSpec(targetID, label)
+	if err != nil {
+		log.Warn().Str("target", targetID).Str("action", label).Err(err).Msg("ephemeral rejected")
 		return err
 	}
 
-	// Resolve the effective workdir exactly as a spawn would (empty → home), so
-	// the diff runs in the same tree the agent actually runs in.
-	dir = ptymgr.PanelDir(dir)
-	if !gitdiff.IsWorkTree(dir) {
-		err := fmt.Errorf("not a git repository: %s", dir)
-		log.Warn().Str("target", targetID).Str("dir", dir).Err(err).Msg("diff rejected")
+	// Resolve the effective workdir exactly as a spawn would (empty → home), then
+	// let the caller resolve the command (and its git-specific gates) against it.
+	dir := ptymgr.PanelDir(spec.Dir)
+	name, args, env, err := resolve(dir)
+	if err != nil {
+		log.Warn().Str("target", targetID).Str("dir", dir).Str("action", label).Err(err).Msg("ephemeral rejected")
 		return err
 	}
-	if !gitdiff.HasChanges(dir) {
-		err := fmt.Errorf("no uncommitted changes")
-		log.Warn().Str("target", targetID).Str("dir", dir).Err(err).Msg("diff rejected")
-		return err
-	}
-	name, args := gitdiff.ResolveCommand(dir, s.diffCommand)
 
-	// Bound a scripted or runaway client: cap how many diff panels one connection
-	// may hold open at once. The check reads cc.ephemeral under the same lock the
-	// allocation below writes it, so two concurrent opens cannot both slip past N.
+	// Bound a scripted or runaway client: cap how many transient panels one
+	// connection may hold open at once. The check reads cc.ephemeral under the same
+	// lock the allocation below writes it, so two concurrent opens cannot both slip
+	// past N.
 	s.mu.Lock()
 	if len(cc.ephemeral) >= maxEphemeralPerConn {
 		s.mu.Unlock()
-		err := fmt.Errorf("too many open diffs (max %d) — close one first", maxEphemeralPerConn)
-		log.Warn().Str("target", targetID).Str("dir", dir).Err(err).Msg("diff rejected")
+		err := fmt.Errorf("too many open panels (max %d) — close one first", maxEphemeralPerConn)
+		log.Warn().Str("target", targetID).Str("action", label).Err(err).Msg("ephemeral rejected")
 		return err
 	}
 	// Allocate the ephemeral id and register it before the spawn, so a concurrent
 	// disconnect cleanup sees a consistent set; unregister if the spawn fails.
 	s.ephSeq++
-	ephID := fmt.Sprintf("diff:%d", s.ephSeq)
+	ephID := fmt.Sprintf("%s:%d", label, s.ephSeq)
 	s.ephemeral[ephID] = struct{}{}
 	cc.ephemeral[ephID] = true
 	s.mu.Unlock()
 
-	if err := s.pty.StartCmd(ephID, ptymgr.Spec{Command: name, Args: args, Dir: dir}); err != nil {
+	if err := s.pty.StartCmd(ephID, ptymgr.Spec{Command: name, Args: args, Env: env, Dir: dir}); err != nil {
 		s.mu.Lock()
 		delete(s.ephemeral, ephID)
 		delete(cc.ephemeral, ephID)
 		s.mu.Unlock()
-		err = fmt.Errorf("could not open diff: %w", err)
-		log.Warn().Str("target", targetID).Str("dir", dir).Err(err).Msg("diff spawn failed")
+		err = fmt.Errorf("could not open %s: %w", label, err)
+		log.Warn().Str("target", targetID).Str("dir", dir).Str("action", label).Err(err).Msg("ephemeral spawn failed")
 		return err
 	}
 
-	log.Info().Str("panel", ephID).Str("target", targetID).Str("dir", dir).Msg("diff panel opened")
-	send(cc, proto.ServerMsg{Type: "diff", ID: ephID})
+	log.Info().Str("panel", ephID).Str("target", targetID).Str("dir", dir).Str("action", label).Msg("ephemeral panel opened")
+	send(cc, proto.ServerMsg{Type: "ephemeral", ID: ephID})
 	return nil
+}
+
+// agentTargetSpec resolves a panel.git / diff target to its spawn spec, enforcing
+// the authoritative agent-only gate in one place — the client gates too for UX, but
+// the server is the source of truth, so every target-taking op (the ephemeral ops,
+// worktree add and remove) routes through here. label names the action in the gate
+// error ("diff"/"git"). Returns the panel's immutable spec, or an error for an
+// unknown id or a non-agent target.
+func (s *Server) agentTargetSpec(targetID, label string) (ptymgr.Spec, error) {
+	s.mu.Lock()
+	idx := s.indexLocked(targetID)
+	if idx < 0 {
+		s.mu.Unlock()
+		return ptymgr.Spec{}, fmt.Errorf("no panel with id %q", targetID)
+	}
+	kind := s.panels[idx].Kind
+	spec := s.specs[targetID]
+	s.mu.Unlock()
+
+	if kind != panel.Agent {
+		return ptymgr.Spec{}, fmt.Errorf("%s is available on agent panels", label)
+	}
+	return spec, nil
+}
+
+// gitWorktreeAdd creates a worktree on a new branch off the target agent's repo and
+// spawns an agent panel rooted in it, grouped under the branch name — the isolation
+// bridge. It reuses the source agent's command and args, so the new tree gets the
+// same kind of agent. A real fleet change, so the caller broadcasts.
+func (s *Server) gitWorktreeAdd(targetID, branch string) error {
+	spec, err := s.agentTargetSpec(targetID, "git")
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	base := s.worktreeDir
+	s.mu.Unlock()
+
+	repo := ptymgr.PanelDir(spec.Dir)
+	if !gitdiff.IsWorkTree(repo) {
+		return fmt.Errorf("not a git repository: %s", repo)
+	}
+
+	path := worktreePath(base, repo, branch)
+	if err := gitops.WorktreeAdd(repo, branch, path); err != nil {
+		return err
+	}
+
+	// Spawn the agent in the new worktree and file it under the branch, so it lands
+	// as a work item immediately. A spawn failure leaves the worktree in place — the
+	// user can retire it with worktree-remove rather than us guessing.
+	id, err := s.createPanel(proto.KindAgent, spec.Command, spec.Args, path)
+	if err != nil {
+		return fmt.Errorf("worktree created at %s, but the agent did not start: %w", path, err)
+	}
+	if err := s.groupPanels([]string{id}, branch); err != nil {
+		log.Warn().Str("panel", id).Str("group", branch).Err(err).Msg("worktree agent spawned but not grouped")
+	}
+	log.Info().Str("repo", repo).Str("branch", branch).Str("path", path).Str("panel", id).Msg("worktree agent spawned")
+	return nil
+}
+
+// gitWorktreeRemove removes the worktree at path from the target agent's repo. It
+// runs plain (no --force), so git refuses a dirty or locked tree — surfaced as the
+// error. It does not touch any panel; a removed tree's agent, if still open, is the
+// user's to close.
+func (s *Server) gitWorktreeRemove(targetID, path string) error {
+	spec, err := s.agentTargetSpec(targetID, "git")
+	if err != nil {
+		return err
+	}
+	repo := ptymgr.PanelDir(spec.Dir)
+	if err := gitops.WorktreeRemove(repo, path); err != nil {
+		return err
+	}
+	log.Info().Str("repo", repo).Str("path", path).Msg("worktree removed")
+	return nil
+}
+
+// worktreePath is where a new worktree for branch goes: under the configured base
+// dir when set, else a sibling "<repo>-worktrees" of the repo. The branch's slashes
+// become dashes so "feature/x" is a single path segment.
+func worktreePath(base, repo, branch string) string {
+	leaf := strings.ReplaceAll(branch, "/", "-")
+	if base != "" {
+		return filepath.Join(base, leaf)
+	}
+	return filepath.Join(repo+"-worktrees", leaf)
+}
+
+// snapDiffCommand / snapEditor read a hot-reloadable setting under the lock, so a
+// concurrent SIGHUP Reload cannot race the read the ephemeral resolvers make.
+func (s *Server) snapDiffCommand() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.diffCommand
+}
+
+func (s *Server) snapEditor() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.editor
 }
 
 // closeEphemeral reaps every diff panel a client still has open, called when its

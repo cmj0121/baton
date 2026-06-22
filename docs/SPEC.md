@@ -105,7 +105,10 @@ group, `C-t [` opens scroll mode on the focused tile, `x` removes the focused
 member from the group, `D` diffs the focused agent member, `enter` drops into the focused panel's own single zoom, and
 `d`/`esc` returns to the dashboard.
 From a zoomed member,
-the always-on `C-t g` escape pops back to the split.
+**back** (`C-t b`) pops back to the split it was launched from. Back is the one key that pops a level wherever you are
+— a zoom to its split (or to the dashboard, if it was opened straight from there), the split to the dashboard, the
+summary sub-view to the parent group. There is no separate group-view escape: you enter a group with `enter` on its card
+and leave with back.
 
 **Visible count and the summary tile.** A group streams its first **N** members as live tiles; `+` / `-` dial N, which
 is **server-owned state** (`group.show`, carried on the snapshot as the group's `Shown`), clamped to `[1, maxGroupTiles]`
@@ -121,7 +124,7 @@ into the summary. Pins are **server-owned state** (`panel.pin` / `panel.unpin`),
 broadcasts — so they survive a frontend restart and are shared across clients. The pin set is re-derived from the parent
 group's full membership on every snapshot, so a refresh arriving while the summary sub-view is open does not wipe your
 curation. Reopening a group brings back the tiles you pinned; and a group with exactly **one** pinned member treats it as
-the default — entering the group drops straight into that panel's zoom rather than a one-tile split (the prefix-`g` escape
+the default — entering the group drops straight into that panel's zoom rather than a one-tile split (**back**, `C-t b`,
 pops back to the split).
 
 **Signals.** `s` opens a picker of the common signals (or `o` to type any name or number); the chosen one is sent over
@@ -164,6 +167,20 @@ and copy. Its lifecycle is tied to that zoom: the normal exit keys close it. `C-
 nothing lingers once you step out. A connection holds at most a small number of open diff pop-ups at once (currently 8);
 past that the diff key reports `too many open diffs (max 8) — close one first`.
 
+**Git menu.** `C-t g` in a zoom opens the **git menu** for the zoomed agent — a keyed pop-up (the signal picker's shape)
+of git operations run against that agent's workdir. It is **zoom-only** (you act on the one agent you are looking at) and
+agent-only. The transient-panel machinery above is generalised into one `openEphemeral` engine: the diff and the git
+**output** ops (log, status, stage, commit, push, branch, worktree-list) all spawn the same auto-zoomed, never-persisted
+pop-up — only the resolved command differs (`internal/gitdiff` for the diff, `internal/gitops` for the rest), and the
+8-pop-up cap is shared. `commit` injects the configured editor as `GIT_EDITOR` (via a new `ptymgr.Spec.Env`) so it opens
+in the panel's PTY. Two ops are not pop-ups: **worktree-add** creates a tree on a new branch and spawns an agent rooted
+in it — grouped under the branch, broadcast as a real fleet change — the **isolation bridge** the panel-model roadmap
+named; **worktree-remove** runs synchronously and confirms with a notice. The op set is additive (no reset / clean /
+discard / `--force`); `push` and `worktree-remove` confirm first. The wire is one command, `panel.git`, carrying the op,
+the target id, and a branch or worktree path; the agent-only and work-tree gates are authoritative on the server. The
+commit editor and the worktree base directory are `panel.editor` / `panel.worktree-dir`, hot-reloaded like the rest. See
+[GIT.md](./GIT.md) for the full op table and the config.
+
 **Persistence and respawn.** The daemon survives its own restart. On every structural change it writes the fleet to a
 per-session **state file** (`internal/state`, derived from the socket path like the pid file, one daemon-per-session) —
 each panel's immutable spawn spec (command, args, workdir), group membership, pins, order, the id counter, and each
@@ -178,7 +195,7 @@ spec; closing or purging a panel drops its spec for good.
 
 **Interact mode.** Pressing `i` hands the keyboard to the focused tile so you can drive its program _in place_, without
 the full-screen zoom — the tile glows green and wears a keyboard badge, and every keystroke is forwarded to that panel.
-Like a zoom, the prefix is the only way out: `C-t i` (or `C-t g`) returns to navigation, `C-t d` leaves for the
+Like a zoom, the prefix is the only way out: `C-t i` returns to navigation, `C-t d` leaves for the
 dashboard, `C-t q` detaches, and `C-t C-t` sends a literal prefix. Only the focused tile receives input; the others stay
 passive, so the navigation keys are never ambiguous with what a panel might want until you opt in. If the panel being
 typed into leaves the group, interact ends rather than silently retargeting the tile the focus falls onto.

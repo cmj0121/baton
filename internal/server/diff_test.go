@@ -133,7 +133,7 @@ func TestDiffPanelDoesNotLeak(t *testing.T) {
 		t.Fatalf("panel.diff: %v", err)
 	}
 	reply := recvEvent(t, c)
-	if reply.Type != "diff" {
+	if reply.Type != "ephemeral" {
 		t.Fatalf("expected a diff reply, got %+v", reply)
 	}
 	if !strings.HasPrefix(reply.ID, "diff:") {
@@ -294,7 +294,7 @@ func TestDiffCloseRemovesEphemeral(t *testing.T) {
 		t.Fatalf("panel.diff: %v", err)
 	}
 	reply := recvEvent(t, c)
-	if reply.Type != "diff" {
+	if reply.Type != "ephemeral" {
 		t.Fatalf("expected a diff reply, got %+v", reply)
 	}
 	ephID := reply.ID
@@ -342,7 +342,7 @@ func TestDiffPerConnCap(t *testing.T) {
 			t.Fatalf("panel.diff %d: %v", i, err)
 		}
 		reply := recvEvent(t, c)
-		if reply.Type != "diff" {
+		if reply.Type != "ephemeral" {
 			t.Fatalf("diff %d: expected a diff reply, got %+v", i, reply)
 		}
 		ephIDs = append(ephIDs, reply.ID)
@@ -359,7 +359,7 @@ func TestDiffPerConnCap(t *testing.T) {
 	if msg.Type != "error" {
 		t.Fatalf("a diff past the cap should error, got %+v", msg)
 	}
-	if !strings.Contains(msg.Error, "too many open diffs") || !strings.Contains(msg.Error, "8") {
+	if !strings.Contains(msg.Error, "too many open panels") || !strings.Contains(msg.Error, "8") {
 		t.Fatalf("unexpected cap error text: %q", msg.Error)
 	}
 	if got := srv.EphemeralCount(); got != cap {
@@ -386,7 +386,7 @@ func TestDiffPerConnCap(t *testing.T) {
 		t.Fatalf("panel.diff after freeing a slot: %v", err)
 	}
 	reply := recvEvent(t, c)
-	if reply.Type != "diff" {
+	if reply.Type != "ephemeral" {
 		t.Fatalf("a diff after freeing a slot should succeed, got %+v", reply)
 	}
 	if got := srv.EphemeralCount(); got != cap {
@@ -416,7 +416,7 @@ func TestDiffHardKillsProcessGroup(t *testing.T) {
 		t.Fatalf("panel.diff: %v", err)
 	}
 	reply := recvEvent(t, c)
-	if reply.Type != "diff" {
+	if reply.Type != "ephemeral" {
 		t.Fatalf("expected a diff reply, got %+v", reply)
 	}
 	ephID := reply.ID
@@ -487,7 +487,7 @@ func TestDiffDisconnectReapsEphemeral(t *testing.T) {
 		t.Fatalf("panel.diff: %v", err)
 	}
 	reply := recvEvent(t, c)
-	if reply.Type != "diff" {
+	if reply.Type != "ephemeral" {
 		t.Fatalf("expected a diff reply, got %+v", reply)
 	}
 	if got := srv.EphemeralCount(); got != 1 {

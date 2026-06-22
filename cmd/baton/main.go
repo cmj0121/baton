@@ -225,6 +225,8 @@ func runServer() error {
 		server.WithAllowNameConflict(rc.allowNameConflict),
 		server.WithDefaultDir(rc.defaultDir),
 		server.WithDiffCommand(rc.diffCommand),
+		server.WithEditor(rc.editor),
+		server.WithWorktreeDir(rc.worktreeDir),
 		server.WithStateFile(stateF),
 	}
 	if rc.replayBytes > 0 {
@@ -257,7 +259,7 @@ func runServer() error {
 			log.Warn().Err(perr).Msg("plugin load error, continuing with what loaded")
 		}
 		rc := reloadableSettings(res.Config)
-		srv.Reload(rc.allowNameConflict, rc.defaultDir, rc.replayBytes, rc.diffCommand)
+		srv.Reload(rc.allowNameConflict, rc.defaultDir, rc.replayBytes, rc.diffCommand, rc.editor, rc.worktreeDir)
 		srv.SetOutputEvents(res.WantOutput)
 		if data, mErr := json.Marshal(res.Config); mErr == nil {
 			srv.SetClientConfig(data)
@@ -333,13 +335,15 @@ type reloadable struct {
 	defaultDir        string
 	replayBytes       int    // 0 keeps the server's built-in replay default
 	diffCommand       string // explicit diff command for the agent diff pop-up; empty falls back to git diff.tool then a built-in diff
+	editor            string // commit editor for the git menu (GIT_EDITOR); empty falls back to git's own editor chain
+	worktreeDir       string // base dir for new git-menu worktrees; empty falls back to a sibling of the agent's repo
 }
 
 // reloadableSettings projects a config onto the hot-reloadable settings, applying
 // the same defaults the server expects: strict names, the home workdir, and the
 // built-in replay buffer when the config leaves a field unset.
 func reloadableSettings(cfg config.Config) reloadable {
-	rc := reloadable{defaultDir: cfg.Panel.Workdir, diffCommand: cfg.Panel.DiffCommand}
+	rc := reloadable{defaultDir: cfg.Panel.Workdir, diffCommand: cfg.Panel.DiffCommand, editor: cfg.Panel.Editor, worktreeDir: cfg.Panel.WorktreeDir}
 	if cfg.Settings.AllowNameConflict != nil {
 		rc.allowNameConflict = *cfg.Settings.AllowNameConflict
 	}

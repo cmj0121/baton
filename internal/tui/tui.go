@@ -77,6 +77,7 @@ const (
 	modePanelConfig
 	modeSignal  // the send-signal picker (s / C-t s)
 	modeCommand // the plugin command picker (C-t c)
+	modeGit     // the git menu (C-t g in a zoom)
 	modeZoom
 	modeGroupZoom
 )
@@ -154,16 +155,26 @@ type model struct {
 	commandCursor  int                   // highlighted row in the command picker
 	pluginFooter   string                // a plugin-set persistent footer segment (baton.footer), shown in every view's footer
 
-	zoomID           string           // panel being zoomed (modeZoom)
-	zoomTitle        string           // its title, for the zoom footer
-	zoomEphemeral    bool             // the current zoom is a transient diff panel — dismissing it closes the panel server-side
-	pendingDiffTitle string           // title to give the diff zoom, stashed when panel.diff is sent, read on the "diff" reply
-	zoomArmed        bool             // prefix pressed inside a zoom, awaiting the verb
-	zoomExited       bool             // the zoomed panel has exited — a read-only result view
-	emu              *vt.SafeEmulator // terminal emulator rendering the zoomed panel
-	scrollOff        int              // scrollback offset (lines above the live bottom) for the zoom / focused tile
-	scrolling        bool             // scroll mode (C-t [): arrows / page keys navigate history, keys are not sent to the program
-	cursorHidden     *bool            // tracks the zoomed program's cursor visibility (DECTCEM); nil when not zooming
+	// The git menu (C-t g in a zoom, zoom-only). gitTarget is the agent it acts on,
+	// captured at open; gitFrom is the zoom it returns to; gitCursor is the
+	// highlighted row. A confirm (push, worktree-remove) parks in gitConfirm with the
+	// op and, for remove, the path to act on.
+	gitFrom       mode
+	gitTarget     panel.Panel
+	gitCursor     int
+	gitConfirmOp  string // "push" | "remove" — the op awaiting a y/n, "" when none is pending
+	gitRemovePath string // the worktree path a confirmed remove targets
+
+	zoomID                string           // panel being zoomed (modeZoom)
+	zoomTitle             string           // its title, for the zoom footer
+	zoomEphemeral         bool             // the current zoom is a transient diff panel — dismissing it closes the panel server-side
+	pendingEphemeralTitle string           // title for the next transient (diff/git) zoom, stashed when the op is sent, read on the "ephemeral" reply
+	zoomArmed             bool             // prefix pressed inside a zoom, awaiting the verb
+	zoomExited            bool             // the zoomed panel has exited — a read-only result view
+	emu                   *vt.SafeEmulator // terminal emulator rendering the zoomed panel
+	scrollOff             int              // scrollback offset (lines above the live bottom) for the zoom / focused tile
+	scrolling             bool             // scroll mode (C-t [): arrows / page keys navigate history, keys are not sent to the program
+	cursorHidden          *bool            // tracks the zoomed program's cursor visibility (DECTCEM); nil when not zooming
 
 	groupName       string                      // work item being split-viewed (modeGroupZoom)
 	groupFocus      int                         // focused member, indexing tiles then the summary slot
@@ -194,6 +205,9 @@ const (
 	inputSignalName               // free-form signal name/number for the picker's "other…"
 	inputFilter                   // live dashboard panel filter (f)
 	inputSearch                   // scrollback search term in a zoom / group tile (C-t f)
+	inputGitBranch                // new branch name for the git menu (b)
+	inputGitWorktree              // new-worktree branch name for the git menu (w)
+	inputGitRemove                // worktree path to remove for the git menu (x)
 )
 
 // RestartRequested reports whether the cockpit exited because the user asked to
@@ -616,15 +630,16 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 	case "stats":
 		m.cpuPct = sm.CPU
 		m.memUsed, m.memTotal = sm.MemUsed, sm.MemTotal
-	case "diff":
-		// The server spawned a transient diff panel and replied with its id. Synthesize
-		// a panel for it and auto-zoom; zoomInto already sends attach+resize and clears
-		// zoomGroupOrigin, so this is a direct zoom that the dismiss path then reaps.
-		title := m.pendingDiffTitle
+	case "ephemeral":
+		// The server spawned a transient panel (a diff or a git op) and replied with
+		// its id. Synthesize a panel for it and auto-zoom; zoomInto already sends
+		// attach+resize and clears zoomGroupOrigin, so this is a direct zoom that the
+		// dismiss path then reaps.
+		title := m.pendingEphemeralTitle
 		if title == "" {
 			title = "diff"
 		}
-		m.pendingDiffTitle = ""
+		m.pendingEphemeralTitle = ""
 		*m = m.zoomInto(panel.Panel{ID: sm.ID, Title: title, State: panel.Running})
 		m.zoomEphemeral = true
 	case "config":
@@ -739,6 +754,11 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// The plugin command picker owns the keyboard until a command runs or esc.
 	if m.mode == modeCommand {
 		return m.handleCommandKey(key)
+	}
+
+	// The git menu owns the keyboard until an op fires, a confirm answers, or esc.
+	if m.mode == modeGit {
+		return m.handleGitKey(key)
 	}
 
 	// A text-input overlay is open: route the keystroke to it.
@@ -1168,6 +1188,12 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		}
 	case inputSearch:
 		return m.runSearch(buf), nil
+	case inputGitBranch:
+		return m.commitGitBranch(buf)
+	case inputGitWorktree:
+		return m.commitGitWorktree(buf)
+	case inputGitRemove:
+		return m.commitGitRemove(buf)
 	}
 	return m, nil
 }
@@ -1464,10 +1490,28 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		return m.ungroupSelected(), nil
 	case actRename:
 		return m.startRename(), nil
-	case actGroupView:
-		return m.enterGroupView()
 	case actCommands:
 		return m.openCommandPicker(m.mode), nil
+	case actBack:
+		// Pop one level of the view hierarchy. A zoom returns to the split it was
+		// launched from, or to the dashboard when it was opened straight from there.
+		// The split returns to the dashboard, or to the parent group from the summary
+		// sub-view. The dashboard is the root, so it just says so.
+		switch m.mode {
+		case modeZoom:
+			if m.zoomGroupOrigin != "" {
+				return m.backToGroup()
+			}
+			return m.zoomDetach()
+		case modeGroupZoom:
+			if m.summaryScope {
+				return m.exitSummaryScope(), nil
+			}
+			return m.exitGroupZoom()
+		default:
+			m.status = "already at the dashboard"
+			return m, nil
+		}
 	}
 	return m, nil
 }
@@ -1561,15 +1605,15 @@ func (m model) fleetPanel(id string) (panel.Panel, bool) {
 }
 
 // requestDiff asks the server for the work-tree diff of an agent panel and stashes
-// the title to give the diff zoom that the "diff" reply will open. Only agent
-// panels are eligible (a client-side gate for UX; the server re-checks); a
-// non-agent target sets a hint and sends nothing.
+// the title for the zoom the "ephemeral" reply will open. Only agent panels are
+// eligible (a client-side gate for UX; the server re-checks); a non-agent target
+// sets a hint and sends nothing.
 func (m *model) requestDiff(p panel.Panel) {
 	if !p.IsAgent() {
 		m.status = "diff: select an agent panel"
 		return
 	}
-	m.pendingDiffTitle = "diff · " + p.Title
+	m.pendingEphemeralTitle = "diff · " + p.Title
 	m.sendf(proto.Command{Action: "panel.diff", ID: p.ID})
 	m.status = "diff · " + p.Title
 }
@@ -1590,15 +1634,13 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			switch b.act {
 			case actDashboard: // C-t d → dashboard, always
 				return m.zoomDetach()
-			case actGroupView: // C-t g → back to the split it came from
-				if m.zoomGroupOrigin != "" {
-					return m.backToGroup()
-				}
 			case actEditMap: // C-t k → edit the key map
 				return m.openEditMap(modeZoom), nil
 			case actScroll: // C-t [ → scroll mode, reached on every terminal
 				return m.enterScroll(), nil
 			}
+			// back (C-t b) is what leaves a zoom — it returns to the split it came
+			// from, or the dashboard. Any other escape no-ops here.
 			return m, nil
 		}
 		if key == m.bindingKey(actDetach) { // C-t q detaches from a zoom too
@@ -1638,6 +1680,12 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.requestDiff(p)
 			return m, nil
+		}
+		if b, ok := m.lookupCmd(key); ok && b.act == actBack { // C-t b → back one level
+			return m.runAction(actBack)
+		}
+		if key == keyGitMenu { // C-t g → the git menu, on the zoomed agent panel
+			return m.openGitPicker()
 		}
 		return m, nil
 	}
@@ -2054,6 +2102,8 @@ func (m model) render() string {
 		body = m.signalPickerView()
 	case m.mode == modeCommand:
 		body = m.commandPickerView()
+	case m.mode == modeGit:
+		body = m.gitPickerView()
 	default:
 		body = m.dashboardView()
 	}
@@ -2415,7 +2465,7 @@ func (m model) helpContent() (title string, body []string) {
 			{"Work items", kc(keyLabel(keySignal)) + " " + kc(keyLabel(keySignalAll)), "signal the focused panel · the whole group"},
 			{"Work items", kc(keyLabel(keyRemove)), "remove the focused panel from the group"},
 			{"View", kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
-			{"View", kc(dash) + " " + kc("esc"), "back to the dashboard"},
+			{"View", kc(keyLabel(m.bindingKey(actBack))) + " " + kc(dash) + " " + kc("esc"), "back to the dashboard"},
 			{"View", kc(pfx) + " " + kc(keyLabel(keyInteract)), "stop interacting (while in interact)"},
 			{"View", kc(pfx) + " " + kc(dash), "dashboard (works in every view)"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), "edit the key map"},
@@ -2430,8 +2480,8 @@ func (m model) helpContent() (title string, body []string) {
 			{"Navigation", kc(pfx) + " " + kc(keySearch), "search the scrollback · n older, N newer"},
 			{"Navigation", kc(pfx) + " " + kc(pfx), "send a literal " + pfx},
 			{"Panels", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actSignal))), "send a signal to this panel"},
-			{"View", kc(pfx) + " " + kc(dash), "back to the dashboard"},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actGroupView))), "back to the group view"},
+			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actBack))), "back one level (to the split / dashboard)"},
+			{"View", kc(pfx) + " " + kc(dash), "straight to the dashboard"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), "edit the key map"},
 			{"Session", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actReload))), "reload config (backend + cockpit)"},
@@ -2739,6 +2789,12 @@ func (m model) inputView() string {
 		title, prompt, action = "FIND PANELS", "filter by title or group  (live)", "apply"
 	case inputSearch:
 		title, prompt, action = "SEARCH", "find in the scrollback", "find"
+	case inputGitBranch:
+		title, prompt, action = "NEW BRANCH", "branch name  (git checkout -b)", "create"
+	case inputGitWorktree:
+		title, prompt, action = "NEW WORKTREE", "branch name  (worktree + agent)", "create"
+	case inputGitRemove:
+		title, prompt, action = "REMOVE WORKTREE", "worktree path  (then confirm)", "next"
 	}
 
 	field := lipgloss.NewStyle().Width(46).Foreground(colInk).Background(colSurface).Render("› " + m.inputBuf + "▌")

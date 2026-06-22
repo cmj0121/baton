@@ -24,7 +24,7 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action string   `json:"action"`         // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.signal | panel.diff | group.show | server.reload | config.get | command.run
+	Action string   `json:"action"`         // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.signal | panel.diff | panel.git | group.show | server.reload | config.get | command.run
 	Kind   string   `json:"kind,omitempty"` // panel kind for "panel.create" (default "shell")
 	ID     string   `json:"id,omitempty"`   // target panel for close/attach/input/resize/diff, or the panel to rename
 	Path   string   `json:"path,omitempty"` // init command (binary path) for "panel.create"; empty = default shell
@@ -39,6 +39,7 @@ type Command struct {
 	Index  int      `json:"index,omitempty"`  // destination index among the remaining panels for "panel.move"
 	Signal string   `json:"signal,omitempty"` // signal name to deliver for "panel.signal", e.g. "SIGINT"
 	Count  int      `json:"count,omitempty"`  // absolute visible count for "group.show": how many members stream as live tiles
+	Git    string   `json:"git,omitempty"`    // git op for "panel.git", e.g. "log", "commit", "worktree-add"; Name carries a branch, Dir a worktree path
 }
 
 // GroupView carries a group's view settings on a snapshot: Shown is how many
@@ -69,7 +70,7 @@ type PluginCommand struct {
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "diff" | "notice" | "config" | "footer"
+	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "notice" | "config" | "footer"
 	Version   string      `json:"version,omitempty"`    // protocol version, set on "welcome"
 	ServerVer string      `json:"server_ver,omitempty"` // the server's build version, set on "welcome"
 	Error     string      `json:"error,omitempty"`      // set on "error"
@@ -77,7 +78,7 @@ type ServerMsg struct {
 	Footer    string      `json:"footer,omitempty"`     // a plugin-set persistent footer segment, set on "footer" and carried on "config"; empty clears it
 	Panels    []Panel     `json:"panels,omitempty"`     // full snapshot on "panels"; live state/spark refresh on "telemetry"
 	Groups    []GroupView `json:"groups,omitempty"`     // per-group view settings on the "panels" snapshot, alongside Panels
-	ID        string      `json:"id,omitempty"`         // panel id on "output"; the new ephemeral diff panel id on "diff"
+	ID        string      `json:"id,omitempty"`         // panel id on "output"; the new transient panel id on "ephemeral" (a diff or git op)
 	Data      []byte      `json:"data,omitempty"`       // pty output bytes on "output"
 
 	// The merged effective client config, set on "config": defaults <- YAML <-

@@ -15,7 +15,7 @@ import (
 //
 //	dashboard:  p new · w close · g mark · G group · ? key map · …  (single keys)
 //	zoom:       C-t p new · C-t w close · …                          (prefix + key)
-//	any mode:   C-t d dashboard · C-t g group view                  (escapes)
+//	any mode:   C-t d dashboard · C-t [ scroll                      (escapes)
 const (
 	keyPrefix      = "ctrl+t"
 	keyNewPanel    = "p"
@@ -34,6 +34,7 @@ const (
 	keyRestart     = "S" // shift+s
 	keyReload      = "R" // shift+r — reload config (backend + cockpit), fleet kept
 	keyDetach      = "q"
+	keyBack        = "b" // back one level: zoom→group→dashboard (bare in command mode, C-t b in a zoom)
 
 	keyMark    = "g" // mark / unmark the selected item
 	keyGroup   = "G" // group the marked panels (shift+g)
@@ -41,9 +42,8 @@ const (
 	keyUngroup = "u" // dissolve the selected work item
 	keyRename  = "e" // edit the name of the selected panel or group
 
-	// The two universal escapes, bound to the prefix in every mode.
+	// Prefix-reached escapes, bound to the leader in every mode.
 	keyDashboard = "d" // C-t d → the dashboard
-	keyGroupView = "g" // C-t g → the group view (the split, or back from a zoom)
 	keyCommands  = "c" // C-t c → the plugin command picker
 
 	keyRemove    = "x" // in the group split: remove the focused member from the group
@@ -94,20 +94,23 @@ const (
 	actUngroup
 	actRename
 
+	// Back pops one view level. It is a command (bare key in command mode, prefix
+	// in a zoom), not an escape, so the prefix handler leaves it to lookupCmd.
+	actBack
+
 	// Escapes — bound to the prefix in every mode.
 	actDashboard
-	actGroupView
 	actEditMap
 	actScroll
 	actCommands
 )
 
 // isEscape reports whether an action is reached after the prefix rather than on a
-// bare key — lookupCmd skips these, lookupEscape resolves them. The dashboard and
-// group-view jumps and the key-map editor work after the prefix in every mode;
-// panel config opens this way from command mode.
+// bare key — lookupCmd skips these, lookupEscape resolves them. The dashboard jump
+// and the key-map editor work after the prefix in every mode; panel config opens
+// this way from command mode.
 func isEscape(a action) bool {
-	return a == actDashboard || a == actGroupView || a == actEditMap || a == actPanelConfig || a == actScroll || a == actCommands
+	return a == actDashboard || a == actEditMap || a == actPanelConfig || a == actScroll || a == actCommands
 }
 
 // binding is one editable command: a stable name (used to persist the key), the
@@ -147,7 +150,7 @@ var bindings = []binding{
 	{"panel-config", keyPanelConfig, "configure panel defaults (prefix)", actPanelConfig, "View"},
 	{"scroll", keyScroll, "scroll mode — line / page (prefix)", actScroll, "View"},
 	{"dashboard", keyDashboard, "jump to the dashboard (prefix)", actDashboard, "View"},
-	{"group-view", keyGroupView, "go to the group view (prefix)", actGroupView, "View"},
+	{"back", keyBack, "back one level: zoom→group→dashboard (C-t b in a zoom)", actBack, "View"},
 	{"commands", keyCommands, "open the plugin command picker (prefix)", actCommands, "View"},
 
 	{"restart", keyRestart, "force-restart the server", actRestart, "Session"},

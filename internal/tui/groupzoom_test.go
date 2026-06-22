@@ -89,14 +89,75 @@ func TestGroupZoomEnterAndBack(t *testing.T) {
 		t.Fatalf("enter should zoom member 3 with group origin, got mode=%v id=%q origin=%q", m.mode, m.zoomID, m.zoomGroupOrigin)
 	}
 
-	// prefix+g (BIND-g) pops back to the group split and forgets the origin.
+	// prefix+g no longer leaves a zoom — the freed C-t g slot now opens the git
+	// menu on the zoomed agent. esc closes it back to the zoom.
 	nm, _ = m.handleZoomKey(key("ctrl+t")) // arm the prefix
 	m = nm.(model)
 	nm, _ = m.handleZoomKey(key("g"))
 	m = nm.(model)
-	if m.mode != modeGroupZoom || m.groupName != "api" || m.zoomGroupOrigin != "" {
-		t.Fatalf("prefix+g should return to the api split, got mode=%v group=%q origin=%q", m.mode, m.groupName, m.zoomGroupOrigin)
+	if m.mode != modeGit {
+		t.Fatalf("prefix+g should open the git menu, got mode=%v", m.mode)
 	}
+	nm, _ = m.handleGitKey("esc")
+	m = nm.(model)
+	if m.mode != modeZoom {
+		t.Fatalf("esc should close the git menu back to the zoom, got mode=%v", m.mode)
+	}
+
+	// prefix+b (back) pops back to the group split and forgets the origin.
+	nm, _ = m.handleZoomKey(key("ctrl+t")) // arm the prefix
+	m = nm.(model)
+	nm, _ = m.handleZoomKey(key("b"))
+	m = nm.(model)
+	if m.mode != modeGroupZoom || m.groupName != "api" || m.zoomGroupOrigin != "" {
+		t.Fatalf("prefix+b should return to the api split, got mode=%v group=%q origin=%q", m.mode, m.groupName, m.zoomGroupOrigin)
+	}
+}
+
+// TestBackPopsOneLevel covers the back action's contextual pop in each view: the
+// split → dashboard, a dashboard-opened zoom → dashboard (the case C-t g never
+// handled), the summary sub-view → parent group, and the dashboard as the root.
+func TestBackPopsOneLevel(t *testing.T) {
+	t.Run("dashboard is the root", func(t *testing.T) {
+		nm, _ := baseModel().runAction(actBack)
+		if got := nm.(model); got.mode != modeDashboard || !strings.Contains(got.status, "dashboard") {
+			t.Fatalf("back on the dashboard should no-op with a hint, got mode=%v status=%q", got.mode, got.status)
+		}
+	})
+
+	t.Run("dashboard zoom backs to the dashboard", func(t *testing.T) {
+		m := baseModel()
+		m.fleet = groupedFleet()
+		m = m.zoomInto(panel.Panel{ID: "1", Title: "lone", State: panel.Running})
+		if m.zoomGroupOrigin != "" {
+			t.Fatalf("a direct zoom should carry no group origin, got %q", m.zoomGroupOrigin)
+		}
+		nm, _ := m.runAction(actBack)
+		if got := nm.(model); got.mode != modeDashboard {
+			t.Fatalf("back from a dashboard zoom should reach the dashboard, got mode=%v", got.mode)
+		}
+	})
+
+	t.Run("bare b in the split backs to the dashboard", func(t *testing.T) {
+		m := baseModel()
+		m.fleet = groupedFleet()
+		m = m.zoomGroup(m.dashItems()[0])
+		nm, _ := m.handleGroupZoomKey(key(keyBack))
+		if got := nm.(model); got.mode != modeDashboard {
+			t.Fatalf("bare b in the split should reach the dashboard, got mode=%v", got.mode)
+		}
+	})
+
+	t.Run("back from the summary sub-view returns to the parent group", func(t *testing.T) {
+		m := baseModel()
+		m.fleet = groupedFleet()
+		m = m.zoomGroup(m.dashItems()[0])
+		m.summaryScope = true
+		nm, _ := m.runAction(actBack)
+		if got := nm.(model); got.mode != modeGroupZoom || got.summaryScope {
+			t.Fatalf("back in the summary scope should return to the group split, got mode=%v summary=%v", got.mode, got.summaryScope)
+		}
+	})
 }
 
 func TestGroupZoomExit(t *testing.T) {

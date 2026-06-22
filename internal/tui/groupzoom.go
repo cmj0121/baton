@@ -14,7 +14,7 @@ import (
 // The group split: zooming a work item lays its panels out as live tiles you
 // navigate as a unit. tab cycles the focus, enter drops into the focused panel's
 // own zoom, and the dashboard key (d) — or esc — leaves for the dashboard. From a
-// zoomed member, BIND-g pops back to the split.
+// zoomed member, back (C-t b) pops back to the split.
 
 const (
 	gtileGap        = 1  // space reserved to the right of each tile
@@ -365,7 +365,7 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	key := k.String()
 	// The split is command-mode, so the prefix is only needed for the universal
-	// escapes — C-t d leaves, C-t g is a no-op (already in the group view).
+	// escapes — C-t d leaves for the dashboard; bare b (back) does the same.
 	if m.groupArmed {
 		m.groupArmed = false
 		if b, ok := m.lookupEscape(key); ok {
@@ -450,6 +450,10 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyDiff:
 		// Bare D pops up the work-tree diff of the focused member, like s signals it.
 		return m.runAction(actDiff)
+	case keyBack:
+		// Bare b leaves the split for the dashboard, or the parent group from the
+		// summary sub-view — the same pop d/esc perform, routed through actBack.
+		return m.runAction(actBack)
 	case keyRemove:
 		return m.removeFocusedMember(), nil
 	case keyInteract:
@@ -470,9 +474,9 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleGroupInteractKey drives the focused tile while interact mode is on: every
 // bare key is fed to that panel's program, and the prefix is the only escape —
-// C-t i (or C-t g) stops interacting and returns to navigation, C-t d leaves for
-// the dashboard, C-t q detaches, and C-t C-t sends a literal prefix. This mirrors
-// a zoom's input model, but on one tile of the split rather than a full screen.
+// C-t i stops interacting and returns to navigation, C-t d leaves for the
+// dashboard, C-t q detaches, and C-t C-t sends a literal prefix. This mirrors a
+// zoom's input model, but on one tile of the split rather than a full screen.
 func (m model) handleGroupInteractKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := k.String()
 	if m.groupArmed {
@@ -488,8 +492,6 @@ func (m model) handleGroupInteractKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			switch b.act {
 			case actDashboard:
 				return m.exitGroupZoom()
-			case actGroupView: // C-t g → back to the split's navigation
-				return m.exitInteract(), nil
 			case actEditMap:
 				return m.openEditMap(modeGroupZoom), nil
 			case actScroll: // C-t [ → scroll the focused tile's history
@@ -661,7 +663,7 @@ func (m model) exitSummaryScope() model {
 }
 
 // zoomFocusedMember drops from the split into the focused panel's own live zoom,
-// remembering the group so BIND-g returns to the split.
+// remembering the group so back (C-t b) returns to the split.
 func (m model) zoomFocusedMember() (tea.Model, tea.Cmd) {
 	p, ok := m.focusedMember()
 	if !ok {
@@ -717,7 +719,7 @@ func (m model) backToGroup() (tea.Model, tea.Cmd) {
 	m.groupName = m.zoomGroupOrigin
 	m.groupArmed = false
 	m.groupInteract = false
-	m.summaryScope = false // BIND-g lands on the parent group, never the summary sub-view
+	m.summaryScope = false // back lands on the parent group, never the summary sub-view
 	m.groupFocus = 0
 	m.scrollOff = 0
 	m.scrolling = false
