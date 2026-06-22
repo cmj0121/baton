@@ -1273,12 +1273,16 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		m.inputBuf = m.defaultWorkdir()
 		m.status = fmt.Sprintf("new %s agent · type the workdir, enter to spawn", name)
 	case actClose:
-		if it, ok := m.selectedItem(); !ok {
+		it, ok := m.selectedItem()
+		switch {
+		case !ok:
 			m.status = "no panel to close"
-		} else if m.confirmClose {
+		case m.confirmClose || it.kind == itemGroup:
+			// A group close retires every member at once, so w always confirms it; a
+			// lone panel asks only when confirm-on-close is on (it defaults on).
 			m.pendingClose = true
-			m.status = "close " + it.title() + "? (y/n)"
-		} else {
+			m.status = it.closePrompt()
+		default:
 			m.closeSelected()
 		}
 	case actRespawn:
