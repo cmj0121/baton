@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -69,6 +70,20 @@ type Server struct {
 	version           string // the server's build version, reported in the welcome
 
 	onReload func() // invoked on a server.reload command; re-reads config and Reloads
+
+	// Plugin wiring. eventSink receives every lifecycle event (a non-blocking post
+	// to the plugin's worker, safe to call under mu); outputEvents gates the
+	// high-volume panel.output emit so it costs nothing until a plugin asks for it.
+	// onRunCommand invokes a plugin command by name. clientConfig is the merged
+	// effective config (defaults <- YAML <- plugin) served to frontends, and
+	// pluginCmds is the plugin command list the picker shows. Set before Serve or
+	// under mu; read under mu.
+	eventSink    func(name string, fields map[string]any)
+	outputEvents atomic.Bool
+	onRunCommand func(name string) error
+	clientConfig json.RawMessage
+	pluginCmds   []proto.PluginCommand
+	footerText   string // a plugin-set persistent footer segment (baton.footer); carried on config + pushed live
 
 	mu      sync.Mutex
 	seq     int
@@ -194,14 +209,17 @@ func (s *Server) Reload(allowNameConflict bool, defaultDir string, replayBytes i
 // onPanelExit marks a panel exited when its process ends on its own, notifies
 // and detaches any client zoomed into it, and broadcasts the change. It is a
 // no-op for a panel already gone (e.g. an explicit panel.close).
-func (s *Server) onPanelExit(id string) {
+func (s *Server) onPanelExit(id string, exitCode int) {
 	s.mu.Lock()
 	found := false
+	var fields map[string]any
 	for i := range s.panels {
 		if s.panels[i].ID == id {
 			s.panels[i].State = panel.Exited
 			s.panels[i].Activity = "exited"
 			s.mon.forget(id) // a dead panel no longer ticks
+			fields = panelFields(s.panels[i])
+			fields["exit_code"] = exitCode
 			found = true
 			break
 		}
@@ -212,10 +230,13 @@ func (s *Server) onPanelExit(id string) {
 			delete(cc.attached, id)
 		}
 	}
+	if found {
+		s.emit("panel.exit", fields)
+	}
 	s.mu.Unlock()
 
 	if found {
-		log.Info().Str("panel", id).Msg("panel process exited")
+		log.Info().Str("panel", id).Int("exit_code", exitCode).Msg("panel process exited")
 		s.broadcast(s.panelsMsg())
 	}
 }
@@ -229,10 +250,21 @@ func (s *Server) routeOutput(id string, data []byte) {
 	defer s.mu.Unlock()
 	s.mon.observed(id, len(data))
 	if i := s.indexLocked(id); i >= 0 {
-		switch s.panels[i].State {
+		switch from := s.panels[i].State; from {
 		case panel.Spawning, panel.Idle, panel.Attention:
 			s.panels[i].State = panel.Running
 			s.mon.entered(id)
+			f := panelFields(s.panels[i])
+			f["from"], f["to"] = from.String(), panel.Running.String()
+			s.emit("panel.state", f)
+		}
+		// panel.output is opt-in: emitted only when a plugin registered a handler,
+		// so the hot output path costs nothing otherwise. The byte slice is copied
+		// since the caller (pump) reuses its buffer after this returns.
+		if s.outputEvents.Load() {
+			f := panelFields(s.panels[i])
+			f["data"] = string(data)
+			s.emit("panel.output", f)
 		}
 	}
 	for cc := range s.clients {
@@ -265,7 +297,10 @@ func (s *Server) attach(cc *clientConn, id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if snap := s.pty.Snapshot(id); len(snap) > 0 {
-		send(cc, proto.ServerMsg{Type: "output", ID: id, Data: snap})
+		// Strip query sequences from the replay so the attaching emulator does not
+		// re-answer the program's old terminal queries — those late replies would be
+		// injected as input and echo as garbage at a prompt. Live output is untouched.
+		send(cc, proto.ServerMsg{Type: "output", ID: id, Data: stripReplayQueries(snap)})
 	}
 	cc.attached[id] = true
 }
@@ -370,9 +405,19 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 		quiet := s.mon.quiet(p.ID)
 		attention := quiet && p.State == panel.Running && looksLikeAttention(s.pty.Tail(p.ID, attnTailBytes))
 		if ns, ok := nextState(p.State, quiet, attention); ok {
+			from := p.State
 			p.State = ns
 			s.mon.entered(p.ID)
 			changed = true
+			f := panelFields(*p)
+			f["from"], f["to"] = from.String(), ns.String()
+			s.emit("panel.state", f)
+			switch ns {
+			case panel.Attention:
+				s.emit("panel.attention", panelFields(*p))
+			case panel.Idle:
+				s.emit("panel.idle", panelFields(*p))
+			}
 		}
 		if spark := s.mon.roll(p.ID); spark != p.Spark {
 			p.Spark = spark
@@ -437,7 +482,7 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "panel.list":
 		send(cc, s.panelsMsg())
 	case "panel.create":
-		if err := s.createPanel(cmd.Kind, cmd.Path, cmd.Args, cmd.Dir); err != nil {
+		if _, err := s.createPanel(cmd.Kind, cmd.Path, cmd.Args, cmd.Dir); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
@@ -520,6 +565,30 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		if s.onReload != nil {
 			s.onReload()
 		}
+	case "config.get":
+		// Hand the frontend the merged effective config (defaults <- YAML <- plugin)
+		// and the plugin command list, so the cockpit can apply keymaps/toggles and
+		// fill its command picker. Empty until a plugin sets them — the client then
+		// just keeps its local config.
+		s.mu.Lock()
+		cfg, cmds, footer := s.clientConfig, s.pluginCmds, s.footerText
+		s.mu.Unlock()
+		send(cc, proto.ServerMsg{Type: "config", Config: cfg, Commands: cmds, Footer: footer})
+	case "command.run":
+		// Invoke a plugin-registered command by name on the Lua worker. The run is
+		// fire-and-forget from the wire's view; any fleet change it makes broadcasts
+		// through the normal core-action path.
+		s.mu.Lock()
+		run := s.onRunCommand
+		s.mu.Unlock()
+		if run == nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: "no plugin commands are registered"})
+			return
+		}
+		if err := run(cmd.Name); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
 	case "panel.attach":
 		s.attach(cc, cmd.ID)
 	case "panel.detach":
@@ -538,7 +607,7 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 // an agent panel runs its profile command with args. Both run in dir, the working
 // directory; an empty dir falls back to the configured default (then the user's
 // home), so a panel never inherits the directory the daemon was launched from.
-func (s *Server) createPanel(kind, path string, args []string, dir string) error {
+func (s *Server) createPanel(kind, path string, args []string, dir string) (string, error) {
 	if kind == "" {
 		kind = proto.KindShell
 	}
@@ -560,14 +629,14 @@ func (s *Server) createPanel(kind, path string, args []string, dir string) error
 		spec = ptymgr.Spec{Command: path, Dir: dir}
 	case proto.KindAgent:
 		if path == "" {
-			return fmt.Errorf("an agent panel needs a command")
+			return "", fmt.Errorf("an agent panel needs a command")
 		}
 		spec = ptymgr.Spec{Command: path, Args: args, Dir: dir}
 	default:
-		return fmt.Errorf("unknown panel kind %q", kind)
+		return "", fmt.Errorf("unknown panel kind %q", kind)
 	}
 	if err := s.pty.StartCmd(id, spec); err != nil {
-		return err
+		return "", err
 	}
 
 	p := panel.Panel{
@@ -581,10 +650,11 @@ func (s *Server) createPanel(kind, path string, args []string, dir string) error
 	s.panels = append(s.panels, p)
 	s.specs[id] = spec // the exact spec StartCmd launched, so respawn reproduces it
 	s.mon.spawned(id)  // start the Monitor's clock; first output wakes it to running
+	s.emit("panel.spawn", panelFields(p))
 	s.mu.Unlock()
 
 	log.Info().Str("panel", p.Title).Msg("panel created")
-	return nil
+	return id, nil
 }
 
 // panelTitle is the human label for a new panel. An agent reads as
@@ -850,6 +920,7 @@ func (s *Server) closePanel(id string) error {
 	s.panels = slices.Delete(s.panels, idx, idx+1)
 	s.mon.forget(id)
 	delete(s.specs, id) // the panel is gone for good; drop its retained spawn spec
+	s.emit("panel.close", map[string]any{"id": id, "title": title})
 	s.mu.Unlock()
 
 	s.pty.Stop(id) // no-op for a panel with no live process
@@ -1020,6 +1091,7 @@ func (s *Server) groupPanels(ids []string, name string) error {
 	if moved == 0 {
 		return fmt.Errorf("no panel matched the given ids")
 	}
+	s.emit("group.change", map[string]any{"group": name})
 	log.Info().Str("group", name).Int("panels", moved).Msg("panels grouped")
 	return nil
 }
@@ -1080,6 +1152,7 @@ func (s *Server) ungroup(ids []string, name string) error {
 		if moved == 0 {
 			return fmt.Errorf("no grouped panel matched the given ids")
 		}
+		s.emit("group.change", map[string]any{})
 		log.Info().Int("panels", moved).Msg("panels removed from group")
 		return nil
 	}
@@ -1093,6 +1166,7 @@ func (s *Server) ungroup(ids []string, name string) error {
 	// The whole group is gone; drop its visible count so the map stays tidy.
 	s.mu.Lock()
 	delete(s.groupShown, name)
+	s.emit("group.change", map[string]any{"group": name})
 	s.mu.Unlock()
 	log.Info().Str("group", name).Int("panels", moved).Msg("group dissolved")
 	return nil
@@ -1157,6 +1231,7 @@ func (s *Server) renameGroup(old, name string) error {
 		s.groupShown[name] = shown
 		delete(s.groupShown, old)
 	}
+	s.emit("group.change", map[string]any{"group": name, "from": old})
 	log.Info().Str("from", old).Str("to", name).Int("panels", moved).Msg("group renamed")
 	return nil
 }
@@ -1300,6 +1375,7 @@ func (s *Server) setGroupShown(group string, count int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.groupShown[group] = count
+	s.emit("group.change", map[string]any{"group": group, "shown": count})
 	log.Info().Str("group", group).Int("shown", count).Msg("group visible count set")
 	return nil
 }

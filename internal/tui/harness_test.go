@@ -15,7 +15,7 @@ import (
 // handshake and records every command the client sends. It lets a test drive the
 // model and assert exactly what travelled over the socket — the resize on a zoom,
 // the move on a reorder — without a real PTY or the full server. The returned
-// channel yields each command (other than the hello) in send order.
+// channel yields each command (other than the hello/config.get handshake) in send order.
 func recordingServer(t *testing.T) (*client.Client, <-chan proto.Command) {
 	t.Helper()
 	sock := filepath.Join(t.TempDir(), "rec.sock")
@@ -42,8 +42,8 @@ func recordingServer(t *testing.T) (*client.Client, <-chan proto.Command) {
 			if err := dec.Decode(&cmd); err != nil {
 				return
 			}
-			if cmd.Action == "hello" {
-				continue
+			if cmd.Action == "hello" || cmd.Action == "config.get" {
+				continue // handshake, not a user action
 			}
 			select {
 			case cmds <- cmd:

@@ -389,7 +389,7 @@ func TestTreeViewKicksInForLargeFleet(t *testing.T) {
 }
 
 func TestKeyMapShowsPurposeSections(t *testing.T) {
-	m := model{mode: modeKeyMap, width: 120, height: 40, binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+	m := model{mode: modeKeyMap, width: 120, height: 44, binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
 	v := m.View()
 	for _, sec := range []string{"Panels", "View", "Work items", "Session"} {
 		if !strings.Contains(v, sec) {
