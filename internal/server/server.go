@@ -19,6 +19,7 @@ import (
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/mem"
 
+	"github.com/cmj0121/baton/internal/gitdiff"
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/ptymgr"
@@ -44,6 +45,10 @@ const (
 type clientConn struct {
 	out      chan proto.ServerMsg
 	attached map[string]bool
+	// ephemeral is the set of ephemeral diff-panel ids this client opened. They
+	// live only as PTYs (never in s.panels), so the owning conn tracks them to
+	// reap any still-open one when it disconnects. Guarded by Server.mu.
+	ephemeral map[string]bool
 }
 
 // Server owns all state and every PTY. It is safe for concurrent use.
@@ -65,6 +70,14 @@ type Server struct {
 	clients map[*clientConn]struct{}
 	mon     *monitor               // lifecycle + telemetry bookkeeping, guarded by mu
 	specs   map[string]ptymgr.Spec // immutable spawn spec per panel id, for persistence + respawn (guarded by mu)
+
+	// Ephemeral diff panels. ephemeral is the set of live "diff:<n>" ids spawned
+	// as PTYs but deliberately kept out of s.panels/s.specs, so persistence
+	// (snapshotState) and the dashboard (panelsMsg) never see them. ephSeq numbers
+	// them from a private counter, so a "diff:" id can never collide with or
+	// perturb the decimal panel ids drawn from s.seq. Both guarded by mu.
+	ephemeral map[string]struct{}
+	ephSeq    int
 
 	// groupShown is the per-group visible count — how many members stream as live
 	// tiles before the rest collapse into the summary tile. Keyed by group name;
@@ -132,6 +145,7 @@ func New(ln net.Listener, opts ...Option) *Server {
 		clients:    make(map[*clientConn]struct{}),
 		mon:        newMonitor(),
 		specs:      make(map[string]ptymgr.Spec),
+		ephemeral:  make(map[string]struct{}),
 		groupShown: make(map[string]int),
 		dirty:      make(chan struct{}, 1),
 	}
@@ -377,9 +391,14 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 func (s *Server) handle(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 
-	cc := &clientConn{out: make(chan proto.ServerMsg, proto.EventBufferSize), attached: make(map[string]bool)}
+	cc := &clientConn{
+		out:       make(chan proto.ServerMsg, proto.EventBufferSize),
+		attached:  make(map[string]bool),
+		ephemeral: make(map[string]bool),
+	}
 	s.addClient(cc)
 	defer s.removeClient(cc)
+	defer s.closeEphemeral(cc) // reap any diff panel this conn left open on the way out
 
 	// Writer goroutine: the only place this connection is encoded to.
 	go func() {
@@ -471,6 +490,15 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		// Delivering a signal does not change any panel struct; an exit it triggers
 		// flows back through onPanelExit, so there is nothing to broadcast here.
 		if err := s.signalPanels(targetIDs(cmd), cmd.Signal); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+	case "panel.diff":
+		// Open a transient diff panel for the target agent. openDiff sends its own
+		// "diff" reply on success; on failure we surface the reason as an error. It
+		// is deliberately NOT broadcastFleet'd — the diff panel is ephemeral and must
+		// never reach the dashboard or the persisted state.
+		if err := s.openDiff(cc, cmd.ID); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
@@ -788,6 +816,21 @@ func (s *Server) closePanel(id string) error {
 		}
 	}
 	if idx < 0 {
+		// Not a real panel: it may be an ephemeral diff panel. Closing one stops its
+		// PTY and drops it from the ephemeral set (the owning conn's cc.ephemeral is
+		// cleared by the disconnect path; an explicit close here just needs the PTY
+		// gone and the server set tidy). The client sends this on leaving the diff
+		// zoom, so the transient panel does not outlive the view.
+		if _, ok := s.ephemeral[id]; ok {
+			delete(s.ephemeral, id)
+			for cc := range s.clients {
+				delete(cc.ephemeral, id)
+			}
+			s.mu.Unlock()
+			s.pty.Stop(id)
+			log.Info().Str("panel", id).Msg("ephemeral diff panel closed")
+			return nil
+		}
 		s.mu.Unlock()
 		return fmt.Errorf("no panel with id %q", id)
 	}
@@ -800,6 +843,87 @@ func (s *Server) closePanel(id string) error {
 	s.pty.Stop(id) // no-op for a panel with no live process
 	log.Info().Str("panel", title).Msg("panel closed")
 	return nil
+}
+
+// openDiff spawns a transient diff panel for the agent panel targetID: an
+// ephemeral PTY, running the resolved diff command in that agent's workdir. The
+// panel is never appended to s.panels and never written to s.specs, so it stays
+// out of both the dashboard snapshot (panelsMsg) and the persisted state
+// (snapshotState) for free — it is tracked only in s.ephemeral (server-wide) and
+// cc.ephemeral (the owning conn, for disconnect cleanup). On success it replies
+// {type:"diff", id:"diff:<n>"} so the client can auto-zoom it.
+//
+// The git probes (work-tree check, change check, command resolution) run with
+// s.mu released — they shell out and must never hold the server lock.
+func (s *Server) openDiff(cc *clientConn, targetID string) error {
+	s.mu.Lock()
+	idx := s.indexLocked(targetID)
+	if idx < 0 {
+		s.mu.Unlock()
+		return fmt.Errorf("no panel with id %q", targetID)
+	}
+	kind := s.panels[idx].Kind
+	dir := s.specs[targetID].Dir
+	s.mu.Unlock()
+
+	// Authoritative agent-only gate. The client gates this too for UX, but the
+	// server is the source of truth; relaxing the feature to shells is this one
+	// line.
+	if kind != panel.Agent {
+		return fmt.Errorf("diff is available on agent panels")
+	}
+
+	// Resolve the effective workdir exactly as a spawn would (empty → home), so
+	// the diff runs in the same tree the agent actually runs in.
+	dir = ptymgr.PanelDir(dir)
+	if !gitdiff.IsWorkTree(dir) {
+		return fmt.Errorf("not a git repository: %s", dir)
+	}
+	if !gitdiff.HasChanges(dir) {
+		return fmt.Errorf("no uncommitted changes")
+	}
+	name, args := gitdiff.ResolveCommand(dir, s.diffCommand)
+
+	// Allocate the ephemeral id and register it before the spawn, so a concurrent
+	// disconnect cleanup sees a consistent set; unregister if the spawn fails.
+	s.mu.Lock()
+	s.ephSeq++
+	ephID := fmt.Sprintf("diff:%d", s.ephSeq)
+	s.ephemeral[ephID] = struct{}{}
+	cc.ephemeral[ephID] = true
+	s.mu.Unlock()
+
+	if err := s.pty.StartCmd(ephID, ptymgr.Spec{Command: name, Args: args, Dir: dir}); err != nil {
+		s.mu.Lock()
+		delete(s.ephemeral, ephID)
+		delete(cc.ephemeral, ephID)
+		s.mu.Unlock()
+		return fmt.Errorf("could not open diff: %w", err)
+	}
+
+	log.Info().Str("panel", ephID).Str("target", targetID).Str("dir", dir).Msg("diff panel opened")
+	send(cc, proto.ServerMsg{Type: "diff", ID: ephID})
+	return nil
+}
+
+// closeEphemeral reaps every diff panel a client still has open, called when its
+// connection drops so a client that vanishes mid-diff leaves no orphan PTY.
+func (s *Server) closeEphemeral(cc *clientConn) {
+	s.mu.Lock()
+	ids := make([]string, 0, len(cc.ephemeral))
+	for id := range cc.ephemeral {
+		ids = append(ids, id)
+		delete(s.ephemeral, id)
+	}
+	cc.ephemeral = make(map[string]bool)
+	s.mu.Unlock()
+
+	for _, id := range ids {
+		s.pty.Stop(id)
+	}
+	if len(ids) > 0 {
+		log.Info().Int("count", len(ids)).Msg("reaped ephemeral diff panels on disconnect")
+	}
 }
 
 // purgeExited drops every exited panel from the fleet and frees its retained PTY
