@@ -61,6 +61,56 @@ func TestCloseRequiresConfirmation(t *testing.T) {
 	}
 }
 
+// TestCloseGroupAlwaysConfirms proves w on a group card asks for confirmation
+// even when confirm-on-close is off — a group close retires every member at once,
+// so it is never a one-keystroke action — and the prompt names the panel count.
+func TestCloseGroupAlwaysConfirms(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+	m.confirmClose = false // off: a lone panel would close instantly
+	m.cursor = 0           // the 3-member api group
+	before := len(m.fleet)
+
+	m = press(m, "w")
+	if !m.pendingClose {
+		t.Fatal("a group close must confirm even with confirm-on-close off")
+	}
+	if !strings.Contains(m.status, "group") || !strings.Contains(m.status, "3 panel") {
+		t.Fatalf("the prompt should name the group and its panel count, got %q", m.status)
+	}
+	if len(m.fleet) != before {
+		t.Fatalf("nothing should close before the answer: %d -> %d", before, len(m.fleet))
+	}
+
+	m = press(m, "y")
+	if m.pendingClose {
+		t.Fatal("confirmation should clear after answering")
+	}
+	for _, p := range m.fleet {
+		if p.Group == "api" {
+			t.Fatalf("every api member should be gone, found %s", p.ID)
+		}
+	}
+}
+
+// TestCloseLonePanelRespectsToggle proves a single panel still closes in one
+// keystroke when confirm-on-close is off, so the group rule does not leak onto it.
+func TestCloseLonePanelRespectsToggle(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+	m.confirmClose = false
+	m.cursor = 1 // the lone shell (id 2)
+	before := len(m.fleet)
+
+	m = press(m, "w")
+	if m.pendingClose {
+		t.Fatal("a lone panel with confirm-on-close off should not arm a prompt")
+	}
+	if len(m.fleet) != before-1 {
+		t.Fatalf("the lone panel should close immediately: %d -> %d", before, len(m.fleet))
+	}
+}
+
 func TestCloseCancelsOnAnyOtherKey(t *testing.T) {
 	m := model{fleet: sampleFleet(), confirmClose: true}
 	before := len(m.fleet)

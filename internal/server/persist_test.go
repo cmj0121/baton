@@ -78,6 +78,43 @@ func TestSnapshotCapturesSpec(t *testing.T) {
 	}
 }
 
+// TestShutdownKillsLivePanels checks the daemon's shutdown sweep: Shutdown
+// SIGKILLs every live panel's process, so no child outlives the backend. Each
+// kill surfaces back through onPanelExit, flipping the panel to exited.
+func TestShutdownKillsLivePanels(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	ln, sock, stateF := listen(t)
+	srv := server.New(ln, server.WithStateFile(stateF))
+	go func() { _ = srv.Serve() }()
+
+	c := dial(t, sock)
+	for i := 0; i < 2; i++ {
+		if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
+			t.Fatalf("create %d: %v", i, err)
+		}
+		recv(t, c)
+	}
+
+	if n := srv.Shutdown(); n != 2 {
+		t.Fatalf("Shutdown should kill 2 live panels, got %d", n)
+	}
+	// The kills flow back as exits; the next broadcast(s) flip both to exited.
+	deadline := time.After(3 * time.Second)
+	for exited := 0; exited < 2; {
+		select {
+		case msg := <-c.Events:
+			exited = 0
+			for _, p := range msg.Panels {
+				if p.State == "exited" {
+					exited++
+				}
+			}
+		case <-deadline:
+			t.Fatal("Shutdown should drive both panels to exited")
+		}
+	}
+}
+
 // TestSaveOnMutation checks that a structural mutation flushes the fleet/layout to
 // disk on its own (no explicit SaveNow), and that the seq and grouping round-trip.
 func TestSaveOnMutation(t *testing.T) {

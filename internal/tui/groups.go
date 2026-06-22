@@ -95,6 +95,16 @@ func (it dashItem) title() string {
 	return it.panel.Title
 }
 
+// closePrompt is the y/n confirmation line for closing an item with w. A group
+// spells out that the close takes every member with it, so the count is never a
+// surprise; a lone panel just names itself.
+func (it dashItem) closePrompt() string {
+	if it.kind == itemGroup {
+		return fmt.Sprintf("close group %q and its %d panel(s)? (y/n)", it.name, len(it.members))
+	}
+	return "close " + it.title() + "? (y/n)"
+}
+
 // ids is the panel ids an item covers: one for a panel, every member for a group.
 func (it dashItem) ids() []string {
 	if it.kind == itemPanel {

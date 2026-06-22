@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -570,6 +571,19 @@ func panelTitle(kind, path, dir, id string) string {
 func (s *Server) broadcastFleet() {
 	s.broadcast(s.panelsMsg())
 	s.markDirty()
+}
+
+// Shutdown sends SIGKILL to every live panel's process group, so no child
+// process outlives the daemon when it stops. The signal handler calls this on the
+// way out (after SaveNow has flushed the layout); a process group escapes only if
+// a child daemonised into its own session, the same caveat panel signals carry.
+// Returns the number of panels killed.
+func (s *Server) Shutdown() int {
+	n := s.pty.KillAll(syscall.SIGKILL)
+	if n > 0 {
+		log.Info().Int("panels", n).Msg("killed live panels on shutdown")
+	}
+	return n
 }
 
 // markDirty nudges the saverLoop to flush the current fleet/layout to disk. It is

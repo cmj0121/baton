@@ -83,6 +83,11 @@ rebindable list of the current view.
 
 Names stay unique unless you set `allow-name-conflict`.
 
+Closing with **`w`** asks `y/n` first: a single panel honours the **confirm on
+close** toggle (on by default, in the key map's settings block), while closing a
+**group** always confirms and names how many panels it will retire — a whole work
+item never goes in one keystroke.
+
 `C-t R` reloads the config without a restart: the daemon re-reads its settings
 (name policy, default workdir, replay buffer) while the fleet keeps running, and
 the cockpit refreshes its own (key map, toggles, panel defaults). Sending the

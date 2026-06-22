@@ -37,6 +37,46 @@ func TestSignalUnknownIDSafe(t *testing.T) {
 	m.Signal("nope", syscall.SIGTERM) // must not panic
 }
 
+// TestKillAllKillsEveryLivePanel is the daemon's shutdown sweep: every live
+// panel's process group gets the signal, the count reflects only the live ones,
+// and each process ends.
+func TestKillAllKillsEveryLivePanel(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	m := New()
+	closed := make(chan string, 3)
+	m.OnClose(func(id string) { closed <- id })
+	for _, id := range []string{"1", "2", "3"} {
+		if err := m.Start(id, ""); err != nil {
+			t.Fatalf("Start %s: %v", id, err)
+		}
+		defer m.Stop(id)
+	}
+
+	if n := m.KillAll(syscall.SIGKILL); n != 3 {
+		t.Fatalf("KillAll should report 3 panels killed, got %d", n)
+	}
+	for i := 0; i < 3; i++ {
+		select {
+		case <-closed:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("KillAll should end every panel's process (only %d exited)", i)
+		}
+	}
+	// A second sweep finds nothing live to kill — dead panes are skipped.
+	if n := m.KillAll(syscall.SIGKILL); n != 0 {
+		t.Fatalf("KillAll over already-dead panels should kill 0, got %d", n)
+	}
+}
+
+// TestKillAllEmptySafe confirms the shutdown sweep over an empty manager is a
+// harmless no-op.
+func TestKillAllEmptySafe(t *testing.T) {
+	m := New()
+	if n := m.KillAll(syscall.SIGKILL); n != 0 {
+		t.Fatalf("KillAll on an empty manager should kill 0, got %d", n)
+	}
+}
+
 func TestStreamsOutputAndForwardsInput(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	m := New()
