@@ -68,6 +68,15 @@ type PanelDefaults struct {
 	// back to the repo's git diff.tool, then a built-in untracked-inclusive diff.
 	DiffCommand string `yaml:"diff-command,omitempty"`
 
+	// Editor is the commit editor the git menu's commit op opens (injected as
+	// GIT_EDITOR); empty lets git use its own GIT_EDITOR / core.editor / EDITOR / vi
+	// chain.
+	Editor string `yaml:"editor,omitempty"`
+
+	// WorktreeDir is the base directory new git-menu worktrees are created under;
+	// empty defaults to a sibling "<repo>-worktrees/<branch>" of the agent's repo.
+	WorktreeDir string `yaml:"worktree-dir,omitempty"`
+
 	// Agents are the named agent profiles, e.g. {"claude": {command: "claude"}}.
 	// A built-in "claude" profile is always available unless overridden here.
 	Agents map[string]AgentProfile `yaml:"agents,omitempty"`

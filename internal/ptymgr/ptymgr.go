@@ -94,6 +94,7 @@ type Spec struct {
 	Command string   // binary path; empty = the user's shell ($SHELL, then /bin/sh)
 	Args    []string // arguments, e.g. an agent profile's flags
 	Dir     string   // working directory; empty falls back to the user's home
+	Env     []string // extra "KEY=value" entries appended to the inherited env (e.g. GIT_EDITOR)
 }
 
 // PanelDir is the directory a panel runs in: the requested dir, or the user's
@@ -130,7 +131,8 @@ func (m *Manager) StartCmd(id string, spec Spec) error {
 
 	cmd := exec.Command(command, spec.Args...)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
-	cmd.Dir = PanelDir(spec.Dir) // empty → home, never the daemon's cwd
+	cmd.Env = append(cmd.Env, spec.Env...) // per-spec overrides (e.g. GIT_EDITOR for a commit)
+	cmd.Dir = PanelDir(spec.Dir)           // empty → home, never the daemon's cwd
 
 	f, err := pty.Start(cmd)
 	if err != nil {

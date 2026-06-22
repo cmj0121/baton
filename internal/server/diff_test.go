@@ -359,7 +359,7 @@ func TestDiffPerConnCap(t *testing.T) {
 	if msg.Type != "error" {
 		t.Fatalf("a diff past the cap should error, got %+v", msg)
 	}
-	if !strings.Contains(msg.Error, "too many open diffs") || !strings.Contains(msg.Error, "8") {
+	if !strings.Contains(msg.Error, "too many open panels") || !strings.Contains(msg.Error, "8") {
 		t.Fatalf("unexpected cap error text: %q", msg.Error)
 	}
 	if got := srv.EphemeralCount(); got != cap {
