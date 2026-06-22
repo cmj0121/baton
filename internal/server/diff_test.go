@@ -5,7 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -317,6 +319,150 @@ func TestDiffCloseRemovesEphemeral(t *testing.T) {
 			t.Fatalf("closing the diff panel left %d ephemeral panels", srv.EphemeralCount())
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestDiffPerConnCap checks the per-connection cap: a single client may hold at
+// most maxEphemeralPerConn (8) diff panels open; the next panel.diff is rejected
+// with an error naming the max and spawns nothing, leaving the count at the cap.
+// Closing one then frees a slot for a fresh diff.
+func TestDiffPerConnCap(t *testing.T) {
+	requireGitDiff(t)
+	repo := gitRepoWithChange(t)
+
+	srv, sock := startDiffServer(t)
+	c := dialReady(t, sock)
+
+	agentID := createAgentIn(t, c, repo)
+
+	const cap = 8 // mirrors maxEphemeralPerConn
+	ephIDs := make([]string, 0, cap)
+	for i := 0; i < cap; i++ {
+		if err := c.Send(proto.Command{Action: "panel.diff", ID: agentID}); err != nil {
+			t.Fatalf("panel.diff %d: %v", i, err)
+		}
+		reply := recvEvent(t, c)
+		if reply.Type != "diff" {
+			t.Fatalf("diff %d: expected a diff reply, got %+v", i, reply)
+		}
+		ephIDs = append(ephIDs, reply.ID)
+	}
+	if got := srv.EphemeralCount(); got != cap {
+		t.Fatalf("expected %d ephemeral panels at the cap, got %d", cap, got)
+	}
+
+	// The (cap+1)th diff is rejected and spawns nothing.
+	if err := c.Send(proto.Command{Action: "panel.diff", ID: agentID}); err != nil {
+		t.Fatalf("panel.diff over cap: %v", err)
+	}
+	msg := recvEvent(t, c)
+	if msg.Type != "error" {
+		t.Fatalf("a diff past the cap should error, got %+v", msg)
+	}
+	if !strings.Contains(msg.Error, "too many open diffs") || !strings.Contains(msg.Error, "8") {
+		t.Fatalf("unexpected cap error text: %q", msg.Error)
+	}
+	if got := srv.EphemeralCount(); got != cap {
+		t.Fatalf("a rejected diff should spawn nothing; count moved off the cap to %d", got)
+	}
+
+	// Close one and confirm a new diff now succeeds.
+	if err := c.Send(proto.Command{Action: "panel.close", ID: ephIDs[0]}); err != nil {
+		t.Fatalf("panel.close: %v", err)
+	}
+	got := recvEvent(t, c)
+	if got.Type != "panels" {
+		t.Fatalf("closing a diff panel should broadcast a snapshot, got %+v", got)
+	}
+	deadline := time.Now().Add(time.Second)
+	for srv.EphemeralCount() != cap-1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("after one close, expected %d ephemeral panels, got %d", cap-1, srv.EphemeralCount())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := c.Send(proto.Command{Action: "panel.diff", ID: agentID}); err != nil {
+		t.Fatalf("panel.diff after freeing a slot: %v", err)
+	}
+	reply := recvEvent(t, c)
+	if reply.Type != "diff" {
+		t.Fatalf("a diff after freeing a slot should succeed, got %+v", reply)
+	}
+	if got := srv.EphemeralCount(); got != cap {
+		t.Fatalf("after re-opening, expected %d ephemeral panels, got %d", cap, got)
+	}
+}
+
+// TestDiffHardKillsProcessGroup proves the ephemeral teardown SIGKILLs the whole
+// process group, not just the PTY's foreground shell: a plain PTY close (SIGHUP)
+// could leave a backgrounded grandchild (a GUI difftool, a pager) alive. The diff
+// command is pinned via WithDiffCommand to spawn a long-lived `sleep`, record its
+// pid, and wait; after panel.close the recorded pid must be gone.
+func TestDiffHardKillsProcessGroup(t *testing.T) {
+	requireGitDiff(t)
+	repo := gitRepoWithChange(t)
+
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	// Background a sleep, publish its pid, then wait — so the diff PTY stays alive
+	// and there is a descendant that only a process-group kill reaches.
+	diffCmd := "sleep 300 & echo $! > " + pidFile + "; wait"
+
+	srv, sock := startDiffServer(t, server.WithDiffCommand(diffCmd))
+	c := dialReady(t, sock)
+
+	agentID := createAgentIn(t, c, repo)
+	if err := c.Send(proto.Command{Action: "panel.diff", ID: agentID}); err != nil {
+		t.Fatalf("panel.diff: %v", err)
+	}
+	reply := recvEvent(t, c)
+	if reply.Type != "diff" {
+		t.Fatalf("expected a diff reply, got %+v", reply)
+	}
+	ephID := reply.ID
+
+	// Wait for the backgrounded sleep to publish its pid.
+	var childPID int
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if b, err := os.ReadFile(pidFile); err == nil {
+			if n, perr := strconv.Atoi(strings.TrimSpace(string(b))); perr == nil && n > 0 {
+				childPID = n
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the diff child never published its pid")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Sanity: the child is alive right now (signal 0 probes existence).
+	if err := syscall.Kill(childPID, 0); err != nil {
+		t.Fatalf("the diff child %d should be alive before close: %v", childPID, err)
+	}
+
+	// Close the diff panel: this runs the SIGKILL-then-Stop path on the group.
+	if err := c.Send(proto.Command{Action: "panel.close", ID: ephID}); err != nil {
+		t.Fatalf("panel.close: %v", err)
+	}
+	recvEvent(t, c) // the broadcast snapshot
+
+	// The whole group is gone, so the backgrounded sleep must be reaped too. A
+	// SIGHUP-only close would leave it orphaned and alive.
+	deadline = time.Now().Add(3 * time.Second)
+	for {
+		if err := syscall.Kill(childPID, 0); err != nil {
+			break // ESRCH (or EPERM after reap) — the child is gone
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the diff child %d outlived its panel — process group was not hard-killed", childPID)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if got := srv.EphemeralCount(); got != 0 {
+		t.Fatalf("closing the diff left %d ephemeral panels", got)
 	}
 }
 

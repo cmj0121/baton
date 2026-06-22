@@ -38,6 +38,12 @@ const (
 	maxVisible = 16
 )
 
+// maxEphemeralPerConn caps how many diff panels a single connection may hold
+// open at once. It bounds a scripted or runaway client's blast radius — each
+// open diff costs a PTY, a throwaway git index, and gc-able loose objects — so a
+// client must close one before opening another past the cap.
+const maxEphemeralPerConn = 8
+
 // clientConn is one attached frontend. Outbound messages go through its buffered
 // channel so a slow client never stalls a broadcast. attached is the set of panel
 // ids this client is streaming (guarded by Server.mu) — one for a single zoom,
@@ -827,6 +833,12 @@ func (s *Server) closePanel(id string) error {
 				delete(cc.ephemeral, id)
 			}
 			s.mu.Unlock()
+			// A plain Stop only closes the PTY master (SIGHUP); a GUI difftool or a
+			// backgrounded child can survive that. An ephemeral panel is transient and
+			// safe to hard-kill, so SIGKILL its whole process group first, then stop —
+			// nothing the diff launched lingers. Scoped strictly to ephemeral ids;
+			// normal panel close keeps its SIGHUP-via-close semantics.
+			s.pty.Signal(id, syscall.SIGKILL)
 			s.pty.Stop(id)
 			log.Info().Str("panel", id).Msg("ephemeral diff panel closed")
 			return nil
@@ -860,7 +872,9 @@ func (s *Server) openDiff(cc *clientConn, targetID string) error {
 	idx := s.indexLocked(targetID)
 	if idx < 0 {
 		s.mu.Unlock()
-		return fmt.Errorf("no panel with id %q", targetID)
+		err := fmt.Errorf("no panel with id %q", targetID)
+		log.Warn().Str("target", targetID).Err(err).Msg("diff rejected")
+		return err
 	}
 	kind := s.panels[idx].Kind
 	dir := s.specs[targetID].Dir
@@ -868,25 +882,41 @@ func (s *Server) openDiff(cc *clientConn, targetID string) error {
 
 	// Authoritative agent-only gate. The client gates this too for UX, but the
 	// server is the source of truth; relaxing the feature to shells is this one
-	// line.
+	// line. Log the rejection at Warn so the error reply has a server-side trace,
+	// matching createPanel/closePanel's Info-level visibility.
 	if kind != panel.Agent {
-		return fmt.Errorf("diff is available on agent panels")
+		err := fmt.Errorf("diff is available on agent panels")
+		log.Warn().Str("target", targetID).Err(err).Msg("diff rejected")
+		return err
 	}
 
 	// Resolve the effective workdir exactly as a spawn would (empty → home), so
 	// the diff runs in the same tree the agent actually runs in.
 	dir = ptymgr.PanelDir(dir)
 	if !gitdiff.IsWorkTree(dir) {
-		return fmt.Errorf("not a git repository: %s", dir)
+		err := fmt.Errorf("not a git repository: %s", dir)
+		log.Warn().Str("target", targetID).Str("dir", dir).Err(err).Msg("diff rejected")
+		return err
 	}
 	if !gitdiff.HasChanges(dir) {
-		return fmt.Errorf("no uncommitted changes")
+		err := fmt.Errorf("no uncommitted changes")
+		log.Warn().Str("target", targetID).Str("dir", dir).Err(err).Msg("diff rejected")
+		return err
 	}
 	name, args := gitdiff.ResolveCommand(dir, s.diffCommand)
 
+	// Bound a scripted or runaway client: cap how many diff panels one connection
+	// may hold open at once. The check reads cc.ephemeral under the same lock the
+	// allocation below writes it, so two concurrent opens cannot both slip past N.
+	s.mu.Lock()
+	if len(cc.ephemeral) >= maxEphemeralPerConn {
+		s.mu.Unlock()
+		err := fmt.Errorf("too many open diffs (max %d) — close one first", maxEphemeralPerConn)
+		log.Warn().Str("target", targetID).Str("dir", dir).Err(err).Msg("diff rejected")
+		return err
+	}
 	// Allocate the ephemeral id and register it before the spawn, so a concurrent
 	// disconnect cleanup sees a consistent set; unregister if the spawn fails.
-	s.mu.Lock()
 	s.ephSeq++
 	ephID := fmt.Sprintf("diff:%d", s.ephSeq)
 	s.ephemeral[ephID] = struct{}{}
@@ -898,7 +928,9 @@ func (s *Server) openDiff(cc *clientConn, targetID string) error {
 		delete(s.ephemeral, ephID)
 		delete(cc.ephemeral, ephID)
 		s.mu.Unlock()
-		return fmt.Errorf("could not open diff: %w", err)
+		err = fmt.Errorf("could not open diff: %w", err)
+		log.Warn().Str("target", targetID).Str("dir", dir).Err(err).Msg("diff spawn failed")
+		return err
 	}
 
 	log.Info().Str("panel", ephID).Str("target", targetID).Str("dir", dir).Msg("diff panel opened")
@@ -919,6 +951,10 @@ func (s *Server) closeEphemeral(cc *clientConn) {
 	s.mu.Unlock()
 
 	for _, id := range ids {
+		// Hard-kill the process group before stopping, as the explicit-close path
+		// does: a plain Stop is only SIGHUP, so a GUI difftool or backgrounded child
+		// could outlive the dropped client. Ephemeral panels are safe to SIGKILL.
+		s.pty.Signal(id, syscall.SIGKILL)
 		s.pty.Stop(id)
 	}
 	if len(ids) > 0 {
