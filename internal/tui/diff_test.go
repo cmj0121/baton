@@ -84,7 +84,7 @@ func TestDiffReplyAutoZooms(t *testing.T) {
 	m.client = c
 	m.pendingDiffTitle = "diff · claude · auth"
 
-	m.applyEvent(proto.ServerMsg{Type: "diff", ID: "diff:9"})
+	m.applyEvent(proto.ServerMsg{Type: "ephemeral", ID: "diff:9"})
 	if m.mode != modeZoom {
 		t.Fatalf("a diff reply should enter modeZoom, got mode=%v", m.mode)
 	}
@@ -109,7 +109,7 @@ func TestDiffReplyFallbackTitle(t *testing.T) {
 	m := baseModel()
 	m.client = c
 
-	m.applyEvent(proto.ServerMsg{Type: "diff", ID: "diff:1"})
+	m.applyEvent(proto.ServerMsg{Type: "ephemeral", ID: "diff:1"})
 	if m.zoomTitle != "diff" {
 		t.Fatalf("an unstashed diff should fall back to %q, got %q", "diff", m.zoomTitle)
 	}
@@ -121,7 +121,7 @@ func TestDiffDismissClosesEphemeral(t *testing.T) {
 	c, cmds := recordingServer(t)
 	m := baseModel()
 	m.client = c
-	m.applyEvent(proto.ServerMsg{Type: "diff", ID: "diff:9"})
+	m.applyEvent(proto.ServerMsg{Type: "ephemeral", ID: "diff:9"})
 
 	// C-t d dismisses the zoom.
 	next, _ := m.handleZoomKey(key(m.effPrefix()))
@@ -204,7 +204,7 @@ func TestDiffOfADiffRejected(t *testing.T) {
 	c, cmds := recordingServer(t)
 	m := baseModel()
 	m.client = c
-	m.applyEvent(proto.ServerMsg{Type: "diff", ID: "diff:9"})
+	m.applyEvent(proto.ServerMsg{Type: "ephemeral", ID: "diff:9"})
 	if !m.zoomEphemeral {
 		t.Fatal("setup: the diff reply should have flagged the zoom ephemeral")
 	}

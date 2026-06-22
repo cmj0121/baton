@@ -49,7 +49,7 @@ func (m model) openGitPicker() (tea.Model, tea.Cmd) {
 	m.gitFrom = m.mode
 	m.gitTarget = p
 	m.gitCursor = 0
-	m.gitConfirm, m.gitConfirmOp, m.gitRemovePath = false, "", ""
+	m.gitConfirmOp, m.gitRemovePath = "", ""
 	m.mode = modeGit
 	m.status = "git · " + p.Title + " · pick an action · esc cancels"
 	return m, nil
@@ -59,10 +59,11 @@ func (m model) openGitPicker() (tea.Model, tea.Cmd) {
 // first; otherwise a hotkey (or enter on the cursor row) runs that op, ↑↓ (j/k)
 // move, esc cancels. Any other key is ignored so a stray press never fires.
 func (m model) handleGitKey(key string) (tea.Model, tea.Cmd) {
-	if m.gitConfirm {
-		m.gitConfirm = false
+	if m.gitConfirmOp != "" {
+		op := m.gitConfirmOp
+		m.gitConfirmOp = ""
 		if key == "y" || key == "enter" {
-			return m.runGitConfirmed()
+			return m.runGitConfirmed(op)
 		}
 		m.mode = m.gitFrom
 		m.status = "git: cancelled"
@@ -110,7 +111,7 @@ func (m model) runGitEntry(key string) (tea.Model, tea.Cmd) {
 	case "W":
 		return m.sendGitEphemeral("worktree-list", "worktrees", "")
 	case "p":
-		m.gitConfirm, m.gitConfirmOp = true, "push"
+		m.gitConfirmOp = "push"
 		m.status = "push " + m.gitTarget.Title + "? · (y/n)"
 		return m, nil
 	case "b":
@@ -140,9 +141,10 @@ func (m model) sendGitEphemeral(op, label, arg string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// runGitConfirmed fires the op a confirm was parked on.
-func (m model) runGitConfirmed() (tea.Model, tea.Cmd) {
-	switch m.gitConfirmOp {
+// runGitConfirmed fires the op a confirm was parked on, passed in so it does not
+// depend on the now-cleared gitConfirmOp field.
+func (m model) runGitConfirmed(op string) (tea.Model, tea.Cmd) {
+	switch op {
 	case "push":
 		return m.sendGitEphemeral("push", "push", "")
 	case "remove":
@@ -187,7 +189,7 @@ func (m model) commitGitRemove(path string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.mode = modeGit
-	m.gitConfirm, m.gitConfirmOp, m.gitRemovePath = true, "remove", path
+	m.gitConfirmOp, m.gitRemovePath = "remove", path
 	m.status = "remove worktree " + path + "? · (y/n)"
 	return m, nil
 }
@@ -217,7 +219,7 @@ func (m model) gitPickerView() string {
 
 	legendKey := lipgloss.NewStyle().Foreground(colCyan).Bold(true)
 	var legend string
-	if m.gitConfirm {
+	if m.gitConfirmOp != "" {
 		legend = legendKey.Render("y") + mutedStyle.Render(" confirm") + "   " +
 			legendKey.Render("n") + mutedStyle.Render("/esc cancel")
 		rows = append(rows, "", lipgloss.NewStyle().Foreground(colBrand).Bold(true).Render(m.status))

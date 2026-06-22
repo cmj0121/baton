@@ -29,7 +29,7 @@ func recvUntil(t *testing.T, c *client.Client, want string) proto.ServerMsg {
 }
 
 // TestGitLogOpensEphemeral checks an output op (log) spawns a transient panel with
-// a "git:"-prefixed id, replied as a "diff" message so the client auto-zooms it.
+// a "git:"-prefixed id, replied as an "ephemeral" message so the client auto-zooms it.
 func TestGitLogOpensEphemeral(t *testing.T) {
 	requireGitDiff(t)
 	repo := gitRepoWithChange(t)
@@ -41,7 +41,7 @@ func TestGitLogOpensEphemeral(t *testing.T) {
 	if err := c.Send(proto.Command{Action: "panel.git", Git: "log", ID: agentID}); err != nil {
 		t.Fatalf("panel.git log: %v", err)
 	}
-	reply := recvUntil(t, c, "diff")
+	reply := recvUntil(t, c, "ephemeral")
 	if !strings.HasPrefix(reply.ID, "git:") {
 		t.Fatalf("a git ephemeral id should be git:-prefixed, got %q", reply.ID)
 	}

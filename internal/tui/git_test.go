@@ -115,8 +115,8 @@ func TestGitMenuPushConfirms(t *testing.T) {
 	// p parks a confirm and sends nothing yet.
 	nm, _ := m.handleGitKey("p")
 	m = nm.(model)
-	if !m.gitConfirm || m.gitConfirmOp != "push" {
-		t.Fatalf("push should park a y/n confirm, got confirm=%v op=%q", m.gitConfirm, m.gitConfirmOp)
+	if m.gitConfirmOp != "push" {
+		t.Fatalf("push should park a y/n confirm, got op=%q", m.gitConfirmOp)
 	}
 	noMatch(t, cmds, isGit("push"))
 
@@ -187,8 +187,8 @@ func TestGitMenuRemoveConfirms(t *testing.T) {
 	m.inputBuf = "/tmp/wt"
 	nm, _ = m.commitInput()
 	m = nm.(model)
-	if !m.gitConfirm || m.gitConfirmOp != "remove" || m.gitRemovePath != "/tmp/wt" {
-		t.Fatalf("a typed path should park a remove confirm, got confirm=%v op=%q path=%q", m.gitConfirm, m.gitConfirmOp, m.gitRemovePath)
+	if m.gitConfirmOp != "remove" || m.gitRemovePath != "/tmp/wt" {
+		t.Fatalf("a typed path should park a remove confirm, got op=%q path=%q", m.gitConfirmOp, m.gitRemovePath)
 	}
 	noMatch(t, cmds, isGit("worktree-remove"))
 

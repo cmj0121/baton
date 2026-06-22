@@ -162,8 +162,7 @@ type model struct {
 	gitFrom       mode
 	gitTarget     panel.Panel
 	gitCursor     int
-	gitConfirm    bool
-	gitConfirmOp  string // "push" | "remove" — the op awaiting a y/n
+	gitConfirmOp  string // "push" | "remove" — the op awaiting a y/n, "" when none is pending
 	gitRemovePath string // the worktree path a confirmed remove targets
 
 	zoomID           string           // panel being zoomed (modeZoom)
@@ -631,10 +630,11 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 	case "stats":
 		m.cpuPct = sm.CPU
 		m.memUsed, m.memTotal = sm.MemUsed, sm.MemTotal
-	case "diff":
-		// The server spawned a transient diff panel and replied with its id. Synthesize
-		// a panel for it and auto-zoom; zoomInto already sends attach+resize and clears
-		// zoomGroupOrigin, so this is a direct zoom that the dismiss path then reaps.
+	case "ephemeral":
+		// The server spawned a transient panel (a diff or a git op) and replied with
+		// its id. Synthesize a panel for it and auto-zoom; zoomInto already sends
+		// attach+resize and clears zoomGroupOrigin, so this is a direct zoom that the
+		// dismiss path then reaps.
 		title := m.pendingDiffTitle
 		if title == "" {
 			title = "diff"

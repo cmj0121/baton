@@ -569,7 +569,7 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		}
 	case "panel.diff":
 		// Open a transient diff panel for the target agent. openDiff sends its own
-		// "diff" reply on success; on failure we surface the reason as an error. It
+		// "ephemeral" reply on success; on failure we surface the reason as an error. It
 		// is deliberately NOT broadcastFleet'd — the diff panel is ephemeral and must
 		// never reach the dashboard or the persisted state.
 		if err := s.openDiff(cc, cmd.ID); err != nil {
@@ -578,7 +578,7 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		}
 	case "panel.git":
 		// Run a git-menu op for the target agent. The output ops spawn a transient
-		// panel (openGit replies "diff" so the client auto-zooms it); worktree-add is
+		// panel (openGit replies "ephemeral" so the client auto-zooms it); worktree-add is
 		// a real fleet change (broadcasts); worktree-remove confirms with a notice.
 		// Any failure surfaces as an error, like panel.diff.
 		if err := s.runGit(cc, cmd); err != nil {
@@ -966,7 +966,7 @@ func (s *Server) closePanel(id string) error {
 // out of both the dashboard snapshot (panelsMsg) and the persisted state
 // (snapshotState) for free — it is tracked only in s.ephemeral (server-wide) and
 // cc.ephemeral (the owning conn, for disconnect cleanup). On success it replies
-// {type:"diff", id:"diff:<n>"} so the client can auto-zoom it.
+// {type:"ephemeral", id:"diff:<n>"} so the client can auto-zoom it.
 //
 // The git probes (work-tree check, change check, command resolution) run with
 // s.mu released — they shell out and must never hold the server lock.
@@ -1026,7 +1026,7 @@ type ephemeralResolver func(dir string) (name string, args, env []string, err er
 // s.specs, so it stays out of the dashboard snapshot (panelsMsg) and the persisted
 // state (snapshotState), tracked only in s.ephemeral (and the owning conn, for
 // disconnect cleanup). label names the action for the log and the ephemeral id
-// prefix. On success it replies {type:"diff", id:"<label>:<n>"} so the client
+// prefix. On success it replies {type:"ephemeral", id:"<label>:<n>"} so the client
 // auto-zooms it. The git probes run with s.mu released — they shell out and must
 // never hold the server lock.
 func (s *Server) openEphemeral(cc *clientConn, targetID, label string, resolve ephemeralResolver) error {
@@ -1089,7 +1089,7 @@ func (s *Server) openEphemeral(cc *clientConn, targetID, label string, resolve e
 	}
 
 	log.Info().Str("panel", ephID).Str("target", targetID).Str("dir", dir).Str("action", label).Msg("ephemeral panel opened")
-	send(cc, proto.ServerMsg{Type: "diff", ID: ephID})
+	send(cc, proto.ServerMsg{Type: "ephemeral", ID: ephID})
 	return nil
 }
 
