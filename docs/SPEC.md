@@ -167,6 +167,20 @@ and copy. Its lifecycle is tied to that zoom: the normal exit keys close it. `C-
 nothing lingers once you step out. A connection holds at most a small number of open diff pop-ups at once (currently 8);
 past that the diff key reports `too many open diffs (max 8) — close one first`.
 
+**Git menu.** `C-t g` in a zoom opens the **git menu** for the zoomed agent — a keyed pop-up (the signal picker's shape)
+of git operations run against that agent's workdir. It is **zoom-only** (you act on the one agent you are looking at) and
+agent-only. The transient-panel machinery above is generalised into one `openEphemeral` engine: the diff and the git
+**output** ops (log, status, stage, commit, push, branch, worktree-list) all spawn the same auto-zoomed, never-persisted
+pop-up — only the resolved command differs (`internal/gitdiff` for the diff, `internal/gitops` for the rest), and the
+8-pop-up cap is shared. `commit` injects the configured editor as `GIT_EDITOR` (via a new `ptymgr.Spec.Env`) so it opens
+in the panel's PTY. Two ops are not pop-ups: **worktree-add** creates a tree on a new branch and spawns an agent rooted
+in it — grouped under the branch, broadcast as a real fleet change — the **isolation bridge** the panel-model roadmap
+named; **worktree-remove** runs synchronously and confirms with a notice. The op set is additive (no reset / clean /
+discard / `--force`); `push` and `worktree-remove` confirm first. The wire is one command, `panel.git`, carrying the op,
+the target id, and a branch or worktree path; the agent-only and work-tree gates are authoritative on the server. The
+commit editor and the worktree base directory are `panel.editor` / `panel.worktree-dir`, hot-reloaded like the rest. See
+[GIT.md](./GIT.md) for the full op table and the config.
+
 **Persistence and respawn.** The daemon survives its own restart. On every structural change it writes the fleet to a
 per-session **state file** (`internal/state`, derived from the socket path like the pid file, one daemon-per-session) —
 each panel's immutable spawn spec (command, args, workdir), group membership, pins, order, the id counter, and each

@@ -77,6 +77,7 @@ rebindable list of the current view.
 |                        | `enter`                     | zoom the focused panel                    |
 | Zoom / interact        | type                        | drive the program directly                |
 |                        | `C-t b`                     | back to the group / dashboard             |
+|                        | `C-t g`                     | git menu (agent panel)                    |
 |                        | `C-t C-t`                   | send a literal `C-t`                      |
 |                        | `C-t s`                     | send a signal to this panel               |
 |                        | `C-t f`                     | search the scrollback                     |
@@ -150,6 +151,16 @@ doesn't page, a very large diff dumps in and only the last `panel.replay-kb` is
 kept in scrollback — the top truncates. A connection holds at most 8 open diff
 pop-ups at once; past that the key reports `too many open diffs — close one
 first`.
+
+**Git.** **`C-t g`** while zoomed into an agent opens the **git menu** — a keyed
+pop-up that runs git against that agent's workdir: diff, log, status, stage,
+commit (in your `$EDITOR`, right in the panel), push, branch, and worktrees. It is
+zoom-only and agent-only. The read and output ops open the same transient pop-up the
+diff does; **worktree** spins up a fresh tree on a branch and an agent in it, grouped
+as a work item — isolation for a parallel agent in one keystroke. The set is
+additive — no `reset`, `clean`, or `--force` — and **push** and **worktree remove**
+confirm first. See [docs/GIT.md](docs/GIT.md) for every op, the commit-editor flow,
+and the `editor` / `worktree-dir` config.
 
 **Mouse.** Off by default, so your terminal's own selection and copy stay
 available. Toggle it in the key map (`C-t k`, the settings block); once on, the
