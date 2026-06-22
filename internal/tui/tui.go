@@ -165,16 +165,16 @@ type model struct {
 	gitConfirmOp  string // "push" | "remove" — the op awaiting a y/n, "" when none is pending
 	gitRemovePath string // the worktree path a confirmed remove targets
 
-	zoomID           string           // panel being zoomed (modeZoom)
-	zoomTitle        string           // its title, for the zoom footer
-	zoomEphemeral    bool             // the current zoom is a transient diff panel — dismissing it closes the panel server-side
-	pendingDiffTitle string           // title to give the diff zoom, stashed when panel.diff is sent, read on the "diff" reply
-	zoomArmed        bool             // prefix pressed inside a zoom, awaiting the verb
-	zoomExited       bool             // the zoomed panel has exited — a read-only result view
-	emu              *vt.SafeEmulator // terminal emulator rendering the zoomed panel
-	scrollOff        int              // scrollback offset (lines above the live bottom) for the zoom / focused tile
-	scrolling        bool             // scroll mode (C-t [): arrows / page keys navigate history, keys are not sent to the program
-	cursorHidden     *bool            // tracks the zoomed program's cursor visibility (DECTCEM); nil when not zooming
+	zoomID                string           // panel being zoomed (modeZoom)
+	zoomTitle             string           // its title, for the zoom footer
+	zoomEphemeral         bool             // the current zoom is a transient diff panel — dismissing it closes the panel server-side
+	pendingEphemeralTitle string           // title for the next transient (diff/git) zoom, stashed when the op is sent, read on the "ephemeral" reply
+	zoomArmed             bool             // prefix pressed inside a zoom, awaiting the verb
+	zoomExited            bool             // the zoomed panel has exited — a read-only result view
+	emu                   *vt.SafeEmulator // terminal emulator rendering the zoomed panel
+	scrollOff             int              // scrollback offset (lines above the live bottom) for the zoom / focused tile
+	scrolling             bool             // scroll mode (C-t [): arrows / page keys navigate history, keys are not sent to the program
+	cursorHidden          *bool            // tracks the zoomed program's cursor visibility (DECTCEM); nil when not zooming
 
 	groupName       string                      // work item being split-viewed (modeGroupZoom)
 	groupFocus      int                         // focused member, indexing tiles then the summary slot
@@ -635,11 +635,11 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		// its id. Synthesize a panel for it and auto-zoom; zoomInto already sends
 		// attach+resize and clears zoomGroupOrigin, so this is a direct zoom that the
 		// dismiss path then reaps.
-		title := m.pendingDiffTitle
+		title := m.pendingEphemeralTitle
 		if title == "" {
 			title = "diff"
 		}
-		m.pendingDiffTitle = ""
+		m.pendingEphemeralTitle = ""
 		*m = m.zoomInto(panel.Panel{ID: sm.ID, Title: title, State: panel.Running})
 		m.zoomEphemeral = true
 	case "config":
@@ -1605,15 +1605,15 @@ func (m model) fleetPanel(id string) (panel.Panel, bool) {
 }
 
 // requestDiff asks the server for the work-tree diff of an agent panel and stashes
-// the title to give the diff zoom that the "diff" reply will open. Only agent
-// panels are eligible (a client-side gate for UX; the server re-checks); a
-// non-agent target sets a hint and sends nothing.
+// the title for the zoom the "ephemeral" reply will open. Only agent panels are
+// eligible (a client-side gate for UX; the server re-checks); a non-agent target
+// sets a hint and sends nothing.
 func (m *model) requestDiff(p panel.Panel) {
 	if !p.IsAgent() {
 		m.status = "diff: select an agent panel"
 		return
 	}
-	m.pendingDiffTitle = "diff · " + p.Title
+	m.pendingEphemeralTitle = "diff · " + p.Title
 	m.sendf(proto.Command{Action: "panel.diff", ID: p.ID})
 	m.status = "diff · " + p.Title
 }

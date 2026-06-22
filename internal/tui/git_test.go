@@ -93,7 +93,7 @@ func TestGitMenuLogSendsEphemeral(t *testing.T) {
 	if got.ID != "a1" {
 		t.Fatalf("log should target the zoomed agent, got %+v", got)
 	}
-	if m.pendingDiffTitle == "" {
+	if m.pendingEphemeralTitle == "" {
 		t.Fatal("an output op should stash a zoom title for the reply")
 	}
 	if m.mode != modeZoom {

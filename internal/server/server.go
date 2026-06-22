@@ -1030,29 +1030,15 @@ type ephemeralResolver func(dir string) (name string, args, env []string, err er
 // auto-zooms it. The git probes run with s.mu released — they shell out and must
 // never hold the server lock.
 func (s *Server) openEphemeral(cc *clientConn, targetID, label string, resolve ephemeralResolver) error {
-	s.mu.Lock()
-	idx := s.indexLocked(targetID)
-	if idx < 0 {
-		s.mu.Unlock()
-		err := fmt.Errorf("no panel with id %q", targetID)
-		log.Warn().Str("target", targetID).Str("action", label).Err(err).Msg("ephemeral rejected")
-		return err
-	}
-	kind := s.panels[idx].Kind
-	dir := s.specs[targetID].Dir
-	s.mu.Unlock()
-
-	// Authoritative agent-only gate. The client gates this too for UX, but the
-	// server is the source of truth; relaxing the feature to shells is this one line.
-	if kind != panel.Agent {
-		err := fmt.Errorf("%s is available on agent panels", label)
+	spec, err := s.agentTargetSpec(targetID, label)
+	if err != nil {
 		log.Warn().Str("target", targetID).Str("action", label).Err(err).Msg("ephemeral rejected")
 		return err
 	}
 
 	// Resolve the effective workdir exactly as a spawn would (empty → home), then
 	// let the caller resolve the command (and its git-specific gates) against it.
-	dir = ptymgr.PanelDir(dir)
+	dir := ptymgr.PanelDir(spec.Dir)
 	name, args, env, err := resolve(dir)
 	if err != nil {
 		log.Warn().Str("target", targetID).Str("dir", dir).Str("action", label).Err(err).Msg("ephemeral rejected")
@@ -1093,25 +1079,42 @@ func (s *Server) openEphemeral(cc *clientConn, targetID, label string, resolve e
 	return nil
 }
 
+// agentTargetSpec resolves a panel.git / diff target to its spawn spec, enforcing
+// the authoritative agent-only gate in one place — the client gates too for UX, but
+// the server is the source of truth, so every target-taking op (the ephemeral ops,
+// worktree add and remove) routes through here. label names the action in the gate
+// error ("diff"/"git"). Returns the panel's immutable spec, or an error for an
+// unknown id or a non-agent target.
+func (s *Server) agentTargetSpec(targetID, label string) (ptymgr.Spec, error) {
+	s.mu.Lock()
+	idx := s.indexLocked(targetID)
+	if idx < 0 {
+		s.mu.Unlock()
+		return ptymgr.Spec{}, fmt.Errorf("no panel with id %q", targetID)
+	}
+	kind := s.panels[idx].Kind
+	spec := s.specs[targetID]
+	s.mu.Unlock()
+
+	if kind != panel.Agent {
+		return ptymgr.Spec{}, fmt.Errorf("%s is available on agent panels", label)
+	}
+	return spec, nil
+}
+
 // gitWorktreeAdd creates a worktree on a new branch off the target agent's repo and
 // spawns an agent panel rooted in it, grouped under the branch name — the isolation
 // bridge. It reuses the source agent's command and args, so the new tree gets the
 // same kind of agent. A real fleet change, so the caller broadcasts.
 func (s *Server) gitWorktreeAdd(targetID, branch string) error {
-	s.mu.Lock()
-	idx := s.indexLocked(targetID)
-	if idx < 0 {
-		s.mu.Unlock()
-		return fmt.Errorf("no panel with id %q", targetID)
+	spec, err := s.agentTargetSpec(targetID, "git")
+	if err != nil {
+		return err
 	}
-	kind := s.panels[idx].Kind
-	spec := s.specs[targetID]
+	s.mu.Lock()
 	base := s.worktreeDir
 	s.mu.Unlock()
 
-	if kind != panel.Agent {
-		return fmt.Errorf("git is available on agent panels")
-	}
 	repo := ptymgr.PanelDir(spec.Dir)
 	if !gitdiff.IsWorkTree(repo) {
 		return fmt.Errorf("not a git repository: %s", repo)
@@ -1141,15 +1144,10 @@ func (s *Server) gitWorktreeAdd(targetID, branch string) error {
 // error. It does not touch any panel; a removed tree's agent, if still open, is the
 // user's to close.
 func (s *Server) gitWorktreeRemove(targetID, path string) error {
-	s.mu.Lock()
-	idx := s.indexLocked(targetID)
-	if idx < 0 {
-		s.mu.Unlock()
-		return fmt.Errorf("no panel with id %q", targetID)
+	spec, err := s.agentTargetSpec(targetID, "git")
+	if err != nil {
+		return err
 	}
-	spec := s.specs[targetID]
-	s.mu.Unlock()
-
 	repo := ptymgr.PanelDir(spec.Dir)
 	if err := gitops.WorktreeRemove(repo, path); err != nil {
 		return err

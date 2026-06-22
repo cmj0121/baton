@@ -144,6 +144,22 @@ func TestGitWorktreeAdd(t *testing.T) {
 	}
 }
 
+// TestGitWorktreeRmShell checks the agent-only gate reaches worktree-remove too
+// (it routes through agentTargetSpec like every other op), so a shell is refused.
+func TestGitWorktreeRmShell(t *testing.T) {
+	_, sock := startDiffServer(t)
+	c := dialReady(t, sock)
+
+	id := createShells(t, c, 1)[0]
+	if err := c.Send(proto.Command{Action: "panel.git", Git: "worktree-remove", ID: id, Dir: "/tmp/x"}); err != nil {
+		t.Fatalf("panel.git worktree-remove: %v", err)
+	}
+	msg := recvUntil(t, c, "error")
+	if !strings.Contains(msg.Error, "available on agent panels") {
+		t.Fatalf("worktree-remove on a shell should be gated, got %q", msg.Error)
+	}
+}
+
 // TestGitWorktreeRemove checks the remove path is wired and surfaces
 // git's own refusal for a path that is not a worktree.
 func TestGitWorktreeRemove(t *testing.T) {

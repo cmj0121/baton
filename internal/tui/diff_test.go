@@ -17,7 +17,7 @@ func TestDiffFromDashboardAgent(t *testing.T) {
 	m.cursor = 0
 
 	m = press(m, keyDiff)
-	if m.pendingDiffTitle == "" {
+	if m.pendingEphemeralTitle == "" {
 		t.Fatal("D should stash a pending diff title for the zoom")
 	}
 	diff := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "panel.diff" })
@@ -36,7 +36,7 @@ func TestDiffFromDashboardShell(t *testing.T) {
 	m.cursor = 0
 
 	m = press(m, keyDiff)
-	if m.pendingDiffTitle != "" {
+	if m.pendingEphemeralTitle != "" {
 		t.Fatal("a shell selection must not stash a diff title")
 	}
 	if m.status != "diff: select an agent panel" {
@@ -61,7 +61,7 @@ func TestDiffFromDashboardGroup(t *testing.T) {
 	m.cursor = 0 // the api group card
 
 	m = press(m, keyDiff)
-	if m.pendingDiffTitle != "" {
+	if m.pendingEphemeralTitle != "" {
 		t.Fatal("a group selection must not stash a diff title")
 	}
 	if m.status != "diff: select an agent panel" {
@@ -82,7 +82,7 @@ func TestDiffReplyAutoZooms(t *testing.T) {
 	c, _ := recordingServer(t)
 	m := baseModel()
 	m.client = c
-	m.pendingDiffTitle = "diff · claude · auth"
+	m.pendingEphemeralTitle = "diff · claude · auth"
 
 	m.applyEvent(proto.ServerMsg{Type: "ephemeral", ID: "diff:9"})
 	if m.mode != modeZoom {
@@ -97,7 +97,7 @@ func TestDiffReplyAutoZooms(t *testing.T) {
 	if m.zoomTitle != "diff · claude · auth" {
 		t.Fatalf("the zoom should take the stashed title, got %q", m.zoomTitle)
 	}
-	if m.pendingDiffTitle != "" {
+	if m.pendingEphemeralTitle != "" {
 		t.Fatal("the pending title should be consumed by the reply")
 	}
 }
@@ -214,7 +214,7 @@ func TestDiffOfADiffRejected(t *testing.T) {
 	next, _ = m.handleZoomKey(key(keyDiff))
 	m = next.(model)
 
-	if m.pendingDiffTitle != "" {
+	if m.pendingEphemeralTitle != "" {
 		t.Fatal("a diff-of-a-diff must not stash a new title")
 	}
 	for {

@@ -131,10 +131,10 @@ func (m model) runGitEntry(key string) (tea.Model, tea.Cmd) {
 }
 
 // sendGitEphemeral fires an output-producing op against the target and returns to
-// the zoom; the server's "diff" reply auto-zooms the transient panel it spawns.
-// label titles that zoom.
+// the zoom; the server's "ephemeral" reply auto-zooms the transient panel it
+// spawns. label titles that zoom.
 func (m model) sendGitEphemeral(op, label, arg string) (tea.Model, tea.Cmd) {
-	m.pendingDiffTitle = "git " + label + " · " + m.gitTarget.Title
+	m.pendingEphemeralTitle = "git " + label + " · " + m.gitTarget.Title
 	m.sendf(proto.Command{Action: "panel.git", Git: op, ID: m.gitTarget.ID, Name: arg})
 	m.mode = m.gitFrom
 	m.status = "git " + label + " · " + m.gitTarget.Title
