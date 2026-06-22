@@ -297,10 +297,14 @@ func (s *Server) attach(cc *clientConn, id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if snap := s.pty.Snapshot(id); len(snap) > 0 {
-		// Strip query sequences from the replay so the attaching emulator does not
-		// re-answer the program's old terminal queries — those late replies would be
-		// injected as input and echo as garbage at a prompt. Live output is untouched.
-		send(cc, proto.ServerMsg{Type: "output", ID: id, Data: stripReplayQueries(snap)})
+		// Condition the raw replay ring before a fresh emulator reconstructs from it:
+		// trim to the last full screen reset so a ring that evicted a program's
+		// alt-screen enter (a long vim/pager) cannot leave its drawing on the primary
+		// grid as dirty data — worst in a group split, where every tile attaches its
+		// own emulator. Then strip query sequences so the emulator does not re-answer
+		// the program's old terminal queries (their late replies echo as garbage at a
+		// prompt). Live output is untouched by both.
+		send(cc, proto.ServerMsg{Type: "output", ID: id, Data: stripReplayQueries(trimToLastScreenReset(snap))})
 	}
 	cc.attached[id] = true
 }
