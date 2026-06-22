@@ -122,6 +122,7 @@ type model struct {
 	defaultAgent string                         // agent profile the new-agent action spawns ("" = claude)
 	agents       map[string]config.AgentProfile // user-configured agent profiles
 	replayKB     int                            // per-panel replay buffer in KiB, round-tripped so a save never drops it
+	diffCommand  string                         // configured diff command for the agent diff pop-up, round-tripped so a save never drops it
 	input        inputPurpose                   // active text-input overlay, or inputNone
 	inputBuf     string                         // text typed into the overlay
 	inputHint    string                         // path-completion hint shown under the field (tab), cleared on edit
@@ -223,6 +224,7 @@ func (m model) applyPrefs(p prefs) model {
 	m.defaultAgent = p.defaultAgent
 	m.agents = p.agents
 	m.replayKB = p.replayKB
+	m.diffCommand = p.diffCommand
 	return m
 }
 

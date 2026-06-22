@@ -215,6 +215,7 @@ func runServer() error {
 		server.WithVersion(version),
 		server.WithAllowNameConflict(rc.allowNameConflict),
 		server.WithDefaultDir(rc.defaultDir),
+		server.WithDiffCommand(rc.diffCommand),
 		server.WithStateFile(stateF),
 	}
 	if rc.replayBytes > 0 {
@@ -263,7 +264,7 @@ func runServer() error {
 			return
 		}
 		rc := reloadableSettings(cfg)
-		srv.Reload(rc.allowNameConflict, rc.defaultDir, rc.replayBytes)
+		srv.Reload(rc.allowNameConflict, rc.defaultDir, rc.replayBytes, rc.diffCommand)
 	}
 	srv.OnReload(reload)
 
@@ -292,14 +293,15 @@ func runServer() error {
 type reloadable struct {
 	allowNameConflict bool
 	defaultDir        string
-	replayBytes       int // 0 keeps the server's built-in replay default
+	replayBytes       int    // 0 keeps the server's built-in replay default
+	diffCommand       string // explicit diff command for the agent diff pop-up; empty falls back to git diff.tool then a built-in diff
 }
 
 // reloadableSettings projects a config onto the hot-reloadable settings, applying
 // the same defaults the server expects: strict names, the home workdir, and the
 // built-in replay buffer when the config leaves a field unset.
 func reloadableSettings(cfg config.Config) reloadable {
-	rc := reloadable{defaultDir: cfg.Panel.Workdir}
+	rc := reloadable{defaultDir: cfg.Panel.Workdir, diffCommand: cfg.Panel.DiffCommand}
 	if cfg.Settings.AllowNameConflict != nil {
 		rc.allowNameConflict = *cfg.Settings.AllowNameConflict
 	}

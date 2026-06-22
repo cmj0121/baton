@@ -64,6 +64,10 @@ type PanelDefaults struct {
 	// means the built-in "claude" profile.
 	DefaultAgent string `yaml:"default-agent,omitempty"`
 
+	// DiffCommand is the diff command run by the agent diff pop-up; empty falls
+	// back to the repo's git diff.tool, then a built-in untracked-inclusive diff.
+	DiffCommand string `yaml:"diff-command,omitempty"`
+
 	// Agents are the named agent profiles, e.g. {"claude": {command: "claude"}}.
 	// A built-in "claude" profile is always available unless overridden here.
 	Agents map[string]AgentProfile `yaml:"agents,omitempty"`

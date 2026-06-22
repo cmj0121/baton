@@ -162,6 +162,7 @@ type prefs struct {
 	defaultAgent      string                         // agent profile the new-agent action spawns
 	agents            map[string]config.AgentProfile // user-configured agent profiles
 	replayKB          int                            // per-panel replay buffer in KiB (0 = server default)
+	diffCommand       string                         // explicit diff command for the agent diff pop-up ("" = git diff.tool then a built-in diff)
 }
 
 // defaultAgentName is the built-in agent profile, used when none is configured —
@@ -212,6 +213,7 @@ func loadPrefs() prefs {
 	p.defaultAgent = cfg.Panel.DefaultAgent
 	p.agents = cfg.Panel.Agents
 	p.replayKB = cfg.Panel.ReplayKB
+	p.diffCommand = cfg.Panel.DiffCommand
 	return p
 }
 
@@ -253,6 +255,7 @@ func (m model) saveConfig() error {
 			DefaultAgent: m.defaultAgent,
 			Agents:       m.agents, // round-trip the user's profiles so a save never drops them
 			ReplayKB:     m.replayKB,
+			DiffCommand:  m.diffCommand,
 		},
 	}.Save()
 }

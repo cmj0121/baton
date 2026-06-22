@@ -54,6 +54,7 @@ type Server struct {
 	allowNameConflict bool   // when false, panel titles and group names stay unique
 	replayBytes       int    // per-panel replay buffer; 0 keeps the ptymgr default
 	defaultDir        string // workdir for a panel that asks for none; empty → the user's home
+	diffCommand       string // explicit diff command for the agent diff pop-up; empty → git diff.tool then a built-in diff
 	version           string // the server's build version, reported in the welcome
 
 	onReload func() // invoked on a server.reload command; re-reads config and Reloads
@@ -101,6 +102,13 @@ func WithReplayBytes(bytes int) Option {
 // inherits the directory the daemon was launched from.
 func WithDefaultDir(dir string) Option {
 	return func(s *Server) { s.defaultDir = dir }
+}
+
+// WithDiffCommand sets the explicit diff command the agent diff pop-up runs.
+// Empty falls back to the repo's git diff.tool, then a built-in untracked-
+// inclusive diff — the resolution gitdiff.ResolveCommand performs.
+func WithDiffCommand(cmd string) Option {
+	return func(s *Server) { s.diffCommand = cmd }
 }
 
 // WithVersion sets the server's build version, reported to a frontend in the
@@ -153,13 +161,14 @@ func (s *Server) OnReload(fn func()) { s.onReload = fn }
 // all change under a running fleet; settings fixed at construction (the listener,
 // the build version) are left alone. A replayBytes of zero resets the buffer to
 // its built-in default.
-func (s *Server) Reload(allowNameConflict bool, defaultDir string, replayBytes int) {
+func (s *Server) Reload(allowNameConflict bool, defaultDir string, replayBytes int, diffCommand string) {
 	s.mu.Lock()
 	s.allowNameConflict = allowNameConflict
 	s.defaultDir = defaultDir
+	s.diffCommand = diffCommand
 	s.mu.Unlock()
 	s.pty.SetRingCap(replayBytes)
-	log.Info().Bool("allow_name_conflict", allowNameConflict).Str("default_dir", defaultDir).Int("replay_bytes", replayBytes).Msg("settings reloaded")
+	log.Info().Bool("allow_name_conflict", allowNameConflict).Str("default_dir", defaultDir).Int("replay_bytes", replayBytes).Str("diff_command", diffCommand).Msg("settings reloaded")
 }
 
 // onPanelExit marks a panel exited when its process ends on its own, notifies
