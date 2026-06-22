@@ -147,14 +147,16 @@ type model struct {
 	signalScope   string   // human label of the target(s), shown in the picker
 	signalCursor  int      // highlighted row in the signal picker (last row is "other…")
 
-	zoomID       string           // panel being zoomed (modeZoom)
-	zoomTitle    string           // its title, for the zoom footer
-	zoomArmed    bool             // prefix pressed inside a zoom, awaiting the verb
-	zoomExited   bool             // the zoomed panel has exited — a read-only result view
-	emu          *vt.SafeEmulator // terminal emulator rendering the zoomed panel
-	scrollOff    int              // scrollback offset (lines above the live bottom) for the zoom / focused tile
-	scrolling    bool             // scroll mode (C-t [): arrows / page keys navigate history, keys are not sent to the program
-	cursorHidden *bool            // tracks the zoomed program's cursor visibility (DECTCEM); nil when not zooming
+	zoomID           string           // panel being zoomed (modeZoom)
+	zoomTitle        string           // its title, for the zoom footer
+	zoomEphemeral    bool             // the current zoom is a transient diff panel — dismissing it closes the panel server-side
+	pendingDiffTitle string           // title to give the diff zoom, stashed when panel.diff is sent, read on the "diff" reply
+	zoomArmed        bool             // prefix pressed inside a zoom, awaiting the verb
+	zoomExited       bool             // the zoomed panel has exited — a read-only result view
+	emu              *vt.SafeEmulator // terminal emulator rendering the zoomed panel
+	scrollOff        int              // scrollback offset (lines above the live bottom) for the zoom / focused tile
+	scrolling        bool             // scroll mode (C-t [): arrows / page keys navigate history, keys are not sent to the program
+	cursorHidden     *bool            // tracks the zoomed program's cursor visibility (DECTCEM); nil when not zooming
 
 	groupName       string                      // work item being split-viewed (modeGroupZoom)
 	groupFocus      int                         // focused member, indexing tiles then the summary slot
@@ -589,6 +591,17 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 	case "stats":
 		m.cpuPct = sm.CPU
 		m.memUsed, m.memTotal = sm.MemUsed, sm.MemTotal
+	case "diff":
+		// The server spawned a transient diff panel and replied with its id. Synthesize
+		// a panel for it and auto-zoom; zoomInto already sends attach+resize and clears
+		// zoomGroupOrigin, so this is a direct zoom that the dismiss path then reaps.
+		title := m.pendingDiffTitle
+		if title == "" {
+			title = "diff"
+		}
+		m.pendingDiffTitle = ""
+		*m = m.zoomInto(panel.Panel{ID: sm.ID, Title: title, State: panel.Running})
+		m.zoomEphemeral = true
 	case "error":
 		m.status = "error: " + sm.Error
 	}
@@ -1334,6 +1347,27 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		// On the dashboard, f opens the live panel filter. In a zoom it is reached
 		// after the prefix (handleZoomKey) and searches the scrollback instead.
 		return m.openFilter(), nil
+	case actDiff:
+		// Pop up the work-tree diff of the selected agent panel. On the dashboard the
+		// target is the highlighted item; the group split reaches this on the focused
+		// member, and a zoom on the zoomed panel (both via handleZoomKey paths). The
+		// agent-only gate here is a UX nicety — the server is authoritative.
+		switch m.mode {
+		case modeGroupZoom:
+			p, ok := m.focusedMember()
+			if !ok {
+				return m, nil
+			}
+			m.requestDiff(p)
+		default:
+			it, ok := m.selectedItem()
+			if !ok || it.kind != itemPanel {
+				m.status = "diff: select an agent panel"
+				return m, nil
+			}
+			m.requestDiff(it.panel)
+		}
+		return m, nil
 	case actDashboard:
 		m.mode = modeDashboard
 		m.cursor = 0
@@ -1438,7 +1472,8 @@ func (m model) zoomInto(p panel.Panel) model {
 	m.zoomID = p.ID
 	m.zoomTitle = p.Title
 	m.zoomArmed = false
-	m.scrollOff = 0 // a fresh zoom opens at the live bottom
+	m.zoomEphemeral = false // a fresh zoom is normal; the diff path sets this true after
+	m.scrollOff = 0         // a fresh zoom opens at the live bottom
 	m.scrolling = false
 	m.zoomGroupOrigin = "" // a direct zoom; the group path sets this after
 	m.zoomExited = p.State == panel.Exited
@@ -1462,6 +1497,30 @@ func (m model) zoomInto(p panel.Panel) model {
 		m.status = "zoomed · " + p.Title
 	}
 	return m
+}
+
+// fleetPanel returns the fleet panel with the given id.
+func (m model) fleetPanel(id string) (panel.Panel, bool) {
+	for _, p := range m.fleet {
+		if p.ID == id {
+			return p, true
+		}
+	}
+	return panel.Panel{}, false
+}
+
+// requestDiff asks the server for the work-tree diff of an agent panel and stashes
+// the title to give the diff zoom that the "diff" reply will open. Only agent
+// panels are eligible (a client-side gate for UX; the server re-checks); a
+// non-agent target sets a hint and sends nothing.
+func (m *model) requestDiff(p panel.Panel) {
+	if !p.IsAgent() {
+		m.status = "diff: select an agent panel"
+		return
+	}
+	m.pendingDiffTitle = "diff · " + p.Title
+	m.sendf(proto.Command{Action: "panel.diff", ID: p.ID})
+	m.status = "diff · " + p.Title
 }
 
 // handleZoomKey forwards keystrokes to the zoomed panel, treating the prefix as
@@ -1492,6 +1551,12 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if key == m.bindingKey(actDetach) { // C-t q detaches from a zoom too
+			// A transient diff panel is reaped on the way out, even when detaching the
+			// whole cockpit — it is never persisted, so it must not outlive its zoom.
+			if m.zoomEphemeral {
+				m.sendf(proto.Command{Action: "panel.close", ID: m.zoomID})
+				m.zoomEphemeral = false
+			}
 			return m.runAction(actDetach)
 		}
 		if b, ok := m.lookupCmd(key); ok && b.act == actHelp { // C-t ? → the key list
@@ -1509,6 +1574,19 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if b, ok := m.lookupCmd(key); ok && b.act == actSearch { // C-t f → search the scrollback
 			return m.openSearch(), nil
+		}
+		if b, ok := m.lookupCmd(key); ok && b.act == actDiff { // C-t D → diff of the zoomed agent panel
+			if m.zoomEphemeral { // already a diff zoom — no diff-of-a-diff
+				m.status = "diff: already showing a diff"
+				return m, nil
+			}
+			p, ok := m.fleetPanel(m.zoomID)
+			if !ok || !p.IsAgent() {
+				m.status = "diff: select an agent panel"
+				return m, nil
+			}
+			m.requestDiff(p)
+			return m, nil
 		}
 		return m, nil
 	}
@@ -1662,6 +1740,12 @@ func (m model) cursorHiddenNow() bool {
 // zoomDetach leaves the zoom, returning to a refreshed dashboard.
 func (m model) zoomDetach() (tea.Model, tea.Cmd) {
 	m.sendf(proto.Command{Action: "panel.detach", ID: m.zoomID})
+	// A transient diff panel is reaped when the zoom that shows it is dismissed —
+	// it is never persisted, so leaving its zoom must also close it server-side.
+	if m.zoomEphemeral {
+		m.sendf(proto.Command{Action: "panel.close", ID: m.zoomID})
+		m.zoomEphemeral = false
+	}
 	closeZoom(m.emu) // stops the zoomReader goroutine (Read returns io.EOF)
 	m.mode = modeDashboard
 	m.emu = nil

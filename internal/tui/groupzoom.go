@@ -409,7 +409,7 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// (which is not a panel) they no-op with a hint rather than acting on nothing.
 	if m.focusedIsSummary() {
 		switch key {
-		case keyPin, keySignal, keyRemove, keyInteract:
+		case keyPin, keySignal, keyRemove, keyInteract, keyDiff:
 			m.status = "not available on the summary"
 			return m, nil
 		}
@@ -447,6 +447,9 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		ids := liveIDs(m.groupMembers())
 		scope := fmt.Sprintf("%s (%d panels)", m.groupName, len(ids))
 		return m.openSignalPicker(modeGroupZoom, ids, scope), nil
+	case keyDiff:
+		// Bare D pops up the work-tree diff of the focused member, like s signals it.
+		return m.runAction(actDiff)
 	case keyRemove:
 		return m.removeFocusedMember(), nil
 	case keyInteract:
