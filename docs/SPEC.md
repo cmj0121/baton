@@ -102,7 +102,8 @@ member** (attention beats running beats spawning beats idle beats exited), so on
 once. By default the split is an _overview you navigate_, not a surface you type into: `tab` moves the focus between
 tiles, `+`/`-` dials how many members stream live (see below), `shift`+`←`/`→` reorders the focused member within the
 group, `C-t [` opens scroll mode on the focused tile, `x` removes the focused
-member from the group, `enter` drops into the focused panel's own single zoom, and `d`/`esc` returns to the dashboard.
+member from the group, `D` diffs the focused agent member, `enter` drops into the focused panel's own single zoom, and
+`d`/`esc` returns to the dashboard.
 From a zoomed member,
 the always-on `C-t g` escape pops back to the split.
 
@@ -132,6 +133,36 @@ count is the count delivered. The name→signal table lives in one place (`inter
 server, so the menu and the accepted set cannot drift. **Reload.** `C-t R` (or a `SIGHUP` to the daemon) re-reads the
 config in place — the name policy, default workdir, and replay buffer change under a running fleet, no restart, no panel
 lost.
+
+**Diff.** `D` (the `diff` binding, `C-t D` in a zoom) shows the working-tree diff of the focused **agent** panel. It is
+agent-only by design — a shell, a group card, or an empty selection never resolves a target and the client just hints
+`diff: select an agent panel`, so the action never reaches the server without a panel. The server gates on the panel's
+workdir: it must be inside a git work tree, or the request fails with `not a git repository: <dir>`; a tree with nothing
+to show fails with `no uncommitted changes`. The change check (`internal/gitdiff`) reads `git status --porcelain`, whose
+output lists **untracked files too**, so a brand-new file an agent just wrote counts — and the diff itself is the working
+tree against `HEAD` computed **without mutating the repo**: no write to the index, the worktree, or any ref — though
+staging into the throwaway index does write loose blobs to `.git/objects`, which are harmless and reclaimed by a later
+`git gc`. The diff **command** is resolved in priority order: an explicit `panel.diff-command` wins, run via `sh -c` so
+the user can write a full shell line or pipe; else, if the repo configures a `diff.tool`, that per-repo choice is honoured
+with `git difftool
+-d --no-prompt` (`--no-prompt` stops difftool stalling on a `[Y/n]` inside the PTY, and this branch keeps git's
+tracked-only difftool semantics — untracked inclusion is a property of the explicit and built-in paths); else a built-in,
+non-mutating, untracked-inclusive `git diff` that pages naturally. A caveat for the difftool branch: if the repo's
+`diff.tool` is a GUI tool and the daemon runs headless or over SSH with no display, `git difftool` errors or hangs — the
+failure is contained to the diff panel, not fatal, but on headless/remote hosts prefer a terminal diff (leave `diff.tool`
+unset for the built-in, or point `panel.diff-command` at a terminal tool such as `git diff | delta`). The diff pages
+through git's pager and is navigable; but if the repo disables the pager (`core.pager=cat`) or the explicit
+`panel.diff-command` does not page, a very large diff dumps into the panel and only the last `panel.replay-kb` survives in
+scrollback — the top truncates.
+
+The diff renders in a **transient, ephemeral panel**. The server spawns it as a PTY running the resolved command in the
+agent's workdir, but it is never inserted into `s.panels` — so it is invisible to the dashboard grid and to the state
+file, never broadcast as fleet membership and never restored on a restart. It is **auto-zoomed**: the client drops
+straight into it as a single zoom, reusing every read affordance — scroll mode (`C-t [`), scrollback search (`C-t f`),
+and copy. Its lifecycle is tied to that zoom: the normal exit keys close it. `C-t d` (back to the dashboard) and `C-t q`
+(detach) dismiss the pop-up and the server tears down the transient panel — there is no separate "close diff" verb, and
+nothing lingers once you step out. A connection holds at most a small number of open diff pop-ups at once (currently 8);
+past that the diff key reports `too many open diffs (max 8) — close one first`.
 
 **Persistence and respawn.** The daemon survives its own restart. On every structural change it writes the fleet to a
 per-session **state file** (`internal/state`, derived from the socket path like the pid file, one daemon-per-session) —
