@@ -115,6 +115,11 @@ type Server struct {
 	dirty    chan struct{}
 	saveMu   sync.Mutex
 	bootTime time.Time
+
+	// heartbeat is the server→client ping cadence for each connection's keepalive
+	// ticker. It defaults to proto.HeartbeatInterval; tests set it to milliseconds
+	// so the heartbeat fires fast. Set before Serve; read once per handle().
+	heartbeat time.Duration
 }
 
 // Option tunes a Server at construction. Options keep New's signature stable as
@@ -186,6 +191,7 @@ func New(ln net.Listener, opts ...Option) *Server {
 		ephemeral:  make(map[string]struct{}),
 		groupShown: make(map[string]int),
 		dirty:      make(chan struct{}, 1),
+		heartbeat:  proto.HeartbeatInterval,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -463,7 +469,18 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 }
 
 func (s *Server) handle(conn net.Conn) {
-	defer func() { _ = conn.Close() }()
+	// closeOnce makes conn.Close idempotent across the reader, writer, and
+	// heartbeat paths: whichever side fails first tears the connection down, and
+	// the others observe the broken conn rather than racing a second Close.
+	var closeOnce sync.Once
+	closeConn := func() { closeOnce.Do(func() { _ = conn.Close() }) }
+
+	// done is closed exactly once, when the reader (this function) returns. The
+	// writer and heartbeat goroutines watch it to stop. It couples the goroutines:
+	// reader returns → done closes + conn closes → writer's Encode fails and the
+	// heartbeat stops; conversely a writer failure closes the conn → the reader's
+	// Decode fails → handle returns.
+	done := make(chan struct{})
 
 	cc := &clientConn{
 		out:       make(chan proto.ServerMsg, proto.EventBufferSize),
@@ -471,25 +488,79 @@ func (s *Server) handle(conn net.Conn) {
 		ephemeral: make(map[string]bool),
 	}
 	s.addClient(cc)
-	defer s.removeClient(cc)
-	defer s.closeEphemeral(cc) // reap any diff panel this conn left open on the way out
 
-	// Writer goroutine: the only place this connection is encoded to.
+	// hbDone signals the heartbeat goroutine has fully stopped. Teardown joins it
+	// BEFORE removeClient closes cc.out, so the heartbeat — the one sender not
+	// serialised by s.mu — can never send on a closed channel. removeClient stays
+	// the sole closer of cc.out; closing it then unblocks the writer's range.
+	hbDone := make(chan struct{})
+
+	// Teardown runs in a fixed order on return: signal both goroutines (done) and
+	// break the conn (closeConn) so the writer's Encode fails; JOIN the heartbeat;
+	// then reap the client (closes cc.out, ending the writer's range) and any
+	// ephemeral diff panels left open.
+	defer func() {
+		close(done)
+		closeConn()
+		<-hbDone
+		s.removeClient(cc)
+		s.closeEphemeral(cc)
+	}()
+
+	// Writer goroutine: the ONLY place this connection is encoded to. A single
+	// json.Encoder lives here, so every server→client message — broadcasts and the
+	// heartbeat ping alike — is serialised through one writer (the single-writer
+	// invariant). On any encode error (incl. a write-deadline timeout) it tears the
+	// conn down so the reader's Decode fails and handle() returns. It ranges over
+	// cc.out until removeClient closes it, so a broadcast mid-teardown never blocks.
 	go func() {
 		enc := json.NewEncoder(conn)
+		broken := false
 		for msg := range cc.out {
+			if broken {
+				continue // conn is gone; drain queued messages until removeClient closes cc.out
+			}
+			_ = conn.SetWriteDeadline(time.Now().Add(proto.WriteTimeout))
 			if err := enc.Encode(msg); err != nil {
-				return
+				broken = true
+				closeConn() // unblock the reader's Decode so handle() returns
 			}
 		}
 	}()
 
-	// Command loop.
+	// Heartbeat ticker: every interval it queues a ping through the normal
+	// send(cc, …) → cc.out path, so the writer goroutine remains the only thing
+	// that ever encodes to this conn. It stops on done — and teardown waits for
+	// hbDone before cc.out is closed — so it never sends on a closed channel.
+	go func() {
+		defer close(hbDone)
+		t := time.NewTicker(s.heartbeat)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				send(cc, proto.ServerMsg{Type: "ping"})
+			}
+		}
+	}()
+
+	// Command loop. The initial hello carries a handshake read deadline so a
+	// connect-but-never-speak peer is dropped; once the first command is read the
+	// deadline is cleared, leaving the steady-state loop with no read deadline (a
+	// client may legitimately stay idle for minutes).
 	dec := json.NewDecoder(conn)
+	_ = conn.SetReadDeadline(time.Now().Add(proto.HandshakeTimeout))
+	first := true
 	for {
 		var cmd proto.Command
 		if err := dec.Decode(&cmd); err != nil {
-			return // client detached
+			return // client detached, timed out on the handshake, or the conn broke
+		}
+		if first {
+			_ = conn.SetReadDeadline(time.Time{}) // idle command loop has no read deadline
+			first = false
 		}
 		s.onCommand(cc, cmd)
 	}

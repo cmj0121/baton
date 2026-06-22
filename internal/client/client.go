@@ -6,9 +6,15 @@ import (
 	"encoding/json"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/cmj0121/baton/internal/proto"
 )
+
+// readTimeout is the client's idle read deadline, reset on every successfully
+// decoded message. It defaults to proto.ClientReadTimeout; tests override it to a
+// few milliseconds so readLoop's timeout path runs fast. Set before Dial.
+var readTimeout = proto.ClientReadTimeout
 
 // Client is a live attachment to the baton server.
 type Client struct {
@@ -71,6 +77,7 @@ func Dial(socket string) (*Client, error) {
 func (c *Client) Send(cmd proto.Command) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
+	_ = c.conn.SetWriteDeadline(time.Now().Add(proto.WriteTimeout))
 	return c.enc.Encode(cmd)
 }
 
@@ -101,12 +108,21 @@ func (c *Client) readLoop() {
 	defer close(c.Config)
 	defer close(c.Footer)
 	dec := json.NewDecoder(c.conn)
+	// The connection is persistent but may be legitimately idle, so liveness rides
+	// on the server's heartbeat: set an idle read deadline up front and reset it on
+	// every successful decode (any message, ping included, proves the peer alive).
+	// When no message arrives within the window the Decode errors and we tear down.
+	_ = c.conn.SetReadDeadline(time.Now().Add(readTimeout))
 	for {
 		var msg proto.ServerMsg
 		if err := dec.Decode(&msg); err != nil {
 			return
 		}
+		_ = c.conn.SetReadDeadline(time.Now().Add(readTimeout)) // a message arrived; reset the idle timer
 		switch msg.Type {
+		case "ping":
+			// An ignorable keepalive: the successful decode above already reset the
+			// read deadline, so a ping is a pure no-op. It must not reach Events.
 		case "output":
 			c.Output <- msg
 		case "stats":

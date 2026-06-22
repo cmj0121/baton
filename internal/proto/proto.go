@@ -5,10 +5,38 @@
 // sends ServerMsg values down. This is the only formal entry into the core.
 package proto
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // ProtocolVersion is negotiated on connect. Bump it on breaking wire changes.
 const ProtocolVersion = "baton/1"
+
+// IPC timing for the persistent, legitimately-idle Unix-socket connection. The
+// steady-state command loop carries NO read deadline (a client may attach and
+// send nothing for minutes); liveness is kept instead by a server→client
+// heartbeat ping and an idle read deadline the client resets on any message.
+const (
+	// HeartbeatInterval is the server→client ping cadence. The server emits a
+	// keepalive ping this often so an idle client's read deadline keeps resetting.
+	HeartbeatInterval = 15 * time.Second
+
+	// ClientReadTimeout is the client's idle read deadline, reset on every message
+	// (incl. ping). It is ≥ 3× HeartbeatInterval so a single dropped ping never
+	// disconnects a healthy client — only a genuinely dead peer trips it.
+	ClientReadTimeout = 45 * time.Second
+
+	// WriteTimeout is the per-encode write deadline on either side. It is generous
+	// enough that a legitimate burst draining a full EventBufferSize buffer does not
+	// trip it; it exists to tear down a peer that has stopped reading.
+	WriteTimeout = 10 * time.Second
+
+	// HandshakeTimeout is the server's read deadline for the initial hello only.
+	// Once the first command is read the deadline is cleared, leaving the idle
+	// command loop with no read deadline.
+	HandshakeTimeout = 10 * time.Second
+)
 
 // Panel kinds carried on the wire.
 const (
@@ -70,7 +98,7 @@ type PluginCommand struct {
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "notice" | "config" | "footer"
+	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "notice" | "config" | "footer" | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline)
 	Version   string      `json:"version,omitempty"`    // protocol version, set on "welcome"
 	ServerVer string      `json:"server_ver,omitempty"` // the server's build version, set on "welcome"
 	Error     string      `json:"error,omitempty"`      // set on "error"
