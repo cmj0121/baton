@@ -117,7 +117,7 @@ func stopDaemon(sock string) error {
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
 		return fmt.Errorf("signal daemon %d: %w", pid, err)
 	}
-	if !waitFor(func() bool { return !alive(sock) }, 50, 50*time.Millisecond) {
+	if !waitFor(func() bool { return !alive(sock) }, daemonPollTries, daemonPollGap) {
 		return fmt.Errorf("daemon %d did not stop in time", pid)
 	}
 	log.Info().Int("pid", pid).Msg("daemon stopped")
@@ -184,7 +184,7 @@ func startDaemon(verbose int, logPath, pluginPath string) error {
 		return fmt.Errorf("start baton server: %w", err)
 	}
 
-	if !waitFor(func() bool { return alive(sock) }, 50, 50*time.Millisecond) {
+	if !waitFor(func() bool { return alive(sock) }, daemonPollTries, daemonPollGap) {
 		return fmt.Errorf("baton server did not come up; see %s", logPath)
 	}
 	log.Debug().Str("socket", sock).Msg("daemon started")
@@ -246,7 +246,10 @@ func runServerOn(ln net.Listener, sock string) error {
 	// unreadable config keeps the strict defaults (unique names, home workdir).
 	// Build the server before the cleanup/signal wiring, so the shutdown handler
 	// can flush the final fleet/layout snapshot through it.
-	cfg, _ := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Warn().Err(err).Msg("config load failed, building the server on defaults")
+	}
 	rc := reloadableSettings(cfg)
 	stateF := paths.StateFile(sock)
 	srv := server.New(ln, buildServerOptions(rc, stateF)...)
@@ -423,6 +426,14 @@ func clearStaleSocket(sock string) error {
 	_ = os.Remove(paths.PidFile(sock))
 	return os.Remove(sock)
 }
+
+// daemonPollTries and daemonPollGap bound how long start/stop waits for the
+// socket to come up or be released — generous enough (5s) to ride out a loaded
+// host binding or releasing the socket, short enough to fail visibly.
+const (
+	daemonPollTries = 100
+	daemonPollGap   = 50 * time.Millisecond
+)
 
 // waitFor polls cond up to tries times, sleeping gap between attempts.
 func waitFor(cond func() bool, tries int, gap time.Duration) bool {
