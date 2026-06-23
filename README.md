@@ -1,11 +1,36 @@
 # Baton
 
-> A next-gen, extensible, agent-friendly terminal multiplexer.
+> An extensible, agent-friendly terminal multiplexer.
 
-Baton is to AI agents what tmux is to shells. Instead of juggling windows and scattered CLI sessions, you run one
-keyboard-driven cockpit: a live dashboard of every agent, grouped into work items, any one a keystroke away.
+Running a handful of AI coding agents at once? It gets messy fast — windows to juggle, sessions scattered across tabs, and
+no single place to see who's working, who's stuck, and who's waiting on you.
 
-You hold the baton. The agents play. You conduct.
+Baton is to AI agents what tmux is to shells. It gives you **one keyboard-driven cockpit**: a live dashboard of every
+agent, grouped into the tasks they belong to, any one a keystroke away.
+
+You hold the baton. The agents play. You conduct. 🎼
+
+## Get started
+
+Baton is a single static binary. Grab it with [Go](https://go.dev) 1.26+:
+
+```sh
+go install github.com/cmj0121/baton/cmd/baton@latest
+```
+
+…or build from a clone with `make install`. Then just run:
+
+```sh
+baton
+```
+
+Baton starts its background server and drops you on the **dashboard** — your home base. Your first minute:
+
+1. Press **`A`** to spawn an agent (you'll pick a working directory for it).
+2. Press **`enter`** to zoom in and watch it work; **`C-t d`** pops you back to the dashboard.
+3. Press **`q`** to detach and walk away — everything keeps running. Come back any time with `baton`.
+
+Lost? **`?`** always shows the keys for wherever you are.
 
 ## Concept
 
@@ -59,6 +84,8 @@ the current view, and **`C-t k`** to edit the key map.
 See **[docs/SPEC.md](docs/SPEC.md)** for the complete, per-view key reference and the design behind every view.
 
 ## Features
+
+Everything you'd reach for while shepherding a fleet, a keystroke away:
 
 - **Signals** — `s` sends any signal to the selection, the focused tile, or the whole group; the picker lists the common
   ones, `o` types any name or number.
