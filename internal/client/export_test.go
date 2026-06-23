@@ -6,7 +6,7 @@ import "time"
 // func. It exists only for tests, which drive readLoop's timeout path in
 // milliseconds rather than the 45s production default. Call it before Dial.
 func SetReadTimeout(d time.Duration) (restore func()) {
-	prev := readTimeout
-	readTimeout = d
-	return func() { readTimeout = prev }
+	prev := readTimeout.Load()
+	readTimeout.Store(int64(d))
+	return func() { readTimeout.Store(prev) }
 }

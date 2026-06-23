@@ -6,15 +6,20 @@ import (
 	"encoding/json"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cmj0121/baton/internal/proto"
 )
 
-// readTimeout is the client's idle read deadline, reset on every successfully
-// decoded message. It defaults to proto.ClientReadTimeout; tests override it to a
-// few milliseconds so readLoop's timeout path runs fast. Set before Dial.
-var readTimeout = proto.ClientReadTimeout
+// readTimeout is the client's idle read deadline (nanoseconds), reset on every
+// successfully decoded message. It defaults to proto.ClientReadTimeout; tests
+// override it (via SetReadTimeout) to a few milliseconds so readLoop's timeout
+// path runs fast. It is atomic so a test adjusting it never races a still-draining
+// readLoop goroutine that reads it — in production it is set once and only read.
+var readTimeout atomic.Int64
+
+func init() { readTimeout.Store(int64(proto.ClientReadTimeout)) }
 
 // Client is a live attachment to the baton server.
 type Client struct {
@@ -112,13 +117,13 @@ func (c *Client) readLoop() {
 	// on the server's heartbeat: set an idle read deadline up front and reset it on
 	// every successful decode (any message, ping included, proves the peer alive).
 	// When no message arrives within the window the Decode errors and we tear down.
-	_ = c.conn.SetReadDeadline(time.Now().Add(readTimeout))
+	_ = c.conn.SetReadDeadline(time.Now().Add(time.Duration(readTimeout.Load())))
 	for {
 		var msg proto.ServerMsg
 		if err := dec.Decode(&msg); err != nil {
 			return
 		}
-		_ = c.conn.SetReadDeadline(time.Now().Add(readTimeout)) // a message arrived; reset the idle timer
+		_ = c.conn.SetReadDeadline(time.Now().Add(time.Duration(readTimeout.Load()))) // a message arrived; reset the idle timer
 		switch msg.Type {
 		case "ping":
 			// An ignorable keepalive: the successful decode above already reset the
