@@ -186,6 +186,29 @@ func TestStateFileDerivation(t *testing.T) {
 	}
 }
 
+// TestLoadReadError covers the non-missing read failure: a path that is a
+// directory is not os.IsNotExist, so Load must surface the error rather than
+// pretend it was a clean first run.
+func TestLoadReadError(t *testing.T) {
+	dir := t.TempDir() // a directory, not a file
+	got, err := Load(dir)
+	if err == nil {
+		t.Fatal("Load(dir) returned nil error, want a read error")
+	}
+	if got.Schema != Schema {
+		t.Errorf("Schema = %d, want %d even on error", got.Schema, Schema)
+	}
+}
+
+// TestSaveTempCreateFails covers the temp-file open failure: a path whose parent
+// directory does not exist cannot be written, and Save must report it.
+func TestSaveTempCreateFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "no-such-dir", "x.state.json")
+	if err := sample().Save(path); err == nil {
+		t.Fatal("Save into a missing directory returned nil error")
+	}
+}
+
 // assertCorruptedAside checks that exactly the bad file was renamed to a
 // .corrupt-* sibling and the original path no longer exists.
 func assertCorruptedAside(t *testing.T, dir, path string) {

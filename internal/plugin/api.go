@@ -3,6 +3,7 @@ package plugin
 import (
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/rs/zerolog/log"
 	lua "github.com/yuin/gopher-lua"
@@ -90,7 +91,23 @@ func (p *Plugin) luaPurge(L *lua.LState) int {
 }
 
 func (p *Plugin) luaSignal(L *lua.LState) int {
-	return result(L, p.host.Signal(idsArg(L, 1), L.CheckString(2)))
+	return result(L, p.host.Signal(idsArg(L, 1), signalToken(L, 2)))
+}
+
+// signalToken reads argument n as a signal: a name ("SIGTERM") or a number,
+// accepted as either a Lua string or a Lua number so baton.signal(id, "SIGKILL")
+// and baton.signal(id, 9) both work — signals.Lookup resolves either form. Any
+// other type raises a Lua error, like the package's other typed arguments.
+func signalToken(L *lua.LState, n int) string {
+	switch v := L.Get(n).(type) {
+	case lua.LString:
+		return string(v)
+	case lua.LNumber:
+		return strconv.Itoa(int(v))
+	default:
+		L.RaiseError("signal must be a name or number, got %s", v.Type().String())
+		return ""
+	}
 }
 
 func (p *Plugin) luaGroup(L *lua.LState) int {
@@ -301,15 +318,25 @@ func idsArg(L *lua.LState, n int) []string {
 	case lua.LString:
 		return []string{string(v)}
 	case *lua.LTable:
-		var ids []string
-		v.ForEach(func(_, val lua.LValue) {
-			if s, ok := val.(lua.LString); ok {
-				ids = append(ids, string(s))
-			}
-		})
-		return ids
+		return collectStrings(v, "panel id")
 	}
 	return nil
+}
+
+// collectStrings reads a Lua table's array part as a string slice. A non-string
+// element is a plugin-author mistake (e.g. a bare number where a string was
+// meant); dropping it silently hides the bug, so warn and skip it while the call
+// proceeds with what it could read. what labels the values in that warning.
+func collectStrings(tbl *lua.LTable, what string) []string {
+	var out []string
+	tbl.ForEach(func(_, val lua.LValue) {
+		if s, ok := val.(lua.LString); ok {
+			out = append(out, string(s))
+			return
+		}
+		log.Warn().Str("what", what).Str("type", val.Type().String()).Msg("plugin: ignoring non-string element")
+	})
+	return out
 }
 
 func fieldStr(tbl *lua.LTable, key string) string {
@@ -342,13 +369,7 @@ func fieldStrSlice(tbl *lua.LTable, key string) []string {
 	if !ok {
 		return nil
 	}
-	var out []string
-	inner.ForEach(func(_, val lua.LValue) {
-		if s, ok := val.(lua.LString); ok {
-			out = append(out, string(s))
-		}
-	})
-	return out
+	return collectStrings(inner, key)
 }
 
 // panelTable renders a wire panel as the Lua table hooks and reads receive.

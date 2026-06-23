@@ -77,6 +77,29 @@ func TestKillAllEmptySafe(t *testing.T) {
 	}
 }
 
+// TestStartAfterKillAllKillsItself guards the spawn-vs-shutdown race: a panel
+// started after the shutdown sweep has run must not outlive the daemon. Once
+// KillAll marks the manager closed, StartCmd kills the freshly forked group
+// itself, so the child exits promptly rather than leaking as an orphan.
+func TestStartAfterKillAllKillsItself(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	m := New()
+	closed := make(chan string, 1)
+	m.OnClose(func(id string, _ int) { closed <- id })
+
+	m.KillAll(syscall.SIGKILL) // the sweep runs first; the manager is now closing
+	if err := m.Start("late", ""); err != nil {
+		t.Fatalf("Start after KillAll: %v", err)
+	}
+	defer m.Stop("late")
+
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("a panel spawned after the shutdown sweep should be killed, not orphaned")
+	}
+}
+
 func TestStreamsOutputAndForwardsInput(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	m := New()
@@ -363,16 +386,27 @@ func TestRingCap(t *testing.T) {
 		t.Fatalf("a tiny cap should floor at %d, got %d", minRingCap, got)
 	}
 
-	// A custom cap above the floor keeps only the most recent bytes (the tail),
-	// which is exactly what replay-on-attach should hand a frontend.
+	// A custom cap above the floor exposes only the most recent bytes (the tail),
+	// which is exactly what replay-on-attach hands a frontend — even though the
+	// backing slice is allowed to run up to 2*cap before it is trimmed.
 	const cap = 8 * 1024
 	m := New(WithRingCap(cap))
 	p := &pane{}
 	for i := 0; i < 10; i++ {
 		m.appendRing(p, make([]byte, 1000)) // 10000 bytes total, cap is 8192
 	}
-	if len(p.ring) != cap {
-		t.Fatalf("ring should be trimmed to the cap, len = %d want %d", len(p.ring), cap)
+	if got := len(m.ringView(p)); got != cap {
+		t.Fatalf("ringView should expose exactly the cap, len = %d want %d", got, cap)
+	}
+	// Keep writing well past 2*cap and confirm the backing slice is trimmed back.
+	for i := 0; i < 10; i++ {
+		m.appendRing(p, make([]byte, 1000)) // 20000 bytes total now
+	}
+	if len(p.ring) > 2*cap {
+		t.Fatalf("backing ring should stay <= 2*cap, len = %d want <= %d", len(p.ring), 2*cap)
+	}
+	if got := len(m.ringView(p)); got != cap {
+		t.Fatalf("ringView should still expose exactly the cap, len = %d want %d", got, cap)
 	}
 }
 
@@ -388,5 +422,36 @@ func TestPanelDir(t *testing.T) {
 	}
 	if got := PanelDir("/tmp/x"); got != "/tmp/x" {
 		t.Fatalf("a given dir should pass through, got %q", got)
+	}
+}
+
+// TestAppendRingAmortizedTrim checks the replay ring exposes at most ringCap
+// bytes while letting its backing slice grow to 2*ringCap before trimming, so the
+// O(ringCap) trim runs at most once per ringCap bytes written rather than on
+// every chunk.
+func TestAppendRingAmortizedTrim(t *testing.T) {
+	m := New()
+	m.ringCap = 64 // white-box: small cap so the trim boundary is easy to hit
+	p := &pane{}
+
+	const writes = 1000
+	for i := 0; i < writes; i++ {
+		m.appendRing(p, []byte{byte('a' + i%26)})
+		if len(p.ring) > 2*m.ringCap {
+			t.Fatalf("write %d: backing ring grew to %d, want <= %d", i, len(p.ring), 2*m.ringCap)
+		}
+		if v := m.ringView(p); len(v) > m.ringCap {
+			t.Fatalf("write %d: ringView exposed %d bytes, want <= %d", i, len(v), m.ringCap)
+		}
+	}
+
+	// The visible window must be exactly the last ringCap bytes written.
+	want := make([]byte, m.ringCap)
+	for i := range want {
+		idx := writes - m.ringCap + i
+		want[i] = byte('a' + idx%26)
+	}
+	if got := m.ringView(p); string(got) != string(want) {
+		t.Fatalf("ringView tail mismatch:\n got %q\nwant %q", got, want)
 	}
 }

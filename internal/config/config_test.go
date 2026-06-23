@@ -2,6 +2,8 @@ package config
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cmj0121/baton/internal/paths"
@@ -88,6 +90,45 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if got.Panel.DiffCommand != "delta" {
 		t.Fatalf("diff-command should round-trip, got %q", got.Panel.DiffCommand)
+	}
+}
+
+// TestLoadNormalizesNegativeReplayKB checks a hand-edited negative replay buffer
+// is clamped to zero on Load rather than passed through — zero is what every
+// consumer reads as "use the built-in default".
+func TestLoadNormalizesNegativeReplayKB(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := paths.EnsureDir(paths.ConfigFile()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.ConfigFile(), []byte("panel:\n  replay-kb: -5\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got.Panel.ReplayKB != 0 {
+		t.Fatalf("negative replay-kb should clamp to 0, got %d", got.Panel.ReplayKB)
+	}
+}
+
+// TestSaveAtomicNoLeftoverTmp confirms the atomic write leaves no sibling .tmp
+// file behind on the happy path.
+func TestSaveAtomicNoLeftoverTmp(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := (Config{Keys: map[string]string{"close": "w"}}).Save(); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(paths.ConfigFile()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("leftover temp file after atomic save: %s", e.Name())
+		}
 	}
 }
 

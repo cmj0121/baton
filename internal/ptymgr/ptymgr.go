@@ -38,6 +38,7 @@ type Manager struct {
 	mu       sync.Mutex
 	ptys     map[string]*pane
 	ringCap  int
+	closed   bool // a KillAll shutdown sweep has run; new spawns must not outlive it
 	onOutput func(id string, data []byte)
 	onClose  func(id string, exitCode int)
 }
@@ -143,9 +144,17 @@ func (m *Manager) StartCmd(id string, spec Spec) error {
 	p := &pane{f: f, pid: cmd.Process.Pid}
 	m.mu.Lock()
 	m.ptys[id] = p
+	shuttingDown := m.closed // a KillAll may have swept just before this fork landed in the map
 	m.mu.Unlock()
 
 	go m.pump(id, p, cmd)
+	// Close the spawn-vs-shutdown race: registering under the lock means KillAll's
+	// next sweep is guaranteed to see this pane, and if its sweep already ran
+	// (closed) we kill the group ourselves — so a child forked mid-shutdown can
+	// never outlive the daemon as an orphan. pump still reaps it via cmd.Wait.
+	if shuttingDown {
+		_ = syscall.Kill(-p.pid, syscall.SIGKILL)
+	}
 	return nil
 }
 
@@ -192,13 +201,31 @@ func (m *Manager) markDead(id string) {
 	m.mu.Unlock()
 }
 
+// appendRing appends chunk to the panel's replay ring, retaining at most ringCap
+// bytes of recent output. The backing slice is allowed to grow to 2*ringCap
+// before it is trimmed back to ringCap, so the trim — an O(ringCap) copy — runs
+// at most once per ringCap bytes written rather than on every chunk. Readers only
+// ever expose the last ringCap bytes (see ringView), so the slack is invisible.
 func (m *Manager) appendRing(p *pane, chunk []byte) {
 	m.mu.Lock()
 	p.ring = append(p.ring, chunk...)
-	if len(p.ring) > m.ringCap {
-		p.ring = append([]byte(nil), p.ring[len(p.ring)-m.ringCap:]...)
+	if len(p.ring) > 2*m.ringCap {
+		trimmed := make([]byte, m.ringCap)
+		copy(trimmed, p.ring[len(p.ring)-m.ringCap:])
+		p.ring = trimmed
 	}
 	m.mu.Unlock()
+}
+
+// ringView returns the last-ringCap-bytes window of a pane's ring without
+// copying. appendRing lets the backing slice run up to 2*ringCap, so every reader
+// must go through this to honour the configured replay-buffer size. The caller
+// holds m.mu.
+func (m *Manager) ringView(p *pane) []byte {
+	if len(p.ring) > m.ringCap {
+		return p.ring[len(p.ring)-m.ringCap:]
+	}
+	return p.ring
 }
 
 // Snapshot returns a copy of a panel's recent output, for replay when a client
@@ -207,7 +234,7 @@ func (m *Manager) Snapshot(id string) []byte {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if p, ok := m.ptys[id]; ok {
-		return append([]byte(nil), p.ring...)
+		return append([]byte(nil), m.ringView(p)...)
 	}
 	return nil
 }
@@ -222,10 +249,11 @@ func (m *Manager) Tail(id string, n int) []byte {
 	if !ok {
 		return nil
 	}
-	if n >= len(p.ring) {
-		return append([]byte(nil), p.ring...)
+	ring := m.ringView(p)
+	if n >= len(ring) {
+		return append([]byte(nil), ring...)
 	}
-	return append([]byte(nil), p.ring[len(p.ring)-n:]...)
+	return append([]byte(nil), ring[len(ring)-n:]...)
 }
 
 // livePane returns a panel's pane if it exists and its process is still running.
@@ -269,6 +297,7 @@ func (m *Manager) Signal(id string, sig syscall.Signal) {
 // manager. Returns how many process groups were signalled.
 func (m *Manager) KillAll(sig syscall.Signal) int {
 	m.mu.Lock()
+	m.closed = true // any spawn that registers after this sweep kills its own group
 	pids := make([]int, 0, len(m.ptys))
 	for _, p := range m.ptys {
 		if !p.dead && p.pid > 0 {

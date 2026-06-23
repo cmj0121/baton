@@ -263,3 +263,106 @@ func TestReadTimeoutClosesChannels(t *testing.T) {
 		}
 	}
 }
+
+// TestMalformedJSONClosesChannels confirms readLoop tears down cleanly when the
+// server sends bytes that are not valid JSON: the Decode errors and every channel
+// closes, exactly as on a clean disconnect.
+func TestMalformedJSONClosesChannels(t *testing.T) {
+	sock := shortSock(t)
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_ = json.NewDecoder(conn).Decode(new(proto.Command)) // hello
+		_, _ = conn.Write([]byte("{ this is not json\n"))    // garbage the decoder rejects
+		time.Sleep(50 * time.Millisecond)
+	}()
+
+	c, err := Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case _, ok := <-c.Events:
+			if !ok {
+				return // malformed frame tore the loop down, as expected
+			}
+		case <-deadline:
+			t.Fatal("malformed JSON never closed the channels")
+		}
+	}
+}
+
+// TestMessageTypesRouteToChannels confirms each server message type is demuxed to
+// its own channel — stats, telemetry, config, and footer ride dedicated channels,
+// not Events.
+func TestMessageTypesRouteToChannels(t *testing.T) {
+	sock := shortSock(t)
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_ = json.NewDecoder(conn).Decode(new(proto.Command)) // hello
+		enc := json.NewEncoder(conn)
+		_ = enc.Encode(proto.ServerMsg{Type: "welcome", Version: proto.ProtocolVersion})
+		_ = enc.Encode(proto.ServerMsg{Type: "stats", CPU: 12.5})
+		_ = enc.Encode(proto.ServerMsg{Type: "telemetry"})
+		_ = enc.Encode(proto.ServerMsg{Type: "config", Footer: "f"})
+		_ = enc.Encode(proto.ServerMsg{Type: "footer", Footer: "live"})
+		time.Sleep(100 * time.Millisecond)
+	}()
+
+	c, err := Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	recv := func(name string, ch <-chan proto.ServerMsg, want string) {
+		t.Helper()
+		select {
+		case m := <-ch:
+			if m.Type != want {
+				t.Fatalf("%s channel got %q, want %q", name, m.Type, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s channel never received %q", name, want)
+		}
+	}
+	recv("Events", c.Events, "welcome")
+	recv("Stats", c.Stats, "stats")
+	recv("Telemetry", c.Telemetry, "telemetry")
+	recv("Config", c.Config, "config")
+	recv("Footer", c.Footer, "footer")
+}
+
+// shortSock returns a unix socket path under a short-named temp root. macOS caps
+// socket paths near 104 bytes, and the default per-test temp dir embeds the (long)
+// test name, which can overrun it — so use a short os.MkdirTemp root instead.
+func shortSock(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ct")
+	if err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return filepath.Join(dir, "s.sock")
+}

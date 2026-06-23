@@ -103,10 +103,23 @@ func Load() (Config, error) {
 	if err := yaml.Unmarshal(data, &c); err != nil {
 		return c, fmt.Errorf("parse config %s: %w", paths.ConfigFile(), err)
 	}
+	c.normalize()
 	return c, nil
 }
 
-// Save writes the config file as YAML, creating $HOME/.baton as needed.
+// normalize coerces a parsed config back into sane bounds so a hand-edited file
+// cannot smuggle a nonsensical value past Load. A negative replay buffer is
+// meaningless — clamp it to zero, which every consumer already reads as "use the
+// built-in default".
+func (c *Config) normalize() {
+	if c.Panel.ReplayKB < 0 {
+		c.Panel.ReplayKB = 0
+	}
+}
+
+// Save writes the config file as YAML, creating $HOME/.baton as needed. The write
+// is atomic: it marshals to a sibling temp file, fsyncs it, and renames it into
+// place, so a crash or full disk mid-write can never leave a truncated config.
 func (c Config) Save() error {
 	data, err := yaml.Marshal(c)
 	if err != nil {
@@ -116,7 +129,7 @@ func (c Config) Save() error {
 	if err := paths.EnsureDir(path); err != nil {
 		return fmt.Errorf("prepare config dir: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := paths.WriteFileAtomic(path, data, 0o600); err != nil {
 		return fmt.Errorf("write config %s: %w", path, err)
 	}
 	return nil

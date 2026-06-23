@@ -83,6 +83,18 @@ func TestDriveTheFleet(t *testing.T) {
 	}
 }
 
+// TestSignalAcceptsNumber checks baton.signal takes a Lua number as well as a name
+// string, stringifying it for the host (signals.Lookup parses "9" the same as
+// "SIGKILL"), so the documented "name or number" form actually works.
+func TestSignalAcceptsNumber(t *testing.T) {
+	h := &fakeHost{}
+	run(t, h, `baton.signal("p1", 9)`)
+	if got := h.signals; len(got) != 1 || got[0].name != "9" ||
+		!reflect.DeepEqual(got[0].ids, []string{"p1"}) {
+		t.Errorf("signal = %+v, want ids[p1] name \"9\"", got)
+	}
+}
+
 // TestResultMarshaling checks the ok,err idiom: a nil host error returns true to
 // Lua, while a host error returns (nil, message).
 func TestResultMarshaling(t *testing.T) {
