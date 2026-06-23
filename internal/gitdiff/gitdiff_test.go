@@ -178,3 +178,76 @@ func porcelain(t *testing.T, dir string) string {
 	}
 	return string(out)
 }
+
+func TestCollect(t *testing.T) {
+	requireGit(t)
+	dir := initRepo(t)
+	commitFile(t, dir, "staged.txt", "one\n")
+	commitFile(t, dir, "work.txt", "alpha\n")
+
+	// Stage a change to staged.txt; leave a change to work.txt unstaged; add a
+	// brand-new untracked file.
+	if err := os.WriteFile(filepath.Join(dir, "staged.txt"), []byte("one\ntwo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitT(t, dir, "add", "staged.txt")
+	if err := os.WriteFile(filepath.Join(dir, "work.txt"), []byte("alpha\nbeta\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "new.txt"), []byte("fresh\nlines\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	changes, err := Collect(dir)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	byPath := make(map[string]FileChange, len(changes))
+	for _, c := range changes {
+		byPath[c.Path] = c
+	}
+
+	st, ok := byPath["staged.txt"]
+	if !ok || st.Index != "M" || st.Staged == "" {
+		t.Fatalf("staged.txt: want index M with staged diff, got %+v", st)
+	}
+	if !strings.Contains(st.Staged, "+two") {
+		t.Errorf("staged.txt staged diff missing the added line:\n%s", st.Staged)
+	}
+
+	wk, ok := byPath["work.txt"]
+	if !ok || wk.Work != "M" || wk.Unstaged == "" {
+		t.Fatalf("work.txt: want work M with unstaged diff, got %+v", wk)
+	}
+	if !strings.Contains(wk.Unstaged, "+beta") {
+		t.Errorf("work.txt unstaged diff missing the added line:\n%s", wk.Unstaged)
+	}
+
+	nw, ok := byPath["new.txt"]
+	if !ok || nw.Work != "?" {
+		t.Fatalf("new.txt: want untracked (work ?), got %+v", nw)
+	}
+	if !strings.Contains(nw.Unstaged, "new file: new.txt") || !strings.Contains(nw.Unstaged, "+fresh") {
+		t.Errorf("new.txt should render as an added file:\n%s", nw.Unstaged)
+	}
+}
+
+func TestCollectNotARepo(t *testing.T) {
+	requireGit(t)
+	if _, err := Collect(t.TempDir()); err == nil {
+		t.Fatal("Collect should fail outside a work tree")
+	}
+}
+
+func TestRenderUntrackedBinary(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "b.bin"), []byte{0x00, 0x01, 0x02}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := renderUntracked(dir, "b.bin"); !strings.Contains(got, "(binary)") {
+		t.Errorf("binary file should be summarised, got %q", got)
+	}
+	if got := renderUntracked(dir, "missing.txt"); !strings.Contains(got, "unreadable") {
+		t.Errorf("missing file should be summarised, got %q", got)
+	}
+}
