@@ -89,6 +89,18 @@ type Panel struct {
 	Pinned   bool   `json:"pinned,omitempty"`   // pinned to a live tile in its group's split view
 }
 
+// DiffFile is one changed path in the structured "diff" reply: its staged and
+// unstaged status letters (as `git status --porcelain` reports them, "?" for an
+// untracked file) and the unified diff text for each side, either empty when that
+// side is unchanged. The cockpit renders the set as a master-detail popup.
+type DiffFile struct {
+	Path     string `json:"path"`
+	Index    string `json:"index,omitempty"`         // staged-side status: M, A, D, R, … or "" when unchanged
+	Work     string `json:"work,omitempty"`          // unstaged-side status, or "?" for an untracked file
+	Staged   string `json:"staged_diff,omitempty"`   // `git diff --cached` text for this file
+	Unstaged string `json:"unstaged_diff,omitempty"` // `git diff` text for this file
+}
+
 // PluginCommand is one command a Lua plugin registered, surfaced to frontends so
 // the cockpit's command picker can list it and invoke it with command.run.
 type PluginCommand struct {
@@ -98,7 +110,7 @@ type PluginCommand struct {
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "notice" | "config" | "footer" | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline)
+	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "diff" | "notice" | "config" | "footer" | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline)
 	Version   string      `json:"version,omitempty"`    // protocol version, set on "welcome"
 	ServerVer string      `json:"server_ver,omitempty"` // the server's build version, set on "welcome"
 	Error     string      `json:"error,omitempty"`      // set on "error"
@@ -106,8 +118,9 @@ type ServerMsg struct {
 	Footer    string      `json:"footer,omitempty"`     // a plugin-set persistent footer segment, set on "footer" and carried on "config"; empty clears it
 	Panels    []Panel     `json:"panels,omitempty"`     // full snapshot on "panels"; live state/spark refresh on "telemetry"
 	Groups    []GroupView `json:"groups,omitempty"`     // per-group view settings on the "panels" snapshot, alongside Panels
-	ID        string      `json:"id,omitempty"`         // panel id on "output"; the new transient panel id on "ephemeral" (a diff or git op)
+	ID        string      `json:"id,omitempty"`         // panel id on "output"; the new transient panel id on "ephemeral" (a git op); the diffed agent panel id on "diff"
 	Data      []byte      `json:"data,omitempty"`       // pty output bytes on "output"
+	Files     []DiffFile  `json:"files,omitempty"`      // per-file staged/unstaged diffs on "diff"; ID carries the target panel
 
 	// The merged effective client config, set on "config": defaults <- YAML <-
 	// plugin. The cockpit applies it over its local config on attach and reload, so

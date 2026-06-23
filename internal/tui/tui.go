@@ -78,6 +78,7 @@ const (
 	modeSignal  // the send-signal picker (s / C-t s)
 	modeCommand // the plugin command picker (C-t c)
 	modeGit     // the git menu (C-t g in a zoom)
+	modeDiff    // the master-detail diff popup (the diff action)
 	modeZoom
 	modeGroupZoom
 )
@@ -164,6 +165,17 @@ type model struct {
 	gitCursor     int
 	gitConfirmOp  string // "push" | "remove" — the op awaiting a y/n, "" when none is pending
 	gitRemovePath string // the worktree path a confirmed remove targets
+
+	// The diff popup (modeDiff): a master-detail overlay fed by the server's
+	// structured "diff" reply. diffFiles is the changed-file set; diffCursor selects
+	// one; diffScroll offsets the detail pane; diffOnDetail routes j/k to the detail
+	// pane (tab toggles) instead of the file list; diffFrom is the view to restore.
+	diffFiles    []proto.DiffFile
+	diffTitle    string
+	diffCursor   int
+	diffScroll   int
+	diffOnDetail bool
+	diffFrom     mode
 
 	zoomID                string           // panel being zoomed (modeZoom)
 	zoomTitle             string           // its title, for the zoom footer
@@ -642,6 +654,16 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		m.pendingEphemeralTitle = ""
 		*m = m.zoomInto(panel.Panel{ID: sm.ID, Title: title, State: panel.Running})
 		m.zoomEphemeral = true
+	case "diff":
+		// The server computed the target agent's structured work-tree diff. Open the
+		// master-detail popup over the current view; it owns nothing server-side, so
+		// esc just closes it. pendingEphemeralTitle was stashed by requestDiff.
+		title := m.pendingEphemeralTitle
+		if title == "" {
+			title = "diff"
+		}
+		m.pendingEphemeralTitle = ""
+		*m = m.openDiffPopup(title, sm.Files)
 	case "config":
 		// The daemon pushed its merged effective config (defaults <- YAML <- plugin)
 		// and the plugin command list. Apply the config over the cockpit's own and
@@ -759,6 +781,11 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// The git menu owns the keyboard until an op fires, a confirm answers, or esc.
 	if m.mode == modeGit {
 		return m.handleGitKey(key)
+	}
+
+	// The diff popup owns the keyboard until esc; it scrolls and switches panes.
+	if m.mode == modeDiff {
+		return m.handleDiffKey(key)
 	}
 
 	// A text-input overlay is open: route the keystroke to it.
@@ -2104,6 +2131,8 @@ func (m model) render() string {
 		body = m.commandPickerView()
 	case m.mode == modeGit:
 		body = m.gitPickerView()
+	case m.mode == modeDiff:
+		body = m.diffView()
 	default:
 		body = m.dashboardView()
 	}

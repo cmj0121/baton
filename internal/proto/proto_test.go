@@ -129,6 +129,31 @@ func TestServerMsgOutputBinary(t *testing.T) {
 	}
 }
 
+func TestServerMsgDiffRoundTrip(t *testing.T) {
+	in := ServerMsg{
+		Type: "diff",
+		ID:   "p1",
+		Files: []DiffFile{
+			{Path: "a.go", Index: "M", Staged: "diff --git a/a.go b/a.go\n+x\n"},
+			{Path: "new.go", Work: "?", Unstaged: "new file: new.go\n+y\n"},
+		},
+	}
+	data, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out ServerMsg
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(out.Files) != 2 || out.Files[0].Path != "a.go" || out.Files[0].Staged != in.Files[0].Staged {
+		t.Errorf("diff files did not round-trip: %+v", out.Files)
+	}
+	if out.Files[1].Work != "?" || out.Files[1].Unstaged != in.Files[1].Unstaged {
+		t.Errorf("untracked file did not round-trip: %+v", out.Files[1])
+	}
+}
+
 // TestConstants pins the negotiated identifiers and a sane timing relationship:
 // the client's idle read window must outlast several heartbeats so one dropped
 // ping never disconnects a healthy peer.
