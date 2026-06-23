@@ -79,6 +79,7 @@ const (
 	modeCommand // the plugin command picker (C-t c)
 	modeGit     // the git menu (C-t g in a zoom)
 	modeDiff    // the master-detail diff popup (the diff action)
+	modeGitOut  // the scrollable text popup for a captured git op (log/status/…)
 	modeZoom
 	modeGroupZoom
 )
@@ -176,6 +177,17 @@ type model struct {
 	diffScroll   int
 	diffOnDetail bool
 	diffFrom     mode
+
+	// The git-output popup (modeGitOut): a scrollable text overlay fed by the
+	// server's "gitout" reply — a non-interactive op's captured output. gitOutLines
+	// is the output split into lines; gitOutScroll is the first visible line;
+	// gitOutFailed tints the header when the op exited non-zero; gitOutFrom is the
+	// view to restore on close.
+	gitOutLines  []string
+	gitOutTitle  string
+	gitOutScroll int
+	gitOutFailed bool
+	gitOutFrom   mode
 
 	zoomID                string           // panel being zoomed (modeZoom)
 	zoomTitle             string           // its title, for the zoom footer
@@ -664,6 +676,18 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		}
 		m.pendingEphemeralTitle = ""
 		*m = m.openDiffPopup(title, sm.Files)
+	case "gitout":
+		// A non-interactive git op (log/status/add/push/branch/worktrees) ran
+		// server-side and returned its captured output; show it in a scrollable text
+		// popup, the sibling of the diff popup. The op was one-shot and reaped, so the
+		// popup owns nothing and esc just closes it. The title was stashed when the op
+		// was sent (sendGitEphemeral).
+		title := m.pendingEphemeralTitle
+		if title == "" {
+			title = "git"
+		}
+		m.pendingEphemeralTitle = ""
+		*m = m.openGitOutPopup(title, sm.Text, sm.Failed)
 	case "config":
 		// The daemon pushed its merged effective config (defaults <- YAML <- plugin)
 		// and the plugin command list. Apply the config over the cockpit's own and
@@ -786,6 +810,11 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// The diff popup owns the keyboard until esc; it scrolls and switches panes.
 	if m.mode == modeDiff {
 		return m.handleDiffKey(key)
+	}
+
+	// The git-output popup owns the keyboard until esc; it scrolls its text.
+	if m.mode == modeGitOut {
+		return m.handleGitOutKey(key)
 	}
 
 	// A text-input overlay is open: route the keystroke to it.
@@ -2133,6 +2162,8 @@ func (m model) render() string {
 		body = m.gitPickerView()
 	case m.mode == modeDiff:
 		body = m.diffView()
+	case m.mode == modeGitOut:
+		body = m.gitOutView()
 	default:
 		body = m.dashboardView()
 	}

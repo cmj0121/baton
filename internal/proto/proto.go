@@ -110,7 +110,7 @@ type PluginCommand struct {
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "diff" | "notice" | "config" | "footer" | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline)
+	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "diff" | "gitout" | "notice" | "config" | "footer" | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline)
 	Version   string      `json:"version,omitempty"`    // protocol version, set on "welcome"
 	ServerVer string      `json:"server_ver,omitempty"` // the server's build version, set on "welcome"
 	Error     string      `json:"error,omitempty"`      // set on "error"
@@ -121,6 +121,8 @@ type ServerMsg struct {
 	ID        string      `json:"id,omitempty"`         // panel id on "output"; the new transient panel id on "ephemeral" (a git op); the diffed agent panel id on "diff"
 	Data      []byte      `json:"data,omitempty"`       // pty output bytes on "output"
 	Files     []DiffFile  `json:"files,omitempty"`      // per-file staged/unstaged diffs on "diff"; ID carries the target panel
+	Text      string      `json:"text,omitempty"`       // a non-interactive git op's captured output on "gitout"; ID carries the target panel
+	Failed    bool        `json:"failed,omitempty"`     // on "gitout", the op exited non-zero (its message is in Text)
 
 	// The merged effective client config, set on "config": defaults <- YAML <-
 	// plugin. The cockpit applies it over its local config on attach and reload, so
