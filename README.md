@@ -125,33 +125,32 @@ copies the selected lines — or, with no selection, the visible page — to the
 system clipboard via OSC52, so it works over SSH with no helper binary.
 
 **Diff.** **`D`** on the dashboard or in a group split (`C-t D` from a zoom)
-pops up the working-tree diff of the focused agent panel — the binding name is
+pops up the work-tree diff of the focused agent panel — the binding name is
 `diff`, rebindable in the key map (`C-t k`). Only an agent panel is a valid
 target; a shell, a group card, or an empty selection just hints `diff: select an
 agent panel`. The server checks the agent's workdir is inside a git work tree
 first — if not, the status line reads `not a git repository: <dir>`, and a clean
-tree reads `no uncommitted changes`. The diff is the working tree against `HEAD`,
-**untracked files included** (a brand-new file a tracked-only check would miss is
-the most common agent output), computed without touching the index, worktree, or
-refs. It opens as a **transient, auto-zoomed panel**: it never lands on the
-dashboard and is never persisted, and you dismiss it with the normal zoom exit
-**`C-t d`** (or `C-t q` to detach) — that closes it. Inside it you get the usual
-scroll mode (`C-t [`), scrollback search (`C-t f`), and copy. The tool is
-`panel.diff-command` in the config, resolved in order: an explicit
-`panel.diff-command` (run via `sh -c`, so a full shell line or pipe works, e.g.
-`git diff HEAD | delta`); else the repo's own `git config diff.tool` (run via
-`git difftool -d --no-prompt`, which keeps git's tracked-only difftool
-semantics); else a built-in `git diff` that includes untracked files and pages
-naturally. If `diff.tool` is a GUI tool and the daemon runs headless or over
-SSH with no display, `git difftool` errors or hangs — contained to that panel,
-not fatal; on headless/remote hosts prefer a terminal diff (leave `diff.tool`
-unset for the built-in, or set `panel.diff-command` to a terminal tool like
-`git diff | delta`). The diff pages through git's pager and is navigable, but
-if the repo disables the pager (`core.pager=cat`) or your `panel.diff-command`
-doesn't page, a very large diff dumps in and only the last `panel.replay-kb` is
-kept in scrollback — the top truncates. A connection holds at most 8 open diff
-pop-ups at once; past that the key reports `too many open diffs — close one
-first`.
+tree reads `no uncommitted changes`.
+
+The diff opens as a **master-detail popup** (a bordered overlay smaller than the
+screen, not a zoom): the left column lists the changed files, each marked with
+its git status — the porcelain `XY`, staged side then unstaged side, `?` for an
+untracked file — and the right pane shows the selected file's diff: its
+**staged** section (`git diff --staged`) above its **unstaged** section (`git
+diff`), so both sides are visible at once. **Untracked files are included**,
+rendered as an added file (a brand-new file a tracked-only check would miss is
+the most common agent output). `tab` switches focus between the two panes;
+`j`/`k` and the arrows move the file selection or scroll the detail pane; the
+page keys and `g`/`G` jump it; `esc` closes. The popup owns nothing
+server-side — the git commands run once and are reaped — so it never lands on the
+dashboard and is never persisted.
+
+Setting `panel.diff-command` in the config overrides the popup with the older
+behaviour for that one command: a transient, auto-zoomed panel running it (an
+arbitrary command can't be split per file), run via `sh -c` so a full shell line
+or pipe works (e.g. `git diff HEAD | delta`). It is dismissed like any zoom
+(`C-t d` / `C-t q`) and a connection holds at most 8 such panels open at once.
+Leave `panel.diff-command` unset for the structured popup.
 
 **Git.** **`C-t g`** while zoomed into an agent opens the **git menu** — a keyed
 pop-up that runs git against that agent's workdir: diff, log, status, stage,
