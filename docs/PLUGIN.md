@@ -55,19 +55,19 @@ baton.pin(id)
 baton.close(id)
 ```
 
-| Call                                                | Core action                      | Notes                            |
-| --------------------------------------------------- | -------------------------------- | -------------------------------- |
-| `baton.spawn{kind=, command=, args=, dir=, group=}` | `panel.create` (+ `panel.group`) | returns the new panel id         |
-| `baton.respawn(id)`                                 | `panel.respawn`                  | re-run an exited panel           |
-| `baton.close(id \| {ids})`                          | `panel.close`                    |                                  |
-| `baton.purge()`                                     | `panel.purge`                    | drop every exited panel          |
-| `baton.signal(id \| {ids}, name)`                   | `panel.signal`                   | name or number, e.g. `"SIGTERM"` |
-| `baton.group({ids}, name)`                          | `panel.group`                    |                                  |
-| `baton.ungroup({ids} \| name)`                      | `panel.ungroup`                  |                                  |
-| `baton.rename{id= \| group=, name=}`                | `panel.rename`                   |                                  |
-| `baton.move({ids}, index)`                          | `panel.move`                     | reorder the fleet                |
-| `baton.pin(id)` / `baton.unpin(id)`                 | `panel.pin` / `panel.unpin`      |                                  |
-| `baton.group_show(name, n)`                         | `group.show`                     | live-tile count for a group      |
+| Call                                                | Core action                      | Notes                                    |
+| --------------------------------------------------- | -------------------------------- | ---------------------------------------- |
+| `baton.spawn{kind=, command=, args=, dir=, group=}` | `panel.create` (+ `panel.group`) | returns the new panel id                 |
+| `baton.respawn(id)`                                 | `panel.respawn`                  | re-run an exited panel                   |
+| `baton.close(id \| {ids})`                          | `panel.close`                    |                                          |
+| `baton.purge()`                                     | `panel.purge`                    | drop every exited panel                  |
+| `baton.signal(id \| {ids}, name)`                   | `panel.signal`                   | name or number, e.g. `"SIGTERM"` or `15` |
+| `baton.group({ids}, name)`                          | `panel.group`                    |                                          |
+| `baton.ungroup({ids} \| name)`                      | `panel.ungroup`                  |                                          |
+| `baton.rename{id= \| group=, name=}`                | `panel.rename`                   |                                          |
+| `baton.move({ids}, index)`                          | `panel.move`                     | reorder the fleet                        |
+| `baton.pin(id)` / `baton.unpin(id)`                 | `panel.pin` / `panel.unpin`      |                                          |
+| `baton.group_show(name, n)`                         | `group.show`                     | live-tile count for a group              |
 
 Every write returns `ok, err` (Lua idiom): `nil, "the name \"api\" is already taken"` on the same failures the socket
 reports, so a plugin handles a rejected action instead of crashing.
