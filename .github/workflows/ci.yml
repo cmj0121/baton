@@ -37,4 +37,11 @@ jobs:
 
       - name: Coverage gate (race + per-package 80%)
         # run the exact same gate the Makefile uses, so CI == local.
+        # writes coverage.out at the repo root, consumed by Codecov below.
         run: make cover
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.out
