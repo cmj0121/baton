@@ -165,3 +165,72 @@ func TestWorktreeArgValidation(t *testing.T) {
 		t.Fatal("a blank remove path should be refused")
 	}
 }
+
+func TestNeedsPTY(t *testing.T) {
+	if !NeedsPTY(OpCommit) {
+		t.Fatal("commit drives $EDITOR, so it needs a PTY")
+	}
+	for _, op := range []Op{OpStatus, OpLog, OpAdd, OpPush, OpBranch, OpWorktreeList} {
+		if NeedsPTY(op) {
+			t.Fatalf("%s is non-interactive and should not need a PTY", op)
+		}
+	}
+}
+
+// TestCaptureStatus checks a read-only op is captured to text: status of a dirty
+// tree names the untracked file and is not flagged failed.
+func TestCaptureStatus(t *testing.T) {
+	dir := initRepo(t)
+	dirty(t, dir)
+
+	res, err := Capture(OpStatus, dir, "", "")
+	if err != nil {
+		t.Fatalf("Capture(status) errored: %v", err)
+	}
+	if res.Failed {
+		t.Fatal("a clean `git status` should not be flagged failed")
+	}
+	if !strings.Contains(res.Output, "new.txt") {
+		t.Fatalf("status should mention the untracked file, got %q", res.Output)
+	}
+}
+
+// TestCaptureRejectsCommit checks commit is refused at the capture layer (it needs a
+// terminal) with nothing to show, so the caller falls back to the PTY path.
+func TestCaptureRejectsCommit(t *testing.T) {
+	dir := initRepo(t)
+	dirty(t, dir)
+
+	res, err := Capture(OpCommit, dir, "", "")
+	if err == nil {
+		t.Fatal("commit should be refused by Capture")
+	}
+	if res.Output != "" {
+		t.Fatalf("a refused capture should have no output, got %q", res.Output)
+	}
+}
+
+// TestCaptureFailedExit checks a non-zero git exit is reported via Failed (with the
+// message in Output), not as an error — push with no remote configured fails this
+// way, so the popup can still show git's reason.
+func TestCaptureFailedExit(t *testing.T) {
+	dir := initRepo(t)
+
+	res, err := Capture(OpPush, dir, "", "")
+	if err != nil {
+		t.Fatalf("a failed push should surface via Failed, not an error: %v", err)
+	}
+	if !res.Failed {
+		t.Fatal("a push with no remote should be flagged failed")
+	}
+	if strings.TrimSpace(res.Output) == "" {
+		t.Fatal("a failed push should carry git's message in Output")
+	}
+}
+
+// TestCaptureNotARepo checks Capture surfaces the not-a-repo pre-flight error.
+func TestCaptureNotARepo(t *testing.T) {
+	if _, err := Capture(OpStatus, t.TempDir(), "", ""); err == nil {
+		t.Fatal("Capture outside a repo should error")
+	}
+}
