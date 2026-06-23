@@ -1,8 +1,8 @@
 # Baton — Plugins (Lua)
 
-> **Status: spec.** The design is settled (see _Decisions_ at the foot) and this document is the contract the
-> implementation follows. v1 lands all four pillars — fleet API, hooks, commands, and Lua config — plus the
-> client-fetches-config wire so a plugin can reshape the cockpit, not just the daemon.
+> **Status: shipped.** All four pillars are live — fleet API, hooks, commands, and Lua config — plus the
+> client-fetches-config wire, so a plugin can reshape the cockpit, not just the daemon. The implementation lives in
+> [`internal/plugin`](../internal/plugin); this document is its contract.
 
 A baton plugin is a single Lua file that the server loads at startup. Through one object — `baton` — it can read the
 fleet, drive every core action, react to lifecycle events, and add its own commands. The plugin is to baton what an
@@ -102,7 +102,7 @@ A handler runs on the daemon's single Lua worker, **off every server lock**, so 
 Handlers are best-effort: a slow or throwing handler is logged and isolated, never stalling the Monitor, and a flood of
 events that outruns the worker drops oldest-first (like telemetry) rather than blocking the fleet.
 
-Proposed event set (the live ones are derived from the lifecycle in SPEC.md):
+The event set (derived from the lifecycle in SPEC.md):
 
 | Event             | Fires when                         | Payload                                                  |
 | ----------------- | ---------------------------------- | -------------------------------------------------------- |
@@ -197,7 +197,7 @@ prints usage.
 
 ## Config: YAML and Lua together
 
-The YAML config (`$HOME/.baton/config`) stays — it is the simple path and nothing forces a plugin. The proposed order:
+The YAML config (`$HOME/.baton/config`) stays — it is the simple path and nothing forces a plugin. The order:
 
 ```txt
 built-in defaults  →  YAML config  →  plug-in.lua
@@ -213,31 +213,28 @@ privileges and (by default) the full Lua standard library — that is the point 
 a private path (`0600`, under `$HOME/.baton`). Baton does not sandbox it. A future opt-in restricted mode (no `os`/`io`,
 no network) is possible if there is demand, but the default is full power.
 
-## Implementation sketch
+## Implementation
 
 - **Engine:** [`gopher-lua`](https://github.com/yuin/gopher-lua) — a pure-Go Lua 5.1 VM. No cgo, so baton stays a single
   static binary with no new build step.
-- **Package:** a new `internal/plugin` that owns the `*lua.LState`, the event queue, and the `baton` table; the server
-  gains an event-dispatcher hook it already has a seat for in the architecture.
+- **Package:** [`internal/plugin`](../internal/plugin) owns the `*lua.LState`, the event queue, and the `baton` table;
+  the server feeds it through the event-dispatcher hook the architecture reserves for it.
 - **One Lua goroutine.** The VM is single-threaded. A dedicated goroutine owns the `LState`; loads, hooks, and commands
   all run on it. Server events are posted to a buffered channel it drains — **never under `s.mu`** — so a hook calling
   back into `baton.*` re-enters the (independently locked) core actions without deadlock.
 - **Mapping is mechanical.** Each `baton.*` write marshals its Lua args into the same call the socket handler makes, so
   the plugin and the wire can never drift in what an action means or how it can fail.
 
-## Decisions
+## Design decisions
 
-The design questions are settled. v1 builds to these:
+The choices the implementation is built on:
 
-1. **Scope — all four pillars.** Fleet API, hooks, `baton.command`, and `baton.config`/`agent`/`bind` all ship in v1.
+1. **Scope — all four pillars.** Fleet API, hooks, `baton.command`, and `baton.config`/`agent`/`bind` are all live.
 2. **Client reach — the client fetches its config from the daemon.** A plugin may set keybindings, the prefix, and the
    cockpit toggles; the daemon serves the merged effective config over the socket and the cockpit applies it on attach
    (and on reload). Registered commands ride the same channel and appear in the cockpit's command picker.
-3. **`panel.output` ships,** opt-in and rate-limited — a handler is only attached when a plugin registers for it, and the
+3. **`panel.output` is opt-in and rate-limited** — a handler is only attached when a plugin registers for it, and the
    stream is coalesced so a chatty panel cannot drown the worker.
-4. **`baton.notify` ships** as a new server→client notice, alongside `baton.log` into the daemon log.
+4. **`baton.notify`** is a server→client notice, alongside `baton.log` into the daemon log.
 5. **Config precedence is `defaults → YAML → Lua`** — YAML is the base, the plugin loads after and wins.
 6. **Engine is `gopher-lua`** — pure-Go Lua 5.1, no cgo.
-   </content>
-
-</invoke>

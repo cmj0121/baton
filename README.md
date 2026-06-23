@@ -1,11 +1,36 @@
 # Baton
 
-> A next-gen, extensible, agent-friendly terminal multiplexer.
+> An extensible, agent-friendly terminal multiplexer.
 
-Baton is to AI agents what tmux is to shells. Instead of juggling windows and scattered CLI sessions, you run one
-keyboard-driven cockpit: a live dashboard of every agent, grouped into work items, any one a keystroke away.
+Running a handful of AI coding agents at once? It gets messy fast — windows to juggle, sessions scattered across tabs, and
+no single place to see who's working, who's stuck, and who's waiting on you.
 
-You hold the baton. The agents play. You conduct.
+Baton is to AI agents what tmux is to shells. It gives you **one keyboard-driven cockpit**: a live dashboard of every
+agent, grouped into the tasks they belong to, any one a keystroke away.
+
+You hold the baton. The agents play. You conduct. 🎼
+
+## Get started
+
+Baton is a single static binary. Grab it with [Go](https://go.dev) 1.26+:
+
+```sh
+go install github.com/cmj0121/baton/cmd/baton@latest
+```
+
+…or build from a clone with `make install`. Then just run:
+
+```sh
+baton
+```
+
+Baton starts its background server and drops you on the **dashboard** — your home base. Your first minute:
+
+1. Press **`A`** to spawn an agent (you'll pick a working directory for it).
+2. Press **`enter`** to zoom in and watch it work; **`C-t d`** pops you back to the dashboard.
+3. Press **`q`** to detach and walk away — everything keeps running. Come back any time with `baton`.
+
+Lost? **`?`** always shows the keys for wherever you are.
 
 ## Concept
 
@@ -32,173 +57,71 @@ You drive Baton through three views, moving between them with a keystroke:
 
 ## Keys
 
-Keys are modal: on the **dashboard** and in a **group** each action is a single key; in a **zoom** or **interact**
-keystrokes drive the program, so a Baton action is the leader **`C-t`** then the key. Press **`?`** for the full,
-rebindable list of the current view.
+Keys are **modal**: on the dashboard and in a group each action is a single key; in a zoom or interact your keystrokes
+drive the program, so a Baton action is the leader **`C-t`** then the key. Press **`?`** for the full, rebindable list of
+the current view, and **`C-t k`** to edit the key map.
 
-| Where                  | Key                         | Does                                       |
-| ---------------------- | --------------------------- | ------------------------------------------ |
-| Anywhere (after `C-t`) | `C-t d`                     | go to the dashboard                        |
-|                        | `C-t b`                     | back one level (zoom → group → dashboard)  |
-|                        | `C-t [`                     | enter scroll mode                          |
-|                        | `C-t k`                     | edit the key map                           |
-|                        | `C-t c`                     | open the plugin command picker             |
-|                        | `C-t P`                     | panel config (default shell, workdir, …)   |
-|                        | `C-t R`                     | reload config (backend + cockpit)          |
-|                        | `C-t S`                     | force-restart the server (kills the fleet) |
-|                        | `C-t D`                     | diff the selected agent panel              |
-|                        | `C-t q`                     | detach (server keeps running)              |
-| Dashboard              | `hjkl` / arrows             | move the cursor                            |
-|                        | `enter`                     | open / zoom the selection                  |
-|                        | `p`                         | new shell panel                            |
-|                        | `A`                         | new agent panel                            |
-|                        | `c`                         | new panel (pick the command)               |
-|                        | `w`                         | close the selection                        |
-|                        | `r`                         | re-run exited panel(s) in the selection    |
-|                        | `x`                         | purge exited panels                        |
-|                        | `s`                         | send a signal to the selection             |
-|                        | `f`                         | find — filter panels by title / group      |
-|                        | `S-←` / `S-→`               | reorder the selected item                  |
-|                        | `g`                         | mark / unmark a panel                      |
-|                        | `G`                         | group the marked panels                    |
-|                        | `a`                         | add marked panels to the selected group    |
-|                        | `u`                         | ungroup the selected work item             |
-|                        | `e`                         | rename the panel or group                  |
-|                        | `D`                         | diff the selected agent panel              |
-| Group view             | `tab`                       | focus the next panel                       |
-|                        | `+` / `-`                   | show more / fewer live tiles               |
-|                        | `p`                         | pin / unpin the focused panel              |
-|                        | `s`                         | send a signal to the focused panel         |
-|                        | `S`                         | send a signal to every panel in the group  |
-|                        | `i`                         | interact (type into the focused tile)      |
-|                        | `x`                         | remove the focused panel from the group    |
-|                        | `S-←` / `S-→`               | reorder the focused panel                  |
-|                        | `D`                         | diff the focused agent panel               |
-|                        | `b`                         | back to the dashboard                      |
-|                        | `enter`                     | zoom the focused panel                     |
-| Zoom / interact        | type                        | drive the program directly                 |
-|                        | `C-t b`                     | back to the group / dashboard              |
-|                        | `C-t g`                     | git menu (agent panel)                     |
-|                        | `C-t C-t`                   | send a literal `C-t`                       |
-|                        | `C-t s`                     | send a signal to this panel                |
-|                        | `C-t f`                     | search the scrollback                      |
-| Scroll mode (`C-t [`)  | `↑` / `↓` (`k`/`j`)         | scroll a line                              |
-|                        | `b` / `Spc` (`PgUp`/`PgDn`) | scroll a page                              |
-|                        | `g` / `G`                   | jump to top / bottom                       |
-|                        | `v` / `y`                   | start a selection / copy to the clipboard  |
-|                        | `n` / `N`                   | next / previous search match               |
-|                        | `esc` / `q`                 | exit scroll mode                           |
+| Where       | Key               | Does                                       |
+| ----------- | ----------------- | ------------------------------------------ |
+| After `C-t` | `d` / `b`         | jump to the dashboard / back one level     |
+|             | `[`               | enter scroll mode                          |
+|             | `R` / `S`         | reload config / force-restart the server   |
+|             | `q`               | detach (server keeps running)              |
+| Dashboard   | `hjkl` / arrows   | move the cursor                            |
+|             | `enter`           | open / zoom the selection                  |
+|             | `p` / `A` / `c`   | new shell / agent / pick-command panel     |
+|             | `w` / `x`         | close the selection / purge exited         |
+|             | `r`               | re-run the exited panel(s) under the focus |
+|             | `g` / `G` / `u`   | mark / group marked panels / ungroup       |
+|             | `s` / `f` / `D`   | signal / find / diff the selection         |
+| Group       | `tab`             | focus the next panel                       |
+|             | `+` / `-`         | show more / fewer live tiles               |
+|             | `p` / `i`         | pin / interact with the focused panel      |
+|             | `enter`           | zoom the focused panel                     |
+| Zoom        | type              | drive the program directly                 |
+|             | `C-t f` / `C-t g` | search the scrollback / git menu (agent)   |
 
-Names stay unique unless you set `allow-name-conflict`.
+See **[docs/SPEC.md](docs/SPEC.md)** for the complete, per-view key reference and the design behind every view.
 
-Closing with **`w`** asks `y/n` first: a single panel honours the **confirm on
-close** toggle (on by default, in the key map's settings block), while closing a
-**group** always confirms and names how many panels it will retire — a whole work
-item never goes in one keystroke.
+## Features
 
-`C-t R` reloads the config without a restart: the daemon re-reads its settings
-(name policy, default workdir, replay buffer) while the fleet keeps running, and
-the cockpit refreshes its own (key map, toggles, panel defaults). Sending the
-daemon `SIGHUP` (e.g. `kill -HUP $(cat ~/.baton/*.pid)`) does the backend half.
+Everything you'd reach for while shepherding a fleet, a keystroke away:
 
-`s` opens the signal picker — one keycap per signal (`SIGINT`, `SIGTERM`,
-`SIGKILL`, `SIGHUP`, `SIGQUIT`, `SIGUSR1`, `SIGUSR2`), `↑↓`+`enter` to choose, or
-`o` for **other…** to type any name or number (`WINCH`, `TSTP`, `28`). Target by
-view: the selection on the dashboard (a panel, or every live member of a group
-card), this panel in a zoom (`C-t s`), the focused panel in the split (`s`) or
-every member (`S`). Exited panels are skipped, so the count is what's delivered.
-
-The signal goes to the panel's whole **process group**, so it reaches the
-foreground job, not just the shell — but a child that daemonizes into its own
-group escapes it. Note this is the panel's `SIGHUP`, unrelated to baton's own
-`C-t R` config reload. Delivery is fire-and-forget: a process that traps or
-ignores a signal still shows as sent.
-
-**Find, search, copy.** On the dashboard, **`f`** filters the fleet — type to keep
-only panels whose title or group (or a group member's title) matches; the heading
-shows the match count, `enter` keeps the filter and `esc` clears it. In a zoom (or
-over a focused group tile), **`C-t f`** searches the scrollback with a
-case-insensitive regular expression: the view jumps to the newest hit and holds
-in scroll mode with the match highlighted, and `n` / `N` walk older / newer
-matches. A term that is not a valid regexp is matched literally. In scroll mode, **`v`** marks a selection and **`y`**
-copies the selected lines — or, with no selection, the visible page — to the
-system clipboard via OSC52, so it works over SSH with no helper binary.
-
-**Diff.** **`D`** on the dashboard or in a group split (`C-t D` from a zoom)
-pops up the work-tree diff of the focused agent panel — the binding name is
-`diff`, rebindable in the key map (`C-t k`). Only an agent panel is a valid
-target; a shell, a group card, or an empty selection just hints `diff: select an
-agent panel`. The server checks the agent's workdir is inside a git work tree
-first — if not, the status line reads `not a git repository: <dir>`, and a clean
-tree reads `no uncommitted changes`.
-
-The diff opens as a **master-detail popup** (a bordered overlay smaller than the
-screen, not a zoom): the left column lists the changed files, each marked with
-its git status — the porcelain `XY`, staged side then unstaged side, `?` for an
-untracked file — and the right pane shows the selected file's diff: its
-**staged** section (`git diff --staged`) above its **unstaged** section (`git
-diff`), so both sides are visible at once. **Untracked files are included**,
-rendered as an added file (a brand-new file a tracked-only check would miss is
-the most common agent output). `tab` switches focus between the two panes;
-`j`/`k` and the arrows move the file selection or scroll the detail pane; the
-page keys and `g`/`G` jump it; `esc` closes. The popup owns nothing
-server-side — the git commands run once and are reaped — so it never lands on the
-dashboard and is never persisted.
-
-Setting `panel.diff-command` in the config overrides the popup with the older
-behaviour for that one command: a transient, auto-zoomed panel running it (an
-arbitrary command can't be split per file), run via `sh -c` so a full shell line
-or pipe works (e.g. `git diff HEAD | delta`). It is dismissed like any zoom
-(`C-t d` / `C-t q`) and a connection holds at most 8 such panels open at once.
-Leave `panel.diff-command` unset for the structured popup.
-
-**Git.** **`C-t g`** while zoomed into an agent opens the **git menu** — a keyed
-pop-up that runs git against that agent's workdir: diff, log, status, stage,
-commit (in your `$EDITOR`, right in the panel), push, branch, and worktrees. It is
-zoom-only and agent-only. The output ops (log, status, stage, push, branch,
-worktrees) capture into a **scrollable text pop-up** — the sibling of the diff
-pop-up; only **commit** keeps a transient, auto-zoomed PTY panel for its editor.
-**worktree** spins up a fresh tree on a branch and an agent in it, grouped
-as a work item — isolation for a parallel agent in one keystroke. The set is
-additive — no `reset`, `clean`, or `--force` — and **push** and **worktree remove**
-confirm first. See [docs/GIT.md](docs/GIT.md) for every op, the commit-editor flow,
-and the `editor` / `worktree-dir` config.
-
-**Mouse.** Off by default, so your terminal's own selection and copy stay
-available. Toggle it in the key map (`C-t k`, the settings block); once on, the
-wheel scrolls the scrollback in a zoom or tile and moves the dashboard selection.
-
-**Split & summary.** In a group, **`+`** / **`-`** dial how many members stream
-as live tiles — server-owned, clamped to `1`–`16`, and remembered across a
-restart. Pinned members are always tiles. Everyone past that count folds into one
-**summary tile**: a rollup of the hidden members' count, their per-state
-breakdown, and the most urgent activity line. Focus it and press **`enter`** to
-zoom into a sub-grid of just those collapsed members; **`esc`** returns to the
-parent group, not the dashboard.
-
-**Layout, restart, respawn.** Baton remembers its fleet. The daemon writes the
-layout — each panel's spawn spec (command, args, workdir), group membership,
-pins, order, and every group's visible-tile count — to a per-session state file
-on each change, and rebuilds it on the next start. Restore is inert: panels come
-back as **exited dead slots**, never auto-respawned (shells included). Press
-**`r`** on the dashboard to re-run the exited panel(s) under the focus — a lone
-dead slot, or every exited member of the focused group — from their retained
-spec; closing or purging a panel drops its spec for good. The state file lives
-beside the socket and pid file, so one daemon-per-session owns one layout; an
-unreadable or newer-schema file is renamed aside rather than wedging the daemon.
+- **Signals** — `s` sends any signal to the selection, the focused tile, or the whole group; the picker lists the common
+  ones, `o` types any name or number.
+- **Find, search, copy** — `f` filters the fleet by title or group; `C-t f` regex-searches a panel's scrollback; scroll
+  mode (`C-t [`) selects and copies over OSC52, so it works over SSH with no helper binary.
+- **Diff** — `D` (or `C-t D` in a zoom) pops up the agent panel's work-tree diff — staged and unstaged at once,
+  untracked included — in a master-detail overlay.
+- **Git** — `C-t g` opens a git menu against the zoomed agent: diff, log, status, stage, commit, push, branch, and
+  worktrees. See **[docs/GIT.md](docs/GIT.md)**.
+- **Groups & summary** — `+` / `-` dial how many members stream as live tiles; the rest fold into one summary tile.
+  Pinned members always stream.
+- **Persistence & respawn** — Baton remembers its fleet across a restart; panels come back as inert exited slots and
+  `r` re-runs them from their retained spec.
+- **Reload** — `C-t R` (or a `SIGHUP` to the daemon) hot-reloads config without restarting the fleet.
+- **Mouse** — off by default so your terminal's own selection stays available; toggle it in the key map to scroll and
+  select with the wheel.
 
 ## Architecture
 
 A headless **baton server** (a background daemon) owns all state and every terminal. Pluggable frontends attach over a
 single Unix domain socket — commands up, events down — so you detach and reattach without losing a thing.
 
-See [docs/SPEC.md](docs/SPEC.md) for the full diagram and interaction model.
+See **[docs/SPEC.md](docs/SPEC.md)** for the full diagram and interaction model.
 
 ## Plugins
 
-A single Lua file (`$HOME/.baton/plug-in.lua`) reshapes baton to your workflow: react to lifecycle events (ping you when
+A single Lua file (`$HOME/.baton/plug-in.lua`) reshapes Baton to your workflow: react to lifecycle events (ping you when
 an agent needs you, chain the next step when one finishes), drive the fleet, add your own commands, and set config — all
-through one `baton` object. See [docs/PLUGIN.md](docs/PLUGIN.md).
+through one `baton` object. See **[docs/PLUGIN.md](docs/PLUGIN.md)**.
+
+## Documentation
+
+- **[docs/SPEC.md](docs/SPEC.md)** — the full specification: views, the panel lifecycle, work items, signals, diff,
+  persistence, the per-view key reference, and the architecture diagram.
+- **[docs/GIT.md](docs/GIT.md)** — the git menu: every op, the commit-editor flow, worktrees, and the config.
+- **[docs/PLUGIN.md](docs/PLUGIN.md)** — the Lua plugin API: the `baton` object, events, commands, and config.
 
 ## DDD (Dream-Driven Development)
 
