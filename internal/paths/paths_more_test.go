@@ -54,3 +54,76 @@ func TestEnsureDirCreatesParent(t *testing.T) {
 		t.Fatalf("parent dir not created: %v", err)
 	}
 }
+
+func TestWriteFileAtomicRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.dat")
+	want := []byte("hello atomic\n")
+	if err := WriteFileAtomic(path, want, 0o600); err != nil {
+		t.Fatalf("WriteFileAtomic: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("content = %q, want %q", got, want)
+	}
+}
+
+// TestWriteFileAtomicNoLeftoverTmp confirms the happy path leaves no sibling
+// ".tmp" file behind.
+func TestWriteFileAtomicNoLeftoverTmp(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.dat")
+	if err := WriteFileAtomic(path, []byte("data"), 0o600); err != nil {
+		t.Fatalf("WriteFileAtomic: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("leftover temp file: %s", e.Name())
+		}
+	}
+}
+
+// TestWriteFileAtomicTempOpenFails covers the create-temp failure: a directory
+// where the ".tmp" file must go makes OpenFile fail regardless of privilege.
+func TestWriteFileAtomicTempOpenFails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.dat")
+	if err := os.Mkdir(path+".tmp", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteFileAtomic(path, []byte("data"), 0o600); err == nil {
+		t.Fatal("WriteFileAtomic should fail when the temp file cannot be created")
+	}
+}
+
+// TestWriteFileAtomicRenameFails covers the write/sync/close success then a rename
+// failure: a directory at the final path makes os.Rename fail, and the temp file
+// must be cleaned up rather than left behind.
+func TestWriteFileAtomicRenameFails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.dat")
+	if err := os.Mkdir(path, 0o700); err != nil { // final path is a directory
+		t.Fatal(err)
+	}
+	if err := WriteFileAtomic(path, []byte("data"), 0o600); err == nil {
+		t.Fatal("WriteFileAtomic should fail when the destination is a directory")
+	}
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Errorf("temp file should be removed after a failed rename")
+	}
+}
+
+// TestHomeFallsBackToEnv checks home() resolves via $HOME when UserHomeDir relies
+// on it, so baton's files anchor to an absolute path rather than a relative one.
+func TestHomeFallsBackToEnv(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+	if got := home(); got != "/home/tester" {
+		t.Errorf("home() = %q, want /home/tester", got)
+	}
+}

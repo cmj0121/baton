@@ -11,8 +11,9 @@ package state
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"time"
+
+	"github.com/cmj0121/baton/internal/paths"
 )
 
 // Schema is the current on-disk schema version. Bump it on a breaking change to
@@ -79,10 +80,9 @@ func Load(path string) (State, error) {
 	return s, nil
 }
 
-// Save writes the snapshot to path atomically and durably: it marshals indented
-// JSON to a sibling temp file, fsyncs and renames it into place, then fsyncs the
-// parent directory so the rename itself is durable. Schema and SavedAt are set
-// if unset.
+// Save writes the snapshot to path atomically and durably (see
+// paths.WriteFileAtomic): indented JSON via a temp file, fsync, rename, and a
+// parent-directory fsync. Schema and SavedAt are set if unset.
 func (s State) Save(path string) error {
 	if s.Schema == 0 {
 		s.Schema = Schema
@@ -95,39 +95,7 @@ func (s State) Save(path string) error {
 	if err != nil {
 		return err
 	}
-
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-
-	// Fsync the parent directory so the rename survives a crash. Some platforms
-	// cannot open a directory for sync; that is not fatal to the save.
-	if dir, err := os.Open(filepath.Dir(path)); err == nil {
-		_ = dir.Sync()
-		_ = dir.Close()
-	}
-	return nil
+	return paths.WriteFileAtomic(path, data, 0o600)
 }
 
 // corrupt renames the bad file aside and returns an empty State. A rename
