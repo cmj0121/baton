@@ -155,8 +155,10 @@ Leave `panel.diff-command` unset for the structured popup.
 **Git.** **`C-t g`** while zoomed into an agent opens the **git menu** — a keyed
 pop-up that runs git against that agent's workdir: diff, log, status, stage,
 commit (in your `$EDITOR`, right in the panel), push, branch, and worktrees. It is
-zoom-only and agent-only. The read and output ops open the same transient pop-up the
-diff does; **worktree** spins up a fresh tree on a branch and an agent in it, grouped
+zoom-only and agent-only. The output ops (log, status, stage, push, branch,
+worktrees) capture into a **scrollable text pop-up** — the sibling of the diff
+pop-up; only **commit** keeps a transient, auto-zoomed PTY panel for its editor.
+**worktree** spins up a fresh tree on a branch and an agent in it, grouped
 as a work item — isolation for a parallel agent in one keystroke. The set is
 additive — no `reset`, `clean`, or `--force` — and **push** and **worktree remove**
 confirm first. See [docs/GIT.md](docs/GIT.md) for every op, the commit-editor flow,

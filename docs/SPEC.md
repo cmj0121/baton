@@ -169,11 +169,14 @@ past that the diff key reports `too many open diffs (max 8) — close one first`
 
 **Git menu.** `C-t g` in a zoom opens the **git menu** for the zoomed agent — a keyed pop-up (the signal picker's shape)
 of git operations run against that agent's workdir. It is **zoom-only** (you act on the one agent you are looking at) and
-agent-only. The transient-panel machinery above is generalised into one `openEphemeral` engine: the diff and the git
-**output** ops (log, status, stage, commit, push, branch, worktree-list) all spawn the same auto-zoomed, never-persisted
-pop-up — only the resolved command differs (`internal/gitdiff` for the diff, `internal/gitops` for the rest), and the
-8-pop-up cap is shared. `commit` injects the configured editor as `GIT_EDITOR` (via a new `ptymgr.Spec.Env`) so it opens
-in the panel's PTY. Two ops are not pop-ups: **worktree-add** creates a tree on a new branch and spawns an agent rooted
+agent-only. The **non-interactive output** ops (log, status, stage, push, branch, worktree-list) are run one-shot by
+`gitops.Capture` and replied as a `gitout` message the cockpit shows in a **scrollable text pop-up** (`modeGitOut`) — the
+text sibling of the diff pop-up: no PTY, nothing in `s.panels` or the state file, `esc` closes it. A non-zero exit still
+opens the pop-up (header tinted) so git's own message shows; the captures run with `GIT_TERMINAL_PROMPT=0` under a 30s cap
+so a credential-prompting push fails fast instead of hanging. Only **commit** keeps the transient, auto-zoomed PTY panel
+(via the `openEphemeral` engine the explicit `diff-command` shares, 8-panel cap): it injects the configured editor as
+`GIT_EDITOR` (via `ptymgr.Spec.Env`) so it opens in the panel's PTY. Two more ops are neither: **worktree-add** creates a
+tree on a new branch and spawns an agent rooted
 in it — grouped under the branch, broadcast as a real fleet change — the **isolation bridge** the panel-model roadmap
 named; **worktree-remove** runs synchronously and confirms with a notice. The op set is additive (no reset / clean /
 discard / `--force`); `push` and `worktree-remove` confirm first. The wire is one command, `panel.git`, carrying the op,
