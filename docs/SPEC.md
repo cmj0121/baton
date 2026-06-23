@@ -3,12 +3,16 @@
 Design detail behind the concept sketched in the [README](../README.md). Start there for the pitch and vocabulary;
 this document covers how the pieces fit together.
 
-## Two views, one cockpit
+## Three views, one cockpit
 
-Baton is keyboard-driven and has exactly two ways to look at your agents:
+Baton is keyboard-driven and has three ways to look at your agents. The dashboard and the zoom are the two poles — all at
+once, or one fully — and the group split sits between them, showing one work item's members live side by side.
 
 - **Dashboard** — see everything at once. Navigate panels, spawn new ones, group them into work items, reorder them
   (`shift`+arrows), retire the dead ones.
+- **Group** — see one work item live. Zooming a work item's card opens a split of its members, each in its own tile, all
+  streaming at once (see [Work items](#work-items)). It is an overview you navigate, not one you type into until you
+  press `i`.
 - **Zoom** — see one thing fully. Drive a single panel as if it were your only terminal; `C-t [` opens a tmux-style
   scroll mode (`↑`/`↓` a line, `b`/`space` or `PgUp`/`PgDn` a page, `g`/`G` top/bottom, `esc` exits) to read back through
   its history. Every bare key drives the program (vim, a BBS), never baton, so the leader works on any terminal — then
@@ -16,7 +20,8 @@ Baton is keyboard-driven and has exactly two ways to look at your agents:
   kept and replayed on attach is `panel.replay-kb` in the config (a larger value pages back further; full-screen programs
   keep no scrollback).
 
-You never juggle windows or tabs. You conduct from the dashboard, and you zoom in only when a player needs you.
+You never juggle windows or tabs. You conduct from the dashboard, drop into a group when one task needs a closer look,
+and zoom in only when a single player needs you.
 
 ## Panels
 
@@ -208,6 +213,94 @@ Under the hood a single client attaches to every member at once; the server tags
 and the client demuxes it into the matching tile, while each tile's input side is forwarded so interact can reach the
 PTY. The split reconciles on every snapshot — members added or removed elsewhere appear and disappear in place, an
 emptied group exits to the dashboard, and live tiles are capped so a very large group cannot spawn unbounded terminals.
+
+## Find, search, copy
+
+**Find** (`f`, on the dashboard) filters the fleet: type and only panels whose title or group — or a group member's title
+— match stay, the heading shows the match count, `enter` keeps the filter and `esc` clears it. **Search** (`C-t f`, in a
+zoom or over a focused group tile) runs a case-insensitive regular expression over the scrollback: the view jumps to the
+newest hit and holds in scroll mode with the match highlighted, `n` / `N` walk older / newer matches, and a term that is
+not a valid regexp is matched literally. **Copy** lives in scroll mode (`C-t [`): `v` starts a selection and `y` copies
+the selected lines — or, with no selection, the visible page — to the system clipboard via OSC52, so it works over SSH
+with no helper binary.
+
+## Mouse
+
+The mouse is **off by default**, so your terminal's own selection and copy stay available. Toggle it in the key map
+(`C-t k`, the settings block); once on, the wheel scrolls the scrollback in a zoom or tile and moves the dashboard
+selection. The toggle persists in the config (`settings.mouse`).
+
+## Settings
+
+A few behaviours are persisted cockpit toggles, edited in the key map's settings block (`C-t k`) and written to the
+config:
+
+- **confirm-on-close** (on by default) — closing a single panel with `w` asks `y/n` first. Closing a whole **group**
+  always confirms and names how many panels it will retire, regardless of the toggle — a work item never goes in one
+  keystroke.
+- **allow-name-conflict** (off by default) — lifts the unique-name policy so two work items may share a name.
+- **bell** (on by default) — rings the terminal when a panel enters `attention`.
+- **mouse** (off by default) — see above.
+
+## Keys
+
+Keys are modal. On the **dashboard** and in a **group** each action fires on a single key; in a **zoom** or **interact**
+the keys reach the live program, so a baton action is the leader **`C-t`** then the key. Two escapes — the dashboard jump
+and the key-map editor — are reached after the prefix in every mode. Everything here is rebindable in the key map
+(`C-t k`); press `?` for the live list of the current view.
+
+| Where                  | Key                         | Does                                       |
+| ---------------------- | --------------------------- | ------------------------------------------ |
+| Anywhere (after `C-t`) | `C-t d`                     | go to the dashboard                        |
+|                        | `C-t b`                     | back one level (zoom → group → dashboard)  |
+|                        | `C-t [`                     | enter scroll mode                          |
+|                        | `C-t k`                     | edit the key map                           |
+|                        | `C-t c`                     | open the plugin command picker             |
+|                        | `C-t P`                     | panel config (default shell, workdir, …)   |
+|                        | `C-t R`                     | reload config (backend + cockpit)          |
+|                        | `C-t S`                     | force-restart the server (kills the fleet) |
+|                        | `C-t D`                     | diff the selected agent panel              |
+|                        | `C-t q`                     | detach (server keeps running)              |
+| Dashboard              | `hjkl` / arrows             | move the cursor                            |
+|                        | `enter`                     | open / zoom the selection                  |
+|                        | `p`                         | new shell panel                            |
+|                        | `A`                         | new agent panel                            |
+|                        | `c`                         | new panel (pick the command)               |
+|                        | `w`                         | close the selection                        |
+|                        | `r`                         | re-run exited panel(s) in the selection    |
+|                        | `x`                         | purge exited panels                        |
+|                        | `s`                         | send a signal to the selection             |
+|                        | `f`                         | find — filter panels by title / group      |
+|                        | `S-←` / `S-→`               | reorder the selected item                  |
+|                        | `g`                         | mark / unmark a panel                      |
+|                        | `G`                         | group the marked panels                    |
+|                        | `a`                         | add marked panels to the selected group    |
+|                        | `u`                         | ungroup the selected work item             |
+|                        | `e`                         | rename the panel or group                  |
+|                        | `D`                         | diff the selected agent panel              |
+| Group view             | `tab`                       | focus the next panel                       |
+|                        | `+` / `-`                   | show more / fewer live tiles               |
+|                        | `p`                         | pin / unpin the focused panel              |
+|                        | `s`                         | send a signal to the focused panel         |
+|                        | `S`                         | send a signal to every panel in the group  |
+|                        | `i`                         | interact (type into the focused tile)      |
+|                        | `x`                         | remove the focused panel from the group    |
+|                        | `S-←` / `S-→`               | reorder the focused panel                  |
+|                        | `D`                         | diff the focused agent panel               |
+|                        | `b`                         | back to the dashboard                      |
+|                        | `enter`                     | zoom the focused panel                     |
+| Zoom / interact        | type                        | drive the program directly                 |
+|                        | `C-t b`                     | back to the group / dashboard              |
+|                        | `C-t g`                     | git menu (agent panel)                     |
+|                        | `C-t C-t`                   | send a literal `C-t`                       |
+|                        | `C-t s`                     | send a signal to this panel                |
+|                        | `C-t f`                     | search the scrollback                      |
+| Scroll mode (`C-t [`)  | `↑` / `↓` (`k`/`j`)         | scroll a line                              |
+|                        | `b` / `Spc` (`PgUp`/`PgDn`) | scroll a page                              |
+|                        | `g` / `G`                   | jump to top / bottom                       |
+|                        | `v` / `y`                   | start a selection / copy to the clipboard  |
+|                        | `n` / `N`                   | next / previous search match               |
+|                        | `esc` / `q`                 | exit scroll mode                           |
 
 ## Architecture
 
