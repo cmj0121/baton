@@ -7,7 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // Socket returns the control socket path. It is scoped to the caller's login
@@ -129,7 +130,7 @@ func home() string {
 // sessionID identifies the caller's login session by its process session id, so
 // each session maps to its own socket. Falls back to the parent PID.
 func sessionID() int {
-	if sid, err := syscall.Getsid(0); err == nil && sid > 0 {
+	if sid, err := unix.Getsid(0); err == nil && sid > 0 {
 		return sid
 	}
 	return os.Getppid()
