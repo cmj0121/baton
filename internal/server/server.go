@@ -643,11 +643,11 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			return
 		}
 	case "panel.diff":
-		// Open a transient diff panel for the target agent. openDiff sends its own
-		// "ephemeral" reply on success; on failure we surface the reason as an error. It
-		// is deliberately NOT broadcastFleet'd — the diff panel is ephemeral and must
-		// never reach the dashboard or the persisted state.
-		if err := s.openDiff(cc, cmd.ID); err != nil {
+		// Compute the target agent's structured work-tree diff and reply with it; the
+		// cockpit renders it as a master-detail popup. The git commands are one-shot
+		// (run and reaped by sendDiff), so nothing lingers — no ephemeral panel reaches
+		// the dashboard or the persisted state. A failure surfaces as an error.
+		if err := s.sendDiff(cc, cmd.ID); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
@@ -1035,28 +1035,49 @@ func (s *Server) closePanel(id string) error {
 	return nil
 }
 
-// openDiff spawns a transient diff panel for the agent panel targetID: an
-// ephemeral PTY, running the resolved diff command in that agent's workdir. The
-// panel is never appended to s.panels and never written to s.specs, so it stays
-// out of both the dashboard snapshot (panelsMsg) and the persisted state
-// (snapshotState) for free — it is tracked only in s.ephemeral (server-wide) and
-// cc.ephemeral (the owning conn, for disconnect cleanup). On success it replies
-// {type:"ephemeral", id:"diff:<n>"} so the client can auto-zoom it.
-//
-// The git probes (work-tree check, change check, command resolution) run with
-// s.mu released — they shell out and must never hold the server lock.
-func (s *Server) openDiff(cc *clientConn, targetID string) error {
-	diffCommand := s.snapDiffCommand()
-	return s.openEphemeral(cc, targetID, "diff", func(dir string) (string, []string, []string, error) {
-		if !gitdiff.IsWorkTree(dir) {
-			return "", nil, nil, fmt.Errorf("not a git repository: %s", dir)
-		}
-		if !gitdiff.HasChanges(dir) {
-			return "", nil, nil, fmt.Errorf("no uncommitted changes")
-		}
-		name, args := gitdiff.ResolveCommand(dir, diffCommand)
-		return name, args, nil, nil
-	})
+// sendDiff replies with the agent panel targetID's work-tree diff. The default is
+// a structured {type:"diff", id:targetID, files:[…]} reply — one entry per changed
+// path with its staged and unstaged diff text — which the cockpit renders as a
+// master-detail popup. A user-configured explicit diff-command cannot be split
+// per-file, so it keeps the old behaviour: a transient, auto-zoomed PTY via
+// openEphemeral (which replies "ephemeral"). Either way nothing structured is
+// persisted. The git probes run with s.mu released — they shell out and must never
+// hold the server lock.
+func (s *Server) sendDiff(cc *clientConn, targetID string) error {
+	spec, err := s.agentTargetSpec(targetID, "diff")
+	if err != nil {
+		log.Warn().Str("target", targetID).Str("action", "diff").Err(err).Msg("diff rejected")
+		return err
+	}
+	dir := ptymgr.PanelDir(spec.Dir)
+	if !gitdiff.IsWorkTree(dir) {
+		return fmt.Errorf("not a git repository: %s", dir)
+	}
+	if !gitdiff.HasChanges(dir) {
+		return fmt.Errorf("no uncommitted changes")
+	}
+
+	// A user-configured explicit diff-command can't be split per file, so it keeps
+	// the old behaviour: a transient, auto-zoomed PTY. openEphemeral re-resolves the
+	// same target and replies "ephemeral".
+	if diffCommand := s.snapDiffCommand(); diffCommand != "" {
+		return s.openEphemeral(cc, targetID, "diff", func(dir string) (string, []string, []string, error) {
+			name, args := gitdiff.ResolveCommand(dir, diffCommand)
+			return name, args, nil, nil
+		})
+	}
+
+	changes, err := gitdiff.Collect(dir)
+	if err != nil {
+		return fmt.Errorf("could not read diff: %w", err)
+	}
+	files := make([]proto.DiffFile, len(changes))
+	for i, c := range changes {
+		files[i] = proto.DiffFile{Path: c.Path, Index: c.Index, Work: c.Work, Staged: c.Staged, Unstaged: c.Unstaged}
+	}
+	log.Info().Str("target", targetID).Str("dir", dir).Int("files", len(files)).Msg("diff sent")
+	send(cc, proto.ServerMsg{Type: "diff", ID: targetID, Files: files})
+	return nil
 }
 
 // runGit dispatches a panel.git op for the target agent. The output-producing ops

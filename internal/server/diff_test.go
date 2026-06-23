@@ -14,7 +14,6 @@ import (
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/server"
-	"github.com/cmj0121/baton/internal/state"
 )
 
 // startDiffServer is a harness like startServer but it returns the *Server too,
@@ -114,77 +113,44 @@ func recvEvent(t *testing.T, c *client.Client) proto.ServerMsg {
 	return recv(t, c)
 }
 
-// TestDiffPanelDoesNotLeak is the headline guarantee: after a successful
-// panel.diff, the ephemeral "diff:*" id must appear in NEITHER the dashboard
-// snapshot (panelsMsg, observed over the wire via panel.list) NOR the persisted
-// state (snapshotState, observed via the on-disk state file).
-func TestDiffPanelDoesNotLeak(t *testing.T) {
+// TestDiffReturnsStructuredFiles checks the default panel.diff replies with the
+// structured per-file diff (type "diff", keyed to the target panel) and spawns no
+// ephemeral panel at all — the strongest form of the no-leak guarantee, since
+// there is nothing transient to reach the dashboard or the persisted state.
+func TestDiffReturnsStructuredFiles(t *testing.T) {
 	requireGitDiff(t)
 	repo := gitRepoWithChange(t)
-	statePath := filepath.Join(t.TempDir(), "state.json")
 
-	srv, sock := startDiffServer(t, server.WithStateFile(statePath))
+	srv, sock := startDiffServer(t)
 	c := dialReady(t, sock)
 
 	agentID := createAgentIn(t, c, repo)
-
-	// Open the diff; the reply carries the ephemeral id.
 	if err := c.Send(proto.Command{Action: "panel.diff", ID: agentID}); err != nil {
 		t.Fatalf("panel.diff: %v", err)
 	}
 	reply := recvEvent(t, c)
-	if reply.Type != "ephemeral" {
-		t.Fatalf("expected a diff reply, got %+v", reply)
+	if reply.Type != "diff" {
+		t.Fatalf("expected a structured diff reply, got %+v", reply)
 	}
-	if !strings.HasPrefix(reply.ID, "diff:") {
-		t.Fatalf("diff reply id should be diff:-prefixed, got %q", reply.ID)
+	if reply.ID != agentID {
+		t.Fatalf("diff reply id = %q, want the target %q", reply.ID, agentID)
 	}
-	ephID := reply.ID
-
-	// 1) Not in the dashboard snapshot.
-	if err := c.Send(proto.Command{Action: "panel.list"}); err != nil {
-		t.Fatalf("panel.list: %v", err)
+	if len(reply.Files) == 0 {
+		t.Fatalf("diff reply carried no files for a dirty repo")
 	}
-	snap := recvEvent(t, c)
-	if snap.Type != "panels" {
-		t.Fatalf("expected a panels snapshot, got %+v", snap)
-	}
-	for _, p := range snap.Panels {
-		if p.ID == ephID {
-			t.Fatalf("ephemeral diff panel %q leaked into the dashboard snapshot", ephID)
+	// The untracked new.txt from gitRepoWithChange must surface as an added file.
+	var found bool
+	for _, f := range reply.Files {
+		if f.Path == "new.txt" && f.Work == "?" && strings.Contains(f.Unstaged, "+") {
+			found = true
 		}
 	}
-
-	// 2) Not in the persisted state. Force a save with a structural mutation (a
-	// new shell panel), then load the snapshot from disk and assert the diff id
-	// is absent. If openDiff had appended to s.panels, it would persist here.
-	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
-		t.Fatalf("create shell: %v", err)
+	if !found {
+		t.Fatalf("expected new.txt as an untracked added file, got %+v", reply.Files)
 	}
-	recvEvent(t, c) // the broadcast snapshot for the new shell
-
-	var st state.State
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		loaded, err := state.Load(statePath)
-		if err == nil && len(loaded.Panels) > 0 {
-			st = loaded
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("state never persisted: %v", err)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	for _, p := range st.Panels {
-		if p.ID == ephID {
-			t.Fatalf("ephemeral diff panel %q leaked into the persisted state", ephID)
-		}
-	}
-
-	// The server still tracks exactly the one ephemeral panel.
-	if got := srv.EphemeralCount(); got != 1 {
-		t.Fatalf("expected 1 tracked ephemeral panel, got %d", got)
+	// Nothing is spawned, so no ephemeral can leak into the dashboard or state.
+	if got := srv.EphemeralCount(); got != 0 {
+		t.Fatalf("the structured diff should spawn no PTY, but %d ephemeral panels exist", got)
 	}
 }
 
@@ -281,12 +247,14 @@ func TestDiffNoChanges(t *testing.T) {
 }
 
 // TestDiffCloseRemovesEphemeral checks the close path accepts an ephemeral id:
-// panel.close on a diff:* id succeeds and drops it from the tracked set.
+// panel.close on a diff:* id succeeds and drops it from the tracked set. It uses
+// an explicit, long-lived diff-command so panel.diff takes the ephemeral-PTY path
+// (the default structured path spawns nothing to close).
 func TestDiffCloseRemovesEphemeral(t *testing.T) {
 	requireGitDiff(t)
 	repo := gitRepoWithChange(t)
 
-	srv, sock := startDiffServer(t)
+	srv, sock := startDiffServer(t, server.WithDiffCommand("sleep 300"))
 	c := dialReady(t, sock)
 
 	agentID := createAgentIn(t, c, repo)
@@ -330,7 +298,9 @@ func TestDiffPerConnCap(t *testing.T) {
 	requireGitDiff(t)
 	repo := gitRepoWithChange(t)
 
-	srv, sock := startDiffServer(t)
+	// Explicit long-lived diff-command so each panel.diff holds an ephemeral PTY
+	// open (the default structured path spawns nothing to count against the cap).
+	srv, sock := startDiffServer(t, server.WithDiffCommand("sleep 300"))
 	c := dialReady(t, sock)
 
 	agentID := createAgentIn(t, c, repo)
@@ -472,7 +442,9 @@ func TestDiffDisconnectReapsEphemeral(t *testing.T) {
 	requireGitDiff(t)
 	repo := gitRepoWithChange(t)
 
-	srv, sock := startDiffServer(t)
+	// Explicit long-lived diff-command so the diff holds an ephemeral PTY the
+	// disconnect path must reap (the default structured path spawns nothing).
+	srv, sock := startDiffServer(t, server.WithDiffCommand("sleep 300"))
 
 	// A dedicated client we close by hand mid-diff.
 	c, err := client.Dial(sock)
