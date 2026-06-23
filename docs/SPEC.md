@@ -193,8 +193,9 @@ though `os.Exit` skips the saver. Saves are atomic and durable (temp file, fsync
 never hard-fails boot — a missing file is a clean first run, and an unparsable or newer-schema file is renamed aside
 (`.corrupt-<ts>`) rather than wedging the daemon. Restore is deliberately **inert**: every panel comes back as an exited
 dead slot, no process auto-respawned (shells or agents alike), and the id counter resumes past the highest restored id so
-a new panel can never collide. The `panel.respawn` action (the dashboard `r` key) re-runs one on demand from its retained
-spec; closing or purging a panel drops its spec for good.
+a new panel can never collide. The `panel.respawn` action (the dashboard `r` key) re-runs an exited slot on demand from
+its retained spec — one command per dead slot, so `r` on a focused group restarts every exited member at once and `r` in
+the group split re-runs the focused tile; closing or purging a panel drops its spec for good.
 
 **Interact mode.** Pressing `i` hands the keyboard to the focused tile so you can drive its program _in place_, without
 the full-screen zoom — the tile glows green and wears a keyboard badge, and every keystroke is forwarded to that panel.

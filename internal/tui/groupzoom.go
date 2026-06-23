@@ -409,7 +409,7 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// (which is not a panel) they no-op with a hint rather than acting on nothing.
 	if m.focusedIsSummary() {
 		switch key {
-		case keyPin, keySignal, keyRemove, keyInteract, keyDiff:
+		case keyPin, keySignal, keyRemove, keyInteract, keyDiff, keyRespawn:
 			m.status = "not available on the summary"
 			return m, nil
 		}
@@ -450,6 +450,10 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyDiff:
 		// Bare D pops up the work-tree diff of the focused member, like s signals it.
 		return m.runAction(actDiff)
+	case keyRespawn:
+		// Bare r re-runs the focused member if it has exited — the split's per-tile
+		// counterpart to r on a dashboard panel.
+		return m.runAction(actRespawn)
 	case keyBack:
 		// Bare b leaves the split for the dashboard, or the parent group from the
 		// summary sub-view — the same pop d/esc perform, routed through actBack.

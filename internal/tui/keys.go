@@ -22,7 +22,7 @@ const (
 	keyNewForm     = "c" // "choose the command" (n is rename)
 	keyNewAgent    = "A" // spawn an agent panel (shift+a)
 	keyClose       = "w"
-	keyRespawn     = "r" // re-run the focused panel when it is exited (a restored dead slot)
+	keyRespawn     = "r" // re-run the exited panel(s) under the focus — a lone dead slot, or every exited member of the focused group
 	keyPurge       = "x"
 	keySignal      = "s" // open the send-signal picker for the selection / panel / group
 	keySearch      = "f" // find: filter panels on the dashboard, search the scrollback in a zoom (C-t f)
@@ -133,7 +133,7 @@ var bindings = []binding{
 	{"new-panel-form", keyNewForm, "new panel (choose the command)", actNewForm, "Panels"},
 	{"new-agent", keyNewAgent, "spawn an agent panel in a workdir", actNewAgent, "Panels"},
 	{"close", keyClose, "close the selected panel", actClose, "Panels"},
-	{"respawn", keyRespawn, "re-run the selected exited panel", actRespawn, "Panels"},
+	{"respawn", keyRespawn, "re-run exited panel(s) in the selection", actRespawn, "Panels"},
 	{"purge-exited", keyPurge, "purge all exited panels", actPurge, "Panels"},
 	{"signal", keySignal, "send a signal to the panel(s)", actSignal, "Panels"},
 	{"search", keySearch, "find panels · search the scrollback (zoom)", actSearch, "Panels"},

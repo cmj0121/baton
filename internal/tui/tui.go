@@ -1432,17 +1432,46 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 			m.closeSelected()
 		}
 	case actRespawn:
-		// Re-run the focused panel when it is a restored (or crashed) dead slot. Only a
-		// single exited panel is a valid target; a group card or a live panel is not.
+		// Re-run every exited panel under the focus: in the group split, the focused
+		// member; on the dashboard, the selected lone panel, or each exited member of
+		// the selected group. Live panels are left running.
+		if m.mode == modeGroupZoom {
+			p, ok := m.focusedMember()
+			switch {
+			case !ok:
+				m.status = "no panel to re-run"
+			case p.State != panel.Exited:
+				m.status = p.Title + " is still running"
+			default:
+				m.sendf(proto.Command{Action: "panel.respawn", ID: p.ID})
+				m.status = "re-running " + p.Title
+			}
+			return m, nil
+		}
 		it, ok := m.selectedItem()
-		switch {
-		case !ok || it.kind != itemPanel:
+		if !ok {
 			m.status = "no panel to re-run"
-		case it.panel.State != panel.Exited:
+			return m, nil
+		}
+		members := it.members
+		if it.kind == itemPanel {
+			members = []panel.Panel{it.panel}
+		}
+		ids := exitedIDs(members)
+		switch {
+		case len(ids) == 0 && it.kind == itemGroup:
+			m.status = "no exited panel in " + it.name
+		case len(ids) == 0:
 			m.status = "panel is still running"
 		default:
-			m.sendf(proto.Command{Action: "panel.respawn", ID: it.panel.ID})
-			m.status = "re-running " + it.panel.Title
+			for _, id := range ids {
+				m.sendf(proto.Command{Action: "panel.respawn", ID: id})
+			}
+			if it.kind == itemGroup {
+				m.status = fmt.Sprintf("re-running %d panel(s) in %s", len(ids), it.name)
+			} else {
+				m.status = "re-running " + it.panel.Title
+			}
 		}
 	case actPurge:
 		if n := m.countState(panel.Exited); n == 0 {

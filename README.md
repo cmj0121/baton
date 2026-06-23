@@ -54,7 +54,7 @@ rebindable list of the current view.
 |                        | `A`                         | new agent panel                            |
 |                        | `c`                         | new panel (pick the command)               |
 |                        | `w`                         | close the selection                        |
-|                        | `r`                         | re-run the selected exited panel           |
+|                        | `r`                         | re-run exited panel(s) in the selection    |
 |                        | `x`                         | purge exited panels                        |
 |                        | `s`                         | send a signal to the selection             |
 |                        | `f`                         | find — filter panels by title / group      |
@@ -181,7 +181,8 @@ layout — each panel's spawn spec (command, args, workdir), group membership,
 pins, order, and every group's visible-tile count — to a per-session state file
 on each change, and rebuilds it on the next start. Restore is inert: panels come
 back as **exited dead slots**, never auto-respawned (shells included). Press
-**`r`** on the dashboard to re-run the selected exited panel from its retained
+**`r`** on the dashboard to re-run the exited panel(s) under the focus — a lone
+dead slot, or every exited member of the focused group — from their retained
 spec; closing or purging a panel drops its spec for good. The state file lives
 beside the socket and pid file, so one daemon-per-session owns one layout; an
 unreadable or newer-schema file is renamed aside rather than wedging the daemon.
