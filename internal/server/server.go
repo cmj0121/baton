@@ -468,6 +468,10 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 	return proto.ServerMsg{Type: "telemetry", Panels: out}, true
 }
 
+// handle serves one accepted client connection for its lifetime: it runs the
+// handshake, then fans the connection into a reader (client commands), a writer
+// (outbound broadcasts), and a heartbeat, tearing all three down together when
+// any one fails.
 func (s *Server) handle(conn net.Conn) {
 	// closeOnce makes conn.Close idempotent across the reader, writer, and
 	// heartbeat paths: whichever side fails first tears the connection down, and
@@ -1623,6 +1627,9 @@ func (s *Server) setGroupShown(group string, count int) error {
 	return nil
 }
 
+// panelsMsg builds the full "panels" snapshot broadcast to clients: every panel
+// in wire form plus each group's non-default view settings, sorted by name for a
+// deterministic frame.
 func (s *Server) panelsMsg() proto.ServerMsg {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1641,6 +1648,7 @@ func (s *Server) panelsMsg() proto.ServerMsg {
 	return proto.ServerMsg{Type: "panels", Panels: out, Groups: groups}
 }
 
+// addClient registers an attached client connection so it receives broadcasts.
 func (s *Server) addClient(cc *clientConn) {
 	s.mu.Lock()
 	s.clients[cc] = struct{}{}
@@ -1649,6 +1657,8 @@ func (s *Server) addClient(cc *clientConn) {
 	log.Info().Int("clients", n).Msg("client attached")
 }
 
+// removeClient detaches a client and closes its outbound queue. It is idempotent:
+// a connection already gone is a no-op, so a double detach cannot double-close.
 func (s *Server) removeClient(cc *clientConn) {
 	s.mu.Lock()
 	if _, ok := s.clients[cc]; ok {
