@@ -169,11 +169,14 @@ past that the diff key reports `too many open diffs (max 8) — close one first`
 
 **Git menu.** `C-t g` in a zoom opens the **git menu** for the zoomed agent — a keyed pop-up (the signal picker's shape)
 of git operations run against that agent's workdir. It is **zoom-only** (you act on the one agent you are looking at) and
-agent-only. The transient-panel machinery above is generalised into one `openEphemeral` engine: the diff and the git
-**output** ops (log, status, stage, commit, push, branch, worktree-list) all spawn the same auto-zoomed, never-persisted
-pop-up — only the resolved command differs (`internal/gitdiff` for the diff, `internal/gitops` for the rest), and the
-8-pop-up cap is shared. `commit` injects the configured editor as `GIT_EDITOR` (via a new `ptymgr.Spec.Env`) so it opens
-in the panel's PTY. Two ops are not pop-ups: **worktree-add** creates a tree on a new branch and spawns an agent rooted
+agent-only. The **non-interactive output** ops (log, status, stage, push, branch, worktree-list) are run one-shot by
+`gitops.Capture` and replied as a `gitout` message the cockpit shows in a **scrollable text pop-up** (`modeGitOut`) — the
+text sibling of the diff pop-up: no PTY, nothing in `s.panels` or the state file, `esc` closes it. A non-zero exit still
+opens the pop-up (header tinted) so git's own message shows; the captures run with `GIT_TERMINAL_PROMPT=0` under a 30s cap
+so a credential-prompting push fails fast instead of hanging. Only **commit** keeps the transient, auto-zoomed PTY panel
+(via the `openEphemeral` engine the explicit `diff-command` shares, 8-panel cap): it injects the configured editor as
+`GIT_EDITOR` (via `ptymgr.Spec.Env`) so it opens in the panel's PTY. Two more ops are neither: **worktree-add** creates a
+tree on a new branch and spawns an agent rooted
 in it — grouped under the branch, broadcast as a real fleet change — the **isolation bridge** the panel-model roadmap
 named; **worktree-remove** runs synchronously and confirms with a notice. The op set is additive (no reset / clean /
 discard / `--force`); `push` and `worktree-remove` confirm first. The wire is one command, `panel.git`, carrying the op,
@@ -190,8 +193,9 @@ though `os.Exit` skips the saver. Saves are atomic and durable (temp file, fsync
 never hard-fails boot — a missing file is a clean first run, and an unparsable or newer-schema file is renamed aside
 (`.corrupt-<ts>`) rather than wedging the daemon. Restore is deliberately **inert**: every panel comes back as an exited
 dead slot, no process auto-respawned (shells or agents alike), and the id counter resumes past the highest restored id so
-a new panel can never collide. The `panel.respawn` action (the dashboard `r` key) re-runs one on demand from its retained
-spec; closing or purging a panel drops its spec for good.
+a new panel can never collide. The `panel.respawn` action (the dashboard `r` key) re-runs an exited slot on demand from
+its retained spec — one command per dead slot, so `r` on a focused group restarts every exited member at once and `r` in
+the group split re-runs the focused tile; closing or purging a panel drops its spec for good.
 
 **Interact mode.** Pressing `i` hands the keyboard to the focused tile so you can drive its program _in place_, without
 the full-screen zoom — the tile glows green and wears a keyboard badge, and every keystroke is forwarded to that panel.

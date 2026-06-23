@@ -78,6 +78,8 @@ const (
 	modeSignal  // the send-signal picker (s / C-t s)
 	modeCommand // the plugin command picker (C-t c)
 	modeGit     // the git menu (C-t g in a zoom)
+	modeDiff    // the master-detail diff popup (the diff action)
+	modeGitOut  // the scrollable text popup for a captured git op (log/status/…)
 	modeZoom
 	modeGroupZoom
 )
@@ -164,6 +166,28 @@ type model struct {
 	gitCursor     int
 	gitConfirmOp  string // "push" | "remove" — the op awaiting a y/n, "" when none is pending
 	gitRemovePath string // the worktree path a confirmed remove targets
+
+	// The diff popup (modeDiff): a master-detail overlay fed by the server's
+	// structured "diff" reply. diffFiles is the changed-file set; diffCursor selects
+	// one; diffScroll offsets the detail pane; diffOnDetail routes j/k to the detail
+	// pane (tab toggles) instead of the file list; diffFrom is the view to restore.
+	diffFiles    []proto.DiffFile
+	diffTitle    string
+	diffCursor   int
+	diffScroll   int
+	diffOnDetail bool
+	diffFrom     mode
+
+	// The git-output popup (modeGitOut): a scrollable text overlay fed by the
+	// server's "gitout" reply — a non-interactive op's captured output. gitOutLines
+	// is the output split into lines; gitOutScroll is the first visible line;
+	// gitOutFailed tints the header when the op exited non-zero; gitOutFrom is the
+	// view to restore on close.
+	gitOutLines  []string
+	gitOutTitle  string
+	gitOutScroll int
+	gitOutFailed bool
+	gitOutFrom   mode
 
 	zoomID                string           // panel being zoomed (modeZoom)
 	zoomTitle             string           // its title, for the zoom footer
@@ -642,6 +666,28 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		m.pendingEphemeralTitle = ""
 		*m = m.zoomInto(panel.Panel{ID: sm.ID, Title: title, State: panel.Running})
 		m.zoomEphemeral = true
+	case "diff":
+		// The server computed the target agent's structured work-tree diff. Open the
+		// master-detail popup over the current view; it owns nothing server-side, so
+		// esc just closes it. pendingEphemeralTitle was stashed by requestDiff.
+		title := m.pendingEphemeralTitle
+		if title == "" {
+			title = "diff"
+		}
+		m.pendingEphemeralTitle = ""
+		*m = m.openDiffPopup(title, sm.Files)
+	case "gitout":
+		// A non-interactive git op (log/status/add/push/branch/worktrees) ran
+		// server-side and returned its captured output; show it in a scrollable text
+		// popup, the sibling of the diff popup. The op was one-shot and reaped, so the
+		// popup owns nothing and esc just closes it. The title was stashed when the op
+		// was sent (sendGitEphemeral).
+		title := m.pendingEphemeralTitle
+		if title == "" {
+			title = "git"
+		}
+		m.pendingEphemeralTitle = ""
+		*m = m.openGitOutPopup(title, sm.Text, sm.Failed)
 	case "config":
 		// The daemon pushed its merged effective config (defaults <- YAML <- plugin)
 		// and the plugin command list. Apply the config over the cockpit's own and
@@ -759,6 +805,16 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// The git menu owns the keyboard until an op fires, a confirm answers, or esc.
 	if m.mode == modeGit {
 		return m.handleGitKey(key)
+	}
+
+	// The diff popup owns the keyboard until esc; it scrolls and switches panes.
+	if m.mode == modeDiff {
+		return m.handleDiffKey(key)
+	}
+
+	// The git-output popup owns the keyboard until esc; it scrolls its text.
+	if m.mode == modeGitOut {
+		return m.handleGitOutKey(key)
 	}
 
 	// A text-input overlay is open: route the keystroke to it.
@@ -1376,17 +1432,46 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 			m.closeSelected()
 		}
 	case actRespawn:
-		// Re-run the focused panel when it is a restored (or crashed) dead slot. Only a
-		// single exited panel is a valid target; a group card or a live panel is not.
+		// Re-run every exited panel under the focus: in the group split, the focused
+		// member; on the dashboard, the selected lone panel, or each exited member of
+		// the selected group. Live panels are left running.
+		if m.mode == modeGroupZoom {
+			p, ok := m.focusedMember()
+			switch {
+			case !ok:
+				m.status = "no panel to re-run"
+			case p.State != panel.Exited:
+				m.status = p.Title + " is still running"
+			default:
+				m.sendf(proto.Command{Action: "panel.respawn", ID: p.ID})
+				m.status = "re-running " + p.Title
+			}
+			return m, nil
+		}
 		it, ok := m.selectedItem()
-		switch {
-		case !ok || it.kind != itemPanel:
+		if !ok {
 			m.status = "no panel to re-run"
-		case it.panel.State != panel.Exited:
+			return m, nil
+		}
+		members := it.members
+		if it.kind == itemPanel {
+			members = []panel.Panel{it.panel}
+		}
+		ids := exitedIDs(members)
+		switch {
+		case len(ids) == 0 && it.kind == itemGroup:
+			m.status = "no exited panel in " + it.name
+		case len(ids) == 0:
 			m.status = "panel is still running"
 		default:
-			m.sendf(proto.Command{Action: "panel.respawn", ID: it.panel.ID})
-			m.status = "re-running " + it.panel.Title
+			for _, id := range ids {
+				m.sendf(proto.Command{Action: "panel.respawn", ID: id})
+			}
+			if it.kind == itemGroup {
+				m.status = fmt.Sprintf("re-running %d panel(s) in %s", len(ids), it.name)
+			} else {
+				m.status = "re-running " + it.panel.Title
+			}
 		}
 	case actPurge:
 		if n := m.countState(panel.Exited); n == 0 {
@@ -2104,6 +2189,10 @@ func (m model) render() string {
 		body = m.commandPickerView()
 	case m.mode == modeGit:
 		body = m.gitPickerView()
+	case m.mode == modeDiff:
+		body = m.diffView()
+	case m.mode == modeGitOut:
+		body = m.gitOutView()
 	default:
 		body = m.dashboardView()
 	}

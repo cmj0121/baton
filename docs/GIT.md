@@ -6,8 +6,8 @@
 
 It is **zoom-only** by design — you act on the one agent you are looking at — and
 **agent-only**: a shell, a non-repo, or a transient (diff/git) view never opens it.
-It builds on the [diff](./SPEC.md) feature's machinery, so every output op opens the
-same transient, auto-zoomed panel you already know.
+It builds on the [diff](./SPEC.md) feature's machinery: most ops capture their output
+into a **scrollable pop-up** over the cockpit, the text sibling of the diff pop-up.
 
 ## The menu
 
@@ -16,23 +16,32 @@ same transient, auto-zoomed panel you already know.
 
 | Key | Op          | Runs                                              | Result                           |
 | --- | ----------- | ------------------------------------------------- | -------------------------------- |
-| `d` | diff        | working tree vs `HEAD`, untracked-included        | transient panel (the diff path)  |
-| `l` | log         | `git log --oneline --graph --decorate -n 200`     | transient panel                  |
-| `s` | status      | `git status`                                      | transient panel                  |
-| `a` | stage all   | `git add -A`                                      | transient panel                  |
-| `c` | commit      | `git add -A && git commit` (opens `$EDITOR`)      | transient panel                  |
-| `p` | push        | `git push` — **confirms first**                   | transient panel                  |
-| `b` | branch      | `git checkout -b <name>`                          | transient panel                  |
+| `d` | diff        | working tree vs `HEAD`, untracked-included        | master-detail pop-up (the diff)  |
+| `l` | log         | `git log --oneline --graph --decorate -n 200`     | text pop-up                      |
+| `s` | status      | `git status`                                      | text pop-up                      |
+| `a` | stage all   | `git add -A`                                      | text pop-up                      |
+| `c` | commit      | `git add -A && git commit` (opens `$EDITOR`)      | transient PTY panel              |
+| `p` | push        | `git push` — **confirms first**                   | text pop-up                      |
+| `b` | branch      | `git checkout -b <name>`                          | text pop-up                      |
 | `w` | worktree    | `git worktree add -b <branch> <path>` + an agent  | new grouped agent (a fleet item) |
-| `W` | worktrees   | `git worktree list`                               | transient panel                  |
+| `W` | worktrees   | `git worktree list`                               | text pop-up                      |
 | `x` | rm worktree | `git worktree remove <path>` — **confirms first** | a status notice                  |
 
-A **transient panel** is the diff pop-up's vehicle: the server spawns the command
-in the agent's workdir as an ephemeral PTY, never on the dashboard and never
-persisted, and the cockpit drops straight into it as an auto-zoom. Dismiss it with
-the normal zoom exit (`C-t b` back, `C-t d` dashboard, `C-t q` detach) — that tears
-it down. A connection holds at most 8 transient panels (diff and git share the cap);
-past that the op reports `too many open panels (max 8) — close one first`.
+A **text pop-up** shows the op's captured output over the current view: the server
+runs the command in the agent's workdir one-shot, reaps it, and replies with the
+text — nothing spawns on the dashboard and nothing is persisted. `j`/`k` and the
+page keys scroll; `esc` closes and restores the view you came from. A non-zero exit
+(a rejected push, a failed branch) still opens the pop-up, header tinted, so you see
+git's own message. The captures run with `GIT_TERMINAL_PROMPT=0` and a 30s cap, so a
+push that would prompt for credentials fails fast rather than hanging.
+
+**`commit`** is the one exception: it opens `$EDITOR`, which needs a real terminal,
+so it keeps the **transient PTY panel** — the server spawns it as an ephemeral PTY,
+never on the dashboard and never persisted, and the cockpit drops straight into it
+as an auto-zoom. Dismiss it with the normal zoom exit (`C-t b` back, `C-t d`
+dashboard, `C-t q` detach) — that tears it down. A connection holds at most 8
+transient panels (diff's explicit `diff-command` and commit share the cap); past
+that the op reports `too many open panels (max 8) — close one first`.
 
 ## Commit — your editor, in the panel
 
@@ -53,7 +62,7 @@ already opens the editor you want at the command line, baton needs no extra conf
   This is how you fan an agent out onto an isolated branch without it stepping on
   the tree you are in. The tree goes under **`panel.worktree-dir`** when set, else a
   sibling `"<repo>-worktrees/<branch>"` (the branch's slashes become dashes).
-- **`W` (worktrees)** lists the repo's worktrees in a transient panel.
+- **`W` (worktrees)** lists the repo's worktrees in a text pop-up.
 - **`x` (rm worktree)** asks for a path, confirms, then `git worktree remove` it. It
   runs **without `--force`**, so git refuses a worktree with uncommitted changes or
   a lock — the safe default, surfaced as the error. It targets a typed path, never
@@ -67,7 +76,7 @@ branch, push, worktree-add. There is **no `reset`, no `clean`, no
 `checkout`-discard, and no `--force` anywhere**, so a misfire never destroys work.
 The two ops that reach outward or remove something — **push** and **worktree-remove**
 — each ask `y/n` first. git's own refusals (no upstream, a dirty worktree, a
-duplicate branch) surface verbatim in the panel or the status line.
+duplicate branch) surface verbatim in the pop-up or the status line.
 
 ## Config
 
@@ -88,8 +97,11 @@ The menu sends one command, `panel.git`, carrying the op (`git`), the target age
 server resolves the op to a concrete command in [`internal/gitops`](../internal/gitops)
 (a sibling of `gitdiff`), then:
 
-- an **output op** spawns the transient panel and replies so the cockpit auto-zooms
-  it (the same `openEphemeral` engine the diff uses);
+- a **non-interactive output op** (log/status/add/push/branch/worktrees) is captured
+  by `gitops.Capture` and replied as a `gitout` message the cockpit shows in the text
+  pop-up — no PTY, nothing persisted;
+- **commit** keeps the transient PTY panel (it drives `$EDITOR`), replying so the
+  cockpit auto-zooms it (the `openEphemeral` engine the explicit `diff-command` uses);
 - **worktree-add** creates the tree, spawns + groups the agent, and broadcasts the
   fleet;
 - **worktree-remove** runs synchronously and confirms with a notice.

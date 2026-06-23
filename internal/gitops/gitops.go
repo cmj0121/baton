@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -26,6 +27,11 @@ import (
 // gitTimeout bounds the synchronous helpers (worktree add/remove). The resolved
 // commands themselves run as long-lived panels, not under this timeout.
 const gitTimeout = 10 * time.Second
+
+// captureTimeout bounds a captured op (Capture). It is looser than gitTimeout
+// because push reaches the network; a slow or hung remote still cannot wedge the
+// caller past this.
+const captureTimeout = 30 * time.Second
 
 // Op is one git operation the menu offers. It rides the wire as a plain string.
 type Op string
@@ -89,6 +95,57 @@ func Resolve(op Op, dir, arg, editor string) (name string, args, env []string, e
 	default:
 		return "", nil, nil, fmt.Errorf("unknown git op %q", op)
 	}
+}
+
+// NeedsPTY reports whether an op must run in an interactive PTY panel rather than
+// being captured to text: only commit, whose editor needs a terminal. Every other
+// resolvable op (status/log/add/push/branch/worktree-list) is non-interactive, so
+// the server captures its output for a popup. The worktree mutators run
+// synchronously elsewhere and never reach here.
+func NeedsPTY(op Op) bool { return op == OpCommit }
+
+// CaptureResult is the outcome of a captured op: git's combined output text and
+// whether it exited non-zero. A non-zero exit is not an error here — the output
+// (git's own message, e.g. a push rejection) is exactly what the popup should
+// show — so Failed flags it instead, leaving errors for pre-flight failures.
+type CaptureResult struct {
+	Output string // git's combined stdout+stderr
+	Failed bool   // git exited non-zero; Output carries its message
+}
+
+// Capture runs a non-interactive output op in dir and returns its combined output
+// as text — the popup counterpart to Resolve+spawn. It refuses the interactive op
+// (commit) and any op Resolve rejects, returning those as errors with nothing to
+// show. The command runs with GIT_TERMINAL_PROMPT=0 so a push that would prompt for
+// credentials fails fast rather than hanging a capture that has no terminal, and
+// under captureTimeout so a slow remote cannot block forever. A non-zero exit is
+// reported via CaptureResult.Failed, not an error, so the caller still shows git's
+// message.
+func Capture(op Op, dir, arg, editor string) (CaptureResult, error) {
+	if NeedsPTY(op) {
+		return CaptureResult{}, fmt.Errorf("%q needs an interactive terminal, not a capture", op)
+	}
+	name, args, env, err := Resolve(op, dir, arg, editor)
+	if err != nil {
+		return CaptureResult{}, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	cmd.Env = append(append(os.Environ(), env...), "GIT_TERMINAL_PROMPT=0")
+	var buf bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &buf, &buf
+
+	if runErr := cmd.Run(); runErr != nil {
+		out := buf.String()
+		if strings.TrimSpace(out) == "" { // a failure with no output of its own (e.g. a timeout)
+			out = runErr.Error()
+		}
+		return CaptureResult{Output: out, Failed: true}, nil
+	}
+	return CaptureResult{Output: buf.String()}, nil
 }
 
 // WorktreeAdd creates a worktree at path on a new branch off the repo at dir. It

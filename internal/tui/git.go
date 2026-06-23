@@ -22,7 +22,7 @@ const keyGitMenu = "g"
 // gitMenu is the menu's rows, in display order — the keycap, the label, and a
 // one-line gloss. The hotkey runs the row directly; ↑↓ + enter pick it.
 var gitMenu = []struct{ key, label, desc string }{
-	{"d", "diff", "working tree vs HEAD"},
+	{"d", "diff", "staged + unstaged, by file"},
 	{"l", "log", "recent commits, graphed"},
 	{"s", "status", "working-tree status"},
 	{"a", "stage all", "git add -A"},

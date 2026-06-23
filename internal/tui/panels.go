@@ -62,6 +62,19 @@ func liveIDs(panels []panel.Panel) []string {
 	return ids
 }
 
+// exitedIDs is the ids of the panels whose process has exited — the respawn
+// targets. It is the complement of liveIDs, so r on a group restarts exactly the
+// dead slots and leaves the running members alone.
+func exitedIDs(panels []panel.Panel) []string {
+	var ids []string
+	for _, p := range panels {
+		if p.State == panel.Exited {
+			ids = append(ids, p.ID)
+		}
+	}
+	return ids
+}
+
 // mergeFleet maps a server snapshot into the dashboard's panel model. The server
 // owns the fleet now, so this is a faithful translation — whatever it sends is
 // what the cockpit shows.
