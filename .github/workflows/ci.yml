@@ -27,8 +27,13 @@ jobs:
       - name: Lint (golangci-lint v2)
         uses: golangci/golangci-lint-action@v7
         with:
-          # pinned to a concrete v2.x so a new release can't break the build.
-          version: v2.1.6
+          # pinned to the version used locally (pre-commit) so CI == local.
+          version: v2.11.2
+          # build from source with the runner's go.mod toolchain: prebuilt
+          # binaries are compiled with an older Go than go.mod targets, which
+          # golangci-lint rejects ("Go version used to build golangci-lint is
+          # lower than the targeted Go version").
+          install-mode: goinstall
 
       - name: Coverage gate (race + per-package 80%)
         # run the exact same gate the Makefile uses, so CI == local.
