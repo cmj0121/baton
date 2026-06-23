@@ -28,9 +28,10 @@ func recvUntil(t *testing.T, c *client.Client, want string) proto.ServerMsg {
 	return proto.ServerMsg{}
 }
 
-// TestGitLogOpensEphemeral checks an output op (log) spawns a transient panel with
-// a "git:"-prefixed id, replied as an "ephemeral" message so the client auto-zooms it.
-func TestGitLogOpensEphemeral(t *testing.T) {
+// TestGitLogCaptured checks a non-interactive output op (log) is captured and
+// replied as a "gitout" message carrying the target id and text, spawning no PTY —
+// the cockpit renders it in a scrollable popup rather than auto-zooming a panel.
+func TestGitLogCaptured(t *testing.T) {
 	requireGitDiff(t)
 	repo := gitRepoWithChange(t)
 
@@ -40,6 +41,35 @@ func TestGitLogOpensEphemeral(t *testing.T) {
 	agentID := createAgentIn(t, c, repo)
 	if err := c.Send(proto.Command{Action: "panel.git", Git: "log", ID: agentID}); err != nil {
 		t.Fatalf("panel.git log: %v", err)
+	}
+	reply := recvUntil(t, c, "gitout")
+	if reply.ID != agentID {
+		t.Fatalf("gitout should carry the target id %q, got %q", agentID, reply.ID)
+	}
+	if !strings.Contains(reply.Text, "init") { // the seed repo's first commit subject
+		t.Fatalf("log output should contain the seed commit, got %q", reply.Text)
+	}
+	if reply.Failed {
+		t.Fatalf("a clean log should not be flagged failed")
+	}
+	if got := srv.EphemeralCount(); got != 0 {
+		t.Fatalf("a captured git op should spawn no PTY, but %d ephemeral panels exist", got)
+	}
+}
+
+// TestGitCommitOpensEphemeral checks commit alone keeps the transient-PTY path: it
+// needs $EDITOR, so it replies "ephemeral" (a "git:"-prefixed, auto-zoomed panel)
+// rather than capturing to a popup.
+func TestGitCommitOpensEphemeral(t *testing.T) {
+	requireGitDiff(t)
+	repo := gitRepoWithChange(t)
+
+	srv, sock := startDiffServer(t)
+	c := dialReady(t, sock)
+
+	agentID := createAgentIn(t, c, repo)
+	if err := c.Send(proto.Command{Action: "panel.git", Git: "commit", ID: agentID}); err != nil {
+		t.Fatalf("panel.git commit: %v", err)
 	}
 	reply := recvUntil(t, c, "ephemeral")
 	if !strings.HasPrefix(reply.ID, "git:") {

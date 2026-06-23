@@ -652,10 +652,11 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			return
 		}
 	case "panel.git":
-		// Run a git-menu op for the target agent. The output ops spawn a transient
-		// panel (openGit replies "ephemeral" so the client auto-zooms it); worktree-add is
-		// a real fleet change (broadcasts); worktree-remove confirms with a notice.
-		// Any failure surfaces as an error, like panel.diff.
+		// Run a git-menu op for the target agent. The non-interactive output ops reply
+		// "gitout" with captured text (a popup); commit spawns a transient PTY panel
+		// ("ephemeral", auto-zoomed) for its editor; worktree-add is a real fleet change
+		// (broadcasts); worktree-remove confirms with a notice. Any failure surfaces as
+		// an error, like panel.diff.
 		if err := s.runGit(cc, cmd); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
@@ -1080,10 +1081,12 @@ func (s *Server) sendDiff(cc *clientConn, targetID string) error {
 	return nil
 }
 
-// runGit dispatches a panel.git op for the target agent. The output-producing ops
-// (status/log/add/commit/push/branch/worktree-list) spawn a transient panel via
-// openGit; worktree-add creates a tree and spawns an agent in it (a fleet change,
-// so it broadcasts); worktree-remove runs synchronously and confirms with a notice.
+// runGit dispatches a panel.git op for the target agent. The non-interactive output
+// ops (status/log/add/push/branch/worktree-list) run synchronously and reply
+// "gitout" with their captured text, which the cockpit shows in a scrollable popup;
+// commit needs an editor, so it alone keeps the transient-PTY path via openGit;
+// worktree-add creates a tree and spawns an agent in it (a fleet change, so it
+// broadcasts); worktree-remove runs synchronously and confirms with a notice.
 func (s *Server) runGit(cc *clientConn, cmd proto.Command) error {
 	switch op := gitops.Op(cmd.Git); op {
 	case gitops.OpWorktreeAdd:
@@ -1098,13 +1101,42 @@ func (s *Server) runGit(cc *clientConn, cmd proto.Command) error {
 		}
 		send(cc, proto.ServerMsg{Type: "notice", Notice: "worktree removed: " + cmd.Dir})
 		return nil
-	default:
+	case gitops.OpCommit:
+		// commit opens $EDITOR, which needs a real terminal, so it keeps the
+		// transient, auto-zoomed PTY rather than a captured popup.
 		return s.openGit(cc, cmd.ID, op, cmd.Name)
+	default:
+		return s.captureGit(cc, cmd.ID, op, cmd.Name)
 	}
 }
 
-// openGit spawns a transient panel running an output-producing git op in the target
-// agent's workdir, resolved by the gitops layer with the configured commit editor.
+// captureGit runs a non-interactive output op for the target agent and replies with
+// a structured {type:"gitout", id, text} the cockpit shows in a scrollable popup —
+// the text sibling of the diff popup. Like the diff probes it spawns and persists
+// nothing, and runs with s.mu released since it shells out to git. A non-zero exit
+// still opens the popup (the failed flag tints it) so the user sees git's message;
+// only a pre-flight failure (not a repo, nothing to do) surfaces as an error.
+func (s *Server) captureGit(cc *clientConn, targetID string, op gitops.Op, arg string) error {
+	spec, err := s.agentTargetSpec(targetID, "git")
+	if err != nil {
+		log.Warn().Str("target", targetID).Str("op", string(op)).Err(err).Msg("git rejected")
+		return err
+	}
+	dir := ptymgr.PanelDir(spec.Dir)
+	res, err := gitops.Capture(op, dir, arg, s.snapEditor())
+	if err != nil {
+		log.Warn().Str("target", targetID).Str("dir", dir).Str("op", string(op)).Err(err).Msg("git rejected")
+		return err
+	}
+	log.Info().Str("target", targetID).Str("dir", dir).Str("op", string(op)).Bool("failed", res.Failed).Msg("git captured")
+	send(cc, proto.ServerMsg{Type: "gitout", ID: targetID, Text: res.Output, Failed: res.Failed})
+	return nil
+}
+
+// openGit spawns a transient panel running commit in the target agent's workdir,
+// resolved by the gitops layer with the configured commit editor. The other output
+// ops capture to a popup via captureGit; only commit, which drives $EDITOR, still
+// needs a live PTY.
 func (s *Server) openGit(cc *clientConn, targetID string, op gitops.Op, arg string) error {
 	editor := s.snapEditor()
 	return s.openEphemeral(cc, targetID, "git", func(dir string) (string, []string, []string, error) {
