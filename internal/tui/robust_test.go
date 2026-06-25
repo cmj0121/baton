@@ -5,7 +5,31 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/cmj0121/baton/internal/panel"
 )
+
+// TestClampGroupFocus checks the render-time guard pulls a dangling focus back
+// into range and that rendering a group with an out-of-range focus never panics.
+func TestClampGroupFocus(t *testing.T) {
+	m := baseModel()
+	m.width, m.height = 100, 40
+	m.mode = modeGroupZoom
+	m.groupName = "g"
+	m.fleet = []panel.Panel{
+		{ID: "a", Group: "g", Title: "a", State: panel.Running},
+		{ID: "b", Group: "g", Title: "b", State: panel.Running},
+	}
+	m.groupFocus = 99 // a member left, leaving the focus past the end
+
+	m.clampGroupFocus()
+	if m.groupFocus < 0 || m.groupFocus >= m.focusCount() {
+		t.Fatalf("focus %d not clamped into [0,%d)", m.groupFocus, m.focusCount())
+	}
+
+	m.groupFocus = 99 // the render entry must also tolerate it without panicking
+	_ = m.groupZoomView()
+}
 
 // TestTruncateByDisplayWidth checks truncation counts display cells, so a wide
 // glyph occupies its two columns and the result never exceeds the width.
