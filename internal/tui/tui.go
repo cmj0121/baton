@@ -2236,6 +2236,9 @@ func (m model) render() string {
 	if m.width == 0 || m.height == 0 {
 		return "" // wait for the first size message
 	}
+	if m.width < minWidth || m.height < minHeight {
+		return m.tooSmallView() // a graceful notice rather than negative-width garbage
+	}
 	if m.mode == modeZoom {
 		return m.zoomView()
 	}
@@ -2243,12 +2246,7 @@ func (m model) render() string {
 		return m.groupZoomView()
 	}
 
-	header := lipgloss.JoinVertical(lipgloss.Center,
-		bannerStyle.Render(banner),
-		"",
-		subStyle.Render("a next-gen, agent-friendly terminal multiplexer"),
-		mutedStyle.Render(m.versionLine()),
-	)
+	header := m.headerBlock()
 
 	var body string
 	switch {
@@ -2279,6 +2277,34 @@ func (m model) render() string {
 	// panels are transparent too, so only their borders carry the brand colour.
 	placed := lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Center, content)
 	return placed + "\n" + m.footer()
+}
+
+// headerBlock is the centered banner, tagline, and version line. The full ASCII
+// banner gives way to a compact wordmark when it would overflow a narrow screen,
+// and the prose lines are clipped to the width so the header never pushes the
+// layout wider than the terminal.
+func (m model) headerBlock() string {
+	art := banner
+	if lipgloss.Width(banner) > m.width {
+		art = spaced("BATON")
+	}
+	return lipgloss.JoinVertical(lipgloss.Center,
+		bannerStyle.Render(art),
+		"",
+		subStyle.Render(truncate("a next-gen, agent-friendly terminal multiplexer", m.width)),
+		mutedStyle.Render(truncate(m.versionLine(), m.width)),
+	)
+}
+
+// tooSmallView is shown when the viewport is below the minimum the cockpit lays
+// out — a calm, centered notice with the size it needs, rather than rendering
+// into width math that would go negative.
+func (m model) tooSmallView() string {
+	msg := lipgloss.JoinVertical(lipgloss.Center,
+		sectionStyle.Render(truncate("terminal too small", m.width)),
+		mutedStyle.Render(truncate(fmt.Sprintf("need ≥ %d×%d · now %d×%d", minWidth, minHeight, m.width, m.height), m.width)),
+	)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, msg)
 }
 
 // zoomView renders the emulated panel screen filling the top rows, with a cursor
@@ -2317,7 +2343,7 @@ func (m model) dashboardView() string {
 	}
 	summary := m.summaryStrip()
 	body := m.cardGrid(items)
-	if len(items) > treeThreshold {
+	if len(items) > treeThreshold && m.width >= treeMinWidth {
 		body = m.treeAndPreview(items)
 	}
 	if m.filter != "" && len(items) == 0 {
@@ -2330,7 +2356,7 @@ func (m model) dashboardView() string {
 // grid for the tree + preview split. Groups count as one item, so collapsing a
 // crowd of panels into a work item can drop the dashboard back to the grid.
 func (m model) treeView() bool {
-	return m.mode == modeDashboard && len(m.dashItems()) > treeThreshold
+	return m.mode == modeDashboard && len(m.dashItems()) > treeThreshold && m.width >= treeMinWidth
 }
 
 // summaryStrip is a row of chips counting panels in each state.
@@ -2387,6 +2413,16 @@ const (
 
 	treeThreshold = 6  // fleets larger than this swap the grid for the tree split
 	treeListWidth = 30 // outer width of the tree pane, incl. border + padding
+
+	// treeMinWidth gates the tree+preview split: below it the preview pane would be
+	// too narrow (even negative), so the dashboard stays on the card grid.
+	treeMinWidth = treeListWidth + 30
+
+	// minWidth/minHeight are the smallest viewport the cockpit will lay out. Below
+	// either, render() shows a graceful "terminal too small" notice instead of
+	// flowing into width math that would go negative and render garbage.
+	minWidth  = cardWidth + 2
+	minHeight = 8
 )
 
 // renderCard draws one panel as three tidy lines that never wrap: a status LED +
