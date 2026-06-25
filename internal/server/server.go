@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -23,6 +24,7 @@ import (
 	"github.com/cmj0121/baton/internal/gitdiff"
 	"github.com/cmj0121/baton/internal/gitops"
 	"github.com/cmj0121/baton/internal/panel"
+	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/ptymgr"
 	"github.com/cmj0121/baton/internal/signals"
@@ -57,6 +59,16 @@ type clientConn struct {
 	// live only as PTYs (never in s.panels), so the owning conn tracks them to
 	// reap any still-open one when it disconnects. Guarded by Server.mu.
 	ephemeral map[string]bool
+
+	// role and self are declared on hello. role "conductor" fences this
+	// connection under guardConductor; self is the conductor's own panel id, the
+	// panel it is forbidden to close/signal/feed input to. They are written once
+	// in the hello handler and thereafter only read, all on this connection's
+	// single command-loop goroutine, so they need no lock. lastSpawn is the last
+	// time this connection's panel.create was admitted, for the spawn-rate cap.
+	role      string
+	self      string
+	lastSpawn time.Time
 }
 
 // Server owns all state and every PTY. It is safe for concurrent use.
@@ -107,6 +119,11 @@ type Server struct {
 	// tiles before the rest collapse into the summary tile. Keyed by group name;
 	// an absent or zero entry means "use the client default". Guarded by mu.
 	groupShown map[string]int
+
+	// conductorPending reserves the conductor singleton across the unlocked spawn
+	// in createPanel, so two near-simultaneous conductor.create calls cannot both
+	// pass the "no conductor exists yet" check. Guarded by mu.
+	conductorPending bool
 
 	// Persistence. stateF is the snapshot path ("" disables persistence); dirty is
 	// a 1-deep "save pending" nudge the saverLoop drains; saveMu serializes the
@@ -570,17 +587,77 @@ func (s *Server) handle(conn net.Conn) {
 	}
 }
 
+// roleConductor is the scoped role a control agent declares on hello.
+const roleConductor = "conductor"
+
+const (
+	// maxConductorFleet caps how many panels may exist while a conductor is
+	// driving, so a looping agent cannot fork-bomb the host. The conductor's own
+	// panel counts toward it.
+	maxConductorFleet = 64
+
+	// minConductorSpawnGap throttles a conductor's panel.create rate: a tight
+	// loop cannot spray panels faster than a person ever would.
+	minConductorSpawnGap = 250 * time.Millisecond
+)
+
+// guardConductor returns a denial reason when cmd is forbidden for a scoped
+// conductor connection, or "" when it is allowed. A non-conductor connection
+// (the full-power cockpit) is never fenced. The conductor may arrange and drive
+// the rest of the fleet, but not: stop the server; close, signal, or feed input
+// to its OWN panel (the self id it declared on hello — closing it would kill the
+// agent mid-command, an input loop would feed itself); or spawn faster than the
+// rate cap / past the fleet ceiling. The fence is a guardrail against agent
+// accidents over a uid-private socket, not a security boundary.
+func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
+	if cc.role != roleConductor {
+		return ""
+	}
+	switch cmd.Action {
+	case "server.reload":
+		return "conductor role: reloading the server is not permitted"
+	case "panel.close", "panel.signal", "panel.input":
+		// Self-targeted control is forbidden: closing/signalling itself kills the
+		// agent mid-command, feeding itself input loops. targetIDs folds in cmd.ID,
+		// so it covers panel.input (which addresses a single panel) too.
+		if cc.self != "" && slices.Contains(targetIDs(cmd), cc.self) {
+			return "conductor role: cannot act on its own panel"
+		}
+	case "panel.create":
+		now := time.Now()
+		if !cc.lastSpawn.IsZero() && now.Sub(cc.lastSpawn) < minConductorSpawnGap {
+			return "conductor role: spawning too fast, slow down"
+		}
+		s.mu.Lock()
+		n := len(s.panels)
+		s.mu.Unlock()
+		if n >= maxConductorFleet {
+			return fmt.Sprintf("conductor role: fleet at capacity (%d panels)", maxConductorFleet)
+		}
+		cc.lastSpawn = now
+	}
+	return ""
+}
+
 // onCommand maps a wire command onto a core action.
 func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
+	// A conductor connection is fenced: it may drive the fleet but not act on
+	// itself, stop the server, or fork-bomb the host. Reject a forbidden command
+	// before it reaches the action; everything else falls through unchanged.
+	if reason := s.guardConductor(cc, cmd); reason != "" {
+		send(cc, proto.ServerMsg{Type: "error", Error: reason})
+		return
+	}
 	switch cmd.Action {
 	case "hello":
+		cc.role, cc.self = cmd.Role, cmd.Self
 		send(cc, proto.ServerMsg{Type: "welcome", Version: proto.ProtocolVersion, ServerVer: s.version})
 		send(cc, s.panelsMsg())
 		send(cc, statsMsg()) // seed the footer immediately, before the first tick
 	case "panel.list":
 		send(cc, s.panelsMsg())
 	case "panel.create":
-		if _, err := s.createPanel(cmd.Kind, cmd.Path, cmd.Args, cmd.Dir); err != nil {
+		if _, err := s.createPanel(cmd.Kind, cmd.Path, cmd.Args, cmd.Dir, cmd.Conductor); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
@@ -715,18 +792,46 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 // an agent panel runs its profile command with args. Both run in dir, the working
 // directory; an empty dir falls back to the configured default (then the user's
 // home), so a panel never inherits the directory the daemon was launched from.
-func (s *Server) createPanel(kind, path string, args []string, dir string) (string, error) {
+//
+// A conductor panel is a special agent: the server enforces at most one, runs it
+// in a fresh ephemeral workspace (not any source tree) instead of dir, and
+// injects the socket + identity env so the agent inside can drive the fleet under
+// the scoped conductor role.
+func (s *Server) createPanel(kind, path string, args []string, dir string, conductor bool) (string, error) {
 	if kind == "" {
 		kind = proto.KindShell
 	}
+	if conductor {
+		kind = proto.KindAgent // a conductor is always an agent
+	}
 
 	s.mu.Lock()
+	if conductor && s.hasConductorLocked() {
+		s.mu.Unlock()
+		return "", fmt.Errorf("a conductor already exists")
+	}
+	if conductor {
+		s.conductorPending = true // reserve the singleton across the unlocked spawn below
+	}
 	s.seq++
 	id := fmt.Sprintf("%d", s.seq)
 	if dir == "" {
 		dir = s.defaultDir // read under the lock so a SIGHUP reload cannot race it; empty still falls back to home
 	}
 	s.mu.Unlock()
+
+	// A conductor runs in a server-managed ephemeral workspace, never dir, and
+	// carries the identity env. Build them before the spec so a failure cleans up
+	// the reservation and any half-made workspace.
+	var env []string
+	if conductor {
+		ws, err := s.makeConductorWorkspace(id)
+		if err != nil {
+			s.clearConductorPending()
+			return "", err
+		}
+		dir, env = ws, s.conductorEnv(id)
+	}
 
 	// Build the spawn spec once, then use the same value to start the PTY and to
 	// stash for respawn — so a restored panel re-runs with exactly what launched it
@@ -737,32 +842,195 @@ func (s *Server) createPanel(kind, path string, args []string, dir string) (stri
 		spec = ptymgr.Spec{Command: path, Dir: dir}
 	case proto.KindAgent:
 		if path == "" {
+			s.clearConductorPending()
 			return "", fmt.Errorf("an agent panel needs a command")
 		}
-		spec = ptymgr.Spec{Command: path, Args: args, Dir: dir}
+		spec = ptymgr.Spec{Command: path, Args: args, Dir: dir, Env: env}
 	default:
 		return "", fmt.Errorf("unknown panel kind %q", kind)
 	}
 	if err := s.pty.StartCmd(id, spec); err != nil {
+		if conductor {
+			_ = os.RemoveAll(dir) // drop the workspace we just made
+			s.clearConductorPending()
+		}
 		return "", err
 	}
 
 	p := panel.Panel{
-		ID:       id,
-		Kind:     panel.ParseKind(kind),
-		Title:    panelTitle(kind, path, dir, id),
-		State:    panel.Spawning,
-		Activity: activityText(panel.Spawning, 0), // the Monitor keeps it live from here
+		ID:        id,
+		Kind:      panel.ParseKind(kind),
+		Title:     panelTitle(kind, path, dir, id),
+		State:     panel.Spawning,
+		Activity:  activityText(panel.Spawning, 0), // the Monitor keeps it live from here
+		Conductor: conductor,
+	}
+	if conductor {
+		p.Title = "conductor · " + id
 	}
 	s.mu.Lock()
 	s.panels = append(s.panels, p)
 	s.specs[id] = spec // the exact spec StartCmd launched, so respawn reproduces it
 	s.mon.spawned(id)  // start the Monitor's clock; first output wakes it to running
+	if conductor {
+		s.conductorPending = false // the singleton is now a real panel
+	}
 	s.emit("panel.spawn", panelFields(p))
 	s.mu.Unlock()
 
 	log.Info().Str("panel", p.Title).Msg("panel created")
 	return id, nil
+}
+
+// hasConductorLocked reports whether a conductor panel already exists or is mid-
+// spawn. It holds the singleton invariant: a second conductor.create is refused
+// while the first is live (running or an exited dead slot) or being created.
+// Caller holds s.mu.
+func (s *Server) hasConductorLocked() bool {
+	if s.conductorPending {
+		return true
+	}
+	for _, p := range s.panels {
+		if p.Conductor {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) clearConductorPending() {
+	s.mu.Lock()
+	s.conductorPending = false
+	s.mu.Unlock()
+}
+
+// conductorEnv is the identity baton injects into the conductor panel's process:
+// the control socket to dial and the scoped role + own panel id the control
+// client declares on hello, so `baton ctl` inside the panel is fenced to the
+// conductor policy and knows which panel not to act on.
+func (s *Server) conductorEnv(id string) []string {
+	return []string{
+		paths.EnvSocket + "=" + s.socketPath(),
+		paths.EnvRole + "=" + roleConductor,
+		paths.EnvPanelID + "=" + id,
+	}
+}
+
+// socketPath is the control socket this server listens on, taken from the live
+// listener so it is correct even in tests that bind an explicit path.
+func (s *Server) socketPath() string {
+	if s.ln != nil {
+		if addr := s.ln.Addr(); addr != nil {
+			return addr.String()
+		}
+	}
+	return paths.Socket()
+}
+
+// makeConductorWorkspace creates a fresh conductor workspace and seeds it with the
+// control wiring (see writeConductorFiles).
+func (s *Server) makeConductorWorkspace(id string) (string, error) {
+	ws, err := paths.NewConductorWorkspace()
+	if err != nil {
+		return "", fmt.Errorf("create conductor workspace: %w", err)
+	}
+	writeConductorFiles(ws, id)
+	return ws, nil
+}
+
+// writeConductorFiles (re)writes the conductor's workspace wiring, so the agent's
+// only local surface is how to drive baton: the briefing and a .mcp.json pointing
+// an MCP-speaking agent at `baton mcp`. The briefing is written to BATON.md (the
+// canonical, agent-agnostic name) and to CLAUDE.md, which the default Claude
+// conductor auto-reads as its project instructions, so it ingests the mission with
+// no extra wiring; the CLAUDE.md copy is harmless for other agents. It is called on
+// every spawn and respawn, so an edited operator brief ($HOME/.baton/CONDUCTOR.md)
+// is re-read each time the conductor is opened. All writes are best-effort — a
+// missing file just costs a hint or the auto-loaded tools, not correctness.
+func writeConductorFiles(ws, id string) {
+	briefing := conductorBriefing(id)
+	_ = os.WriteFile(filepath.Join(ws, "BATON.md"), briefing, 0o600)
+	_ = os.WriteFile(filepath.Join(ws, "CLAUDE.md"), briefing, 0o600)
+	_ = os.WriteFile(filepath.Join(ws, ".mcp.json"), conductorMCPConfig(), 0o600)
+}
+
+// conductorBriefing is the full BATON.md: the built-in control primer, plus the
+// operator's own goal and guide from $HOME/.baton/CONDUCTOR.md when it is present
+// and non-empty. The operator brief is appended (never replaces the primer), so
+// the agent always keeps the mechanics and forbidden actions.
+func conductorBriefing(id string) []byte {
+	b := conductorPrimer(id)
+	guide, err := os.ReadFile(paths.ConductorFile())
+	if err != nil || strings.TrimSpace(string(guide)) == "" {
+		return b
+	}
+	b = append(b, []byte("\n---\n\n# Operator's brief\n\nYour operator wrote this in "+
+		paths.ConductorFile()+" to set your goal — follow it:\n\n")...)
+	b = append(b, guide...)
+	if !strings.HasSuffix(string(guide), "\n") {
+		b = append(b, '\n')
+	}
+	return b
+}
+
+// conductorMCPConfig is the .mcp.json dropped into the conductor workspace so an
+// MCP-aware agent (Claude Code) auto-loads baton's fleet-control tools. It points
+// at this very baton binary, run as `baton mcp`; the MCP subprocess inherits the
+// conductor panel's env (BATON_SOCK/role/self), so it is fenced like the CLI.
+func conductorMCPConfig() []byte {
+	bin := "baton"
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		bin = exe
+	}
+	cfg := map[string]any{
+		"mcpServers": map[string]any{
+			"baton": map[string]any{
+				"command": bin,
+				"args":    []string{"mcp"},
+			},
+		},
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return []byte(`{"mcpServers":{"baton":{"command":"baton","args":["mcp"]}}}`)
+	}
+	return data
+}
+
+// conductorPrimer is the control crib sheet dropped into the conductor's
+// workspace. It tells the agent it drives the fleet through `baton ctl` and what
+// it may and may not do under the scoped role.
+func conductorPrimer(id string) []byte {
+	return []byte(`# You are the baton conductor
+
+You are an AI agent running inside baton — a terminal multiplexer for AI coding
+agents. You are the **conductor**: you orchestrate the other panels (agents and
+shells) in the fleet. You have no source code here; this workspace exists only so
+you can drive baton.
+
+If you speak MCP, baton's tools are auto-loaded from .mcp.json: ` +
+		"`baton_list`, `baton_spawn`, `baton_send`, `baton_group`, `baton_rename`, " +
+		"`baton_pin`, `baton_unpin`, `baton_signal`, `baton_close`" + `. Prefer them.
+
+Either way, the same verbs are available as the ` + "`baton ctl`" + ` command:
+
+    baton ctl list                       # the fleet, as JSON (ids, titles, state, group)
+    baton ctl spawn --agent claude --dir /path/to/repo   # start an agent; prints its id
+    baton ctl spawn --dir /path/to/repo  # start a shell panel
+    baton ctl send <id> "a prompt"       # type a prompt into a panel and submit it
+    baton ctl group <name> <id> <id>     # file panels under a work item
+    baton ctl rename --id <id> <name>    # rename a panel
+    baton ctl pin <id>                   # pin a panel to a live tile
+    baton ctl signal SIGINT <id>         # signal a panel
+    baton ctl close <id>                 # close a panel
+
+You may arrange and drive every other panel. You may NOT act on your own panel
+(id ` + id + `), reload the server, or spawn faster than the rate cap — the
+server will refuse these.
+
+If an "Operator's brief" section follows below, your operator wrote it to set
+your goal — treat it as your standing instructions.
+`)
 }
 
 // panelTitle is the human label for a new panel. An agent reads as
@@ -844,12 +1112,13 @@ func (s *Server) snapshotState() state.State {
 	for i, p := range s.panels {
 		spec := s.specs[p.ID]
 		panels[i] = state.PanelState{
-			ID:     p.ID,
-			Kind:   p.Kind.String(),
-			Title:  p.Title,
-			Group:  p.Group,
-			Pinned: p.Pinned,
-			Spec:   state.Spec{Command: spec.Command, Args: spec.Args, Dir: spec.Dir},
+			ID:        p.ID,
+			Kind:      p.Kind.String(),
+			Title:     p.Title,
+			Group:     p.Group,
+			Pinned:    p.Pinned,
+			Conductor: p.Conductor,
+			Spec:      state.Spec{Command: spec.Command, Args: spec.Args, Dir: spec.Dir},
 		}
 	}
 	// Per-group view settings (the visible counts), keyed by name like the group.
@@ -903,13 +1172,14 @@ func (s *Server) Restore() {
 	max := s.seq
 	for _, ps := range st.Panels {
 		s.panels = append(s.panels, panel.Panel{
-			ID:       ps.ID,
-			Kind:     panel.ParseKind(ps.Kind),
-			Title:    ps.Title,
-			Group:    ps.Group,
-			Pinned:   ps.Pinned,
-			State:    panel.Exited,
-			Activity: "restored · press r to re-run",
+			ID:        ps.ID,
+			Kind:      panel.ParseKind(ps.Kind),
+			Title:     ps.Title,
+			Group:     ps.Group,
+			Pinned:    ps.Pinned,
+			Conductor: ps.Conductor,
+			State:     panel.Exited,
+			Activity:  "restored · press r to re-run",
 		})
 		s.specs[ps.ID] = ptymgr.Spec{Command: ps.Spec.Command, Args: ps.Spec.Args, Dir: ps.Spec.Dir}
 		if n, err := strconv.Atoi(ps.ID); err == nil && n > max {
@@ -942,10 +1212,32 @@ func (s *Server) respawnPanel(id string) error {
 		s.mu.Unlock()
 		return fmt.Errorf("panel is still running")
 	}
+	isConductor := s.panels[idx].Conductor
 	spec, ok := s.specs[id]
 	s.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("nothing to re-run")
+	}
+
+	// A conductor re-run needs a live workspace and fresh identity env: reuse the
+	// retained workspace if it still exists (the common exit→respawn), make a new
+	// one if it is gone (e.g. after a reboot cleared the runtime dir), and always
+	// refresh the env since the socket path can change across a daemon restart.
+	// Rewrite the workspace wiring either way, so an edited operator brief
+	// ($HOME/.baton/CONDUCTOR.md) is picked up on every re-run.
+	if isConductor {
+		if spec.Dir == "" || !dirExists(spec.Dir) {
+			ws, err := paths.NewConductorWorkspace()
+			if err != nil {
+				return err
+			}
+			spec.Dir = ws
+		}
+		writeConductorFiles(spec.Dir, id)
+		spec.Env = s.conductorEnv(id)
+		s.mu.Lock()
+		s.specs[id] = spec
+		s.mu.Unlock()
 	}
 
 	if err := s.pty.StartCmd(id, spec); err != nil {
@@ -1025,6 +1317,10 @@ func (s *Server) closePanel(id string) error {
 		return fmt.Errorf("no panel with id %q", id)
 	}
 	title := s.panels[idx].Title
+	workspace := "" // a conductor's ephemeral workspace, removed once the panel is gone
+	if s.panels[idx].Conductor {
+		workspace = s.specs[id].Dir
+	}
 	s.panels = slices.Delete(s.panels, idx, idx+1)
 	s.mon.forget(id)
 	delete(s.specs, id) // the panel is gone for good; drop its retained spawn spec
@@ -1032,8 +1328,17 @@ func (s *Server) closePanel(id string) error {
 	s.mu.Unlock()
 
 	s.pty.Stop(id) // no-op for a panel with no live process
+	if workspace != "" {
+		_ = os.RemoveAll(workspace)
+	}
 	log.Info().Str("panel", title).Msg("panel closed")
 	return nil
+}
+
+// dirExists reports whether path is an existing directory.
+func dirExists(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.IsDir()
 }
 
 // sendDiff replies with the agent panel targetID's work-tree diff. The default is
@@ -1256,7 +1561,7 @@ func (s *Server) gitWorktreeAdd(targetID, branch string) error {
 	// Spawn the agent in the new worktree and file it under the branch, so it lands
 	// as a work item immediately. A spawn failure leaves the worktree in place — the
 	// user can retire it with worktree-remove rather than us guessing.
-	id, err := s.createPanel(proto.KindAgent, spec.Command, spec.Args, path)
+	id, err := s.createPanel(proto.KindAgent, spec.Command, spec.Args, path, false)
 	if err != nil {
 		return fmt.Errorf("worktree created at %s, but the agent did not start: %w", path, err)
 	}
@@ -1339,9 +1644,15 @@ func (s *Server) purgeExited() int {
 	s.mu.Lock()
 	kept := make([]panel.Panel, 0, len(s.panels))
 	var gone []string
+	var workspaces []string // ephemeral conductor workspaces to remove once purged
 	for _, p := range s.panels {
 		if p.State == panel.Exited {
 			gone = append(gone, p.ID)
+			if p.Conductor {
+				if ws := s.specs[p.ID].Dir; ws != "" {
+					workspaces = append(workspaces, ws)
+				}
+			}
 			s.mon.forget(p.ID)
 			delete(s.specs, p.ID) // purged for good; drop its retained spawn spec
 			continue
@@ -1353,6 +1664,9 @@ func (s *Server) purgeExited() int {
 
 	for _, id := range gone {
 		s.pty.Stop(id)
+	}
+	for _, ws := range workspaces {
+		_ = os.RemoveAll(ws)
 	}
 	if len(gone) > 0 {
 		log.Info().Int("count", len(gone)).Msg("purged exited panels")

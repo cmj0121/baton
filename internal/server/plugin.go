@@ -108,7 +108,7 @@ func (s *Server) Notify(msg string) {
 // Spawn creates a panel and, when group is non-empty, files it under that work item;
 // it returns the new panel's id. It is baton.spawn.
 func (s *Server) Spawn(kind, command string, args []string, dir, group string) (string, error) {
-	id, err := s.createPanel(kind, command, args, dir)
+	id, err := s.createPanel(kind, command, args, dir, false)
 	if err != nil {
 		return "", err
 	}
