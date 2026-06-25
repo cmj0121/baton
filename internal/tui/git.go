@@ -217,19 +217,15 @@ func (m model) gitPickerView() string {
 		rows = append(rows, caret(m.gitCursor == i)+keyCol.Render(kc(e.key))+nameStyle.Render(e.label)+mutedStyle.Render(e.desc))
 	}
 
-	legendKey := lipgloss.NewStyle().Foreground(colCyan).Bold(true)
-	var legend string
+	var hints string
 	if m.gitConfirmOp != "" {
-		legend = legendKey.Render("y") + mutedStyle.Render(" confirm") + "   " +
-			legendKey.Render("n") + mutedStyle.Render("/esc cancel")
+		hints = legend("y", "confirm", "n/esc", "cancel")
 		rows = append(rows, "", lipgloss.NewStyle().Foreground(colBrand).Bold(true).Render(m.status))
 	} else {
-		legend = legendKey.Render("↑↓") + mutedStyle.Render(" move") + "   " +
-			legendKey.Render("enter") + mutedStyle.Render(" run") + "   " +
-			legendKey.Render("esc") + mutedStyle.Render(" cancel")
+		hints = legend("↑↓", "move", "enter", "run", "esc", "cancel")
 	}
 	rows = append(rows, "",
 		mutedStyle.Render("acts on the zoomed agent · "+keyLabel(m.effPrefix())+" R reloads baton"),
-		"", legend)
+		"", hints)
 	return configBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }

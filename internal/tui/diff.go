@@ -238,12 +238,33 @@ func (m model) diffDetailBlock(width, rows int) []string {
 	out := make([]string, 0, rows)
 	for _, dl := range lines[off:end] {
 		if dl.kind == diffHeader {
-			out = append(out, lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Width(width).Render(truncate(dl.text, max(1, width))))
+			out = append(out, renderDiffHeader(dl.text, width))
 			continue
 		}
 		out = append(out, renderDiffContentLine(dl.text, width))
 	}
 	return out
+}
+
+// renderDiffHeader styles a detail-pane section header, tinting its leading
+// status glyph to echo the per-line colouring below: green for the staged side,
+// cyan for the unstaged side, with the label in the highlight blue.
+func renderDiffHeader(text string, width int) string {
+	label := lipgloss.NewStyle().Foreground(colBrandHi).Bold(true)
+	glyphFg := colBrandHi
+	switch {
+	case strings.HasPrefix(text, "● "):
+		glyphFg = colGreen
+	case strings.HasPrefix(text, "○ "):
+		glyphFg = colCyan
+	}
+	r := []rune(text)
+	if glyphFg == colBrandHi || len(r) == 0 {
+		return label.Width(width).Render(truncate(text, max(1, width)))
+	}
+	glyph := lipgloss.NewStyle().Foreground(glyphFg).Bold(true).Render(string(r[0]))
+	rest := label.Render(truncate(string(r[1:]), max(1, width-1)))
+	return lipgloss.NewStyle().Width(width).Render(glyph + rest)
 }
 
 // renderDiffContentLine colours one diff content line by its lead: additions
@@ -267,15 +288,12 @@ func renderDiffContentLine(line string, width int) string {
 
 // diffLegend is the popup's key hint, marking the focused pane.
 func (m model) diffLegend() string {
-	k := func(s string) string { return lipgloss.NewStyle().Foreground(colCyan).Bold(true).Render(s) }
 	focus := "files"
 	if m.diffOnDetail {
 		focus = "diff"
 	}
 	return mutedStyle.Render("["+focus+"]  ") +
-		k("tab") + mutedStyle.Render(" switch  ") +
-		k("j/k") + mutedStyle.Render(" move·scroll  ") +
-		k("esc") + mutedStyle.Render(" close")
+		legend("tab", "switch", "j/k", "move · scroll", "esc", "close")
 }
 
 // padBlock pads (or leaves) a column to exactly rows lines, each blank line set to

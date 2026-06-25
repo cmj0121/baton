@@ -122,8 +122,5 @@ func (m model) gitOutView() string {
 
 // gitOutLegend is the popup's key hint.
 func (m model) gitOutLegend() string {
-	k := func(s string) string { return lipgloss.NewStyle().Foreground(colCyan).Bold(true).Render(s) }
-	return k("j/k") + mutedStyle.Render(" scroll  ") +
-		k("g/G") + mutedStyle.Render(" top·end  ") +
-		k("esc") + mutedStyle.Render(" close")
+	return legend("j/k", "scroll", "g/G", "top · end", "esc", "close")
 }

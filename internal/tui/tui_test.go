@@ -377,14 +377,20 @@ func TestScrollWindowKeepsCursorVisible(t *testing.T) {
 }
 
 func TestTreeViewKicksInForLargeFleet(t *testing.T) {
-	full := model{fleet: sampleFleet()}
+	full := model{fleet: sampleFleet(), width: 100, height: 40}
 	if !full.treeView() {
 		t.Fatalf("fleet of %d should use the tree view", len(full.fleet))
 	}
 
-	small := model{fleet: sampleFleet()[:treeThreshold]}
+	small := model{fleet: sampleFleet()[:treeThreshold], width: 100, height: 40}
 	if small.treeView() {
 		t.Fatalf("fleet of %d should use the card grid", len(small.fleet))
+	}
+
+	// Too narrow for the preview pane, even a large fleet stays on the grid.
+	narrow := model{fleet: sampleFleet(), width: treeMinWidth - 1, height: 40}
+	if narrow.treeView() {
+		t.Fatalf("a narrow terminal should stay on the card grid")
 	}
 }
 

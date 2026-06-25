@@ -154,6 +154,18 @@ func (m model) focusCount() int {
 	return n
 }
 
+// clampGroupFocus keeps the focus within the current slot count (live tiles plus
+// the summary slot, if any). reconcileGroupTiles already clamps on every fleet
+// update; this is a cheap guard at the render entry so no path that changes the
+// member set can leave the focus pointing past the end.
+func (m *model) clampGroupFocus() {
+	if n := m.focusCount(); n > 0 {
+		m.groupFocus = max(0, min(m.groupFocus, n-1))
+	} else {
+		m.groupFocus = 0
+	}
+}
+
 // focusedIsSummary reports whether the focus rests on the summary tile — the
 // extra slot past the last live tile, present only when some member is collapsed.
 // The pin / interact / signal / remove actions no-op on it, and enter zooms it.
@@ -740,6 +752,7 @@ func (m model) backToGroup() (tea.Model, tea.Cmd) {
 // and a footer pinned to the last line. In the summary sub-view the header names
 // the parent and there is no summary tile (the scoped set shows in full).
 func (m model) groupZoomView() string {
+	m.clampGroupFocus() // render-time guard; reconcile already clamps on fleet updates
 	tiles, collapsed := m.splitMembers()
 	caption := "GROUP"
 	if m.summaryScope {
@@ -937,7 +950,7 @@ func (m model) groupZoomFooter() string {
 	case m.searchActive():
 		mode = m.searchSeg()
 	case m.scrolling:
-		mode = seg("↕ SCROLL", colDark, colCyan)
+		mode = seg("↕ SCROLL", colDark, colScroll)
 	case m.groupInteract:
 		mode = seg("⌨ INTERACT", colDark, colGreen) // typing into the focused tile
 	}

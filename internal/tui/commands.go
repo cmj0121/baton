@@ -77,11 +77,8 @@ func (m model) commandPickerView() string {
 		rows = append(rows, caret(m.commandCursor == i)+nameStyle.Render(c.Name)+mutedStyle.Render(c.Desc))
 	}
 
-	legendKey := lipgloss.NewStyle().Foreground(colCyan).Bold(true)
-	legend := legendKey.Render("↑↓") + mutedStyle.Render(" move") + "   " +
-		legendKey.Render("enter") + mutedStyle.Render(" run") + "   " +
-		legendKey.Render("esc") + mutedStyle.Render(" cancel")
-	rows = append(rows, "", mutedStyle.Render("registered by your Lua plugin · "+keyLabel(m.effPrefix())+" R reloads it"), "", legend)
+	rows = append(rows, "", mutedStyle.Render("registered by your Lua plugin · "+keyLabel(m.effPrefix())+" R reloads it"), "",
+		legend("↑↓", "move", "enter", "run", "esc", "cancel"))
 	return configBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
 
