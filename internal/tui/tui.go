@@ -17,6 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	vt "github.com/charmbracelet/x/vt"
+	"github.com/mattn/go-runewidth"
 	"github.com/rs/zerolog/log"
 
 	"github.com/cmj0121/baton/internal/client"
@@ -65,24 +66,29 @@ var (
 
 	sectionStyle = lipgloss.NewStyle().Bold(true).Foreground(colBrandHi)
 
-	barStyle = lipgloss.NewStyle().Background(colBar).Foreground(colDark)
-	barBold  = barStyle.Bold(true)
+	// The footer fill, prebuilt once per mode: the standing light blue, and a warm
+	// amber while scrolling so the whole status bar signals "history / navigation"
+	// at a glance. bar/barStrong select between them by mode, so a per-tick footer
+	// render rebuilds no styles.
+	barNormal     = lipgloss.NewStyle().Background(colBar).Foreground(colDark)
+	barNormalBold = barNormal.Bold(true)
+	barScroll     = lipgloss.NewStyle().Background(colScroll).Foreground(colDark)
+	barScrollBold = barScroll.Bold(true)
 )
 
-// barBG is the footer fill colour: a warm amber while scrolling so the whole
-// status bar signals "history / navigation" at a glance, otherwise the standing
-// light blue. bar/barStrong are the mode-aware footer styles built from it.
-func (m model) barBG() lipgloss.Color {
+func (m model) bar() lipgloss.Style {
 	if m.scrolling {
-		return colScroll
+		return barScroll
 	}
-	return colBar
+	return barNormal
 }
 
-func (m model) bar() lipgloss.Style {
-	return lipgloss.NewStyle().Background(m.barBG()).Foreground(colDark)
+func (m model) barStrong() lipgloss.Style {
+	if m.scrolling {
+		return barScrollBold
+	}
+	return barNormalBold
 }
-func (m model) barStrong() lipgloss.Style { return m.bar().Bold(true) }
 
 type mode int
 
@@ -2359,7 +2365,7 @@ func (m model) dashboardView() string {
 	}
 	summary := m.summaryStrip()
 	body := m.cardGrid(items)
-	if len(items) > treeThreshold && m.width >= treeMinWidth {
+	if m.useTree(items) {
 		body = m.treeAndPreview(items)
 	}
 	if m.filter != "" && len(items) == 0 {
@@ -2374,7 +2380,14 @@ func (m model) dashboardView() string {
 // grid for the tree + preview split. Groups count as one item, so collapsing a
 // crowd of panels into a work item can drop the dashboard back to the grid.
 func (m model) treeView() bool {
-	return m.mode == modeDashboard && len(m.dashItems()) > treeThreshold && m.width >= treeMinWidth
+	return m.mode == modeDashboard && m.useTree(m.dashItems())
+}
+
+// useTree reports whether the dashboard swaps the card grid for the tree + preview
+// split: enough items to be worth it, and enough width for the preview pane. It is
+// the single gate dashboardView and treeView both read, so they cannot drift.
+func (m model) useTree(items []dashItem) bool {
+	return len(items) > treeThreshold && m.width >= treeMinWidth
 }
 
 // summaryStrip is a row of chips counting panels in each state.
@@ -2841,18 +2854,13 @@ func (m model) keyMapView() string {
 
 	// In-panel legend (the footer no longer carries key hints) and the negotiated
 	// protocol version, pinned below the scrolling body.
-	legendKey := lipgloss.NewStyle().Foreground(colCyan).Bold(true)
-	legend := mutedStyle.Render("↑↓ move") + "   " +
-		legendKey.Render("tab") + mutedStyle.Render(" section") + "   " +
-		legendKey.Render("e") + mutedStyle.Render(" edit") + "   " +
-		legendKey.Render("enter") + mutedStyle.Render(" run") + "   " +
-		legendKey.Render("esc") + mutedStyle.Render(" back")
+	hints := legend("↑↓", "move", "tab", "section", "e", "edit", "enter", "run", "esc", "back")
 	about := lipgloss.NewStyle().Foreground(colFaint).Render(m.versionLine())
 
 	return m.renderScrollPanel(scrollPanel{
 		title:    "KEY BINDINGS",
 		body:     body,
-		footer:   []string{"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(legend))), legend, about},
+		footer:   []string{"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(hints))), hints, about},
 		reserved: keyMapReserved,
 		anchor:   selLine,
 		centered: true,
@@ -2974,17 +2982,14 @@ func (m model) panelConfigView() string {
 		row(panelRowShell, "default shell", shellLabel(m.shellPath)),
 		row(panelRowReplayKB, "replay buffer", replayLabel(m.replayKB)),
 	}
-	legendKey := lipgloss.NewStyle().Foreground(colCyan).Bold(true)
-	legend := mutedStyle.Render("↑↓ move") + "   " +
-		legendKey.Render("e") + mutedStyle.Render(" edit") + "   " +
-		legendKey.Render("esc") + mutedStyle.Render(" back")
+	hints := legend("↑↓", "move", "e", "edit", "esc", "back")
 
 	return m.renderScrollPanel(scrollPanel{
 		title: "PANEL CONFIG",
 		body:  body,
 		footer: []string{"",
 			mutedStyle.Render("replay buffer seeds scrollback · change applies on server restart"),
-			"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(legend))), legend},
+			"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(hints))), hints},
 		reserved: panelConfigReserved,
 		anchor:   m.cursor,
 		centered: true,
@@ -3247,7 +3252,7 @@ func noticeBox(s string) string {
 // emoji) counts as the two columns it actually occupies — a title that mixes
 // wide and narrow runes no longer overflows its slot and breaks alignment.
 func truncate(s string, width int) string {
-	if width < 1 || lipgloss.Width(s) <= width {
+	if width < 1 || runewidth.StringWidth(s) <= width {
 		return s
 	}
 	if width == 1 {
@@ -3257,7 +3262,7 @@ func truncate(s string, width int) string {
 	var b strings.Builder
 	w := 0
 	for _, r := range s {
-		rw := lipgloss.Width(string(r))
+		rw := runewidth.RuneWidth(r) // cell width, no per-rune allocation or ANSI scan
 		if w+rw > limit {
 			break
 		}

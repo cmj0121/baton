@@ -13,11 +13,11 @@ import (
 // colour in scroll mode and back to the standing bar colour otherwise.
 func TestScrollFooterColor(t *testing.T) {
 	m := baseModel()
-	if got := m.barBG(); got != colBar {
+	if got := m.bar().GetBackground(); got != colBar {
 		t.Fatalf("non-scroll footer = %v, want colBar", got)
 	}
 	m.scrolling = true
-	if got := m.barBG(); got != colScroll {
+	if got := m.bar().GetBackground(); got != colScroll {
 		t.Fatalf("scroll footer = %v, want colScroll", got)
 	}
 }

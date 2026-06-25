@@ -155,7 +155,7 @@ func (m model) searchSeg() string {
 // and search caps with the term being typed, so the screen behind stays visible
 // rather than being hidden under a centred popup.
 func (m model) searchPromptFooter() string {
-	left := seg("◈ BATON", colDark, colBrand) + m.searchSeg() + barBold.Render(" "+m.inputBuf+"▌ ")
+	left := seg("◈ BATON", colDark, colBrand) + m.searchSeg() + m.barStrong().Render(" "+m.inputBuf+"▌ ")
 	return m.statusBar(left, "")
 }
 
