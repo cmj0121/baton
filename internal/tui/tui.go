@@ -2347,7 +2347,9 @@ func (m model) dashboardView() string {
 		body = m.treeAndPreview(items)
 	}
 	if m.filter != "" && len(items) == 0 {
-		body = mutedStyle.Render("no panels match \"" + truncate(m.filter, 24) + "\"  ·  esc clears the filter")
+		body = noticeBox(mutedStyle.Render("no panels match ") +
+			lipgloss.NewStyle().Foreground(colBrandHi).Render("\""+truncate(m.filter, 24)+"\"") +
+			mutedStyle.Render("  ·  ") + legendKey("esc") + mutedStyle.Render(" clears the filter"))
 	}
 	return lipgloss.JoinVertical(lipgloss.Center, heading, "", summary, "", body)
 }
@@ -2373,7 +2375,12 @@ func (m model) summaryStrip() string {
 		chips = append(chips, fmt.Sprintf("%s %s", led, mutedStyle.Render(fmt.Sprintf("%d %s", n, info.label))))
 	}
 	if len(chips) == 0 {
-		return mutedStyle.Render("no panels yet — press C-t p to spawn one")
+		return noticeBox(mutedStyle.Render("no panels yet  ·  ") +
+			legend(
+				keyLabel(m.bindingKey(actNewPanel)), "shell",
+				keyLabel(m.bindingKey(actNewAgent)), "agent",
+				keyLabel(m.bindingKey(actConductor)), "conductor",
+			))
 	}
 	return strings.Join(chips, mutedStyle.Render("   ·   "))
 }
@@ -2999,20 +3006,17 @@ func (m model) inputView() string {
 		title, prompt, action = "REMOVE WORKTREE", "worktree path  (then confirm)", "next"
 	}
 
-	field := lipgloss.NewStyle().Width(46).Foreground(colInk).Background(colSurface).Render("› " + m.inputBuf + "▌")
-	legendKey := lipgloss.NewStyle().Foreground(colCyan).Bold(true)
-	legend := legendKey.Render("enter") + mutedStyle.Render(" "+action) + "   " +
-		legendKey.Render("esc") + mutedStyle.Render(" cancel")
+	field := lipgloss.NewStyle().Width(46).Padding(0, 1).Foreground(colInk).Background(colSurface).Render("› " + m.inputBuf + "▌")
+	hints := legend("enter", action, "esc", "cancel")
 	if inputIsPath(m.input) {
-		legend += "   " + legendKey.Render("tab") + mutedStyle.Render(" complete") +
-			"   " + legendKey.Render("C-b") + mutedStyle.Render(" del word")
+		hints += mutedStyle.Render("  ·  ") + legend("tab", "complete", "C-b", "del word")
 	}
 
 	rows := []string{sectionStyle.Render(spaced(title)), "", mutedStyle.Render(prompt), field}
 	if m.inputHint != "" {
 		rows = append(rows, lipgloss.NewStyle().Foreground(colCyan).Width(46).Render(truncate(m.inputHint, 46)))
 	}
-	rows = append(rows, "", legend)
+	rows = append(rows, "", hints)
 	return configBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
 
@@ -3192,6 +3196,33 @@ func memLabel(used, total uint64) string {
 // giving section headers an airy, control-panel feel (lipgloss has no tracking).
 func spaced(s string) string {
 	return strings.Join(strings.Split(s, ""), " ")
+}
+
+// legendKey styles one keycap in a footer-style legend: cyan-bold, lighter than
+// the pickers' badge keycaps so a legend reads as a hint, not a control.
+func legendKey(s string) string {
+	return lipgloss.NewStyle().Foreground(colCyan).Bold(true).Render(s)
+}
+
+// legend joins key/label pairs into one hint line with a consistent separator,
+// e.g. legend("enter", "save", "esc", "cancel"). It is the single source of the
+// legend look so every overlay's footer hint lines up the same way.
+func legend(pairs ...string) string {
+	cells := make([]string, 0, len(pairs)/2)
+	for i := 0; i+1 < len(pairs); i += 2 {
+		cells = append(cells, legendKey(pairs[i])+mutedStyle.Render(" "+pairs[i+1]))
+	}
+	return strings.Join(cells, mutedStyle.Render("  ·  "))
+}
+
+// noticeBox frames a centered hint in a faint hairline — for empty states that
+// deserve more presence than plain muted text but less weight than a modal.
+func noticeBox(s string) string {
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colFaint).
+		Padding(0, 2).
+		Render(s)
 }
 
 // truncate clips s to width display cells, appending an ellipsis when it

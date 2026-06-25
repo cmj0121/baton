@@ -125,12 +125,8 @@ func (m model) signalPickerView() string {
 	otherSel := m.signalCursor >= len(signals.Choices)
 	rows = append(rows, caret(otherSel)+keyCol.Render(kc(otherSignalKey))+nameStyle.Render("other…")+mutedStyle.Render("any name or number"))
 
-	legendKey := lipgloss.NewStyle().Foreground(colCyan).Bold(true)
-	legend := legendKey.Render("↑↓") + mutedStyle.Render(" move") + "   " +
-		legendKey.Render("enter") + mutedStyle.Render(" send") + "   " +
-		legendKey.Render("esc") + mutedStyle.Render(" cancel")
 	rows = append(rows, "",
 		mutedStyle.Render("delivered to the panel's process group · "+keyLabel(m.effPrefix())+" R reloads baton"),
-		"", legend)
+		"", legend("↑↓", "move", "enter", "send", "esc", "cancel"))
 	return configBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
