@@ -111,6 +111,7 @@ type model struct {
 	mouseEnabled      bool      // mouse reporting on — the wheel scrolls and moves the selection (toggled in the key map)
 	pendingClose      bool      // a close is awaiting y/n confirmation
 	pendingRestart    bool      // a force-restart is awaiting y/n confirmation
+	pendingConductor  string    // a running conductor's id awaiting y/n restart confirmation ("" = none)
 	now               time.Time // wall clock shown in the footer, ticked every second
 
 	cpuPct   float64 // system-wide CPU load %, sampled each tick for the footer
@@ -872,6 +873,19 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// A conductor restart is waiting on a y/n answer. It kills the running
+	// conductor agent (losing its in-progress work) and spawns a fresh one, so it
+	// always confirms; only an explicit yes goes through.
+	if m.pendingConductor != "" {
+		id := m.pendingConductor
+		m.pendingConductor = ""
+		if key == "y" || key == "enter" {
+			return m.restartConductor(id), nil
+		}
+		m.status = "conductor restart cancelled"
+		return m, nil
+	}
+
 	pkey := m.effPrefix()
 
 	// In command mode the prefix is only for the universal escapes (C-t d / C-t
@@ -1305,6 +1319,50 @@ func (m model) spawnAgent(dir string) model {
 	return m
 }
 
+// conductorPanel returns the singleton conductor panel if the fleet has one.
+func (m model) conductorPanel() (panel.Panel, bool) {
+	for _, p := range m.fleet {
+		if p.Conductor {
+			return p, true
+		}
+	}
+	return panel.Panel{}, false
+}
+
+// spawnConductor asks the server to create the conductor: the resolved agent
+// profile, run as the singleton control agent. The cockpit only names the
+// command — the server places it in a managed ephemeral workspace and injects the
+// socket + scoped-role env so the agent inside can drive the fleet.
+func (m model) spawnConductor() model {
+	prof, name, ok := m.resolveAgent()
+	if !ok {
+		m.status = fmt.Sprintf("no agent profile %q for the conductor", name)
+		return m
+	}
+	if m.client != nil {
+		cmd := proto.Command{Action: "panel.create", Kind: proto.KindAgent, Path: prof.Command, Args: prof.Args, Conductor: true}
+		if err := m.client.Send(cmd); err != nil {
+			m.status = "send failed: " + err.Error()
+			return m
+		}
+	}
+	m.status = fmt.Sprintf("opening the conductor (%s)", name)
+	return m
+}
+
+// restartConductor closes the running conductor id and spawns a fresh one. The
+// new conductor gets a new workspace, so its briefing — and any edited operator
+// brief in $HOME/.baton/CONDUCTOR.md — is re-read on launch. The server processes
+// the close before the create on this one connection, so the singleton slot is
+// free in time. id is unused beyond the close; spawnConductor finds the (now
+// empty) conductor slot itself.
+func (m model) restartConductor(id string) model {
+	m.sendf(proto.Command{Action: "panel.close", ID: id})
+	m = m.spawnConductor()
+	m.status = "restarting the conductor (reloading its brief)"
+	return m
+}
+
 // defaultWorkdir is the directory offered when spawning a panel: the user's
 // configured workdir, or their home — never the client's current directory, so a
 // new panel does not silently inherit wherever baton was launched from.
@@ -1418,6 +1476,21 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		m.input = inputAgentDir
 		m.inputBuf = m.defaultWorkdir()
 		m.status = fmt.Sprintf("new %s agent · type the workdir, enter to spawn", name)
+	case actConductor:
+		// Find-or-create the singleton conductor: re-run an exited one (the server
+		// gives it a fresh workspace), offer to restart a running one so it picks up
+		// an edited brief (enter still zooms it like any panel), else spawn it.
+		if p, ok := m.conductorPanel(); ok {
+			if p.State == panel.Exited {
+				m.sendf(proto.Command{Action: "panel.respawn", ID: p.ID})
+				m.status = "re-running the conductor"
+				return m, nil
+			}
+			m.pendingConductor = p.ID
+			m.status = "restart the conductor? reloads its brief, drops its work (y/n)"
+			return m, nil
+		}
+		return m.spawnConductor(), nil
 	case actClose:
 		it, ok := m.selectedItem()
 		switch {
