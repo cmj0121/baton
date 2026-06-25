@@ -53,7 +53,8 @@ const (
 	colAgent = lipgloss.Color("75") // agent-panel count (blue)
 	colShell = lipgloss.Color("73") // shell-panel count (teal)
 
-	colBar = lipgloss.Color("111") // light-blue status-bar fill (the footer)
+	colBar    = lipgloss.Color("111") // light-blue status-bar fill (the footer)
+	colScroll = lipgloss.Color("179") // warm amber footer fill while in scroll mode
 )
 
 var (
@@ -67,6 +68,21 @@ var (
 	barStyle = lipgloss.NewStyle().Background(colBar).Foreground(colDark)
 	barBold  = barStyle.Bold(true)
 )
+
+// barBG is the footer fill colour: a warm amber while scrolling so the whole
+// status bar signals "history / navigation" at a glance, otherwise the standing
+// light blue. bar/barStrong are the mode-aware footer styles built from it.
+func (m model) barBG() lipgloss.Color {
+	if m.scrolling {
+		return colScroll
+	}
+	return colBar
+}
+
+func (m model) bar() lipgloss.Style {
+	return lipgloss.NewStyle().Background(m.barBG()).Foreground(colDark)
+}
+func (m model) barStrong() lipgloss.Style { return m.bar().Bold(true) }
 
 type mode int
 
@@ -3156,7 +3172,7 @@ func (m model) statusBar(left, hint string) string {
 	if lipgloss.Width(hint) > gap {
 		hint = ""
 	}
-	return left + barStyle.Width(gap).Render(hint) + right
+	return left + m.bar().Width(gap).Render(hint) + right
 }
 
 // helpHint is the footer's standing invitation to the key list: "? keys" in a
@@ -3166,7 +3182,7 @@ func (m model) helpHint() string {
 	if m.mode == modeZoom {
 		k = keyLabel(m.effPrefix()) + " " + k
 	}
-	return barBold.Render(" "+k) + barStyle.Render(" keys ")
+	return m.barStrong().Render(" "+k) + m.bar().Render(" keys ")
 }
 
 // statsStrip renders the system CPU and memory readout as a surface-coloured
@@ -3176,9 +3192,10 @@ func (m model) statsStrip() string {
 	if m.memTotal == 0 {
 		return ""
 	}
-	body := barStyle.Render(" CPU ") + barBold.Render(fmt.Sprintf("%.0f%%", m.cpuPct)) +
-		barStyle.Render("  MEM ") + barBold.Render(memLabel(m.memUsed, m.memTotal)) + barStyle.Render(" ")
-	return barStyle.Render(body)
+	bar, barBold := m.bar(), m.barStrong()
+	body := bar.Render(" CPU ") + barBold.Render(fmt.Sprintf("%.0f%%", m.cpuPct)) +
+		bar.Render("  MEM ") + barBold.Render(memLabel(m.memUsed, m.memTotal)) + bar.Render(" ")
+	return bar.Render(body)
 }
 
 // memLabel formats a used/total byte pair in the total's unit, e.g. "9.2/16G".

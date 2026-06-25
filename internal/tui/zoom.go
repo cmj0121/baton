@@ -56,11 +56,11 @@ func (m model) zoomFooter() string {
 	case m.searchActive():
 		state = m.searchSeg()
 	case m.scrolling:
-		state = seg("↕ SCROLL", colDark, colCyan)
+		state = seg("↕ SCROLL", colDark, colScroll)
 	case m.zoomExited:
 		state = seg("◼ EXITED", colDark, colMuted)
 	}
-	left := seg("◈ BATON", colDark, colBrand) + state + scrollSeg(m.scrollOff) + barBold.Render(" "+m.zoomTitle+" ")
+	left := seg("◈ BATON", colDark, colBrand) + state + scrollSeg(m.scrollOff) + m.barStrong().Render(" "+m.zoomTitle+" ")
 	return m.statusBar(left, m.helpHint())
 }
 

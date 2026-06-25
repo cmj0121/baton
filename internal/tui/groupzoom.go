@@ -950,7 +950,7 @@ func (m model) groupZoomFooter() string {
 	case m.searchActive():
 		mode = m.searchSeg()
 	case m.scrolling:
-		mode = seg("↕ SCROLL", colDark, colCyan)
+		mode = seg("↕ SCROLL", colDark, colScroll)
 	case m.groupInteract:
 		mode = seg("⌨ INTERACT", colDark, colGreen) // typing into the focused tile
 	}

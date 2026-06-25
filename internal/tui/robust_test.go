@@ -9,6 +9,19 @@ import (
 	"github.com/cmj0121/baton/internal/panel"
 )
 
+// TestScrollFooterColor checks the footer fill switches to the amber scroll
+// colour in scroll mode and back to the standing bar colour otherwise.
+func TestScrollFooterColor(t *testing.T) {
+	m := baseModel()
+	if got := m.barBG(); got != colBar {
+		t.Fatalf("non-scroll footer = %v, want colBar", got)
+	}
+	m.scrolling = true
+	if got := m.barBG(); got != colScroll {
+		t.Fatalf("scroll footer = %v, want colScroll", got)
+	}
+}
+
 // TestClampGroupFocus checks the render-time guard pulls a dangling focus back
 // into range and that rendering a group with an out-of-range focus never panics.
 func TestClampGroupFocus(t *testing.T) {
