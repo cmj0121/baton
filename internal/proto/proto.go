@@ -68,6 +68,22 @@ type Command struct {
 	Signal string   `json:"signal,omitempty"` // signal name to deliver for "panel.signal", e.g. "SIGINT"
 	Count  int      `json:"count,omitempty"`  // absolute visible count for "group.show": how many members stream as live tiles
 	Git    string   `json:"git,omitempty"`    // git op for "panel.git", e.g. "log", "commit", "worktree-add"; Name carries a branch, Dir a worktree path
+
+	// Role and Self are declared on "hello" by a control client (the conductor
+	// agent driving the fleet over the socket). Role "conductor" puts the
+	// connection under a scoped policy — it cannot act on itself and cannot stop
+	// the server (see the server's command dispatch); an empty Role is the
+	// full-power cockpit, unchanged. Self is the conductor's OWN panel id, so the
+	// server knows which panel to refuse self-targeted actions against. Both are
+	// self-declared over a uid-private socket: they are a guardrail against agent
+	// accidents, not a security boundary.
+	Role string `json:"role,omitempty"`
+	Self string `json:"self,omitempty"`
+
+	// Conductor marks a "panel.create" as the singleton control agent. The server
+	// enforces at most one, gives it a server-managed ephemeral workspace, and
+	// injects the socket/identity env so the agent inside can drive the fleet.
+	Conductor bool `json:"conductor,omitempty"`
 }
 
 // GroupView carries a group's view settings on a snapshot: Shown is how many
@@ -79,14 +95,15 @@ type GroupView struct {
 
 // Panel is the server-side view of a single live terminal.
 type Panel struct {
-	ID       string `json:"id"`
-	Kind     string `json:"kind"`               // "shell" | "agent"
-	Title    string `json:"title"`              // human label shown on the dashboard
-	State    string `json:"state,omitempty"`    // lifecycle: spawning|running|idle|attention|exited
-	Group    string `json:"group,omitempty"`    // work item the panel belongs to, if any
-	Activity string `json:"activity,omitempty"` // short status line the Monitor keeps live
-	Spark    string `json:"spark,omitempty"`    // output-rate sparkline over the recent window
-	Pinned   bool   `json:"pinned,omitempty"`   // pinned to a live tile in its group's split view
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`                // "shell" | "agent"
+	Title     string `json:"title"`               // human label shown on the dashboard
+	State     string `json:"state,omitempty"`     // lifecycle: spawning|running|idle|attention|exited
+	Group     string `json:"group,omitempty"`     // work item the panel belongs to, if any
+	Activity  string `json:"activity,omitempty"`  // short status line the Monitor keeps live
+	Spark     string `json:"spark,omitempty"`     // output-rate sparkline over the recent window
+	Pinned    bool   `json:"pinned,omitempty"`    // pinned to a live tile in its group's split view
+	Conductor bool   `json:"conductor,omitempty"` // the singleton control agent (server-managed workspace), so a frontend can badge it
 }
 
 // DiffFile is one changed path in the structured "diff" reply: its staged and

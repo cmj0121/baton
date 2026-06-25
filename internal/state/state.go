@@ -33,12 +33,13 @@ type State struct {
 // PanelState is a single panel's persisted identity plus its immutable spawn
 // inputs. Live telemetry (state/activity/spark) is intentionally not persisted.
 type PanelState struct {
-	ID     string `json:"id"`
-	Kind   string `json:"kind"`
-	Title  string `json:"title"`
-	Group  string `json:"group"`
-	Pinned bool   `json:"pinned"`
-	Spec   Spec   `json:"spec"` // immutable spawn inputs only
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	Title     string `json:"title"`
+	Group     string `json:"group"`
+	Pinned    bool   `json:"pinned"`
+	Conductor bool   `json:"conductor,omitempty"` // the singleton control agent; respawned into a fresh server-managed workspace
+	Spec      Spec   `json:"spec"`                // immutable spawn inputs only
 }
 
 // Spec is a panel's immutable spawn inputs, frozen at create time.

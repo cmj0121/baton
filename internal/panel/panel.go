@@ -96,6 +96,11 @@ type Panel struct {
 	// view. The server owns the flag and reports it to every frontend, so a pin
 	// survives a frontend restart and is shared across clients.
 	Pinned bool
+
+	// Conductor marks the singleton control agent: an agent panel the server
+	// spawned in a server-managed ephemeral workspace and wired to drive the
+	// fleet over the socket. At most one exists at a time.
+	Conductor bool
 }
 
 // IsAgent reports whether the panel runs an agent CLI rather than a shell.
@@ -104,27 +109,29 @@ func (p Panel) IsAgent() bool { return p.Kind == Agent }
 // FromProto decodes a wire panel into the domain model.
 func FromProto(p proto.Panel) Panel {
 	return Panel{
-		ID:       p.ID,
-		Kind:     ParseKind(p.Kind),
-		Title:    p.Title,
-		State:    ParseState(p.State),
-		Group:    p.Group,
-		Activity: p.Activity,
-		Spark:    p.Spark,
-		Pinned:   p.Pinned,
+		ID:        p.ID,
+		Kind:      ParseKind(p.Kind),
+		Title:     p.Title,
+		State:     ParseState(p.State),
+		Group:     p.Group,
+		Activity:  p.Activity,
+		Spark:     p.Spark,
+		Pinned:    p.Pinned,
+		Conductor: p.Conductor,
 	}
 }
 
 // ToProto encodes the panel for the wire.
 func (p Panel) ToProto() proto.Panel {
 	return proto.Panel{
-		ID:       p.ID,
-		Kind:     p.Kind.String(),
-		Title:    p.Title,
-		State:    p.State.String(),
-		Group:    p.Group,
-		Activity: p.Activity,
-		Spark:    p.Spark,
-		Pinned:   p.Pinned,
+		ID:        p.ID,
+		Kind:      p.Kind.String(),
+		Title:     p.Title,
+		State:     p.State.String(),
+		Group:     p.Group,
+		Activity:  p.Activity,
+		Spark:     p.Spark,
+		Pinned:    p.Pinned,
+		Conductor: p.Conductor,
 	}
 }
