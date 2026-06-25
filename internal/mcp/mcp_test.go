@@ -130,6 +130,44 @@ func TestMCPToolCalls(t *testing.T) {
 	}
 }
 
+// TestMCPAllTools calls every tool so each handler closure and the arg accessors
+// (str, boolDefault, strSlice) run. The first spawn is panel id "1", which the
+// later calls target; whether the server accepts or rejects each, the tool
+// handler executes and returns a result (never a protocol error).
+func TestMCPAllTools(t *testing.T) {
+	sock := startServer(t)
+
+	resps := run(t, sock,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"baton_spawn","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"baton_spawn","arguments":{"agent":"/bin/cat","args":["-u"],"dir":"/tmp"}}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"baton_list","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"baton_send","arguments":{"id":"1","text":"hi","submit":false}}}`,
+		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"baton_send","arguments":{"id":"1","text":"hi"}}}`,
+		`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"baton_send","arguments":{"text":"no id"}}}`,
+		`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"baton_group","arguments":{"name":"g","ids":["1"]}}}`,
+		`{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"baton_rename","arguments":{"id":"1","name":"r"}}}`,
+		`{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"baton_pin","arguments":{"ids":["1"]}}}`,
+		`{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"baton_unpin","arguments":{"ids":["1"]}}}`,
+		`{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"baton_signal","arguments":{"signal":"SIGCONT","ids":["1"]}}}`,
+		`{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"baton_close","arguments":{"ids":["1"]}}}`,
+	)
+	if len(resps) != 12 {
+		t.Fatalf("want 12 responses, got %d", len(resps))
+	}
+	for i, r := range resps {
+		if r.Error != nil {
+			t.Fatalf("call %d returned a protocol error: %+v", i+1, r.Error)
+		}
+		if r.Result == nil {
+			t.Fatalf("call %d returned no result", i+1)
+		}
+	}
+	// The missing-id send reports a tool-level error the model can read.
+	if resps[5].Result["isError"] != true {
+		t.Fatalf("baton_send without an id should be a tool error, got %+v", resps[5].Result)
+	}
+}
+
 func contentText(t *testing.T, result map[string]any) string {
 	t.Helper()
 	content, ok := result["content"].([]any)

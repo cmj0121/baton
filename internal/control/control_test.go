@@ -72,6 +72,43 @@ func TestControlRoundtrips(t *testing.T) {
 	}
 }
 
+// TestControlHelpers exercises the semantic wrappers shared with the MCP tools:
+// SpawnPanel (agent and shell), ListJSON, and SendText (submit on/off).
+func TestControlHelpers(t *testing.T) {
+	sock := startServer(t)
+
+	c, err := control.DialSocket(sock, "", "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	// Agent spawn (with args) and a plain shell spawn.
+	agentID, err := c.SpawnPanel("/bin/cat", []string{"-u"}, t.TempDir())
+	if err != nil {
+		t.Fatalf("spawn agent: %v", err)
+	}
+	shellID, err := c.SpawnPanel("", nil, "")
+	if err != nil {
+		t.Fatalf("spawn shell: %v", err)
+	}
+
+	js, err := c.ListJSON()
+	if err != nil {
+		t.Fatalf("list json: %v", err)
+	}
+	if !strings.Contains(js, agentID) || !strings.Contains(js, shellID) {
+		t.Fatalf("ListJSON should mention both panels, got:\n%s", js)
+	}
+
+	if err := c.SendText(agentID, "submitted", true); err != nil {
+		t.Fatalf("send submit: %v", err)
+	}
+	if err := c.SendText(agentID, "no newline", false); err != nil {
+		t.Fatalf("send no-submit: %v", err)
+	}
+}
+
 // TestControlConductorFenced confirms the env-driven conductor identity reaches
 // the server: a control client that inherits BATON_ROLE/BATON_PANEL_ID is fenced
 // off from acting on its own panel.
