@@ -9,10 +9,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           # track the toolchain declared in go.mod so CI and go.mod never drift.
           go-version-file: go.mod
@@ -25,7 +25,7 @@ jobs:
         run: go vet ./...
 
       - name: Lint (golangci-lint v2)
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v9
         with:
           # pinned to the version used locally (pre-commit) so CI == local.
           version: v2.11.2
@@ -41,7 +41,7 @@ jobs:
         run: make cover
 
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.out
