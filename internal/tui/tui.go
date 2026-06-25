@@ -495,7 +495,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modeGroupZoom {
 			m.resizeGroupTiles() // reflow the tiles to the new screen, net of the bar
 		}
-		return m, nil
+		// A resize can leave stale cells from the old frame — most visibly in a
+		// zoom, whose View embeds the panel emulator's raw render that the diff
+		// renderer will not fully clear. Force a clean full repaint so the whole
+		// cockpit reloads at the new size, in every mode (zoom included).
+		return m, tea.ClearScreen
 
 	case eventMsg:
 		m.applyEvent(proto.ServerMsg(msg))
