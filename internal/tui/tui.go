@@ -3194,14 +3194,27 @@ func spaced(s string) string {
 	return strings.Join(strings.Split(s, ""), " ")
 }
 
-// truncate clips s to width runes, appending an ellipsis when it overflows.
+// truncate clips s to width display cells, appending an ellipsis when it
+// overflows. Width is measured in cells, not runes, so a wide glyph (CJK, an
+// emoji) counts as the two columns it actually occupies — a title that mixes
+// wide and narrow runes no longer overflows its slot and breaks alignment.
 func truncate(s string, width int) string {
-	r := []rune(s)
-	if width < 1 || len(r) <= width {
+	if width < 1 || lipgloss.Width(s) <= width {
 		return s
 	}
 	if width == 1 {
 		return "…"
 	}
-	return string(r[:width-1]) + "…"
+	limit := width - 1 // leave one cell for the ellipsis
+	var b strings.Builder
+	w := 0
+	for _, r := range s {
+		rw := lipgloss.Width(string(r))
+		if w+rw > limit {
+			break
+		}
+		b.WriteRune(r)
+		w += rw
+	}
+	return b.String() + "…"
 }

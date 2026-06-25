@@ -3,7 +3,29 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 )
+
+// TestTruncateByDisplayWidth checks truncation counts display cells, so a wide
+// glyph occupies its two columns and the result never exceeds the width.
+func TestTruncateByDisplayWidth(t *testing.T) {
+	cases := []struct {
+		s     string
+		width int
+	}{
+		{"hello world", 5},
+		{"日本語テスト", 5}, // wide runes (2 cells each)
+		{"a日b語c", 4},  // mixed
+		{"short", 20}, // no truncation
+		{"x", 1},
+	}
+	for _, c := range cases {
+		if got := truncate(c.s, c.width); lipgloss.Width(got) > c.width {
+			t.Fatalf("truncate(%q,%d)=%q width %d > %d", c.s, c.width, got, lipgloss.Width(got), c.width)
+		}
+	}
+}
 
 // TestTinyTerminalNotice checks that a viewport below the minimum renders a
 // graceful notice instead of flowing into negative-width layout math.
