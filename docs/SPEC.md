@@ -265,6 +265,7 @@ and the key-map editor — are reached after the prefix in every mode. Everythin
 |                        | `enter`                     | open / zoom the selection                  |
 |                        | `p`                         | new shell panel                            |
 |                        | `A`                         | new agent panel                            |
+|                        | `C`                         | open the conductor (find-or-create)        |
 |                        | `c`                         | new panel (pick the command)               |
 |                        | `w`                         | close the selection                        |
 |                        | `r`                         | re-run exited panel(s) in the selection    |

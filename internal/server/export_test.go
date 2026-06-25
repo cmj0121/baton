@@ -32,3 +32,18 @@ func (s *Server) ClientCount() int {
 	defer s.mu.Unlock()
 	return len(s.clients)
 }
+
+// PanelDir and PanelEnv expose a panel's retained spawn spec, so tests can assert
+// the conductor runs in a server-managed workspace (not the requested dir) with
+// the injected identity env.
+func (s *Server) PanelDir(id string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.specs[id].Dir
+}
+
+func (s *Server) PanelEnv(id string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.specs[id].Env
+}

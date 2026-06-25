@@ -1,12 +1,17 @@
 // Command baton is an agent-friendly terminal multiplexer.
 //
 // Running `baton` starts the background server for this login session (if one is
-// not already running) and attaches a cockpit to it. There are no subcommands.
+// not already running) and attaches a cockpit to it.
 //
 //	-l, --log FILE  write logs to FILE (default: a per-session file)
 //	-v, -vv         increase log verbosity
 //	-h, --help      show help and exit
 //	-V, --version   show the version and exit
+//
+// Two subcommands drive the fleet over the session's socket without the cockpit:
+// `baton ctl` is a thin control client for a human or a script (see ctl.go), and
+// `baton mcp` is a Model Context Protocol server an agent's .mcp.json launches so
+// it can spawn, group, signal, and send prompts to panels (see mcp.go).
 package main
 
 import (
@@ -51,6 +56,16 @@ type CLI struct {
 }
 
 func main() {
+	// `baton ctl …` and `baton mcp` are the control surfaces, handled before the
+	// cockpit's flag parsing so the default `baton` (attach) path stays a flag-only
+	// CLI. ctl is the human/script CLI; mcp is the agent-facing MCP server.
+	if len(os.Args) > 1 && os.Args[1] == "ctl" {
+		os.Exit(ctlMain(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		os.Exit(mcpMain())
+	}
+
 	var cli CLI
 	kctx := kong.Parse(&cli,
 		kong.Name("baton"),

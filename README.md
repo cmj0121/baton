@@ -41,10 +41,11 @@ Lost? **`?`** always shows the keys for wherever you are.
 - **Dashboard, not windows.** A live overview of everything at once, not a pile of tabs.
 - **Headless core, replaceable frontends.** The brain is a background daemon; the face that renders it is swappable.
 
-| Concept       | What it is                                                              |
-| ------------- | ----------------------------------------------------------------------- |
-| **Panel**     | One live terminal — an _agent_ panel (an agent CLI) or a _shell_ panel. |
-| **Work item** | A named group of panels that belong to one task.                        |
+| Concept       | What it is                                                                                             |
+| ------------- | ------------------------------------------------------------------------------------------------------ |
+| **Panel**     | One live terminal — an _agent_ panel (an agent CLI) or a _shell_ panel.                                |
+| **Work item** | A named group of panels that belong to one task.                                                       |
+| **Conductor** | An agent that drives the fleet for you — spawns, groups, and prompts the other panels over the socket. |
 
 ## Views
 
@@ -64,25 +65,26 @@ Keys are **modal**: on the dashboard and in a group each action is a single key;
 drive the program, so a Baton action is the leader **`C-t`** then the key. Press **`?`** for the full, rebindable list of
 the current view, and **`C-t k`** to edit the key map.
 
-| Where       | Key               | Does                                       |
-| ----------- | ----------------- | ------------------------------------------ |
-| After `C-t` | `d` / `b`         | jump to the dashboard / back one level     |
-|             | `[`               | enter scroll mode                          |
-|             | `R` / `S`         | reload config / force-restart the server   |
-|             | `q`               | detach (server keeps running)              |
-| Dashboard   | `hjkl` / arrows   | move the cursor                            |
-|             | `enter`           | open / zoom the selection                  |
-|             | `p` / `A` / `c`   | new shell / agent / pick-command panel     |
-|             | `w` / `x`         | close the selection / purge exited         |
-|             | `r`               | re-run the exited panel(s) under the focus |
-|             | `g` / `G` / `u`   | mark / group marked panels / ungroup       |
-|             | `s` / `f` / `D`   | signal / find / diff the selection         |
-| Group       | `tab`             | focus the next panel                       |
-|             | `+` / `-`         | show more / fewer live tiles               |
-|             | `p` / `i`         | pin / interact with the focused panel      |
-|             | `enter`           | zoom the focused panel                     |
-| Zoom        | type              | drive the program directly                 |
-|             | `C-t f` / `C-t g` | search the scrollback / git menu (agent)   |
+| Where       | Key               | Does                                                |
+| ----------- | ----------------- | --------------------------------------------------- |
+| After `C-t` | `d` / `b`         | jump to the dashboard / back one level              |
+|             | `[`               | enter scroll mode                                   |
+|             | `R` / `S`         | reload config / force-restart the server            |
+|             | `q`               | detach (server keeps running)                       |
+| Dashboard   | `hjkl` / arrows   | move the cursor                                     |
+|             | `enter`           | open / zoom the selection                           |
+|             | `p` / `A` / `c`   | new shell / agent / pick-command panel              |
+|             | `C`               | open the conductor (an agent that drives the fleet) |
+|             | `w` / `x`         | close the selection / purge exited                  |
+|             | `r`               | re-run the exited panel(s) under the focus          |
+|             | `g` / `G` / `u`   | mark / group marked panels / ungroup                |
+|             | `s` / `f` / `D`   | signal / find / diff the selection                  |
+| Group       | `tab`             | focus the next panel                                |
+|             | `+` / `-`         | show more / fewer live tiles                        |
+|             | `p` / `i`         | pin / interact with the focused panel               |
+|             | `enter`           | zoom the focused panel                              |
+| Zoom        | type              | drive the program directly                          |
+|             | `C-t f` / `C-t g` | search the scrollback / git menu (agent)            |
 
 See **[docs/SPEC.md](docs/SPEC.md)** for the complete, per-view key reference and the design behind every view.
 
@@ -98,6 +100,9 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
   untracked included — in a master-detail overlay.
 - **Git** — `C-t g` opens a git menu against the zoomed agent: diff, log, status, stage, commit, push, branch, and
   worktrees. See **[docs/GIT.md](docs/GIT.md)**.
+- **Conductor & control** — `C` opens a conductor: an agent that drives the fleet for you. It spawns, groups, signals,
+  and prompts the other panels over the socket — through `baton ctl` or the `baton mcp` tools — fenced so it can't wreck
+  its own host. Set its goal in `$HOME/.baton/CONDUCTOR.md`. See **[docs/CONTROL.md](docs/CONTROL.md)**.
 - **Groups & summary** — `+` / `-` dial how many members stream as live tiles; the rest fold into one summary tile.
   Pinned members always stream.
 - **Persistence & respawn** — Baton remembers its fleet across a restart; panels come back as inert exited slots and
@@ -125,6 +130,8 @@ through one `baton` object. See **[docs/PLUGIN.md](docs/PLUGIN.md)**.
   persistence, the per-view key reference, and the architecture diagram.
 - **[docs/GIT.md](docs/GIT.md)** — the git menu: every op, the commit-editor flow, worktrees, and the config.
 - **[docs/PLUGIN.md](docs/PLUGIN.md)** — the Lua plugin API: the `baton` object, events, commands, and config.
+- **[docs/CONTROL.md](docs/CONTROL.md)** — driving the fleet by agent: the conductor, the `baton ctl` CLI, the
+  `baton mcp` tools, and the guardrails.
 
 ## DDD (Dream-Driven Development)
 

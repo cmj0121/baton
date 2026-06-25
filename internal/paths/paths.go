@@ -11,12 +11,24 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// Environment variables baton reads and injects. EnvSocket points a client at
+// the control socket (and lets the daemon child inherit the parent's choice
+// across its re-session). EnvRole and EnvPanelID are injected into a conductor
+// panel's process so the control client inside it identifies itself to the
+// server: the scoped role it runs under, and its own panel id (the panel it is
+// fenced from acting on).
+const (
+	EnvSocket  = "BATON_SOCK"
+	EnvRole    = "BATON_ROLE"
+	EnvPanelID = "BATON_PANEL_ID"
+)
+
 // Socket returns the control socket path. It is scoped to the caller's login
 // session, so there is one and only one server per session. Override with
 // BATON_SOCK — which is also how the daemon child inherits the parent's choice,
 // since it re-sessions itself and could not otherwise recompute the same path.
 func Socket() string {
-	if v := os.Getenv("BATON_SOCK"); v != "" {
+	if v := os.Getenv(EnvSocket); v != "" {
 		return v
 	}
 	return filepath.Join(runtimeDir(), fmt.Sprintf("baton-%d.sock", sessionID()))
@@ -50,6 +62,15 @@ func ConfigFile() string {
 	return filepath.Join(home(), ".baton", "config")
 }
 
+// ConductorFile is the operator's conductor brief ($HOME/.baton/CONDUCTOR.md): a
+// goal and guide the user writes for the conductor agent. It is optional — when
+// absent or empty the conductor gets only the built-in control primer. The server
+// reads it each time it builds a conductor workspace, so edits take effect on the
+// next time the conductor is opened or re-run.
+func ConductorFile() string {
+	return filepath.Join(home(), ".baton", "CONDUCTOR.md")
+}
+
 // PluginFile is the user's Lua plugin ($HOME/.baton/plug-in.lua). BATON_PLUGIN
 // overrides it (and is how the daemon child inherits an explicit --plugin choice
 // across the re-exec, since it re-sessions itself).
@@ -63,6 +84,19 @@ func PluginFile() string {
 // EnsureDir creates the directory that holds the given file, with private perms.
 func EnsureDir(file string) error {
 	return os.MkdirAll(filepath.Dir(file), 0o700)
+}
+
+// NewConductorWorkspace creates a fresh, private, ephemeral directory for a
+// conductor panel under baton's runtime dir and returns its path. The conductor
+// agent runs here instead of in any source tree, so its only local surface is
+// the baton control wiring the server drops in — not the user's code. The caller
+// removes it when the conductor panel is closed.
+func NewConductorWorkspace() (string, error) {
+	base := runtimeDir()
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		return "", err
+	}
+	return os.MkdirTemp(base, "conductor-")
 }
 
 // WriteFileAtomic writes data to path atomically and durably: it writes a sibling
