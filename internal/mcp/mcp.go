@@ -1,0 +1,306 @@
+// Package mcp is a minimal Model Context Protocol server over stdio: it exposes
+// baton's fleet-control verbs as MCP tools so an MCP-speaking agent (a Claude
+// conductor) drives the fleet through structured, discoverable tool calls instead
+// of shelling out to `baton ctl`. Every tool is a thin wrapper over the same
+// internal/control client the CLI uses, so it grants no power the socket did not
+// already expose — and inside a conductor panel it inherits the injected env, so
+// the server fences it under the conductor role.
+//
+// The transport is the MCP stdio transport: newline-delimited JSON-RPC 2.0 on
+// stdin/stdout. Only protocol messages go to stdout; logs (if any) go to stderr,
+// so the stream stays clean.
+package mcp
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+
+	"github.com/cmj0121/baton/internal/control"
+	"github.com/cmj0121/baton/internal/proto"
+)
+
+// protocolVersion is the MCP revision baton implements; it is echoed back to a
+// client that requests a version, and used as the default otherwise.
+const protocolVersion = "2024-11-05"
+
+// Server is an MCP stdio server bound to a set of fleet-control tools.
+type Server struct {
+	version string                          // baton's build version, reported in serverInfo
+	dial    func() (*control.Client, error) // how a tool call reaches the socket; control.Dial by default
+	tools   []tool
+}
+
+// tool is one MCP tool: its name, one-line description, JSON-Schema input shape,
+// and the handler that runs it against a live control connection.
+type tool struct {
+	name   string
+	desc   string
+	schema map[string]any
+	run    func(c *control.Client, a args) (string, error)
+}
+
+// New builds a server reporting version, dialing the session socket per tool call
+// (so a dropped connection never wedges the long-lived server, and the per-call
+// hello re-reads the injected conductor identity each time).
+func New(version string) *Server {
+	s := &Server{version: version, dial: control.Dial}
+	s.tools = defaultTools()
+	return s
+}
+
+// Serve runs the JSON-RPC loop until in reaches EOF. Requests get a response;
+// notifications (no id) are handled for their side effects and answered with
+// nothing, per JSON-RPC.
+func (s *Server) Serve(in io.Reader, out io.Writer) error {
+	dec := json.NewDecoder(in)
+	enc := json.NewEncoder(out)
+	for {
+		var req rpcRequest
+		if err := dec.Decode(&req); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		resp, reply := s.handle(req)
+		if !reply {
+			continue
+		}
+		if err := enc.Encode(resp); err != nil {
+			return err
+		}
+	}
+}
+
+// handle dispatches one message. The second return is false for a notification,
+// which carries no id and must not be answered.
+func (s *Server) handle(req rpcRequest) (rpcResponse, bool) {
+	if len(req.ID) == 0 {
+		return rpcResponse{}, false // a notification (e.g. notifications/initialized)
+	}
+	switch req.Method {
+	case "initialize":
+		return ok(req.ID, s.initializeResult(req.Params)), true
+	case "tools/list":
+		return ok(req.ID, map[string]any{"tools": s.toolList()}), true
+	case "tools/call":
+		return ok(req.ID, s.callTool(req.Params)), true
+	case "ping":
+		return ok(req.ID, map[string]any{}), true
+	default:
+		return rpcResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Error:   &rpcError{Code: -32601, Message: fmt.Sprintf("method not found: %s", req.Method)},
+		}, true
+	}
+}
+
+// initializeResult answers the handshake. It echoes the client's requested
+// protocol version when given (so negotiation never fails on a version baton
+// would also accept), advertises the tools capability, and names the server.
+func (s *Server) initializeResult(params json.RawMessage) map[string]any {
+	version := protocolVersion
+	if len(params) > 0 {
+		var p struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		}
+		if json.Unmarshal(params, &p) == nil && p.ProtocolVersion != "" {
+			version = p.ProtocolVersion
+		}
+	}
+	return map[string]any{
+		"protocolVersion": version,
+		"capabilities":    map[string]any{"tools": map[string]any{}},
+		"serverInfo":      map[string]any{"name": "baton", "version": s.version},
+	}
+}
+
+// toolList renders the tool definitions for tools/list.
+func (s *Server) toolList() []map[string]any {
+	out := make([]map[string]any, 0, len(s.tools))
+	for _, t := range s.tools {
+		out = append(out, map[string]any{
+			"name":        t.name,
+			"description": t.desc,
+			"inputSchema": t.schema,
+		})
+	}
+	return out
+}
+
+// callTool runs the named tool. A tool failure (bad args, server rejection,
+// socket down) comes back as an MCP tool result with isError set, so the model
+// sees it and can adjust — only a malformed request is a JSON-RPC-level error.
+func (s *Server) callTool(params json.RawMessage) map[string]any {
+	var call struct {
+		Name      string `json:"name"`
+		Arguments args   `json:"arguments"`
+	}
+	if err := json.Unmarshal(params, &call); err != nil {
+		return errorResult(fmt.Sprintf("invalid tool call: %v", err))
+	}
+	t, ok := s.lookup(call.Name)
+	if !ok {
+		return errorResult(fmt.Sprintf("unknown tool: %s", call.Name))
+	}
+
+	c, err := s.dial()
+	if err != nil {
+		return errorResult(err.Error())
+	}
+	defer func() { _ = c.Close() }()
+
+	text, err := t.run(c, call.Arguments)
+	if err != nil {
+		return errorResult(err.Error())
+	}
+	return textResult(text)
+}
+
+func (s *Server) lookup(name string) (tool, bool) {
+	for _, t := range s.tools {
+		if t.name == name {
+			return t, true
+		}
+	}
+	return tool{}, false
+}
+
+// defaultTools is the fleet-control tool set, mirroring `baton ctl`.
+func defaultTools() []tool {
+	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
+	strList := func(desc string) map[string]any {
+		return map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": desc}
+	}
+	obj := func(props map[string]any, required ...string) map[string]any {
+		m := map[string]any{"type": "object", "properties": props}
+		if len(required) > 0 {
+			m["required"] = required
+		}
+		return m
+	}
+
+	return []tool{
+		{
+			name:   "baton_list",
+			desc:   "List the fleet: every panel with its id, title, state, group, and whether it is the conductor.",
+			schema: obj(map[string]any{}),
+			run: func(c *control.Client, _ args) (string, error) {
+				return c.ListJSON()
+			},
+		},
+		{
+			name: "baton_spawn",
+			desc: "Spawn a panel and return its id. Give 'agent' to run an agent CLI (e.g. claude); omit it for a shell.",
+			schema: obj(map[string]any{
+				"agent": str("agent CLI command to run; omit for a shell panel"),
+				"args":  strList("arguments passed to the agent command"),
+				"dir":   str("working directory the panel runs in"),
+			}),
+			run: func(c *control.Client, a args) (string, error) {
+				id, err := c.SpawnPanel(a.str("agent"), a.strSlice("args"), a.str("dir"))
+				if err != nil {
+					return "", err
+				}
+				return "spawned panel " + id, nil
+			},
+		},
+		{
+			name: "baton_send",
+			desc: "Type text into a panel — a prompt for an agent, a command for a shell. Submits with a newline unless submit is false.",
+			schema: obj(map[string]any{
+				"id":     str("target panel id"),
+				"text":   str("text to type into the panel"),
+				"submit": map[string]any{"type": "boolean", "description": "append a newline to submit (default true)"},
+			}, "id", "text"),
+			run: func(c *control.Client, a args) (string, error) {
+				id := a.str("id")
+				if id == "" {
+					return "", fmt.Errorf("id is required")
+				}
+				if err := c.SendText(id, a.str("text"), a.boolDefault("submit", true)); err != nil {
+					return "", err
+				}
+				return "sent to panel " + id, nil
+			},
+		},
+		{
+			name: "baton_group",
+			desc: "File panels under a work-item name, grouping them in the dashboard and split view.",
+			schema: obj(map[string]any{
+				"name": str("work-item name"),
+				"ids":  strList("panel ids to group"),
+			}, "name", "ids"),
+			run: func(c *control.Client, a args) (string, error) {
+				if err := c.Do(proto.Command{Action: "panel.group", Group: a.str("name"), IDs: a.strSlice("ids")}); err != nil {
+					return "", err
+				}
+				return "grouped under " + a.str("name"), nil
+			},
+		},
+		{
+			name: "baton_rename",
+			desc: "Rename a panel (give id) or a group (give group). 'name' is the new name.",
+			schema: obj(map[string]any{
+				"id":    str("panel id to rename"),
+				"group": str("existing group name to rename"),
+				"name":  str("the new name"),
+			}, "name"),
+			run: func(c *control.Client, a args) (string, error) {
+				if err := c.Do(proto.Command{Action: "panel.rename", ID: a.str("id"), Group: a.str("group"), Name: a.str("name")}); err != nil {
+					return "", err
+				}
+				return "renamed to " + a.str("name"), nil
+			},
+		},
+		{
+			name:   "baton_pin",
+			desc:   "Pin panels to live tiles in their group split.",
+			schema: obj(map[string]any{"ids": strList("panel ids to pin")}, "ids"),
+			run: func(c *control.Client, a args) (string, error) {
+				if err := c.Do(proto.Command{Action: "panel.pin", IDs: a.strSlice("ids")}); err != nil {
+					return "", err
+				}
+				return "pinned", nil
+			},
+		},
+		{
+			name:   "baton_unpin",
+			desc:   "Unpin panels.",
+			schema: obj(map[string]any{"ids": strList("panel ids to unpin")}, "ids"),
+			run: func(c *control.Client, a args) (string, error) {
+				if err := c.Do(proto.Command{Action: "panel.unpin", IDs: a.strSlice("ids")}); err != nil {
+					return "", err
+				}
+				return "unpinned", nil
+			},
+		},
+		{
+			name: "baton_signal",
+			desc: "Send a signal (e.g. SIGINT) to panels.",
+			schema: obj(map[string]any{
+				"signal": str("signal name or number, e.g. SIGINT or 2"),
+				"ids":    strList("panel ids to signal"),
+			}, "signal", "ids"),
+			run: func(c *control.Client, a args) (string, error) {
+				if err := c.Do(proto.Command{Action: "panel.signal", Signal: a.str("signal"), IDs: a.strSlice("ids")}); err != nil {
+					return "", err
+				}
+				return "signalled " + a.str("signal"), nil
+			},
+		},
+		{
+			name:   "baton_close",
+			desc:   "Close panels by id.",
+			schema: obj(map[string]any{"ids": strList("panel ids to close")}, "ids"),
+			run: func(c *control.Client, a args) (string, error) {
+				if err := c.Do(proto.Command{Action: "panel.close", IDs: a.strSlice("ids")}); err != nil {
+					return "", err
+				}
+				return "closed", nil
+			},
+		},
+	}
+}
