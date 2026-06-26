@@ -50,12 +50,14 @@ type Spec struct {
 	Dir     string   `json:"dir"`
 }
 
-// GroupLayout is one group's persisted view settings. Members stream as equal-
-// size tiles in an even grid; Shown is how many of them stream live before the
-// rest collapse into the group's summary tile. Shown == 0 means "use the default".
+// GroupLayout is one group's persisted view settings. Shown is how many members
+// stream live before the rest collapse into the group's summary tile (0 = use the
+// default). Layout is the named split arrangement the group opens with — a preset
+// or a custom TUI.yaml layout ("" = the default "tiled").
 type GroupLayout struct {
-	Group string `json:"group"`
-	Shown int    `json:"shown,omitempty"`
+	Group  string `json:"group"`
+	Shown  int    `json:"shown,omitempty"`
+	Layout string `json:"layout,omitempty"`
 }
 
 // Load reads the snapshot at path. It never returns a corrupt State: a missing

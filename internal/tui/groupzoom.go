@@ -74,10 +74,11 @@ func (m *model) attachGroupMembers() {
 	if m.client == nil {
 		return
 	}
-	_, emuCols, emuRows := m.tileGeometry()
+	sizes := m.tileEmuSizes()
 	m.groupEmus = make(map[string]*vt.SafeEmulator)
 	for _, p := range m.tileMembers() {
-		m.attachTile(p, emuCols, emuRows)
+		s := sizes[p.ID]
+		m.attachTile(p, s[0], s[1])
 	}
 }
 
@@ -105,6 +106,101 @@ func (m model) groupShownN() int {
 		n = maxGroupTiles
 	}
 	return max(1, min(n, maxGroupTiles))
+}
+
+// groupLayoutName is the split arrangement the current group opens with: the
+// server-owned per-group choice (m.groupLayout), else the user's configured
+// default (tuiCfg.DefaultLayout), else the built-in "tiled" even grid.
+func (m model) groupLayoutName() string {
+	if n, ok := m.groupLayout[m.groupName]; ok && n != "" {
+		return n
+	}
+	if d := m.tuiCfg.DefaultLayout; d != "" {
+		return d
+	}
+	return layoutTiled
+}
+
+// availableLayouts is the cycle order for the layout key: the built-in presets
+// followed by any custom TUI.yaml layouts not shadowing a preset name, so L walks
+// every arrangement the user can pick.
+func (m model) availableLayouts() []string {
+	out := append([]string(nil), presetLayouts...)
+	seen := map[string]bool{}
+	for _, n := range out {
+		seen[n] = true
+	}
+	for _, l := range m.tuiCfg.Layouts {
+		if l.Name != "" && !seen[l.Name] {
+			out = append(out, l.Name)
+			seen[l.Name] = true
+		}
+	}
+	return out
+}
+
+// layoutRects resolves the current group's layout to one tileRect per cell (the
+// live tiles plus the summary slot when any member is collapsed), or ok=false for
+// the even-grid default. The render, attach, and resize paths share it so a tile's
+// emulator is always sized to the box it is drawn in.
+func (m model) layoutRects() ([]tileRect, bool) {
+	return resolveLayout(m.groupLayoutName(), m.tuiCfg.Layouts, m.gridCells(), m.width, m.height-1-groupHeaderRows)
+}
+
+// tileEmuSize is the emulator size for the live tile at focus-order index i under
+// the current layout — the rect's inner size for a resolved layout, else the
+// uniform even-grid size. The shared source for attaching and resizing each tile.
+func (m model) tileEmuSize(i int) (cols, rows int) {
+	if rects, ok := m.layoutRects(); ok && i >= 0 && i < len(rects) {
+		return rects[i].emuCols, rects[i].emuRows
+	}
+	_, ec, er := m.tileGeometry()
+	return ec, er
+}
+
+// tileEmuSizes maps each live tile's panel id to its emulator size under the
+// current layout, so attach/resize size every tile to the box it occupies without
+// re-deriving its index.
+func (m model) tileEmuSizes() map[string][2]int {
+	tiles := m.tileMembers()
+	out := make(map[string][2]int, len(tiles))
+	for i, p := range tiles {
+		c, r := m.tileEmuSize(i)
+		out[p.ID] = [2]int{c, r}
+	}
+	return out
+}
+
+// cycleGroupLayout advances the group's layout by delta through availableLayouts,
+// optimistically setting it (so the split reflows at once) and sending group.layout
+// so the server owns and persists the choice. The tiles resize to the new boxes
+// immediately; the next snapshot reconciles the local guess. A no-op in the summary
+// sub-view, which shows a fixed scoped grid, not a chosen layout.
+func (m model) cycleGroupLayout(delta int) model {
+	if m.summaryScope {
+		return m
+	}
+	avail := m.availableLayouts()
+	if len(avail) == 0 {
+		return m
+	}
+	cur := m.groupLayoutName()
+	idx := 0
+	for i, n := range avail {
+		if n == cur {
+			idx = i
+			break
+		}
+	}
+	next := avail[wrapIndex(idx, delta, len(avail))]
+	if m.groupLayout == nil {
+		m.groupLayout = map[string]string{}
+	}
+	m.groupLayout[m.groupName] = next
+	m.sendf(proto.Command{Action: "group.layout", Group: m.groupName, Layout: next})
+	m.resizeGroupTiles() // re-fit every tile's emulator to the new layout's boxes
+	m.status = "layout · " + next
+	return m
 }
 
 // splitMembers partitions the group into the live tiles and the collapsed
@@ -243,11 +339,12 @@ func (m *model) reconcileGroupTiles(focusID string) {
 				changed = true
 			}
 		}
-		// Attach a tile for each newly-live member, sized to the current grid.
-		_, emuCols, emuRows := m.tileGeometry()
+		// Attach a tile for each newly-live member, sized to its box in the layout.
+		sizes := m.tileEmuSizes()
 		for _, p := range tiles {
 			if m.groupEmus[p.ID] == nil {
-				m.attachTile(p, emuCols, emuRows)
+				s := sizes[p.ID]
+				m.attachTile(p, s[0], s[1])
 				changed = true
 			}
 		}
@@ -291,12 +388,17 @@ func indexOfMember(members []panel.Panel, id string) int {
 // current geometry, so the split reflows when the window — and thus the space
 // above the footer bar — changes.
 func (m *model) resizeGroupTiles() {
-	_, emuCols, emuRows := m.tileGeometry()
+	sizes := m.tileEmuSizes()
 	// groupEmus already holds exactly the live tiles, keyed by id, so resize them
-	// directly rather than re-scanning the fleet for members.
+	// directly rather than re-scanning the fleet for members. Each tile is sized to
+	// its own box, which may differ under a spanned layout.
 	for id, emu := range m.groupEmus {
-		emu.Resize(emuCols, emuRows)
-		m.sendf(proto.Command{Action: "panel.resize", ID: id, Rows: emuRows, Cols: emuCols})
+		s, ok := sizes[id]
+		if !ok {
+			continue
+		}
+		emu.Resize(s[0], s[1])
+		m.sendf(proto.Command{Action: "panel.resize", ID: id, Rows: s[1], Cols: s[0]})
 	}
 }
 
@@ -441,6 +543,10 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.adjustGroupShown(1), nil
 	case "-", "_":
 		return m.adjustGroupShown(-1), nil
+	case keyLayout:
+		// Cycle the split arrangement: tiled → main-vertical → main-horizontal →
+		// stack → any custom TUI.yaml layouts → back to tiled.
+		return m.cycleGroupLayout(1), nil
 	case keyPin:
 		return m.togglePin(), nil
 	case keySignal:
@@ -766,24 +872,47 @@ func (m model) groupZoomView() string {
 			Render(fmt.Sprintf("   · %d live · %d summarised", len(tiles), len(collapsed)))
 	}
 
-	cols, emuCols, emuRows := m.tileGeometry()
-	// Render the live tiles, then append the summary tile as the last grid cell so
-	// the even grid sizes it like any other tile. Its focus slot is len(tiles).
-	rendered := make([]string, 0, len(tiles)+1)
-	for i, p := range tiles {
-		rendered = append(rendered, m.renderTile(p, i == m.groupFocus, emuCols, emuRows))
-	}
-	if len(collapsed) > 0 {
-		// The summary slot sits just past the last tile; reuse the partition already
-		// in scope rather than recomputing it through focusedIsSummary.
-		summaryFocused := m.groupFocus == len(tiles)
-		rendered = append(rendered, m.renderSummaryTile(collapsed, summaryFocused, emuCols, emuRows))
-	}
-	grid := tileGrid(rendered, cols)
-
+	grid := m.renderSplitGrid(tiles, collapsed)
 	body := lipgloss.JoinVertical(lipgloss.Left, header, "", grid)
 	placed := lipgloss.Place(m.width, m.height-1, lipgloss.Left, lipgloss.Top, body)
 	return placed + "\n" + m.groupZoomFooter()
+}
+
+// renderSplitGrid lays the live tiles (plus the summary tile when members are
+// collapsed) out under the group's chosen layout. The default "tiled" layout uses
+// the even-grid path — uniform geometry joined by tileGrid — unchanged. Any other
+// layout resolves to per-tile rects and is composited; an unknown or non-fitting
+// layout falls back to the even grid, so a layout that only exists in another
+// frontend's config never breaks the split here.
+func (m model) renderSplitGrid(tiles, collapsed []panel.Panel) string {
+	if rects, ok := m.layoutRects(); ok {
+		rendered := make([]string, 0, len(rects))
+		for i, p := range tiles {
+			if i >= len(rects) {
+				break
+			}
+			r := rects[i]
+			rendered = append(rendered, m.renderTile(p, i == m.groupFocus, r.emuCols, r.emuRows, 0))
+		}
+		if len(collapsed) > 0 && len(tiles) < len(rects) {
+			r := rects[len(tiles)]
+			summaryFocused := m.groupFocus == len(tiles)
+			rendered = append(rendered, m.renderSummaryTile(collapsed, summaryFocused, r.emuCols, r.emuRows, 0))
+		}
+		return composeTiles(rects[:len(rendered)], rendered, m.width, m.height-1-groupHeaderRows)
+	}
+
+	// The even-grid path (the "tiled" default), unchanged.
+	cols, emuCols, emuRows := m.tileGeometry()
+	rendered := make([]string, 0, len(tiles)+1)
+	for i, p := range tiles {
+		rendered = append(rendered, m.renderTile(p, i == m.groupFocus, emuCols, emuRows, gtileGap))
+	}
+	if len(collapsed) > 0 {
+		summaryFocused := m.groupFocus == len(tiles)
+		rendered = append(rendered, m.renderSummaryTile(collapsed, summaryFocused, emuCols, emuRows, gtileGap))
+	}
+	return tileGrid(rendered, cols)
 }
 
 // renderSummaryTile draws the rollup of the collapsed members as one tile in the
@@ -791,7 +920,7 @@ func (m model) groupZoomView() string {
 // and the most-urgent member's activity line — so the spillover is legible at a
 // glance and one enter away. It matches renderTile's box (size, padding, brand
 // glow when focused) so it sits flush as the grid's last cell.
-func (m model) renderSummaryTile(collapsed []panel.Panel, focused bool, emuCols, emuRows int) string {
+func (m model) renderSummaryTile(collapsed []panel.Panel, focused bool, emuCols, emuRows, marginRight int) string {
 	border := colFaint
 	titleColor := colInk
 	if focused {
@@ -818,7 +947,7 @@ func (m model) renderSummaryTile(collapsed []panel.Panel, focused bool, emuCols,
 	box := lipgloss.NewStyle().
 		Width(emuCols+2). // inner content + padding; the border adds the last 2
 		Padding(0, 1).
-		MarginRight(gtileGap).
+		MarginRight(marginRight).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(border)
 	return box.Render(lipgloss.JoinVertical(lipgloss.Left, head,
@@ -856,7 +985,7 @@ func tileGrid(tiles []string, cols int) string {
 // screen: a status LED and title above the panel's live screen (emuCols×emuRows).
 // The focused tile glows in the brand colour, mirroring the dashboard's selected
 // card.
-func (m model) renderTile(p panel.Panel, focused bool, emuCols, emuRows int) string {
+func (m model) renderTile(p panel.Panel, focused bool, emuCols, emuRows, marginRight int) string {
 	info := states[p.State]
 	border := colFaint
 	titleColor := colInk
@@ -891,7 +1020,7 @@ func (m model) renderTile(p panel.Panel, focused bool, emuCols, emuRows int) str
 	box := lipgloss.NewStyle().
 		Width(emuCols+2). // inner content + padding; the border adds the last 2
 		Padding(0, 1).
-		MarginRight(gtileGap).
+		MarginRight(marginRight).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(border)
 

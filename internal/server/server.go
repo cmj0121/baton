@@ -155,6 +155,11 @@ type Server struct {
 	// an absent or zero entry means "use the client default". Guarded by mu.
 	groupShown map[string]int
 
+	// groupLayout is the per-group split arrangement — the named layout (a preset
+	// or a custom TUI.yaml layout) a group opens with. Keyed by group name; an
+	// absent or empty entry means "use the client default" (tiled). Guarded by mu.
+	groupLayout map[string]string
+
 	// conductorPending reserves the conductor singleton across the unlocked spawn
 	// in createPanel, so two near-simultaneous conductor.create calls cannot both
 	// pass the "no conductor exists yet" check. Guarded by mu.
@@ -268,6 +273,7 @@ func New(ln net.Listener, opts ...Option) *Server {
 		specs:           make(map[string]ptymgr.Spec),
 		ephemeral:       make(map[string]struct{}),
 		groupShown:      make(map[string]int),
+		groupLayout:     make(map[string]string),
 		pendingDispatch: make(map[string][]byte),
 		tasks:           make(map[string]*task.Task),
 		panelTask:       make(map[string]string),
@@ -863,6 +869,12 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			return
 		}
 		s.broadcastFleet()
+	case "group.layout":
+		if err := s.setGroupLayout(cmd.Group, cmd.Layout); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		s.broadcastFleet()
 	case "server.reload":
 		// Re-read the config and apply it in place — the cockpit's reload action.
 		// The fleet keeps running; only the tunable settings change.
@@ -1273,12 +1285,30 @@ func (s *Server) snapshotState() state.State {
 			Spec:      state.Spec{Command: spec.Command, Args: spec.Args, Dir: spec.Dir},
 		}
 	}
-	// Per-group view settings (the visible counts), keyed by name like the group.
-	groups := make([]state.GroupLayout, 0, len(s.groupShown))
+	// Per-group view settings (the visible counts and the chosen layout), keyed by
+	// name like the group, so a restart restores how each group was arranged.
+	gviews := make(map[string]*state.GroupLayout)
+	gview := func(g string) *state.GroupLayout {
+		v, ok := gviews[g]
+		if !ok {
+			v = &state.GroupLayout{Group: g}
+			gviews[g] = v
+		}
+		return v
+	}
 	for g, shown := range s.groupShown {
 		if shown != 0 {
-			groups = append(groups, state.GroupLayout{Group: g, Shown: shown})
+			gview(g).Shown = shown
 		}
+	}
+	for g, layout := range s.groupLayout {
+		if layout != "" {
+			gview(g).Layout = layout
+		}
+	}
+	groups := make([]state.GroupLayout, 0, len(gviews))
+	for _, v := range gviews {
+		groups = append(groups, *v)
 	}
 	return state.State{Seq: s.seq, LastBoot: s.bootTime, Panels: panels, Groups: groups}
 }
@@ -1345,6 +1375,9 @@ func (s *Server) Restore() {
 	for _, g := range st.Groups {
 		if g.Shown > 0 {
 			s.groupShown[g.Group] = g.Shown
+		}
+		if g.Layout != "" {
+			s.groupLayout[g.Group] = g.Layout
 		}
 	}
 	s.restoreTasksLocked()
@@ -2337,9 +2370,10 @@ func (s *Server) ungroup(ids []string, name string) error {
 	if moved == 0 {
 		return fmt.Errorf("no panels in group %q", name)
 	}
-	// The whole group is gone; drop its visible count so the map stays tidy.
+	// The whole group is gone; drop its view settings so the maps stay tidy.
 	s.mu.Lock()
 	delete(s.groupShown, name)
+	delete(s.groupLayout, name)
 	s.emit("group.change", map[string]any{"group": name})
 	s.mu.Unlock()
 	log.Info().Str("group", name).Int("panels", moved).Msg("group dissolved")
@@ -2400,10 +2434,14 @@ func (s *Server) renameGroup(old, name string) error {
 	if moved == 0 {
 		return fmt.Errorf("no panels in group %q", old)
 	}
-	// Carry the visible count to the new name, keyed by name like the group itself.
+	// Carry the view settings to the new name, keyed by name like the group itself.
 	if shown, ok := s.groupShown[old]; ok {
 		s.groupShown[name] = shown
 		delete(s.groupShown, old)
+	}
+	if layout, ok := s.groupLayout[old]; ok {
+		s.groupLayout[name] = layout
+		delete(s.groupLayout, old)
 	}
 	s.emit("group.change", map[string]any{"group": name, "from": old})
 	log.Info().Str("from", old).Str("to", name).Int("panels", moved).Msg("group renamed")
@@ -2554,6 +2592,31 @@ func (s *Server) setGroupShown(group string, count int) error {
 	return nil
 }
 
+// setGroupLayout records a group's split arrangement — the named layout (a preset
+// or a custom TUI.yaml layout) the group opens with. The name is stored verbatim;
+// the client resolves an unknown name to the default, so a layout that only exists
+// in one frontend's config never wedges another. An empty group name is rejected;
+// an empty layout clears the override back to the default. Like setGroupShown the
+// group need not currently exist, and lifecycle cleanup keeps the map tidy.
+func (s *Server) setGroupLayout(group, layout string) error {
+	group = strings.TrimSpace(group)
+	if group == "" {
+		return fmt.Errorf("group.layout needs a group")
+	}
+	layout = strings.TrimSpace(layout)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if layout == "" {
+		delete(s.groupLayout, group)
+	} else {
+		s.groupLayout[group] = layout
+	}
+	s.emit("group.change", map[string]any{"group": group, "layout": layout})
+	log.Info().Str("group", group).Str("layout", layout).Msg("group layout set")
+	return nil
+}
+
 // panelsMsg builds the full "panels" snapshot broadcast to clients: every panel
 // in wire form plus each group's non-default view settings, sorted by name for a
 // deterministic frame.
@@ -2565,11 +2628,30 @@ func (s *Server) panelsMsg() proto.ServerMsg {
 		out[i] = p.ToProto()
 	}
 	// Per-group view settings ride the snapshot, sorted by name for determinism.
-	groups := make([]proto.GroupView, 0, len(s.groupShown))
+	// A group appears when it carries a non-default visible count, a non-default
+	// layout, or both, so the two settings travel on one row per group.
+	views := make(map[string]*proto.GroupView)
+	view := func(g string) *proto.GroupView {
+		v, ok := views[g]
+		if !ok {
+			v = &proto.GroupView{Group: g}
+			views[g] = v
+		}
+		return v
+	}
 	for g, shown := range s.groupShown {
 		if shown != 0 {
-			groups = append(groups, proto.GroupView{Group: g, Shown: shown})
+			view(g).Shown = shown
 		}
+	}
+	for g, layout := range s.groupLayout {
+		if layout != "" {
+			view(g).Layout = layout
+		}
+	}
+	groups := make([]proto.GroupView, 0, len(views))
+	for _, v := range views {
+		groups = append(groups, *v)
 	}
 	slices.SortFunc(groups, func(a, b proto.GroupView) int { return strings.Compare(a.Group, b.Group) })
 	return proto.ServerMsg{Type: "panels", Panels: out, Groups: groups}

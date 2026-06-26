@@ -246,6 +246,7 @@ type model struct {
 	groupArmed      bool                        // prefix pressed in the split, awaiting an escape
 	groupInteract   bool                        // keys drive the focused tile in place (i), no zoom
 	groupShown      map[string]int              // per-group visible-tile count N, server-owned via the snapshot's Groups
+	groupLayout     map[string]string           // per-group split layout name, server-owned via the snapshot's Groups
 	summaryScope    bool                        // the split is scoped to a group's collapsed (summarised) members
 	groupPinned     map[string]bool             // member ids pinned to a live tile, derived from the fleet's server-owned Pinned flags
 	groupEmus       map[string]*vt.SafeEmulator // live emulator per member tile
@@ -682,6 +683,7 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		}
 		m.fleet = mergeFleet(sm.Panels)
 		m.groupShown = shownForGroups(sm.Groups)
+		m.groupLayout = layoutForGroups(sm.Groups)
 		if onDash {
 			m.restoreCursor(selKind, selID, selGroup, hadSel)
 		} else {
