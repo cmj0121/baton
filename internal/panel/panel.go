@@ -89,6 +89,13 @@ type Panel struct {
 	State State
 	Group string // work item this panel belongs to, "" if ungrouped
 
+	// Task is the brief the panel was last dispatched: the objective an agent was
+	// asked to work, recorded when a prompt is handed to it as a unit (not as raw
+	// keystrokes). Empty until the panel is dispatched; carried to every frontend so
+	// the card can show what the agent is working, and persisted so it survives a
+	// restart.
+	Task string
+
 	Activity string // short status line, e.g. "running · 3m"
 	Spark    string // output-rate sparkline over the recent window, e.g. "▂▃▅▇▆▃▁"
 
@@ -114,6 +121,7 @@ func FromProto(p proto.Panel) Panel {
 		Title:     p.Title,
 		State:     ParseState(p.State),
 		Group:     p.Group,
+		Task:      p.Task,
 		Activity:  p.Activity,
 		Spark:     p.Spark,
 		Pinned:    p.Pinned,
@@ -129,6 +137,7 @@ func (p Panel) ToProto() proto.Panel {
 		Title:     p.Title,
 		State:     p.State.String(),
 		Group:     p.Group,
+		Task:      p.Task,
 		Activity:  p.Activity,
 		Spark:     p.Spark,
 		Pinned:    p.Pinned,
