@@ -147,6 +147,40 @@ func (m model) layoutRects() ([]tileRect, bool) {
 	return resolveLayout(m.groupLayoutName(), m.tuiCfg.Layouts, m.gridCells(), m.width, m.height-1-groupHeaderRows)
 }
 
+// tileHitRects returns one rect per cell for hit-testing — the layout's rects for a
+// resolved layout, or the even grid's rects reconstructed from its geometry. Unlike
+// layoutRects it always returns a set, so a mouse click resolves under any layout.
+func (m model) tileHitRects() []tileRect {
+	if rects, ok := m.layoutRects(); ok {
+		return rects
+	}
+	cols, emuCols, emuRows := m.tileGeometry()
+	tileW, tileH := emuCols+4, emuRows+3 // border (2) + padding (2); border (2) + head (1)
+	n := m.gridCells()
+	rects := make([]tileRect, n)
+	for i := 0; i < n; i++ {
+		r, c := i/cols, i%cols
+		rects[i] = tileRect{x: c * (tileW + gtileGap), y: r * tileH, w: tileW, h: tileH, emuCols: emuCols, emuRows: emuRows}
+	}
+	return rects
+}
+
+// tileAtPoint maps a screen point to the focus index of the tile under it, or false
+// when it falls on the header, a gap, or past the grid. The grid sits below the
+// split header, so the point is shifted into the grid's own coordinates first.
+func (m model) tileAtPoint(x, y int) (int, bool) {
+	gy := y - groupHeaderRows
+	if gy < 0 {
+		return 0, false
+	}
+	for i, r := range m.tileHitRects() {
+		if x >= r.x && x < r.x+r.w && gy >= r.y && gy < r.y+r.h {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
 // tileEmuSize is the emulator size for the live tile at focus-order index i under
 // the current layout — the rect's inner size for a resolved layout, else the
 // uniform even-grid size. The shared source for attaching and resizing each tile.

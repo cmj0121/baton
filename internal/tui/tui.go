@@ -180,6 +180,8 @@ type model struct {
 
 	copySelecting bool // a copy selection is being made in scroll mode (v marks the anchor)
 	copyAnchor    int  // combined line index the selection is anchored at; the span runs to the current top
+	copyBlock     bool // the selection is rectangular (V): rows as usual, but only columns [0, copyCol]
+	copyCol       int  // the right column edge of a block selection; h / l pull it in / out
 
 	signalFrom    mode     // the view the signal picker was opened from, restored on esc / after sending
 	signalTargets []string // panel ids the chosen signal is delivered to
@@ -1971,8 +1973,8 @@ func (m model) enterScroll() model {
 		return m
 	}
 	m.scrolling = true
-	m.copySelecting = false // a fresh scroll session starts with no selection
-	m.status = "scroll · ↑↓ line · b/Spc page · v select · y copy · esc exits"
+	m.copySelecting, m.copyBlock = false, false // a fresh scroll session starts with no selection
+	m.status = "scroll · ↑↓ line · b/Spc page · v select · V block · y copy · esc exits"
 	return m
 }
 
@@ -1981,7 +1983,7 @@ func (m model) enterScroll() model {
 func (m model) exitScroll() model {
 	m.scrolling = false
 	m.scrollOff = 0
-	m.copySelecting = false
+	m.copySelecting, m.copyBlock = false, false
 	m = m.clearSearch()
 	m.status = ""
 	return m
@@ -2029,8 +2031,18 @@ func (m model) handleScrollKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.gotoMatch(-1), nil
 	case "N": // previous search hit (newer)
 		return m.gotoMatch(1), nil
-	case "v": // mark / clear the copy selection anchor
+	case "v": // mark / clear the copy selection anchor (whole lines)
 		return m.copyToggle(), nil
+	case "V": // mark / clear a rectangular (block) selection
+		return m.copyBlockToggle(), nil
+	case "l", "right": // block selection: widen the column span
+		if m.copyBlock {
+			return m.adjustCopyCol(1), nil
+		}
+	case "h", "left": // block selection: narrow the column span
+		if m.copyBlock {
+			return m.adjustCopyCol(-1), nil
+		}
 	case "y": // copy the selection (or the visible page) to the clipboard
 		return m.yankSelection()
 	case "esc", "q":
@@ -2054,6 +2066,18 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil // a prompt (filter, search, rename…) owns the view — don't scroll behind it
 	}
 	if msg.Action != tea.MouseActionPress {
+		return m, nil
+	}
+	// A left click in the group split focuses the tile under the pointer, so you can
+	// jump straight to a member instead of tabbing to it. It is ignored in interact
+	// mode (where clicks belong to the program) and when it lands off any tile.
+	if msg.Button == tea.MouseButtonLeft {
+		if m.mode == modeGroupZoom && !m.groupInteract {
+			if idx, ok := m.tileAtPoint(msg.X, msg.Y); ok {
+				m.groupFocus = idx
+				m.scrollOff = 0
+			}
+		}
 		return m, nil
 	}
 	up := msg.Button == tea.MouseButtonWheelUp
