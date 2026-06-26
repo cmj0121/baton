@@ -3,12 +3,46 @@ package server
 import (
 	"net"
 	"time"
+
+	"github.com/cmj0121/baton/internal/task"
 )
 
 // Handle runs the connection handler on conn directly, bypassing the listener.
 // It exists only for tests that need to interpose an instrumented net.Conn (e.g.
 // one flagging concurrent writes) on the server's side of the wire.
 func (s *Server) Handle(conn net.Conn) { s.handle(conn) }
+
+// TaskByPanel returns a copy of the task currently mapped to a panel, for tests
+// asserting how the panel lifecycle drives the task lifecycle.
+func (s *Server) TaskByPanel(panelID string) (task.Task, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if tid, ok := s.panelTask[panelID]; ok {
+		if t := s.tasks[tid]; t != nil {
+			return *t, true
+		}
+	}
+	return task.Task{}, false
+}
+
+// TaskCount returns how many tasks the server is tracking, for tests asserting
+// re-dispatch updates one task rather than spawning many.
+func (s *Server) TaskCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.tasks)
+}
+
+// TaskByID returns a copy of a task by id, for tests asserting how restore
+// re-queues an orphaned task.
+func (s *Server) TaskByID(id string) (task.Task, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t := s.tasks[id]; t != nil {
+		return *t, true
+	}
+	return task.Task{}, false
+}
 
 // EphemeralCount returns how many ephemeral diff panels the server currently
 // tracks. It exists only for tests, which assert the set is empty after a diff
