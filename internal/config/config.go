@@ -29,6 +29,56 @@ type Config struct {
 
 	// Queue holds the task-backlog caps.
 	Queue QueueDefaults `yaml:"queue,omitempty"`
+
+	// TUI holds the cockpit appearance — the colour theme and the group-split
+	// layouts. Its canonical source is a separate file ($HOME/.baton/TUI.yaml,
+	// see LoadTUI); it lives here so it rides the same config broadcast to every
+	// frontend.
+	TUI TUIConfig `yaml:"tui,omitempty"`
+}
+
+// TUIConfig is the cockpit appearance: the colour theme and the named group-split
+// layouts. It is read from $HOME/.baton/TUI.yaml (see LoadTUI) and carried on
+// Config.TUI so frontends receive it over the existing config broadcast.
+type TUIConfig struct {
+	// Theme overrides the cockpit palette; an empty field keeps the built-in.
+	Theme Theme `yaml:"theme,omitempty"`
+
+	// Layouts are the named group-split arrangements offered in addition to the
+	// built-in presets (tiled, main-vertical, main-horizontal, stack). A custom
+	// entry with the same name as a preset overrides it.
+	Layouts []Layout `yaml:"layouts,omitempty"`
+
+	// DefaultLayout names the layout a group opens with; empty uses "tiled".
+	DefaultLayout string `yaml:"default-layout,omitempty"`
+}
+
+// Theme is the cockpit colour palette. Each field is a colour string (a hex
+// "#rrggbb" or an ANSI index); an empty field falls back to the built-in default,
+// so a partial theme only overrides what it names.
+type Theme struct {
+	Brand   string `yaml:"brand,omitempty"`    // primary accent (banner, active borders, selection)
+	BrandHi string `yaml:"brand-hi,omitempty"` // brighter accent (titles, pins, summary, hits)
+
+	// The five lifecycle-state LEDs, by state name.
+	Spawning  string `yaml:"spawning,omitempty"`
+	Running   string `yaml:"running,omitempty"`
+	Idle      string `yaml:"idle,omitempty"`
+	Attention string `yaml:"attention,omitempty"`
+	Exited    string `yaml:"exited,omitempty"`
+}
+
+// Layout is one named group-split arrangement. With no Areas it names a built-in
+// preset (tiled, main-vertical, main-horizontal, stack). A custom layout gives an
+// Areas grid: Areas[r] is one row of region names, each cell naming the region
+// that owns it, so a region spanning several cells repeats its name across them.
+// Members fill the regions in row-major order of first appearance; members past
+// the region count fold into the summary tile.
+type Layout struct {
+	Name  string     `yaml:"name"`
+	Rows  int        `yaml:"rows,omitempty"`
+	Cols  int        `yaml:"cols,omitempty"`
+	Areas [][]string `yaml:"areas,omitempty"`
 }
 
 // QueueDefaults caps the task backlog: Max is the most queued (unassigned) tasks
@@ -117,6 +167,25 @@ func Load() (Config, error) {
 	}
 	c.normalize()
 	return c, nil
+}
+
+// LoadTUI reads the cockpit appearance file ($HOME/.baton/TUI.yaml). A missing
+// file yields a zero TUIConfig and no error, so the built-in theme and the preset
+// layouts apply. The caller attaches the result onto Config.TUI before the config
+// is broadcast to frontends.
+func LoadTUI() (TUIConfig, error) {
+	var t TUIConfig
+	data, err := os.ReadFile(paths.TUIConfigFile())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return t, nil
+		}
+		return t, fmt.Errorf("read TUI config: %w", err)
+	}
+	if err := yaml.Unmarshal(data, &t); err != nil {
+		return t, fmt.Errorf("parse TUI config %s: %w", paths.TUIConfigFile(), err)
+	}
+	return t, nil
 }
 
 // normalize coerces a parsed config back into sane bounds so a hand-edited file

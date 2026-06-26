@@ -36,9 +36,16 @@ const banner = `██████╗  █████╗ ███████�
 // Palette. A dark theme keyed on a single primary blue: azure (39) carries the
 // brand and every selection, deep blues fill the chrome, and the rest stay
 // semantic so panel state still reads at a glance.
-const (
+// colBrand and colBrandHi are var, not const, because the theme (TUI.yaml) can
+// override them on config apply; see applyTheme in theme.go. Every render site
+// reads these, so re-resolving them here re-skins the cockpit without touching
+// the render tree.
+var (
 	colBrand   = lipgloss.Color("39")  // primary blue — banner, borders, selection
 	colBrandHi = lipgloss.Color("117") // lighter blue for highlighted text
+)
+
+const (
 	colInk     = lipgloss.Color("253") // near-white text
 	colMuted   = lipgloss.Color("245") // dim text
 	colFaint   = lipgloss.Color("239") // hairlines / inactive borders
@@ -152,6 +159,7 @@ type model struct {
 	agents       map[string]config.AgentProfile // user-configured agent profiles
 	replayKB     int                            // per-panel replay buffer in KiB, round-tripped so a save never drops it
 	diffCommand  string                         // configured diff command for the agent diff pop-up, round-tripped so a save never drops it
+	tuiCfg       config.TUIConfig               // cockpit appearance (theme + layouts) pushed from the daemon
 	input        inputPurpose                   // active text-input overlay, or inputNone
 	inputBuf     string                         // text typed into the overlay
 	inputHint    string                         // path-completion hint shown under the field (tab), cleared on edit
@@ -306,6 +314,8 @@ func (m model) applyPrefs(p prefs) model {
 	m.agents = p.agents
 	m.replayKB = p.replayKB
 	m.diffCommand = p.diffCommand
+	m.tuiCfg = p.tui
+	applyTheme(p.tui.Theme) // resolve the colour tokens into the package palette
 	return m
 }
 
