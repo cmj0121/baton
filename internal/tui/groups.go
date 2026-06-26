@@ -461,6 +461,26 @@ func shownForGroups(groups []proto.GroupView) map[string]int {
 	return out
 }
 
+// layoutForGroups builds the per-group layout-name map from a snapshot's GroupView
+// entries, keyed by group name. Only groups the server reports a layout for appear;
+// a group absent from the map falls back to the default layout in groupLayoutName,
+// so a fresh or un-annotated group still opens as a plain tiled split.
+func layoutForGroups(groups []proto.GroupView) map[string]string {
+	if len(groups) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(groups))
+	for _, g := range groups {
+		if g.Layout != "" {
+			out[g.Group] = g.Layout
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // singlePinned returns the lone pinned member when exactly one of the group's
 // members is pinned, so entering can drop straight into it.
 func singlePinned(members []panel.Panel, pins map[string]bool) (panel.Panel, bool) {

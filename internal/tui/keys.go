@@ -53,6 +53,7 @@ const (
 	keyInteract  = "i" // in the group split: drive the focused tile in place, no zoom
 	keyPin       = "p" // in the group split: pin/unpin the focused member to a live tile
 	keySignalAll = "S" // in the group split: signal every member (bare s signals the focused one)
+	keyLayout    = "L" // in the group split: cycle the tile layout (shift+l; bare l moves focus)
 
 	keyCtrlC = "ctrl+c" // captured in command mode — exit is the detach binding only
 	keyCtrlE = "ctrl+e" // captured in command mode — exit is the detach binding only
@@ -181,6 +182,7 @@ type prefs struct {
 	agents            map[string]config.AgentProfile // user-configured agent profiles
 	replayKB          int                            // per-panel replay buffer in KiB (0 = server default)
 	diffCommand       string                         // explicit diff command for the agent diff pop-up ("" = git diff.tool then a built-in diff)
+	tui               config.TUIConfig               // cockpit appearance: colour theme and group-split layouts
 }
 
 // defaultAgentName is the built-in agent profile, used when none is configured —
@@ -238,6 +240,7 @@ func prefsFromConfig(cfg config.Config) prefs {
 	p.agents = cfg.Panel.Agents
 	p.replayKB = cfg.Panel.ReplayKB
 	p.diffCommand = cfg.Panel.DiffCommand
+	p.tui = cfg.TUI
 	return p
 }
 

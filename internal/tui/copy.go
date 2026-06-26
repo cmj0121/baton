@@ -36,6 +36,52 @@ func (m model) copyToggle() model {
 	return m
 }
 
+// copyBlockToggle starts (or clears) a rectangular selection: rows run from the
+// anchor to the current top like a line selection, but only columns [0, copyCol]
+// are copied, so you can lift a narrow left column out of aligned output. h / l
+// pull the right edge in and out. Pressing V again clears it.
+func (m model) copyBlockToggle() model {
+	if m.copySelecting && m.copyBlock {
+		m.copySelecting, m.copyBlock = false, false
+		m.status = "selection cleared"
+		return m
+	}
+	emu, _ := m.scrollTarget()
+	if emu == nil {
+		m.status = "nothing to select here"
+		return m
+	}
+	m.copySelecting = true
+	m.copyBlock = true
+	m.copyAnchor = m.topVisibleLine(emu)
+	m.copyCol = max(0, m.scrollCols()-1) // start full width; h narrows it
+	m.status = "block select · scroll rows · h/l columns · y copies · V clears"
+	return m
+}
+
+// adjustCopyCol moves a block selection's right column edge by delta, clamped to
+// the target's width. A no-op outside a block selection.
+func (m model) adjustCopyCol(delta int) model {
+	if !m.copySelecting || !m.copyBlock {
+		return m
+	}
+	m.copyCol = max(0, min(m.copyCol+delta, m.scrollCols()-1))
+	m.status = fmt.Sprintf("block · columns 0–%d", m.copyCol)
+	return m
+}
+
+// scrollCols is the column width of the current scroll target: the full screen in a
+// single zoom, or the focused tile's inner width in the group split.
+func (m model) scrollCols() int {
+	switch m.mode {
+	case modeGroupZoom:
+		c, _ := m.tileEmuSize(m.groupFocus)
+		return c
+	default:
+		return m.width
+	}
+}
+
 // topVisibleLine is the combined scrollback+screen index of the line at the top
 // of the current scroll window.
 func (m model) topVisibleLine(emu *vt.SafeEmulator) int {
@@ -92,9 +138,19 @@ func (m model) yankSelection() (tea.Model, tea.Cmd) {
 		m.status = "nothing to copy"
 		return m, nil
 	}
-	// Drop trailing blank rows (a page copy at the live bottom picks up empty screen
-	// lines) but keep one closing newline so the paste lands on its own line.
-	text := strings.TrimRight(strings.Join(plain[lo:hi+1], "\n"), " \t\n") + "\n"
+	// Block selection clips each row to the chosen columns; a line selection takes
+	// the whole row. Either way drop trailing blank rows (a page copy at the live
+	// bottom picks up empty screen lines) and keep one closing newline.
+	rowsOut := plain[lo : hi+1]
+	if m.copyBlock {
+		width := min(m.copyCol+1, m.scrollCols())
+		clipped := make([]string, len(rowsOut))
+		for i, r := range rowsOut {
+			clipped[i] = strings.TrimRight(clipCells(r, width), " \t")
+		}
+		rowsOut = clipped
+	}
+	text := strings.TrimRight(strings.Join(rowsOut, "\n"), " \t\n") + "\n"
 	n := hi - lo + 1
 	m = m.exitScroll() // a yank ends copy mode and returns to the live bottom
 	m.status = fmt.Sprintf("copied %d line(s) to the clipboard", n)
@@ -128,13 +184,59 @@ func (m model) selectWindow(emu *vt.SafeEmulator, cols, rows, off int) []string 
 	if lo > hi {
 		lo, hi = hi, lo
 	}
+	width := cols
+	if m.copyBlock {
+		width = max(0, min(m.copyCol+1, cols)) // the block's highlighted column span
+	}
 	for i := range lines {
 		idx := start + i
 		if idx >= lo && idx <= hi && idx >= 0 && idx < len(plain) {
-			lines[i] = selectLine(plain[idx], cols)
+			if m.copyBlock {
+				lines[i] = selectCells(plain[idx], width, cols)
+			} else {
+				lines[i] = selectLine(plain[idx], cols)
+			}
 		}
 	}
 	return lines
+}
+
+// selectCells draws a plain line for a block selection: the first width columns in
+// reverse video (padded so the band is solid), then the rest of the line plain up
+// to cols. So a rectangular selection highlights only its columns, with the
+// unselected remainder still legible.
+func selectCells(s string, width, cols int) string {
+	if width >= cols {
+		return selectLine(s, cols) // full width — no distinct tail to draw
+	}
+	head := clipCells(s, width)
+	if w := cellsWidth(head); w < width {
+		head += strings.Repeat(" ", width-w)
+	}
+	tail := clipCells(dropCells(s, width), cols-width)
+	return "\x1b[7m" + head + "\x1b[27m" + tail
+}
+
+// cellsWidth is the display width of a plain string in terminal cells.
+func cellsWidth(s string) int {
+	w := 0
+	for _, r := range s {
+		w += cellWidth(r)
+	}
+	return w
+}
+
+// dropCells returns the suffix of a plain string after the first n display columns,
+// the complement of clipCells. A rune straddling the boundary is dropped whole.
+func dropCells(s string, n int) string {
+	vis := 0
+	for i, r := range s {
+		if vis >= n {
+			return s[i:]
+		}
+		vis += cellWidth(r)
+	}
+	return ""
 }
 
 // selectLine draws a plain line as a full-width reverse-video band, so a selected

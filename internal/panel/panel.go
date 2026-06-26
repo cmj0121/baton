@@ -89,6 +89,12 @@ type Panel struct {
 	State State
 	Group string // work item this panel belongs to, "" if ungrouped
 
+	// DisplayTitle is the title a panel.title plugin hook computed, overriding
+	// Title on the frontends only. Title stays the base "<cmd> · <dir>" the hook
+	// reads, so the hook never sees its own output (no feedback). Empty means no
+	// override — the frontends show Title.
+	DisplayTitle string
+
 	// Task is the brief the panel was last dispatched: the objective an agent was
 	// asked to work, recorded when a prompt is handed to it as a unit (not as raw
 	// keystrokes). Empty until the panel is dispatched; carried to every frontend so
@@ -131,10 +137,14 @@ func FromProto(p proto.Panel) Panel {
 
 // ToProto encodes the panel for the wire.
 func (p Panel) ToProto() proto.Panel {
+	title := p.Title
+	if p.DisplayTitle != "" {
+		title = p.DisplayTitle // a panel.title hook's override wins on the frontends
+	}
 	return proto.Panel{
 		ID:        p.ID,
 		Kind:      p.Kind.String(),
-		Title:     p.Title,
+		Title:     title,
 		State:     p.State.String(),
 		Group:     p.Group,
 		Task:      p.Task,

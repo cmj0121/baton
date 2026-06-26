@@ -30,7 +30,7 @@ func TestRenderTileHeadStaysOneRow(t *testing.T) {
 			m := baseModel()
 			p := panel.Panel{ID: "x", Title: long, State: panel.Running}
 			tc.mut(&m, p)
-			if h := lipgloss.Height(m.renderTile(p, true, emuCols, emuRows)); h != emuRows+3 {
+			if h := lipgloss.Height(m.renderTile(p, true, emuCols, emuRows, gtileGap)); h != emuRows+3 {
 				t.Fatalf("head should stay one row: tile height %d, want %d", h, emuRows+3)
 			}
 		})

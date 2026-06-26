@@ -47,6 +47,7 @@ type Host interface {
 	GroupInfos() []proto.GroupView
 	Notify(msg string)
 	SetFooter(text string)
+	SetPanelTitle(id, title string)
 }
 
 // LoadResult is what a load produced for the daemon to apply: the merged effective
@@ -57,6 +58,7 @@ type LoadResult struct {
 	Config     config.Config
 	Commands   []proto.PluginCommand
 	WantOutput bool
+	WantTitle  bool // a panel.title hook is registered (the server clears overrides when it is not)
 }
 
 // command is one registered baton.command: its name and description (shown in the
@@ -265,7 +267,12 @@ func (p *Plugin) result() LoadResult {
 	for i, c := range p.commands {
 		cmds[i] = proto.PluginCommand{Name: c.name, Desc: c.desc}
 	}
-	return LoadResult{Config: p.cfg, Commands: cmds, WantOutput: len(p.hooks["panel.output"]) > 0}
+	return LoadResult{
+		Config:     p.cfg,
+		Commands:   cmds,
+		WantOutput: len(p.hooks["panel.output"]) > 0,
+		WantTitle:  len(p.hooks["panel.title"]) > 0,
+	}
 }
 
 // runCommand invokes the named command's Lua function. Worker thread only.
@@ -293,6 +300,42 @@ func (p *Plugin) dispatch(name string, fields map[string]any) {
 			log.Warn().Str("event", name).Err(err).Msg("plugin hook error")
 		}
 	}
+	// A panel's display title may depend on what just changed (its birth or its
+	// state), so recompute it after the user hooks for those events run. The recompute
+	// is gated on a panel.title hook existing, so the common no-hook path stays free.
+	if (name == "panel.spawn" || name == "panel.state") && len(p.hooks["panel.title"]) > 0 {
+		p.refreshTitle(fields)
+	}
+}
+
+// refreshTitle runs the panel.title hooks over a panel's fields and pushes the
+// computed title back to the host. Worker thread only. Each hook receives the panel
+// table and may return a string to set the title; hooks chain, a later one seeing
+// the running result, and a hook that returns nil/"" leaves it unchanged. The base
+// Title in fields is never the previous override (the host keeps them separate), so
+// a hook never sees its own output. A throwing hook is logged and skipped.
+func (p *Plugin) refreshTitle(fields map[string]any) {
+	id, _ := fields["id"].(string)
+	if id == "" {
+		return
+	}
+	cur, _ := fields["title"].(string)
+	for _, fn := range p.hooks["panel.title"] {
+		tbl := mapToTable(p.L, fields)
+		tbl.RawSetString("title", lua.LString(cur)) // hooks compose on the running result
+		p.L.Push(fn)
+		p.L.Push(tbl)
+		if err := p.L.PCall(1, 1, nil); err != nil {
+			log.Warn().Err(err).Msg("panel.title hook error, keeping the title")
+			continue
+		}
+		ret := p.L.Get(-1)
+		p.L.Pop(1)
+		if s, ok := ret.(lua.LString); ok && string(s) != "" {
+			cur = string(s)
+		}
+	}
+	p.host.SetPanelTitle(id, cur)
 }
 
 // filterTask chains the task.pre hooks over a brief on the worker thread. Each hook

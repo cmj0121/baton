@@ -70,6 +70,15 @@ func ConfigFile() string {
 	return filepath.Join(home(), ".baton", "config")
 }
 
+// TUIConfigFile is the user's cockpit appearance configuration
+// ($HOME/.baton/TUI.yaml): the colour theme and the group-split layouts. It is a
+// separate file from ConfigFile so a user can reshape the look without touching
+// their bindings and behaviour settings. The server reads it, merges it into the
+// effective config, and broadcasts it to every frontend.
+func TUIConfigFile() string {
+	return filepath.Join(home(), ".baton", "TUI.yaml")
+}
+
 // ConductorFile is the operator's conductor brief ($HOME/.baton/CONDUCTOR.md): a
 // goal and guide the user writes for the conductor agent. It is optional — when
 // absent or empty the conductor gets only the built-in control primer. The server

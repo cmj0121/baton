@@ -52,7 +52,7 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action string   `json:"action"`           // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.signal | panel.diff | panel.git | group.show | task.enqueue | task.list | task.cancel | task.drain | server.reload | config.get | command.run
+	Action string   `json:"action"`           // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.signal | panel.diff | panel.git | group.show | group.layout | task.enqueue | task.list | task.cancel | task.drain | server.reload | config.get | command.run
 	Kind   string   `json:"kind,omitempty"`   // panel kind for "panel.create" (default "shell")
 	ID     string   `json:"id,omitempty"`     // target panel for close/attach/input/resize/diff, or the panel to rename
 	Path   string   `json:"path,omitempty"`   // init command (binary path) for "panel.create"; empty = default shell
@@ -70,6 +70,7 @@ type Command struct {
 	Signal string   `json:"signal,omitempty"` // signal name to deliver for "panel.signal", e.g. "SIGINT"
 	Count  int      `json:"count,omitempty"`  // absolute visible count for "group.show": how many members stream as live tiles
 	Git    string   `json:"git,omitempty"`    // git op for "panel.git", e.g. "log", "commit", "worktree-add"; Name carries a branch, Dir a worktree path
+	Layout string   `json:"layout,omitempty"` // layout name for "group.layout": the named split arrangement the group opens with
 
 	// Role and Self are declared on "hello" by a control client (the conductor
 	// agent driving the fleet over the socket). Role "conductor" puts the
@@ -91,8 +92,9 @@ type Command struct {
 // GroupView carries a group's view settings on a snapshot: Shown is how many
 // members stream as live tiles before the rest collapse into the summary tile.
 type GroupView struct {
-	Group string `json:"group"`
-	Shown int    `json:"shown,omitempty"`
+	Group  string `json:"group"`
+	Shown  int    `json:"shown,omitempty"`
+	Layout string `json:"layout,omitempty"` // the named split arrangement the group opens with ("" = the default)
 }
 
 // Panel is the server-side view of a single live terminal.

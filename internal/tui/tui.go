@@ -36,9 +36,16 @@ const banner = `██████╗  █████╗ ███████�
 // Palette. A dark theme keyed on a single primary blue: azure (39) carries the
 // brand and every selection, deep blues fill the chrome, and the rest stay
 // semantic so panel state still reads at a glance.
-const (
+// colBrand and colBrandHi are var, not const, because the theme (TUI.yaml) can
+// override them on config apply; see applyTheme in theme.go. Every render site
+// reads these, so re-resolving them here re-skins the cockpit without touching
+// the render tree.
+var (
 	colBrand   = lipgloss.Color("39")  // primary blue — banner, borders, selection
 	colBrandHi = lipgloss.Color("117") // lighter blue for highlighted text
+)
+
+const (
 	colInk     = lipgloss.Color("253") // near-white text
 	colMuted   = lipgloss.Color("245") // dim text
 	colFaint   = lipgloss.Color("239") // hairlines / inactive borders
@@ -152,6 +159,7 @@ type model struct {
 	agents       map[string]config.AgentProfile // user-configured agent profiles
 	replayKB     int                            // per-panel replay buffer in KiB, round-tripped so a save never drops it
 	diffCommand  string                         // configured diff command for the agent diff pop-up, round-tripped so a save never drops it
+	tuiCfg       config.TUIConfig               // cockpit appearance (theme + layouts) pushed from the daemon
 	input        inputPurpose                   // active text-input overlay, or inputNone
 	inputBuf     string                         // text typed into the overlay
 	inputHint    string                         // path-completion hint shown under the field (tab), cleared on edit
@@ -172,6 +180,8 @@ type model struct {
 
 	copySelecting bool // a copy selection is being made in scroll mode (v marks the anchor)
 	copyAnchor    int  // combined line index the selection is anchored at; the span runs to the current top
+	copyBlock     bool // the selection is rectangular (V): rows as usual, but only columns [0, copyCol]
+	copyCol       int  // the right column edge of a block selection; h / l pull it in / out
 
 	signalFrom    mode     // the view the signal picker was opened from, restored on esc / after sending
 	signalTargets []string // panel ids the chosen signal is delivered to
@@ -238,6 +248,7 @@ type model struct {
 	groupArmed      bool                        // prefix pressed in the split, awaiting an escape
 	groupInteract   bool                        // keys drive the focused tile in place (i), no zoom
 	groupShown      map[string]int              // per-group visible-tile count N, server-owned via the snapshot's Groups
+	groupLayout     map[string]string           // per-group split layout name, server-owned via the snapshot's Groups
 	summaryScope    bool                        // the split is scoped to a group's collapsed (summarised) members
 	groupPinned     map[string]bool             // member ids pinned to a live tile, derived from the fleet's server-owned Pinned flags
 	groupEmus       map[string]*vt.SafeEmulator // live emulator per member tile
@@ -306,6 +317,8 @@ func (m model) applyPrefs(p prefs) model {
 	m.agents = p.agents
 	m.replayKB = p.replayKB
 	m.diffCommand = p.diffCommand
+	m.tuiCfg = p.tui
+	applyTheme(p.tui.Theme) // resolve the colour tokens into the package palette
 	return m
 }
 
@@ -672,6 +685,7 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		}
 		m.fleet = mergeFleet(sm.Panels)
 		m.groupShown = shownForGroups(sm.Groups)
+		m.groupLayout = layoutForGroups(sm.Groups)
 		if onDash {
 			m.restoreCursor(selKind, selID, selGroup, hadSel)
 		} else {
@@ -1959,8 +1973,8 @@ func (m model) enterScroll() model {
 		return m
 	}
 	m.scrolling = true
-	m.copySelecting = false // a fresh scroll session starts with no selection
-	m.status = "scroll · ↑↓ line · b/Spc page · v select · y copy · esc exits"
+	m.copySelecting, m.copyBlock = false, false // a fresh scroll session starts with no selection
+	m.status = "scroll · ↑↓ line · b/Spc page · v select · V block · y copy · esc exits"
 	return m
 }
 
@@ -1969,7 +1983,7 @@ func (m model) enterScroll() model {
 func (m model) exitScroll() model {
 	m.scrolling = false
 	m.scrollOff = 0
-	m.copySelecting = false
+	m.copySelecting, m.copyBlock = false, false
 	m = m.clearSearch()
 	m.status = ""
 	return m
@@ -2017,8 +2031,18 @@ func (m model) handleScrollKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.gotoMatch(-1), nil
 	case "N": // previous search hit (newer)
 		return m.gotoMatch(1), nil
-	case "v": // mark / clear the copy selection anchor
+	case "v": // mark / clear the copy selection anchor (whole lines)
 		return m.copyToggle(), nil
+	case "V": // mark / clear a rectangular (block) selection
+		return m.copyBlockToggle(), nil
+	case "l", "right": // block selection: widen the column span
+		if m.copyBlock {
+			return m.adjustCopyCol(1), nil
+		}
+	case "h", "left": // block selection: narrow the column span
+		if m.copyBlock {
+			return m.adjustCopyCol(-1), nil
+		}
 	case "y": // copy the selection (or the visible page) to the clipboard
 		return m.yankSelection()
 	case "esc", "q":
@@ -2042,6 +2066,18 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil // a prompt (filter, search, rename…) owns the view — don't scroll behind it
 	}
 	if msg.Action != tea.MouseActionPress {
+		return m, nil
+	}
+	// A left click in the group split focuses the tile under the pointer, so you can
+	// jump straight to a member instead of tabbing to it. It is ignored in interact
+	// mode (where clicks belong to the program) and when it lands off any tile.
+	if msg.Button == tea.MouseButtonLeft {
+		if m.mode == modeGroupZoom && !m.groupInteract {
+			if idx, ok := m.tileAtPoint(msg.X, msg.Y); ok {
+				m.groupFocus = idx
+				m.scrollOff = 0
+			}
+		}
 		return m, nil
 	}
 	up := msg.Button == tea.MouseButtonWheelUp

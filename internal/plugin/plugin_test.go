@@ -54,6 +54,11 @@ type groupShowRec struct {
 	count int
 }
 
+type titleRec struct {
+	id    string
+	title string
+}
+
 // fakeHost is a stand-in for *server.Server: it records what the baton.* calls
 // drive, so a test can assert the Lua surface lands on the host. Every method
 // records its received arguments; the err* / ret* fields let a test steer the
@@ -77,6 +82,7 @@ type fakeHost struct {
 	enqueued         []dispatchRec
 	notified         []string
 	footer           string
+	titles           []titleRec
 
 	// return-value control.
 	panels       []proto.Panel
@@ -204,6 +210,11 @@ func (h *fakeHost) SetFooter(text string) {
 	defer h.mu.Unlock()
 	h.footer = text
 }
+func (h *fakeHost) SetPanelTitle(id, title string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.titles = append(h.titles, titleRec{id: id, title: title})
+}
 func (h *fakeHost) PanelInfos() []proto.Panel {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -220,6 +231,18 @@ func (h *fakeHost) footerText() string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.footer
+}
+
+// lastTitle returns the most recent SetPanelTitle for id, and whether any landed.
+func (h *fakeHost) lastTitle(id string) (string, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for i := len(h.titles) - 1; i >= 0; i-- {
+		if h.titles[i].id == id {
+			return h.titles[i].title, true
+		}
+	}
+	return "", false
 }
 
 // writeLua writes src to a temp .lua file and returns its path.
@@ -512,6 +535,60 @@ func TestLoadErrorIsNonFatal(t *testing.T) {
 	}
 	if res.Config.Prefix != "ctrl+t" {
 		t.Errorf("base config should still come back on error, prefix = %q", res.Config.Prefix)
+	}
+}
+
+// TestTitleHookComputesAndPushes exercises the panel.title filter: a hook computes
+// a title from the panel fields, the result is pushed to the host on a spawn and on
+// a state change, and WantTitle is reported so the server can gate.
+func TestTitleHookComputesAndPushes(t *testing.T) {
+	h := &fakeHost{}
+	p := plugin.New(h)
+	defer p.Close()
+
+	path := writeLua(t, `
+		baton.on("panel.title", function(pan)
+			return "["..pan.state.."] "..pan.title
+		end)
+	`)
+	res, err := p.Load(path, config.Config{})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !res.WantTitle {
+		t.Fatal("a panel.title hook must set WantTitle")
+	}
+
+	// A spawn computes the title from the base fields.
+	p.Dispatch("panel.spawn", map[string]any{"id": "1", "title": "claude · api", "state": "running"})
+	waitFor(t, func() bool { v, ok := h.lastTitle("1"); return ok && v == "[running] claude · api" })
+
+	// A state change recomputes it; the hook still sees the BASE title (no feedback).
+	p.Dispatch("panel.state", map[string]any{"id": "1", "title": "claude · api", "state": "idle"})
+	waitFor(t, func() bool { v, ok := h.lastTitle("1"); return ok && v == "[idle] claude · api" })
+}
+
+// TestNoTitleHookIsInert: without a panel.title hook, no title is ever pushed and
+// WantTitle is false, so the no-hook path costs nothing.
+func TestNoTitleHookIsInert(t *testing.T) {
+	h := &fakeHost{}
+	p := plugin.New(h)
+	defer p.Close()
+
+	path := writeLua(t, `baton.on("panel.state", function(pan) end)`)
+	res, err := p.Load(path, config.Config{})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if res.WantTitle {
+		t.Fatal("WantTitle must be false without a panel.title hook")
+	}
+	p.Dispatch("panel.spawn", map[string]any{"id": "1", "title": "claude · api", "state": "running"})
+	p.Dispatch("panel.state", map[string]any{"id": "1", "title": "claude · api", "state": "idle"})
+	// Give the worker a moment; nothing should have been pushed.
+	waitFor(t, func() bool { return true })
+	if _, ok := h.lastTitle("1"); ok {
+		t.Fatal("no panel.title hook should push no title")
 	}
 }
 

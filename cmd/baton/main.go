@@ -295,9 +295,18 @@ func runServerOn(ln net.Listener, sock string) error {
 		if perr != nil {
 			log.Warn().Err(perr).Msg("plugin load error, continuing with what loaded")
 		}
+		// The cockpit appearance lives in its own file ($HOME/.baton/TUI.yaml). Read
+		// it and attach onto the merged config so it rides the same broadcast to every
+		// frontend; a read error is non-fatal — the frontends keep the built-in look.
+		if tcfg, tErr := config.LoadTUI(); tErr != nil {
+			log.Warn().Err(tErr).Msg("TUI config load failed, using the built-in theme and layouts")
+		} else {
+			res.Config.TUI = tcfg
+		}
 		rc := reloadableSettings(res.Config)
 		srv.Reload(rc.allowNameConflict, rc.defaultDir, rc.replayBytes, rc.diffCommand, rc.editor, rc.worktreeDir)
 		srv.SetOutputEvents(res.WantOutput)
+		srv.SetTitleHook(res.WantTitle)
 		if data, mErr := json.Marshal(res.Config); mErr == nil {
 			srv.SetClientConfig(data)
 		}
