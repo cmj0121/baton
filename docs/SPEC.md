@@ -214,6 +214,46 @@ and the client demuxes it into the matching tile, while each tile's input side i
 PTY. The split reconciles on every snapshot — members added or removed elsewhere appear and disappear in place, an
 emptied group exits to the dashboard, and live tiles are capped so a very large group cannot spawn unbounded terminals.
 
+## Tasks and the queue
+
+A **panel** is a terminal; a **task** is a unit of work you hand one. Typing into a panel is raw keystrokes — the server
+sees bytes. A **dispatch** is different: you give the server the _objective_, and it records it on the panel and delivers
+it to the process as a unit. The brief then shows on the panel's card (a `▸` line) and in the snapshot, so every frontend
+and every reattach knows what each agent is working on.
+
+**Dispatch** is the direct path. `T` on the dashboard (`C-t T` in a zoom) opens a one-line prompt; what you type is
+delivered to the focused agent — or, on a work-item card, **fanned to every member** of the group at once, the mechanic
+behind racing N agents on the same prompt. The conductor cannot dispatch to its own panel (see
+[CONTROL.md](./CONTROL.md)). Delivery **waits for readiness**: a brief sent to a busy agent is held and written the
+moment the panel settles to `idle` or `attention`, so it lands at a prompt rather than interleaving with a running
+command.
+
+**A task is a tracked entity.** Each dispatch becomes a task with a forward-only status — `queued → dispatched → running
+→ done` (or `failed` from any non-terminal state) — an attempt count, and the panel and group it belongs to. The Monitor
+advances it as output flows: delivery moves it to `dispatched`, the first output to `running`, a settle to `done`, a
+process exit or a closed panel to `failed`.
+
+**The queue** is for work with nowhere to run yet. Instead of dispatching to a named panel, you **enqueue** a brief (with
+an optional group) and a server-owned scheduler drains it onto a free idle agent on a later tick — oldest task first,
+honouring a per-group concurrency cap. The scheduler never spawns a panel; it distributes work across the agents already
+in the fleet. This is the flagship **you → conductor → fleet** flow: you hand the conductor a batch of briefs, it
+enqueues them, and they flow out to whichever workers come free.
+
+The backlog is **persistent**. Each task is one JSON file under `$HOME/.baton/<session>.queue/`, written atomically and
+removed by the scheduler when the task leaves the backlog — so a daemon restart restores the queue. A task already
+assigned to a panel that did not survive the restart is re-queued (its id and attempt count kept) rather than lost. The
+queue is **opt-in**: with no `queue` config block the daemon takes dispatches but runs no scheduler, so the auto-drain
+never surprises you. `queue.max` caps the unassigned backlog; `queue.concurrency` caps how many of a group's tasks run
+at once.
+
+**Managing the backlog.** `Q` (`C-t Q` in a zoom) opens the queue manager — one row per task with its status, id, group,
+and brief. `d` cancels the highlighted **queued** task (a task already in flight on a panel is left to finish; cancel it
+by closing or signalling its panel), and `D` drains the whole unassigned backlog. The popup owns no state of its own: a
+cancel or drain is a server action, and the fresh snapshot it replies with is what redraws the list.
+
+A plugin can shape tasks as they flow — react to every status change, or rewrite/veto a brief before it is delivered. See
+the [task hooks](./PLUGIN.md#tasks-and-the-queue) in PLUGIN.md.
+
 ## Find, search, copy
 
 **Find** (`f`, on the dashboard) filters the fleet: type and only panels whose title or group — or a group member's title
@@ -249,59 +289,63 @@ the keys reach the live program, so a baton action is the leader **`C-t`** then 
 and the key-map editor — are reached after the prefix in every mode. Everything here is rebindable in the key map
 (`C-t k`); press `?` for the live list of the current view.
 
-| Where                  | Key                         | Does                                       |
-| ---------------------- | --------------------------- | ------------------------------------------ |
-| Anywhere (after `C-t`) | `C-t d`                     | go to the dashboard                        |
-|                        | `C-t b`                     | back one level (zoom → group → dashboard)  |
-|                        | `C-t [`                     | enter scroll mode                          |
-|                        | `C-t k`                     | edit the key map                           |
-|                        | `C-t c`                     | open the plugin command picker             |
-|                        | `C-t P`                     | panel config (default shell, workdir, …)   |
-|                        | `C-t R`                     | reload config (backend + cockpit)          |
-|                        | `C-t S`                     | force-restart the server (kills the fleet) |
-|                        | `C-t D`                     | diff the selected agent panel              |
-|                        | `C-t q`                     | detach (server keeps running)              |
-| Dashboard              | `hjkl` / arrows             | move the cursor                            |
-|                        | `enter`                     | open / zoom the selection                  |
-|                        | `p`                         | new shell panel                            |
-|                        | `A`                         | new agent panel                            |
-|                        | `C`                         | open the conductor (find-or-create)        |
-|                        | `c`                         | new panel (pick the command)               |
-|                        | `w`                         | close the selection                        |
-|                        | `r`                         | re-run exited panel(s) in the selection    |
-|                        | `x`                         | purge exited panels                        |
-|                        | `s`                         | send a signal to the selection             |
-|                        | `f`                         | find — filter panels by title / group      |
-|                        | `S-←` / `S-→`               | reorder the selected item                  |
-|                        | `g`                         | mark / unmark a panel                      |
-|                        | `G`                         | group the marked panels                    |
-|                        | `a`                         | add marked panels to the selected group    |
-|                        | `u`                         | ungroup the selected work item             |
-|                        | `e`                         | rename the panel or group                  |
-|                        | `D`                         | diff the selected agent panel              |
-| Group view             | `tab`                       | focus the next panel                       |
-|                        | `+` / `-`                   | show more / fewer live tiles               |
-|                        | `p`                         | pin / unpin the focused panel              |
-|                        | `s`                         | send a signal to the focused panel         |
-|                        | `S`                         | send a signal to every panel in the group  |
-|                        | `i`                         | interact (type into the focused tile)      |
-|                        | `x`                         | remove the focused panel from the group    |
-|                        | `S-←` / `S-→`               | reorder the focused panel                  |
-|                        | `D`                         | diff the focused agent panel               |
-|                        | `b`                         | back to the dashboard                      |
-|                        | `enter`                     | zoom the focused panel                     |
-| Zoom / interact        | type                        | drive the program directly                 |
-|                        | `C-t b`                     | back to the group / dashboard              |
-|                        | `C-t g`                     | git menu (agent panel)                     |
-|                        | `C-t C-t`                   | send a literal `C-t`                       |
-|                        | `C-t s`                     | send a signal to this panel                |
-|                        | `C-t f`                     | search the scrollback                      |
-| Scroll mode (`C-t [`)  | `↑` / `↓` (`k`/`j`)         | scroll a line                              |
-|                        | `b` / `Spc` (`PgUp`/`PgDn`) | scroll a page                              |
-|                        | `g` / `G`                   | jump to top / bottom                       |
-|                        | `v` / `y`                   | start a selection / copy to the clipboard  |
-|                        | `n` / `N`                   | next / previous search match               |
-|                        | `esc` / `q`                 | exit scroll mode                           |
+| Where                  | Key                         | Does                                          |
+| ---------------------- | --------------------------- | --------------------------------------------- |
+| Anywhere (after `C-t`) | `C-t d`                     | go to the dashboard                           |
+|                        | `C-t b`                     | back one level (zoom → group → dashboard)     |
+|                        | `C-t [`                     | enter scroll mode                             |
+|                        | `C-t k`                     | edit the key map                              |
+|                        | `C-t c`                     | open the plugin command picker                |
+|                        | `C-t P`                     | panel config (default shell, workdir, …)      |
+|                        | `C-t R`                     | reload config (backend + cockpit)             |
+|                        | `C-t S`                     | force-restart the server (kills the fleet)    |
+|                        | `C-t D`                     | diff the selected agent panel                 |
+|                        | `C-t T`                     | dispatch a task to the zoomed agent           |
+|                        | `C-t Q`                     | manage the task queue                         |
+|                        | `C-t q`                     | detach (server keeps running)                 |
+| Dashboard              | `hjkl` / arrows             | move the cursor                               |
+|                        | `enter`                     | open / zoom the selection                     |
+|                        | `p`                         | new shell panel                               |
+|                        | `A`                         | new agent panel                               |
+|                        | `C`                         | open the conductor (find-or-create)           |
+|                        | `c`                         | new panel (pick the command)                  |
+|                        | `w`                         | close the selection                           |
+|                        | `r`                         | re-run exited panel(s) in the selection       |
+|                        | `x`                         | purge exited panels                           |
+|                        | `s`                         | send a signal to the selection                |
+|                        | `f`                         | find — filter panels by title / group         |
+|                        | `S-←` / `S-→`               | reorder the selected item                     |
+|                        | `g`                         | mark / unmark a panel                         |
+|                        | `G`                         | group the marked panels                       |
+|                        | `a`                         | add marked panels to the selected group       |
+|                        | `u`                         | ungroup the selected work item                |
+|                        | `e`                         | rename the panel or group                     |
+|                        | `D`                         | diff the selected agent panel                 |
+|                        | `T`                         | dispatch a task to the agent / work item      |
+|                        | `Q`                         | manage the task queue (list · cancel · drain) |
+| Group view             | `tab`                       | focus the next panel                          |
+|                        | `+` / `-`                   | show more / fewer live tiles                  |
+|                        | `p`                         | pin / unpin the focused panel                 |
+|                        | `s`                         | send a signal to the focused panel            |
+|                        | `S`                         | send a signal to every panel in the group     |
+|                        | `i`                         | interact (type into the focused tile)         |
+|                        | `x`                         | remove the focused panel from the group       |
+|                        | `S-←` / `S-→`               | reorder the focused panel                     |
+|                        | `D`                         | diff the focused agent panel                  |
+|                        | `b`                         | back to the dashboard                         |
+|                        | `enter`                     | zoom the focused panel                        |
+| Zoom / interact        | type                        | drive the program directly                    |
+|                        | `C-t b`                     | back to the group / dashboard                 |
+|                        | `C-t g`                     | git menu (agent panel)                        |
+|                        | `C-t C-t`                   | send a literal `C-t`                          |
+|                        | `C-t s`                     | send a signal to this panel                   |
+|                        | `C-t f`                     | search the scrollback                         |
+| Scroll mode (`C-t [`)  | `↑` / `↓` (`k`/`j`)         | scroll a line                                 |
+|                        | `b` / `Spc` (`PgUp`/`PgDn`) | scroll a page                                 |
+|                        | `g` / `G`                   | jump to top / bottom                          |
+|                        | `v` / `y`                   | start a selection / copy to the clipboard     |
+|                        | `n` / `N`                   | next / previous search match                  |
+|                        | `esc` / `q`                 | exit scroll mode                              |
 
 ## Architecture
 
@@ -357,17 +401,17 @@ and the key-map editor — are reached after the prefix in every mode. Everythin
 
 The picture, read from top to bottom:
 
-| Block                | Role                                                                      |
-| -------------------- | ------------------------------------------------------------------------- |
-| **Frontends**        | Stateless clients — render events, send commands. TUI, browser, …         |
-| **The socket**       | The one wire — semantic, versioned, negotiated. Commands up, events down. |
-| **baton server**     | Background daemon owning all state and terminals; outlives any frontend.  |
-| **Connection layer** | Multi-client attach / detach / broadcast; commands → core actions.        |
-| **baton.\* API**     | The only gate in — socket, Lua, and events all pass through it.           |
-| **Lua runtime**      | Config, hooks, and commands as Lua, all calling `baton.*`.                |
-| **Core actions**     | Single source of truth; every request lands here, and only here.          |
-| **State**            | Holds panels, work items, and layout.                                     |
-| **PTY manager**      | Spawns and feeds the real processes behind each panel.                    |
-| **Monitor**          | Watches panels for liveness, idleness, and notable output.                |
-| **Event dispatcher** | Broadcasts every change to subscribers and hooks.                         |
-| **Panels**           | The live terminals themselves — each an agent or a shell.                 |
+| Block                | Role                                                                           |
+| -------------------- | ------------------------------------------------------------------------------ |
+| **Frontends**        | Stateless clients — render events, send commands. TUI, browser, …              |
+| **The socket**       | The one wire — semantic, versioned, negotiated. Commands up, events down.      |
+| **baton server**     | Background daemon owning all state and terminals; outlives any frontend.       |
+| **Connection layer** | Multi-client attach / detach / broadcast; commands → core actions.             |
+| **baton.\* API**     | The only gate in — socket, Lua, and events all pass through it.                |
+| **Lua runtime**      | Config, hooks, and commands as Lua, all calling `baton.*`.                     |
+| **Core actions**     | Single source of truth; every request lands here, and only here.               |
+| **State**            | Holds panels, work items, tasks, and layout; the queue is snapshotted to disk. |
+| **PTY manager**      | Spawns and feeds the real processes behind each panel.                         |
+| **Monitor**          | Watches panels for liveness, idleness, and notable output.                     |
+| **Event dispatcher** | Broadcasts every change to subscribers and hooks.                              |
+| **Panels**           | The live terminals themselves — each an agent or a shell.                      |

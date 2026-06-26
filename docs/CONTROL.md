@@ -58,13 +58,28 @@ acts, and exits.
 | `baton ctl pin <id>...` / `unpin <id>...`           | pin/unpin panels to live tiles                                      |
 | `baton ctl signal <signal> <id>...`                 | send a signal, e.g. `SIGINT`                                        |
 | `baton ctl close <id>...`                           | close panels                                                        |
+| `baton ctl dispatch <id> <prompt>`                  | assign a task brief to a panel and deliver it as a unit             |
+| `baton ctl dispatch-group <group> <prompt>`         | fan one brief to every member of a work item                        |
+| `baton ctl queue add <prompt> [--group G]`          | enqueue a task for the scheduler to drain onto a free agent         |
+| `baton ctl queue list`                              | print the backlog as JSON (id, prompt, status, panel, group, …)     |
+| `baton ctl queue cancel <id>`                       | cancel a queued task by id                                          |
+| `baton ctl queue drain`                             | clear every queued task                                             |
 
 ```sh
 # Stand up a reviewer next to a worker and hand it the task.
 id=$(baton ctl spawn --agent claude --dir ~/src/api)
 baton ctl group review "$id"
-baton ctl send "$id" "review the open diff and list correctness risks"
+baton ctl dispatch "$id" "review the open diff and list correctness risks"
+
+# Or queue a batch and let the scheduler fan it across whoever comes free.
+baton ctl queue add "audit the auth module"   --group review
+baton ctl queue add "audit the billing module" --group review
+baton ctl queue list
 ```
+
+**Dispatch vs. send.** `send` types raw keystrokes; `dispatch` hands the server the _objective_, which it records on the
+panel (so it reaches every card and the snapshot) and delivers as a unit — waiting for the agent to be ready rather than
+interleaving with a running command. See [Tasks and the queue](./SPEC.md#tasks-and-the-queue) for the model.
 
 ## `baton mcp` — the MCP server
 
@@ -72,8 +87,13 @@ baton ctl send "$id" "review the open diff and list correctness risks"
 2.0). It exposes the same verbs as MCP tools, so an MCP-speaking agent drives the fleet through structured tool calls
 instead of shelling out:
 
-`baton_list` · `baton_spawn` · `baton_send` · `baton_group` · `baton_rename` · `baton_pin` · `baton_unpin` ·
-`baton_signal` · `baton_close`
+`baton_list` · `baton_spawn` · `baton_send` · `baton_dispatch` · `baton_dispatch_group` · `baton_enqueue` ·
+`baton_queue` · `baton_group` · `baton_rename` · `baton_pin` · `baton_unpin` · `baton_signal` · `baton_close`
+
+`baton_dispatch` / `baton_dispatch_group` assign a task brief to a panel or a whole work item; `baton_enqueue` adds one
+to the backlog and `baton_queue` reads it back. These are the verbs a conductor uses to run the flagship **you →
+conductor → fleet** flow: you hand the conductor a batch of objectives, it enqueues them, and the scheduler drains them
+onto the workers as they come free.
 
 The conductor's workspace ships a `.mcp.json` pointing at this very binary run as `baton mcp`, so a Claude conductor
 auto-loads the tools — no setup. The MCP subprocess inherits the conductor panel's environment, so it is fenced exactly
@@ -89,6 +109,10 @@ declares its identity on the `hello` handshake:
 | ------ | ------------------------------------------------------------------------------ |
 | `role` | `"conductor"` to be fenced; empty (the cockpit) for full power.                |
 | `self` | the client's own panel id — the panel the server will refuse to let it act on. |
+
+A dispatch carries two more fields: `prompt` (the brief) and an optional `submit` override (the keys appended to send it,
+default a newline) on `panel.dispatch` / `panel.dispatch-group`; `task.enqueue` / `task.cancel` / `task.drain` /
+`task.list` drive the backlog and reply with a `tasks` snapshot.
 
 Baton injects the wiring into the conductor panel's process, which both `baton ctl` and `baton mcp` read automatically:
 
@@ -107,7 +131,12 @@ always speak the socket directly).
 | A conductor may                           | A conductor may not                                            |
 | ----------------------------------------- | -------------------------------------------------------------- |
 | list, spawn, group, rename, pin, move     | close, signal, or send input to **its own** panel              |
-| signal and send input to **other** panels | reload or stop the server                                      |
-| close other panels, purge exited          | spawn faster than the rate cap, or past the fleet ceiling (64) |
+| signal and send input to **other** panels | **dispatch a task to its own** panel                           |
+| dispatch to other panels, enqueue tasks   | **drain the queue** — clearing the backlog is operator-only    |
+| close other panels, purge exited          | reload or stop the server                                      |
+|                                           | spawn faster than the rate cap, or past the fleet ceiling (64) |
+
+So a conductor can fill and dispatch from the backlog but cannot wipe it, and the queue gives it no way around the
+self-fence: a brief it enqueues is drained by the scheduler onto _other_ idle agents, never back onto itself.
 
 A plain cockpit connection declares no role and is never fenced.
