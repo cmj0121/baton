@@ -89,7 +89,7 @@ func TestMCPHandshakeAndTools(t *testing.T) {
 			got[m["name"].(string)] = true
 		}
 	}
-	for _, want := range []string{"baton_list", "baton_spawn", "baton_send", "baton_group", "baton_close"} {
+	for _, want := range []string{"baton_list", "baton_spawn", "baton_send", "baton_dispatch", "baton_dispatch_group", "baton_enqueue", "baton_queue", "baton_group", "baton_close"} {
 		if !got[want] {
 			t.Fatalf("tools/list missing %q, got %v", want, got)
 		}
@@ -144,15 +144,21 @@ func TestMCPAllTools(t *testing.T) {
 		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"baton_send","arguments":{"id":"1","text":"hi","submit":false}}}`,
 		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"baton_send","arguments":{"id":"1","text":"hi"}}}`,
 		`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"baton_send","arguments":{"text":"no id"}}}`,
+		`{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"baton_dispatch","arguments":{"id":"1","prompt":"do the thing"}}}`,
+		`{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"baton_dispatch","arguments":{"prompt":"no id"}}}`,
 		`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"baton_group","arguments":{"name":"g","ids":["1"]}}}`,
+		`{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"baton_dispatch_group","arguments":{"group":"g","prompt":"go"}}}`,
+		`{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"baton_dispatch_group","arguments":{"prompt":"no group"}}}`,
+		`{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"baton_enqueue","arguments":{"prompt":"queued work","group":"g"}}}`,
+		`{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"baton_queue","arguments":{}}}`,
 		`{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"baton_rename","arguments":{"id":"1","name":"r"}}}`,
 		`{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"baton_pin","arguments":{"ids":["1"]}}}`,
 		`{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"baton_unpin","arguments":{"ids":["1"]}}}`,
 		`{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"baton_signal","arguments":{"signal":"SIGCONT","ids":["1"]}}}`,
 		`{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"baton_close","arguments":{"ids":["1"]}}}`,
 	)
-	if len(resps) != 12 {
-		t.Fatalf("want 12 responses, got %d", len(resps))
+	if len(resps) != 18 {
+		t.Fatalf("want 18 responses, got %d", len(resps))
 	}
 	for i, r := range resps {
 		if r.Error != nil {
@@ -165,6 +171,20 @@ func TestMCPAllTools(t *testing.T) {
 	// The missing-id send reports a tool-level error the model can read.
 	if resps[5].Result["isError"] != true {
 		t.Fatalf("baton_send without an id should be a tool error, got %+v", resps[5].Result)
+	}
+	// baton_dispatch with an id succeeds; without one it is a tool-level error.
+	if txt := contentText(t, resps[6].Result); !strings.Contains(txt, "dispatched to panel") {
+		t.Fatalf("baton_dispatch result = %q", txt)
+	}
+	if resps[7].Result["isError"] != true {
+		t.Fatalf("baton_dispatch without an id should be a tool error, got %+v", resps[7].Result)
+	}
+	// baton_dispatch_group with a group succeeds; without one it is a tool error.
+	if txt := contentText(t, resps[9].Result); !strings.Contains(txt, "dispatched to group") {
+		t.Fatalf("baton_dispatch_group result = %q", txt)
+	}
+	if resps[10].Result["isError"] != true {
+		t.Fatalf("baton_dispatch_group without a group should be a tool error, got %+v", resps[10].Result)
 	}
 }
 

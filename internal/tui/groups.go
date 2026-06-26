@@ -352,6 +352,54 @@ func (m model) commitRename(name string) model {
 	return m
 }
 
+// startDispatch opens the task-input overlay for an agent panel, seeded with its
+// current brief so the action both assigns and re-assigns. A non-agent target is
+// refused with a hint (the server is authoritative, but the cockpit steers).
+func (m model) startDispatch(p panel.Panel) model {
+	if !p.IsAgent() {
+		m.status = "dispatch: select an agent panel"
+		return m
+	}
+	m.input = inputDispatch
+	m.inputBuf = p.Task // re-assign edits the existing brief; first dispatch starts empty
+	m.dispatchID, m.dispatchGroup = p.ID, ""
+	m.status = "dispatch task · enter to send"
+	return m
+}
+
+// startDispatchGroup opens the task overlay for a whole work item: the brief is
+// fanned to every member on commit (the cockpit path to racing N agents).
+func (m model) startDispatchGroup(group string) model {
+	m.input = inputDispatch
+	m.inputBuf = ""
+	m.dispatchID, m.dispatchGroup = "", group
+	m.status = "dispatch to group · enter to send to every member"
+	return m
+}
+
+// commitDispatch sends the typed brief to the remembered target — one agent panel
+// or every member of a group. An empty brief is refused with the overlay left
+// closed; dispatch assigns a task, it does not clear one.
+func (m model) commitDispatch(prompt string) model {
+	if prompt == "" {
+		m.status = "a task cannot be empty"
+		m.dispatchID, m.dispatchGroup = "", ""
+		return m
+	}
+	switch {
+	case m.dispatchGroup != "":
+		m.sendf(proto.Command{Action: "panel.dispatch-group", Group: m.dispatchGroup, Prompt: prompt})
+		m.status = fmt.Sprintf("dispatched to group %q · %s", m.dispatchGroup, truncate(prompt, 32))
+	case m.dispatchID != "":
+		m.sendf(proto.Command{Action: "panel.dispatch", ID: m.dispatchID, Prompt: prompt})
+		m.status = "dispatched · " + truncate(prompt, 40)
+	default:
+		m.status = "nothing to dispatch"
+	}
+	m.dispatchID, m.dispatchGroup = "", ""
+	return m
+}
+
 // zoomGroup opens the group's split view: the member tiles you navigate as a
 // unit before dropping into any one panel. Pins persist across views, so the
 // split reopens with the panels you pinned already promoted to live tiles — and

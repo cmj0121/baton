@@ -107,6 +107,108 @@ func TestControlHelpers(t *testing.T) {
 	if err := c.SendText(agentID, "no newline", false); err != nil {
 		t.Fatalf("send no-submit: %v", err)
 	}
+
+	// Dispatch records a brief and is accepted; an unknown panel surfaces the
+	// server's error through the client.
+	if err := c.Dispatch(agentID, "land the fix"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if err := c.Dispatch("999", "nope"); err == nil {
+		t.Fatal("dispatch to an unknown panel should error")
+	}
+
+	// Group dispatch reaches a real work item, and errors on an unknown one.
+	if err := c.Do(proto.Command{Action: "panel.group", Group: "team", IDs: []string{agentID}}); err != nil {
+		t.Fatalf("group: %v", err)
+	}
+	if err := c.DispatchGroup("team", "ship it"); err != nil {
+		t.Fatalf("dispatch-group: %v", err)
+	}
+	if err := c.DispatchGroup("ghost", "nope"); err == nil {
+		t.Fatal("dispatch-group to an unknown group should error")
+	}
+
+	// Enqueue a backlog task and read it back through the list.
+	if err := c.Enqueue("queued work", "team"); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	tasks, err := c.Tasks()
+	if err != nil {
+		t.Fatalf("tasks: %v", err)
+	}
+	var queuedID string
+	for _, tk := range tasks {
+		if tk.Prompt == "queued work" {
+			queuedID = tk.ID
+		}
+	}
+	if queuedID == "" {
+		t.Fatalf("the enqueued task should appear in the backlog, got %+v", tasks)
+	}
+
+	// The same backlog renders as indented JSON for the ctl/MCP surfaces.
+	js, err = c.TasksJSON()
+	if err != nil {
+		t.Fatalf("tasks json: %v", err)
+	}
+	if !strings.Contains(js, queuedID) {
+		t.Fatalf("TasksJSON should mention the queued task, got:\n%s", js)
+	}
+
+	// Cancel that one task by id, then enqueue another and drain the whole
+	// backlog — both leave the queue empty.
+	if err := c.CancelTask(queuedID); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	if err := c.Enqueue("more work", ""); err != nil {
+		t.Fatalf("enqueue again: %v", err)
+	}
+	if err := c.DrainQueue(); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if tasks, err = c.Tasks(); err != nil {
+		t.Fatalf("tasks after drain: %v", err)
+	}
+	for _, tk := range tasks {
+		// Drain clears only the unassigned backlog; tasks already bound to a
+		// panel are left to finish.
+		if tk.Panel == "" && tk.Status == "queued" {
+			t.Fatalf("drain should clear the unassigned backlog, got %+v", tasks)
+		}
+	}
+}
+
+// TestControlDialErrors covers the connect-failure path: dialling a socket that
+// no server is listening on surfaces a clear error rather than a nil client.
+func TestControlDialErrors(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "absent.sock")
+	if _, err := control.DialSocket(missing, "", ""); err == nil {
+		t.Fatal("dialling an absent socket should fail")
+	}
+
+	// Cancelling an unknown task id is rejected by the server and surfaced.
+	sock := startServer(t)
+	c, err := control.DialSocket(sock, "", "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	if err := c.CancelTask("t999"); err == nil {
+		t.Fatal("cancelling an unknown task should error")
+	}
+
+	// Once the connection is closed, the write paths fail fast rather than block:
+	// every wrapper surfaces the encode error.
+	_ = c.Close()
+	if err := c.Enqueue("after close", ""); err == nil {
+		t.Fatal("enqueue on a closed client should error")
+	}
+	if _, err := c.Tasks(); err == nil {
+		t.Fatal("tasks on a closed client should error")
+	}
+	if _, err := c.TasksJSON(); err == nil {
+		t.Fatal("tasks-json on a closed client should error")
+	}
 }
 
 // TestControlConductorFenced confirms the env-driven conductor identity reaches

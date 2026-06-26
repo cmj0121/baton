@@ -141,6 +141,83 @@ func (c *Client) SendText(id, text string, submit bool) error {
 	return c.Do(proto.Command{Action: "panel.input", ID: id, Data: data})
 }
 
+// Dispatch assigns prompt to panel id as a task brief: the server records it on
+// the panel and delivers it to the process as a unit. Unlike SendText (raw
+// keystrokes), the brief reaches every frontend's card and the snapshot.
+func (c *Client) Dispatch(id, prompt string) error {
+	return c.Do(proto.Command{Action: "panel.dispatch", ID: id, Prompt: prompt})
+}
+
+// DispatchGroup fans prompt to every member of a work item — one task delivered
+// to N agents, the mechanic behind racing them on the same prompt.
+func (c *Client) DispatchGroup(group, prompt string) error {
+	return c.Do(proto.Command{Action: "panel.dispatch-group", Group: group, Prompt: prompt})
+}
+
+// Enqueue adds a task to the backlog for the scheduler to drain onto a free agent
+// in the given group (empty = any agent).
+func (c *Client) Enqueue(prompt, group string) error {
+	return c.Do(proto.Command{Action: "task.enqueue", Prompt: prompt, Group: group})
+}
+
+// CancelTask removes a queued backlog task by id.
+func (c *Client) CancelTask(id string) error {
+	return c.Do(proto.Command{Action: "task.cancel", ID: id})
+}
+
+// DrainQueue clears every queued backlog task.
+func (c *Client) DrainQueue() error {
+	return c.Do(proto.Command{Action: "task.drain"})
+}
+
+// Tasks returns the current backlog snapshot. Like exchange it trails the request
+// with a config.get barrier, capturing the "tasks" reply before the barrier.
+func (c *Client) Tasks() ([]proto.Task, error) {
+	if err := c.send(proto.Command{Action: "task.list"}); err != nil {
+		return nil, err
+	}
+	if err := c.send(proto.Command{Action: "config.get"}); err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(ioTimeout)
+	var tasks []proto.Task
+	var firstErr error
+	for {
+		_ = c.conn.SetReadDeadline(deadline)
+		var msg proto.ServerMsg
+		if err := c.dec.Decode(&msg); err != nil {
+			return nil, fmt.Errorf("read from baton: %w", err)
+		}
+		switch msg.Type {
+		case "error":
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s", msg.Error)
+			}
+		case "tasks":
+			tasks = msg.Tasks
+		case "config":
+			if firstErr != nil {
+				return nil, firstErr
+			}
+			return tasks, nil
+		}
+	}
+}
+
+// TasksJSON returns the backlog as indented JSON, the shared presentation for
+// `baton ctl queue list` and the MCP queue tool.
+func (c *Client) TasksJSON() (string, error) {
+	tasks, err := c.Tasks()
+	if err != nil {
+		return "", err
+	}
+	out, err := json.MarshalIndent(tasks, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
 // exchange sends cmd followed by a config.get as a sync barrier, and reads up to
 // and including the barrier's "config" reply — so the connection buffer is left
 // clean for the next exchange. It returns the latest fleet snapshot seen before

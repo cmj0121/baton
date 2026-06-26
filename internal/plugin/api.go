@@ -26,18 +26,21 @@ func (p *Plugin) registerAPI(L *lua.LState) {
 	t := L.NewTable()
 	fns := map[string]lua.LGFunction{
 		// drive the fleet
-		"spawn":      p.luaSpawn,
-		"respawn":    p.luaRespawn,
-		"close":      p.luaClose,
-		"purge":      p.luaPurge,
-		"signal":     p.luaSignal,
-		"group":      p.luaGroup,
-		"ungroup":    p.luaUngroup,
-		"rename":     p.luaRename,
-		"move":       p.luaMove,
-		"pin":        p.luaPin,
-		"unpin":      p.luaUnpin,
-		"group_show": p.luaGroupShow,
+		"spawn":          p.luaSpawn,
+		"dispatch":       p.luaDispatch,
+		"dispatch_group": p.luaDispatchGroup,
+		"enqueue":        p.luaEnqueue,
+		"respawn":        p.luaRespawn,
+		"close":          p.luaClose,
+		"purge":          p.luaPurge,
+		"signal":         p.luaSignal,
+		"group":          p.luaGroup,
+		"ungroup":        p.luaUngroup,
+		"rename":         p.luaRename,
+		"move":           p.luaMove,
+		"pin":            p.luaPin,
+		"unpin":          p.luaUnpin,
+		"group_show":     p.luaGroupShow,
 		// read the fleet
 		"panels": p.luaPanels,
 		"panel":  p.luaPanel,
@@ -70,6 +73,43 @@ func (p *Plugin) luaSpawn(L *lua.LState) int {
 		fieldStr(tbl, "dir"),
 		fieldStr(tbl, "group"),
 	)
+	if err != nil {
+		return fail(L, err)
+	}
+	// baton.spawn{ ..., prompt = "…" } dispatches the brief to the fresh panel as a
+	// unit. A dispatch failure (e.g. a name the host rejects) is non-fatal: the
+	// panel exists, so still return its id and let the caller see the panel.
+	if prompt := fieldStr(tbl, "prompt"); prompt != "" {
+		if err := p.host.Dispatch(id, prompt); err != nil {
+			log.Warn().Str("panel", id).Err(err).Msg("spawn prompt dispatch failed")
+		}
+	}
+	L.Push(lua.LString(id))
+	return 1
+}
+
+// luaDispatch is baton.dispatch(id, prompt): assign a task brief to a panel and
+// deliver it to the process as a unit.
+func (p *Plugin) luaDispatch(L *lua.LState) int {
+	return result(L, p.host.Dispatch(L.CheckString(1), L.CheckString(2)))
+}
+
+// luaDispatchGroup is baton.dispatch_group(group, prompt): fan one task to every
+// member of a work item; returns how many panels it reached.
+func (p *Plugin) luaDispatchGroup(L *lua.LState) int {
+	n, err := p.host.DispatchGroup(L.CheckString(1), L.CheckString(2))
+	if err != nil {
+		return fail(L, err)
+	}
+	L.Push(lua.LNumber(n))
+	return 1
+}
+
+// luaEnqueue is baton.enqueue{ prompt = "…", group = "…" }: add a task to the
+// backlog for the scheduler to drain. Returns the new task id.
+func (p *Plugin) luaEnqueue(L *lua.LState) int {
+	tbl := L.CheckTable(1)
+	id, err := p.host.Enqueue(fieldStr(tbl, "prompt"), fieldStr(tbl, "group"))
 	if err != nil {
 		return fail(L, err)
 	}

@@ -37,6 +37,7 @@ type PanelState struct {
 	Kind      string `json:"kind"`
 	Title     string `json:"title"`
 	Group     string `json:"group"`
+	Task      string `json:"task,omitempty"` // last dispatched brief; additive and optional, so old snapshots (no field) still load
 	Pinned    bool   `json:"pinned"`
 	Conductor bool   `json:"conductor,omitempty"` // the singleton control agent; respawned into a fresh server-managed workspace
 	Spec      Spec   `json:"spec"`                // immutable spawn inputs only

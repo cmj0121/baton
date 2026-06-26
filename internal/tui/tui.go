@@ -102,6 +102,7 @@ const (
 	modeGit     // the git menu (C-t g in a zoom)
 	modeDiff    // the master-detail diff popup (the diff action)
 	modeGitOut  // the scrollable text popup for a captured git op (log/status/…)
+	modeQueue   // the task-queue manager popup (Q): list / cancel / drain the backlog
 	modeZoom
 	modeGroupZoom
 )
@@ -157,8 +158,10 @@ type model struct {
 	helpFrom     mode                           // the view the key map (?) was opened from, to restore on esc
 	helpScroll   int                            // scroll offset for the read-only help list (it has no cursor)
 
-	renameID    string // panel id being renamed via inputRename ("" if a group)
-	renameGroup string // group being renamed via inputRename ("" if a panel)
+	renameID      string // panel id being renamed via inputRename ("" if a group)
+	renameGroup   string // group being renamed via inputRename ("" if a panel)
+	dispatchID    string // agent panel id being dispatched a task via inputDispatch
+	dispatchGroup string // group name being dispatched a task to every member (mutually exclusive with dispatchID)
 
 	filter string // dashboard panel filter (substring on titles / group names); "" shows the whole fleet
 
@@ -179,6 +182,13 @@ type model struct {
 	commandFrom    mode                  // the view the command picker was opened from, restored on esc
 	commandCursor  int                   // highlighted row in the command picker
 	pluginFooter   string                // a plugin-set persistent footer segment (baton.footer), shown in every view's footer
+
+	// The task-queue manager popup (modeQueue, opened with Q). tasks is the latest
+	// backlog snapshot the server pushes on task.list / each queue mutation;
+	// queueFrom is the view to restore on esc; queueCursor is the highlighted row.
+	tasks       []proto.Task
+	queueFrom   mode
+	queueCursor int
 
 	// The git menu (C-t g in a zoom, zoom-only). gitTarget is the agent it acts on,
 	// captured at open; gitFrom is the zoom it returns to; gitCursor is the
@@ -249,6 +259,7 @@ const (
 	inputAgentDir                 // the workdir for a new agent panel
 	inputGroupName                // naming a new group from the marked panels
 	inputRename                   // renaming the selected panel or group
+	inputDispatch                 // assigning a task brief to the selected agent panel
 	inputSignalName               // free-form signal name/number for the picker's "other…"
 	inputFilter                   // live dashboard panel filter (f)
 	inputSearch                   // scrollback search term in a zoom / group tile (C-t f)
@@ -730,6 +741,14 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		m.pluginFooter = sm.Footer // current footer value, so a fresh attach shows it immediately
 	case "footer":
 		m.pluginFooter = sm.Footer
+	case "tasks":
+		// The latest backlog snapshot — the reply to task.list and to every queue
+		// mutation. Store it and keep the manager popup's cursor in range as the
+		// backlog shrinks under it (a cancel/drain/scheduler drain).
+		m.tasks = sm.Tasks
+		if m.queueCursor >= len(m.tasks) {
+			m.queueCursor = max(0, len(m.tasks)-1)
+		}
 	case "notice":
 		// A plugin-originated toast (baton.notify). It rides the transient status line
 		// and fades like any other one-off message.
@@ -842,6 +861,12 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// The git-output popup owns the keyboard until esc; it scrolls its text.
 	if m.mode == modeGitOut {
 		return m.handleGitOutKey(key)
+	}
+
+	// The task-queue manager owns the keyboard until esc; it moves the cursor and
+	// cancels/drains the backlog.
+	if m.mode == modeQueue {
+		return m.handleQueueKey(key)
 	}
 
 	// A text-input overlay is open: route the keystroke to it.
@@ -1273,6 +1298,8 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		return m.commitGroup(buf), nil
 	case inputRename:
 		return m.commitRename(buf), nil
+	case inputDispatch:
+		return m.commitDispatch(buf), nil
 	case inputSignalName:
 		return m.commitOtherSignal(buf)
 	case inputFilter:
@@ -1627,6 +1654,31 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 			m.requestDiff(it.panel)
 		}
 		return m, nil
+	case actDispatch:
+		// Open the task-input overlay for the selected agent panel. Like diff, the
+		// target is the focused group member in the split, otherwise the highlighted
+		// dashboard item; the agent-only gate is a UX nicety (the server is
+		// authoritative).
+		switch m.mode {
+		case modeGroupZoom:
+			p, ok := m.focusedMember()
+			if !ok {
+				return m, nil
+			}
+			return m.startDispatch(p), nil
+		default:
+			it, ok := m.selectedItem()
+			if !ok {
+				m.status = "dispatch: select an agent panel or a work item"
+				return m, nil
+			}
+			if it.kind == itemGroup {
+				return m.startDispatchGroup(it.name), nil
+			}
+			return m.startDispatch(it.panel), nil
+		}
+	case actQueue:
+		return m.openQueue(m.mode), nil
 	case actDashboard:
 		m.mode = modeDashboard
 		m.cursor = 0
@@ -1864,6 +1916,17 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.requestDiff(p)
 			return m, nil
+		}
+		if b, ok := m.lookupCmd(key); ok && b.act == actDispatch { // C-t T → dispatch a task to the zoomed agent
+			p, ok := m.fleetPanel(m.zoomID)
+			if !ok || !p.IsAgent() {
+				m.status = "dispatch: select an agent panel"
+				return m, nil
+			}
+			return m.startDispatch(p), nil
+		}
+		if b, ok := m.lookupCmd(key); ok && b.act == actQueue { // C-t Q → the task-queue manager
+			return m.openQueue(modeZoom), nil
 		}
 		if b, ok := m.lookupCmd(key); ok && b.act == actBack { // C-t b → back one level
 			return m.runAction(actBack)
@@ -2290,6 +2353,8 @@ func (m model) render() string {
 		body = m.diffView()
 	case m.mode == modeGitOut:
 		body = m.gitOutView()
+	case m.mode == modeQueue:
+		body = m.queueView()
 	default:
 		body = m.dashboardView()
 	}
@@ -2487,7 +2552,14 @@ func (m model) renderCard(p panel.Panel, selected bool) string {
 	kindLine := badge + "  " + state
 
 	spark := lipgloss.NewStyle().Foreground(info.color).Render(p.Spark)
-	footer := spark + "  " + mutedStyle.Render(truncate(p.Activity, cardInner-lipgloss.Width(spark)-2))
+	// When the panel carries a dispatched brief, the task headlines the footer (▸)
+	// instead of the bare activity line — for an agent at work the objective says
+	// more at a glance than "running · 3m". Height stays at three lines either way.
+	footText, glyph := p.Activity, ""
+	if p.Task != "" {
+		footText, glyph = p.Task, "▸ "
+	}
+	footer := spark + "  " + mutedStyle.Render(truncate(glyph+footText, cardInner-lipgloss.Width(spark)-2))
 
 	style := lipgloss.NewStyle().
 		Width(cardWidth-2).
@@ -2640,12 +2712,18 @@ func (m model) renderPreview(items []dashItem, width int) string {
 	statusLine := led + " " + kindBadge(p.Kind) + "  " + lipgloss.NewStyle().Foreground(info.color).Render(info.label)
 	rule := mutedStyle.Render(strings.Repeat("─", width))
 
-	meta := lipgloss.JoinVertical(lipgloss.Left,
+	rows := []string{
 		metaRow("state", info.label, info.color),
 		metaRow("kind", p.Kind.String(), colInk),
+	}
+	if p.Task != "" {
+		rows = append(rows, metaRow("task", truncate(p.Task, width), colBrandHi))
+	}
+	rows = append(rows,
 		metaRow("activity", p.Activity, colInk),
 		metaRow("signal", p.Spark, info.color),
 	)
+	meta := lipgloss.JoinVertical(lipgloss.Left, rows...)
 
 	return lipgloss.JoinVertical(lipgloss.Left, title, statusLine, rule, meta)
 }
@@ -3013,6 +3091,8 @@ func (m model) inputView() string {
 		title, prompt, action = "NEW GROUP", "work-item name", "create"
 	case inputRename:
 		title, prompt, action = "RENAME", "new name", "save"
+	case inputDispatch:
+		title, prompt, action = "DISPATCH TASK", "the task brief for the agent", "send"
 	case inputSignalName:
 		title, prompt, action = "SEND SIGNAL", "signal name or number  (e.g. WINCH, TSTP, 28)", "send"
 	case inputFilter:

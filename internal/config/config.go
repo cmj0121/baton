@@ -26,6 +26,18 @@ type Config struct {
 
 	// Panel holds the default behaviour for new panels.
 	Panel PanelDefaults `yaml:"panel,omitempty"`
+
+	// Queue holds the task-backlog caps.
+	Queue QueueDefaults `yaml:"queue,omitempty"`
+}
+
+// QueueDefaults caps the task backlog: Max is the most queued (unassigned) tasks
+// the backlog holds before an enqueue is refused (0 = unlimited; unset uses the
+// built-in default), and Concurrency is the most tasks one work item runs at once
+// (0 = unlimited).
+type QueueDefaults struct {
+	Max         int `yaml:"max,omitempty"`
+	Concurrency int `yaml:"concurrency,omitempty"`
 }
 
 // Settings are the persisted cockpit toggles. Pointers distinguish "unset"

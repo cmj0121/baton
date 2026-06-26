@@ -49,6 +49,14 @@ func StateFile(socket string) string {
 	return strings.TrimSuffix(socket, ".sock") + ".state.json"
 }
 
+// QueueDir returns the task-backlog directory that pairs with the given socket —
+// one file per queued task. Like StateFile it is derived from the socket path, so
+// one daemon-per-session owns one backlog and the daemon child resolves the same
+// path from BATON_SOCK after it re-sessions itself.
+func QueueDir(socket string) string {
+	return strings.TrimSuffix(socket, ".sock") + ".queue"
+}
+
 // LogFile is the default log file ($HOME/.baton/baton.log), used when --log is
 // not given. One server runs per login session, so it needs no per-instance
 // suffix.

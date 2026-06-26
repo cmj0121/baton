@@ -41,11 +41,12 @@ Lost? **`?`** always shows the keys for wherever you are.
 - **Dashboard, not windows.** A live overview of everything at once, not a pile of tabs.
 - **Headless core, replaceable frontends.** The brain is a background daemon; the face that renders it is swappable.
 
-| Concept       | What it is                                                                                             |
-| ------------- | ------------------------------------------------------------------------------------------------------ |
-| **Panel**     | One live terminal — an _agent_ panel (an agent CLI) or a _shell_ panel.                                |
-| **Work item** | A named group of panels that belong to one task.                                                       |
-| **Conductor** | An agent that drives the fleet for you — spawns, groups, and prompts the other panels over the socket. |
+| Concept       | What it is                                                                                              |
+| ------------- | ------------------------------------------------------------------------------------------------------- |
+| **Panel**     | One live terminal — an _agent_ panel (an agent CLI) or a _shell_ panel.                                 |
+| **Work item** | A named group of panels that belong to one task.                                                        |
+| **Task**      | A brief you dispatch to an agent — tracked through its lifecycle, queued and scheduled if it must wait. |
+| **Conductor** | An agent that drives the fleet for you — spawns, groups, and prompts the other panels over the socket.  |
 
 ## Views
 
@@ -79,6 +80,7 @@ the current view, and **`C-t k`** to edit the key map.
 |             | `r`               | re-run the exited panel(s) under the focus          |
 |             | `g` / `G` / `u`   | mark / group marked panels / ungroup                |
 |             | `s` / `f` / `D`   | signal / find / diff the selection                  |
+|             | `T` / `Q`         | dispatch a task / manage the task queue             |
 | Group       | `tab`             | focus the next panel                                |
 |             | `+` / `-`         | show more / fewer live tiles                        |
 |             | `p` / `i`         | pin / interact with the focused panel               |
@@ -103,6 +105,9 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
 - **Conductor & control** — `C` opens a conductor: an agent that drives the fleet for you. It spawns, groups, signals,
   and prompts the other panels over the socket — through `baton ctl` or the `baton mcp` tools — fenced so it can't wreck
   its own host. Set its goal in `$HOME/.baton/CONDUCTOR.md`. See **[docs/CONTROL.md](docs/CONTROL.md)**.
+- **Tasks & the queue** — `T` dispatches a brief to an agent (or fans it to a whole work item), recorded on the card and
+  delivered when the agent is ready. `Q` manages a persistent backlog a server-owned scheduler drains onto free agents —
+  the **you → conductor → fleet** flow. A `task.pre` Lua hook can rewrite or veto a brief; `task.change` watches it.
 - **Groups & summary** — `+` / `-` dial how many members stream as live tiles; the rest fold into one summary tile.
   Pinned members always stream.
 - **Persistence & respawn** — Baton remembers its fleet across a restart; panels come back as inert exited slots and

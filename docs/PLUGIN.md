@@ -55,19 +55,26 @@ baton.pin(id)
 baton.close(id)
 ```
 
-| Call                                                | Core action                      | Notes                                    |
-| --------------------------------------------------- | -------------------------------- | ---------------------------------------- |
-| `baton.spawn{kind=, command=, args=, dir=, group=}` | `panel.create` (+ `panel.group`) | returns the new panel id                 |
-| `baton.respawn(id)`                                 | `panel.respawn`                  | re-run an exited panel                   |
-| `baton.close(id \| {ids})`                          | `panel.close`                    |                                          |
-| `baton.purge()`                                     | `panel.purge`                    | drop every exited panel                  |
-| `baton.signal(id \| {ids}, name)`                   | `panel.signal`                   | name or number, e.g. `"SIGTERM"` or `15` |
-| `baton.group({ids}, name)`                          | `panel.group`                    |                                          |
-| `baton.ungroup({ids} \| name)`                      | `panel.ungroup`                  |                                          |
-| `baton.rename{id= \| group=, name=}`                | `panel.rename`                   |                                          |
-| `baton.move({ids}, index)`                          | `panel.move`                     | reorder the fleet                        |
-| `baton.pin(id)` / `baton.unpin(id)`                 | `panel.pin` / `panel.unpin`      |                                          |
-| `baton.group_show(name, n)`                         | `group.show`                     | live-tile count for a group              |
+| Call                                                | Core action                      | Notes                                          |
+| --------------------------------------------------- | -------------------------------- | ---------------------------------------------- |
+| `baton.spawn{kind=, command=, args=, dir=, group=}` | `panel.create` (+ `panel.group`) | returns the new panel id                       |
+| `baton.respawn(id)`                                 | `panel.respawn`                  | re-run an exited panel                         |
+| `baton.close(id \| {ids})`                          | `panel.close`                    |                                                |
+| `baton.purge()`                                     | `panel.purge`                    | drop every exited panel                        |
+| `baton.signal(id \| {ids}, name)`                   | `panel.signal`                   | name or number, e.g. `"SIGTERM"` or `15`       |
+| `baton.group({ids}, name)`                          | `panel.group`                    |                                                |
+| `baton.ungroup({ids} \| name)`                      | `panel.ungroup`                  |                                                |
+| `baton.rename{id= \| group=, name=}`                | `panel.rename`                   |                                                |
+| `baton.move({ids}, index)`                          | `panel.move`                     | reorder the fleet                              |
+| `baton.pin(id)` / `baton.unpin(id)`                 | `panel.pin` / `panel.unpin`      |                                                |
+| `baton.group_show(name, n)`                         | `group.show`                     | live-tile count for a group                    |
+| `baton.dispatch(id, prompt)`                        | `panel.dispatch`                 | assign a brief and deliver it as a unit        |
+| `baton.dispatch_group(group, prompt)`               | `panel.dispatch-group`           | fan a brief to every member; returns the count |
+| `baton.enqueue(prompt, group)`                      | `task.enqueue`                   | add to the backlog; returns the task id        |
+
+`baton.spawn` also takes a `prompt =` — spawn an agent and dispatch its first task in one call. Plugin-originated
+dispatches go straight to the core action and **bypass the `task.pre` filter** (see below), so a hook that enqueues can
+never re-enter itself.
 
 Every write returns `ok, err` (Lua idiom): `nil, "the name \"api\" is already taken"` on the same failures the socket
 reports, so a plugin handles a rejected action instead of crashing.
@@ -104,20 +111,63 @@ events that outruns the worker drops oldest-first (like telemetry) rather than b
 
 The event set (derived from the lifecycle in SPEC.md):
 
-| Event             | Fires when                         | Payload                                                  |
-| ----------------- | ---------------------------------- | -------------------------------------------------------- |
-| `panel.spawn`     | a panel is created                 | the panel                                                |
-| `panel.state`     | any lifecycle transition           | panel + `from`, `to`                                     |
-| `panel.attention` | a panel enters `attention`         | the panel                                                |
-| `panel.idle`      | a panel settles to `idle`          | the panel                                                |
-| `panel.exit`      | a process ends on its own          | panel + `exit_code`                                      |
-| `panel.close`     | a panel is retired                 | `{ id }`                                                 |
-| `group.change`    | membership / rename / show changes | the group                                                |
-| `server.reload`   | config/plugin reloaded             | —                                                        |
-| `panel.output`    | bytes arrive on a panel            | panel + `data` — **high-volume, opt-in, off by default** |
+| Event             | Fires when                          | Payload                                                           |
+| ----------------- | ----------------------------------- | ----------------------------------------------------------------- |
+| `panel.spawn`     | a panel is created                  | the panel                                                         |
+| `panel.state`     | any lifecycle transition            | panel + `from`, `to`                                              |
+| `panel.attention` | a panel enters `attention`          | the panel                                                         |
+| `panel.idle`      | a panel settles to `idle`           | the panel                                                         |
+| `panel.exit`      | a process ends on its own           | panel + `exit_code`                                               |
+| `panel.close`     | a panel is retired                  | `{ id }`                                                          |
+| `group.change`    | membership / rename / show changes  | the group                                                         |
+| `task.change`     | a task is recorded or changes state | the task — `id`, `prompt`, `status`, `panel`, `group`, `attempts` |
+| `server.reload`   | config/plugin reloaded              | —                                                                 |
+| `panel.output`    | bytes arrive on a panel             | panel + `data` — **high-volume, opt-in, off by default**          |
 
 `panel.attention` and `panel.exit` are the headline hooks: "ping me when an agent needs me," "kick off the next step when
 this one finishes," "desktop-notify on completion" all fall out of them.
+
+### Tasks and the queue
+
+A dispatch ([SPEC.md](./SPEC.md#tasks-and-the-queue)) is a tracked task, and a plugin can both **watch** it and **shape**
+it. Watching is an ordinary hook — `task.change` fires on every transition, so "log every brief," "notify when a task
+fails," or "chain the next step when one finishes" all read the same way as the panel hooks:
+
+```lua
+baton.on("task.change", function(t)
+  if t.status == "failed" then baton.notify(t.id .. " failed: " .. (t.prompt or "")) end
+end)
+```
+
+Shaping is the one **filter hook**, `task.pre`. Unlike every other hook — which is fire-and-forget and ignores its return
+value — `task.pre` runs **synchronously before a brief is delivered** and its return value changes the action. It is the
+single place a plugin can rewrite or veto work, the natural seat for an allow-list, a prompt preamble, or a routing tag:
+
+```lua
+baton.on("task.pre", function(t)
+  if t.prompt:find("rm %-rf") then return false end           -- veto: drop the task
+  if t.group == "review" then return "[read-only] " .. t.prompt end  -- rewrite the brief
+  -- return nothing to pass it through unchanged
+end)
+```
+
+The hook receives a `{ prompt, group }` table and returns one of:
+
+| Return                      | Effect                                               |
+| --------------------------- | ---------------------------------------------------- |
+| `nil` / nothing / `true`    | pass the brief through unchanged                     |
+| a string                    | rewrite the prompt to that string                    |
+| `{ prompt = "…" }`          | rewrite the prompt                                   |
+| `false` / `{ drop = true }` | veto — the task is dropped, the caller gets an error |
+
+Hooks **chain** (a later hook sees the earlier one's rewrite) and the **first veto stops the chain**. It runs at the
+`dispatch`, `dispatch-group`, and `enqueue` intake points; plugin-originated dispatches bypass it, so it never re-enters
+itself.
+
+`task.pre` is **fail-open** by contract: no hook, a throwing hook, or a hook that runs past the timeout all leave the
+brief unchanged. The filter blocks the dispatch on the single Lua worker, so a slow hook is bounded — past the deadline
+the caller proceeds with the original brief and the late result is discarded. A broken or slow plugin can never drop a
+task or wedge the fleet; the worst it does is fail to filter.
 
 ### Add commands — `baton.command`
 
@@ -221,7 +271,10 @@ no network) is possible if there is demand, but the default is full power.
   the server feeds it through the event-dispatcher hook the architecture reserves for it.
 - **One Lua goroutine.** The VM is single-threaded. A dedicated goroutine owns the `LState`; loads, hooks, and commands
   all run on it. Server events are posted to a buffered channel it drains — **never under `s.mu`** — so a hook calling
-  back into `baton.*` re-enters the (independently locked) core actions without deadlock.
+  back into `baton.*` re-enters the (independently locked) core actions without deadlock. The one synchronous hook,
+  `task.pre`, rides the same worker but **blocks the dispatch** on a bounded request: the server reads the brief result
+  off a buffered channel with `s.mu` released, and a timeout makes it fail open, so a wedged filter never stalls the
+  fleet.
 - **Mapping is mechanical.** Each `baton.*` write marshals its Lua args into the same call the socket handler makes, so
   the plugin and the wire can never drift in what an action means or how it can fail.
 

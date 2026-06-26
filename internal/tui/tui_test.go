@@ -298,6 +298,32 @@ func TestChangePrefixKey(t *testing.T) {
 	}
 }
 
+// TestDispatchedBriefShowsOnCardAndPreview checks that a panel carrying a
+// dispatched task headlines its card (▸ brief) and gets a "task" row in the tree
+// preview — the visible payoff of recording the brief on the panel.
+func TestDispatchedBriefShowsOnCardAndPreview(t *testing.T) {
+	const brief = "land the login fix"
+	fleet := []panel.Panel{
+		{ID: "a1", Kind: panel.Agent, Title: "claude #1", State: panel.Running, Activity: "running · 3m", Task: brief},
+	}
+
+	// Card grid (small fleet → grid, not tree).
+	card := model{mode: modeDashboard, fleet: fleet, width: 110, height: 40}.View()
+	if !strings.Contains(card, brief) || !strings.Contains(card, "▸") {
+		t.Fatalf("card should headline the brief with ▸; got:\n%s", card)
+	}
+
+	// Tree preview (crowd the fleet so the dashboard switches to tree+preview).
+	crowd := append([]panel.Panel(nil), fleet...)
+	for len(crowd) <= treeThreshold {
+		crowd = append(crowd, panel.Panel{ID: "x", Kind: panel.Shell, Title: "shell", State: panel.Idle})
+	}
+	prev := model{mode: modeDashboard, fleet: crowd, width: 120, height: 44}.View()
+	if !strings.Contains(prev, "task") || !strings.Contains(prev, brief) {
+		t.Fatalf("tree preview should carry a task row with the brief; got:\n%s", prev)
+	}
+}
+
 func TestRestartBindingFlagsRestart(t *testing.T) {
 	m := model{mode: modeDashboard, fleet: sampleFleet()}
 	if m.RestartRequested() {

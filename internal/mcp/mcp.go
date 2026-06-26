@@ -227,6 +227,64 @@ func defaultTools() []tool {
 			},
 		},
 		{
+			name: "baton_dispatch",
+			desc: "Assign a task to a panel: record the brief and deliver the prompt to the agent as a unit. Prefer this over baton_send for handing an agent work — the brief shows on its card and survives a restart.",
+			schema: obj(map[string]any{
+				"id":     str("target panel id"),
+				"prompt": str("the task brief to assign and deliver"),
+			}, "id", "prompt"),
+			run: func(c *control.Client, a args) (string, error) {
+				id := a.str("id")
+				if id == "" {
+					return "", fmt.Errorf("id is required")
+				}
+				if err := c.Dispatch(id, a.str("prompt")); err != nil {
+					return "", err
+				}
+				return "dispatched to panel " + id, nil
+			},
+		},
+		{
+			name: "baton_enqueue",
+			desc: "Add a task to the backlog. The scheduler drains it onto a free idle agent (in the given work item, if any) — use this to hand off work without picking a panel yourself.",
+			schema: obj(map[string]any{
+				"prompt": str("the task brief to enqueue"),
+				"group":  str("restrict the task to agents in this work item (optional)"),
+			}, "prompt"),
+			run: func(c *control.Client, a args) (string, error) {
+				if err := c.Enqueue(a.str("prompt"), a.str("group")); err != nil {
+					return "", err
+				}
+				return "enqueued", nil
+			},
+		},
+		{
+			name:   "baton_queue",
+			desc:   "List the task backlog: every task with its id, prompt, status, panel, and group.",
+			schema: obj(map[string]any{}),
+			run: func(c *control.Client, _ args) (string, error) {
+				return c.TasksJSON()
+			},
+		},
+		{
+			name: "baton_dispatch_group",
+			desc: "Fan one task to every member of a work item — the way to race N agents on the same prompt. Group them first with baton_group.",
+			schema: obj(map[string]any{
+				"group":  str("the work-item name whose members receive the task"),
+				"prompt": str("the task brief to dispatch to every member"),
+			}, "group", "prompt"),
+			run: func(c *control.Client, a args) (string, error) {
+				group := a.str("group")
+				if group == "" {
+					return "", fmt.Errorf("group is required")
+				}
+				if err := c.DispatchGroup(group, a.str("prompt")); err != nil {
+					return "", err
+				}
+				return "dispatched to group " + group, nil
+			},
+		},
+		{
 			name: "baton_group",
 			desc: "File panels under a work-item name, grouping them in the dashboard and split view.",
 			schema: obj(map[string]any{

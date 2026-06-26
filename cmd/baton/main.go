@@ -236,6 +236,7 @@ func buildServerOptions(rc reloadable, stateF string) []server.Option {
 		server.WithEditor(rc.editor),
 		server.WithWorktreeDir(rc.worktreeDir),
 		server.WithStateFile(stateF),
+		server.WithQueue(rc.queueMax, rc.queueConcurrency),
 	}
 	if rc.replayBytes > 0 {
 		opts = append(opts, server.WithReplayBytes(rc.replayBytes))
@@ -277,6 +278,7 @@ func runServerOn(ln net.Listener, sock string) error {
 	defer plug.Close()
 	srv.SetEventSink(plug.Dispatch)
 	srv.SetRunCommand(plug.RunCommand)
+	srv.SetTaskFilter(plug.FilterTask)
 	pluginPath := paths.PluginFile()
 
 	// applyConfig re-reads the YAML config, (re)runs the plugin on top of it, and
@@ -372,6 +374,8 @@ type reloadable struct {
 	diffCommand       string // explicit diff command for the agent diff pop-up; empty falls back to git diff.tool then a built-in diff
 	editor            string // commit editor for the git menu (GIT_EDITOR); empty falls back to git's own editor chain
 	worktreeDir       string // base dir for new git-menu worktrees; empty falls back to a sibling of the agent's repo
+	queueMax          int    // most queued tasks the backlog holds; -1 keeps the server default
+	queueConcurrency  int    // most tasks one work item runs at once; 0 = unlimited
 }
 
 // reloadableSettings projects a config onto the hot-reloadable settings, applying
@@ -385,6 +389,13 @@ func reloadableSettings(cfg config.Config) reloadable {
 	if cfg.Panel.ReplayKB > 0 {
 		rc.replayBytes = cfg.Panel.ReplayKB * 1024
 	}
+	// queueMax -1 keeps the server's built-in default; a positive config caps the
+	// backlog. Concurrency passes straight through (0 = unlimited).
+	rc.queueMax = -1
+	if cfg.Queue.Max > 0 {
+		rc.queueMax = cfg.Queue.Max
+	}
+	rc.queueConcurrency = cfg.Queue.Concurrency
 	return rc
 }
 

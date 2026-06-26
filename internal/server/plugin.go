@@ -25,6 +25,7 @@ func panelFields(p panel.Panel) map[string]any {
 		"title":    p.Title,
 		"state":    p.State.String(),
 		"group":    p.Group,
+		"task":     p.Task,
 		"activity": p.Activity,
 		"pinned":   p.Pinned,
 	}
@@ -54,6 +55,49 @@ func (s *Server) SetRunCommand(fn func(name string) error) {
 	s.mu.Lock()
 	s.onRunCommand = fn
 	s.mu.Unlock()
+}
+
+// SetTaskFilter wires the synchronous task.pre filter — the one hook that can change
+// an action, rewriting or vetoing a brief before it is delivered. It blocks on the
+// plugin worker, so the dispatch path calls it without s.mu held. Call before/while
+// serving; stored under mu.
+func (s *Server) SetTaskFilter(fn func(prompt, group string) (string, bool)) {
+	s.mu.Lock()
+	s.onFilterTask = fn
+	s.mu.Unlock()
+}
+
+// filterBrief runs the wired task.pre filter over a brief and returns the
+// (possibly rewritten) prompt and whether to proceed. It reads the callback under a
+// brief lock, then releases it before the blocking call — the filter must never run
+// under s.mu. A nil filter (no plugin) passes the brief through unchanged.
+func (s *Server) filterBrief(prompt, group string) (string, bool) {
+	s.mu.Lock()
+	fn := s.onFilterTask
+	s.mu.Unlock()
+	if fn == nil {
+		return prompt, true
+	}
+	return fn(prompt, group)
+}
+
+// dispatchFiltered is the shared body of the panel.dispatch / dispatch-group /
+// task.enqueue commands: run the task.pre filter over the brief, then perform the
+// intake action with the (possibly rewritten) prompt. A veto or a failed action
+// becomes a wire error; a success broadcasts the fleet. Routing all three through
+// here means they honour the filter identically, and the filter runs before action
+// takes s.mu — which is safe because onCommand holds no lock at the call site.
+func (s *Server) dispatchFiltered(cc *clientConn, prompt, group string, action func(prompt string) error) {
+	filtered, ok := s.filterBrief(prompt, group)
+	if !ok {
+		send(cc, proto.ServerMsg{Type: "error", Error: "task vetoed by a task.pre hook"})
+		return
+	}
+	if err := action(filtered); err != nil {
+		send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+		return
+	}
+	s.broadcastFleet()
 }
 
 // SetClientConfig publishes the merged effective config served on config.get. The
@@ -119,6 +163,38 @@ func (s *Server) Spawn(kind, command string, args []string, dir, group string) (
 			s.broadcastFleet()
 			return id, err
 		}
+	}
+	s.broadcastFleet()
+	return id, nil
+}
+
+// Dispatch records prompt as panel id's task brief and delivers it to the process
+// as a unit, broadcasting and persisting like the wire path. It is baton.dispatch.
+func (s *Server) Dispatch(id, prompt string) error {
+	if err := s.dispatchPanel(id, prompt, ""); err != nil {
+		return err
+	}
+	s.broadcastFleet()
+	return nil
+}
+
+// DispatchGroup fans prompt to every member of group, returning how many it
+// reached. It is baton.dispatch_group.
+func (s *Server) DispatchGroup(group, prompt string) (int, error) {
+	n, err := s.dispatchGroup(group, prompt, "")
+	if err != nil {
+		return 0, err
+	}
+	s.broadcastFleet()
+	return n, nil
+}
+
+// Enqueue adds a task to the backlog and returns its id. It is baton.enqueue; the
+// scheduler drains it onto a free agent on a later tick.
+func (s *Server) Enqueue(prompt, group string) (string, error) {
+	id, err := s.enqueueTask(prompt, group)
+	if err != nil {
+		return "", err
 	}
 	s.broadcastFleet()
 	return id, nil

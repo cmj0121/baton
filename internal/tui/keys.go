@@ -28,6 +28,8 @@ const (
 	keySignal      = "s" // open the send-signal picker for the selection / panel / group
 	keySearch      = "f" // find: filter panels on the dashboard, search the scrollback in a zoom (C-t f)
 	keyDiff        = "D" // show the work-tree diff of the focused agent panel (shift+d; C-t D in a zoom)
+	keyDispatch    = "T" // dispatch a task to the focused agent panel (shift+t; C-t T in a zoom)
+	keyQueue       = "Q" // open the task-queue manager popup (shift+q; C-t Q in a zoom)
 	keyHelp        = "?" // view the key list for the current view
 	keyEditMap     = "k" // edit the key map (prefix only: C-t k)
 	keyPanelConfig = "P" // shift+p
@@ -84,6 +86,8 @@ const (
 	actSignal
 	actSearch
 	actDiff
+	actDispatch
+	actQueue
 	actHelp
 	actPanelConfig
 	actRestart
@@ -141,6 +145,8 @@ var bindings = []binding{
 	{"signal", keySignal, "send a signal to the panel(s)", actSignal, "Panels"},
 	{"search", keySearch, "find panels · search the scrollback (zoom)", actSearch, "Panels"},
 	{"diff", keyDiff, "show the work-tree diff (agent panel)", actDiff, "Panels"},
+	{"dispatch", keyDispatch, "dispatch a task to the agent panel", actDispatch, "Panels"},
+	{"queue", keyQueue, "manage the task queue (list · cancel · drain)", actQueue, "Panels"},
 
 	{"mark", keyMark, "mark a panel for grouping", actMark, "Work items"},
 	{"group", keyGroup, "group the marked panels", actGroup, "Work items"},

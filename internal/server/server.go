@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,8 +28,10 @@ import (
 	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/ptymgr"
+	"github.com/cmj0121/baton/internal/queue"
 	"github.com/cmj0121/baton/internal/signals"
 	"github.com/cmj0121/baton/internal/state"
+	"github.com/cmj0121/baton/internal/task"
 )
 
 // statsInterval is how often the server samples host CPU/memory for the footer.
@@ -96,6 +99,11 @@ type Server struct {
 	eventSink    func(name string, fields map[string]any)
 	outputEvents atomic.Bool
 	onRunCommand func(name string) error
+	// onFilterTask runs the synchronous task.pre hooks over a brief before it is
+	// delivered: it may rewrite the prompt or veto the task. It blocks on the plugin
+	// worker, so — unlike eventSink — it must be called WITHOUT s.mu held. A nil
+	// filter (no plugin) passes every brief through unchanged.
+	onFilterTask func(prompt, group string) (string, bool)
 	clientConfig json.RawMessage
 	pluginCmds   []proto.PluginCommand
 	footerText   string // a plugin-set persistent footer segment (baton.footer); carried on config + pushed live
@@ -106,6 +114,33 @@ type Server struct {
 	clients map[*clientConn]struct{}
 	mon     *monitor               // lifecycle + telemetry bookkeeping, guarded by mu
 	specs   map[string]ptymgr.Spec // immutable spawn spec per panel id, for persistence + respawn (guarded by mu)
+
+	// pendingDispatch holds a dispatch whose panel was not yet ready to receive it
+	// (still spawning or mid-output): the bytes to write once the panel settles to
+	// idle/attention. Keyed by panel id, guarded by mu; the monitor tick drains it.
+	pendingDispatch map[string][]byte
+
+	// Tasks. A dispatched prompt is promoted to a task.Task tracked through its
+	// lifecycle; tasks holds them by id and panelTask maps a panel to its current
+	// task, so a re-dispatch updates the same task (bumping Attempts). taskSeq names
+	// tasks "t<n>" from a private counter. All guarded by mu.
+	tasks     map[string]*task.Task
+	panelTask map[string]string
+	taskSeq   int
+
+	// Queue. qstore is the on-disk backlog mirror ("" / nil when persistence is
+	// off). queueMax caps the queued (unassigned) backlog; queueConcurrency caps
+	// how many of a group's tasks run at once (0 = unlimited). taskDirty carries
+	// task ids whose disk file the saver must refresh or remove.
+	qstore           *queue.Store
+	queueMax         int
+	queueConcurrency int
+	taskDirty        chan string
+
+	// writeInput delivers input bytes to a panel's PTY. It is s.pty.Write in
+	// production; a test swaps it (SetInputWriter) to record dispatched bytes
+	// without a live process. Set once in New, then read without a lock.
+	writeInput func(id string, data []byte)
 
 	// Ephemeral diff panels. ephemeral is the set of live "diff:<n>" ids spawned
 	// as PTYs but deliberately kept out of s.panels/s.specs, so persistence
@@ -196,22 +231,59 @@ func WithStateFile(path string) Option {
 	return func(s *Server) { s.stateF = path }
 }
 
+// WithClock overrides the monitor's clock so a test can advance time without
+// sleeping — the lifecycle transitions (idle/attention) and the dispatch gating
+// they drive then become deterministic.
+func WithClock(now func() time.Time) Option {
+	return func(s *Server) { s.mon.now = now }
+}
+
+// defaultQueueMax is the built-in cap on the queued (unassigned) backlog when the
+// config sets none: enough headroom for real fan-out, low enough to rein in a
+// runaway producer.
+const defaultQueueMax = 128
+
+// WithQueue sets the backlog caps: max is the most queued tasks the backlog holds
+// (0 = unlimited), concurrency is the most tasks one work item runs at once (0 =
+// unlimited). A negative value is ignored, keeping the default.
+func WithQueue(max, concurrency int) Option {
+	return func(s *Server) {
+		if max >= 0 {
+			s.queueMax = max
+		}
+		if concurrency >= 0 {
+			s.queueConcurrency = concurrency
+		}
+	}
+}
+
 // New builds a server bound to ln. The fleet starts empty — panels appear only
 // when the user spawns a real one. Options are applied before the PTY manager is
 // built, so settings like the replay size reach it.
 func New(ln net.Listener, opts ...Option) *Server {
 	s := &Server{
-		ln:         ln,
-		clients:    make(map[*clientConn]struct{}),
-		mon:        newMonitor(),
-		specs:      make(map[string]ptymgr.Spec),
-		ephemeral:  make(map[string]struct{}),
-		groupShown: make(map[string]int),
-		dirty:      make(chan struct{}, 1),
-		heartbeat:  proto.HeartbeatInterval,
+		ln:              ln,
+		clients:         make(map[*clientConn]struct{}),
+		mon:             newMonitor(),
+		specs:           make(map[string]ptymgr.Spec),
+		ephemeral:       make(map[string]struct{}),
+		groupShown:      make(map[string]int),
+		pendingDispatch: make(map[string][]byte),
+		tasks:           make(map[string]*task.Task),
+		panelTask:       make(map[string]string),
+		taskDirty:       make(chan string, 256),
+		queueMax:        defaultQueueMax,
+		dirty:           make(chan struct{}, 1),
+		heartbeat:       proto.HeartbeatInterval,
 	}
 	for _, opt := range opts {
 		opt(s)
+	}
+
+	// The task backlog mirrors to disk alongside the fleet snapshot, so it shares
+	// the same on/off switch: a state file implies a sibling queue directory.
+	if s.stateF != "" {
+		s.qstore = queue.New(strings.TrimSuffix(s.stateF, ".state.json")+".queue", time.Now)
 	}
 
 	var pmOpts []ptymgr.Option
@@ -219,6 +291,9 @@ func New(ln net.Listener, opts ...Option) *Server {
 		pmOpts = append(pmOpts, ptymgr.WithRingCap(s.replayBytes))
 	}
 	s.pty = ptymgr.New(pmOpts...)
+	if s.writeInput == nil {
+		s.writeInput = s.pty.Write
+	}
 	s.pty.OnOutput(s.routeOutput)
 	s.pty.OnClose(s.onPanelExit)
 	return s
@@ -259,7 +334,9 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 		if s.panels[i].ID == id {
 			s.panels[i].State = panel.Exited
 			s.panels[i].Activity = "exited"
-			s.mon.forget(id) // a dead panel no longer ticks
+			s.mon.forget(id)                     // a dead panel no longer ticks
+			delete(s.pendingDispatch, id)        // a held dispatch dies with the process
+			s.advanceTaskLocked(id, task.Failed) // a task in flight died with its panel
 			fields = panelFields(s.panels[i])
 			fields["exit_code"] = exitCode
 			found = true
@@ -299,6 +376,7 @@ func (s *Server) routeOutput(id string, data []byte) {
 			f := panelFields(s.panels[i])
 			f["from"], f["to"] = from.String(), panel.Running.String()
 			s.emit("panel.state", f)
+			s.advanceTaskLocked(id, task.Running) // output means the agent is working its task
 		}
 		// panel.output is opt-in: emitted only when a plugin registered a handler,
 		// so the hot output path costs nothing otherwise. The byte slice is copied
@@ -370,6 +448,7 @@ func (s *Server) Serve() error {
 	go s.statsLoop(stop)
 	go s.monitorLoop(stop)
 	go s.saverLoop(stop)
+	go s.taskSaverLoop(stop)
 
 	for {
 		conn, err := s.ln.Accept()
@@ -440,9 +519,9 @@ func (s *Server) monitorLoop(stop <-chan struct{}) {
 // so it never disturbs a frontend's structural panel stream.
 func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	changed := false
+	var deliver []readyDispatch // pending dispatches whose panel settled this tick
 	for i := range s.panels {
 		p := &s.panels[i]
 		if p.State == panel.Exited {
@@ -464,6 +543,18 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 			case panel.Idle:
 				s.emit("panel.idle", panelFields(*p))
 			}
+			// The panel just settled. If a dispatch was held for it, deliver it and
+			// move its task to dispatched; otherwise a running task whose agent has
+			// gone quiet is finished — mark it done.
+			if dispatchReady(ns) {
+				if data, held := s.pendingDispatch[p.ID]; held {
+					delete(s.pendingDispatch, p.ID)
+					deliver = append(deliver, readyDispatch{id: p.ID, data: data})
+					s.advanceTaskLocked(p.ID, task.Dispatched)
+				} else {
+					s.advanceTaskLocked(p.ID, task.Done)
+				}
+			}
 		}
 		if spark := s.mon.roll(p.ID); spark != p.Spark {
 			p.Spark = spark
@@ -475,14 +566,39 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 		}
 	}
 
-	if !changed || len(s.clients) == 0 {
+	// Drain the queued backlog onto any free idle agents this tick assignments
+	// also produce deliveries and change panels, so they refresh the dashboard.
+	if assigned := s.scheduleLocked(); len(assigned) > 0 {
+		deliver = append(deliver, assigned...)
+		changed = true
+	}
+
+	var out []proto.Panel
+	if changed && len(s.clients) > 0 {
+		out = make([]proto.Panel, len(s.panels))
+		for i, p := range s.panels {
+			out[i] = p.ToProto()
+		}
+	}
+	s.mu.Unlock()
+
+	// Deliver held dispatches outside the lock — a PTY write must not block under
+	// mu, and a panel that just settled is waiting for input, so the write lands.
+	for _, d := range deliver {
+		s.writeInput(d.id, d.data)
+	}
+
+	if out == nil {
 		return proto.ServerMsg{}, false
 	}
-	out := make([]proto.Panel, len(s.panels))
-	for i, p := range s.panels {
-		out[i] = p.ToProto()
-	}
 	return proto.ServerMsg{Type: "telemetry", Panels: out}, true
+}
+
+// readyDispatch is a held dispatch whose panel settled this tick: the bytes to
+// deliver once the monitor lock is released.
+type readyDispatch struct {
+	id   string
+	data []byte
 }
 
 // handle serves one accepted client connection for its lifetime: it runs the
@@ -616,10 +732,13 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 	switch cmd.Action {
 	case "server.reload":
 		return "conductor role: reloading the server is not permitted"
-	case "panel.close", "panel.signal", "panel.input":
+	case "task.drain":
+		return "conductor role: draining the backlog is an operator action"
+	case "panel.close", "panel.signal", "panel.input", "panel.dispatch":
 		// Self-targeted control is forbidden: closing/signalling itself kills the
-		// agent mid-command, feeding itself input loops. targetIDs folds in cmd.ID,
-		// so it covers panel.input (which addresses a single panel) too.
+		// agent mid-command, feeding itself input loops, or dispatching a task onto
+		// its own panel. targetIDs folds in cmd.ID, so it covers panel.input and
+		// panel.dispatch (which address a single panel) too.
 		if cc.self != "" && slices.Contains(targetIDs(cmd), cc.self) {
 			return "conductor role: cannot act on its own panel"
 		}
@@ -780,6 +899,38 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		s.detach(cc, cmd.ID)
 	case "panel.input":
 		s.pty.Write(cmd.ID, cmd.Data)
+	case "panel.dispatch":
+		// Assign a task to a panel: record the brief and deliver it to the process as
+		// a unit. Unlike panel.input (raw keystrokes), the server knows the objective,
+		// so it reaches every frontend's card and the snapshot.
+		s.dispatchFiltered(cc, cmd.Prompt, "", func(p string) error {
+			return s.dispatchPanel(cmd.ID, p, cmd.Submit)
+		})
+	case "panel.dispatch-group":
+		// Fan one task to every member of a work item — the mechanic behind racing N
+		// agents on the same prompt. The reply error names an empty/unknown group.
+		s.dispatchFiltered(cc, cmd.Prompt, cmd.Group, func(p string) error {
+			_, err := s.dispatchGroup(cmd.Group, p, cmd.Submit)
+			return err
+		})
+	case "task.enqueue":
+		// Add a task to the backlog; the scheduler drains it onto a free agent. The
+		// reply error names a full queue.
+		s.dispatchFiltered(cc, cmd.Prompt, cmd.Group, func(p string) error {
+			_, err := s.enqueueTask(p, cmd.Group)
+			return err
+		})
+	case "task.list":
+		send(cc, s.tasksMsg())
+	case "task.cancel":
+		if err := s.cancelTask(cmd.ID); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		send(cc, s.tasksMsg())
+	case "task.drain":
+		s.drainQueued()
+		send(cc, s.tasksMsg())
 	case "panel.resize":
 		s.pty.Resize(cmd.ID, cmd.Rows, cmd.Cols)
 	default:
@@ -1116,6 +1267,7 @@ func (s *Server) snapshotState() state.State {
 			Kind:      p.Kind.String(),
 			Title:     p.Title,
 			Group:     p.Group,
+			Task:      p.Task,
 			Pinned:    p.Pinned,
 			Conductor: p.Conductor,
 			Spec:      state.Spec{Command: spec.Command, Args: spec.Args, Dir: spec.Dir},
@@ -1176,6 +1328,7 @@ func (s *Server) Restore() {
 			Kind:      panel.ParseKind(ps.Kind),
 			Title:     ps.Title,
 			Group:     ps.Group,
+			Task:      ps.Task,
 			Pinned:    ps.Pinned,
 			Conductor: ps.Conductor,
 			State:     panel.Exited,
@@ -1194,7 +1347,411 @@ func (s *Server) Restore() {
 			s.groupShown[g.Group] = g.Shown
 		}
 	}
-	log.Info().Int("panels", len(st.Panels)).Int("seq", s.seq).Msg("state restored")
+	s.restoreTasksLocked()
+	log.Info().Int("panels", len(st.Panels)).Int("seq", s.seq).Int("tasks", len(s.tasks)).Msg("state restored")
+}
+
+// restoreTasksLocked reloads the on-disk backlog into the task table. Every
+// restored panel comes back exited, so a task that was in flight on one is
+// orphaned: it is re-queued (unassigned, kept id and attempts) for the scheduler
+// to redrive once agents are running again. A malformed file is quarantined aside.
+// taskSeq is bumped past the highest restored id so a new task never collides.
+// Caller holds s.mu; a no-op when persistence is off.
+func (s *Server) restoreTasksLocked() {
+	if s.qstore == nil {
+		return
+	}
+	tasks, bad, err := s.qstore.LoadAll()
+	if err != nil {
+		log.Warn().Err(err).Msg("could not load task backlog")
+		return
+	}
+	for _, id := range bad {
+		_ = s.qstore.Quarantine(id)
+	}
+	for _, t := range tasks {
+		tk := t
+		if tk.Status.Terminal() {
+			continue // a terminal task should not have a live file; drop it
+		}
+		if tk.Panel != "" { // was in flight on a now-dead panel — orphaned, re-queue it
+			tk.Panel = ""
+			tk.Status = task.Queued
+		}
+		s.tasks[tk.ID] = &tk
+		_ = s.qstore.Save(tk) // rewrite the re-queued shape
+		if n := taskSeqNum(tk.ID); n > s.taskSeq {
+			s.taskSeq = n
+		}
+	}
+}
+
+// taskSeqNum parses the numeric part of a "t<n>" task id, or -1 if it does not fit
+// the shape, so the restored counter can clear the highest seen id.
+func taskSeqNum(id string) int {
+	if len(id) < 2 || id[0] != 't' {
+		return -1
+	}
+	n, err := strconv.Atoi(id[1:])
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+// defaultSubmit is the bytes appended to a dispatched prompt to submit it — a
+// newline, the same rule control.SendText uses. A dispatch may override it (some
+// REPLs want a different sequence), but the hard default lives here, not inline.
+const defaultSubmit = "\n"
+
+// dispatchData is the bytes a dispatch delivers: the prompt followed by its submit
+// sequence (the default when the caller gives none).
+func dispatchData(prompt, submit string) []byte {
+	if submit == "" {
+		submit = defaultSubmit
+	}
+	return append([]byte(prompt), submit...)
+}
+
+// dispatchPanel is a core action: it records prompt as the panel's task brief and
+// delivers it to the panel's process as a unit — the prompt text followed by a
+// submit sequence. Unlike raw panel.input, the server keeps the brief on the
+// panel, so it reaches every frontend's card and is persisted to survive a
+// restart. An empty id, unknown panel, or empty prompt errors — dispatch is
+// "assign a task", not "clear it".
+//
+// Delivery is gated on readiness: a panel still spawning or mid-output is not
+// ready to receive a prompt, so the bytes are held in pendingDispatch and the
+// monitor tick delivers them once the panel settles to idle/attention. A panel
+// already settled is written immediately. The brief is recorded either way.
+func (s *Server) dispatchPanel(id, prompt, submit string) error {
+	if id == "" {
+		return fmt.Errorf("panel.dispatch needs an id")
+	}
+	if prompt == "" {
+		return fmt.Errorf("panel.dispatch needs a prompt")
+	}
+	data := dispatchData(prompt, submit)
+
+	s.mu.Lock()
+	idx := s.indexLocked(id)
+	if idx < 0 {
+		s.mu.Unlock()
+		return fmt.Errorf("no panel with id %q", id)
+	}
+	s.panels[idx].Task = prompt
+	ready := dispatchReady(s.panels[idx].State)
+	status := task.Queued
+	if ready {
+		delete(s.pendingDispatch, id) // a fresh immediate dispatch supersedes a held one
+		status = task.Dispatched
+	} else {
+		s.pendingDispatch[id] = data // deliver when the panel next settles
+	}
+	s.upsertTaskLocked(id, prompt, s.panels[idx].Group, status)
+	s.mu.Unlock()
+
+	if ready {
+		s.writeInput(id, data)
+	}
+	s.markDirty() // persist the brief so a restart restores it
+	return nil
+}
+
+// markTaskDirtyLocked nudges the task saver to refresh (or remove) a task's disk
+// file. It is a non-blocking hand-off — a full channel drops the nudge, and the
+// next change re-sends it — so it is safe to call under mu. A no-op when there is
+// no backlog store. Caller holds s.mu.
+func (s *Server) markTaskDirtyLocked(id string) {
+	if s.qstore == nil {
+		return
+	}
+	select {
+	case s.taskDirty <- id:
+	default:
+	}
+}
+
+// taskSaverLoop mirrors task changes to the on-disk backlog: it saves a live task
+// and removes a terminal or vanished one, serialising the disk I/O off the command
+// path. It stops when Serve returns.
+func (s *Server) taskSaverLoop(stop <-chan struct{}) {
+	for {
+		select {
+		case <-stop:
+			return
+		case id := <-s.taskDirty:
+			s.mu.Lock()
+			t, ok := s.tasks[id]
+			var snapshot task.Task
+			remove := !ok
+			if ok {
+				snapshot = *t
+				remove = t.Status.Terminal()
+			}
+			s.mu.Unlock()
+			var err error
+			if remove {
+				err = s.qstore.Remove(id)
+			} else {
+				err = s.qstore.Save(snapshot)
+			}
+			if err != nil {
+				log.Warn().Str("task", id).Bool("remove", remove).Err(err).Msg("could not persist task")
+			}
+		}
+	}
+}
+
+// taskFields is the event payload for a task — the shape the Lua worker turns
+// into the table a task.change handler receives.
+func taskFields(t *task.Task) map[string]any {
+	return map[string]any{
+		"id":       t.ID,
+		"prompt":   t.Prompt,
+		"status":   string(t.Status),
+		"panel":    t.Panel,
+		"group":    t.Group,
+		"attempts": t.Attempts,
+	}
+}
+
+// upsertTaskLocked records a dispatch as a task and emits task.change. A panel
+// whose current task is still live is re-dispatched in place — same id, a bumped
+// Attempts — so iterating on a busy agent keeps one task; otherwise a new task is
+// created. Caller holds s.mu.
+func (s *Server) upsertTaskLocked(panelID, prompt, group string, status task.Status) *task.Task {
+	now := s.mon.now()
+	if tid, ok := s.panelTask[panelID]; ok {
+		if t := s.tasks[tid]; t != nil && !t.Status.Terminal() {
+			t.Prompt, t.Group, t.Status = prompt, group, status
+			t.Attempts++
+			t.Updated = now
+			s.emit("task.change", taskFields(t))
+			s.markTaskDirtyLocked(t.ID)
+			return t
+		}
+	}
+	s.taskSeq++
+	t := &task.Task{
+		ID: fmt.Sprintf("t%d", s.taskSeq), Prompt: prompt, Status: status,
+		Panel: panelID, Group: group, Attempts: 1, Created: now, Updated: now,
+	}
+	s.tasks[t.ID] = t
+	if panelID != "" {
+		s.panelTask[panelID] = t.ID
+	}
+	s.emit("task.change", taskFields(t))
+	s.markTaskDirtyLocked(t.ID)
+	return t
+}
+
+// advanceTaskLocked moves a panel's current task to status when the lifecycle
+// permits it (see task.CanAdvance), emitting task.change on a real move. It is the
+// one place the panel lifecycle drives the task lifecycle. Caller holds s.mu.
+func (s *Server) advanceTaskLocked(panelID string, status task.Status) {
+	tid, ok := s.panelTask[panelID]
+	if !ok {
+		return
+	}
+	t := s.tasks[tid]
+	if t == nil || !task.CanAdvance(t.Status, status) {
+		return
+	}
+	t.Status = status
+	t.Updated = s.mon.now()
+	s.emit("task.change", taskFields(t))
+	s.markTaskDirtyLocked(t.ID)
+}
+
+// dispatchReady reports whether a panel in this state can receive a dispatched
+// prompt now: a settled agent (idle or waiting for input) is ready; one still
+// spawning or actively producing output is not, so the dispatch is held.
+func dispatchReady(st panel.State) bool {
+	return st == panel.Idle || st == panel.Attention
+}
+
+// enqueueTask adds an unassigned task to the backlog for the scheduler to drain
+// onto a free agent. It errors when the queued backlog is at queueMax — the cap is
+// backpressure on a runaway producer, counting only unassigned tasks, so a busy
+// fleet never blocks new work from being queued.
+func (s *Server) enqueueTask(prompt, group string) (string, error) {
+	if prompt == "" {
+		return "", fmt.Errorf("task.enqueue needs a prompt")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.queueMax > 0 && s.queuedBacklogLenLocked() >= s.queueMax {
+		return "", fmt.Errorf("queue is full (%d queued); raise queue.max or let it drain", s.queueMax)
+	}
+	t := s.upsertTaskLocked("", prompt, group, task.Queued)
+	return t.ID, nil
+}
+
+// queuedBacklogLenLocked counts the unassigned queued tasks — the backlog depth
+// queueMax caps. Caller holds s.mu.
+func (s *Server) queuedBacklogLenLocked() int {
+	n := 0
+	for _, t := range s.tasks {
+		if t.Panel == "" && t.Status == task.Queued {
+			n++
+		}
+	}
+	return n
+}
+
+// freeIdleAgentLocked finds an idle agent panel that can take a task in group: an
+// agent (never the conductor) sitting idle, in the matching group when one is
+// named, with no live task of its own. Caller holds s.mu.
+func (s *Server) freeIdleAgentLocked(group string) (string, bool) {
+	for i := range s.panels {
+		p := &s.panels[i]
+		if p.Kind != panel.Agent || p.Conductor || p.State != panel.Idle {
+			continue
+		}
+		if group != "" && p.Group != group {
+			continue
+		}
+		if tid, ok := s.panelTask[p.ID]; ok {
+			if t := s.tasks[tid]; t != nil && !t.Status.Terminal() {
+				continue // already running a task
+			}
+		}
+		return p.ID, true
+	}
+	return "", false
+}
+
+// scheduleLocked drains the queued backlog onto free idle agents, oldest task
+// first, honouring the per-group concurrency cap. It assigns the task to the panel
+// (recording the brief, moving the task to dispatched) and returns the prompts to
+// deliver once the lock is released. The scheduler never spawns a panel — it
+// distributes work across the agents already in the fleet. Caller holds s.mu.
+func (s *Server) scheduleLocked() []readyDispatch {
+	// One pass over the task table: collect the unassigned backlog and tally each
+	// group's in-flight (dispatched/running) count, so the per-group cap is a map
+	// lookup per candidate rather than a full rescan.
+	var queued []*task.Task
+	groupRunning := map[string]int{}
+	for _, t := range s.tasks {
+		switch {
+		case t.Panel == "" && t.Status == task.Queued:
+			queued = append(queued, t)
+		case t.Status == task.Dispatched || t.Status == task.Running:
+			groupRunning[t.Group]++
+		}
+	}
+	if len(queued) == 0 {
+		return nil
+	}
+	sort.Slice(queued, func(i, j int) bool { return queued[i].Created.Before(queued[j].Created) })
+
+	var deliver []readyDispatch
+	for _, t := range queued {
+		if s.queueConcurrency > 0 && groupRunning[t.Group] >= s.queueConcurrency {
+			continue
+		}
+		pid, ok := s.freeIdleAgentLocked(t.Group)
+		if !ok {
+			continue
+		}
+		if idx := s.indexLocked(pid); idx >= 0 {
+			s.panels[idx].Task = t.Prompt
+		}
+		t.Panel = pid
+		t.Status = task.Dispatched
+		t.Attempts++
+		t.Updated = s.mon.now()
+		s.panelTask[pid] = t.ID
+		groupRunning[t.Group]++ // the fresh dispatch counts against the cap for later tasks
+		s.emit("task.change", taskFields(t))
+		s.markTaskDirtyLocked(t.ID)
+		deliver = append(deliver, readyDispatch{id: pid, data: dispatchData(t.Prompt, "")})
+	}
+	return deliver
+}
+
+// cancelTask removes a queued, unassigned task from the backlog. A task already
+// dispatched or running is in flight on a panel — cancel that by closing or
+// signalling the panel — so only a waiting task can be cancelled here.
+func (s *Server) cancelTask(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[id]
+	if !ok {
+		return fmt.Errorf("no task %q", id)
+	}
+	if t.Panel != "" || t.Status != task.Queued {
+		return fmt.Errorf("task %q is already in flight; close its panel instead", id)
+	}
+	delete(s.tasks, id)
+	s.markTaskDirtyLocked(id)
+	return nil
+}
+
+// drainQueued clears every unassigned queued task, returning how many it dropped.
+// In-flight tasks (dispatched/running on a panel) are left to finish — draining the
+// backlog is not the same as stopping the fleet.
+func (s *Server) drainQueued() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for id, t := range s.tasks {
+		if t.Panel == "" && t.Status == task.Queued {
+			delete(s.tasks, id)
+			s.markTaskDirtyLocked(id)
+			n++
+		}
+	}
+	return n
+}
+
+// tasksMsg builds the backlog snapshot reply, newest activity first, so a frontend
+// can render the queue/kanban.
+func (s *Server) tasksMsg() proto.ServerMsg {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tasks := make([]*task.Task, 0, len(s.tasks))
+	for _, t := range s.tasks {
+		tasks = append(tasks, t)
+	}
+	sort.Slice(tasks, func(i, j int) bool { return tasks[i].Updated.After(tasks[j].Updated) })
+	wire := make([]proto.Task, len(tasks))
+	for i, t := range tasks {
+		wire[i] = proto.Task{
+			ID: t.ID, Prompt: t.Prompt, Status: string(t.Status), Panel: t.Panel,
+			Group: t.Group, Result: t.Result, Attempts: t.Attempts,
+		}
+	}
+	return proto.ServerMsg{Type: "tasks", Tasks: wire}
+}
+
+// dispatchGroup dispatches one prompt to every member of a named group, returning
+// how many it reached. The conductor panel is never a target — a group dispatch
+// cannot loop the control agent back onto itself. An unknown or empty group, or
+// one with no dispatchable member, errors.
+func (s *Server) dispatchGroup(group, prompt, submit string) (int, error) {
+	if group == "" {
+		return 0, fmt.Errorf("panel.dispatch-group needs a group")
+	}
+	if prompt == "" {
+		return 0, fmt.Errorf("panel.dispatch-group needs a prompt")
+	}
+	s.mu.Lock()
+	var ids []string
+	for _, p := range s.panels {
+		if p.Group == group && !p.Conductor {
+			ids = append(ids, p.ID)
+		}
+	}
+	s.mu.Unlock()
+	if len(ids) == 0 {
+		return 0, fmt.Errorf("no panel in group %q", group)
+	}
+	for _, id := range ids {
+		_ = s.dispatchPanel(id, prompt, submit) // each id came from the fleet a moment ago
+	}
+	return len(ids), nil
 }
 
 // respawnPanel re-runs the backing process of an exited panel from its frozen spawn
@@ -1321,9 +1878,12 @@ func (s *Server) closePanel(id string) error {
 	if s.panels[idx].Conductor {
 		workspace = s.specs[id].Dir
 	}
+	s.advanceTaskLocked(id, task.Failed) // closing a panel mid-task abandons it
 	s.panels = slices.Delete(s.panels, idx, idx+1)
 	s.mon.forget(id)
-	delete(s.specs, id) // the panel is gone for good; drop its retained spawn spec
+	delete(s.specs, id)           // the panel is gone for good; drop its retained spawn spec
+	delete(s.pendingDispatch, id) // and any dispatch held for it
+	delete(s.panelTask, id)       // and its task mapping (the task record stays as history)
 	s.emit("panel.close", map[string]any{"id": id, "title": title})
 	s.mu.Unlock()
 

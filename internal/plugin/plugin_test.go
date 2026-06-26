@@ -1,6 +1,7 @@
 package plugin_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -60,19 +61,22 @@ type groupShowRec struct {
 type fakeHost struct {
 	mu sync.Mutex
 
-	spawned    []spawnRec
-	closed     [][]string
-	respawned  []string
-	purgeCalls int
-	signals    []signalRec
-	groups     []groupRec
-	ungroups   []groupRec
-	renames    []renameRec
-	moves      []moveRec
-	pins       []pinRec
-	groupShows []groupShowRec
-	notified   []string
-	footer     string
+	spawned          []spawnRec
+	closed           [][]string
+	respawned        []string
+	purgeCalls       int
+	signals          []signalRec
+	groups           []groupRec
+	ungroups         []groupRec
+	renames          []renameRec
+	moves            []moveRec
+	pins             []pinRec
+	groupShows       []groupShowRec
+	dispatched       []dispatchRec
+	dispatchedGroups []dispatchRec
+	enqueued         []dispatchRec
+	notified         []string
+	footer           string
 
 	// return-value control.
 	panels       []proto.Panel
@@ -89,6 +93,12 @@ type fakeHost struct {
 	moveErr      error
 	pinErr       error
 	groupShowErr error
+	dispatchErr  error
+}
+
+type dispatchRec struct {
+	id     string
+	prompt string
 }
 
 func (h *fakeHost) Spawn(kind, command string, args []string, dir, group string) (string, error) {
@@ -100,6 +110,24 @@ func (h *fakeHost) Spawn(kind, command string, args []string, dir, group string)
 		id = "p1"
 	}
 	return id, h.spawnErr
+}
+func (h *fakeHost) Dispatch(id, prompt string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.dispatched = append(h.dispatched, dispatchRec{id, prompt})
+	return h.dispatchErr
+}
+func (h *fakeHost) DispatchGroup(group, prompt string) (int, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.dispatchedGroups = append(h.dispatchedGroups, dispatchRec{group, prompt})
+	return len(h.dispatchedGroups), h.dispatchErr
+}
+func (h *fakeHost) Enqueue(prompt, group string) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.enqueued = append(h.enqueued, dispatchRec{group, prompt})
+	return "t1", h.dispatchErr
 }
 func (h *fakeHost) Close(ids []string) error {
 	h.mu.Lock()
@@ -270,6 +298,95 @@ func TestLoadRegistersEverything(t *testing.T) {
 	}
 }
 
+// TestDispatchVerb checks baton.dispatch(id, prompt) lands on the host's Dispatch,
+// and that baton.spawn{prompt=…} dispatches the brief to the freshly spawned panel.
+func TestDispatchVerb(t *testing.T) {
+	h := &fakeHost{spawnID: "p7"}
+	p := plugin.New(h)
+	defer p.Close()
+
+	path := writeLua(t, `
+		baton.dispatch("p3", "review the PR")
+		baton.spawn{ kind = "agent", command = "claude", prompt = "write the tests" }
+	`)
+	if _, err := p.Load(path, config.Config{}); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	h.mu.Lock()
+	got := h.dispatched
+	h.mu.Unlock()
+	if len(got) != 2 {
+		t.Fatalf("want 2 dispatches (explicit + spawn prompt), got %+v", got)
+	}
+	if got[0] != (dispatchRec{"p3", "review the PR"}) {
+		t.Errorf("explicit dispatch = %+v", got[0])
+	}
+	if got[1] != (dispatchRec{"p7", "write the tests"}) {
+		t.Errorf("spawn-prompt dispatch = %+v (want it to target the new panel id)", got[1])
+	}
+}
+
+// TestDispatchGroupVerb checks baton.dispatch_group(group, prompt) lands on the
+// host's DispatchGroup and returns the reached count.
+func TestDispatchGroupVerb(t *testing.T) {
+	h := &fakeHost{}
+	p := plugin.New(h)
+	defer p.Close()
+
+	path := writeLua(t, `
+		n = baton.dispatch_group("api", "refactor")
+		if n ~= 1 then error("expected count 1, got "..tostring(n)) end
+	`)
+	if _, err := p.Load(path, config.Config{}); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	h.mu.Lock()
+	got := h.dispatchedGroups
+	h.mu.Unlock()
+	if len(got) != 1 || got[0] != (dispatchRec{"api", "refactor"}) {
+		t.Fatalf("dispatch_group not delivered to host: %+v", got)
+	}
+}
+
+// TestEnqueueVerb checks baton.enqueue{prompt,group} lands on the host's Enqueue
+// and returns the new task id.
+func TestEnqueueVerb(t *testing.T) {
+	h := &fakeHost{}
+	p := plugin.New(h)
+	defer p.Close()
+
+	path := writeLua(t, `
+		id = baton.enqueue{ prompt = "ship it", group = "api" }
+		if id ~= "t1" then error("expected task id t1, got "..tostring(id)) end
+	`)
+	if _, err := p.Load(path, config.Config{}); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	h.mu.Lock()
+	got := h.enqueued
+	h.mu.Unlock()
+	if len(got) != 1 || got[0] != (dispatchRec{"api", "ship it"}) {
+		t.Fatalf("enqueue not delivered to host: %+v", got)
+	}
+}
+
+// TestSpawnPromptSurvivesDispatchError checks that a failing prompt dispatch does
+// not strand the spawn: the panel id is still returned and the panel kept.
+func TestSpawnPromptSurvivesDispatchError(t *testing.T) {
+	h := &fakeHost{spawnID: "p9", dispatchErr: errors.New("busy")}
+	p := plugin.New(h)
+	defer p.Close()
+
+	path := writeLua(t, `
+		id = baton.spawn{ kind = "agent", command = "claude", prompt = "go" }
+		if id ~= "p9" then error("spawn should still return the id, got "..tostring(id)) end
+	`)
+	if _, err := p.Load(path, config.Config{}); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+}
+
 // TestHookFires checks a dispatched event reaches its Lua handler, which calls back
 // into the host with the event payload.
 func TestHookFires(t *testing.T) {
@@ -396,4 +513,130 @@ func TestLoadErrorIsNonFatal(t *testing.T) {
 	if res.Config.Prefix != "ctrl+t" {
 		t.Errorf("base config should still come back on error, prefix = %q", res.Config.Prefix)
 	}
+}
+
+// TestFilterTaskRewriteAndVeto exercises the synchronous task.pre hook: a hook can
+// pass a brief through, rewrite the prompt (by string or table), or veto the task
+// (by false or a drop table). Hooks chain, and the first veto stops the chain.
+func TestFilterTaskRewriteAndVeto(t *testing.T) {
+	h := &fakeHost{}
+	p := plugin.New(h)
+	defer p.Close()
+
+	path := writeLua(t, `
+		baton.on("task.pre", function(t)
+			if t.prompt == "drop me" then return false end       -- veto
+			if t.prompt == "tag me" then return "[build] "..t.prompt end  -- string rewrite
+			if t.prompt == "table me" then return { prompt = "rewritten" } end -- table rewrite
+			if t.prompt == "table drop" then return { drop = true } end       -- table veto
+		end)
+	`)
+	if _, err := p.Load(path, config.Config{}); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	cases := []struct {
+		in        string
+		wantOut   string
+		wantAllow bool
+	}{
+		{"keep me", "keep me", true},
+		{"tag me", "[build] tag me", true},
+		{"table me", "rewritten", true},
+		{"drop me", "", false},
+		{"table drop", "", false},
+	}
+	for _, c := range cases {
+		out, allow := p.FilterTask(c.in, "build")
+		if allow != c.wantAllow || (allow && out != c.wantOut) {
+			t.Errorf("FilterTask(%q) = (%q, %v), want (%q, %v)", c.in, out, allow, c.wantOut, c.wantAllow)
+		}
+	}
+}
+
+// TestFilterTaskChains threads a brief through two hooks: the second sees the first
+// one's rewrite, proving the chain accumulates.
+func TestFilterTaskChains(t *testing.T) {
+	h := &fakeHost{}
+	p := plugin.New(h)
+	defer p.Close()
+
+	path := writeLua(t, `
+		baton.on("task.pre", function(t) return t.prompt.." [a]" end)
+		baton.on("task.pre", function(t) return t.prompt.." [b]" end)
+	`)
+	if _, err := p.Load(path, config.Config{}); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	out, allow := p.FilterTask("go", "")
+	if !allow || out != "go [a] [b]" {
+		t.Fatalf("chained filter = (%q, %v), want (\"go [a] [b]\", true)", out, allow)
+	}
+}
+
+// TestFilterTaskFailsOpen confirms the fail-open contract: a throwing hook is
+// skipped (the brief survives), and no hook at all passes through.
+func TestFilterTaskFailsOpen(t *testing.T) {
+	h := &fakeHost{}
+	p := plugin.New(h)
+	defer p.Close()
+
+	// No plugin loaded → no task.pre hook → pass-through.
+	if out, allow := p.FilterTask("untouched", ""); out != "untouched" || !allow {
+		t.Fatalf("no-hook filter = (%q, %v), want (\"untouched\", true)", out, allow)
+	}
+
+	path := writeLua(t, `baton.on("task.pre", function(t) error("boom") end)`)
+	if _, err := p.Load(path, config.Config{}); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if out, allow := p.FilterTask("survive", ""); out != "survive" || !allow {
+		t.Fatalf("a throwing hook should fail open, got (%q, %v)", out, allow)
+	}
+}
+
+// TestFilterTaskAfterClose checks the quit path: once the worker is closed, the
+// filter fails open rather than hanging.
+func TestFilterTaskAfterClose(t *testing.T) {
+	h := &fakeHost{}
+	p := plugin.New(h)
+	p.Close()
+
+	if out, allow := p.FilterTask("late", "g"); out != "late" || !allow {
+		t.Fatalf("filter after close should fail open, got (%q, %v)", out, allow)
+	}
+}
+
+// TestFilterTaskConcurrent hammers FilterTask from many goroutines while the event
+// worker also fires hooks, proving the synchronous filter serializes safely onto the
+// single worker thread (run under -race). Each call carries its own result channel,
+// so there is no shared state to tear.
+func TestFilterTaskConcurrent(t *testing.T) {
+	h := &fakeHost{}
+	p := plugin.New(h)
+	defer p.Close()
+
+	path := writeLua(t, `
+		baton.on("task.pre", function(t) return t.prompt.."!" end)
+		baton.on("panel.attention", function(pan) end)
+	`)
+	if _, err := p.Load(path, config.Config{}); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				if out, allow := p.FilterTask("go", ""); !allow || out != "go!" {
+					t.Errorf("concurrent filter = (%q, %v)", out, allow)
+					return
+				}
+				p.Dispatch("panel.attention", map[string]any{"title": "x"})
+			}
+		}()
+	}
+	wg.Wait()
 }

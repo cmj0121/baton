@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	lua "github.com/yuin/gopher-lua"
@@ -29,6 +30,9 @@ import (
 // socket command runs. *server.Server satisfies it.
 type Host interface {
 	Spawn(kind, command string, args []string, dir, group string) (string, error)
+	Dispatch(id, prompt string) error
+	DispatchGroup(group, prompt string) (int, error)
+	Enqueue(prompt, group string) (string, error)
 	Close(ids []string) error
 	Respawn(id string) error
 	Purge() int
@@ -173,6 +177,50 @@ func (p *Plugin) RunCommand(name string) (err error) {
 	return err
 }
 
+// filterTimeout bounds how long a dispatch waits on the task.pre hooks before it
+// gives up and proceeds with the original brief. The worker is single-threaded, so
+// a wedged hook would otherwise stall every dispatch; past this budget the caller
+// fails open and the (eventually-returning) hook result is discarded.
+const filterTimeout = 2 * time.Second
+
+// FilterTask runs the registered task.pre hooks over a brief before it is delivered,
+// returning the (possibly rewritten) prompt and whether to proceed. It is the one
+// synchronous hook that can change an action: a hook may rewrite the prompt or veto
+// the task. It is fail-open by construction — no hook, a hook error, or a timeout
+// all yield (prompt, true) — so a broken or slow plugin never blocks the fleet. The
+// result rides a buffered channel, never shared state, so a timed-out call races
+// with nothing when the worker finally finishes.
+func (p *Plugin) FilterTask(prompt, group string) (string, bool) {
+	type result struct {
+		prompt string
+		allow  bool
+	}
+	ch := make(chan result, 1)
+	c := call{fn: func() {
+		np, allow := p.filterTask(prompt, group)
+		ch <- result{np, allow}
+	}, done: make(chan struct{})}
+
+	deadline := time.After(filterTimeout)
+	select {
+	case p.calls <- c:
+	case <-deadline:
+		log.Warn().Str("group", group).Msg("task.pre worker busy, proceeding with the original brief")
+		return prompt, true
+	case <-p.quit:
+		return prompt, true
+	}
+	select {
+	case r := <-ch:
+		return r.prompt, r.allow
+	case <-deadline:
+		log.Warn().Str("group", group).Msg("task.pre hook timed out, proceeding with the original brief")
+		return prompt, true
+	case <-p.quit:
+		return prompt, true
+	}
+}
+
 // Close stops the worker and tears down the VM. Safe to call once.
 func (p *Plugin) Close() {
 	close(p.quit)
@@ -245,4 +293,45 @@ func (p *Plugin) dispatch(name string, fields map[string]any) {
 			log.Warn().Str("event", name).Err(err).Msg("plugin hook error")
 		}
 	}
+}
+
+// filterTask chains the task.pre hooks over a brief on the worker thread. Each hook
+// receives a {prompt, group} table and returns one of: nil/true to pass the brief
+// through unchanged, false to veto (drop) the task, a string to rewrite the prompt,
+// or a {prompt=…, drop=…} table to do either. Hooks chain — a later hook sees the
+// prior one's rewrite — and the first veto stops the chain. A throwing hook is
+// logged and skipped (fail-open), so one bad handler never drops a task.
+func (p *Plugin) filterTask(prompt, group string) (string, bool) {
+	cur := prompt
+	for _, fn := range p.hooks["task.pre"] {
+		tbl := p.L.NewTable()
+		tbl.RawSetString("prompt", lua.LString(cur))
+		tbl.RawSetString("group", lua.LString(group))
+		p.L.Push(fn)
+		p.L.Push(tbl)
+		if err := p.L.PCall(1, 1, nil); err != nil {
+			log.Warn().Err(err).Msg("task.pre hook error, keeping the brief")
+			continue
+		}
+		ret := p.L.Get(-1)
+		p.L.Pop(1)
+		switch v := ret.(type) {
+		case *lua.LNilType:
+			// no return → pass through unchanged
+		case lua.LBool:
+			if !bool(v) {
+				return "", false // explicit veto
+			}
+		case lua.LString:
+			cur = string(v)
+		case *lua.LTable:
+			if drop, ok := v.RawGetString("drop").(lua.LBool); ok && bool(drop) {
+				return "", false
+			}
+			if s := fieldStr(v, "prompt"); s != "" {
+				cur = s
+			}
+		}
+	}
+	return cur, true
 }

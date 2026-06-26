@@ -52,14 +52,16 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action string   `json:"action"`         // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.signal | panel.diff | panel.git | group.show | server.reload | config.get | command.run
-	Kind   string   `json:"kind,omitempty"` // panel kind for "panel.create" (default "shell")
-	ID     string   `json:"id,omitempty"`   // target panel for close/attach/input/resize/diff, or the panel to rename
-	Path   string   `json:"path,omitempty"` // init command (binary path) for "panel.create"; empty = default shell
-	Args   []string `json:"args,omitempty"` // command arguments for "panel.create" (an agent profile's args)
-	Dir    string   `json:"dir,omitempty"`  // working directory the new panel's process runs in ("panel.create")
-	Data   []byte   `json:"data,omitempty"` // input bytes for "panel.input"
-	Rows   int      `json:"rows,omitempty"` // window size for "panel.resize"
+	Action string   `json:"action"`           // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.signal | panel.diff | panel.git | group.show | task.enqueue | task.list | task.cancel | task.drain | server.reload | config.get | command.run
+	Kind   string   `json:"kind,omitempty"`   // panel kind for "panel.create" (default "shell")
+	ID     string   `json:"id,omitempty"`     // target panel for close/attach/input/resize/diff, or the panel to rename
+	Path   string   `json:"path,omitempty"`   // init command (binary path) for "panel.create"; empty = default shell
+	Args   []string `json:"args,omitempty"`   // command arguments for "panel.create" (an agent profile's args)
+	Dir    string   `json:"dir,omitempty"`    // working directory the new panel's process runs in ("panel.create")
+	Data   []byte   `json:"data,omitempty"`   // input bytes for "panel.input"
+	Prompt string   `json:"prompt,omitempty"` // the task brief for "panel.dispatch"/"panel.dispatch-group": recorded on the panel(s) and delivered to the process as a unit
+	Submit string   `json:"submit,omitempty"` // optional submit sequence appended to a dispatched prompt (default newline)
+	Rows   int      `json:"rows,omitempty"`   // window size for "panel.resize"
 	Cols   int      `json:"cols,omitempty"`
 	IDs    []string `json:"ids,omitempty"`    // panels to group ("panel.group"), remove ("panel.ungroup"), close ("panel.close"), or move as a block ("panel.move")
 	Group  string   `json:"group,omitempty"`  // group name to assign ("panel.group"), or the group to rename ("panel.rename")
@@ -100,10 +102,24 @@ type Panel struct {
 	Title     string `json:"title"`               // human label shown on the dashboard
 	State     string `json:"state,omitempty"`     // lifecycle: spawning|running|idle|attention|exited
 	Group     string `json:"group,omitempty"`     // work item the panel belongs to, if any
+	Task      string `json:"task,omitempty"`      // the brief the panel was last dispatched, if any
 	Activity  string `json:"activity,omitempty"`  // short status line the Monitor keeps live
 	Spark     string `json:"spark,omitempty"`     // output-rate sparkline over the recent window
 	Pinned    bool   `json:"pinned,omitempty"`    // pinned to a live tile in its group's split view
 	Conductor bool   `json:"conductor,omitempty"` // the singleton control agent (server-managed workspace), so a frontend can badge it
+}
+
+// Task is the wire view of a backlog task: a prompt assigned (or waiting to be
+// assigned) to a panel, with its lifecycle status. Frontends render the set as the
+// queue/kanban; the status string matches task.Status.
+type Task struct {
+	ID       string `json:"id"`
+	Prompt   string `json:"prompt"`
+	Status   string `json:"status"`             // queued | dispatched | running | done | failed
+	Panel    string `json:"panel,omitempty"`    // the panel executing it, if assigned
+	Group    string `json:"group,omitempty"`    // the work item it belongs to, if any
+	Result   string `json:"result,omitempty"`   // a terminal note (e.g. a failure reason)
+	Attempts int    `json:"attempts,omitempty"` // how many times its prompt has been delivered
 }
 
 // DiffFile is one changed path in the structured "diff" reply: its staged and
@@ -127,7 +143,7 @@ type PluginCommand struct {
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "diff" | "gitout" | "notice" | "config" | "footer" | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline)
+	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "diff" | "gitout" | "notice" | "config" | "footer" | "tasks" | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline)
 	Version   string      `json:"version,omitempty"`    // protocol version, set on "welcome"
 	ServerVer string      `json:"server_ver,omitempty"` // the server's build version, set on "welcome"
 	Error     string      `json:"error,omitempty"`      // set on "error"
@@ -135,6 +151,7 @@ type ServerMsg struct {
 	Footer    string      `json:"footer,omitempty"`     // a plugin-set persistent footer segment, set on "footer" and carried on "config"; empty clears it
 	Panels    []Panel     `json:"panels,omitempty"`     // full snapshot on "panels"; live state/spark refresh on "telemetry"
 	Groups    []GroupView `json:"groups,omitempty"`     // per-group view settings on the "panels" snapshot, alongside Panels
+	Tasks     []Task      `json:"tasks,omitempty"`      // the backlog snapshot on "tasks" (reply to task.list)
 	ID        string      `json:"id,omitempty"`         // panel id on "output"; the new transient panel id on "ephemeral" (a git op); the diffed agent panel id on "diff"
 	Data      []byte      `json:"data,omitempty"`       // pty output bytes on "output"
 	Files     []DiffFile  `json:"files,omitempty"`      // per-file staged/unstaged diffs on "diff"; ID carries the target panel
