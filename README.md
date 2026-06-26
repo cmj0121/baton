@@ -83,6 +83,7 @@ the current view, and **`C-t k`** to edit the key map.
 |             | `T` / `Q`         | dispatch a task / manage the task queue             |
 | Group       | `tab`             | focus the next panel                                |
 |             | `+` / `-`         | show more / fewer live tiles                        |
+|             | `L`               | cycle the tile layout                               |
 |             | `p` / `i`         | pin / interact with the focused panel               |
 |             | `enter`           | zoom the focused panel                              |
 | Zoom        | type              | drive the program directly                          |
@@ -109,7 +110,10 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
   delivered when the agent is ready. `Q` manages a persistent backlog a server-owned scheduler drains onto free agents —
   the **you → conductor → fleet** flow. A `task.pre` Lua hook can rewrite or veto a brief; `task.change` watches it.
 - **Groups & summary** — `+` / `-` dial how many members stream as live tiles; the rest fold into one summary tile.
-  Pinned members always stream.
+  Pinned members always stream. `L` cycles the split's **layout** — the even grid, `main-vertical`, `main-horizontal`,
+  `stack`, or your own grids from `TUI.yaml`.
+- **Appearance** — `$HOME/.baton/TUI.yaml` reshapes the cockpit: a colour **theme** and the group-split **layouts**,
+  hot-reloaded with `C-t R`. See **[docs/TUI.md](docs/TUI.md)**.
 - **Persistence & respawn** — Baton remembers its fleet across a restart; panels come back as inert exited slots and
   `r` re-runs them from their retained spec.
 - **Reload** — `C-t R` (or a `SIGHUP` to the daemon) hot-reloads config without restarting the fleet.
@@ -133,6 +137,8 @@ through one `baton` object. See **[docs/PLUGIN.md](docs/PLUGIN.md)**.
 
 - **[docs/SPEC.md](docs/SPEC.md)** — the full specification: views, the panel lifecycle, work items, signals, diff,
   persistence, the per-view key reference, and the architecture diagram.
+- **[docs/TUI.md](docs/TUI.md)** — the cockpit appearance file (`$HOME/.baton/TUI.yaml`): the colour theme and the
+  group-split layouts (presets and custom grids).
 - **[docs/GIT.md](docs/GIT.md)** — the git menu: every op, the commit-editor flow, worktrees, and the config.
 - **[docs/PLUGIN.md](docs/PLUGIN.md)** — the Lua plugin API: the `baton` object, events, commands, and config.
 - **[docs/CONTROL.md](docs/CONTROL.md)** — driving the fleet by agent: the conductor, the `baton ctl` CLI, the

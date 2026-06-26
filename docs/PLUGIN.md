@@ -123,9 +123,32 @@ The event set (derived from the lifecycle in SPEC.md):
 | `task.change`     | a task is recorded or changes state | the task — `id`, `prompt`, `status`, `panel`, `group`, `attempts` |
 | `server.reload`   | config/plugin reloaded              | —                                                                 |
 | `panel.output`    | bytes arrive on a panel             | panel + `data` — **high-volume, opt-in, off by default**          |
+| `panel.title`     | a panel spawns or changes state     | the panel — **a filter: return the title string to show**         |
 
 `panel.attention` and `panel.exit` are the headline hooks: "ping me when an agent needs me," "kick off the next step when
 this one finishes," "desktop-notify on completion" all fall out of them.
+
+### Programmable titles — `panel.title`
+
+`panel.title` is a **filter hook** like `task.pre`: it returns a value the cockpit uses. The function receives a panel and
+returns the title string to show on the dashboard card and in the panel's group tile. It runs when a panel spawns and when
+its state changes — **not on every render** — and the result is cached, so it costs nothing between changes (the whole path
+is skipped unless a `panel.title` hook is registered).
+
+```lua
+local BADGE = { running = "▶", idle = "•", attention = "!", exited = "×", spawning = "…" }
+
+baton.on("panel.title", function(p)
+  -- p carries id, kind, title, state, group, activity. Return a string to set the
+  -- title, or nil to leave it unchanged.
+  return string.format("%s %s", BADGE[p.state] or "?", p.title)
+end)
+```
+
+The hook always reads the panel's **base** `"<command> · <workdir>"` title, never a previous result of its own, so it
+never feeds back — rebuild the title from scratch each time. Hooks chain (a later one sees the running result), and a hook
+that returns `nil` or `""` leaves the title untouched. Removing the hook and reloading (`C-t R`) restores the built-in
+titles. See [`examples/title-hook.lua`](../examples/title-hook.lua) for a state-badge-and-group title.
 
 ### Tasks and the queue
 
