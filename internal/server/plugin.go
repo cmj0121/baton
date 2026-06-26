@@ -136,6 +136,56 @@ func (s *Server) SetFooter(text string) {
 	s.broadcast(proto.ServerMsg{Type: "footer", Footer: text})
 }
 
+// SetPanelTitle records the display title a panel.title hook computed for a panel
+// and broadcasts the change. The base Title is left untouched (it is what the hook
+// reads), so this never feeds back into the hook. A no-op for an unknown id or when
+// the override is unchanged. Called from the plugin worker, off s.mu.
+func (s *Server) SetPanelTitle(id, title string) {
+	s.mu.Lock()
+	changed := false
+	for i := range s.panels {
+		if s.panels[i].ID == id {
+			// A title equal to the base clears the override rather than storing a
+			// redundant copy, so ToProto falls back to Title.
+			next := title
+			if next == s.panels[i].Title {
+				next = ""
+			}
+			if s.panels[i].DisplayTitle != next {
+				s.panels[i].DisplayTitle = next
+				changed = true
+			}
+			break
+		}
+	}
+	s.mu.Unlock()
+	if changed {
+		s.broadcastFleet()
+	}
+}
+
+// SetTitleHook is told whether a panel.title hook is registered. When it is not
+// (a first load without one, or a reload that removed it), every panel's display
+// title override is cleared so the frontends fall back to the base title. Called
+// from applyConfig, off s.mu.
+func (s *Server) SetTitleHook(want bool) {
+	if want {
+		return // overrides are (re)computed as events flow; nothing to clear
+	}
+	s.mu.Lock()
+	changed := false
+	for i := range s.panels {
+		if s.panels[i].DisplayTitle != "" {
+			s.panels[i].DisplayTitle = ""
+			changed = true
+		}
+	}
+	s.mu.Unlock()
+	if changed {
+		s.broadcastFleet()
+	}
+}
+
 // Notify surfaces a transient notice to every attached cockpit — the backing of the
 // plugin's baton.notify. It is best-effort, like telemetry: a client whose buffer is
 // full simply misses it.

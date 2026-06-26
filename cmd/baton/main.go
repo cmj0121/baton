@@ -306,6 +306,7 @@ func runServerOn(ln net.Listener, sock string) error {
 		rc := reloadableSettings(res.Config)
 		srv.Reload(rc.allowNameConflict, rc.defaultDir, rc.replayBytes, rc.diffCommand, rc.editor, rc.worktreeDir)
 		srv.SetOutputEvents(res.WantOutput)
+		srv.SetTitleHook(res.WantTitle)
 		if data, mErr := json.Marshal(res.Config); mErr == nil {
 			srv.SetClientConfig(data)
 		}
