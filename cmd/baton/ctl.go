@@ -15,15 +15,18 @@ import (
 // shell it acts with the full-power cockpit role; run inside a conductor panel
 // (where baton injects BATON_ROLE/BATON_PANEL_ID) the server fences it.
 type ctlCLI struct {
-	List   ctlList   `cmd:"" help:"Print the fleet as JSON."`
-	Spawn  ctlSpawn  `cmd:"" help:"Spawn a panel and print its id."`
-	Close  ctlClose  `cmd:"" help:"Close panels by id."`
-	Group  ctlGroup  `cmd:"" help:"Group panels under a work item."`
-	Rename ctlRename `cmd:"" help:"Rename a panel or a group."`
-	Pin    ctlPin    `cmd:"" help:"Pin panels to live tiles in their group split."`
-	Unpin  ctlUnpin  `cmd:"" help:"Unpin panels."`
-	Signal ctlSignal `cmd:"" help:"Send a signal to panels."`
-	Send   ctlSend   `cmd:"" help:"Send text (a prompt) to a panel."`
+	List          ctlList          `cmd:"" help:"Print the fleet as JSON."`
+	Spawn         ctlSpawn         `cmd:"" help:"Spawn a panel and print its id."`
+	Close         ctlClose         `cmd:"" help:"Close panels by id."`
+	Group         ctlGroup         `cmd:"" help:"Group panels under a work item."`
+	Rename        ctlRename        `cmd:"" help:"Rename a panel or a group."`
+	Pin           ctlPin           `cmd:"" help:"Pin panels to live tiles in their group split."`
+	Unpin         ctlUnpin         `cmd:"" help:"Unpin panels."`
+	Signal        ctlSignal        `cmd:"" help:"Send a signal to panels."`
+	Send          ctlSend          `cmd:"" help:"Send text (a prompt) to a panel."`
+	Dispatch      ctlDispatch      `cmd:"" help:"Assign a task brief to a panel and deliver it as a unit."`
+	DispatchGroup ctlDispatchGroup `cmd:"" name:"dispatch-group" help:"Dispatch one task to every member of a work item."`
+	Queue         ctlQueue         `cmd:"" help:"Manage the task backlog (add/list/cancel/drain)."`
 }
 
 // ctlMain parses and runs `baton ctl <command>`. It is kept separate from the
@@ -145,4 +148,64 @@ type ctlSend struct {
 
 func (x ctlSend) Run(c *control.Client) error {
 	return c.SendText(x.ID, x.Text, !x.NoEnter)
+}
+
+type ctlDispatch struct {
+	ID     string `arg:"" help:"Target panel id."`
+	Prompt string `arg:"" help:"The task brief to assign and deliver."`
+}
+
+func (x ctlDispatch) Run(c *control.Client) error {
+	return c.Dispatch(x.ID, x.Prompt)
+}
+
+type ctlDispatchGroup struct {
+	Group  string `arg:"" help:"Work-item name whose members receive the task."`
+	Prompt string `arg:"" help:"The task brief to dispatch to every member."`
+}
+
+func (x ctlDispatchGroup) Run(c *control.Client) error {
+	return c.DispatchGroup(x.Group, x.Prompt)
+}
+
+// ctlQueue groups the backlog verbs under `baton ctl queue …`.
+type ctlQueue struct {
+	Add    ctlQueueAdd    `cmd:"" help:"Enqueue a task for the scheduler to drain onto a free agent."`
+	List   ctlQueueList   `cmd:"" help:"Print the backlog as JSON."`
+	Cancel ctlQueueCancel `cmd:"" help:"Cancel a queued task by id."`
+	Drain  ctlQueueDrain  `cmd:"" help:"Clear every queued task."`
+}
+
+type ctlQueueAdd struct {
+	Prompt string `arg:"" help:"The task brief to enqueue."`
+	Group  string `help:"Restrict the task to agents in this work item."`
+}
+
+func (x ctlQueueAdd) Run(c *control.Client) error {
+	return c.Enqueue(x.Prompt, x.Group)
+}
+
+type ctlQueueList struct{}
+
+func (ctlQueueList) Run(c *control.Client) error {
+	out, err := c.TasksJSON()
+	if err != nil {
+		return err
+	}
+	fmt.Println(out)
+	return nil
+}
+
+type ctlQueueCancel struct {
+	ID string `arg:"" help:"Queued task id to cancel."`
+}
+
+func (x ctlQueueCancel) Run(c *control.Client) error {
+	return c.CancelTask(x.ID)
+}
+
+type ctlQueueDrain struct{}
+
+func (ctlQueueDrain) Run(c *control.Client) error {
+	return c.DrainQueue()
 }

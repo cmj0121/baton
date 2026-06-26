@@ -65,6 +65,11 @@ func TestCtlRuns(t *testing.T) {
 		ctlUnpin{IDs: []string{id}},
 		ctlSend{ID: id, Text: "hi"},
 		ctlSend{ID: id, Text: "x", NoEnter: true},
+		ctlDispatch{ID: id, Prompt: "land the fix"},
+		ctlDispatchGroup{Group: "g", Prompt: "ship it"},
+		ctlQueueAdd{Prompt: "queued work", Group: "g"},
+		ctlQueueList{},
+		ctlQueueDrain{},
 		ctlSignal{Signal: "SIGTERM", IDs: []string{id}},
 		ctlClose{IDs: []string{id}},
 	}
@@ -72,6 +77,27 @@ func TestCtlRuns(t *testing.T) {
 		if err := r.Run(c); err != nil {
 			t.Fatalf("%T.Run: %v", r, err)
 		}
+	}
+
+	// Enqueue then cancel a specific task by id, covering the cancel handler.
+	if err := c.Enqueue("cancel me", ""); err != nil {
+		t.Fatalf("seed enqueue: %v", err)
+	}
+	tasks, err := c.Tasks()
+	if err != nil {
+		t.Fatalf("tasks: %v", err)
+	}
+	var cancelID string
+	for _, tk := range tasks {
+		if tk.Prompt == "cancel me" {
+			cancelID = tk.ID
+		}
+	}
+	if cancelID == "" {
+		t.Fatalf("the enqueued task should be in the backlog, got %+v", tasks)
+	}
+	if err := (ctlQueueCancel{ID: cancelID}).Run(c); err != nil {
+		t.Fatalf("ctlQueueCancel.Run: %v", err)
 	}
 }
 
