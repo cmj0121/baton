@@ -76,17 +76,27 @@ a custom layout that is non-rectangular, unknown to this frontend, or too small 
 grid**, so a layout that only exists in one frontend's config never wedges the split. Members past the region count fold
 into the **summary tile**, exactly as they do in the even grid.
 
+### Resize
+
+`z` in the split enters **resize mode**: the arrows (or `h` / `j` / `k` / `l`) grow and shrink the focused tile, `tab`
+moves the focus to another tile, and `z` / `esc` finish. The sizing skews the current layout's rows and columns — so it
+applies to every layout **except** the even `tiled` grid, which has no per-track sizing to adjust (press `L` for a split
+layout first). A nudge that would shrink any tile too small to render is refused, so the split never snaps back to the even
+grid mid-resize. Resize is **view-local**: it lives in this cockpit only (never sent to the server), holds until you cycle
+the layout or leave the group, and **resets on reattach** — unlike the layout and visible-count, which the server owns.
+
 ## Related cockpit keys
 
 These ride alongside the appearance config (full key reference in [SPEC.md](./SPEC.md#keys)):
 
-| Where                  | Key       | Does                                                           |
-| ---------------------- | --------- | -------------------------------------------------------------- |
-| Group split            | `L`       | cycle the tile layout (presets, then your custom layouts)      |
-| Scroll mode (`C-t [`)  | `v`       | start a whole-line selection                                   |
-|                        | `V`       | start a **block** (rectangular) selection                      |
-|                        | `h` / `l` | in a block selection, pull the column edge in / out            |
-| Group split (mouse on) | click     | focus the tile under the pointer (toggle the mouse in `C-t k`) |
+| Where                  | Key       | Does                                                             |
+| ---------------------- | --------- | ---------------------------------------------------------------- |
+| Group split            | `L`       | cycle the tile layout (presets, then your custom layouts)        |
+|                        | `z`       | resize mode — arrows grow / shrink the focused tile (view-local) |
+| Scroll mode (`C-t [`)  | `v`       | start a whole-line selection                                     |
+|                        | `V`       | start a **block** (rectangular) selection                        |
+|                        | `h` / `l` | in a block selection, pull the column edge in / out              |
+| Group split (mouse on) | click     | focus the tile under the pointer (toggle the mouse in `C-t k`)   |
 
 See [PLUGIN.md](./PLUGIN.md#programmable-titles--paneltitle) for the `panel.title` hook, which makes the per-panel title
 itself programmable from Lua.

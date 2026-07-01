@@ -54,6 +54,7 @@ const (
 	keyPin       = "p" // in the group split: pin/unpin the focused member to a live tile
 	keySignalAll = "S" // in the group split: signal every member (bare s signals the focused one)
 	keyLayout    = "L" // in the group split: cycle the tile layout (shift+l; bare l moves focus)
+	keyResize    = "z" // in the group split: enter resize mode — arrows grow/shrink the focused tile
 
 	keyCtrlC = "ctrl+c" // captured in command mode — exit is the detach binding only
 	keyCtrlE = "ctrl+e" // captured in command mode — exit is the detach binding only

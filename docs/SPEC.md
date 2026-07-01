@@ -108,7 +108,8 @@ once. By default the split is an _overview you navigate_, not a surface you type
 tiles, `+`/`-` dials how many members stream live (see below), `shift`+`←`/`→` reorders the focused member within the
 group, `C-t [` opens scroll mode on the focused tile, `x` removes the focused
 member from the group, `D` diffs the focused agent member, `enter` drops into the focused panel's own single zoom, and
-`d`/`esc` returns to the dashboard.
+`d`/`esc` returns to the dashboard. `L` cycles the tile layout and `z` opens **resize mode**, where the arrows grow and
+shrink the focused tile (view-local, see [TUI.md](./TUI.md#resize)).
 From a zoomed member,
 **back** (`C-t b`) pops back to the split it was launched from. Back is the one key that pops a level wherever you are
 — a zoom to its split (or to the dashboard, if it was opened straight from there), the split to the dashboard, the
@@ -328,6 +329,7 @@ and the key-map editor — are reached after the prefix in every mode. Everythin
 | Group view             | `tab`                       | focus the next panel                           |
 |                        | `+` / `-`                   | show more / fewer live tiles                   |
 |                        | `L`                         | cycle the tile layout (see [TUI.md](./TUI.md)) |
+|                        | `z`                         | resize mode — arrows grow / shrink the tile    |
 |                        | `p`                         | pin / unpin the focused panel                  |
 |                        | `s`                         | send a signal to the focused panel             |
 |                        | `S`                         | send a signal to every panel in the group      |

@@ -247,8 +247,10 @@ type model struct {
 	groupFocus      int                         // focused member, indexing tiles then the summary slot
 	groupArmed      bool                        // prefix pressed in the split, awaiting an escape
 	groupInteract   bool                        // keys drive the focused tile in place (i), no zoom
+	groupResize     bool                        // resize mode (z): arrows grow/shrink the focused tile
 	groupShown      map[string]int              // per-group visible-tile count N, server-owned via the snapshot's Groups
 	groupLayout     map[string]string           // per-group split layout name, server-owned via the snapshot's Groups
+	groupRatios     map[string]splitRatios      // per-group manual tile weights (view-local, reset when the layout changes)
 	summaryScope    bool                        // the split is scoped to a group's collapsed (summarised) members
 	groupPinned     map[string]bool             // member ids pinned to a live tile, derived from the fleet's server-owned Pinned flags
 	groupEmus       map[string]*vt.SafeEmulator // live emulator per member tile
@@ -2810,6 +2812,8 @@ func (m model) helpContent() (title string, body []string) {
 			{"Navigation", kc(keyLabel(keyInteract)), "interact: type into the focused panel in place"},
 			{"Navigation", kc("enter"), "zoom the focused panel"},
 			{"Navigation", kc("+") + " " + kc("-"), "show more / fewer live tiles"},
+			{"Navigation", kc(keyLabel(keyLayout)), "cycle the tile layout"},
+			{"Navigation", kc(keyLabel(keyResize)), "resize mode · arrows grow/shrink the focused tile"},
 			{"Navigation", kc("S-←→"), "reorder the focused panel"},
 			{"Navigation", kc(pfx) + " " + kc(keyScroll), "scroll mode · the focused panel (↑↓ line, b/Spc page)"},
 			{"Navigation", kc(pfx) + " " + kc(keySearch), "search the focused panel · n older, N newer"},

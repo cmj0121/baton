@@ -43,11 +43,15 @@ type cellSpan struct {
 
 // resolveLayout lays n tiles into a w×h area under the named layout, returning one
 // tileRect per tile (in tile order) and ok=true. It returns ok=false when the name
-// is "tiled" or unknown, or when the grid does not fit (a tile would be too small
-// to render) — the caller falls back to the even-grid path. customs are the user's
-// TUI.yaml layouts, consulted before the built-in presets so a custom may override
-// a preset name.
-func resolveLayout(name string, customs []config.Layout, n, w, h int) ([]tileRect, bool) {
+// is "tiled" or unknown, or when the grid does not fit (a tile would be too small to
+// render) — the caller falls back to the even-grid path. customs are the user's
+// TUI.yaml layouts, consulted before the built-in presets so a custom may override a
+// preset name. Optional per-column and per-row weights skew the even track division
+// (see tracksAxis), so a tile can be grown or shrunk from the split's resize mode;
+// nil weights (the common case) give the plain even layout, and weights of the wrong
+// length are padded with 1 / truncated to the resolved grid, so a stale set from
+// another layout degrades gracefully rather than being rejected.
+func resolveLayout(name string, customs []config.Layout, n, w, h int, colWeights, rowWeights []float64) ([]tileRect, bool) {
 	if n < 1 || w < 1 || h < 1 || name == "" || name == layoutTiled {
 		return nil, false
 	}
@@ -55,7 +59,7 @@ func resolveLayout(name string, customs []config.Layout, n, w, h int) ([]tileRec
 	if !ok || len(spans) == 0 {
 		return nil, false
 	}
-	return spansToRects(rows, cols, spans, w, h)
+	return spansToRects(rows, cols, spans, w, h, colWeights, rowWeights)
 }
 
 // layoutSpans resolves a layout name and tile count to a unit-cell grid: its row
@@ -182,14 +186,17 @@ func customSpans(l config.Layout, n int) (int, int, []cellSpan, bool) {
 // spansToRects converts unit-cell spans into pixel tileRects over a w×h area. The
 // columns and rows tile the area exactly (gaps of gtileGap sit between columns; no
 // vertical gap, matching the even grid), with any rounding remainder spread across
-// the first tracks. A tile too small to render (its inner emulator would vanish)
-// fails the whole layout so the caller falls back to the even grid.
-func spansToRects(rows, cols int, spans []cellSpan, w, h int) ([]tileRect, bool) {
+// the tracks. Optional per-column / per-row weights skew the otherwise-even track
+// sizes (nil ⇒ even) — the seam manual resize adjusts. A tile too small to render
+// (its inner emulator would vanish) fails the whole layout, so the caller falls
+// back to the even grid and an over-aggressive resize is rejected rather than drawn
+// broken.
+func spansToRects(rows, cols int, spans []cellSpan, w, h int, colWeights, rowWeights []float64) ([]tileRect, bool) {
 	if rows < 1 || cols < 1 {
 		return nil, false
 	}
-	colX, colW := tracks(w, cols, gtileGap)
-	rowY, rowH := tracks(h, rows, 0)
+	colX, colW := tracksAxis(w, cols, gtileGap, colWeights)
+	rowY, rowH := tracksAxis(h, rows, 0, rowWeights)
 
 	rects := make([]tileRect, len(spans))
 	for i, s := range spans {
@@ -234,6 +241,66 @@ func tracks(total, n, gap int) (starts, sizes []int) {
 		starts[i] = x
 		sizes[i] = sz
 		x += sz + gap
+	}
+	return starts, sizes
+}
+
+// tracksAxis sizes n tracks like tracks, but skewed by per-track weights when any
+// are given: it is the seam manual resize hooks into. With no weights it is exactly
+// tracks (so the even grid is byte-for-byte unchanged), keeping the weighted path
+// off every default render.
+func tracksAxis(total, n, gap int, weights []float64) (starts, sizes []int) {
+	if len(weights) == 0 {
+		return tracks(total, n, gap)
+	}
+	return tracksWeighted(total, n, gap, weights)
+}
+
+// tracksWeighted divides total (minus the gutters) across n tracks in proportion
+// to weights, rather than evenly. It uses largest-remainder apportionment — floor
+// each track's exact share, then hand the leftover cells one at a time to the
+// tracks with the largest fractional part — so the sizes always sum to the usable
+// span exactly, with no drift. Weights shorter than n are padded with 1 and
+// non-positive weights are floored to 1, so a partial or stale weight set still
+// yields a sane layout. A weight small enough to zero a track is left for
+// spansToRects to reject (it fails the layout), which is how the resize hook clamps.
+func tracksWeighted(total, n, gap int, weights []float64) (starts, sizes []int) {
+	starts = make([]int, n)
+	sizes = make([]int, n)
+	usable := total - (n-1)*gap
+	if usable < n {
+		usable = n
+	}
+	sum := 0.0
+	w := make([]float64, n)
+	for i := 0; i < n; i++ {
+		wi := 1.0
+		if i < len(weights) && weights[i] > 0 {
+			wi = weights[i]
+		}
+		w[i] = wi
+		sum += wi
+	}
+	type rem struct {
+		i    int
+		frac float64
+	}
+	rems := make([]rem, n)
+	used := 0
+	for i := 0; i < n; i++ {
+		exact := float64(usable) * w[i] / sum
+		sizes[i] = int(exact)
+		rems[i] = rem{i, exact - float64(sizes[i])}
+		used += sizes[i]
+	}
+	sort.Slice(rems, func(a, b int) bool { return rems[a].frac > rems[b].frac })
+	for k := 0; used < usable; k, used = k+1, used+1 {
+		sizes[rems[k%n].i]++
+	}
+	x := 0
+	for i := 0; i < n; i++ {
+		starts[i] = x
+		x += sizes[i] + gap
 	}
 	return starts, sizes
 }
