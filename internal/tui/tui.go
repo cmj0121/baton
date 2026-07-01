@@ -141,7 +141,7 @@ type model struct {
 	mouseEnabled      bool      // mouse reporting on — the wheel scrolls and moves the selection (toggled in the key map)
 	pendingClose      bool      // a close is awaiting y/n confirmation
 	pendingRestart    bool      // a force-restart is awaiting y/n confirmation
-	pendingConductor  string    // a running conductor's id awaiting y/n restart confirmation ("" = none)
+	pendingConductor  bool      // a conductor spawn is in flight; zoom it when it lands in a snapshot
 	now               time.Time // wall clock shown in the footer, ticked every second
 
 	cpuPct   float64 // system-wide CPU load %, sampled each tick for the footer
@@ -723,6 +723,18 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 			m.reconcileGroupTiles(focusID)
 		}
 		m.refreshAttention()
+		// A spawn-then-view of the conductor: once the freshly created conductor lands
+		// in a snapshot, zoom it — it is a mark in the heading, not a card to select.
+		// Only from the dashboard, so a snapshot arriving while you are elsewhere never
+		// yanks the view out from under you; the flag clears either way.
+		if m.pendingConductor {
+			if p, ok := m.conductorPanel(); ok {
+				m.pendingConductor = false
+				if m.mode == modeDashboard {
+					*m = m.zoomInto(p)
+				}
+			}
+		}
 	case "stats":
 		m.cpuPct = sm.CPU
 		m.memUsed, m.memTotal = sm.MemUsed, sm.MemTotal
@@ -833,8 +845,10 @@ func (m *model) applyTelemetry(sm proto.ServerMsg) {
 func (m *model) refreshAttention() {
 	cur := make(map[string]bool)
 	var fresh []string
+	// Inline conductor skip (not m.visibleFleet()): this fires on every snapshot and
+	// telemetry tick, so it avoids allocating a filtered slice per event.
 	for _, p := range m.fleet {
-		if p.State != panel.Attention {
+		if p.Conductor || p.State != panel.Attention {
 			continue
 		}
 		cur[p.ID] = true
@@ -964,19 +978,6 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		m.status = "restart cancelled"
-		return m, nil
-	}
-
-	// A conductor restart is waiting on a y/n answer. It kills the running
-	// conductor agent (losing its in-progress work) and spawns a fresh one, so it
-	// always confirms; only an explicit yes goes through.
-	if m.pendingConductor != "" {
-		id := m.pendingConductor
-		m.pendingConductor = ""
-		if key == "y" || key == "enter" {
-			return m.restartConductor(id), nil
-		}
-		m.status = "conductor restart cancelled"
 		return m, nil
 	}
 
@@ -1425,6 +1426,37 @@ func (m model) conductorPanel() (panel.Panel, bool) {
 	return panel.Panel{}, false
 }
 
+// visibleFleet is the fleet the dashboard shows: every panel except the conductor,
+// which is surfaced as a mark in the FLEET heading (conductorMark) rather than a
+// card. It drives the roster, the counts, and the attention nudges, so the conductor
+// stays clear of all of them; everywhere else — zoom, telemetry, id lookups — the
+// conductor is a first-class fleet member, so those still read m.fleet.
+func (m model) visibleFleet() []panel.Panel {
+	out := make([]panel.Panel, 0, len(m.fleet))
+	for _, p := range m.fleet {
+		if !p.Conductor {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// conductorMark is the FLEET-heading badge for the singleton conductor — shown in
+// place of a card, since the conductor drives the fleet rather than being one of it.
+// It carries the conductor's live state LED and label, so its health reads at a
+// glance (green running, the attention colour when it needs you, faint exited), with
+// the key that opens it. Empty when no conductor exists.
+func (m model) conductorMark() string {
+	p, ok := m.conductorPanel()
+	if !ok {
+		return ""
+	}
+	info := states[p.State]
+	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
+	name := lipgloss.NewStyle().Foreground(colBrandHi).Render("conductor")
+	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", info.label, keyLabel(m.bindingKey(actConductor))))
+}
+
 // spawnConductor asks the server to create the conductor: the resolved agent
 // profile, run as the singleton control agent. The cockpit only names the
 // command — the server places it in a managed ephemeral workspace and injects the
@@ -1443,19 +1475,6 @@ func (m model) spawnConductor() model {
 		}
 	}
 	m.status = fmt.Sprintf("opening the conductor (%s)", name)
-	return m
-}
-
-// restartConductor closes the running conductor id and spawns a fresh one. The
-// new conductor gets a new workspace, so its briefing — and any edited operator
-// brief in $HOME/.baton/CONDUCTOR.md — is re-read on launch. The server processes
-// the close before the create on this one connection, so the singleton slot is
-// free in time. id is unused beyond the close; spawnConductor finds the (now
-// empty) conductor slot itself.
-func (m model) restartConductor(id string) model {
-	m.sendf(proto.Command{Action: "panel.close", ID: id})
-	m = m.spawnConductor()
-	m.status = "restarting the conductor (reloading its brief)"
 	return m
 }
 
@@ -1575,19 +1594,19 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		m.inputBuf = m.defaultWorkdir()
 		m.status = fmt.Sprintf("new %s agent · type the workdir, enter to spawn", name)
 	case actConductor:
-		// Find-or-create the singleton conductor: re-run an exited one (the server
-		// gives it a fresh workspace), offer to restart a running one so it picks up
-		// an edited brief (enter still zooms it like any panel), else spawn it.
+		// Open the conductor: since it is a mark in the FLEET heading, not a card, C
+		// is how you reach it. Zoom a live one to watch its work; re-run an exited one
+		// (the server gives it a fresh workspace) and zoom the restart; else spawn one
+		// and zoom it once it lands in a snapshot (pendingConductor).
 		if p, ok := m.conductorPanel(); ok {
 			if p.State == panel.Exited {
 				m.sendf(proto.Command{Action: "panel.respawn", ID: p.ID})
+				p.State = panel.Spawning // zoom the re-run as a live panel, not a read-only result
 				m.status = "re-running the conductor"
-				return m, nil
 			}
-			m.pendingConductor = p.ID
-			m.status = "restart the conductor? reloads its brief, drops its work (y/n)"
-			return m, nil
+			return m.zoomInto(p), nil
 		}
+		m.pendingConductor = true // zoom it the moment the spawn lands in the fleet
 		return m.spawnConductor(), nil
 	case actClose:
 		it, ok := m.selectedItem()
@@ -2269,7 +2288,7 @@ func (m model) itemCount() int {
 func (m model) countState(s panel.State) int {
 	n := 0
 	for _, p := range m.fleet {
-		if p.State == s {
+		if !p.Conductor && p.State == s { // conductor kept off the dashboard counters
 			n++
 		}
 	}
@@ -2498,13 +2517,17 @@ func (m model) zoomView() string {
 // space-efficient tree + preview split.
 func (m model) dashboardView() string {
 	items := m.dashItems() // built once and threaded through the render below
+	shown := m.visibleFleet()
 	heading := sectionStyle.Render(spaced("FLEET")) +
-		mutedStyle.Render(fmt.Sprintf("   %d panel(s)  ", len(m.fleet))) + fleetBreakdown(m.fleet, items)
+		mutedStyle.Render(fmt.Sprintf("   %d panel(s)  ", len(shown))) + fleetBreakdown(shown, items)
+	if mark := m.conductorMark(); mark != "" {
+		heading += mutedStyle.Render("   ·   ") + mark
+	}
 	if m.filter != "" {
 		heading += "  " + seg("⌕ "+truncate(m.filter, 20), colDark, colCyan) +
 			mutedStyle.Render(fmt.Sprintf("  %d match(es)", len(items)))
 	}
-	summary := m.summaryStrip()
+	summary := m.summaryStrip(shown)
 	body := m.cardGrid(items)
 	if m.useTree(items) {
 		body = m.treeAndPreview(items)
@@ -2531,9 +2554,10 @@ func (m model) useTree(items []dashItem) bool {
 	return len(items) > treeThreshold && m.width >= treeMinWidth
 }
 
-// summaryStrip is a row of chips counting panels in each state.
-func (m model) summaryStrip() string {
-	counts := stateCounts(m.fleet)
+// summaryStrip is a row of chips counting panels in each state. It takes the
+// already-filtered dashboard fleet so the conductor is excluded without re-scanning.
+func (m model) summaryStrip(fleet []panel.Panel) string {
+	counts := stateCounts(fleet)
 	chips := make([]string, 0, len(stateOrder))
 	for _, st := range stateOrder {
 		n := counts[st]
@@ -3247,8 +3271,10 @@ func (m model) footer() string {
 // fleet is calm.
 func (m model) attentionBadge() string {
 	var names []string
+	// Range m.fleet with an inline conductor skip rather than m.visibleFleet(): this
+	// runs in every view's footer on every frame, so it must not allocate a slice.
 	for _, p := range m.fleet {
-		if p.State == panel.Attention {
+		if !p.Conductor && p.State == panel.Attention {
 			names = append(names, p.Title)
 		}
 	}
