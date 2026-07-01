@@ -110,11 +110,20 @@ func (m *model) attachGroupMembers() {
 // fed, so the tile only ever relays the query replies a live program emits. The
 // shared per-member step of building the split and of reconciling it.
 func (m *model) attachTile(p panel.Panel, emuCols, emuRows int) {
+	m.groupEmus[p.ID] = m.attachEmu(p.ID, emuCols, emuRows)
+}
+
+// attachEmu opens a live, correctly-sized emulator for a panel id: it streams the
+// panel's output and forwards the emulator's input side to the PTY (zoomReader), so
+// keys fed to it reach the program. This is the shared attach handshake behind the
+// split tiles and the floating scratch pane; the caller owns where the returned
+// emulator is stored.
+func (m model) attachEmu(id string, emuCols, emuRows int) *vt.SafeEmulator {
 	emu := vt.NewSafeEmulator(emuCols, emuRows)
-	m.groupEmus[p.ID] = emu
-	go zoomReader(emu, m.client, p.ID)
-	m.sendf(proto.Command{Action: "panel.resize", ID: p.ID, Rows: emuRows, Cols: emuCols})
-	m.sendf(proto.Command{Action: "panel.attach", ID: p.ID})
+	go zoomReader(emu, m.client, id)
+	m.sendf(proto.Command{Action: "panel.resize", ID: id, Rows: emuRows, Cols: emuCols})
+	m.sendf(proto.Command{Action: "panel.attach", ID: id})
+	return emu
 }
 
 // groupShownN is the group's visible-tile count N: how many members stream as
@@ -695,6 +704,8 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.openEditMap(modeGroupZoom), nil
 			case actScroll: // C-t [ → scroll the focused tile's history
 				return m.enterScroll(), nil
+			case actScratch: // C-t ~ → float the scratch pane over the split
+				return m.toggleScratch()
 			}
 		}
 		if key == m.bindingKey(actDetach) { // C-t q detaches from the split too
@@ -827,6 +838,8 @@ func (m model) handleGroupInteractKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.openEditMap(modeGroupZoom), nil
 			case actScroll: // C-t [ → scroll the focused tile's history
 				return m.enterScroll(), nil
+			case actScratch: // C-t ~ → float the scratch pane over the split
+				return m.toggleScratch()
 			}
 			return m, nil
 		}
@@ -1155,13 +1168,7 @@ func (m model) renderSummaryTile(collapsed []panel.Panel, focused bool, emuCols,
 		}
 	}
 
-	box := lipgloss.NewStyle().
-		Width(emuCols+2). // inner content + padding; the border adds the last 2
-		Padding(0, 1).
-		MarginRight(marginRight).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(border)
-	return box.Render(lipgloss.JoinVertical(lipgloss.Left, head,
+	return paneBox(emuCols, marginRight, border).Render(lipgloss.JoinVertical(lipgloss.Left, head,
 		lipgloss.JoinVertical(lipgloss.Left, body...)))
 }
 
@@ -1228,17 +1235,23 @@ func (m model) renderTile(p panel.Panel, focused bool, emuCols, emuRows, marginR
 		Render(truncate(p.Title, max(1, emuCols-lipgloss.Width(prefix))))
 	head := prefix + title
 
-	box := lipgloss.NewStyle().
-		Width(emuCols+2). // inner content + padding; the border adds the last 2
+	return paneBox(emuCols, marginRight, border).Render(lipgloss.JoinVertical(lipgloss.Left,
+		head,
+		lipgloss.JoinVertical(lipgloss.Left, m.tileBody(p, emuCols, emuRows, focused, interacting)...),
+	))
+}
+
+// paneBox is the shared tile/pane chrome: a rounded, padded box emuCols+2 wide
+// (inner content + padding; the border adds the last 2), with the given border
+// colour and right margin. renderTile, renderSummaryTile, and the floating scratch
+// pane all wrap their head + body in it.
+func paneBox(emuCols, marginRight int, border lipgloss.Color) lipgloss.Style {
+	return lipgloss.NewStyle().
+		Width(emuCols+2).
 		Padding(0, 1).
 		MarginRight(marginRight).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(border)
-
-	return box.Render(lipgloss.JoinVertical(lipgloss.Left,
-		head,
-		lipgloss.JoinVertical(lipgloss.Left, m.tileBody(p, emuCols, emuRows, focused, interacting)...),
-	))
 }
 
 // tileBody is a tile's content rows, always exactly emuRows tall: the member's

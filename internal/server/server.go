@@ -863,6 +863,14 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
+	case "panel.scratch":
+		// Spawn the cockpit's floating scratch shell as a transient ephemeral PTY —
+		// off the fleet snapshot and the persisted state, reaped on close/disconnect —
+		// and reply "scratch" with its id so the client attaches and floats it.
+		if err := s.openScratch(cc, cmd.Path, cmd.Dir); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
 	case "group.show":
 		if err := s.setGroupShown(cmd.Group, cmd.Count); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
@@ -2071,30 +2079,13 @@ func (s *Server) openEphemeral(cc *clientConn, targetID, label string, resolve e
 		return err
 	}
 
-	// Bound a scripted or runaway client: cap how many transient panels one
-	// connection may hold open at once. The check reads cc.ephemeral under the same
-	// lock the allocation below writes it, so two concurrent opens cannot both slip
-	// past N.
-	s.mu.Lock()
-	if len(cc.ephemeral) >= maxEphemeralPerConn {
-		s.mu.Unlock()
-		err := fmt.Errorf("too many open panels (max %d) — close one first", maxEphemeralPerConn)
+	ephID, unwind, err := s.registerEphemeral(cc, label)
+	if err != nil {
 		log.Warn().Str("target", targetID).Str("action", label).Err(err).Msg("ephemeral rejected")
 		return err
 	}
-	// Allocate the ephemeral id and register it before the spawn, so a concurrent
-	// disconnect cleanup sees a consistent set; unregister if the spawn fails.
-	s.ephSeq++
-	ephID := fmt.Sprintf("%s:%d", label, s.ephSeq)
-	s.ephemeral[ephID] = struct{}{}
-	cc.ephemeral[ephID] = true
-	s.mu.Unlock()
-
 	if err := s.pty.StartCmd(ephID, ptymgr.Spec{Command: name, Args: args, Env: env, Dir: dir}); err != nil {
-		s.mu.Lock()
-		delete(s.ephemeral, ephID)
-		delete(cc.ephemeral, ephID)
-		s.mu.Unlock()
+		unwind()
 		err = fmt.Errorf("could not open %s: %w", label, err)
 		log.Warn().Str("target", targetID).Str("dir", dir).Str("action", label).Err(err).Msg("ephemeral spawn failed")
 		return err
@@ -2102,6 +2093,56 @@ func (s *Server) openEphemeral(cc *clientConn, targetID, label string, resolve e
 
 	log.Info().Str("panel", ephID).Str("target", targetID).Str("dir", dir).Str("action", label).Msg("ephemeral panel opened")
 	send(cc, proto.ServerMsg{Type: "ephemeral", ID: ephID})
+	return nil
+}
+
+// registerEphemeral allocates and registers a transient panel id for a connection,
+// enforcing the per-connection cap — the shared bookkeeping behind openEphemeral and
+// openScratch. It bumps ephSeq and records the id in both s.ephemeral and
+// cc.ephemeral under one lock, so a concurrent disconnect cleanup sees a consistent
+// set and two opens cannot slip past the cap. It returns the id and an unwind func
+// the caller must invoke if the spawn then fails, to drop the reservation. label
+// prefixes the id ("diff:3", "scratch:7").
+func (s *Server) registerEphemeral(cc *clientConn, label string) (string, func(), error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(cc.ephemeral) >= maxEphemeralPerConn {
+		return "", nil, fmt.Errorf("too many open panels (max %d) — close one first", maxEphemeralPerConn)
+	}
+	s.ephSeq++
+	ephID := fmt.Sprintf("%s:%d", label, s.ephSeq)
+	s.ephemeral[ephID] = struct{}{}
+	cc.ephemeral[ephID] = true
+	unwind := func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(s.ephemeral, ephID)
+		delete(cc.ephemeral, ephID)
+	}
+	return ephID, unwind, nil
+}
+
+// openScratch spawns a transient shell PTY for the cockpit's floating scratch pane
+// — the standalone sibling of openEphemeral, with no agent target. Like a diff
+// panel it is registered only in s.ephemeral (and the owning conn), so it never
+// reaches the fleet snapshot (panelsMsg) or the persisted state (snapshotState),
+// and it is reaped when the client closes it (panel.close on an ephemeral id) or
+// disconnects. cmd is the program to run (empty = the default shell) in dir. On
+// success it replies {type:"scratch", id:"scratch:<n>"} so the client attaches and
+// floats it, rather than the auto-zoom an "ephemeral" reply drives.
+func (s *Server) openScratch(cc *clientConn, cmd, dir string) error {
+	dir = ptymgr.PanelDir(dir)
+
+	ephID, unwind, err := s.registerEphemeral(cc, "scratch")
+	if err != nil {
+		return err
+	}
+	if err := s.pty.StartCmd(ephID, ptymgr.Spec{Command: cmd, Dir: dir}); err != nil {
+		unwind()
+		return fmt.Errorf("could not open the scratch shell: %w", err)
+	}
+	log.Info().Str("panel", ephID).Str("dir", dir).Msg("scratch panel opened")
+	send(cc, proto.ServerMsg{Type: "scratch", ID: ephID})
 	return nil
 }
 

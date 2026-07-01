@@ -296,6 +296,7 @@ and the key-map editor — are reached after the prefix in every mode. Everythin
 | ---------------------- | --------------------------- | ---------------------------------------------- |
 | Anywhere (after `C-t`) | `C-t d`                     | go to the dashboard                            |
 |                        | `C-t b`                     | back one level (zoom → group → dashboard)      |
+|                        | `C-t ~`                     | toggle the floating scratch pane               |
 |                        | `C-t [`                     | enter scroll mode                              |
 |                        | `C-t k`                     | edit the key map                               |
 |                        | `C-t c`                     | open the plugin command picker                 |

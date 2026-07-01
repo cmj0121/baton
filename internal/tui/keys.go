@@ -48,6 +48,7 @@ const (
 	// Prefix-reached escapes, bound to the leader in every mode.
 	keyDashboard = "d" // C-t d → the dashboard
 	keyCommands  = "c" // C-t c → the plugin command picker
+	keyScratch   = "~" // C-t ~ → toggle the floating scratch shell (any view)
 
 	keyRemove    = "x" // in the group split: remove the focused member from the group
 	keyInteract  = "i" // in the group split: drive the focused tile in place, no zoom
@@ -111,6 +112,7 @@ const (
 	actEditMap
 	actScroll
 	actCommands
+	actScratch
 )
 
 // isEscape reports whether an action is reached after the prefix rather than on a
@@ -118,7 +120,7 @@ const (
 // and the key-map editor work after the prefix in every mode; panel config opens
 // this way from command mode.
 func isEscape(a action) bool {
-	return a == actDashboard || a == actEditMap || a == actPanelConfig || a == actScroll || a == actCommands
+	return a == actDashboard || a == actEditMap || a == actPanelConfig || a == actScroll || a == actCommands || a == actScratch
 }
 
 // binding is one editable command: a stable name (used to persist the key), the
@@ -163,6 +165,7 @@ var bindings = []binding{
 	{"dashboard", keyDashboard, "jump to the dashboard (prefix)", actDashboard, "View"},
 	{"back", keyBack, "back one level: zoom→group→dashboard (C-t b in a zoom)", actBack, "View"},
 	{"commands", keyCommands, "open the plugin command picker (prefix)", actCommands, "View"},
+	{"scratch", keyScratch, "toggle a floating scratch shell (prefix)", actScratch, "View"},
 
 	{"restart", keyRestart, "force-restart the server", actRestart, "Session"},
 	{"reload", keyReload, "reload config (backend + cockpit)", actReload, "Session"},

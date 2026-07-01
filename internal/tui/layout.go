@@ -3,6 +3,7 @@ package tui
 import (
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -303,6 +304,94 @@ func tracksWeighted(total, n, gap int, weights []float64) (starts, sizes []int) 
 		x += sizes[i] + gap
 	}
 	return starts, sizes
+}
+
+// overlayBox stamps a rendered box onto an already-composited frame at cell (x,y),
+// returning the new frame — the draw-on-top primitive the floating scratch pane
+// needs (composeTiles builds from blank; this composites over live content). For
+// each row the box covers it keeps the frame's cells left of the box, drops the
+// cells the box hides, and resumes the frame to the right — all ANSI-aware, so a
+// styled background is neither miscounted nor bled into the box. Rows past the
+// frame are ignored, so a box near the bottom edge simply clips.
+func overlayBox(frame, box string, x, y int) string {
+	if x < 0 {
+		x = 0
+	}
+	fl := strings.Split(frame, "\n")
+	bl := strings.Split(box, "\n")
+	for i, brow := range bl {
+		row := y + i
+		if row < 0 || row >= len(fl) {
+			continue
+		}
+		bw := lipgloss.Width(brow)
+		left := takeCols(fl[row], x)              // frame cells [0, x), padded if short
+		right := dropCols(fl[row], x+bw)          // frame cells [x+bw, end), style-preserved
+		fl[row] = left + brow + "\x1b[0m" + right // reset so the box's style never bleeds right
+	}
+	return strings.Join(fl, "\n")
+}
+
+// takeCols returns the prefix of an ANSI-styled line spanning the first n visible
+// columns, escapes copied verbatim and wide glyphs counted as their cell width. A
+// short line is space-padded to n, and a wide glyph straddling column n is dropped
+// (the caller's box starts exactly at n) — the mirror of dropCols.
+func takeCols(line string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	var out strings.Builder
+	vis := 0
+	for i := 0; i < len(line) && vis < n; {
+		if line[i] == 0x1b {
+			l := escLen(line[i:])
+			out.WriteString(line[i : i+l])
+			i += l
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(line[i:])
+		w := cellWidth(r)
+		if w > 0 && vis+w > n { // a wide glyph would cross the edge: stop, pad below
+			break
+		}
+		out.WriteString(line[i : i+size])
+		vis += w
+		i += size
+	}
+	if vis < n {
+		out.WriteString(strings.Repeat(" ", n-vis))
+	}
+	return out.String()
+}
+
+// dropCols returns the tail of an ANSI-styled line from visible column n onward,
+// re-emitting every escape seen before the cut first — so a colour or attribute
+// opened left of the cut still applies to the tail rather than bleeding away where
+// the overlay sliced the line. A wide glyph straddling column n is replaced by a
+// space for its trailing half so the tail still starts exactly at n.
+func dropCols(line string, n int) string {
+	if n <= 0 {
+		return line
+	}
+	var pre strings.Builder // escapes seen before the cut, replayed to restore style
+	vis := 0
+	i := 0
+	for i < len(line) && vis < n {
+		if line[i] == 0x1b {
+			l := escLen(line[i:])
+			pre.WriteString(line[i : i+l])
+			i += l
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(line[i:])
+		w := cellWidth(r)
+		i += size
+		vis += w
+		if vis > n { // a wide glyph straddled the cut: pad its trailing cell(s)
+			return pre.String() + strings.Repeat(" ", vis-n) + line[i:]
+		}
+	}
+	return pre.String() + line[i:]
 }
 
 // composeTiles stamps each rendered tile box onto a w×h screen buffer at its rect,

@@ -20,6 +20,11 @@ layouts:
     areas:
       - [diff, diff, log]
       - [diff, diff, sh]
+
+scratch: # the floating scratch pane (C-t ~)
+  command: "" # program to run; empty = the default shell
+  width: 0.8 # box size as a fraction of the terminal
+  height: 0.6
 ```
 
 ## Theme
@@ -85,12 +90,29 @@ layout first). A nudge that would shrink any tile too small to render is refused
 grid mid-resize. Resize is **view-local**: it lives in this cockpit only (never sent to the server), holds until you cycle
 the layout or leave the group, and **resets on reattach** — unlike the layout and visible-count, which the server owns.
 
+## Scratch pane
+
+`C-t ~` floats a **scratch pane** — a throwaway shell (or any `command`) — over whatever view you are in, tmux's
+`display-popup` for a quick `git`/`ls`/`htop` without leaving the fleet. It is a server-side **ephemeral** PTY: it never
+joins the fleet, the dashboard, or the persisted state, and it is reaped when you close it or the cockpit disconnects.
+Inside it, every key drives the shell; the leader is the only escape — `C-t ~` **hides** it (the shell keeps running, so
+reopening resumes where you left off), `C-t w` **closes** it for good, and `C-t C-t` sends a literal prefix. The box
+centres on the terminal at the configured `width`/`height` fraction (defaults `0.8`×`0.6`), floored at a legible minimum,
+and reflows when the terminal resizes.
+
+| Field     | Meaning                                              |
+| --------- | ---------------------------------------------------- |
+| `command` | the program the pane runs (empty = the shell)        |
+| `width`   | box width as a fraction of the terminal (0 = `0.8`)  |
+| `height`  | box height as a fraction of the terminal (0 = `0.6`) |
+
 ## Related cockpit keys
 
 These ride alongside the appearance config (full key reference in [SPEC.md](./SPEC.md#keys)):
 
 | Where                  | Key       | Does                                                             |
 | ---------------------- | --------- | ---------------------------------------------------------------- |
+| Any view               | `C-t ~`   | toggle the floating scratch pane (a throwaway shell)             |
 | Group split            | `L`       | cycle the tile layout (presets, then your custom layouts)        |
 |                        | `z`       | resize mode — arrows grow / shrink the focused tile (view-local) |
 | Scroll mode (`C-t [`)  | `v`       | start a whole-line selection                                     |

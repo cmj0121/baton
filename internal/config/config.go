@@ -51,6 +51,20 @@ type TUIConfig struct {
 
 	// DefaultLayout names the layout a group opens with; empty uses "tiled".
 	DefaultLayout string `yaml:"default-layout,omitempty"`
+
+	// Scratch configures the floating scratch pane (the pop-up shell overlaid on any
+	// view): the command it runs and its size. An empty section uses the defaults.
+	Scratch ScratchConfig `yaml:"scratch,omitempty"`
+}
+
+// ScratchConfig is the floating scratch pane's setup: the program it runs (empty =
+// the panel shell) and its size as a fraction of the terminal (0 = the built-in
+// default). It is read from TUI.yaml alongside the theme and layouts, so a SIGHUP
+// hot-reloads it like any other appearance setting.
+type ScratchConfig struct {
+	Command string  `yaml:"command,omitempty"` // program to run; empty = the default shell
+	Width   float64 `yaml:"width,omitempty"`   // width as a fraction of the terminal (0 = default)
+	Height  float64 `yaml:"height,omitempty"`  // height as a fraction of the terminal (0 = default)
 }
 
 // Theme is the cockpit colour palette. Each field is a colour string (a hex

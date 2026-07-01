@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/cmj0121/baton/internal/config"
 )
 
@@ -192,6 +194,68 @@ func TestResolveLayoutWeightedWidensMain(t *testing.T) {
 	}
 	if wide[0].w <= even[0].w {
 		t.Errorf("column weight 2:1 should widen the main tile: even=%d weighted=%d", even[0].w, wide[0].w)
+	}
+}
+
+// TestTakeDropCols: the ANSI-aware column slicers cut plain and styled lines on the
+// visible column, escapes carried but not counted, short lines padded.
+func TestTakeDropCols(t *testing.T) {
+	s := "abcdefgh"
+	if got := takeCols(s, 3); got != "abc" {
+		t.Errorf("takeCols(%q,3) = %q", s, got)
+	}
+	if got := takeCols("ab", 5); got != "ab   " {
+		t.Errorf("takeCols pad = %q, want %q", got, "ab   ")
+	}
+	if got := takeCols(s, 0); got != "" {
+		t.Errorf("takeCols(_,0) = %q, want empty", got)
+	}
+	if got := dropCols(s, 3); got != "defgh" {
+		t.Errorf("dropCols(%q,3) = %q", s, got)
+	}
+	if got := dropCols(s, 0); got != s {
+		t.Errorf("dropCols(_,0) = %q, want the whole line", got)
+	}
+	// Escapes count as zero columns: a styled prefix does not shift the cut.
+	styled := "\x1b[31mabc\x1b[0mdef"
+	if w := lipgloss.Width(takeCols(styled, 3)); w != 3 {
+		t.Errorf("takeCols on a styled line: visible width %d, want 3", w)
+	}
+	if w := lipgloss.Width(dropCols(styled, 3)); w != 3 {
+		t.Errorf("dropCols on a styled line: visible width %d, want 3", w)
+	}
+}
+
+// TestOverlayBox: a box stamps onto a frame at (x,y), covering only its own cells,
+// leaving the rows above/below and the columns left/right intact, and never changing
+// the frame's line count or any row's visible width.
+func TestOverlayBox(t *testing.T) {
+	frame := strings.Join([]string{
+		"..........",
+		"..........",
+		"..........",
+		"..........",
+	}, "\n")
+	out := overlayBox(frame, strings.Join([]string{"###", "###"}, "\n"), 2, 1)
+	lines := strings.Split(out, "\n")
+	if len(lines) != 4 {
+		t.Fatalf("overlay changed the frame line count: %d", len(lines))
+	}
+	if lines[0] != ".........." || lines[3] != ".........." {
+		t.Errorf("rows outside the box should be untouched: %q %q", lines[0], lines[3])
+	}
+	for _, r := range []int{1, 2} {
+		if w := lipgloss.Width(lines[r]); w != 10 {
+			t.Errorf("row %d width = %d, want 10", r, w)
+		}
+		if !strings.HasPrefix(lines[r], "..###") || !strings.HasSuffix(lines[r], ".....") {
+			t.Errorf("row %d = %q, want ..###.....", r, lines[r])
+		}
+	}
+	// A box running past the bottom edge simply clips (no panic, no extra lines).
+	clip := overlayBox(frame, "###\n###\n###", 0, 3)
+	if n := len(strings.Split(clip, "\n")); n != 4 {
+		t.Fatalf("a box past the edge should clip to the frame: %d lines", n)
 	}
 }
 

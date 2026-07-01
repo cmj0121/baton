@@ -256,6 +256,15 @@ type model struct {
 	groupEmus       map[string]*vt.SafeEmulator // live emulator per member tile
 	zoomGroupOrigin string                      // group to return to from a single zoom, "" if none
 
+	// The floating scratch pane (C-t ~): a transient ephemeral shell overlaid on any
+	// view. scratchID is its server-side ephemeral id ("" until first opened, kept
+	// alive across hide/show for reuse); scratchEmu renders it; scratchOpen shows the
+	// box and gives it the keyboard; scratchArmed is the prefix pressed inside it.
+	scratchID    string
+	scratchEmu   *vt.SafeEmulator
+	scratchOpen  bool
+	scratchArmed bool
+
 	width, height int
 	quitting      bool
 	restart       bool // user asked to force-restart the daemon on exit
@@ -543,6 +552,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modeGroupZoom {
 			m.resizeGroupTiles() // reflow the tiles to the new screen, net of the bar
 		}
+		if m.scratchOpen {
+			m.resizeScratch() // refit the floating pane to the new screen
+		}
 		// A resize can leave stale cells from the old frame — most visibly in a
 		// zoom, whose View embeds the panel emulator's raw render that the diff
 		// renderer will not fully clear. Force a clean full repaint so the whole
@@ -562,6 +574,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if emu := m.groupEmus[sm.ID]; emu != nil {
 				writeEmu(emu, sm.Data) // demux by id into the member's tile
 			}
+		}
+		if m.scratchEmu != nil && sm.ID == m.scratchID {
+			writeEmu(m.scratchEmu, sm.Data) // the floating pane streams in any mode
 		}
 		return m, waitOutput(m.client.Output)
 
@@ -600,6 +615,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.input != inputNone { // a text-input overlay (incl. zoom search) captures keys in every mode
 			return m.handleInput(msg)
+		}
+		if m.scratchOpen { // the floating scratch pane owns the keyboard while shown
+			return m.handleScratchKey(msg)
 		}
 		if m.scrolling { // scroll mode owns the keyboard until esc/q
 			return m.handleScrollKey(msg)
@@ -720,6 +738,15 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		m.pendingEphemeralTitle = ""
 		*m = m.zoomInto(panel.Panel{ID: sm.ID, Title: title, State: panel.Running})
 		m.zoomEphemeral = true
+	case "scratch":
+		// The server spawned our transient scratch shell and returned its ephemeral id.
+		// Attach a box-sized emulator, subscribe its stream, and float the pane. Like a
+		// tile, zoomReader forwards the emulator's input side to the PTY so keystrokes
+		// reach the shell; the panelOutput demux writes its output back by id.
+		m.scratchID = sm.ID
+		cols, rows := m.scratchEmuSize()
+		m.scratchEmu = m.attachEmu(m.scratchID, cols, rows)
+		*m = m.showScratch()
 	case "diff":
 		// The server computed the target agent's structured work-tree diff. Open the
 		// master-detail popup over the current view; it owns nothing server-side, so
@@ -1530,6 +1557,8 @@ func (m model) openEditMap(from mode) model {
 // enter key funnel through here.
 func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 	switch a {
+	case actScratch:
+		return m.toggleScratch()
 	case actNewPanel:
 		return m.spawnPanel(m.shellPath), nil
 	case actNewForm:
@@ -1890,6 +1919,8 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.openEditMap(modeZoom), nil
 			case actScroll: // C-t [ → scroll mode, reached on every terminal
 				return m.enterScroll(), nil
+			case actScratch: // C-t ~ → float the scratch pane over the zoom
+				return m.toggleScratch()
 			}
 			// back (C-t b) is what leaves a zoom — it returns to the split it came
 			// from, or the dashboard. Any other escape no-ops here.
@@ -2346,7 +2377,14 @@ func (m model) View() (out string) {
 			out = "baton: a render glitch was recovered — press any key to refresh\r\n"
 		}
 	}()
-	return m.render()
+	frame := m.render()
+	// The scratch pane floats over whatever view render produced — the only overlay
+	// that draws on top rather than swapping the body. Skip it on the sub-frames that
+	// are not the full cockpit (the too-small notice, the detach line).
+	if m.scratchOpen && m.scratchEmu != nil && !m.quitting && m.width >= minWidth && m.height >= minHeight {
+		frame = m.overlayScratch(frame)
+	}
+	return frame
 }
 
 func (m model) render() string {
