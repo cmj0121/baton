@@ -28,6 +28,28 @@ const (
 	maxGroupTiles = 16
 )
 
+const (
+	// resizeStep is how much weight one arrow press shifts across a tile boundary
+	// in resize mode — a track carrying weight 1.0 by default, so ~0.18 is a brisk
+	// but controllable nudge. resizeMinWeight floors a track's weight so no tile
+	// can be shrunk to nothing (the render-time reject in spansToRects is the final
+	// backstop; this keeps the common case from ever reaching it).
+	resizeStep      = 0.18
+	resizeMinWeight = 0.35
+)
+
+// splitRatios holds a group's manual resize weights for one layout: a multiplier
+// per column and per row of that layout's unit-cell grid, applied on top of the
+// even track division. All-1.0 is the even split. They are view-local — never sent
+// to the server — and keyed to the layout they were made under, so cycling the
+// layout (which changes the track counts) starts fresh rather than misapplying a
+// stale set.
+type splitRatios struct {
+	layout string
+	cols   []float64
+	rows   []float64
+}
+
 // tileGeometry lays n tiles into a w×h area (h already net of the footer bar and
 // the header), returning the column count and the inner emulator size of each
 // tile so the grid fills the screen rather than sitting in fixed little boxes.
@@ -88,11 +110,20 @@ func (m *model) attachGroupMembers() {
 // fed, so the tile only ever relays the query replies a live program emits. The
 // shared per-member step of building the split and of reconciling it.
 func (m *model) attachTile(p panel.Panel, emuCols, emuRows int) {
+	m.groupEmus[p.ID] = m.attachEmu(p.ID, emuCols, emuRows)
+}
+
+// attachEmu opens a live, correctly-sized emulator for a panel id: it streams the
+// panel's output and forwards the emulator's input side to the PTY (zoomReader), so
+// keys fed to it reach the program. This is the shared attach handshake behind the
+// split tiles and the floating scratch pane; the caller owns where the returned
+// emulator is stored.
+func (m model) attachEmu(id string, emuCols, emuRows int) *vt.SafeEmulator {
 	emu := vt.NewSafeEmulator(emuCols, emuRows)
-	m.groupEmus[p.ID] = emu
-	go zoomReader(emu, m.client, p.ID)
-	m.sendf(proto.Command{Action: "panel.resize", ID: p.ID, Rows: emuRows, Cols: emuCols})
-	m.sendf(proto.Command{Action: "panel.attach", ID: p.ID})
+	go zoomReader(emu, m.client, id)
+	m.sendf(proto.Command{Action: "panel.resize", ID: id, Rows: emuRows, Cols: emuCols})
+	m.sendf(proto.Command{Action: "panel.attach", ID: id})
+	return emu
 }
 
 // groupShownN is the group's visible-tile count N: how many members stream as
@@ -144,7 +175,12 @@ func (m model) availableLayouts() []string {
 // the even-grid default. The render, attach, and resize paths share it so a tile's
 // emulator is always sized to the box it is drawn in.
 func (m model) layoutRects() ([]tileRect, bool) {
-	return resolveLayout(m.groupLayoutName(), m.tuiCfg.Layouts, m.gridCells(), m.width, m.height-1-groupHeaderRows)
+	name := m.groupLayoutName()
+	var colW, rowW []float64
+	if r, ok := m.groupRatios[m.groupName]; ok && r.layout == name {
+		colW, rowW = r.cols, r.rows // manual resize weights apply only to their own layout
+	}
+	return resolveLayout(name, m.tuiCfg.Layouts, m.gridCells(), m.width, m.height-1-groupHeaderRows, colW, rowW)
 }
 
 // tileHitRects returns one rect per cell for hit-testing — the layout's rects for a
@@ -235,6 +271,146 @@ func (m model) cycleGroupLayout(delta int) model {
 	m.resizeGroupTiles() // re-fit every tile's emulator to the new layout's boxes
 	m.status = "layout · " + next
 	return m
+}
+
+// enterResize arms resize mode, in which the arrow keys grow and shrink the
+// focused tile. It needs a resolved (non-"tiled") layout to skew — the even grid
+// has no per-track sizing to adjust — so it points the user at the layout key when
+// the group is on the default grid, and no-ops in the summary sub-view.
+func (m model) enterResize() model {
+	if m.summaryScope {
+		m.status = "resize is not available in the summary"
+		return m
+	}
+	if _, ok := m.layoutRects(); !ok {
+		m.status = "resize needs a split layout — press " + keyLabel(keyLayout) + " to pick one"
+		return m
+	}
+	m.groupResize = true
+	m.groupArmed = false
+	m.status = fmt.Sprintf("resize · %s · arrows grow/shrink · %s or esc to finish", m.groupName, keyLabel(keyResize))
+	return m
+}
+
+// exitResize returns the split to passive navigation, leaving the ratios in place
+// so the sizing sticks until the layout is cycled (or the group is left).
+func (m model) exitResize() model {
+	m.groupResize = false
+	m.status = "group · " + m.groupName
+	return m
+}
+
+// resizeFocused grows or shrinks the focused tile by shifting weight across one of
+// its boundaries: dCol ±1 widens/narrows it (borrowing from the column to its
+// right, or the left when it is already flush right), dRow ±1 does the same
+// vertically. The candidate weights are validated by re-resolving the layout — a
+// nudge that would make any tile too small to render is refused rather than
+// committed — so resize can never drop the split back to the even grid. A no-op on
+// the summary slot (not a real tile) or an unresolved layout.
+func (m model) resizeFocused(dCol, dRow int) model {
+	name := m.groupLayoutName()
+	rows, cols, spans, ok := layoutSpans(name, m.tuiCfg.Layouts, m.gridCells())
+	if !ok || m.groupFocus < 0 || m.groupFocus >= len(spans) {
+		return m
+	}
+	sp := spans[m.groupFocus]
+	r := m.ratiosFor(name, rows, cols) // a fresh copy sized to this layout, all-1.0 default
+
+	if dCol != 0 && cols > 1 {
+		edge, nb := sp.c1-1, sp.c1 // grow the tile's right column, shrink its right neighbour
+		if nb >= cols {            // already flush right: borrow from the left instead
+			edge, nb = sp.c0, sp.c0-1
+		}
+		shiftWeight(r.cols, edge, nb, float64(dCol)*resizeStep)
+	}
+	if dRow != 0 && rows > 1 {
+		edge, nb := sp.r1-1, sp.r1
+		if nb >= rows {
+			edge, nb = sp.r0, sp.r0-1
+		}
+		shiftWeight(r.rows, edge, nb, float64(dRow)*resizeStep)
+	}
+
+	// Validate with the spans already resolved above rather than re-resolving: a
+	// nudge that would make any tile too small to render is refused, so resize can
+	// never drop the split back to the even grid.
+	if _, valid := spansToRects(rows, cols, spans, m.width, m.height-1-groupHeaderRows, r.cols, r.rows); !valid {
+		m.status = "can't resize any further"
+		return m
+	}
+	if m.groupRatios == nil {
+		m.groupRatios = map[string]splitRatios{}
+	}
+	m.groupRatios[m.groupName] = r
+	m.resizeGroupTiles() // refit every tile's emulator + PTY to its new box
+	m.status = "resize · " + m.groupName
+	return m
+}
+
+// ratiosFor returns a fresh splitRatios for the current group sized to a layout's
+// rows×cols, seeded from any stored set for the same layout (else all-1.0). The
+// copy means an adjustment mutates the returned slices, not the stored ones, so a
+// rejected nudge leaves the committed sizing untouched.
+func (m model) ratiosFor(layout string, rows, cols int) splitRatios {
+	r, ok := m.groupRatios[m.groupName]
+	if !ok || r.layout != layout {
+		r = splitRatios{layout: layout}
+	}
+	return splitRatios{layout: layout, cols: fitWeights(r.cols, cols), rows: fitWeights(r.rows, rows)}
+}
+
+// fitWeights returns a length-n weight slice seeded from w — padded with 1.0 where
+// w is short or non-positive, truncated where it is long — so a weight set carried
+// over from a different track count is coerced to the current one.
+func fitWeights(w []float64, n int) []float64 {
+	out := make([]float64, n)
+	for i := range out {
+		if i < len(w) && w[i] > 0 {
+			out[i] = w[i]
+		} else {
+			out[i] = 1
+		}
+	}
+	return out
+}
+
+// shiftWeight moves amt of weight from track b into track a, in place, refusing the
+// move if it would push either below resizeMinWeight — so a tile never inverts or
+// collapses. Out-of-range indices are ignored (e.g. a tile already at the grid
+// edge has no neighbour to borrow from).
+func shiftWeight(w []float64, a, b int, amt float64) {
+	if a < 0 || a >= len(w) || b < 0 || b >= len(w) {
+		return
+	}
+	na, nb := w[a]+amt, w[b]-amt
+	if na < resizeMinWeight || nb < resizeMinWeight {
+		return
+	}
+	w[a], w[b] = na, nb
+}
+
+// handleGroupResizeKey drives resize mode: the arrows (or hjkl) grow and shrink the
+// focused tile, tab moves the focus to a different tile to resize, and z / esc
+// leave. The prefix is not consumed here — a leader press just falls through to the
+// caller after resize exits — keeping the mode a thin, self-contained loop.
+func (m model) handleGroupResizeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch k.String() {
+	case keyResize, "esc", "enter":
+		return m.exitResize(), nil
+	case "right", "l":
+		return m.resizeFocused(1, 0), nil
+	case "left", "h":
+		return m.resizeFocused(-1, 0), nil
+	case "down", "j":
+		return m.resizeFocused(0, 1), nil
+	case "up", "k":
+		return m.resizeFocused(0, -1), nil
+	case "tab":
+		m.groupFocus = wrapIndex(m.groupFocus, 1, m.focusCount())
+	case "shift+tab":
+		m.groupFocus = wrapIndex(m.groupFocus, -1, m.focusCount())
+	}
+	return m, nil
 }
 
 // splitMembers partitions the group into the live tiles and the collapsed
@@ -511,6 +687,10 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.groupInteract {
 		return m.handleGroupInteractKey(k)
 	}
+	// Resize mode captures the arrows to grow/shrink the focused tile until z / esc.
+	if m.groupResize {
+		return m.handleGroupResizeKey(k)
+	}
 	key := k.String()
 	// The split is command-mode, so the prefix is only needed for the universal
 	// escapes — C-t d leaves for the dashboard; bare b (back) does the same.
@@ -524,6 +704,8 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.openEditMap(modeGroupZoom), nil
 			case actScroll: // C-t [ → scroll the focused tile's history
 				return m.enterScroll(), nil
+			case actScratch: // C-t ~ → float the scratch pane over the split
+				return m.toggleScratch()
 			}
 		}
 		if key == m.bindingKey(actDetach) { // C-t q detaches from the split too
@@ -581,6 +763,10 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Cycle the split arrangement: tiled → main-vertical → main-horizontal →
 		// stack → any custom TUI.yaml layouts → back to tiled.
 		return m.cycleGroupLayout(1), nil
+	case keyResize:
+		// Enter resize mode: the arrows then grow/shrink the focused tile, skewing the
+		// current split layout's tracks (a no-op on the even "tiled" grid).
+		return m.enterResize(), nil
 	case keyPin:
 		return m.togglePin(), nil
 	case keySignal:
@@ -652,6 +838,8 @@ func (m model) handleGroupInteractKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.openEditMap(modeGroupZoom), nil
 			case actScroll: // C-t [ → scroll the focused tile's history
 				return m.enterScroll(), nil
+			case actScratch: // C-t ~ → float the scratch pane over the split
+				return m.toggleScratch()
 			}
 			return m, nil
 		}
@@ -771,6 +959,7 @@ func (m model) adjustGroupShown(delta int) model {
 		m.groupShown = map[string]int{}
 	}
 	m.groupShown[m.groupName] = newN
+	delete(m.groupRatios, m.groupName) // a new N reshapes the grid; manual weights reset
 	m.sendf(proto.Command{Action: "group.show", Group: m.groupName, Count: newN})
 	m.status = fmt.Sprintf("group · %d shown", newN)
 	return m
@@ -846,6 +1035,7 @@ func (m *model) resetToDashboard(status string) {
 	m.groupFocus = 0
 	m.groupArmed = false
 	m.groupInteract = false
+	m.groupResize = false
 	m.summaryScope = false
 	m.groupPinned = nil
 	m.scrollOff = 0
@@ -978,13 +1168,7 @@ func (m model) renderSummaryTile(collapsed []panel.Panel, focused bool, emuCols,
 		}
 	}
 
-	box := lipgloss.NewStyle().
-		Width(emuCols+2). // inner content + padding; the border adds the last 2
-		Padding(0, 1).
-		MarginRight(marginRight).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(border)
-	return box.Render(lipgloss.JoinVertical(lipgloss.Left, head,
+	return paneBox(emuCols, marginRight, border).Render(lipgloss.JoinVertical(lipgloss.Left, head,
 		lipgloss.JoinVertical(lipgloss.Left, body...)))
 }
 
@@ -1051,17 +1235,23 @@ func (m model) renderTile(p panel.Panel, focused bool, emuCols, emuRows, marginR
 		Render(truncate(p.Title, max(1, emuCols-lipgloss.Width(prefix))))
 	head := prefix + title
 
-	box := lipgloss.NewStyle().
-		Width(emuCols+2). // inner content + padding; the border adds the last 2
+	return paneBox(emuCols, marginRight, border).Render(lipgloss.JoinVertical(lipgloss.Left,
+		head,
+		lipgloss.JoinVertical(lipgloss.Left, m.tileBody(p, emuCols, emuRows, focused, interacting)...),
+	))
+}
+
+// paneBox is the shared tile/pane chrome: a rounded, padded box emuCols+2 wide
+// (inner content + padding; the border adds the last 2), with the given border
+// colour and right margin. renderTile, renderSummaryTile, and the floating scratch
+// pane all wrap their head + body in it.
+func paneBox(emuCols, marginRight int, border lipgloss.Color) lipgloss.Style {
+	return lipgloss.NewStyle().
+		Width(emuCols+2).
 		Padding(0, 1).
 		MarginRight(marginRight).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(border)
-
-	return box.Render(lipgloss.JoinVertical(lipgloss.Left,
-		head,
-		lipgloss.JoinVertical(lipgloss.Left, m.tileBody(p, emuCols, emuRows, focused, interacting)...),
-	))
 }
 
 // tileBody is a tile's content rows, always exactly emuRows tall: the member's
@@ -1114,6 +1304,8 @@ func (m model) groupZoomFooter() string {
 		mode = m.searchSeg()
 	case m.scrolling:
 		mode = seg("↕ SCROLL", colDark, colScroll)
+	case m.groupResize:
+		mode = seg("⤢ RESIZE", colDark, colCyan) // arrows grow/shrink the focused tile
 	case m.groupInteract:
 		mode = seg("⌨ INTERACT", colDark, colGreen) // typing into the focused tile
 	}

@@ -13,9 +13,11 @@ that keep an agent driving its own host from wrecking it.
 Press **`C`** on the dashboard to open the conductor. It is a normal agent (your default agent profile, `claude` out of
 the box), with three differences:
 
-- **Singleton.** There is one and only one conductor per server. `C` spawns it when there is none, re-runs an exited
-  one, or — on a running conductor — offers to **restart** it (a `y`/`n` confirm), which reloads its brief at the cost of
-  its in-progress work; `enter` still zooms a running conductor like any panel. The server refuses a second.
+- **Singleton.** There is one and only one conductor per server; the server refuses a second. It is **not a card in the
+  fleet** — it shows as a **mark in the `FLEET` heading** (with its live state), since it drives the fleet rather than
+  being one of it, and stays out of the roster, the counts, and the attention nudges. `C` is how you reach it: it **zooms**
+  a live conductor so you can watch its work, **re-runs** an exited one (a fresh workspace, so it reloads its brief) and
+  zooms the restart, or **spawns** one when there is none and zooms it the moment it lands.
 - **Control-only workspace.** The conductor runs in a fresh, private, throwaway directory under baton's runtime dir —
   never your source tree. Its only local surface is the control wiring baton drops in: the briefing (written as both
   `BATON.md` and `CLAUDE.md`, the latter so the default Claude conductor auto-reads it as project instructions) and a
@@ -31,9 +33,9 @@ workspace with an absolute path. Baton shapes the environment so control is the 
 
 The built-in primer tells the conductor _how_ to drive baton; you tell it _what to do_. Write a goal and guide in
 `$HOME/.baton/CONDUCTOR.md` and baton appends it to the conductor's briefing under an **Operator's brief** heading every
-time the conductor is opened or re-run — so editing the file and then pressing `C` (which restarts a running conductor or
-re-runs an exited one) updates its standing instructions. The file is optional and never replaces the primer: the agent
-always keeps the control mechanics and the forbidden actions. For example:
+time the conductor is spawned or re-run — so editing the file and then re-running the conductor (`C` on an exited one, or
+after you stop a running one from its zoom) updates its standing instructions. The file is optional and never replaces the
+primer: the agent always keeps the control mechanics and the forbidden actions. For example:
 
 ```md
 # Mission

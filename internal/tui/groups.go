@@ -37,6 +37,9 @@ func (m model) dashItems() []dashItem {
 	items := make([]dashItem, 0, len(m.fleet))
 	groupAt := make(map[string]int) // group name -> index into items
 	for _, p := range m.fleet {
+		if p.Conductor {
+			continue // the conductor is a mark in the FLEET heading, not a card/group
+		}
 		if p.Group == "" {
 			items = append(items, dashItem{kind: itemPanel, panel: p})
 			continue

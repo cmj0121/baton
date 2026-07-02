@@ -3,6 +3,7 @@ package tui
 import (
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -43,11 +44,15 @@ type cellSpan struct {
 
 // resolveLayout lays n tiles into a w×h area under the named layout, returning one
 // tileRect per tile (in tile order) and ok=true. It returns ok=false when the name
-// is "tiled" or unknown, or when the grid does not fit (a tile would be too small
-// to render) — the caller falls back to the even-grid path. customs are the user's
-// TUI.yaml layouts, consulted before the built-in presets so a custom may override
-// a preset name.
-func resolveLayout(name string, customs []config.Layout, n, w, h int) ([]tileRect, bool) {
+// is "tiled" or unknown, or when the grid does not fit (a tile would be too small to
+// render) — the caller falls back to the even-grid path. customs are the user's
+// TUI.yaml layouts, consulted before the built-in presets so a custom may override a
+// preset name. Optional per-column and per-row weights skew the even track division
+// (see tracksAxis), so a tile can be grown or shrunk from the split's resize mode;
+// nil weights (the common case) give the plain even layout, and weights of the wrong
+// length are padded with 1 / truncated to the resolved grid, so a stale set from
+// another layout degrades gracefully rather than being rejected.
+func resolveLayout(name string, customs []config.Layout, n, w, h int, colWeights, rowWeights []float64) ([]tileRect, bool) {
 	if n < 1 || w < 1 || h < 1 || name == "" || name == layoutTiled {
 		return nil, false
 	}
@@ -55,7 +60,7 @@ func resolveLayout(name string, customs []config.Layout, n, w, h int) ([]tileRec
 	if !ok || len(spans) == 0 {
 		return nil, false
 	}
-	return spansToRects(rows, cols, spans, w, h)
+	return spansToRects(rows, cols, spans, w, h, colWeights, rowWeights)
 }
 
 // layoutSpans resolves a layout name and tile count to a unit-cell grid: its row
@@ -182,14 +187,17 @@ func customSpans(l config.Layout, n int) (int, int, []cellSpan, bool) {
 // spansToRects converts unit-cell spans into pixel tileRects over a w×h area. The
 // columns and rows tile the area exactly (gaps of gtileGap sit between columns; no
 // vertical gap, matching the even grid), with any rounding remainder spread across
-// the first tracks. A tile too small to render (its inner emulator would vanish)
-// fails the whole layout so the caller falls back to the even grid.
-func spansToRects(rows, cols int, spans []cellSpan, w, h int) ([]tileRect, bool) {
+// the tracks. Optional per-column / per-row weights skew the otherwise-even track
+// sizes (nil ⇒ even) — the seam manual resize adjusts. A tile too small to render
+// (its inner emulator would vanish) fails the whole layout, so the caller falls
+// back to the even grid and an over-aggressive resize is rejected rather than drawn
+// broken.
+func spansToRects(rows, cols int, spans []cellSpan, w, h int, colWeights, rowWeights []float64) ([]tileRect, bool) {
 	if rows < 1 || cols < 1 {
 		return nil, false
 	}
-	colX, colW := tracks(w, cols, gtileGap)
-	rowY, rowH := tracks(h, rows, 0)
+	colX, colW := tracksAxis(w, cols, gtileGap, colWeights)
+	rowY, rowH := tracksAxis(h, rows, 0, rowWeights)
 
 	rects := make([]tileRect, len(spans))
 	for i, s := range spans {
@@ -236,6 +244,154 @@ func tracks(total, n, gap int) (starts, sizes []int) {
 		x += sz + gap
 	}
 	return starts, sizes
+}
+
+// tracksAxis sizes n tracks like tracks, but skewed by per-track weights when any
+// are given: it is the seam manual resize hooks into. With no weights it is exactly
+// tracks (so the even grid is byte-for-byte unchanged), keeping the weighted path
+// off every default render.
+func tracksAxis(total, n, gap int, weights []float64) (starts, sizes []int) {
+	if len(weights) == 0 {
+		return tracks(total, n, gap)
+	}
+	return tracksWeighted(total, n, gap, weights)
+}
+
+// tracksWeighted divides total (minus the gutters) across n tracks in proportion
+// to weights, rather than evenly. It uses largest-remainder apportionment — floor
+// each track's exact share, then hand the leftover cells one at a time to the
+// tracks with the largest fractional part — so the sizes always sum to the usable
+// span exactly, with no drift. Weights shorter than n are padded with 1 and
+// non-positive weights are floored to 1, so a partial or stale weight set still
+// yields a sane layout. A weight small enough to zero a track is left for
+// spansToRects to reject (it fails the layout), which is how the resize hook clamps.
+func tracksWeighted(total, n, gap int, weights []float64) (starts, sizes []int) {
+	starts = make([]int, n)
+	sizes = make([]int, n)
+	usable := total - (n-1)*gap
+	if usable < n {
+		usable = n
+	}
+	sum := 0.0
+	w := make([]float64, n)
+	for i := 0; i < n; i++ {
+		wi := 1.0
+		if i < len(weights) && weights[i] > 0 {
+			wi = weights[i]
+		}
+		w[i] = wi
+		sum += wi
+	}
+	type rem struct {
+		i    int
+		frac float64
+	}
+	rems := make([]rem, n)
+	used := 0
+	for i := 0; i < n; i++ {
+		exact := float64(usable) * w[i] / sum
+		sizes[i] = int(exact)
+		rems[i] = rem{i, exact - float64(sizes[i])}
+		used += sizes[i]
+	}
+	sort.Slice(rems, func(a, b int) bool { return rems[a].frac > rems[b].frac })
+	for k := 0; used < usable; k, used = k+1, used+1 {
+		sizes[rems[k%n].i]++
+	}
+	x := 0
+	for i := 0; i < n; i++ {
+		starts[i] = x
+		x += sizes[i] + gap
+	}
+	return starts, sizes
+}
+
+// overlayBox stamps a rendered box onto an already-composited frame at cell (x,y),
+// returning the new frame — the draw-on-top primitive the floating scratch pane
+// needs (composeTiles builds from blank; this composites over live content). For
+// each row the box covers it keeps the frame's cells left of the box, drops the
+// cells the box hides, and resumes the frame to the right — all ANSI-aware, so a
+// styled background is neither miscounted nor bled into the box. Rows past the
+// frame are ignored, so a box near the bottom edge simply clips.
+func overlayBox(frame, box string, x, y int) string {
+	if x < 0 {
+		x = 0
+	}
+	fl := strings.Split(frame, "\n")
+	bl := strings.Split(box, "\n")
+	for i, brow := range bl {
+		row := y + i
+		if row < 0 || row >= len(fl) {
+			continue
+		}
+		bw := lipgloss.Width(brow)
+		left := takeCols(fl[row], x)              // frame cells [0, x), padded if short
+		right := dropCols(fl[row], x+bw)          // frame cells [x+bw, end), style-preserved
+		fl[row] = left + brow + "\x1b[0m" + right // reset so the box's style never bleeds right
+	}
+	return strings.Join(fl, "\n")
+}
+
+// takeCols returns the prefix of an ANSI-styled line spanning the first n visible
+// columns, escapes copied verbatim and wide glyphs counted as their cell width. A
+// short line is space-padded to n, and a wide glyph straddling column n is dropped
+// (the caller's box starts exactly at n) — the mirror of dropCols.
+func takeCols(line string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	var out strings.Builder
+	vis := 0
+	for i := 0; i < len(line) && vis < n; {
+		if line[i] == 0x1b {
+			l := escLen(line[i:])
+			out.WriteString(line[i : i+l])
+			i += l
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(line[i:])
+		w := cellWidth(r)
+		if w > 0 && vis+w > n { // a wide glyph would cross the edge: stop, pad below
+			break
+		}
+		out.WriteString(line[i : i+size])
+		vis += w
+		i += size
+	}
+	if vis < n {
+		out.WriteString(strings.Repeat(" ", n-vis))
+	}
+	return out.String()
+}
+
+// dropCols returns the tail of an ANSI-styled line from visible column n onward,
+// re-emitting every escape seen before the cut first — so a colour or attribute
+// opened left of the cut still applies to the tail rather than bleeding away where
+// the overlay sliced the line. A wide glyph straddling column n is replaced by a
+// space for its trailing half so the tail still starts exactly at n.
+func dropCols(line string, n int) string {
+	if n <= 0 {
+		return line
+	}
+	var pre strings.Builder // escapes seen before the cut, replayed to restore style
+	vis := 0
+	i := 0
+	for i < len(line) && vis < n {
+		if line[i] == 0x1b {
+			l := escLen(line[i:])
+			pre.WriteString(line[i : i+l])
+			i += l
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(line[i:])
+		w := cellWidth(r)
+		i += size
+		vis += w
+		if vis > n { // a wide glyph straddled the cut: pad its trailing cell(s)
+			return pre.String() + strings.Repeat(" ", vis-n) + line[i:]
+		}
+	}
+	return pre.String() + line[i:]
 }
 
 // composeTiles stamps each rendered tile box onto a w×h screen buffer at its rect,

@@ -12,8 +12,8 @@ func runningConductor() []panel.Panel {
 	return []panel.Panel{{ID: "c1", Kind: panel.Agent, Conductor: true, State: panel.Running, Title: "conductor · c1"}}
 }
 
-// TestCondSpawn checks that C with no conductor in the fleet
-// spawns one, flagged Conductor.
+// TestCondSpawn checks that C with no conductor in the fleet spawns one, flagged
+// Conductor, and arms the spawn-then-zoom so it opens when it lands.
 func TestCondSpawn(t *testing.T) {
 	c, cmds := recordingServer(t)
 	m := baseModel()
@@ -25,9 +25,29 @@ func TestCondSpawn(t *testing.T) {
 	if !got.Conductor {
 		t.Fatalf("C should spawn a conductor panel, got %+v", got)
 	}
+	if !m.pendingConductor {
+		t.Fatal("spawning the conductor should arm the pending zoom")
+	}
 }
 
-// TestCondRespawn checks that C on an exited conductor re-runs it.
+// TestCondPendingZoomOnSnapshot checks the spawned conductor is zoomed the moment it
+// arrives in a snapshot — it has no card to select, so C is the only way in.
+func TestCondPendingZoomOnSnapshot(t *testing.T) {
+	m := baseModel()
+	m.pendingConductor = true
+	m.applyEvent(proto.ServerMsg{Type: "panels", Panels: []proto.Panel{
+		{ID: "c1", Kind: "agent", State: "running", Conductor: true, Title: "conductor · c1"},
+	}})
+	if m.mode != modeZoom || m.zoomID != "c1" {
+		t.Fatalf("the conductor should auto-zoom on arrival, got mode=%v id=%q", m.mode, m.zoomID)
+	}
+	if m.pendingConductor {
+		t.Fatal("the pending-zoom flag should clear once consumed")
+	}
+}
+
+// TestCondRespawn checks that C on an exited conductor re-runs it and zooms the
+// restart as a live panel (not a read-only result view).
 func TestCondRespawn(t *testing.T) {
 	c, cmds := recordingServer(t)
 	m := baseModel()
@@ -39,54 +59,44 @@ func TestCondRespawn(t *testing.T) {
 	if got.ID != "c1" {
 		t.Fatalf("C on an exited conductor should respawn it, got %q", got.ID)
 	}
-}
-
-// TestCondRestart checks that C on a running conductor confirms first,
-// then restarts it: close the running one, spawn a fresh one (so it re-reads its
-// brief).
-func TestCondRestart(t *testing.T) {
-	c, cmds := recordingServer(t)
-	m := baseModel()
-	m.client = c
-	m.fleet = runningConductor()
-
-	// C arms a restart but sends nothing until confirmed.
-	m = press(m, "C")
-	if m.pendingConductor != "c1" {
-		t.Fatalf("C on a running conductor should arm a restart, got pending %q", m.pendingConductor)
-	}
-	select {
-	case got := <-cmds:
-		t.Fatalf("restart must wait for confirmation, but sent %+v", got)
-	default:
-	}
-
-	// y confirms: close the running conductor, then spawn a fresh one.
-	m = press(m, "y")
-	if got := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "panel.close" }); got.ID != "c1" {
-		t.Fatalf("restart should close the running conductor c1, got %q", got.ID)
-	}
-	if got := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "panel.create" }); !got.Conductor {
-		t.Fatalf("restart should spawn a fresh conductor, got %+v", got)
+	if m.mode != modeZoom || m.zoomID != "c1" || m.zoomExited {
+		t.Fatalf("re-running should zoom the conductor live, got mode=%v id=%q exited=%v", m.mode, m.zoomID, m.zoomExited)
 	}
 }
 
-// TestCondRestartCancel checks that any non-yes answer cancels the restart
-// and sends nothing.
-func TestCondRestartCancel(t *testing.T) {
+// TestCondRunningZooms checks that C on a running conductor zooms it (to watch its
+// work) — attaching, and sending no create/close, since restart is gone.
+func TestCondRunningZooms(t *testing.T) {
 	c, cmds := recordingServer(t)
 	m := baseModel()
 	m.client = c
 	m.fleet = runningConductor()
 
 	m = press(m, "C")
-	m = press(m, "n")
-	if m.pendingConductor != "" {
-		t.Fatalf("a cancelled restart should clear the pending state, got %q", m.pendingConductor)
+	if m.mode != modeZoom || m.zoomID != "c1" {
+		t.Fatalf("C on a running conductor should zoom it, got mode=%v id=%q", m.mode, m.zoomID)
 	}
-	select {
-	case got := <-cmds:
-		t.Fatalf("a cancelled restart should send nothing, but sent %+v", got)
-	default:
+	got := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "panel.attach" })
+	if got.ID != "c1" {
+		t.Fatalf("zoom should attach the conductor c1, got %q", got.ID)
+	}
+}
+
+// TestConductorHiddenFromDashboard checks the conductor is off the dashboard roster
+// and its counts, surfacing only as the FLEET-heading mark.
+func TestConductorHiddenFromDashboard(t *testing.T) {
+	m := baseModel()
+	m.fleet = append(sampleFleet(), panel.Panel{ID: "c1", Kind: panel.Agent, Conductor: true, State: panel.Running, Title: "conductor · c1"})
+
+	for _, it := range m.dashItems() {
+		if it.kind == itemPanel && it.panel.Conductor {
+			t.Fatal("the conductor must not appear as a dashboard card")
+		}
+	}
+	if got := len(m.visibleFleet()); got != len(sampleFleet()) {
+		t.Fatalf("visibleFleet should drop the conductor: %d, want %d", got, len(sampleFleet()))
+	}
+	if m.conductorMark() == "" {
+		t.Fatal("a running conductor should show a FLEET-heading mark")
 	}
 }
