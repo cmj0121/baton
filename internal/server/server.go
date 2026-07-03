@@ -1781,7 +1781,7 @@ func (s *Server) dispatchGroup(group, prompt, submit string) (int, error) {
 	s.mu.Lock()
 	var ids []string
 	for _, p := range s.panels {
-		if p.Group == group && !p.Conductor {
+		if panel.GroupIsUnder(group, p.Group) && !p.Conductor { // the whole subtree, nested groups included
 			ids = append(ids, p.ID)
 		}
 	}
@@ -2317,6 +2317,9 @@ func (s *Server) groupPanels(ids []string, name string) error {
 	if name == "" {
 		return fmt.Errorf("panel.group needs a name")
 	}
+	if !panel.GroupValid(name) {
+		return fmt.Errorf("invalid group path %q", name)
+	}
 	if len(ids) == 0 {
 		return fmt.Errorf("panel.group needs at least one panel")
 	}
@@ -2384,6 +2387,63 @@ func (s *Server) setGroupLocked(match func(panel.Panel) bool, name string) int {
 	return moved
 }
 
+// swapGroupPrefix rewrites a group path that lies under oldPrefix so it sits under
+// newPrefix instead, keeping the suffix below the prefix. It is the primitive behind
+// both re-parenting (rename to a nested path) and dissolving a level (promote to the
+// parent, newPrefix == the parent). A newPrefix of "" strips the prefix entirely,
+// returning the bare suffix — a top-level path, or "" for the prefix itself.
+func swapGroupPrefix(path, oldPrefix, newPrefix string) string {
+	suffix := path[len(oldPrefix):] // "" when path == oldPrefix, else "/rest"
+	if newPrefix == "" {
+		return strings.TrimPrefix(suffix, panel.GroupSep)
+	}
+	return newPrefix + suffix
+}
+
+// remapGroupKeys re-keys the per-group view maps when a subtree moves: every key
+// under oldPrefix is swapped onto newPrefix (dropping any that collapse to "", i.e.
+// the dissolved root's own settings). Keys are collected before any write so a moved
+// key is never re-read. A generic over the two map value types (int count, string
+// layout).
+func remapGroupKeys[V any](m map[string]V, oldPrefix, newPrefix string) {
+	type kv struct {
+		k string
+		v V
+	}
+	var moves []kv
+	for k, v := range m {
+		if panel.GroupIsUnder(oldPrefix, k) {
+			moves = append(moves, kv{k, v})
+		}
+	}
+	for _, mv := range moves {
+		delete(m, mv.k)
+	}
+	for _, mv := range moves {
+		if nk := swapGroupPrefix(mv.k, oldPrefix, newPrefix); nk != "" {
+			m[nk] = mv.v
+		}
+	}
+}
+
+// moveGroupSubtreeLocked re-parents the whole subtree rooted at oldPrefix onto
+// newPrefix: every panel whose Group is under oldPrefix has its path prefix swapped,
+// and the per-group view settings (visible count, layout) are re-keyed to follow. It
+// is the shared core of a group rename/move and a dissolve (newPrefix == the group's
+// parent). Returns how many panels moved. The caller holds s.mu.
+func (s *Server) moveGroupSubtreeLocked(oldPrefix, newPrefix string) int {
+	moved := 0
+	for i := range s.panels {
+		if panel.GroupIsUnder(oldPrefix, s.panels[i].Group) {
+			s.panels[i].Group = swapGroupPrefix(s.panels[i].Group, oldPrefix, newPrefix)
+			moved++
+		}
+	}
+	remapGroupKeys(s.groupShown, oldPrefix, newPrefix)
+	remapGroupKeys(s.groupLayout, oldPrefix, newPrefix)
+	return moved
+}
+
 // ungroup is a core action that clears the Group on its targets, returning them
 // to the dashboard as lone panels. Given ids it removes just those members from
 // whatever group they sit in; otherwise it dissolves the whole named group.
@@ -2407,16 +2467,20 @@ func (s *Server) ungroup(ids []string, name string) error {
 	if name == "" {
 		return fmt.Errorf("panel.ungroup needs a group or panel ids")
 	}
-	moved := s.setGroup(func(p panel.Panel) bool { return p.Group == name }, "")
+	// Dissolve the whole group: promote its subtree one level (drop this path
+	// segment), so nested sub-groups survive as children of the parent — "backend"
+	// dissolves to lone panels + top-level sub-groups, "backend/api" folds into
+	// "backend". moveGroupSubtreeLocked also re-keys the dissolved level's view
+	// settings (dropping the root's own).
+	s.mu.Lock()
+	moved := s.moveGroupSubtreeLocked(name, panel.GroupParent(name))
+	if moved > 0 {
+		s.emit("group.change", map[string]any{"group": name})
+	}
+	s.mu.Unlock()
 	if moved == 0 {
 		return fmt.Errorf("no panels in group %q", name)
 	}
-	// The whole group is gone; drop its view settings so the maps stay tidy.
-	s.mu.Lock()
-	delete(s.groupShown, name)
-	delete(s.groupLayout, name)
-	s.emit("group.change", map[string]any{"group": name})
-	s.mu.Unlock()
 	log.Info().Str("group", name).Int("panels", moved).Msg("group dissolved")
 	return nil
 }
@@ -2468,21 +2532,22 @@ func (s *Server) renamePanel(id, title string) error {
 func (s *Server) renameGroup(old, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !panel.GroupValid(name) {
+		return fmt.Errorf("invalid group path %q", name)
+	}
+	if panel.GroupIsUnder(old, name) {
+		return fmt.Errorf("cannot nest group %q inside itself", old)
+	}
 	if !s.allowNameConflict && s.nameTakenLocked(name, "", old) {
 		return fmt.Errorf("the name %q is already taken", name)
 	}
-	moved := s.setGroupLocked(func(p panel.Panel) bool { return p.Group == old }, name)
+	// A group rename is a subtree prefix move: it rewrites old → name across every
+	// descendant path (so renaming "db" → "backend/db" nests the whole subtree) and
+	// re-keys the view settings to follow. Renaming onto an existing path merges the
+	// two, as before — group identity is the path.
+	moved := s.moveGroupSubtreeLocked(old, name)
 	if moved == 0 {
 		return fmt.Errorf("no panels in group %q", old)
-	}
-	// Carry the view settings to the new name, keyed by name like the group itself.
-	if shown, ok := s.groupShown[old]; ok {
-		s.groupShown[name] = shown
-		delete(s.groupShown, old)
-	}
-	if layout, ok := s.groupLayout[old]; ok {
-		s.groupLayout[name] = layout
-		delete(s.groupLayout, old)
 	}
 	s.emit("group.change", map[string]any{"group": name, "from": old})
 	log.Info().Str("from", old).Str("to", name).Int("panels", moved).Msg("group renamed")
