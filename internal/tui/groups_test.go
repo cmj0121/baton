@@ -35,6 +35,47 @@ func groupedFleet() []panel.Panel {
 	}
 }
 
+// nestedFleet has a top-level group "backend" holding a direct panel plus two
+// sub-groups (api, db), and one lone panel.
+func nestedFleet() []panel.Panel {
+	return []panel.Panel{
+		{ID: "1", Kind: panel.Shell, Title: "backend · d", State: panel.Running, Group: "backend"},
+		{ID: "2", Kind: panel.Agent, Title: "api · a", State: panel.Running, Group: "backend/api"},
+		{ID: "3", Kind: panel.Agent, Title: "api · b", State: panel.Idle, Group: "backend/api"},
+		{ID: "4", Kind: panel.Agent, Title: "db · a", State: panel.Idle, Group: "backend/db"},
+		{ID: "5", Kind: panel.Shell, Title: "lone", State: panel.Idle},
+	}
+}
+
+// TestDashItemsFoldsSubtreeToTop: a nested group folds its whole subtree into one
+// top-level card, and subGroupCount reports its immediate sub-groups.
+func TestDashItemsFoldsSubtreeToTop(t *testing.T) {
+	m := baseModel()
+	m.fleet = nestedFleet()
+	items := m.dashItems()
+
+	if len(items) != 2 {
+		t.Fatalf("expected 2 top-level items (backend + lone), got %d: %+v", len(items), items)
+	}
+	backend := items[0]
+	if backend.kind != itemGroup || backend.name != "backend" {
+		t.Fatalf("item 0 should be the top-level backend group, got %+v", backend)
+	}
+	if len(backend.members) != 4 {
+		t.Fatalf("backend should fold its whole subtree (4 panels), got %d", len(backend.members))
+	}
+	// ids() covers the subtree, so close/signal/dispatch over the group recurse.
+	if len(backend.ids()) != 4 {
+		t.Fatalf("ids() should cover the subtree, got %v", backend.ids())
+	}
+	if n := subGroupCount(backend.members, backend.name); n != 2 {
+		t.Fatalf("backend should report 2 immediate sub-groups (api, db), got %d", n)
+	}
+	if items[1].kind != itemPanel || items[1].panel.ID != "5" {
+		t.Fatalf("item 1 should be the lone panel, got %+v", items[1])
+	}
+}
+
 func TestDashItemsCollapsesGroups(t *testing.T) {
 	m := baseModel()
 	m.fleet = groupedFleet()

@@ -55,22 +55,22 @@ baton.pin(id)
 baton.close(id)
 ```
 
-| Call                                                | Core action                      | Notes                                          |
-| --------------------------------------------------- | -------------------------------- | ---------------------------------------------- |
-| `baton.spawn{kind=, command=, args=, dir=, group=}` | `panel.create` (+ `panel.group`) | returns the new panel id                       |
-| `baton.respawn(id)`                                 | `panel.respawn`                  | re-run an exited panel                         |
-| `baton.close(id \| {ids})`                          | `panel.close`                    |                                                |
-| `baton.purge()`                                     | `panel.purge`                    | drop every exited panel                        |
-| `baton.signal(id \| {ids}, name)`                   | `panel.signal`                   | name or number, e.g. `"SIGTERM"` or `15`       |
-| `baton.group({ids}, name)`                          | `panel.group`                    |                                                |
-| `baton.ungroup({ids} \| name)`                      | `panel.ungroup`                  |                                                |
-| `baton.rename{id= \| group=, name=}`                | `panel.rename`                   |                                                |
-| `baton.move({ids}, index)`                          | `panel.move`                     | reorder the fleet                              |
-| `baton.pin(id)` / `baton.unpin(id)`                 | `panel.pin` / `panel.unpin`      |                                                |
-| `baton.group_show(name, n)`                         | `group.show`                     | live-tile count for a group                    |
-| `baton.dispatch(id, prompt)`                        | `panel.dispatch`                 | assign a brief and deliver it as a unit        |
-| `baton.dispatch_group(group, prompt)`               | `panel.dispatch-group`           | fan a brief to every member; returns the count |
-| `baton.enqueue(prompt, group)`                      | `task.enqueue`                   | add to the backlog; returns the task id        |
+| Call                                                | Core action                      | Notes                                           |
+| --------------------------------------------------- | -------------------------------- | ----------------------------------------------- |
+| `baton.spawn{kind=, command=, args=, dir=, group=}` | `panel.create` (+ `panel.group`) | returns the new panel id                        |
+| `baton.respawn(id)`                                 | `panel.respawn`                  | re-run an exited panel                          |
+| `baton.close(id \| {ids})`                          | `panel.close`                    |                                                 |
+| `baton.purge()`                                     | `panel.purge`                    | drop every exited panel                         |
+| `baton.signal(id \| {ids}, name)`                   | `panel.signal`                   | name or number, e.g. `"SIGTERM"` or `15`        |
+| `baton.group({ids}, name)`                          | `panel.group`                    | a slash-`path` name nests (`backend/api`)       |
+| `baton.ungroup({ids} \| name)`                      | `panel.ungroup`                  | dissolving a group promotes its subtree         |
+| `baton.rename{id= \| group=, name=}`                | `panel.rename`                   | rename a group to a path to re-parent it        |
+| `baton.move({ids}, index)`                          | `panel.move`                     | reorder the fleet                               |
+| `baton.pin(id)` / `baton.unpin(id)`                 | `panel.pin` / `panel.unpin`      |                                                 |
+| `baton.group_show(name, n)`                         | `group.show`                     | live-tile count for a group                     |
+| `baton.dispatch(id, prompt)`                        | `panel.dispatch`                 | assign a brief and deliver it as a unit         |
+| `baton.dispatch_group(group, prompt)`               | `panel.dispatch-group`           | fan a brief to the whole subtree; returns count |
+| `baton.enqueue(prompt, group)`                      | `task.enqueue`                   | add to the backlog; returns the task id         |
 
 `baton.spawn` also takes a `prompt =` — spawn an agent and dispatch its first task in one call. Plugin-originated
 dispatches go straight to the core action and **bypass the `task.pre` filter** (see below), so a hook that enqueues can

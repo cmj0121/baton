@@ -30,12 +30,14 @@ type dashItem struct {
 }
 
 // dashItems projects the flat fleet into the dashboard's cursor model: lone
-// panels in place, and each group collapsed into one item at the position of its
-// first member. Order is stable and follows the fleet, so the cursor never jumps
-// when a snapshot arrives with the same shape.
+// panels in place, and each top-level group collapsed into one item at the position
+// of its first member. With nested groups the dashboard shows only the top level — a
+// group folds its **whole subtree** (every descendant panel) into one card, and the
+// hierarchy is walked by descending in the split. Order is stable and follows the
+// fleet, so the cursor never jumps when a snapshot arrives with the same shape.
 func (m model) dashItems() []dashItem {
 	items := make([]dashItem, 0, len(m.fleet))
-	groupAt := make(map[string]int) // group name -> index into items
+	groupAt := make(map[string]int) // top-level group name -> index into items
 	for _, p := range m.fleet {
 		if p.Conductor {
 			continue // the conductor is a mark in the FLEET heading, not a card/group
@@ -44,14 +46,52 @@ func (m model) dashItems() []dashItem {
 			items = append(items, dashItem{kind: itemPanel, panel: p})
 			continue
 		}
-		if idx, ok := groupAt[p.Group]; ok {
+		top := panel.GroupTop(p.Group) // fold the subtree under its top-level group
+		if idx, ok := groupAt[top]; ok {
 			items[idx].members = append(items[idx].members, p)
 			continue
 		}
-		groupAt[p.Group] = len(items)
-		items = append(items, dashItem{kind: itemGroup, name: p.Group, members: []panel.Panel{p}})
+		groupAt[top] = len(items)
+		items = append(items, dashItem{kind: itemGroup, name: top, members: []panel.Panel{p}})
 	}
 	return filterItems(items, m.filter)
+}
+
+// childGroup is one immediate sub-group under a parent path: its full path and its
+// whole subtree. The dashboard counts them (subGroupCount) and the split renders one
+// descendable tile per child group.
+type childGroup struct {
+	path    string
+	members []panel.Panel
+}
+
+// childGroupsOf folds panels into the immediate sub-groups directly under parent —
+// one childGroup per distinct child segment, in first-appearance order, each with its
+// whole subtree. The dashboard card (subGroupCount) and the split (childGroups) share
+// it, so "the immediate sub-groups" is derived one way.
+func childGroupsOf(panels []panel.Panel, parent string) []childGroup {
+	at := map[string]int{}
+	var out []childGroup
+	for _, p := range panels {
+		seg, ok := panel.GroupChildSegment(p.Group, parent)
+		if !ok {
+			continue
+		}
+		child := panel.GroupJoin(parent, seg)
+		if i, seen := at[child]; seen {
+			out[i].members = append(out[i].members, p)
+			continue
+		}
+		at[child] = len(out)
+		out = append(out, childGroup{path: child, members: []panel.Panel{p}})
+	}
+	return out
+}
+
+// subGroupCount is how many immediate sub-groups a top-level group holds, for the
+// card's nested makeup — the same fold the split uses, counted.
+func subGroupCount(members []panel.Panel, top string) int {
+	return len(childGroupsOf(members, top))
 }
 
 // filterItems narrows the dashboard to items matching the filter — a
@@ -258,22 +298,25 @@ func (m model) commitGroup(name string) model {
 		m.status = "a group needs a name"
 		return m
 	}
-	ids := m.markedIDs()
-	if len(ids) == 0 {
+	if len(m.markedIDs()) == 0 {
 		m.status = "no panels selected"
+		return m
+	}
+	if !panel.GroupValid(name) {
+		m.status = fmt.Sprintf("%q is not a valid group path", name)
 		return m
 	}
 	if m.nameConflict(name, "", name) {
 		m.status = fmt.Sprintf("the name %q is already taken — pick another", name)
 		return m
 	}
-	m.sendf(proto.Command{Action: "panel.group", IDs: ids, Group: name})
+	groups, panels := m.nestMarkedInto(name)
 	m.marked = nil
-	m.status = fmt.Sprintf("grouped %d panel(s) into %q", len(ids), name)
+	m.status = groupStatus("grouped", groups, panels, name)
 	return m
 }
 
-// addMarkedToGroup files the marked panels into the selected work item and
+// addMarkedToGroup files the marked selection into the selected work item and
 // clears the selection. The cursor must be on a group card.
 func (m model) addMarkedToGroup() model {
 	it, ok := m.selectedItem()
@@ -281,15 +324,86 @@ func (m model) addMarkedToGroup() model {
 		m.status = "select a group to add to"
 		return m
 	}
-	ids := m.markedIDs()
-	if len(ids) == 0 {
+	if len(m.markedIDs()) == 0 {
 		m.status = "mark panels first, then add to a group"
 		return m
 	}
-	m.sendf(proto.Command{Action: "panel.group", IDs: ids, Group: it.name})
+	groups, panels := m.nestMarkedInto(it.name)
 	m.marked = nil
-	m.status = fmt.Sprintf("added %d panel(s) to %q", len(ids), it.name)
+	m.status = groupStatus("added", groups, panels, it.name)
 	return m
+}
+
+// nestMarkedInto files the marked selection under target: a fully-marked group is
+// **nested** — re-parented as target/<its name>, keeping its own sub-structure —
+// rather than flattened, and loose marked panels attach directly to target. So
+// grouping a group into a group carries the group's name into the new parent. It
+// returns how many groups were nested and how many loose panels moved.
+//
+// It reasons in top-level groups because that is the only unit the dashboard lets
+// you mark: a card folds its whole subtree (dashItems folds by GroupTop) and
+// toggleMark marks all of it, so a marked group is always a complete top-level
+// subtree and GroupJoin(target, top) is a clean one-level re-parent. The fan-out is
+// best-effort — each rename/group is its own command, so a rejected one (e.g. the
+// nested path already exists) leaves the rest applied and the next snapshot shows
+// the true state.
+func (m model) nestMarkedInto(target string) (groups, panels int) {
+	// One pass over the fleet, bucketing by top-level group ("" = a lone panel): each
+	// top's marked ids plus its total membership, so "the whole group is marked" needs
+	// no re-scan. order keeps the command sequence deterministic (map order is not).
+	type bucket struct {
+		ids           []string
+		marked, total int
+	}
+	buckets := map[string]*bucket{}
+	var order []string
+	for _, p := range m.fleet {
+		top := panel.GroupTop(p.Group)
+		b := buckets[top]
+		if b == nil {
+			b = &bucket{}
+			buckets[top] = b
+			order = append(order, top)
+		}
+		b.total++
+		if m.marked[p.ID] {
+			b.marked++
+			b.ids = append(b.ids, p.ID)
+		}
+	}
+
+	var loose []string
+	for _, top := range order {
+		b := buckets[top]
+		switch {
+		case b.marked == 0 || top == target:
+			// nothing marked here, or a group already at the target (a no-op).
+		case top != "" && b.marked == b.total:
+			// the whole group is marked: nest it, keeping its name as the sub-segment.
+			m.sendf(proto.Command{Action: "panel.rename", Group: top, Name: panel.GroupJoin(target, top)})
+			groups++
+		default:
+			loose = append(loose, b.ids...) // lone panels, and partial group selections
+		}
+	}
+	if len(loose) > 0 {
+		m.sendf(proto.Command{Action: "panel.group", IDs: loose, Group: target})
+		panels = len(loose)
+	}
+	return groups, panels
+}
+
+// groupStatus phrases the result of a group/add that may have nested sub-groups,
+// moved loose panels, or both.
+func groupStatus(verb string, groups, panels int, target string) string {
+	switch {
+	case groups > 0 && panels > 0:
+		return fmt.Sprintf("%s %d sub-group(s) + %d panel(s) into %q", verb, groups, panels, target)
+	case groups > 0:
+		return fmt.Sprintf("%s %d sub-group(s) into %q", verb, groups, target)
+	default:
+		return fmt.Sprintf("%s %d panel(s) into %q", verb, panels, target)
+	}
 }
 
 // ungroupSelected dissolves the selected work item, returning its panels to the
@@ -343,6 +457,15 @@ func (m model) commitRename(name string) model {
 	}
 	switch {
 	case m.renameGroup != "":
+		// A group name is a path (renaming to "backend/db" nests it), so it must be a
+		// valid path; a panel title has no such rule. Keep the overlay open on a bad
+		// path so the attempt is not lost to a round-trip.
+		if !panel.GroupValid(name) {
+			m.input = inputRename
+			m.inputBuf = name
+			m.status = fmt.Sprintf("%q is not a valid group path", name)
+			return m
+		}
 		m.sendf(proto.Command{Action: "panel.rename", Group: m.renameGroup, Name: name})
 		m.status = fmt.Sprintf("renamed group to %q", name)
 	case m.renameID != "":
@@ -416,15 +539,19 @@ func (m model) zoomGroup(it dashItem) model {
 	m.scrollOff = 0 // open at the live bottom
 	m.scrolling = false
 	m.summaryScope = false // always open on the group itself, never a stale sub-view
-	m.groupPinned = pinsForMembers(it.members)
-	if only, ok := singlePinned(it.members, m.groupPinned); ok {
+	// Pins are a per-scope concept, so build the set from this level's direct panels
+	// (fleetGroup now that groupName is set), not the whole subtree — a pinned panel
+	// nested in a sub-group belongs to that sub-group's split, not this one.
+	direct := m.fleetGroup()
+	m.groupPinned = pinsForMembers(direct)
+	if only, ok := singlePinned(direct, m.groupPinned); ok {
 		m = m.zoomInto(only)
 		m.zoomGroupOrigin = it.name // back (C-t b) pops back to the split
 		m.status = fmt.Sprintf("group · %s · %s (pinned)", it.name, only.Title)
 		return m
 	}
 	m.attachGroupMembers()
-	m.status = fmt.Sprintf("group · %s (%d panels)", it.name, len(m.groupMembers()))
+	m.status = fmt.Sprintf("group · %s (%d panels)", groupBreadcrumb(it.name), len(direct))
 	return m
 }
 
@@ -521,8 +648,12 @@ func (m model) renderGroupCard(it dashItem, selected bool) string {
 
 	badge := groupBadge()
 	// Split the member count by kind, so a card says what kind of work it holds —
-	// "2 agent · 1 shell" — not just how many panels.
+	// "2 agent · 1 shell" — not just how many panels. A nested group also notes how
+	// many immediate sub-groups it holds.
 	kindLine := badge + "  " + kindBreakdown(it.members)
+	if n := subGroupCount(it.members, it.name); n > 0 {
+		kindLine += lipgloss.NewStyle().Foreground(colBrand).Render(fmt.Sprintf("  ▣%d", n))
+	}
 
 	// The footer is the per-state chips, led by a sparkline in the group's rolled-up
 	// colour while it is active — so a working group animates like a panel card.
@@ -549,6 +680,9 @@ func (m model) renderGroupPreview(it dashItem, width int) string {
 	title := lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(truncate(it.title(), width))
 	statusLine := groupBadge() + "  " +
 		mutedStyle.Render(fmt.Sprintf("%d panel(s)", len(it.members))) + "  " + kindBreakdown(it.members)
+	if n := subGroupCount(it.members, it.name); n > 0 {
+		statusLine += lipgloss.NewStyle().Foreground(colBrand).Render(fmt.Sprintf("  ▣ %d sub-group(s)", n))
+	}
 	rule := mutedStyle.Render(strings.Repeat("─", width))
 
 	roster := make([]string, 0, len(it.members)+1)

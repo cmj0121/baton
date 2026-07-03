@@ -100,21 +100,33 @@ item) or a set of panel ids (drop just those members).
 title or group, so a work item is never ambiguous. Adding panels to an _existing_ group reuses its name and is allowed;
 the policy can be lifted with the `allow-name-conflict` setting, which the daemon reads at startup.
 
+**Nested groups.** A group name is a **slash-path**, so a group can nest inside another: a panel filed under
+`"backend/api"` sits in the group `api`, nested under `backend`. Membership stays derived — `backend` "exists" while any
+panel carries `backend` or a path beneath it. Nest by using a path when you group (`backend/api`), by **renaming a group
+to a path** — renaming `db` to `backend/db` re-parents the whole `db` subtree in one move (the server rewrites the path
+prefix across every descendant) — or by **grouping/adding a whole group into another**: mark a group and group or add it
+into a target, and it nests as `target/<its name>` (keeping its own sub-structure) rather than flattening.
+Group-wide actions **recurse over the subtree**: dispatching to, closing, or
+signalling `backend` reaches every descendant panel, nested groups included; **dissolving** `backend` promotes its
+subtree one level (its direct panels go lone, its sub-groups become top-level) rather than deleting the work. The
+dashboard shows only the **top level** — a group card folds its whole subtree — and you walk the hierarchy by descending
+in the split.
+
 On the dashboard a work item collapses into a single card: a member count and a state that **rolls up to its most urgent
 member** (attention beats running beats spawning beats idle beats exited), so one card speaks for the whole task.
 
-**The group split.** Zooming a work item opens a split — every member rendered live in its own tile, all streaming at
-once. By default the split is an _overview you navigate_, not a surface you type into: `tab` moves the focus between
-tiles, `+`/`-` dials how many members stream live (see below), `shift`+`←`/`→` reorders the focused member within the
-group, `C-t [` opens scroll mode on the focused tile, `x` removes the focused
-member from the group, `D` diffs the focused agent member, `enter` drops into the focused panel's own single zoom, and
-`d`/`esc` returns to the dashboard. `L` cycles the tile layout and `z` opens **resize mode**, where the arrows grow and
-shrink the focused tile (view-local, see [TUI.md](./TUI.md#resize)).
-From a zoomed member,
-**back** (`C-t b`) pops back to the split it was launched from. Back is the one key that pops a level wherever you are
-— a zoom to its split (or to the dashboard, if it was opened straight from there), the split to the dashboard, the
-summary sub-view to the parent group. There is no separate group-view escape: you enter a group with `enter` on its card
-and leave with back.
+**The group split.** Zooming a work item opens a split scoped to that path's **direct children** — each direct panel
+rendered live in its own tile, plus one tile per immediate **sub-group** (a rollup box marked `▣`). By default the split
+is an _overview you navigate_, not a surface you type into: `tab` moves the focus between tiles, `+`/`-` dials how many
+panels stream live (see below), `shift`+`←`/`→` reorders the focused member within the group, `C-t [` opens scroll mode on
+the focused tile, `x` removes the focused member from the group, `D` diffs the focused agent member, and `L`/`z` cycle the
+layout / resize a tile (view-local, see [TUI.md](./TUI.md#resize)). `enter` **descends**: on a panel it drops into that
+panel's own single zoom; on a sub-group tile it re-scopes the split into that sub-group (its header shows the path as a
+breadcrumb, `backend › api`).
+`esc` / `b` pop **back one level** — a sub-group to its parent, the summary sub-view to its group, the top-level group to
+the dashboard — while `d` jumps straight out to the dashboard from any depth.
+From a zoomed member, **back** (`C-t b`) pops back to the split it was launched from. You enter a group with `enter` on
+its card and walk out with back.
 
 **Visible count and the summary tile.** A group streams its first **N** members as live tiles; `+` / `-` dial N, which
 is **server-owned state** (`group.show`, carried on the snapshot as the group's `Shown`), clamped to `[1, maxGroupTiles]`
@@ -292,67 +304,67 @@ the keys reach the live program, so a baton action is the leader **`C-t`** then 
 and the key-map editor — are reached after the prefix in every mode. Everything here is rebindable in the key map
 (`C-t k`); press `?` for the live list of the current view.
 
-| Where                  | Key                         | Does                                           |
-| ---------------------- | --------------------------- | ---------------------------------------------- |
-| Anywhere (after `C-t`) | `C-t d`                     | go to the dashboard                            |
-|                        | `C-t b`                     | back one level (zoom → group → dashboard)      |
-|                        | `C-t ~`                     | toggle the floating scratch pane               |
-|                        | `C-t [`                     | enter scroll mode                              |
-|                        | `C-t k`                     | edit the key map                               |
-|                        | `C-t c`                     | open the plugin command picker                 |
-|                        | `C-t P`                     | panel config (default shell, workdir, …)       |
-|                        | `C-t R`                     | reload config (backend + cockpit)              |
-|                        | `C-t S`                     | force-restart the server (kills the fleet)     |
-|                        | `C-t D`                     | diff the selected agent panel                  |
-|                        | `C-t T`                     | dispatch a task to the zoomed agent            |
-|                        | `C-t Q`                     | manage the task queue                          |
-|                        | `C-t q`                     | detach (server keeps running)                  |
-| Dashboard              | `hjkl` / arrows             | move the cursor                                |
-|                        | `enter`                     | open / zoom the selection                      |
-|                        | `p`                         | new shell panel                                |
-|                        | `A`                         | new agent panel                                |
-|                        | `C`                         | open the conductor (find-or-create)            |
-|                        | `c`                         | new panel (pick the command)                   |
-|                        | `w`                         | close the selection                            |
-|                        | `r`                         | re-run exited panel(s) in the selection        |
-|                        | `x`                         | purge exited panels                            |
-|                        | `s`                         | send a signal to the selection                 |
-|                        | `f`                         | find — filter panels by title / group          |
-|                        | `S-←` / `S-→`               | reorder the selected item                      |
-|                        | `g`                         | mark / unmark a panel                          |
-|                        | `G`                         | group the marked panels                        |
-|                        | `a`                         | add marked panels to the selected group        |
-|                        | `u`                         | ungroup the selected work item                 |
-|                        | `e`                         | rename the panel or group                      |
-|                        | `D`                         | diff the selected agent panel                  |
-|                        | `T`                         | dispatch a task to the agent / work item       |
-|                        | `Q`                         | manage the task queue (list · cancel · drain)  |
-| Group view             | `tab`                       | focus the next panel                           |
-|                        | `+` / `-`                   | show more / fewer live tiles                   |
-|                        | `L`                         | cycle the tile layout (see [TUI.md](./TUI.md)) |
-|                        | `z`                         | resize mode — arrows grow / shrink the tile    |
-|                        | `p`                         | pin / unpin the focused panel                  |
-|                        | `s`                         | send a signal to the focused panel             |
-|                        | `S`                         | send a signal to every panel in the group      |
-|                        | `i`                         | interact (type into the focused tile)          |
-|                        | `x`                         | remove the focused panel from the group        |
-|                        | `S-←` / `S-→`               | reorder the focused panel                      |
-|                        | `D`                         | diff the focused agent panel                   |
-|                        | `b`                         | back to the dashboard                          |
-|                        | `enter`                     | zoom the focused panel                         |
-| Zoom / interact        | type                        | drive the program directly                     |
-|                        | `C-t b`                     | back to the group / dashboard                  |
-|                        | `C-t g`                     | git menu (agent panel)                         |
-|                        | `C-t C-t`                   | send a literal `C-t`                           |
-|                        | `C-t s`                     | send a signal to this panel                    |
-|                        | `C-t f`                     | search the scrollback                          |
-| Scroll mode (`C-t [`)  | `↑` / `↓` (`k`/`j`)         | scroll a line                                  |
-|                        | `b` / `Spc` (`PgUp`/`PgDn`) | scroll a page                                  |
-|                        | `g` / `G`                   | jump to top / bottom                           |
-|                        | `v` / `y`                   | start a selection / copy to the clipboard      |
-|                        | `V` (then `h`/`l`)          | start a block selection / set its columns      |
-|                        | `n` / `N`                   | next / previous search match                   |
-|                        | `esc` / `q`                 | exit scroll mode                               |
+| Where                  | Key                         | Does                                            |
+| ---------------------- | --------------------------- | ----------------------------------------------- |
+| Anywhere (after `C-t`) | `C-t d`                     | go to the dashboard                             |
+|                        | `C-t b`                     | back one level (zoom → group → dashboard)       |
+|                        | `C-t ~`                     | toggle the floating scratch pane                |
+|                        | `C-t [`                     | enter scroll mode                               |
+|                        | `C-t k`                     | edit the key map                                |
+|                        | `C-t c`                     | open the plugin command picker                  |
+|                        | `C-t P`                     | panel config (default shell, workdir, …)        |
+|                        | `C-t R`                     | reload config (backend + cockpit)               |
+|                        | `C-t S`                     | force-restart the server (kills the fleet)      |
+|                        | `C-t D`                     | diff the selected agent panel                   |
+|                        | `C-t T`                     | dispatch a task to the zoomed agent             |
+|                        | `C-t Q`                     | manage the task queue                           |
+|                        | `C-t q`                     | detach (server keeps running)                   |
+| Dashboard              | `hjkl` / arrows             | move the cursor                                 |
+|                        | `enter`                     | open / zoom the selection                       |
+|                        | `p`                         | new shell panel                                 |
+|                        | `A`                         | new agent panel                                 |
+|                        | `C`                         | open the conductor (find-or-create)             |
+|                        | `c`                         | new panel (pick the command)                    |
+|                        | `w`                         | close the selection                             |
+|                        | `r`                         | re-run exited panel(s) in the selection         |
+|                        | `x`                         | purge exited panels                             |
+|                        | `s`                         | send a signal to the selection                  |
+|                        | `f`                         | find — filter panels by title / group           |
+|                        | `S-←` / `S-→`               | reorder the selected item                       |
+|                        | `g`                         | mark / unmark a panel                           |
+|                        | `G`                         | group the marked panels                         |
+|                        | `a`                         | add marked panels to the selected group         |
+|                        | `u`                         | ungroup the selected work item                  |
+|                        | `e`                         | rename the panel or group                       |
+|                        | `D`                         | diff the selected agent panel                   |
+|                        | `T`                         | dispatch a task to the agent / work item        |
+|                        | `Q`                         | manage the task queue (list · cancel · drain)   |
+| Group view             | `tab`                       | focus the next panel                            |
+|                        | `+` / `-`                   | show more / fewer live tiles                    |
+|                        | `L`                         | cycle the tile layout (see [TUI.md](./TUI.md))  |
+|                        | `z`                         | resize mode — arrows grow / shrink the tile     |
+|                        | `p`                         | pin / unpin the focused panel                   |
+|                        | `s`                         | send a signal to the focused panel              |
+|                        | `S`                         | send a signal to every panel in the group       |
+|                        | `i`                         | interact (type into the focused tile)           |
+|                        | `x`                         | remove the focused panel from the group         |
+|                        | `S-←` / `S-→`               | reorder the focused panel                       |
+|                        | `D`                         | diff the focused agent panel                    |
+|                        | `b` / `esc`                 | back one level (sub-group → parent → dashboard) |
+|                        | `enter`                     | zoom a panel, or descend into a sub-group       |
+| Zoom / interact        | type                        | drive the program directly                      |
+|                        | `C-t b`                     | back to the group / dashboard                   |
+|                        | `C-t g`                     | git menu (agent panel)                          |
+|                        | `C-t C-t`                   | send a literal `C-t`                            |
+|                        | `C-t s`                     | send a signal to this panel                     |
+|                        | `C-t f`                     | search the scrollback                           |
+| Scroll mode (`C-t [`)  | `↑` / `↓` (`k`/`j`)         | scroll a line                                   |
+|                        | `b` / `Spc` (`PgUp`/`PgDn`) | scroll a page                                   |
+|                        | `g` / `G`                   | jump to top / bottom                            |
+|                        | `v` / `y`                   | start a selection / copy to the clipboard       |
+|                        | `V` (then `h`/`l`)          | start a block selection / set its columns       |
+|                        | `n` / `N`                   | next / previous search match                    |
+|                        | `esc` / `q`                 | exit scroll mode                                |
 
 ## Architecture
 

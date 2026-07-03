@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -449,15 +450,79 @@ func (m model) tileMembers() []panel.Panel {
 	return tiles
 }
 
-// focusCount is how many slots the focus walks: the live tiles, plus one for the
-// summary tile when any member is collapsed. tab / shift-tab wrap over this.
-func (m model) focusCount() int {
-	tiles, collapsed := m.splitMembers()
-	n := len(tiles)
-	if len(collapsed) > 0 {
-		n++ // the summary slot sits after the last tile
+// childGroups is the immediate sub-groups of the current scope (m.groupName), in
+// fleet order of first appearance, each carrying its whole subtree for the rollup.
+// None in the summary sub-view, which shows only the overflow of direct panels.
+func (m model) childGroups() []childGroup {
+	if m.summaryScope {
+		return nil
 	}
-	return n
+	return childGroupsOf(m.fleet, m.groupName)
+}
+
+// tileKind classifies a split focus slot: a live member panel, an immediate
+// sub-group (descendable), or the overflow summary of direct panels past N.
+type tileKind int
+
+const (
+	tilePanel tileKind = iota
+	tileGroup
+	tileSummary
+)
+
+// splitTile is one focus slot of the split, in display order; only the field for its
+// kind is set. Reifying the slots into one ordered list keeps the slot order in a
+// single place — focusCount, the focus classification, and the render all index this
+// list rather than each re-deriving boundaries from len(tiles)/len(children).
+type splitTile struct {
+	kind      tileKind
+	panel     panel.Panel   // tilePanel
+	child     childGroup    // tileGroup
+	collapsed []panel.Panel // tileSummary
+}
+
+// splitSlots builds the ordered focus slots for the current scope: the live panel
+// tiles, then one tile per immediate sub-group, then the overflow summary when direct
+// panels spill past N.
+func (m model) splitSlots() []splitTile {
+	tiles, collapsed := m.splitMembers()
+	children := m.childGroups()
+	slots := make([]splitTile, 0, len(tiles)+len(children)+1)
+	for _, p := range tiles {
+		slots = append(slots, splitTile{kind: tilePanel, panel: p})
+	}
+	for _, cg := range children {
+		slots = append(slots, splitTile{kind: tileGroup, child: cg})
+	}
+	if len(collapsed) > 0 {
+		slots = append(slots, splitTile{kind: tileSummary, collapsed: collapsed})
+	}
+	return slots
+}
+
+// focusedSlot resolves the focus to its slot, false when out of range.
+func (m model) focusedSlot() (splitTile, bool) {
+	slots := m.splitSlots()
+	if m.groupFocus < 0 || m.groupFocus >= len(slots) {
+		return splitTile{}, false
+	}
+	return slots[m.groupFocus], true
+}
+
+// focusCount is how many slots the focus walks: the live panel tiles, the sub-group
+// tiles, and the summary tile when direct panels overflow. tab / shift-tab wrap over
+// this.
+func (m model) focusCount() int {
+	return len(m.splitSlots())
+}
+
+// focusedChildGroup resolves the focus to a sub-group tile, reporting false
+// elsewhere. enter descends into it.
+func (m model) focusedChildGroup() (childGroup, bool) {
+	if s, ok := m.focusedSlot(); ok && s.kind == tileGroup {
+		return s.child, true
+	}
+	return childGroup{}, false
 }
 
 // clampGroupFocus keeps the focus within the current slot count (live tiles plus
@@ -476,8 +541,8 @@ func (m *model) clampGroupFocus() {
 // extra slot past the last live tile, present only when some member is collapsed.
 // The pin / interact / signal / remove actions no-op on it, and enter zooms it.
 func (m model) focusedIsSummary() bool {
-	tiles, collapsed := m.splitMembers()
-	return len(collapsed) > 0 && m.groupFocus == len(tiles)
+	s, ok := m.focusedSlot()
+	return ok && s.kind == tileSummary
 }
 
 // pinnedCount is how many of the parent group's members are pinned to a live
@@ -497,11 +562,10 @@ func (m model) pinnedCount() int {
 // focus is out of range OR rests on the summary slot (which is not a panel). The
 // single bounds check the pin, interact, remove, signal, and zoom actions share.
 func (m model) focusedMember() (panel.Panel, bool) {
-	tiles := m.tileMembers()
-	if m.groupFocus < 0 || m.groupFocus >= len(tiles) {
-		return panel.Panel{}, false
+	if s, ok := m.focusedSlot(); ok && s.kind == tilePanel {
+		return s.panel, true
 	}
-	return tiles[m.groupFocus], true
+	return panel.Panel{}, false
 }
 
 // focusedMemberID is the id of the panel the focus rests on, read before a
@@ -522,8 +586,10 @@ func (m model) focusedMemberID() string {
 // a client. focusID is the panel the focus rested on before the change.
 func (m *model) reconcileGroupTiles(focusID string) {
 	tiles, collapsed := m.splitMembers()
-	if len(tiles)+len(collapsed) == 0 {
-		// The group dissolved or lost its last panel: leave for the dashboard.
+	if len(tiles)+len(collapsed) == 0 && len(m.childGroups()) == 0 {
+		// The scope lost its last panel AND has no sub-groups left: leave for the
+		// dashboard. A container group with only sub-groups still renders (its
+		// sub-group tiles), so it does not bail.
 		m.resetToDashboard("group emptied · dashboard")
 		return
 	}
@@ -645,6 +711,19 @@ func (m model) fleetGroup() []panel.Panel {
 	return out
 }
 
+// subtreeMembers is every panel in the current scope's subtree — its direct panels
+// and all nested descendants — the set the group-wide signal (S) recurses over, to
+// match dispatch-group and the documented subtree semantics.
+func (m model) subtreeMembers() []panel.Panel {
+	var out []panel.Panel
+	for _, p := range m.fleet {
+		if panel.GroupIsUnder(m.groupName, p.Group) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // partitionGroup splits the parent group's full membership into the live tiles
 // and the collapsed (summarised) set, by the same N/pins rules splitMembers
 // applies — but always against the raw fleetGroup, never the scoped view. It is
@@ -723,24 +802,31 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.groupArmed = true
 		return m, nil
 	}
-	// Bare single keys drive the split. The dashboard key (d) and esc leave: from
-	// the summary sub-view they return to the parent group, otherwise to the
-	// dashboard.
-	if key == m.bindingKey(actDashboard) || key == "esc" {
-		if m.summaryScope {
-			return m.exitSummaryScope(), nil
-		}
+	// The dashboard key (d) jumps straight out of the split, skipping any levels;
+	// esc goes back just one level (summary → group, sub-group → parent, top → out).
+	if key == m.bindingKey(actDashboard) {
 		return m.exitGroupZoom()
 	}
-	// Focus walks the live tiles then the summary slot (when present), so a large
-	// group's overflow is reachable through the summary, not stranded.
+	if key == "esc" {
+		return m.popGroupLevel()
+	}
+	// Focus walks the live tiles, then the sub-group tiles, then the summary slot, so
+	// a large group's overflow and its sub-groups are all reachable, not stranded.
 	n := m.focusCount()
-	// The per-member actions need a real panel under the focus; on the summary slot
-	// (which is not a panel) they no-op with a hint rather than acting on nothing.
+	// The per-member actions need a real panel under the focus; on the summary or a
+	// sub-group tile (neither is a panel) they no-op with a hint rather than acting on
+	// nothing.
 	if m.focusedIsSummary() {
 		switch key {
 		case keyPin, keySignal, keyRemove, keyInteract, keyDiff, keyRespawn:
 			m.status = "not available on the summary"
+			return m, nil
+		}
+	}
+	if _, onGroup := m.focusedChildGroup(); onGroup {
+		switch key {
+		case keyPin, keySignal, keyRemove, keyInteract, keyDiff, keyRespawn:
+			m.status = "not available on a sub-group — enter to descend"
 			return m, nil
 		}
 	}
@@ -782,8 +868,15 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.openSignalPicker(modeGroupZoom, []string{p.ID}, p.Title), nil
 	case keySignalAll:
-		ids := liveIDs(m.groupMembers())
-		scope := fmt.Sprintf("%s (%d panels)", m.groupName, len(ids))
+		// S signals the whole subtree of the current scope — nested sub-groups
+		// included, matching dispatch-group and the docs — not just this level's
+		// direct panels; the summary sub-view signals the set it shows.
+		members := m.subtreeMembers()
+		if m.summaryScope {
+			members = m.groupMembers()
+		}
+		ids := liveIDs(members)
+		scope := fmt.Sprintf("%s (%d panels)", groupBreadcrumb(m.groupName), len(ids))
 		return m.openSignalPicker(modeGroupZoom, ids, scope), nil
 	case keyDiff:
 		// Bare D pops up the work-tree diff of the focused member, like s signals it.
@@ -793,9 +886,9 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// counterpart to r on a dashboard panel.
 		return m.runAction(actRespawn)
 	case keyBack:
-		// Bare b leaves the split for the dashboard, or the parent group from the
-		// summary sub-view — the same pop d/esc perform, routed through actBack.
-		return m.runAction(actBack)
+		// Bare b goes back one level — the summary to its group, a sub-group to its
+		// parent, the top group to the dashboard — the same pop esc performs.
+		return m.popGroupLevel()
 	case keyRemove:
 		return m.removeFocusedMember(), nil
 	case keyInteract:
@@ -806,6 +899,9 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Captured like on the dashboard: the split exits only via detach.
 		m.status = m.exitHint()
 	case "enter":
+		if cg, ok := m.focusedChildGroup(); ok {
+			return m.rescopeGroup(cg.path), nil // descend into the sub-group
+		}
 		if m.focusedIsSummary() {
 			return m.enterSummaryScope(), nil
 		}
@@ -976,15 +1072,9 @@ func (m model) enterSummaryScope() model {
 		return m
 	}
 	parent := m.groupName
-	m.sendf(proto.Command{Action: "panel.detach"}) // detach the parent's tiles
-	m.closeGroupEmus()
-	m.groupInteract = false
-	m.summaryScope = true
-	m.groupFocus = 0
-	m.scrollOff = 0
-	m.attachGroupMembers() // re-attach, now over the scoped collapsed set
+	m = m.retile(func(m *model) { m.summaryScope = true }) // scope to the parent's collapsed half
 	shown := m.tileMembers()
-	status := fmt.Sprintf("summary · %s (%d panels)", parent, len(collapsed))
+	status := fmt.Sprintf("summary · %s (%d panels)", groupBreadcrumb(parent), len(collapsed))
 	if len(collapsed) > len(shown) {
 		status += fmt.Sprintf(" · showing first %d", len(shown))
 	}
@@ -993,18 +1083,61 @@ func (m model) enterSummaryScope() model {
 }
 
 // exitSummaryScope returns from the summary sub-view to the parent group view: it
-// detaches the scoped tiles, clears summaryScope, resets the focus, and re-attaches
-// the parent group's own tiles.
+// re-tiles the parent group's own tiles.
 func (m model) exitSummaryScope() model {
-	m.sendf(proto.Command{Action: "panel.detach"}) // detach the scoped tiles
+	m = m.retile(func(m *model) { m.summaryScope = false })
+	m.status = "group · " + groupBreadcrumb(m.groupName)
+	return m
+}
+
+// rescopeGroup re-points the split at a different path in the tree — a descend into
+// a sub-group tile, or an ascend to the parent — re-tiling the new scope's direct
+// panels (its sub-groups render as their own tiles). summaryScope is always cleared;
+// the pin set is rebuilt for the new scope.
+func (m model) rescopeGroup(path string) model {
+	m = m.retile(func(m *model) {
+		m.summaryScope = false
+		m.groupName = path
+		m.groupPinned = pinsForMembers(m.fleetGroup()) // pins are per-scope, over the new direct panels
+	})
+	m.status = "group · " + groupBreadcrumb(path)
+	return m
+}
+
+// retile re-tiles the split at a new scope — descend, ascend, or enter/leave the
+// summary sub-view. It drops the current tiles' streams, applies the caller's scope
+// mutation (change groupName / toggle summaryScope / rebuild pins), and re-attaches.
+// The transient per-scope modes (interact, resize) always reset, so no re-scope path
+// can strand one, and the focus returns to the top.
+func (m model) retile(mutate func(*model)) model {
+	m.sendf(proto.Command{Action: "panel.detach"}) // drop the current scope's tiles
 	m.closeGroupEmus()
 	m.groupInteract = false
-	m.summaryScope = false
+	m.groupResize = false
 	m.groupFocus = 0
 	m.scrollOff = 0
-	m.attachGroupMembers() // re-attach the parent group's tiles
-	m.status = "group · " + m.groupName
+	mutate(&m)
+	m.attachGroupMembers()
 	return m
+}
+
+// popGroupLevel goes back one level: out of the summary sub-view to its group, up to
+// the parent group when nested, or off the split to the dashboard at the top level.
+// This is what esc and back (b) do; the dashboard key jumps straight out instead.
+func (m model) popGroupLevel() (tea.Model, tea.Cmd) {
+	if m.summaryScope {
+		return m.exitSummaryScope(), nil
+	}
+	if parent := panel.GroupParent(m.groupName); parent != "" {
+		return m.rescopeGroup(parent), nil
+	}
+	return m.exitGroupZoom()
+}
+
+// groupBreadcrumb renders a group path as a breadcrumb trail — "backend/api" reads
+// as "backend › api" — so the header/footer show where in the tree the split sits.
+func groupBreadcrumb(path string) string {
+	return strings.ReplaceAll(path, panel.GroupSep, " › ")
 }
 
 // zoomFocusedMember drops from the split into the focused panel's own live zoom,
@@ -1082,21 +1215,45 @@ func (m model) backToGroup() (tea.Model, tea.Cmd) {
 // and a footer pinned to the last line. In the summary sub-view the header names
 // the parent and there is no summary tile (the scoped set shows in full).
 func (m model) groupZoomView() string {
-	m.clampGroupFocus() // render-time guard; reconcile already clamps on fleet updates
-	tiles, collapsed := m.splitMembers()
+	slots := m.splitSlots() // the ordered focus slots, computed once for the whole view
+	// Clamp the focus into range here (reconcile already clamps on fleet updates),
+	// against the slots we just built rather than recomputing them.
+	if n := len(slots); n > 0 {
+		m.groupFocus = max(0, min(m.groupFocus, n-1))
+	} else {
+		m.groupFocus = 0
+	}
+	// The header counts derive from the slots — the shown direct panels, the sub-group
+	// tiles, and the overflow set — so nothing is re-scanned.
+	var tiles, collapsed []panel.Panel
+	ng := 0
+	for _, s := range slots {
+		switch s.kind {
+		case tilePanel:
+			tiles = append(tiles, s.panel)
+		case tileGroup:
+			ng++
+		case tileSummary:
+			collapsed = s.collapsed
+		}
+	}
+
 	caption := "GROUP"
 	if m.summaryScope {
 		caption = "SUMMARY"
 	}
 	header := sectionStyle.Render(spaced(caption)) + "  " +
-		lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(m.groupName) +
+		lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(groupBreadcrumb(m.groupName)) +
 		mutedStyle.Render(fmt.Sprintf("   %d panel(s)  ", len(tiles))) + kindBreakdown(tiles)
+	if ng > 0 {
+		header += lipgloss.NewStyle().Foreground(colBrand).Render(fmt.Sprintf("   ▣ %d sub-group(s)", ng))
+	}
 	if len(collapsed) > 0 {
 		header += lipgloss.NewStyle().Foreground(states[panel.Idle].color).
 			Render(fmt.Sprintf("   · %d live · %d summarised", len(tiles), len(collapsed)))
 	}
 
-	grid := m.renderSplitGrid(tiles, collapsed)
+	grid := m.renderSplitGrid(slots)
 	body := lipgloss.JoinVertical(lipgloss.Left, header, "", grid)
 	placed := lipgloss.Place(m.width, m.height-1, lipgloss.Left, lipgloss.Top, body)
 	return placed + "\n" + m.groupZoomFooter()
@@ -1108,68 +1265,83 @@ func (m model) groupZoomView() string {
 // layout resolves to per-tile rects and is composited; an unknown or non-fitting
 // layout falls back to the even grid, so a layout that only exists in another
 // frontend's config never breaks the split here.
-func (m model) renderSplitGrid(tiles, collapsed []panel.Panel) string {
+func (m model) renderSplitGrid(slots []splitTile) string {
+	// renderSlot draws focus slot i by its kind — a panel tile, a sub-group tile, or
+	// the overflow summary — sized to the box it occupies.
+	renderSlot := func(i, emuCols, emuRows, margin int) string {
+		s := slots[i]
+		focused := i == m.groupFocus
+		switch s.kind {
+		case tilePanel:
+			return m.renderTile(s.panel, focused, emuCols, emuRows, margin)
+		case tileGroup:
+			return m.renderGroupTile(s.child, focused, emuCols, emuRows, margin)
+		default:
+			return m.renderSummaryTile(s.collapsed, focused, emuCols, emuRows, margin)
+		}
+	}
+
 	if rects, ok := m.layoutRects(); ok {
 		rendered := make([]string, 0, len(rects))
-		for i, p := range tiles {
-			if i >= len(rects) {
-				break
-			}
-			r := rects[i]
-			rendered = append(rendered, m.renderTile(p, i == m.groupFocus, r.emuCols, r.emuRows, 0))
-		}
-		if len(collapsed) > 0 && len(tiles) < len(rects) {
-			r := rects[len(tiles)]
-			summaryFocused := m.groupFocus == len(tiles)
-			rendered = append(rendered, m.renderSummaryTile(collapsed, summaryFocused, r.emuCols, r.emuRows, 0))
+		for i := 0; i < len(slots) && i < len(rects); i++ {
+			rendered = append(rendered, renderSlot(i, rects[i].emuCols, rects[i].emuRows, 0))
 		}
 		return composeTiles(rects[:len(rendered)], rendered, m.width, m.height-1-groupHeaderRows)
 	}
 
-	// The even-grid path (the "tiled" default), unchanged.
+	// The even-grid path (the "tiled" default).
 	cols, emuCols, emuRows := m.tileGeometry()
-	rendered := make([]string, 0, len(tiles)+1)
-	for i, p := range tiles {
-		rendered = append(rendered, m.renderTile(p, i == m.groupFocus, emuCols, emuRows, gtileGap))
-	}
-	if len(collapsed) > 0 {
-		summaryFocused := m.groupFocus == len(tiles)
-		rendered = append(rendered, m.renderSummaryTile(collapsed, summaryFocused, emuCols, emuRows, gtileGap))
+	rendered := make([]string, 0, len(slots))
+	for i := range slots {
+		rendered = append(rendered, renderSlot(i, emuCols, emuRows, gtileGap))
 	}
 	return tileGrid(rendered, cols)
 }
 
-// renderSummaryTile draws the rollup of the collapsed members as one tile in the
-// even grid: a "+N more" header, a per-state breakdown in the state LED colours,
-// and the most-urgent member's activity line — so the spillover is legible at a
-// glance and one enter away. It matches renderTile's box (size, padding, brand
-// glow when focused) so it sits flush as the grid's last cell.
-func (m model) renderSummaryTile(collapsed []panel.Panel, focused bool, emuCols, emuRows, marginRight int) string {
-	border := colFaint
-	titleColor := colInk
+// renderRollupTile draws a non-panel tile — a sub-group or the overflow summary —
+// as a glyph-and-title head over up to two body lines, in a box matching renderTile
+// (size, padding, brand glow when focused) so it sits flush in the grid. The body is
+// padded and clipped to exactly emuRows so every cell is the same height.
+func (m model) renderRollupTile(glyph string, glyphColor lipgloss.Color, title string, lines []string, focused bool, emuCols, emuRows, marginRight int) string {
+	border, titleColor := colFaint, colInk
 	if focused {
-		border = colBrand
-		titleColor = colBrandHi
+		border, titleColor = colBrand, colBrandHi
 	}
-
-	glyph := lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render("▦")
-	head := glyph + " " + lipgloss.NewStyle().Foreground(titleColor).Bold(true).
-		Render(truncate(fmt.Sprintf("+%d more", len(collapsed)), max(1, emuCols-2)))
-
-	// The body, padded to exactly emuRows so the summary tile is the same height as
-	// every other cell: the per-state chips, then the most-urgent activity line.
+	head := lipgloss.NewStyle().Foreground(glyphColor).Bold(true).Render(glyph) + " " +
+		lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(title, max(1, emuCols-2)))
 	body := make([]string, emuRows)
-	if emuRows > 0 {
-		body[0] = truncate(groupCountChips(collapsed), emuCols)
+	for i := 0; i < emuRows && i < len(lines); i++ {
+		body[i] = lines[i]
 	}
-	if emuRows > 1 {
-		if act := mostUrgentActivity(collapsed); act != "" {
-			body[1] = mutedStyle.Render(truncate(act, emuCols))
-		}
-	}
-
 	return paneBox(emuCols, marginRight, border).Render(lipgloss.JoinVertical(lipgloss.Left, head,
 		lipgloss.JoinVertical(lipgloss.Left, body...)))
+}
+
+// renderGroupTile draws an immediate sub-group as one descendable tile: a ▣ glyph in
+// the sub-group's rolled-up state colour, its leaf name, and a rollup line (its panel
+// count and any deeper sub-groups). enter descends the split into it.
+func (m model) renderGroupTile(cg childGroup, focused bool, emuCols, emuRows, marginRight int) string {
+	line := fmt.Sprintf("%d panel(s)", len(cg.members))
+	if n := subGroupCount(cg.members, cg.path); n > 0 {
+		line += fmt.Sprintf(" · ▣%d", n)
+	}
+	lines := []string{
+		truncate(groupCountChips(cg.members), emuCols),
+		mutedStyle.Render(truncate(line, emuCols)),
+	}
+	return m.renderRollupTile("▣", states[groupState(cg.members)].color, panel.GroupLeaf(cg.path), lines, focused, emuCols, emuRows, marginRight)
+}
+
+// renderSummaryTile draws the rollup of the collapsed members as one tile: a "+N
+// more" header, a per-state breakdown in the state LED colours, and the most-urgent
+// member's activity line — so the spillover is legible at a glance and one enter
+// away.
+func (m model) renderSummaryTile(collapsed []panel.Panel, focused bool, emuCols, emuRows, marginRight int) string {
+	lines := []string{truncate(groupCountChips(collapsed), emuCols)}
+	if act := mostUrgentActivity(collapsed); act != "" {
+		lines = append(lines, mutedStyle.Render(truncate(act, emuCols)))
+	}
+	return m.renderRollupTile("▦", colBrandHi, fmt.Sprintf("+%d more", len(collapsed)), lines, focused, emuCols, emuRows, marginRight)
 }
 
 // mostUrgentActivity is the activity line of the most pressing collapsed member,
@@ -1311,7 +1483,7 @@ func (m model) groupZoomFooter() string {
 	}
 	left := seg("◈ BATON", colDark, colBrand) +
 		mode +
-		seg(truncate(m.groupName, 24), colDark, colBrandHi) +
+		seg(truncate(groupBreadcrumb(m.groupName), 32), colDark, colBrandHi) +
 		scrollSeg(m.scrollOff)
 	return m.statusBar(left, m.helpHint())
 }

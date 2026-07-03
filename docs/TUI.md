@@ -47,7 +47,10 @@ rather than wedging the cockpit.
 
 A group's **split** (see [SPEC.md](./SPEC.md#work-items)) arranges its live tiles. The default — `tiled` — is the even grid.
 `L` in the split **cycles** the arrangement through the built-in presets and any custom layouts you define; the choice is
-**server-owned per group**, rides the snapshot beside the visible count, and **persists across a restart**.
+**server-owned per group**, rides the snapshot beside the visible count, and **persists across a restart**. With
+[nested groups](./SPEC.md#work-items), a sub-group appears as a `▣` rollup tile you `enter` to **descend** into (the header
+shows the path as a breadcrumb, `backend › api`); `esc` / `b` pop back one level. Each level keeps its own layout,
+visible count, and resize ratios, since all of those are keyed by the group's path.
 
 ### Presets
 

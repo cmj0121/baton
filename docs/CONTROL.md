@@ -50,22 +50,22 @@ named "report" and pause for me.
 cockpit role; run inside the conductor panel it inherits the conductor identity and is fenced. Each command connects,
 acts, and exits.
 
-| Command                                             | Does                                                                |
-| --------------------------------------------------- | ------------------------------------------------------------------- |
-| `baton ctl list`                                    | print the fleet as JSON (id, title, state, group, …)                |
-| `baton ctl spawn [--agent CMD] [--arg A] [--dir D]` | spawn a panel (agent if `--agent`, else a shell); prints the new id |
-| `baton ctl send <id> <text> [--no-enter]`           | type text into a panel; submits with a newline unless `--no-enter`  |
-| `baton ctl group <name> <id>...`                    | file panels under a work item                                       |
-| `baton ctl rename [--id ID \| --group G] <name>`    | rename a panel or a group                                           |
-| `baton ctl pin <id>...` / `unpin <id>...`           | pin/unpin panels to live tiles                                      |
-| `baton ctl signal <signal> <id>...`                 | send a signal, e.g. `SIGINT`                                        |
-| `baton ctl close <id>...`                           | close panels                                                        |
-| `baton ctl dispatch <id> <prompt>`                  | assign a task brief to a panel and deliver it as a unit             |
-| `baton ctl dispatch-group <group> <prompt>`         | fan one brief to every member of a work item                        |
-| `baton ctl queue add <prompt> [--group G]`          | enqueue a task for the scheduler to drain onto a free agent         |
-| `baton ctl queue list`                              | print the backlog as JSON (id, prompt, status, panel, group, …)     |
-| `baton ctl queue cancel <id>`                       | cancel a queued task by id                                          |
-| `baton ctl queue drain`                             | clear every queued task                                             |
+| Command                                             | Does                                                                 |
+| --------------------------------------------------- | -------------------------------------------------------------------- |
+| `baton ctl list`                                    | print the fleet as JSON (id, title, state, group, …)                 |
+| `baton ctl spawn [--agent CMD] [--arg A] [--dir D]` | spawn a panel (agent if `--agent`, else a shell); prints the new id  |
+| `baton ctl send <id> <text> [--no-enter]`           | type text into a panel; submits with a newline unless `--no-enter`   |
+| `baton ctl group <name> <id>...`                    | file panels under a work item (a slash-`path` nests: `backend/api`)  |
+| `baton ctl rename [--id ID \| --group G] <name>`    | rename a panel or a group (rename a group to a path to re-parent it) |
+| `baton ctl pin <id>...` / `unpin <id>...`           | pin/unpin panels to live tiles                                       |
+| `baton ctl signal <signal> <id>...`                 | send a signal, e.g. `SIGINT`                                         |
+| `baton ctl close <id>...`                           | close panels                                                         |
+| `baton ctl dispatch <id> <prompt>`                  | assign a task brief to a panel and deliver it as a unit              |
+| `baton ctl dispatch-group <group> <prompt>`         | fan one brief to a work item's whole subtree (nested groups too)     |
+| `baton ctl queue add <prompt> [--group G]`          | enqueue a task for the scheduler to drain onto a free agent          |
+| `baton ctl queue list`                              | print the backlog as JSON (id, prompt, status, panel, group, …)      |
+| `baton ctl queue cancel <id>`                       | cancel a queued task by id                                           |
+| `baton ctl queue drain`                             | clear every queued task                                              |
 
 ```sh
 # Stand up a reviewer next to a worker and hand it the task.
