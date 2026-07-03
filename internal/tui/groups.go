@@ -30,12 +30,14 @@ type dashItem struct {
 }
 
 // dashItems projects the flat fleet into the dashboard's cursor model: lone
-// panels in place, and each group collapsed into one item at the position of its
-// first member. Order is stable and follows the fleet, so the cursor never jumps
-// when a snapshot arrives with the same shape.
+// panels in place, and each top-level group collapsed into one item at the position
+// of its first member. With nested groups the dashboard shows only the top level — a
+// group folds its **whole subtree** (every descendant panel) into one card, and the
+// hierarchy is walked by descending in the split. Order is stable and follows the
+// fleet, so the cursor never jumps when a snapshot arrives with the same shape.
 func (m model) dashItems() []dashItem {
 	items := make([]dashItem, 0, len(m.fleet))
-	groupAt := make(map[string]int) // group name -> index into items
+	groupAt := make(map[string]int) // top-level group name -> index into items
 	for _, p := range m.fleet {
 		if p.Conductor {
 			continue // the conductor is a mark in the FLEET heading, not a card/group
@@ -44,14 +46,52 @@ func (m model) dashItems() []dashItem {
 			items = append(items, dashItem{kind: itemPanel, panel: p})
 			continue
 		}
-		if idx, ok := groupAt[p.Group]; ok {
+		top := panel.GroupTop(p.Group) // fold the subtree under its top-level group
+		if idx, ok := groupAt[top]; ok {
 			items[idx].members = append(items[idx].members, p)
 			continue
 		}
-		groupAt[p.Group] = len(items)
-		items = append(items, dashItem{kind: itemGroup, name: p.Group, members: []panel.Panel{p}})
+		groupAt[top] = len(items)
+		items = append(items, dashItem{kind: itemGroup, name: top, members: []panel.Panel{p}})
 	}
 	return filterItems(items, m.filter)
+}
+
+// childGroup is one immediate sub-group under a parent path: its full path and its
+// whole subtree. The dashboard counts them (subGroupCount) and the split renders one
+// descendable tile per child group.
+type childGroup struct {
+	path    string
+	members []panel.Panel
+}
+
+// childGroupsOf folds panels into the immediate sub-groups directly under parent —
+// one childGroup per distinct child segment, in first-appearance order, each with its
+// whole subtree. The dashboard card (subGroupCount) and the split (childGroups) share
+// it, so "the immediate sub-groups" is derived one way.
+func childGroupsOf(panels []panel.Panel, parent string) []childGroup {
+	at := map[string]int{}
+	var out []childGroup
+	for _, p := range panels {
+		seg, ok := panel.GroupChildSegment(p.Group, parent)
+		if !ok {
+			continue
+		}
+		child := panel.GroupJoin(parent, seg)
+		if i, seen := at[child]; seen {
+			out[i].members = append(out[i].members, p)
+			continue
+		}
+		at[child] = len(out)
+		out = append(out, childGroup{path: child, members: []panel.Panel{p}})
+	}
+	return out
+}
+
+// subGroupCount is how many immediate sub-groups a top-level group holds, for the
+// card's nested makeup — the same fold the split uses, counted.
+func subGroupCount(members []panel.Panel, top string) int {
+	return len(childGroupsOf(members, top))
 }
 
 // filterItems narrows the dashboard to items matching the filter — a
@@ -263,6 +303,10 @@ func (m model) commitGroup(name string) model {
 		m.status = "no panels selected"
 		return m
 	}
+	if !panel.GroupValid(name) {
+		m.status = fmt.Sprintf("%q is not a valid group path", name)
+		return m
+	}
 	if m.nameConflict(name, "", name) {
 		m.status = fmt.Sprintf("the name %q is already taken — pick another", name)
 		return m
@@ -343,6 +387,15 @@ func (m model) commitRename(name string) model {
 	}
 	switch {
 	case m.renameGroup != "":
+		// A group name is a path (renaming to "backend/db" nests it), so it must be a
+		// valid path; a panel title has no such rule. Keep the overlay open on a bad
+		// path so the attempt is not lost to a round-trip.
+		if !panel.GroupValid(name) {
+			m.input = inputRename
+			m.inputBuf = name
+			m.status = fmt.Sprintf("%q is not a valid group path", name)
+			return m
+		}
 		m.sendf(proto.Command{Action: "panel.rename", Group: m.renameGroup, Name: name})
 		m.status = fmt.Sprintf("renamed group to %q", name)
 	case m.renameID != "":
@@ -521,8 +574,12 @@ func (m model) renderGroupCard(it dashItem, selected bool) string {
 
 	badge := groupBadge()
 	// Split the member count by kind, so a card says what kind of work it holds —
-	// "2 agent · 1 shell" — not just how many panels.
+	// "2 agent · 1 shell" — not just how many panels. A nested group also notes how
+	// many immediate sub-groups it holds.
 	kindLine := badge + "  " + kindBreakdown(it.members)
+	if n := subGroupCount(it.members, it.name); n > 0 {
+		kindLine += lipgloss.NewStyle().Foreground(colBrand).Render(fmt.Sprintf("  ▣%d", n))
+	}
 
 	// The footer is the per-state chips, led by a sparkline in the group's rolled-up
 	// colour while it is active — so a working group animates like a panel card.
@@ -549,6 +606,9 @@ func (m model) renderGroupPreview(it dashItem, width int) string {
 	title := lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(truncate(it.title(), width))
 	statusLine := groupBadge() + "  " +
 		mutedStyle.Render(fmt.Sprintf("%d panel(s)", len(it.members))) + "  " + kindBreakdown(it.members)
+	if n := subGroupCount(it.members, it.name); n > 0 {
+		statusLine += lipgloss.NewStyle().Foreground(colBrand).Render(fmt.Sprintf("  ▣ %d sub-group(s)", n))
+	}
 	rule := mutedStyle.Render(strings.Repeat("─", width))
 
 	roster := make([]string, 0, len(it.members)+1)
