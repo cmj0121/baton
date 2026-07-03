@@ -298,8 +298,7 @@ func (m model) commitGroup(name string) model {
 		m.status = "a group needs a name"
 		return m
 	}
-	ids := m.markedIDs()
-	if len(ids) == 0 {
+	if len(m.markedIDs()) == 0 {
 		m.status = "no panels selected"
 		return m
 	}
@@ -311,13 +310,13 @@ func (m model) commitGroup(name string) model {
 		m.status = fmt.Sprintf("the name %q is already taken — pick another", name)
 		return m
 	}
-	m.sendf(proto.Command{Action: "panel.group", IDs: ids, Group: name})
+	groups, panels := m.nestMarkedInto(name)
 	m.marked = nil
-	m.status = fmt.Sprintf("grouped %d panel(s) into %q", len(ids), name)
+	m.status = groupStatus("grouped", groups, panels, name)
 	return m
 }
 
-// addMarkedToGroup files the marked panels into the selected work item and
+// addMarkedToGroup files the marked selection into the selected work item and
 // clears the selection. The cursor must be on a group card.
 func (m model) addMarkedToGroup() model {
 	it, ok := m.selectedItem()
@@ -325,15 +324,86 @@ func (m model) addMarkedToGroup() model {
 		m.status = "select a group to add to"
 		return m
 	}
-	ids := m.markedIDs()
-	if len(ids) == 0 {
+	if len(m.markedIDs()) == 0 {
 		m.status = "mark panels first, then add to a group"
 		return m
 	}
-	m.sendf(proto.Command{Action: "panel.group", IDs: ids, Group: it.name})
+	groups, panels := m.nestMarkedInto(it.name)
 	m.marked = nil
-	m.status = fmt.Sprintf("added %d panel(s) to %q", len(ids), it.name)
+	m.status = groupStatus("added", groups, panels, it.name)
 	return m
+}
+
+// nestMarkedInto files the marked selection under target: a fully-marked group is
+// **nested** — re-parented as target/<its name>, keeping its own sub-structure —
+// rather than flattened, and loose marked panels attach directly to target. So
+// grouping a group into a group carries the group's name into the new parent. It
+// returns how many groups were nested and how many loose panels moved.
+//
+// It reasons in top-level groups because that is the only unit the dashboard lets
+// you mark: a card folds its whole subtree (dashItems folds by GroupTop) and
+// toggleMark marks all of it, so a marked group is always a complete top-level
+// subtree and GroupJoin(target, top) is a clean one-level re-parent. The fan-out is
+// best-effort — each rename/group is its own command, so a rejected one (e.g. the
+// nested path already exists) leaves the rest applied and the next snapshot shows
+// the true state.
+func (m model) nestMarkedInto(target string) (groups, panels int) {
+	// One pass over the fleet, bucketing by top-level group ("" = a lone panel): each
+	// top's marked ids plus its total membership, so "the whole group is marked" needs
+	// no re-scan. order keeps the command sequence deterministic (map order is not).
+	type bucket struct {
+		ids           []string
+		marked, total int
+	}
+	buckets := map[string]*bucket{}
+	var order []string
+	for _, p := range m.fleet {
+		top := panel.GroupTop(p.Group)
+		b := buckets[top]
+		if b == nil {
+			b = &bucket{}
+			buckets[top] = b
+			order = append(order, top)
+		}
+		b.total++
+		if m.marked[p.ID] {
+			b.marked++
+			b.ids = append(b.ids, p.ID)
+		}
+	}
+
+	var loose []string
+	for _, top := range order {
+		b := buckets[top]
+		switch {
+		case b.marked == 0 || top == target:
+			// nothing marked here, or a group already at the target (a no-op).
+		case top != "" && b.marked == b.total:
+			// the whole group is marked: nest it, keeping its name as the sub-segment.
+			m.sendf(proto.Command{Action: "panel.rename", Group: top, Name: panel.GroupJoin(target, top)})
+			groups++
+		default:
+			loose = append(loose, b.ids...) // lone panels, and partial group selections
+		}
+	}
+	if len(loose) > 0 {
+		m.sendf(proto.Command{Action: "panel.group", IDs: loose, Group: target})
+		panels = len(loose)
+	}
+	return groups, panels
+}
+
+// groupStatus phrases the result of a group/add that may have nested sub-groups,
+// moved loose panels, or both.
+func groupStatus(verb string, groups, panels int, target string) string {
+	switch {
+	case groups > 0 && panels > 0:
+		return fmt.Sprintf("%s %d sub-group(s) + %d panel(s) into %q", verb, groups, panels, target)
+	case groups > 0:
+		return fmt.Sprintf("%s %d sub-group(s) into %q", verb, groups, target)
+	default:
+		return fmt.Sprintf("%s %d panel(s) into %q", verb, panels, target)
+	}
 }
 
 // ungroupSelected dissolves the selected work item, returning its panels to the

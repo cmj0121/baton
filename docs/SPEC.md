@@ -102,9 +102,11 @@ the policy can be lifted with the `allow-name-conflict` setting, which the daemo
 
 **Nested groups.** A group name is a **slash-path**, so a group can nest inside another: a panel filed under
 `"backend/api"` sits in the group `api`, nested under `backend`. Membership stays derived — `backend` "exists" while any
-panel carries `backend` or a path beneath it. Nest by using a path when you group (`backend/api`) or by **renaming a
-group to a path** — renaming `db` to `backend/db` re-parents the whole `db` subtree in one move (the server rewrites the
-path prefix across every descendant). Group-wide actions **recurse over the subtree**: dispatching to, closing, or
+panel carries `backend` or a path beneath it. Nest by using a path when you group (`backend/api`), by **renaming a group
+to a path** — renaming `db` to `backend/db` re-parents the whole `db` subtree in one move (the server rewrites the path
+prefix across every descendant) — or by **grouping/adding a whole group into another**: mark a group and group or add it
+into a target, and it nests as `target/<its name>` (keeping its own sub-structure) rather than flattening.
+Group-wide actions **recurse over the subtree**: dispatching to, closing, or
 signalling `backend` reaches every descendant panel, nested groups included; **dissolving** `backend` promotes its
 subtree one level (its direct panels go lone, its sub-groups become top-level) rather than deleting the work. The
 dashboard shows only the **top level** — a group card folds its whole subtree — and you walk the hierarchy by descending
