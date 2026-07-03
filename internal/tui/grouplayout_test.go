@@ -118,8 +118,7 @@ func TestSplitGridRendersSpannedLayout(t *testing.T) {
 	m.groupName = "api" // 3 members
 	m.groupLayout = map[string]string{"api": layoutMainVertical}
 
-	tiles, collapsed := m.splitMembers()
-	grid := m.renderSplitGrid(tiles, collapsed)
+	grid := m.renderSplitGrid(m.splitSlots())
 	lines := strings.Split(grid, "\n")
 	wantH := m.height - 1 - groupHeaderRows
 	if len(lines) != wantH {

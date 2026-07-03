@@ -469,15 +469,19 @@ func (m model) zoomGroup(it dashItem) model {
 	m.scrollOff = 0 // open at the live bottom
 	m.scrolling = false
 	m.summaryScope = false // always open on the group itself, never a stale sub-view
-	m.groupPinned = pinsForMembers(it.members)
-	if only, ok := singlePinned(it.members, m.groupPinned); ok {
+	// Pins are a per-scope concept, so build the set from this level's direct panels
+	// (fleetGroup now that groupName is set), not the whole subtree — a pinned panel
+	// nested in a sub-group belongs to that sub-group's split, not this one.
+	direct := m.fleetGroup()
+	m.groupPinned = pinsForMembers(direct)
+	if only, ok := singlePinned(direct, m.groupPinned); ok {
 		m = m.zoomInto(only)
 		m.zoomGroupOrigin = it.name // back (C-t b) pops back to the split
 		m.status = fmt.Sprintf("group · %s · %s (pinned)", it.name, only.Title)
 		return m
 	}
 	m.attachGroupMembers()
-	m.status = fmt.Sprintf("group · %s (%d panels)", it.name, len(m.groupMembers()))
+	m.status = fmt.Sprintf("group · %s (%d panels)", groupBreadcrumb(it.name), len(direct))
 	return m
 }
 
