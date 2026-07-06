@@ -643,25 +643,39 @@ func (m model) renderGroupCard(it dashItem, selected bool) string {
 		mark = markCell(m.itemMarked(it))
 	}
 	glyph := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render("▣")
-	name := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(it.title(), cardInner-4))
+	// A nested group notes its immediate sub-group count right-aligned in the head —
+	// the same place the split's sub-group tile shows it — rather than trailing the
+	// kind line, so that line can never spill onto a second row and grow the card one
+	// taller than a panel card.
+	sub := ""
+	if n := subGroupCount(it.members, it.name); n > 0 {
+		sub = lipgloss.NewStyle().Foreground(colBrand).Render(fmt.Sprintf("▣%d", n))
+	}
+	avail := cardInner - lipgloss.Width(mark) - 2 - lipgloss.Width(sub) // glyph + its trailing space = 2
+	if sub != "" {
+		avail-- // a gap before the right-aligned count
+	}
+	name := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(it.title(), max(1, avail)))
 	head := mark + glyph + " " + name
+	if sub != "" {
+		head = padEnds(head, sub, cardInner)
+	}
 
 	badge := groupBadge()
 	// Split the member count by kind, so a card says what kind of work it holds —
-	// "2 agent · 1 shell" — not just how many panels. A nested group also notes how
-	// many immediate sub-groups it holds.
-	kindLine := badge + "  " + kindBreakdown(it.members)
-	if n := subGroupCount(it.members, it.name); n > 0 {
-		kindLine += lipgloss.NewStyle().Foreground(colBrand).Render(fmt.Sprintf("  ▣%d", n))
-	}
+	// "2 agent · 1 shell" — not just how many panels. Clamp it to the inner width so a
+	// long breakdown truncates rather than wrapping and growing the card.
+	kindLine := clampWidth(badge+"  "+kindBreakdown(it.members), cardInner)
 
 	// The footer is the per-state chips, led by a sparkline in the group's rolled-up
-	// colour while it is active — so a working group animates like a panel card.
+	// colour while it is active — so a working group animates like a panel card. It is
+	// clamped to the inner width for the same no-wrap, fixed-height reason.
 	footer := groupCountChips(it.members)
 	if activeState(st) {
 		spark := lipgloss.NewStyle().Foreground(info.color).Render(groupSpark(it.members, st))
 		footer = spark + "  " + footer
 	}
+	footer = clampWidth(footer, cardInner)
 
 	style := lipgloss.NewStyle().
 		Width(cardWidth-2).

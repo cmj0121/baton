@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/cmj0121/baton/internal/panel"
 )
 
@@ -752,5 +754,34 @@ func TestDetachWithPrefixQ(t *testing.T) {
 	zd, _ := za.(model).handleZoomKey(key(keyDetach))
 	if !zd.(model).quitting {
 		t.Fatal("C-t q should detach from a zoom")
+	}
+}
+
+// TestGroupCardHeightMatchesPanel guards the dashboard invariant that a group card —
+// including a group-of-group whose sub-group count used to spill its kind line onto a
+// second row — is exactly the same size as a plain panel card, so the grid stays even.
+func TestGroupCardHeightMatchesPanel(t *testing.T) {
+	m := baseModel()
+	panelCard := m.renderCard(panel.Panel{ID: "9", Kind: panel.Agent, Title: "worker", State: panel.Running, Task: "do the thing"}, false)
+	wantH, wantW := lipgloss.Height(panelCard), lipgloss.Width(panelCard)
+
+	gog := dashItem{kind: itemGroup, name: "backend", members: []panel.Panel{
+		{ID: "1", Kind: panel.Agent, Title: "backend-with-a-fairly-long-name", State: panel.Running, Group: "backend"},
+		{ID: "2", Kind: panel.Shell, Title: "s", State: panel.Idle, Group: "backend"},
+		{ID: "3", Kind: panel.Agent, Title: "a", State: panel.Running, Group: "backend/api"},
+		{ID: "4", Kind: panel.Agent, Title: "b", State: panel.Idle, Group: "backend/db"},
+	}}
+	for _, sel := range []bool{false, true} {
+		for _, marking := range []bool{false, true} {
+			if marking {
+				m.marked = map[string]bool{"zzz": true} // force the select-mark column on
+			} else {
+				m.marked = nil
+			}
+			card := m.renderGroupCard(gog, sel)
+			if h, w := lipgloss.Height(card), lipgloss.Width(card); h != wantH || w != wantW {
+				t.Fatalf("group-of-group card sel=%v marking=%v is %dx%d, want %dx%d (a panel card)", sel, marking, w, h, wantW, wantH)
+			}
+		}
 	}
 }
