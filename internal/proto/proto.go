@@ -52,25 +52,26 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action string   `json:"action"`           // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.diff | panel.git | panel.scratch | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run
-	Kind   string   `json:"kind,omitempty"`   // panel kind for "panel.create" (default "shell")
-	ID     string   `json:"id,omitempty"`     // target panel for close/attach/input/resize/diff, or the panel to rename
-	Path   string   `json:"path,omitempty"`   // init command (binary path) for "panel.create"; empty = default shell
-	Args   []string `json:"args,omitempty"`   // command arguments for "panel.create" (an agent profile's args)
-	Dir    string   `json:"dir,omitempty"`    // working directory the new panel's process runs in ("panel.create")
-	Data   []byte   `json:"data,omitempty"`   // input bytes for "panel.input"
-	Prompt string   `json:"prompt,omitempty"` // the task brief for "panel.dispatch"/"panel.dispatch-group": recorded on the panel(s) and delivered to the process as a unit
-	Submit string   `json:"submit,omitempty"` // optional submit sequence appended to a dispatched prompt (default newline)
-	Rows   int      `json:"rows,omitempty"`   // window size for "panel.resize"
-	Cols   int      `json:"cols,omitempty"`
-	IDs    []string `json:"ids,omitempty"`    // panels to group ("panel.group"), remove ("panel.ungroup"), close ("panel.close"), or move as a block ("panel.move")
-	Group  string   `json:"group,omitempty"`  // group name to assign ("panel.group"), or the group to rename ("panel.rename")
-	Name   string   `json:"name,omitempty"`   // new name for "panel.rename" (a panel title or a group name)
-	Index  int      `json:"index,omitempty"`  // destination index among the remaining panels for "panel.move"
-	Signal string   `json:"signal,omitempty"` // signal name to deliver for "panel.signal", e.g. "SIGINT"
-	Count  int      `json:"count,omitempty"`  // absolute visible count for "group.show": how many members stream as live tiles
-	Git    string   `json:"git,omitempty"`    // git op for "panel.git", e.g. "log", "commit", "worktree-add"; Name carries a branch, Dir a worktree path
-	Layout string   `json:"layout,omitempty"` // layout name for "group.layout": the named split arrangement the group opens with
+	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.diff | panel.git | panel.scratch | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run
+	Kind      string   `json:"kind,omitempty"`      // panel kind for "panel.create" (default "shell")
+	ID        string   `json:"id,omitempty"`        // target panel for close/attach/input/resize/diff, or the panel to rename
+	Path      string   `json:"path,omitempty"`      // init command (binary path) for "panel.create"; empty = default shell
+	Args      []string `json:"args,omitempty"`      // command arguments for "panel.create" (an agent profile's args)
+	Dir       string   `json:"dir,omitempty"`       // working directory the new panel's process runs in ("panel.create")
+	Data      []byte   `json:"data,omitempty"`      // input bytes for "panel.input"
+	Prompt    string   `json:"prompt,omitempty"`    // the task brief for "panel.dispatch"/"panel.dispatch-group": recorded on the panel(s) and delivered to the process as a unit
+	Submit    string   `json:"submit,omitempty"`    // optional submit sequence appended to a dispatched prompt (default newline)
+	Ephemeral bool     `json:"ephemeral,omitempty"` // for "task.enqueue" with a spawn spec (Path/Args/Dir): close the provisioned agent once the task finishes
+	Rows      int      `json:"rows,omitempty"`      // window size for "panel.resize"
+	Cols      int      `json:"cols,omitempty"`
+	IDs       []string `json:"ids,omitempty"`    // panels to group ("panel.group"), remove ("panel.ungroup"), close ("panel.close"), or move as a block ("panel.move")
+	Group     string   `json:"group,omitempty"`  // group name to assign ("panel.group"), or the group to rename ("panel.rename")
+	Name      string   `json:"name,omitempty"`   // new name for "panel.rename" (a panel title or a group name)
+	Index     int      `json:"index,omitempty"`  // destination index among the remaining panels for "panel.move"
+	Signal    string   `json:"signal,omitempty"` // signal name to deliver for "panel.signal", e.g. "SIGINT"
+	Count     int      `json:"count,omitempty"`  // absolute visible count for "group.show": how many members stream as live tiles
+	Git       string   `json:"git,omitempty"`    // git op for "panel.git", e.g. "log", "commit", "worktree-add"; Name carries a branch, Dir a worktree path
+	Layout    string   `json:"layout,omitempty"` // layout name for "group.layout": the named split arrangement the group opens with
 
 	// Role and Self are declared on "hello" by a control client (the conductor
 	// agent driving the fleet over the socket). Role "conductor" puts the
@@ -125,6 +126,7 @@ type Task struct {
 	Result   string `json:"result,omitempty"`   // a terminal note (e.g. a failure reason)
 	Priority int    `json:"priority,omitempty"` // scheduler order among queued tasks: higher drains first
 	Attempts int    `json:"attempts,omitempty"` // how many times its prompt has been delivered
+	Spawn    bool   `json:"spawn,omitempty"`    // the task provisions its own agent when none is free
 }
 
 // DiffFile is one changed path in the structured "diff" reply: its staged and

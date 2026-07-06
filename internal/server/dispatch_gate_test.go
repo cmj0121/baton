@@ -22,6 +22,8 @@ func gateServer(panels ...panel.Panel) (*Server, *fakeClock, *[]string) {
 		pendingDispatch: map[string][]byte{},
 		tasks:           map[string]*task.Task{},
 		panelTask:       map[string]string{},
+		spawning:        map[string]bool{},
+		specs:           map[string]ptymgr.Spec{},
 	}
 	s.writeInput = func(id string, data []byte) { *written = append(*written, id+":"+string(data)) }
 	for _, p := range panels {

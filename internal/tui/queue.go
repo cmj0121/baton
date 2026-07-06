@@ -186,7 +186,11 @@ func (m model) queueView() string {
 		if t.Group != "" {
 			grp = t.Group
 		}
-		row := caret(m.queueCursor == i) + st + idCol.Render(t.ID) + grpCol.Render(grp) + inkStyle.Render(truncate(t.Prompt, 40))
+		id := t.ID
+		if t.Spawn { // provisions its own agent when none is free
+			id += "⚡"
+		}
+		row := caret(m.queueCursor == i) + st + idCol.Render(id) + grpCol.Render(grp) + inkStyle.Render(truncate(t.Prompt, 40))
 		if t.Result != "" { // a finished task's terminal note — why it failed
 			row += mutedStyle.Render("  — " + truncate(t.Result, 24))
 		}

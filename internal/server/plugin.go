@@ -243,7 +243,7 @@ func (s *Server) DispatchGroup(group, prompt string) (int, error) {
 // Enqueue adds a task to the backlog and returns its id. It is baton.enqueue; the
 // scheduler drains it onto a free agent on a later tick.
 func (s *Server) Enqueue(prompt, group string) (string, error) {
-	id, err := s.enqueueTask(prompt, group)
+	id, err := s.enqueueTask(prompt, group, nil)
 	if err != nil {
 		return "", err
 	}

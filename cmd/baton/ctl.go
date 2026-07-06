@@ -179,11 +179,18 @@ type ctlQueue struct {
 }
 
 type ctlQueueAdd struct {
-	Prompt string `arg:"" help:"The task brief to enqueue."`
-	Group  string `help:"Restrict the task to agents in this work item."`
+	Prompt  string   `arg:"" help:"The task brief to enqueue."`
+	Group   string   `help:"Restrict the task to agents in this work item."`
+	Command string   `help:"Spawn-on-demand: provision an agent running this command when none is free."`
+	Arg     []string `help:"Argument for the spawned command (repeatable)."`
+	Dir     string   `help:"Working directory for the spawned agent."`
+	Close   bool     `help:"Close the spawned agent once the task finishes."`
 }
 
 func (x ctlQueueAdd) Run(c *control.Client) error {
+	if x.Command != "" {
+		return c.EnqueueSpawn(x.Prompt, x.Group, x.Command, x.Arg, x.Dir, x.Close)
+	}
 	return c.Enqueue(x.Prompt, x.Group)
 }
 
