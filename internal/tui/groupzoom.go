@@ -901,6 +901,11 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status = m.exitHint()
 	case "enter":
 		if cg, ok := m.focusedChildGroup(); ok {
+			// A sub-group with a lone pinned default auto-zooms into it, like zoomGroup's
+			// single-pin shortcut; otherwise descend into the sub-group's own split.
+			if p, pinned := childPinnedDefault(cg); pinned {
+				return m.descendZoom(cg.path, p)
+			}
 			return m.rescopeGroup(cg.path), nil // descend into the sub-group
 		}
 		if m.focusedIsSummary() {
@@ -1154,6 +1159,24 @@ func childPinnedDefault(cg childGroup) (panel.Panel, bool) {
 		}
 	}
 	return only, n == 1
+}
+
+// descendZoom drops straight from the split into a sub-group's lone pinned default,
+// skipping that sub-group's own split — the descend-path parity of zoomGroup's
+// single-pin shortcut. It tears the current tiles down like zoomFocusedMember, then
+// rescopes to the child so back (C-t b) returns to the sub-group's OWN split, not the
+// parent's.
+func (m model) descendZoom(childPath string, p panel.Panel) (tea.Model, tea.Cmd) {
+	m.sendf(proto.Command{Action: "panel.detach"}) // detach all tiles
+	m.closeGroupEmus()
+	m.groupInteract = false
+	m.groupResize = false
+	m.groupName = childPath
+	m.groupPinned = pinsForMembers(m.fleetGroup()) // rebuild for the child's own scope, so back lands consistent
+	m = m.zoomInto(p)
+	m.zoomGroupOrigin = childPath // back returns to the sub-group's split, not the parent's
+	m.status = fmt.Sprintf("group · %s · %s (pinned)", groupBreadcrumb(childPath), p.Title)
+	return m, nil
 }
 
 // zoomFocusedMember drops from the split into the focused panel's own live zoom,

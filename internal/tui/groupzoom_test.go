@@ -134,6 +134,47 @@ func TestChildPinnedDefault(t *testing.T) {
 	}
 }
 
+// TestDescendAutoZoom: enter on a sub-group whose sole pinned direct panel is the
+// default drops straight into that panel's zoom, with back set to the sub-group's own
+// split.
+func TestDescendAutoZoom(t *testing.T) {
+	m := backendSplit("2") // pin api's direct panel #2
+	m.groupFocus = 1       // the backend/api sub-group tile
+	if _, ok := m.focusedChildGroup(); !ok {
+		t.Fatalf("focus %d should rest on a sub-group tile", m.groupFocus)
+	}
+
+	nm, _ := m.handleGroupZoomKey(key("enter"))
+	m = nm.(model)
+	if m.mode != modeZoom || m.zoomID != "2" || m.zoomGroupOrigin != "backend/api" {
+		t.Fatalf("descend should auto-zoom the pinned default, got mode=%v id=%q origin=%q", m.mode, m.zoomID, m.zoomGroupOrigin)
+	}
+
+	// Back (C-t b) lands on the sub-group's OWN split, with its pin set rebuilt for
+	// that scope — not the parent's.
+	nm, _ = m.backToGroup()
+	m = nm.(model)
+	if m.mode != modeGroupZoom || m.groupName != "backend/api" {
+		t.Fatalf("back should return to the sub-group split, got mode=%v group=%q", m.mode, m.groupName)
+	}
+	if !m.groupPinned["2"] {
+		t.Fatalf("back should keep the child's pin, got %v", m.groupPinned)
+	}
+}
+
+// TestDescendRescopesWithoutPin: enter on a sub-group with no lone pinned default
+// rescopes the split into it rather than zooming a panel.
+func TestDescendRescopesWithoutPin(t *testing.T) {
+	m := backendSplit("") // no pins
+	m.groupFocus = 1      // the backend/api sub-group tile
+
+	nm, _ := m.handleGroupZoomKey(key("enter"))
+	m = nm.(model)
+	if m.mode != modeGroupZoom || m.groupName != "backend/api" {
+		t.Fatalf("descend without a pin should rescope, got mode=%v group=%q", m.mode, m.groupName)
+	}
+}
+
 // TestRenderGroupTilePinGlyph: a sub-group holding a lone pinned default is marked
 // with a ⊙ in its head.
 func TestRenderGroupTilePinGlyph(t *testing.T) {
