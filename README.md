@@ -17,7 +17,7 @@ You hold the baton. The agents play. You conduct. 🎼
 
 _Spawn panels, zoom into one to drive it, group two into a work item — and `?` is always there for the keys._
 
-<!-- Clip generated from docs/assets/baton-demo.tape; regeneration steps are in the tape header. -->
+_Clip generated from [`baton-demo.tape`](docs/assets/baton-demo.tape) — regeneration steps are in the tape header._
 
 ## Get started
 
