@@ -155,7 +155,7 @@ var bindings = []binding{
 	{"diff", keyDiff, "show the work-tree diff (agent panel)", actDiff, "Panels"},
 	{"dispatch", keyDispatch, "dispatch a task to the agent panel", actDispatch, "Panels"},
 	{"enqueue", keyEnqueue, "enqueue a task for any free agent (a work item, if selected)", actEnqueue, "Panels"},
-	{"queue", keyQueue, "manage the task queue (list · cancel · drain)", actQueue, "Panels"},
+	{"queue", keyQueue, "manage the task queue (list · reorder · cancel · drain)", actQueue, "Panels"},
 
 	{"mark", keyMark, "mark a panel for grouping", actMark, "Work items"},
 	{"group", keyGroup, "group the marked panels", actGroup, "Work items"},

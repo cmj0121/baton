@@ -85,6 +85,26 @@ func TestQueueCancel(t *testing.T) {
 	}
 }
 
+// TestQueueReorder promotes and demotes the highlighted task; the status names the
+// id being moved. (The actual reordering rides the server's "tasks" reply.)
+func TestQueueReorder(t *testing.T) {
+	m := model{width: 120, height: 40, mode: modeQueue, queueFrom: modeDashboard, tasks: sampleTasks()}
+	m = press(m, keyQueuePromote) // K — promote t3 (top row)
+	if !strings.Contains(m.status, "t3") || !strings.Contains(m.status, "promoting") {
+		t.Fatalf("promote should name the highlighted task, got %q", m.status)
+	}
+	m = press(m, keyQueueDemote) // J — demote t3
+	if !strings.Contains(m.status, "t3") || !strings.Contains(m.status, "demoting") {
+		t.Fatalf("demote should name the highlighted task, got %q", m.status)
+	}
+
+	empty := model{width: 120, height: 40, mode: modeQueue, queueFrom: modeDashboard}
+	empty = press(empty, keyQueuePromote)
+	if !strings.Contains(empty.status, "nothing to reorder") {
+		t.Fatalf("reorder on an empty backlog should say so, got %q", empty.status)
+	}
+}
+
 // TestQueueDrain drains the whole backlog, and is a no-op when already empty.
 func TestQueueDrain(t *testing.T) {
 	m := model{width: 120, height: 40, mode: modeQueue, queueFrom: modeDashboard, tasks: sampleTasks()}

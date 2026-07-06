@@ -170,10 +170,12 @@ func (x ctlDispatchGroup) Run(c *control.Client) error {
 
 // ctlQueue groups the backlog verbs under `baton ctl queue …`.
 type ctlQueue struct {
-	Add    ctlQueueAdd    `cmd:"" help:"Enqueue a task for the scheduler to drain onto a free agent."`
-	List   ctlQueueList   `cmd:"" help:"Print the backlog as JSON."`
-	Cancel ctlQueueCancel `cmd:"" help:"Cancel a queued task by id."`
-	Drain  ctlQueueDrain  `cmd:"" help:"Clear every queued task."`
+	Add     ctlQueueAdd     `cmd:"" help:"Enqueue a task for the scheduler to drain onto a free agent."`
+	List    ctlQueueList    `cmd:"" help:"Print the backlog as JSON."`
+	Cancel  ctlQueueCancel  `cmd:"" help:"Cancel a queued task by id."`
+	Promote ctlQueuePromote `cmd:"" help:"Bump a queued task to the head of the backlog."`
+	Demote  ctlQueueDemote  `cmd:"" help:"Drop a queued task to the tail of the backlog."`
+	Drain   ctlQueueDrain   `cmd:"" help:"Clear every queued task."`
 }
 
 type ctlQueueAdd struct {
@@ -202,6 +204,22 @@ type ctlQueueCancel struct {
 
 func (x ctlQueueCancel) Run(c *control.Client) error {
 	return c.CancelTask(x.ID)
+}
+
+type ctlQueuePromote struct {
+	ID string `arg:"" help:"Queued task id to bump to the head."`
+}
+
+func (x ctlQueuePromote) Run(c *control.Client) error {
+	return c.PromoteTask(x.ID)
+}
+
+type ctlQueueDemote struct {
+	ID string `arg:"" help:"Queued task id to drop to the tail."`
+}
+
+func (x ctlQueueDemote) Run(c *control.Client) error {
+	return c.DemoteTask(x.ID)
 }
 
 type ctlQueueDrain struct{}

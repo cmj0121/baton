@@ -267,6 +267,34 @@ func defaultTools() []tool {
 			},
 		},
 		{
+			name: "baton_reorder",
+			desc: "Reorder a queued task in the backlog: 'head' drains it next, 'tail' drains it last. Only a task still waiting (not yet on an agent) can be reordered.",
+			schema: obj(map[string]any{
+				"id": str("queued task id to move"),
+				"to": str("where to move it: 'head' or 'tail'"),
+			}, "id", "to"),
+			run: func(c *control.Client, a args) (string, error) {
+				id, to := a.str("id"), a.str("to")
+				if id == "" {
+					return "", fmt.Errorf("id is required")
+				}
+				switch to {
+				case "head":
+					if err := c.PromoteTask(id); err != nil {
+						return "", err
+					}
+					return "promoted " + id + " to the head", nil
+				case "tail":
+					if err := c.DemoteTask(id); err != nil {
+						return "", err
+					}
+					return "demoted " + id + " to the tail", nil
+				default:
+					return "", fmt.Errorf("to must be 'head' or 'tail'")
+				}
+			},
+		},
+		{
 			name: "baton_dispatch_group",
 			desc: "Fan one task to every member of a work item — the way to race N agents on the same prompt. Group them first with baton_group.",
 			schema: obj(map[string]any{

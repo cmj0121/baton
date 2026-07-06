@@ -165,6 +165,17 @@ func (c *Client) CancelTask(id string) error {
 	return c.Do(proto.Command{Action: "task.cancel", ID: id})
 }
 
+// PromoteTask bumps a queued task to the head of the backlog, so the scheduler
+// drains it next.
+func (c *Client) PromoteTask(id string) error {
+	return c.Do(proto.Command{Action: "task.promote", ID: id})
+}
+
+// DemoteTask drops a queued task to the tail of the backlog, so it drains last.
+func (c *Client) DemoteTask(id string) error {
+	return c.Do(proto.Command{Action: "task.demote", ID: id})
+}
+
 // DrainQueue clears every queued backlog task.
 func (c *Client) DrainQueue() error {
 	return c.Do(proto.Command{Action: "task.drain"})

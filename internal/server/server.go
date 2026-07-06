@@ -983,6 +983,14 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			return
 		}
 		send(cc, s.tasksMsg())
+	case "task.promote", "task.demote":
+		// Reorder a queued task within the backlog: promote bumps it to the head,
+		// demote drops it to the tail. Only a waiting task can be reordered.
+		if err := s.reprioritizeTask(cmd.ID, cmd.Action == "task.promote"); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		send(cc, s.tasksMsg())
 	case "task.drain":
 		s.drainQueued()
 		send(cc, s.tasksMsg())
@@ -1597,6 +1605,7 @@ func taskFields(t *task.Task) map[string]any {
 		"panel":    t.Panel,
 		"group":    t.Group,
 		"result":   t.Result,
+		"priority": t.Priority,
 		"attempts": t.Attempts,
 	}
 }
@@ -1768,7 +1777,12 @@ func (s *Server) scheduleLocked() []readyDispatch {
 	if len(queued) == 0 {
 		return nil
 	}
-	sort.Slice(queued, func(i, j int) bool { return queued[i].Created.Before(queued[j].Created) })
+	sort.Slice(queued, func(i, j int) bool {
+		if queued[i].Priority != queued[j].Priority {
+			return queued[i].Priority > queued[j].Priority // higher priority drains first
+		}
+		return queued[i].Created.Before(queued[j].Created) // then oldest-first
+	})
 
 	var deliver []readyDispatch
 	for _, t := range queued {
@@ -1813,6 +1827,46 @@ func (s *Server) cancelTask(id string) error {
 	return nil
 }
 
+// reprioritizeTask moves a queued task to the head (up) or tail (down) of the
+// backlog by setting its priority just past the current extreme among the other
+// queued tasks — a single, predictable "bump to next" / "drop to last" gesture.
+// Only a waiting task has a queue position: a task already in flight or finished is
+// refused, like cancel.
+func (s *Server) reprioritizeTask(id string, up bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[id]
+	if !ok {
+		return fmt.Errorf("no task %q", id)
+	}
+	if t.Panel != "" || t.Status != task.Queued {
+		return fmt.Errorf("task %q is not queued; only a waiting task can be reordered", id)
+	}
+	hi, lo, seen := 0, 0, false
+	for _, o := range s.tasks {
+		if o.ID == id || o.Panel != "" || o.Status != task.Queued {
+			continue
+		}
+		if !seen {
+			hi, lo, seen = o.Priority, o.Priority, true
+			continue
+		}
+		hi, lo = max(hi, o.Priority), min(lo, o.Priority)
+	}
+	if !seen { // the only queued task — nothing to reorder against
+		return nil
+	}
+	if up {
+		t.Priority = hi + 1
+	} else {
+		t.Priority = lo - 1
+	}
+	t.Updated = s.mon.now()
+	s.emit("task.change", taskFields(t))
+	s.markTaskDirtyLocked(t.ID)
+	return nil
+}
+
 // drainQueued clears every unassigned queued task, returning how many it dropped.
 // In-flight tasks (dispatched/running on a panel) are left to finish — draining the
 // backlog is not the same as stopping the fleet.
@@ -1830,8 +1884,11 @@ func (s *Server) drainQueued() int {
 	return n
 }
 
-// tasksMsg builds the backlog snapshot reply, newest activity first, so a frontend
-// can render the queue/kanban.
+// tasksMsg builds the backlog snapshot reply so a frontend can render the
+// queue/kanban. The order mirrors what will happen: live tasks come first in
+// scheduler order (higher priority, then oldest), so the pending backlog reads
+// top-to-bottom in the sequence it will drain and a reorder visibly moves a row;
+// finished history follows, most recent first.
 func (s *Server) tasksMsg() proto.ServerMsg {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1839,12 +1896,24 @@ func (s *Server) tasksMsg() proto.ServerMsg {
 	for _, t := range s.tasks {
 		tasks = append(tasks, t)
 	}
-	sort.Slice(tasks, func(i, j int) bool { return tasks[i].Updated.After(tasks[j].Updated) })
+	sort.Slice(tasks, func(i, j int) bool {
+		a, b := tasks[i], tasks[j]
+		if a.Status.Terminal() != b.Status.Terminal() {
+			return !a.Status.Terminal() // live tasks before finished history
+		}
+		if a.Status.Terminal() {
+			return a.Updated.After(b.Updated) // history: most recent first
+		}
+		if a.Priority != b.Priority {
+			return a.Priority > b.Priority // backlog: higher priority first
+		}
+		return a.Created.Before(b.Created) // then oldest-first, matching the scheduler
+	})
 	wire := make([]proto.Task, len(tasks))
 	for i, t := range tasks {
 		wire[i] = proto.Task{
 			ID: t.ID, Prompt: t.Prompt, Status: string(t.Status), Panel: t.Panel,
-			Group: t.Group, Result: t.Result, Attempts: t.Attempts,
+			Group: t.Group, Result: t.Result, Priority: t.Priority, Attempts: t.Attempts,
 		}
 	}
 	return proto.ServerMsg{Type: "tasks", Tasks: wire}

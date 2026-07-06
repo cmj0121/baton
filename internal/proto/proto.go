@@ -52,7 +52,7 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action string   `json:"action"`           // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.diff | panel.git | panel.scratch | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.drain | server.reload | config.get | command.run
+	Action string   `json:"action"`           // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.diff | panel.git | panel.scratch | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run
 	Kind   string   `json:"kind,omitempty"`   // panel kind for "panel.create" (default "shell")
 	ID     string   `json:"id,omitempty"`     // target panel for close/attach/input/resize/diff, or the panel to rename
 	Path   string   `json:"path,omitempty"`   // init command (binary path) for "panel.create"; empty = default shell
@@ -123,6 +123,7 @@ type Task struct {
 	Panel    string `json:"panel,omitempty"`    // the panel executing it, if assigned
 	Group    string `json:"group,omitempty"`    // the work item it belongs to, if any
 	Result   string `json:"result,omitempty"`   // a terminal note (e.g. a failure reason)
+	Priority int    `json:"priority,omitempty"` // scheduler order among queued tasks: higher drains first
 	Attempts int    `json:"attempts,omitempty"` // how many times its prompt has been delivered
 }
 

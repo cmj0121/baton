@@ -54,10 +54,11 @@ type Task struct {
 	ID       string    `json:"id"`
 	Prompt   string    `json:"prompt"`
 	Status   Status    `json:"status"`
-	Panel    string    `json:"panel,omitempty"`  // the panel currently executing it, if any
-	Group    string    `json:"group,omitempty"`  // the work item it belongs to, if any
-	Result   string    `json:"result,omitempty"` // a terminal note (e.g. a failure reason)
-	Attempts int       `json:"attempts"`         // how many times its prompt has been delivered
+	Panel    string    `json:"panel,omitempty"`    // the panel currently executing it, if any
+	Group    string    `json:"group,omitempty"`    // the work item it belongs to, if any
+	Result   string    `json:"result,omitempty"`   // a terminal note (e.g. a failure reason)
+	Priority int       `json:"priority,omitempty"` // scheduler order among queued tasks: higher drains first (default 0, ties break oldest-first)
+	Attempts int       `json:"attempts"`           // how many times its prompt has been delivered
 	Created  time.Time `json:"created"`
 	Updated  time.Time `json:"updated"`
 }

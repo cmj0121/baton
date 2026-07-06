@@ -16,11 +16,14 @@ import (
 // popup owns no state of its own beyond the cursor — so the reply (a fresh "tasks"
 // snapshot) is what redraws the list.
 
-// queueManageKeys: cancel the task under the cursor, drain the whole backlog.
+// queueManageKeys: cancel the task under the cursor, drain the whole backlog,
+// reorder a queued task to the head/tail of the backlog.
 const (
-	keyQueueCancel = "d" // cancel the highlighted queued task
-	keyQueueDrain  = "D" // drain every queued task (shift+d)
-	keyQueueEdit   = "e" // edit the highlighted task (planned follow-up)
+	keyQueueCancel  = "d" // cancel the highlighted queued task
+	keyQueueDrain   = "D" // drain every queued task (shift+d)
+	keyQueueEdit    = "e" // edit the highlighted task (planned follow-up)
+	keyQueuePromote = "K" // bump the highlighted queued task to the head of the backlog (shift+k)
+	keyQueueDemote  = "J" // drop the highlighted queued task to the tail of the backlog (shift+j)
 )
 
 // openQueue opens the manager over the current view, remembering from so esc
@@ -33,7 +36,7 @@ func (m model) openQueue(from mode) model {
 	m.queueCursor = 0
 	m.mode = modeQueue
 	m.sendf(proto.Command{Action: "task.list"})
-	m.status = "task queue · ↑↓ move · d cancel · D drain · esc closes"
+	m.status = "task queue · ↑↓ move · K/J reorder · d cancel · D drain · esc closes"
 	return m
 }
 
@@ -62,6 +65,10 @@ func (m model) handleQueueKey(key string) (tea.Model, tea.Cmd) {
 		return m.cancelQueued(), nil
 	case keyQueueDrain:
 		return m.drainQueue(), nil
+	case keyQueuePromote:
+		return m.reprioritizeQueued(true), nil
+	case keyQueueDemote:
+		return m.reprioritizeQueued(false), nil
 	case keyQueueEdit:
 		// Editing a brief means handing it to $EDITOR, which in baton runs as a
 		// server-owned PTY panel (like a git commit), not a frontend shell-out — a
@@ -83,6 +90,26 @@ func (m model) cancelQueued() model {
 	}
 	m.sendf(proto.Command{Action: "task.cancel", ID: t.ID})
 	m.status = "cancelling " + t.ID
+	return m
+}
+
+// reprioritizeQueued bumps the task under the cursor to the head (up) or tail
+// (down) of the backlog. Only a waiting task can be reordered; the server refuses
+// an in-flight or finished one and the refusal rides the status line. The reply is
+// a fresh, reordered snapshot.
+func (m model) reprioritizeQueued(up bool) model {
+	t, ok := m.taskUnderCursor()
+	if !ok {
+		m.status = "queue: nothing to reorder"
+		return m
+	}
+	if up {
+		m.sendf(proto.Command{Action: "task.promote", ID: t.ID})
+		m.status = "promoting " + t.ID + " to the head"
+	} else {
+		m.sendf(proto.Command{Action: "task.demote", ID: t.ID})
+		m.status = "demoting " + t.ID + " to the tail"
+	}
 	return m
 }
 
@@ -167,7 +194,7 @@ func (m model) queueView() string {
 	}
 
 	rows = append(rows, "",
-		mutedStyle.Render("d cancels a queued task · in-flight tasks finish on their panel"),
-		"", legend("↑↓", "move", "d", "cancel", "D", "drain all", "esc", "close"))
+		mutedStyle.Render("K/J reorder · d cancels a queued task · in-flight tasks finish on their panel"),
+		"", legend("↑↓", "move", "K/J", "reorder", "d", "cancel", "D", "drain all", "esc", "close"))
 	return configBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
