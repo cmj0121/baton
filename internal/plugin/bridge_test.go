@@ -230,7 +230,7 @@ func TestBadArgTypeRaises(t *testing.T) {
 // the right fields and types, and that panel order/count is preserved.
 func TestReadPanels(t *testing.T) {
 	h := &fakeHost{panels: []proto.Panel{
-		{ID: "p1", Kind: "agent", Title: "claude", State: "running", Group: "feat", Activity: "thinking", Pinned: true},
+		{ID: "p1", Kind: "agent", Title: "claude", State: "running", Group: "feat", Activity: "thinking", Pinned: true, Favourite: true},
 		{ID: "p2", Kind: "shell", Title: "bash"},
 	}}
 	run(t, h, `
@@ -240,8 +240,9 @@ func TestReadPanels(t *testing.T) {
 		baton.notify(ps[1].state .. "/" .. ps[1].group .. "/" .. ps[1].activity)
 		baton.notify(tostring(ps[1].pinned))
 		baton.notify(tostring(ps[2].pinned))
+		baton.notify(tostring(ps[1].favourite) .. "/" .. tostring(ps[2].favourite))
 	`)
-	want := []string{"2", "p1/agent/claude", "running/feat/thinking", "true", "false"}
+	want := []string{"2", "p1/agent/claude", "running/feat/thinking", "true", "false", "true/false"}
 	if got := h.notifies(); !reflect.DeepEqual(got, want) {
 		t.Errorf("panels marshaling = %v, want %v", got, want)
 	}

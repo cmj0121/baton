@@ -250,6 +250,7 @@ type model struct {
 	groupResize     bool                        // resize mode (z): arrows grow/shrink the focused tile
 	groupShown      map[string]int              // per-group visible-tile count N, server-owned via the snapshot's Groups
 	groupLayout     map[string]string           // per-group split layout name, server-owned via the snapshot's Groups
+	favGroups       map[string]bool             // groups marked a dashboard favourite, server-owned via the snapshot's Groups
 	groupRatios     map[string]splitRatios      // per-group manual tile weights (view-local, reset when the layout changes)
 	summaryScope    bool                        // the split is scoped to a group's collapsed (summarised) members
 	groupPinned     map[string]bool             // member ids pinned to a live tile, derived from the fleet's server-owned Pinned flags
@@ -706,6 +707,7 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		m.fleet = mergeFleet(sm.Panels)
 		m.groupShown = shownForGroups(sm.Groups)
 		m.groupLayout = layoutForGroups(sm.Groups)
+		m.favGroups = favForGroups(sm.Groups)
 		if onDash {
 			m.restoreCursor(selKind, selID, selGroup, hadSel)
 		} else {
@@ -1790,6 +1792,8 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		return m.ungroupSelected(), nil
 	case actRename:
 		return m.startRename(), nil
+	case actFavourite:
+		return m.toggleFavourite(), nil
 	case actCommands:
 		return m.openCommandPicker(m.mode), nil
 	case actBack:
@@ -2643,9 +2647,16 @@ func (m model) renderCard(p panel.Panel, selected bool) string {
 	if m.selecting() {
 		mark = markCell(m.marked[p.ID])
 	}
+	// A favourite prefixes a ⊙ before the state LED, exactly as the split marks a
+	// pinned tile. The title's width shrinks by the prefix so the head never wraps
+	// and the card stays the same size; clampWidth is a final guard.
+	fav := ""
+	if p.Favourite {
+		fav = lipgloss.NewStyle().Foreground(colBrandHi).Render("⊙") + " "
+	}
 	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
-	title := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(p.Title, cardInner-4))
-	head := mark + led + " " + title
+	title := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(p.Title, max(1, cardInner-4-lipgloss.Width(fav))))
+	head := clampWidth(mark+fav+led+" "+title, cardInner)
 
 	badge := kindBadge(p.Kind)
 	state := lipgloss.NewStyle().Foreground(info.color).Render(info.label)

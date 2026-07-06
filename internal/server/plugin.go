@@ -20,14 +20,15 @@ import (
 // (from/to, exit_code, data) before emitting.
 func panelFields(p panel.Panel) map[string]any {
 	return map[string]any{
-		"id":       p.ID,
-		"kind":     p.Kind.String(),
-		"title":    p.Title,
-		"state":    p.State.String(),
-		"group":    p.Group,
-		"task":     p.Task,
-		"activity": p.Activity,
-		"pinned":   p.Pinned,
+		"id":        p.ID,
+		"kind":      p.Kind.String(),
+		"title":     p.Title,
+		"state":     p.State.String(),
+		"group":     p.Group,
+		"task":      p.Task,
+		"activity":  p.Activity,
+		"pinned":    p.Pinned,
+		"favourite": p.Favourite,
 	}
 }
 

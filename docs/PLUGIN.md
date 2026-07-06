@@ -87,7 +87,7 @@ for _, p in ipairs(baton.panels()) do
 end
 ```
 
-- `baton.panels()` → array of `{ id, kind, title, state, group, activity, pinned }`
+- `baton.panels()` → array of `{ id, kind, title, state, group, activity, pinned, favourite }`
 - `baton.panel(id)` → one panel table, or `nil`
 - `baton.groups()` → array of `{ group, shown }`
 

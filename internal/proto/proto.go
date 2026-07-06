@@ -52,7 +52,7 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action string   `json:"action"`           // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.signal | panel.diff | panel.git | panel.scratch | group.show | group.layout | task.enqueue | task.list | task.cancel | task.drain | server.reload | config.get | command.run
+	Action string   `json:"action"`           // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.diff | panel.git | panel.scratch | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.drain | server.reload | config.get | command.run
 	Kind   string   `json:"kind,omitempty"`   // panel kind for "panel.create" (default "shell")
 	ID     string   `json:"id,omitempty"`     // target panel for close/attach/input/resize/diff, or the panel to rename
 	Path   string   `json:"path,omitempty"`   // init command (binary path) for "panel.create"; empty = default shell
@@ -92,9 +92,10 @@ type Command struct {
 // GroupView carries a group's view settings on a snapshot: Shown is how many
 // members stream as live tiles before the rest collapse into the summary tile.
 type GroupView struct {
-	Group  string `json:"group"`
-	Shown  int    `json:"shown,omitempty"`
-	Layout string `json:"layout,omitempty"` // the named split arrangement the group opens with ("" = the default)
+	Group     string `json:"group"`
+	Shown     int    `json:"shown,omitempty"`
+	Layout    string `json:"layout,omitempty"`    // the named split arrangement the group opens with ("" = the default)
+	Favourite bool   `json:"favourite,omitempty"` // a dashboard favourite: sorts the group's card to the front
 }
 
 // Panel is the server-side view of a single live terminal.
@@ -108,6 +109,7 @@ type Panel struct {
 	Activity  string `json:"activity,omitempty"`  // short status line the Monitor keeps live
 	Spark     string `json:"spark,omitempty"`     // output-rate sparkline over the recent window
 	Pinned    bool   `json:"pinned,omitempty"`    // pinned to a live tile in its group's split view
+	Favourite bool   `json:"favourite,omitempty"` // a dashboard favourite: sorts the card to the front
 	Conductor bool   `json:"conductor,omitempty"` // the singleton control agent (server-managed workspace), so a frontend can badge it
 }
 

@@ -39,6 +39,7 @@ type PanelState struct {
 	Group     string `json:"group"`
 	Task      string `json:"task,omitempty"` // last dispatched brief; additive and optional, so old snapshots (no field) still load
 	Pinned    bool   `json:"pinned"`
+	Favourite bool   `json:"favourite,omitempty"` // a dashboard favourite: additive and optional, so old snapshots still load
 	Conductor bool   `json:"conductor,omitempty"` // the singleton control agent; respawned into a fresh server-managed workspace
 	Spec      Spec   `json:"spec"`                // immutable spawn inputs only
 }
@@ -55,9 +56,10 @@ type Spec struct {
 // default). Layout is the named split arrangement the group opens with — a preset
 // or a custom TUI.yaml layout ("" = the default "tiled").
 type GroupLayout struct {
-	Group  string `json:"group"`
-	Shown  int    `json:"shown,omitempty"`
-	Layout string `json:"layout,omitempty"`
+	Group     string `json:"group"`
+	Shown     int    `json:"shown,omitempty"`
+	Layout    string `json:"layout,omitempty"`
+	Favourite bool   `json:"favourite,omitempty"` // a dashboard favourite: additive and optional, so old snapshots still load
 }
 
 // Load reads the snapshot at path. It never returns a corrupt State: a missing

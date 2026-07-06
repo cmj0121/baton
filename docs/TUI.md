@@ -48,9 +48,15 @@ rather than wedging the cockpit.
 A group's **split** (see [SPEC.md](./SPEC.md#work-items)) arranges its live tiles. The default — `tiled` — is the even grid.
 `L` in the split **cycles** the arrangement through the built-in presets and any custom layouts you define; the choice is
 **server-owned per group**, rides the snapshot beside the visible count, and **persists across a restart**. With
-[nested groups](./SPEC.md#work-items), a sub-group appears as a `▣` rollup tile you `enter` to **descend** into (the header
-shows the path as a breadcrumb, `backend › api`); `esc` / `b` pop back one level. Each level keeps its own layout,
-visible count, and resize ratios, since all of those are keyed by the group's path.
+[nested groups](./SPEC.md#work-items), a sub-group appears as a `▣` rollup tile — sized like a live panel — listing a small
+roster of the members / sub-sub-groups it holds, each with a state LED, plus an `↵ descend` hint (the overflow `▦` summary
+tile carries the same roster + `↵ open`). `enter` **descends** into it (the header shows the path as a breadcrumb,
+`backend › api`); `esc` / `b` pop back one level. A `⊙` on a sub-group tile marks a **pinned default** — exactly one of its
+direct panels is pinned — and descending then drops straight into that panel's zoom rather than the sub-group's split, the
+same single-pin shortcut a top-level group has from the dashboard (**back**, `C-t b`, pops back to the sub-group's split).
+That split `⊙` is not the dashboard **favourite**: `*` favourites the selected card — a separate, server-owned flag that
+floats a panel or group to the **front** of the grid and tree, and never touches which tiles stream live or the single-pin
+descend. Each level keeps its own layout, visible count, and resize ratios, since all of those are keyed by the group's path.
 
 ### Presets
 
