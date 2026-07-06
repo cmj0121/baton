@@ -37,6 +37,116 @@ func TestRenderTileHeadStaysOneRow(t *testing.T) {
 	}
 }
 
+// backendSplit opens the backend group's split (a direct panel plus the api and db
+// sub-groups) with an optional pin applied to a fleet panel by id, for the descend
+// and rollup-tile tests. The focus walks the live panel tile first, then the
+// sub-group tiles, so api sits at focus index 1.
+func backendSplit(pinID string) model {
+	m := baseModel()
+	nf := nestedFleet()
+	for i := range nf {
+		if nf[i].ID == pinID {
+			nf[i].Pinned = true
+		}
+	}
+	m.fleet = nf
+	return m.zoomGroup(m.dashItems()[0]) // the backend group
+}
+
+// childGroupNamed resolves the current scope's immediate sub-group with the given
+// path, for the rollup-tile tests.
+func childGroupNamed(m model, path string) childGroup {
+	for _, cg := range m.childGroups() {
+		if cg.path == path {
+			return cg
+		}
+	}
+	return childGroup{}
+}
+
+// TestRenderRollupTileHeight mirrors TestRenderTileHeadStaysOneRow for the two
+// rollup tiles: a sub-group and the overflow summary each stay head (1) + body
+// (emuRows) + border (2) tall — including at narrow emuCols, where a long name, a
+// wide count, and a ⊙ prefix must never wrap the head or a roster line onto a second
+// row. It also checks the roster/hint show at a comfortable width.
+func TestRenderRollupTileHeight(t *testing.T) {
+	long := "a-really-long-sub-group-name-that-would-wrap"
+	// A pinned default gives the sub-group a ⊙ prefix; the long title stresses the head
+	// clamp, and many collapsed members stress the roster's "+K more" fold.
+	pinned := backendSplit("2")
+	collapsed := make([]panel.Panel, 0, 12)
+	for i := 0; i < 12; i++ {
+		collapsed = append(collapsed, panel.Panel{ID: string(rune('a' + i)), Title: long, State: panel.Running})
+	}
+
+	for _, emuCols := range []int{4, 8, 16, 24} {
+		for _, emuRows := range []int{1, 2, 3, 4, 8} {
+			cg := childGroupNamed(pinned, "backend/api")
+			cg.path = long // force a long leaf name through the head at every width
+			group := pinned.renderGroupTile(cg, true, emuCols, emuRows, gtileGap)
+			if h := lipgloss.Height(group); h != emuRows+3 {
+				t.Fatalf("sub-group tile emuCols=%d emuRows=%d: height %d, want %d\n%s", emuCols, emuRows, h, emuRows+3, group)
+			}
+			summary := pinned.renderSummaryTile(collapsed, false, emuCols, emuRows, gtileGap)
+			if h := lipgloss.Height(summary); h != emuRows+3 {
+				t.Fatalf("summary tile emuCols=%d emuRows=%d: height %d, want %d\n%s", emuCols, emuRows, h, emuRows+3, summary)
+			}
+		}
+	}
+
+	// At a comfortable size the roster and hints are visible.
+	group := pinned.renderGroupTile(childGroupNamed(pinned, "backend/api"), true, 24, 8, gtileGap)
+	if !strings.Contains(group, "api · a") {
+		t.Fatalf("sub-group tile should roster a member, got:\n%s", group)
+	}
+	if !strings.Contains(group, "descend") {
+		t.Fatalf("sub-group tile should show the descend hint, got:\n%s", group)
+	}
+	if !strings.Contains(pinned.renderSummaryTile(collapsed, false, 24, 8, gtileGap), "open") {
+		t.Fatal("summary tile should show the open hint")
+	}
+}
+
+// TestChildPinnedDefault: exactly one pinned direct panel yields ok + that panel;
+// zero, several, or a pin nested deeper in the subtree yield !ok.
+func TestChildPinnedDefault(t *testing.T) {
+	cg := func(members ...panel.Panel) childGroup {
+		return childGroup{path: "backend/api", members: members}
+	}
+	direct := func(id string, pinned bool) panel.Panel {
+		return panel.Panel{ID: id, Group: "backend/api", Pinned: pinned}
+	}
+	deep := func(id string, pinned bool) panel.Panel {
+		return panel.Panel{ID: id, Group: "backend/api/v2", Pinned: pinned}
+	}
+
+	if p, ok := childPinnedDefault(cg(direct("1", true), direct("2", false))); !ok || p.ID != "1" {
+		t.Fatalf("one pinned direct panel should return it, got %q ok=%v", p.ID, ok)
+	}
+	if _, ok := childPinnedDefault(cg(direct("1", false), direct("2", false))); ok {
+		t.Fatal("no pin should be !ok")
+	}
+	if _, ok := childPinnedDefault(cg(direct("1", true), direct("2", true))); ok {
+		t.Fatal("several pins should be !ok")
+	}
+	if _, ok := childPinnedDefault(cg(direct("1", false), deep("2", true))); ok {
+		t.Fatal("a pin deeper in the subtree should be !ok")
+	}
+}
+
+// TestRenderGroupTilePinGlyph: a sub-group holding a lone pinned default is marked
+// with a ⊙ in its head.
+func TestRenderGroupTilePinGlyph(t *testing.T) {
+	m := backendSplit("2") // pin api's direct panel #2
+	tile := m.renderGroupTile(childGroupNamed(m, "backend/api"), false, 24, 8, gtileGap)
+	if !strings.Contains(tile, "⊙") {
+		t.Fatalf("a sub-group with a pinned default should show the ⊙ glyph, got:\n%s", tile)
+	}
+	if strings.Contains(m.renderGroupTile(childGroupNamed(m, "backend/db"), false, 24, 8, gtileGap), "⊙") {
+		t.Fatal("a sub-group with no pinned default should not show the ⊙ glyph")
+	}
+}
+
 func TestGroupMembers(t *testing.T) {
 	m := baseModel()
 	m.fleet = groupedFleet()

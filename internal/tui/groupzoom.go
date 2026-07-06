@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	vt "github.com/charmbracelet/x/vt"
 
 	"github.com/cmj0121/baton/internal/panel"
@@ -1140,6 +1141,21 @@ func groupBreadcrumb(path string) string {
 	return strings.ReplaceAll(path, panel.GroupSep, " › ")
 }
 
+// childPinnedDefault returns a sub-group's lone pinned *direct* panel — the one
+// descending would auto-zoom into — when exactly one of its direct panels carries
+// the server-owned Pinned flag, matching zoomGroup's single-pin default at the top
+// level. ok=false on no pin, several pins, or a pin that sits deeper in the subtree.
+func childPinnedDefault(cg childGroup) (panel.Panel, bool) {
+	var only panel.Panel
+	n := 0
+	for _, p := range cg.members {
+		if p.Group == cg.path && p.Pinned { // a direct panel of the sub-group, pinned
+			only, n = p, n+1
+		}
+	}
+	return only, n == 1
+}
+
 // zoomFocusedMember drops from the split into the focused panel's own live zoom,
 // remembering the group so back (C-t b) returns to the split.
 func (m model) zoomFocusedMember() (tea.Model, tea.Cmd) {
@@ -1298,64 +1314,178 @@ func (m model) renderSplitGrid(slots []splitTile) string {
 	return tileGrid(rendered, cols)
 }
 
-// renderRollupTile draws a non-panel tile — a sub-group or the overflow summary —
-// as a glyph-and-title head over up to two body lines, in a box matching renderTile
-// (size, padding, brand glow when focused) so it sits flush in the grid. The body is
-// padded and clipped to exactly emuRows so every cell is the same height.
-func (m model) renderRollupTile(glyph string, glyphColor lipgloss.Color, title string, lines []string, focused bool, emuCols, emuRows, marginRight int) string {
+// rollupRow is one roster line of a rollup tile: a member (or an immediate
+// sub-sub-group) name and its already-styled LED — a state LED for a panel, a ▣
+// for a nested group — so renderRollupTile lays the roster out without re-styling.
+type rollupRow struct {
+	led  string // already styled
+	name string
+}
+
+// renderRollupTile draws a non-panel tile — a sub-group or the overflow summary — as
+// a glyph-and-title head over a fixed-height body: the state chips, a roster of the
+// members it rolls up, and a centred descend hint pinned to the bottom. The box
+// matches renderTile (size, padding, brand glow when focused) so it sits flush in the
+// grid, and the body is always exactly emuRows tall so every cell is the same height.
+// pinned prefixes a ⊙ before the glyph, exactly as renderTile marks a pinned panel.
+func (m model) renderRollupTile(glyph string, glyphColor lipgloss.Color, pinned bool, title, countRight, chips string, roster []rollupRow, footer string, focused bool, emuCols, emuRows, marginRight int) string {
 	border, titleColor := colFaint, colInk
 	if focused {
 		border, titleColor = colBrand, colBrandHi
 	}
-	head := lipgloss.NewStyle().Foreground(glyphColor).Bold(true).Render(glyph) + " " +
-		lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(title, max(1, emuCols-2)))
-	body := make([]string, emuRows)
-	for i := 0; i < emuRows && i < len(lines); i++ {
-		body[i] = lines[i]
+	// The head's leading markers first — an optional pin glyph, then the tile glyph —
+	// then the title in whatever width is left of the right-aligned count, so a long
+	// name never wraps the head onto a second row.
+	prefix := lipgloss.NewStyle().Foreground(glyphColor).Bold(true).Render(glyph) + " "
+	if pinned {
+		prefix = lipgloss.NewStyle().Foreground(colBrandHi).Render("⊙") + " " + prefix
 	}
+	titleStyle := lipgloss.NewStyle().Foreground(titleColor).Bold(true)
+	// Right-align the count only when the prefix, count, and at least one title cell
+	// all fit; otherwise drop the count so a wide count (plus a ⊙ prefix) can never
+	// force the head past emuCols and wrap it onto a second row.
+	var head string
+	if avail := emuCols - lipgloss.Width(prefix) - lipgloss.Width(countRight) - 1; countRight != "" && avail >= 1 {
+		head = padEnds(prefix+titleStyle.Render(truncate(title, avail)), countRight, emuCols)
+	} else {
+		head = prefix + titleStyle.Render(truncate(title, max(1, emuCols-lipgloss.Width(prefix))))
+	}
+	head = clampWidth(head, emuCols) // final guard: a tiny tile's prefix alone must not wrap
+	body := rollupBody(chips, roster, footer, emuCols, emuRows)
 	return paneBox(emuCols, marginRight, border).Render(lipgloss.JoinVertical(lipgloss.Left, head,
 		lipgloss.JoinVertical(lipgloss.Left, body...)))
 }
 
+// rollupBody composes a rollup tile's body into exactly emuRows lines: the chips on
+// line 0, a blank line, then the roster, with the footer centred on the last line and
+// the gap between filled with blanks. It degrades gracefully as emuRows shrinks —
+// dropping the roster first, then the footer, always keeping the chips — and never
+// emits more than emuRows lines.
+func rollupBody(chips string, roster []rollupRow, footer string, emuCols, emuRows int) []string {
+	body := make([]string, emuRows)
+	if emuRows < 1 {
+		return body
+	}
+	body[0] = truncate(chips, emuCols) // chips carry ANSI, but truncate only ever shortens — safe against a wrap
+	// The footer sits on the last line once there is room for it below the chips and
+	// the blank spacer (emuRows >= 3); below that it is dropped and only the chips show.
+	footerRow := -1
+	if footer != "" && emuRows >= 3 {
+		footerRow = emuRows - 1
+		body[footerRow] = centerText(mutedStyle.Render(truncate(footer, emuCols)), emuCols)
+	}
+	// The roster fills line 2 up to (but not including) the footer, leaving line 1 blank.
+	end := emuRows
+	if footerRow >= 0 {
+		end = footerRow
+	}
+	writeRoster(body, roster, 2, end, emuCols)
+	return body
+}
+
+// writeRoster lays roster rows into body[start:end], one per line. When there are
+// more rows than fit, the last shown line becomes a muted "+K more" so the overflow
+// is never silently dropped.
+func writeRoster(body []string, roster []rollupRow, start, end, emuCols int) {
+	capacity := end - start
+	if capacity < 1 || len(roster) == 0 {
+		return
+	}
+	if len(roster) <= capacity {
+		for i, r := range roster {
+			body[start+i] = rollupLine(r, emuCols)
+		}
+		return
+	}
+	// More rows than fit: show capacity-1 and fold the rest into a "+K more" line.
+	shown := capacity - 1
+	for i := 0; i < shown; i++ {
+		body[start+i] = rollupLine(roster[i], emuCols)
+	}
+	body[start+shown] = mutedStyle.Render(truncate(fmt.Sprintf("+%d more", len(roster)-shown), emuCols))
+}
+
+// padEnds lays left flush-left and right flush-right within width columns, with at
+// least one space between — the visible width of each is measured so styled (ANSI)
+// segments still align.
+func padEnds(left, right string, width int) string {
+	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		gap = 1
+	}
+	return left + strings.Repeat(" ", gap) + right
+}
+
+// centerText left-pads s so it sits centred within width columns; the box's own
+// width fills the trailing space, so no right pad is needed.
+func centerText(s string, width int) string {
+	if pad := (width - lipgloss.Width(s)) / 2; pad > 0 {
+		return strings.Repeat(" ", pad) + s
+	}
+	return s
+}
+
+// rollupLine renders one roster row: a "· " bullet and the leaf name flush-left, its
+// LED flush-right, clamped to emuCols so the forced minimum gap can't overflow a very
+// narrow tile (emuCols <= 4) and wrap the row.
+func rollupLine(r rollupRow, emuCols int) string {
+	name := truncate(r.name, max(1, emuCols-3-lipgloss.Width(r.led)))
+	return clampWidth(padEnds("· "+name, r.led, emuCols), emuCols)
+}
+
+// clampWidth truncates a possibly-styled string to at most width visible cells,
+// preserving its ANSI styling — the final guard that a composed head or roster line
+// can never exceed the tile's inner width and wrap onto a second row.
+func clampWidth(s string, width int) string {
+	if width < 1 {
+		return ""
+	}
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	return ansi.Truncate(s, width, "")
+}
+
 // renderGroupTile draws an immediate sub-group as one descendable tile: a ▣ glyph in
-// the sub-group's rolled-up state colour, its leaf name, and a rollup line (its panel
-// count and any deeper sub-groups). enter descends the split into it.
+// the sub-group's rolled-up state colour, its leaf name and a compact count in the
+// head, its state chips, a roster of its immediate children, and a ↵ descend hint. A
+// ⊙ marks a sub-group holding a lone pinned default (enter drops straight into it).
 func (m model) renderGroupTile(cg childGroup, focused bool, emuCols, emuRows, marginRight int) string {
-	line := fmt.Sprintf("%d panel(s)", len(cg.members))
+	count := fmt.Sprintf("%d", len(cg.members))
 	if n := subGroupCount(cg.members, cg.path); n > 0 {
-		line += fmt.Sprintf(" · ▣%d", n)
+		count += fmt.Sprintf(" · ▣%d", n)
 	}
-	lines := []string{
-		truncate(groupCountChips(cg.members), emuCols),
-		mutedStyle.Render(truncate(line, emuCols)),
+	// The roster is the sub-group's immediate children: its direct panels first (leaf =
+	// title, state LED), then its immediate sub-sub-groups (leaf = group name, a ▣ LED).
+	var roster []rollupRow
+	for _, p := range cg.members {
+		if p.Group == cg.path {
+			info := states[p.State]
+			led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
+			roster = append(roster, rollupRow{led: led, name: p.Title})
+		}
 	}
-	return m.renderRollupTile("▣", states[groupState(cg.members)].color, panel.GroupLeaf(cg.path), lines, focused, emuCols, emuRows, marginRight)
+	for _, sub := range childGroupsOf(cg.members, cg.path) {
+		led := lipgloss.NewStyle().Foreground(states[groupState(sub.members)].color).Bold(true).Render("▣")
+		roster = append(roster, rollupRow{led: led, name: panel.GroupLeaf(sub.path)})
+	}
+	_, pinned := childPinnedDefault(cg)
+	return m.renderRollupTile("▣", states[groupState(cg.members)].color, pinned, panel.GroupLeaf(cg.path),
+		mutedStyle.Render(count), groupCountChips(cg.members), roster, "↵ descend", focused, emuCols, emuRows, marginRight)
 }
 
 // renderSummaryTile draws the rollup of the collapsed members as one tile: a "+N
-// more" header, a per-state breakdown in the state LED colours, and the most-urgent
-// member's activity line — so the spillover is legible at a glance and one enter
-// away.
+// more" head, the per-state chips, a roster of the summarised panels, and a ↵ open
+// hint — so the spillover is legible at a glance and one enter away.
 func (m model) renderSummaryTile(collapsed []panel.Panel, focused bool, emuCols, emuRows, marginRight int) string {
-	lines := []string{truncate(groupCountChips(collapsed), emuCols)}
-	if act := mostUrgentActivity(collapsed); act != "" {
-		lines = append(lines, mutedStyle.Render(truncate(act, emuCols)))
+	roster := make([]rollupRow, 0, len(collapsed))
+	for _, p := range collapsed {
+		info := states[p.State]
+		led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
+		roster = append(roster, rollupRow{led: led, name: p.Title})
 	}
-	return m.renderRollupTile("▦", colBrandHi, fmt.Sprintf("+%d more", len(collapsed)), lines, focused, emuCols, emuRows, marginRight)
-}
-
-// mostUrgentActivity is the activity line of the most pressing collapsed member,
-// by the same urgency order the summary chips use (attention > running > spawning
-// > idle > exited). Empty when no such member carries an activity line yet.
-func mostUrgentActivity(members []panel.Panel) string {
-	for _, st := range stateOrder {
-		for _, p := range members {
-			if p.State == st && p.Activity != "" {
-				return fmt.Sprintf("%s · %s", p.Title, p.Activity)
-			}
-		}
-	}
-	return ""
+	return m.renderRollupTile("▦", colBrandHi, false, fmt.Sprintf("+%d more", len(collapsed)),
+		"", groupCountChips(collapsed), roster, "↵ open", focused, emuCols, emuRows, marginRight)
 }
 
 // tileGrid arranges rendered tiles into rows of at most cols columns.
