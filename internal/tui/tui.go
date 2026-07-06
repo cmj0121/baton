@@ -112,6 +112,7 @@ const (
 	modeQueue   // the task-queue manager popup (Q): list / cancel / drain the backlog
 	modeZoom
 	modeGroupZoom
+	modeScreensaver // the hidden Matrix-rain + clock Easter egg (C-t E / idle auto-start)
 )
 
 type model struct {
@@ -265,6 +266,15 @@ type model struct {
 	scratchEmu   *vt.SafeEmulator
 	scratchOpen  bool
 	scratchArmed bool
+
+	// The hidden screensaver Easter egg (modeScreensaver, C-t E / idle auto-start).
+	// saverReturn is the mode to restore on dismiss; saver is the live digital rain;
+	// lastInput is the wall time (m.now) of the last key / mouse click, checked on
+	// the 1 s tick to auto-start the saver once the cockpit has sat idle. See
+	// screensaver.go.
+	saverReturn mode
+	saver       *rain
+	lastInput   time.Time
 
 	width, height int
 	quitting      bool
@@ -556,6 +566,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.scratchOpen {
 			m.resizeScratch() // refit the floating pane to the new screen
 		}
+		if m.mode == modeScreensaver && m.saver != nil {
+			m.saver.resize(m.width, m.height) // reflow the rain columns to the new size
+		}
 		// A resize can leave stale cells from the old frame — most visibly in a
 		// zoom, whose View embeds the panel emulator's raw render that the diff
 		// renderer will not fully clear. Force a clean full repaint so the whole
@@ -601,6 +614,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The backend dropped. Rather than vanish, stay up and alert in the footer
 		// so the user can see it and recover — C-t S restarts the daemon and
 		// reattaches, C-t q detaches. The clock tick keeps the cockpit rendering.
+		if m.mode == modeScreensaver {
+			m = m.exitScreensaver() // never mask an outage behind the rain
+		}
 		m.backendDown = true
 		m.status = "error: backend down — " + keyLabel(m.effPrefix()) + " S to restart"
 		return m, nil
@@ -608,12 +624,38 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		m.now = time.Time(msg)
 		m.ageStatus()
+		if cmd := m.maybeAutoSaver(); cmd != nil { // auto-start the saver after saverIdle
+			return m, tea.Batch(cmd, tick())
+		}
 		return m, tick()
 
+	case saverTickMsg:
+		// Advance the rain, re-arming the fast cadence only while the saver is still
+		// the active mode; a dismiss stops the animation by letting this fall through.
+		if m.mode != modeScreensaver || m.saver == nil {
+			return m, nil
+		}
+		m.saver.step()
+		return m, saverTick()
+
 	case tea.MouseMsg:
+		if m.mode == modeScreensaver {
+			if msg.Action == tea.MouseActionPress { // a click dismisses; motion/release is ignored
+				m.lastInput = m.now
+				return m.exitScreensaver(), nil
+			}
+			return m, nil // do not let cell-motion noise leak into the covered view
+		}
+		if msg.Action == tea.MouseActionPress {
+			m.lastInput = m.now // only a real click counts as activity for the idle timer
+		}
 		return m.handleMouse(msg)
 
 	case tea.KeyMsg:
+		m.lastInput = m.now // any key resets the idle timer, in every mode
+		if m.mode == modeScreensaver {
+			return m.exitScreensaver(), nil // any key dismisses the saver, swallowed whole
+		}
 		if m.input != inputNone { // a text-input overlay (incl. zoom search) captures keys in every mode
 			return m.handleInput(msg)
 		}
@@ -991,6 +1033,9 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.prefix = false
 		if b, ok := m.lookupEscape(key); ok {
 			return m.runAction(b.act)
+		}
+		if key == keyScreensaver { // C-t E → the hidden screensaver (kept out of the key map)
+			return m.enterScreensaver(), saverTick()
 		}
 		if key == m.bindingKey(actDetach) { // C-t q detaches from every mode
 			return m.runAction(actDetach)
@@ -1949,6 +1994,9 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// from, or the dashboard. Any other escape no-ops here.
 			return m, nil
 		}
+		if key == keyScreensaver { // C-t E → the hidden screensaver, over the zoom
+			return m.enterScreensaver(), saverTick()
+		}
 		if key == m.bindingKey(actDetach) { // C-t q detaches from a zoom too
 			// A transient diff panel is reaped on the way out, even when detaching the
 			// whole cockpit — it is never persisted, so it must not outlive its zoom.
@@ -2422,6 +2470,9 @@ func (m model) render() string {
 	}
 	if m.width < minWidth || m.height < minHeight {
 		return m.tooSmallView() // a graceful notice rather than negative-width garbage
+	}
+	if m.mode == modeScreensaver {
+		return m.screensaverView() // full-screen takeover: rain + clock, no footer
 	}
 	if m.mode == modeZoom {
 		return m.zoomView()

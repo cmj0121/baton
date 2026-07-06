@@ -788,6 +788,9 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.toggleScratch()
 			}
 		}
+		if key == keyScreensaver { // C-t E → the hidden screensaver, over the split
+			return m.enterScreensaver(), saverTick()
+		}
 		if key == m.bindingKey(actDetach) { // C-t q detaches from the split too
 			return m.runAction(actDetach)
 		}
