@@ -110,6 +110,13 @@ type Panel struct {
 	// survives a frontend restart and is shared across clients.
 	Pinned bool
 
+	// Favourite marks the panel as a dashboard favourite: favourited cards sort
+	// to the front of the dashboard and show a marker. The server owns the flag
+	// and reports it to every frontend, so it survives a frontend restart and is
+	// shared across clients. It is entirely separate from Pinned (which only
+	// curates live tiles inside a group split).
+	Favourite bool
+
 	// Conductor marks the singleton control agent: an agent panel the server
 	// spawned in a server-managed ephemeral workspace and wired to drive the
 	// fleet over the socket. At most one exists at a time.
@@ -131,6 +138,7 @@ func FromProto(p proto.Panel) Panel {
 		Activity:  p.Activity,
 		Spark:     p.Spark,
 		Pinned:    p.Pinned,
+		Favourite: p.Favourite,
 		Conductor: p.Conductor,
 	}
 }
@@ -151,6 +159,7 @@ func (p Panel) ToProto() proto.Panel {
 		Activity:  p.Activity,
 		Spark:     p.Spark,
 		Pinned:    p.Pinned,
+		Favourite: p.Favourite,
 		Conductor: p.Conductor,
 	}
 }

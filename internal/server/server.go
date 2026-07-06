@@ -160,6 +160,12 @@ type Server struct {
 	// absent or empty entry means "use the client default" (tiled). Guarded by mu.
 	groupLayout map[string]string
 
+	// groupFavourite is the set of groups marked a dashboard favourite — their
+	// cards sort to the front of the dashboard. Keyed by group name; an absent
+	// entry means "not a favourite". Entirely separate from groupShown/groupLayout
+	// and from a panel's Pinned flag. Guarded by mu.
+	groupFavourite map[string]bool
+
 	// conductorPending reserves the conductor singleton across the unlocked spawn
 	// in createPanel, so two near-simultaneous conductor.create calls cannot both
 	// pass the "no conductor exists yet" check. Guarded by mu.
@@ -274,6 +280,7 @@ func New(ln net.Listener, opts ...Option) *Server {
 		ephemeral:       make(map[string]struct{}),
 		groupShown:      make(map[string]int),
 		groupLayout:     make(map[string]string),
+		groupFavourite:  make(map[string]bool),
 		pendingDispatch: make(map[string][]byte),
 		tasks:           make(map[string]*task.Task),
 		panelTask:       make(map[string]string),
@@ -837,6 +844,12 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			return
 		}
 		s.broadcastFleet()
+	case "panel.favourite", "panel.unfavourite":
+		if err := s.setFavourite(targetIDs(cmd), cmd.Action == "panel.favourite"); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		s.broadcastFleet()
 	case "panel.signal":
 		// Delivering a signal does not change any panel struct; an exit it triggers
 		// flows back through onPanelExit, so there is nothing to broadcast here.
@@ -873,6 +886,12 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		}
 	case "group.show":
 		if err := s.setGroupShown(cmd.Group, cmd.Count); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		s.broadcastFleet()
+	case "group.favourite", "group.unfavourite":
+		if err := s.setGroupFavourite(cmd.Group, cmd.Action == "group.favourite"); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
@@ -1289,6 +1308,7 @@ func (s *Server) snapshotState() state.State {
 			Group:     p.Group,
 			Task:      p.Task,
 			Pinned:    p.Pinned,
+			Favourite: p.Favourite,
 			Conductor: p.Conductor,
 			Spec:      state.Spec{Command: spec.Command, Args: spec.Args, Dir: spec.Dir},
 		}
@@ -1313,6 +1333,9 @@ func (s *Server) snapshotState() state.State {
 		if layout != "" {
 			gview(g).Layout = layout
 		}
+	}
+	for g := range s.groupFavourite { // the map only ever stores true — a false deletes the key
+		gview(g).Favourite = true
 	}
 	groups := make([]state.GroupLayout, 0, len(gviews))
 	for _, v := range gviews {
@@ -1368,6 +1391,7 @@ func (s *Server) Restore() {
 			Group:     ps.Group,
 			Task:      ps.Task,
 			Pinned:    ps.Pinned,
+			Favourite: ps.Favourite,
 			Conductor: ps.Conductor,
 			State:     panel.Exited,
 			Activity:  "restored · press r to re-run",
@@ -1386,6 +1410,9 @@ func (s *Server) Restore() {
 		}
 		if g.Layout != "" {
 			s.groupLayout[g.Group] = g.Layout
+		}
+		if g.Favourite {
+			s.groupFavourite[g.Group] = true
 		}
 	}
 	s.restoreTasksLocked()
@@ -2441,6 +2468,7 @@ func (s *Server) moveGroupSubtreeLocked(oldPrefix, newPrefix string) int {
 	}
 	remapGroupKeys(s.groupShown, oldPrefix, newPrefix)
 	remapGroupKeys(s.groupLayout, oldPrefix, newPrefix)
+	remapGroupKeys(s.groupFavourite, oldPrefix, newPrefix)
 	return moved
 }
 
@@ -2678,6 +2706,36 @@ func (s *Server) setPinned(ids []string, pinned bool) error {
 	return nil
 }
 
+// setFavourite marks every listed panel a dashboard favourite (or not), the
+// server-owned flag the dashboard reads to sort a card to the front. Favourites
+// live with the panel here — the single source of truth — so they survive a
+// frontend restart and are shared across clients. It is entirely separate from
+// Pinned. Ids that match no panel are skipped; it errors only when none matched.
+func (s *Server) setFavourite(ids []string, fav bool) error {
+	if len(ids) == 0 {
+		return fmt.Errorf("panel.favourite needs at least one panel")
+	}
+	want := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for i := range s.panels {
+		if _, ok := want[s.panels[i].ID]; ok {
+			s.panels[i].Favourite = fav
+			n++
+		}
+	}
+	if n == 0 {
+		return fmt.Errorf("no panel matched the given ids")
+	}
+	log.Info().Int("panels", n).Bool("favourite", fav).Msg("panels favourited")
+	return nil
+}
+
 // setGroupShown records a group's visible count — how many members stream as
 // live tiles before the rest collapse into the summary tile. The count is clamped
 // to [minVisible, maxVisible]; an empty group name is rejected. The group need not
@@ -2723,6 +2781,29 @@ func (s *Server) setGroupLayout(group, layout string) error {
 	return nil
 }
 
+// setGroupFavourite records whether a group is a dashboard favourite — its card
+// sorts to the front of the dashboard. An empty group name is rejected. Like
+// setGroupShown the group need not currently exist, and lifecycle cleanup keeps
+// the map tidy on dissolve/rename. It is entirely separate from a panel's Pinned
+// flag and from the per-group view settings.
+func (s *Server) setGroupFavourite(group string, fav bool) error {
+	group = strings.TrimSpace(group)
+	if group == "" {
+		return fmt.Errorf("group.favourite needs a group")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if fav {
+		s.groupFavourite[group] = true
+	} else {
+		delete(s.groupFavourite, group)
+	}
+	s.emit("group.change", map[string]any{"group": group, "favourite": fav})
+	log.Info().Str("group", group).Bool("favourite", fav).Msg("group favourite set")
+	return nil
+}
+
 // panelsMsg builds the full "panels" snapshot broadcast to clients: every panel
 // in wire form plus each group's non-default view settings, sorted by name for a
 // deterministic frame.
@@ -2754,6 +2835,9 @@ func (s *Server) panelsMsg() proto.ServerMsg {
 		if layout != "" {
 			view(g).Layout = layout
 		}
+	}
+	for g := range s.groupFavourite { // the map only ever stores true — a false deletes the key
+		view(g).Favourite = true
 	}
 	groups := make([]proto.GroupView, 0, len(views))
 	for _, v := range views {

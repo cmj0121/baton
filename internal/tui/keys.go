@@ -39,11 +39,12 @@ const (
 	keyDetach      = "q"
 	keyBack        = "b" // back one level: zoom→group→dashboard (bare in command mode, C-t b in a zoom)
 
-	keyMark    = "g" // mark / unmark the selected item
-	keyGroup   = "G" // group the marked panels (shift+g)
-	keyAdd     = "a" // add the marked panels to the selected group
-	keyUngroup = "u" // dissolve the selected work item
-	keyRename  = "e" // edit the name of the selected panel or group
+	keyMark      = "g" // mark / unmark the selected item
+	keyGroup     = "G" // group the marked panels (shift+g)
+	keyAdd       = "a" // add the marked panels to the selected group
+	keyUngroup   = "u" // dissolve the selected work item
+	keyRename    = "e" // edit the name of the selected panel or group
+	keyFavourite = "*" // favourite / unfavourite the selected panel or group (sorts it to the front)
 
 	// Prefix-reached escapes, bound to the leader in every mode.
 	keyDashboard = "d" // C-t d → the dashboard
@@ -102,6 +103,7 @@ const (
 	actAdd
 	actUngroup
 	actRename
+	actFavourite
 
 	// Back pops one view level. It is a command (bare key in command mode, prefix
 	// in a zoom), not an escape, so the prefix handler leaves it to lookupCmd.
@@ -157,6 +159,7 @@ var bindings = []binding{
 	{"add", keyAdd, "add the marked panels to the selected group", actAdd, "Work items"},
 	{"ungroup", keyUngroup, "ungroup the selected work item", actUngroup, "Work items"},
 	{"rename", keyRename, "rename the panel or group", actRename, "Work items"},
+	{"favourite", keyFavourite, "favourite the panel or group (sorts it to the front)", actFavourite, "Work items"},
 
 	{"help", keyHelp, "view the keys for this view", actHelp, "View"},
 	{"key-map", keyEditMap, "edit the key map (prefix)", actEditMap, "View"},

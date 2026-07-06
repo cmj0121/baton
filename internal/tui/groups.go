@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -54,7 +55,31 @@ func (m model) dashItems() []dashItem {
 		groupAt[top] = len(items)
 		items = append(items, dashItem{kind: itemGroup, name: top, members: []panel.Panel{p}})
 	}
-	return filterItems(items, m.filter)
+	items = filterItems(items, m.filter)
+	// Float favourited cards to the front, preserving the fleet order within the
+	// favourited and non-favourited partitions (a stable sort), so both the grid
+	// and the tree view — which project through here — show favourites first.
+	slices.SortStableFunc(items, func(a, b dashItem) int {
+		af, bf := m.itemFavourite(a), m.itemFavourite(b)
+		switch {
+		case af && !bf:
+			return -1
+		case !af && bf:
+			return 1
+		default:
+			return 0
+		}
+	})
+	return items
+}
+
+// itemFavourite reports whether a dashboard item is a favourite: a lone panel by
+// its server-owned Favourite flag, a group by the snapshot's favGroups set.
+func (m model) itemFavourite(it dashItem) bool {
+	if it.kind == itemGroup {
+		return m.favGroups[it.name]
+	}
+	return it.panel.Favourite
 }
 
 // childGroup is one immediate sub-group under a parent path: its full path and its
@@ -419,6 +444,69 @@ func (m model) ungroupSelected() model {
 	return m
 }
 
+// toggleFavourite stars or un-stars the selected dashboard item — a lone panel or
+// a group. The server owns the favourite flag, so each toggle is sent on to it
+// (and broadcast to every client); the local state is updated optimistically so
+// the sort reflows at once, then the next snapshot reconciles it. Favourited
+// cards sort to the front of the dashboard, so the cursor is moved to follow the
+// toggled card to its new position — no one-frame flicker onto a neighbour.
+func (m model) toggleFavourite() model {
+	it, ok := m.selectedItem()
+	if !ok {
+		m.status = "nothing to favourite"
+		return m
+	}
+	if it.kind == itemGroup {
+		fav := !m.favGroups[it.name]
+		if m.favGroups == nil {
+			m.favGroups = map[string]bool{}
+		}
+		if fav {
+			m.favGroups[it.name] = true
+			m.sendf(proto.Command{Action: "group.favourite", Group: it.name})
+			m.status = fmt.Sprintf("favourited %q", it.name)
+		} else {
+			delete(m.favGroups, it.name)
+			m.sendf(proto.Command{Action: "group.unfavourite", Group: it.name})
+			m.status = fmt.Sprintf("unfavourited %q", it.name)
+		}
+		m.cursorToItem(it)
+		return m
+	}
+	fav := !it.panel.Favourite
+	for i := range m.fleet {
+		if m.fleet[i].ID == it.panel.ID {
+			m.fleet[i].Favourite = fav // optimistic: reflow the sort before the snapshot lands
+		}
+	}
+	if fav {
+		m.sendf(proto.Command{Action: "panel.favourite", ID: it.panel.ID})
+		m.status = "favourited " + it.panel.Title
+	} else {
+		m.sendf(proto.Command{Action: "panel.unfavourite", ID: it.panel.ID})
+		m.status = "unfavourited " + it.panel.Title
+	}
+	m.cursorToItem(it)
+	return m
+}
+
+// cursorToItem re-points the dashboard cursor at the given item after a reflow —
+// matching a lone panel by id and a group by name against the freshly sorted
+// dashItems, so the highlight stays on the same card. A no-match leaves the cursor
+// put (clamped elsewhere), so a vanished item never wedges it.
+func (m *model) cursorToItem(target dashItem) {
+	for i, it := range m.dashItems() {
+		if it.kind != target.kind {
+			continue
+		}
+		if (it.kind == itemGroup && it.name == target.name) ||
+			(it.kind == itemPanel && it.panel.ID == target.panel.ID) {
+			m.cursor = i
+			return
+		}
+	}
+}
+
 // startRename opens the rename overlay for the selected item, seeded with its
 // current name and remembering whether a panel or a group is the target.
 func (m model) startRename() model {
@@ -611,6 +699,26 @@ func layoutForGroups(groups []proto.GroupView) map[string]string {
 	return out
 }
 
+// favForGroups builds the set of favourited groups from a snapshot's GroupView
+// entries, keyed by group name. Only groups the server reports as a favourite
+// appear; a group absent from the map is not a favourite. The dashboard sorts
+// these cards to the front.
+func favForGroups(groups []proto.GroupView) map[string]bool {
+	if len(groups) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(groups))
+	for _, g := range groups {
+		if g.Favourite {
+			out[g.Group] = true
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // singlePinned returns the lone pinned member when exactly one of the group's
 // members is pinned, so entering can drop straight into it.
 func singlePinned(members []panel.Panel, pins map[string]bool) (panel.Panel, bool) {
@@ -642,6 +750,13 @@ func (m model) renderGroupCard(it dashItem, selected bool) string {
 	if m.selecting() {
 		mark = markCell(m.itemMarked(it))
 	}
+	// A favourite prefixes a ⊙ before the group glyph, exactly as renderCard marks a
+	// favourited panel. The name's width shrinks by the prefix so the head keeps to
+	// one row and the card stays the same size as a panel card.
+	fav := ""
+	if m.itemFavourite(it) {
+		fav = lipgloss.NewStyle().Foreground(colBrandHi).Render("⊙") + " "
+	}
 	glyph := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render("▣")
 	// A nested group notes its immediate sub-group count right-aligned in the head —
 	// the same place the split's sub-group tile shows it — rather than trailing the
@@ -651,15 +766,16 @@ func (m model) renderGroupCard(it dashItem, selected bool) string {
 	if n := subGroupCount(it.members, it.name); n > 0 {
 		sub = lipgloss.NewStyle().Foreground(colBrand).Render(fmt.Sprintf("▣%d", n))
 	}
-	avail := cardInner - lipgloss.Width(mark) - 2 - lipgloss.Width(sub) // glyph + its trailing space = 2
+	avail := cardInner - lipgloss.Width(mark) - lipgloss.Width(fav) - 2 - lipgloss.Width(sub) // glyph + its trailing space = 2
 	if sub != "" {
 		avail-- // a gap before the right-aligned count
 	}
 	name := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(it.title(), max(1, avail)))
-	head := mark + glyph + " " + name
+	head := mark + fav + glyph + " " + name
 	if sub != "" {
 		head = padEnds(head, sub, cardInner)
 	}
+	head = clampWidth(head, cardInner)
 
 	badge := groupBadge()
 	// Split the member count by kind, so a card says what kind of work it holds —
