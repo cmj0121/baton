@@ -619,6 +619,21 @@ type readyDispatch struct {
 // (outbound broadcasts), and a heartbeat, tearing all three down together when
 // any one fails.
 func (s *Server) handle(conn net.Conn) {
+	// Enforce the uid-private socket invariant before this connection can send a
+	// single command. A stranger who reaches the socket could otherwise spawn any
+	// process (panel.create) as this user; the conductor fence is explicitly a
+	// guardrail, not this boundary. A peer whose uid cannot be confirmed to match
+	// ours is dropped — the check fails closed on a real unix peer.
+	if ok, err := sameUserPeer(conn); err != nil || !ok {
+		if err != nil {
+			log.Warn().Err(err).Msg("rejecting control connection: cannot verify peer identity")
+		} else {
+			log.Warn().Msg("rejecting control connection from a different user")
+		}
+		_ = conn.Close()
+		return
+	}
+
 	// closeOnce makes conn.Close idempotent across the reader, writer, and
 	// heartbeat paths: whichever side fails first tears the connection down, and
 	// the others observe the broken conn rather than racing a second Close.

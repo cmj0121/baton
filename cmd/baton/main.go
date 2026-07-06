@@ -220,6 +220,12 @@ func runServer() error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", sock, err)
 	}
+	// Clamp the socket to owner-only so no other user on the host can connect and
+	// drive the fleet — the socket carries full spawn-any-process power.
+	if err := paths.SecureSocket(sock); err != nil {
+		_ = ln.Close()
+		return fmt.Errorf("secure socket %s: %w", sock, err)
+	}
 	return runServerOn(ln, sock)
 }
 

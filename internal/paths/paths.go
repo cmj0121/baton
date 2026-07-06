@@ -103,6 +103,22 @@ func EnsureDir(file string) error {
 	return os.MkdirAll(filepath.Dir(file), 0o700)
 }
 
+// SecureSocket tightens a freshly bound control socket to owner-only (0600). The
+// socket is the one uid-private channel that drives the whole fleet — anyone who
+// can connect can spawn processes as this user — so it must not be reachable by
+// group or other. net.Listen creates the socket under the process umask, which on
+// a permissive umask leaves group/other bits set; on Linux those bits gate
+// connect(2), so clamping them here is a real barrier (and defence in depth
+// behind the 0700 runtime dir, which is the platform-independent gate). The
+// server additionally verifies each peer's uid, so this is the outer of two
+// layers. A missing socket (already unlinked) is not an error.
+func SecureSocket(socket string) error {
+	if err := os.Chmod(socket, 0o600); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // NewConductorWorkspace creates a fresh, private, ephemeral directory for a
 // conductor panel under baton's runtime dir and returns its path. The conductor
 // agent runs here instead of in any source tree, so its only local surface is
