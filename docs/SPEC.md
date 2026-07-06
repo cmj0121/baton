@@ -251,13 +251,21 @@ command.
 **A task is a tracked entity.** Each dispatch becomes a task with a forward-only status — `queued → dispatched → running
 → done` (or `failed` from any non-terminal state) — an attempt count, and the panel and group it belongs to. The Monitor
 advances it as output flows: delivery moves it to `dispatched`, the first output to `running`, a settle to `done`, a
-process exit or a closed panel to `failed`.
+process exit or a closed panel to `failed`. A failed task keeps a short **reason** (`panel exited (code N)`, `panel
+closed`); finished tasks linger as history, bounded to the most recent 50 so a long session never grows unboundedly.
 
 **The queue** is for work with nowhere to run yet. Instead of dispatching to a named panel, you **enqueue** a brief (with
-an optional group) and a server-owned scheduler drains it onto a free idle agent on a later tick — oldest task first,
-honouring a per-group concurrency cap. The scheduler never spawns a panel; it distributes work across the agents already
-in the fleet. This is the flagship **you → conductor → fleet** flow: you hand the conductor a batch of briefs, it
-enqueues them, and they flow out to whichever workers come free.
+an optional group) — from the cockpit with `t` (the everyday sibling of `T` dispatch), or over `baton ctl` / MCP — and a
+server-owned scheduler drains it onto a free idle agent on a later tick, honouring a per-group concurrency cap. Tasks
+drain **highest priority first, then oldest**; a waiting task can be reordered to the head or tail of the backlog. This is
+the flagship **you → conductor → fleet** flow: you hand the conductor a batch of briefs, it enqueues them, and they flow
+out to whichever workers come free.
+
+**Spawn-on-demand.** A queued task may carry a spawn spec — a command, args, workdir, and a close-on-done flag. When the
+scheduler finds no free agent, it **provisions a fresh agent** for such a task (below the 64-panel fleet ceiling),
+dispatches the task there, and reaps that agent once the task settles if asked. The backlog then becomes a true work
+queue that grows its own ephemeral workers, not just a buffer over the standing fleet. A task with no spawn spec still
+only rides the agents already in the fleet.
 
 The backlog is **persistent**. Each task is one JSON file under `$HOME/.baton/<session>.queue/`, written atomically and
 removed by the scheduler when the task leaves the backlog — so a daemon restart restores the queue. A task already
@@ -267,9 +275,11 @@ never surprises you. `queue.max` caps the unassigned backlog; `queue.concurrency
 at once.
 
 **Managing the backlog.** `Q` (`C-t Q` in a zoom) opens the queue manager — one row per task with its status, id, group,
-and brief. `d` cancels the highlighted **queued** task (a task already in flight on a panel is left to finish; cancel it
-by closing or signalling its panel), and `D` drains the whole unassigned backlog. The popup owns no state of its own: a
-cancel or drain is a server action, and the fresh snapshot it replies with is what redraws the list.
+and brief (a spawn-on-demand task is badged ⚡, a finished one shows its reason). `K` / `J` promote / demote the
+highlighted **queued** task to the head / tail of the backlog, `d` cancels it (a task already in flight on a panel is
+left to finish; cancel it by closing or signalling its panel), and `D` drains the whole unassigned backlog. The popup
+owns no state of its own: every mutation is a server action, and the fresh snapshot it replies with — the live backlog in
+run order, finished history below — is what redraws the list.
 
 A plugin can shape tasks as they flow — react to every status change, or rewrite/veto a brief before it is delivered. See
 the [task hooks](./PLUGIN.md#tasks-and-the-queue) in PLUGIN.md.
