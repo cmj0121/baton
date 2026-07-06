@@ -13,6 +13,10 @@ agent, grouped into the tasks they belong to, any one a keystroke away.
 
 You hold the baton. The agents play. You conduct. 🎼
 
+![Baton cockpit demo — panels on a dashboard, zoom to drive one, group into a work item](docs/assets/baton-demo.png)
+
+_Spawn panels, zoom into one to drive it, group two into a work item — and `?` is always there for the keys._
+
 ## Get started
 
 Baton is a single static binary. Grab it with [Go](https://go.dev) 1.26+:
