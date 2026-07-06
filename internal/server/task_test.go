@@ -1,7 +1,9 @@
 package server
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/task"
@@ -69,8 +71,8 @@ func TestTaskReDispatchUpdatesSameTask(t *testing.T) {
 	}
 
 	// Drive the task terminal, then a fresh dispatch starts a new task id.
-	s.advanceTaskLocked("p1", task.Running)
-	s.advanceTaskLocked("p1", task.Done)
+	s.advanceTaskLocked("p1", task.Running, "")
+	s.advanceTaskLocked("p1", task.Done, "")
 	if err := s.dispatchPanel("p1", "third", ""); err != nil {
 		t.Fatalf("dispatch 3: %v", err)
 	}
@@ -86,11 +88,48 @@ func TestTaskFailsOnExit(t *testing.T) {
 	if err := s.dispatchPanel("p1", "work", ""); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	s.advanceTaskLocked("p1", task.Running)
+	s.advanceTaskLocked("p1", task.Running, "")
 
 	s.onPanelExit("p1", 1)
 	if tk := taskFor(s, "p1"); tk == nil || tk.Status != task.Failed {
 		t.Fatalf("a task should fail when its panel exits, got %+v", tk)
+	}
+	if tk := taskFor(s, "p1"); tk == nil || tk.Result == "" {
+		t.Fatalf("a failed task should carry a terminal reason, got %+v", tk)
+	}
+}
+
+// TestHistoryPruned checks that finished tasks are bounded: seeding more terminal
+// tasks than the cap and pruning keeps the most recent maxTaskHistory and drops the
+// oldest, while a live (queued) task is never pruned.
+func TestHistoryPruned(t *testing.T) {
+	s, _, _ := gateServer()
+	base := time.Unix(0, 0)
+	for i := 0; i < maxTaskHistory+10; i++ {
+		id := fmt.Sprintf("t%d", i+1)
+		s.tasks[id] = &task.Task{ID: id, Status: task.Done, Updated: base.Add(time.Duration(i) * time.Second)}
+	}
+	s.tasks["live"] = &task.Task{ID: "live", Status: task.Queued, Updated: base}
+
+	s.pruneHistoryLocked()
+
+	if _, ok := s.tasks["live"]; !ok {
+		t.Fatal("a queued task must never be pruned as history")
+	}
+	finished := 0
+	for _, tk := range s.tasks {
+		if tk.Status.Terminal() {
+			finished++
+		}
+	}
+	if finished != maxTaskHistory {
+		t.Fatalf("finished history should be bounded to %d, got %d", maxTaskHistory, finished)
+	}
+	if _, ok := s.tasks["t1"]; ok {
+		t.Fatal("the oldest finished task should be pruned")
+	}
+	if _, ok := s.tasks[fmt.Sprintf("t%d", maxTaskHistory+10)]; !ok {
+		t.Fatal("the newest finished task should survive the prune")
 	}
 }
 

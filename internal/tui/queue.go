@@ -160,6 +160,9 @@ func (m model) queueView() string {
 			grp = t.Group
 		}
 		row := caret(m.queueCursor == i) + st + idCol.Render(t.ID) + grpCol.Render(grp) + inkStyle.Render(truncate(t.Prompt, 40))
+		if t.Result != "" { // a finished task's terminal note — why it failed
+			row += mutedStyle.Render("  — " + truncate(t.Result, 24))
+		}
 		rows = append(rows, row)
 	}
 

@@ -347,9 +347,10 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 		if s.panels[i].ID == id {
 			s.panels[i].State = panel.Exited
 			s.panels[i].Activity = "exited"
-			s.mon.forget(id)                     // a dead panel no longer ticks
-			delete(s.pendingDispatch, id)        // a held dispatch dies with the process
-			s.advanceTaskLocked(id, task.Failed) // a task in flight died with its panel
+			s.mon.forget(id)              // a dead panel no longer ticks
+			delete(s.pendingDispatch, id) // a held dispatch dies with the process
+			// A task in flight died with its panel — fail it with the exit code.
+			s.advanceTaskLocked(id, task.Failed, fmt.Sprintf("panel exited (code %d)", exitCode))
 			fields = panelFields(s.panels[i])
 			fields["exit_code"] = exitCode
 			found = true
@@ -389,7 +390,7 @@ func (s *Server) routeOutput(id string, data []byte) {
 			f := panelFields(s.panels[i])
 			f["from"], f["to"] = from.String(), panel.Running.String()
 			s.emit("panel.state", f)
-			s.advanceTaskLocked(id, task.Running) // output means the agent is working its task
+			s.advanceTaskLocked(id, task.Running, "") // output means the agent is working its task
 		}
 		// panel.output is opt-in: emitted only when a plugin registered a handler,
 		// so the hot output path costs nothing otherwise. The byte slice is copied
@@ -563,9 +564,9 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 				if data, held := s.pendingDispatch[p.ID]; held {
 					delete(s.pendingDispatch, p.ID)
 					deliver = append(deliver, readyDispatch{id: p.ID, data: data})
-					s.advanceTaskLocked(p.ID, task.Dispatched)
+					s.advanceTaskLocked(p.ID, task.Dispatched, "")
 				} else {
-					s.advanceTaskLocked(p.ID, task.Done)
+					s.advanceTaskLocked(p.ID, task.Done, "")
 				}
 			}
 		}
@@ -1595,6 +1596,7 @@ func taskFields(t *task.Task) map[string]any {
 		"status":   string(t.Status),
 		"panel":    t.Panel,
 		"group":    t.Group,
+		"result":   t.Result,
 		"attempts": t.Attempts,
 	}
 }
@@ -1631,8 +1633,11 @@ func (s *Server) upsertTaskLocked(panelID, prompt, group string, status task.Sta
 
 // advanceTaskLocked moves a panel's current task to status when the lifecycle
 // permits it (see task.CanAdvance), emitting task.change on a real move. It is the
-// one place the panel lifecycle drives the task lifecycle. Caller holds s.mu.
-func (s *Server) advanceTaskLocked(panelID string, status task.Status) {
+// one place the panel lifecycle drives the task lifecycle. A non-empty result is
+// recorded as the task's terminal note (why it failed), so a finished task carries
+// a reason rather than a blank. A move into a terminal state prunes the finished
+// history so it stays bounded. Caller holds s.mu.
+func (s *Server) advanceTaskLocked(panelID string, status task.Status, result string) {
 	tid, ok := s.panelTask[panelID]
 	if !ok {
 		return
@@ -1642,9 +1647,45 @@ func (s *Server) advanceTaskLocked(panelID string, status task.Status) {
 		return
 	}
 	t.Status = status
+	if result != "" {
+		t.Result = result
+	}
 	t.Updated = s.mon.now()
 	s.emit("task.change", taskFields(t))
 	s.markTaskDirtyLocked(t.ID)
+	if status.Terminal() {
+		s.pruneHistoryLocked()
+	}
+}
+
+// maxTaskHistory caps how many finished (done/failed) tasks linger in memory as
+// history — enough to review a recent burst without the task table (and the queue
+// view) growing without bound over a long session.
+const maxTaskHistory = 50
+
+// pruneHistoryLocked trims finished tasks to the most recently updated
+// maxTaskHistory, dropping the oldest beyond it. Live tasks (queued, dispatched,
+// running) are never touched — only terminal history is bounded. A dropped task's
+// file is already gone (removed when it went terminal); the dirty nudge reconciles
+// any stragglers. Caller holds s.mu.
+func (s *Server) pruneHistoryLocked() {
+	var terminal []*task.Task
+	for _, t := range s.tasks {
+		if t.Status.Terminal() {
+			terminal = append(terminal, t)
+		}
+	}
+	if len(terminal) <= maxTaskHistory {
+		return
+	}
+	sort.Slice(terminal, func(i, j int) bool { return terminal[i].Updated.After(terminal[j].Updated) })
+	for _, t := range terminal[maxTaskHistory:] {
+		delete(s.tasks, t.ID)
+		if t.Panel != "" && s.panelTask[t.Panel] == t.ID {
+			delete(s.panelTask, t.Panel) // drop a mapping left dangling by the pruned task
+		}
+		s.markTaskDirtyLocked(t.ID)
+	}
 }
 
 // dispatchReady reports whether a panel in this state can receive a dispatched
@@ -1961,7 +2002,7 @@ func (s *Server) closePanel(id string) error {
 	if s.panels[idx].Conductor {
 		workspace = s.specs[id].Dir
 	}
-	s.advanceTaskLocked(id, task.Failed) // closing a panel mid-task abandons it
+	s.advanceTaskLocked(id, task.Failed, "panel closed") // closing a panel mid-task abandons it
 	s.panels = slices.Delete(s.panels, idx, idx+1)
 	s.mon.forget(id)
 	delete(s.specs, id)           // the panel is gone for good; drop its retained spawn spec
