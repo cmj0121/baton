@@ -26,7 +26,10 @@ func (m model) openGitOutPopup(title, text string, failed bool) model {
 	if strings.TrimSpace(text) == "" {
 		m.gitOutLines = []string{"(no output)"}
 	} else {
-		m.gitOutLines = strings.Split(strings.TrimRight(text, "\n"), "\n")
+		// git output is untrusted (an agent controls commit subjects, branch and
+		// file names): strip any embedded terminal escapes before it can render to
+		// the real terminal. See sanitizeText.
+		m.gitOutLines = sanitizeLines(strings.Split(strings.TrimRight(text, "\n"), "\n"))
 	}
 	m.status = title
 	return m

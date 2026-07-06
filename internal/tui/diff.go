@@ -49,7 +49,7 @@ func (m model) openDiffPopup(title string, files []proto.DiffFile) model {
 	m.diffFrom = m.mode
 	m.mode = modeDiff
 	m.diffTitle = title
-	m.diffFiles = files
+	m.diffFiles = sanitizeDiffFiles(files)
 	m.diffCursor, m.diffScroll = 0, 0
 	m.diffOnDetail = false
 	m.status = title
