@@ -29,6 +29,7 @@ const (
 	keySearch      = "f" // find: filter panels on the dashboard, search the scrollback in a zoom (C-t f)
 	keyDiff        = "D" // show the work-tree diff of the focused agent panel (shift+d; C-t D in a zoom)
 	keyDispatch    = "T" // dispatch a task to the focused agent panel (shift+t; C-t T in a zoom)
+	keyEnqueue     = "t" // enqueue a task for the scheduler to drain onto a free agent (bare t, the everyday sibling of T; C-t t in a zoom)
 	keyQueue       = "Q" // open the task-queue manager popup (shift+q; C-t Q in a zoom)
 	keyHelp        = "?" // view the key list for the current view
 	keyEditMap     = "k" // edit the key map (prefix only: C-t k)
@@ -91,6 +92,7 @@ const (
 	actSearch
 	actDiff
 	actDispatch
+	actEnqueue
 	actQueue
 	actHelp
 	actPanelConfig
@@ -152,6 +154,7 @@ var bindings = []binding{
 	{"search", keySearch, "find panels · search the scrollback (zoom)", actSearch, "Panels"},
 	{"diff", keyDiff, "show the work-tree diff (agent panel)", actDiff, "Panels"},
 	{"dispatch", keyDispatch, "dispatch a task to the agent panel", actDispatch, "Panels"},
+	{"enqueue", keyEnqueue, "enqueue a task for any free agent (a work item, if selected)", actEnqueue, "Panels"},
 	{"queue", keyQueue, "manage the task queue (list · cancel · drain)", actQueue, "Panels"},
 
 	{"mark", keyMark, "mark a panel for grouping", actMark, "Work items"},

@@ -614,6 +614,41 @@ func (m model) commitDispatch(prompt string) model {
 	return m
 }
 
+// startEnqueue opens the task overlay for the backlog: the brief is not sent to a
+// panel but queued, and the server's scheduler drains it onto a free idle agent —
+// in group, if named, otherwise any. It is the cockpit counterpart to the dispatch
+// overlay, for handing work off without picking an agent.
+func (m model) startEnqueue(group string) model {
+	m.input = inputEnqueue
+	m.inputBuf = ""
+	m.enqueueGroup = group
+	if group != "" {
+		m.status = fmt.Sprintf("enqueue to %q · enter to queue for a free member", group)
+	} else {
+		m.status = "enqueue · enter to queue for any free agent"
+	}
+	return m
+}
+
+// commitEnqueue queues the typed brief onto the backlog, restricted to the
+// remembered work item when one was selected. An empty brief is refused with the
+// overlay closed — enqueue adds work, it does not queue a blank.
+func (m model) commitEnqueue(prompt string) model {
+	group := m.enqueueGroup
+	m.enqueueGroup = ""
+	if prompt == "" {
+		m.status = "a task cannot be empty"
+		return m
+	}
+	m.sendf(proto.Command{Action: "task.enqueue", Prompt: prompt, Group: group})
+	if group != "" {
+		m.status = fmt.Sprintf("enqueued to %q · %s", group, truncate(prompt, 32))
+	} else {
+		m.status = "enqueued · " + truncate(prompt, 40)
+	}
+	return m
+}
+
 // zoomGroup opens the group's split view: the member tiles you navigate as a
 // unit before dropping into any one panel. Pins persist across views, so the
 // split reopens with the panels you pinned already promoted to live tiles — and
