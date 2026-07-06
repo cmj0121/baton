@@ -115,6 +115,13 @@ in the split.
 On the dashboard a work item collapses into a single card: a member count and a state that **rolls up to its most urgent
 member** (attention beats running beats spawning beats idle beats exited), so one card speaks for the whole task.
 
+**Favourites.** `*` **favourites** the selected dashboard item — a lone panel or a whole group card — and favourited cards
+sort to the **front** of the dashboard, in both the grid and the tree, each marked with a `⊙`. It is **server-owned state**
+(`panel.favourite` / `panel.unfavourite` for a panel, `group.favourite` / `group.unfavourite` for a group), carried on the
+snapshot — so it survives a restart, is shared across clients, and follows a group through a rename or ungroup. It is
+**separate from the split's pin**: favouriting only reorders the dashboard, never which tiles stream live or the single-pin
+descend.
+
 **The group split.** Zooming a work item opens a split scoped to that path's **direct children** — each direct panel
 rendered live in its own tile, plus one tile per immediate **sub-group** (a rollup box marked `▣`). By default the split
 is an _overview you navigate_, not a surface you type into: `tab` moves the focus between tiles, `+`/`-` dials how many
@@ -336,6 +343,7 @@ and the key-map editor — are reached after the prefix in every mode. Everythin
 |                        | `a`                         | add marked panels to the selected group         |
 |                        | `u`                         | ungroup the selected work item                  |
 |                        | `e`                         | rename the panel or group                       |
+|                        | `*`                         | favourite the panel / group (sorts to front)    |
 |                        | `D`                         | diff the selected agent panel                   |
 |                        | `T`                         | dispatch a task to the agent / work item        |
 |                        | `Q`                         | manage the task queue (list · cancel · drain)   |
