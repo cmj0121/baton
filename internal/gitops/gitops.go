@@ -86,8 +86,8 @@ func Resolve(op Op, dir, arg, editor string) (name string, args, env []string, e
 		return "sh", []string{"-c", "git add -A && git commit"}, env, nil
 	case OpBranch:
 		b := strings.TrimSpace(arg)
-		if b == "" {
-			return "", nil, nil, fmt.Errorf("a new branch needs a name")
+		if err := ValidateBranch(b); err != nil {
+			return "", nil, nil, err
 		}
 		return "git", []string{"checkout", "-b", b}, nil, nil
 	case OpWorktreeAdd, OpWorktreeRemove:
@@ -153,13 +153,15 @@ func Capture(op Op, dir, arg, editor string) (CaptureResult, error) {
 // returned path afterwards. git refuses an existing branch or a non-empty path, so
 // no flag forces over existing work.
 func WorktreeAdd(dir, branch, path string) error {
-	if strings.TrimSpace(branch) == "" {
-		return fmt.Errorf("a worktree needs a branch name")
+	if err := ValidateBranch(strings.TrimSpace(branch)); err != nil {
+		return err
 	}
 	if strings.TrimSpace(path) == "" {
 		return fmt.Errorf("a worktree needs a path")
 	}
-	if out, err := runGit(dir, "worktree", "add", "-b", branch, path); err != nil {
+	// End-of-options guard so a path that somehow begins with "-" is never read as
+	// a flag; the branch is already validated, and "--" fences the positional path.
+	if out, err := runGit(dir, "worktree", "add", "-b", branch, "--", path); err != nil {
 		return gitErr("worktree add", out, err)
 	}
 	return nil
@@ -172,8 +174,41 @@ func WorktreeRemove(dir, path string) error {
 	if strings.TrimSpace(path) == "" {
 		return fmt.Errorf("worktree remove needs a path")
 	}
-	if out, err := runGit(dir, "worktree", "remove", path); err != nil {
+	// "--" fences the positional path so a value beginning with "-" cannot be read
+	// as a flag (e.g. slip in --force against the plain, safe default).
+	if out, err := runGit(dir, "worktree", "remove", "--", path); err != nil {
 		return gitErr("worktree remove", out, err)
+	}
+	return nil
+}
+
+// ValidateBranch rejects a branch name that git would refuse or that could be
+// misread as a command-line flag. The name reaches git as an argument to
+// `checkout -b` / `worktree add -b`, so a value beginning with "-" is the real
+// concern — it would be parsed as an option rather than a branch (argument
+// injection) — but the same pass also enforces git's check-ref-format rules, so
+// an invalid name fails here with a clear message instead of a cryptic git error
+// (or, worse, a surprising flag). It is deliberately conservative: it allows the
+// ordinary "feature/foo-bar_1" shapes and refuses the rest.
+func ValidateBranch(name string) error {
+	switch {
+	case name == "":
+		return fmt.Errorf("a new branch needs a name")
+	case strings.HasPrefix(name, "-"):
+		// The security-critical rule: a leading "-" makes the name look like a flag.
+		return fmt.Errorf("invalid branch name %q: cannot start with '-'", name)
+	case strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") || strings.Contains(name, "//"):
+		return fmt.Errorf("invalid branch name %q: bad use of '/'", name)
+	case strings.Contains(name, ".."), strings.Contains(name, "@{"), strings.HasSuffix(name, ".lock"),
+		strings.HasSuffix(name, "."), name == "@":
+		return fmt.Errorf("invalid branch name %q: rejected by git's ref-format rules", name)
+	}
+	// Forbid whitespace, ASCII control bytes, and the metacharacters git's
+	// check-ref-format bars (~ ^ : ? * [ \ and DEL).
+	for _, r := range name {
+		if r <= 0x20 || r == 0x7f || strings.ContainsRune("~^:?*[\\", r) {
+			return fmt.Errorf("invalid branch name %q: contains a forbidden character", name)
+		}
 	}
 	return nil
 }
