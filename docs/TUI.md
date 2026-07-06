@@ -131,3 +131,13 @@ These ride alongside the appearance config (full key reference in [SPEC.md](./SP
 
 See [PLUGIN.md](./PLUGIN.md#programmable-titles--paneltitle) for the `panel.title` hook, which makes the per-panel title
 itself programmable from Lua.
+
+## Screen protector 🟢
+
+Leave the cockpit idle for a few minutes and it slips into a screen protector: a full-screen curtain of digital rain with
+the **BATON** wordmark and a big clock glowing at its centre. Any key or click wakes it — and that keystroke is swallowed,
+so you never nudge the fleet on your way back. It only ever draws over a resting view (never a live zoom, split, scratch
+pane, or an open prompt), and a backend hiccup pulls it aside at once so an outage is never hidden behind the rain.
+
+Impatient? The leader summons it on demand — the key is left off the key map on purpose. It is only rain and a clock; it
+touches nothing on the server. _(Hint: the leader, then the letter this whole feature is named for.)_
