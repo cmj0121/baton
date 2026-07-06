@@ -422,6 +422,7 @@ func panelTable(L *lua.LState, p proto.Panel) *lua.LTable {
 	t.RawSetString("group", lua.LString(p.Group))
 	t.RawSetString("activity", lua.LString(p.Activity))
 	t.RawSetString("pinned", lua.LBool(p.Pinned))
+	t.RawSetString("favourite", lua.LBool(p.Favourite))
 	return t
 }
 
