@@ -46,18 +46,33 @@ func CanAdvance(from, to Status) bool {
 	return false
 }
 
+// SpawnSpec is a queued task's optional request to provision its own agent: when
+// the scheduler finds no free agent, it spawns one running Command with Args in
+// Dir, dispatches the task there, and — if CloseOnDone — closes that panel once the
+// task settles, so the backlog can drain onto fresh, ephemeral workers instead of
+// waiting on the standing fleet. A nil Spawn means the task only rides an existing
+// idle agent.
+type SpawnSpec struct {
+	Command     string   `json:"command"`                 // agent CLI to run (already resolved from a profile by the caller)
+	Args        []string `json:"args,omitempty"`          // arguments to the command
+	Dir         string   `json:"dir,omitempty"`           // working directory ("" = the server default)
+	CloseOnDone bool     `json:"close_on_done,omitempty"` // close the spawned panel when the task finishes
+}
+
 // Task is one unit of work: the prompt assigned to a panel, its lifecycle status,
 // and the bookkeeping the queue and retries need. Its identity is the unit of
 // work, not the panel — the same Task id survives a reassign or respawn, with
 // Attempts counting each delivery.
 type Task struct {
-	ID       string    `json:"id"`
-	Prompt   string    `json:"prompt"`
-	Status   Status    `json:"status"`
-	Panel    string    `json:"panel,omitempty"`  // the panel currently executing it, if any
-	Group    string    `json:"group,omitempty"`  // the work item it belongs to, if any
-	Result   string    `json:"result,omitempty"` // a terminal note (e.g. a failure reason)
-	Attempts int       `json:"attempts"`         // how many times its prompt has been delivered
-	Created  time.Time `json:"created"`
-	Updated  time.Time `json:"updated"`
+	ID       string     `json:"id"`
+	Prompt   string     `json:"prompt"`
+	Status   Status     `json:"status"`
+	Panel    string     `json:"panel,omitempty"`    // the panel currently executing it, if any
+	Group    string     `json:"group,omitempty"`    // the work item it belongs to, if any
+	Result   string     `json:"result,omitempty"`   // a terminal note (e.g. a failure reason)
+	Priority int        `json:"priority,omitempty"` // scheduler order among queued tasks: higher drains first (default 0, ties break oldest-first)
+	Attempts int        `json:"attempts"`           // how many times its prompt has been delivered
+	Spawn    *SpawnSpec `json:"spawn,omitempty"`    // provision a fresh agent for this task when none is free (nil = existing agents only)
+	Created  time.Time  `json:"created"`
+	Updated  time.Time  `json:"updated"`
 }

@@ -160,9 +160,30 @@ func (c *Client) Enqueue(prompt, group string) error {
 	return c.Do(proto.Command{Action: "task.enqueue", Prompt: prompt, Group: group})
 }
 
+// EnqueueSpawn adds a spawn-on-demand task: when no agent is free, the scheduler
+// provisions one running command (with args, in dir) and dispatches the task there,
+// closing that agent on done when closeOnDone is set.
+func (c *Client) EnqueueSpawn(prompt, group, command string, args []string, dir string, closeOnDone bool) error {
+	return c.Do(proto.Command{
+		Action: "task.enqueue", Prompt: prompt, Group: group,
+		Path: command, Args: args, Dir: dir, Ephemeral: closeOnDone,
+	})
+}
+
 // CancelTask removes a queued backlog task by id.
 func (c *Client) CancelTask(id string) error {
 	return c.Do(proto.Command{Action: "task.cancel", ID: id})
+}
+
+// PromoteTask bumps a queued task to the head of the backlog, so the scheduler
+// drains it next.
+func (c *Client) PromoteTask(id string) error {
+	return c.Do(proto.Command{Action: "task.promote", ID: id})
+}
+
+// DemoteTask drops a queued task to the tail of the backlog, so it drains last.
+func (c *Client) DemoteTask(id string) error {
+	return c.Do(proto.Command{Action: "task.demote", ID: id})
 }
 
 // DrainQueue clears every queued backlog task.

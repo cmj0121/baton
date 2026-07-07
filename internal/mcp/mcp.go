@@ -246,12 +246,22 @@ func defaultTools() []tool {
 		},
 		{
 			name: "baton_enqueue",
-			desc: "Add a task to the backlog. The scheduler drains it onto a free idle agent (in the given work item, if any) — use this to hand off work without picking a panel yourself.",
+			desc: "Add a task to the backlog. The scheduler drains it onto a free idle agent (in the given work item, if any) — use this to hand off work without picking a panel yourself. Give 'command' to make it spawn-on-demand: when no agent is free the scheduler provisions one running that command, and 'close' reaps it once the task is done — a way to burst a fresh worker fleet through the backlog.",
 			schema: obj(map[string]any{
-				"prompt": str("the task brief to enqueue"),
-				"group":  str("restrict the task to agents in this work item (optional)"),
+				"prompt":  str("the task brief to enqueue"),
+				"group":   str("restrict the task to agents in this work item (optional)"),
+				"command": str("spawn-on-demand: agent command to provision when none is free (optional)"),
+				"args":    strList("arguments for the spawned command (optional)"),
+				"dir":     str("working directory for the spawned agent (optional)"),
+				"close":   map[string]any{"type": "boolean", "description": "close the spawned agent once the task finishes (optional)"},
 			}, "prompt"),
 			run: func(c *control.Client, a args) (string, error) {
+				if cmd := a.str("command"); cmd != "" {
+					if err := c.EnqueueSpawn(a.str("prompt"), a.str("group"), cmd, a.strSlice("args"), a.str("dir"), a.boolDefault("close", false)); err != nil {
+						return "", err
+					}
+					return "enqueued (spawn-on-demand)", nil
+				}
 				if err := c.Enqueue(a.str("prompt"), a.str("group")); err != nil {
 					return "", err
 				}
@@ -264,6 +274,34 @@ func defaultTools() []tool {
 			schema: obj(map[string]any{}),
 			run: func(c *control.Client, _ args) (string, error) {
 				return c.TasksJSON()
+			},
+		},
+		{
+			name: "baton_reorder",
+			desc: "Reorder a queued task in the backlog: 'head' drains it next, 'tail' drains it last. Only a task still waiting (not yet on an agent) can be reordered.",
+			schema: obj(map[string]any{
+				"id": str("queued task id to move"),
+				"to": str("where to move it: 'head' or 'tail'"),
+			}, "id", "to"),
+			run: func(c *control.Client, a args) (string, error) {
+				id, to := a.str("id"), a.str("to")
+				if id == "" {
+					return "", fmt.Errorf("id is required")
+				}
+				switch to {
+				case "head":
+					if err := c.PromoteTask(id); err != nil {
+						return "", err
+					}
+					return "promoted " + id + " to the head", nil
+				case "tail":
+					if err := c.DemoteTask(id); err != nil {
+						return "", err
+					}
+					return "demoted " + id + " to the tail", nil
+				default:
+					return "", fmt.Errorf("to must be 'head' or 'tail'")
+				}
 			},
 		},
 		{

@@ -170,18 +170,27 @@ func (x ctlDispatchGroup) Run(c *control.Client) error {
 
 // ctlQueue groups the backlog verbs under `baton ctl queue …`.
 type ctlQueue struct {
-	Add    ctlQueueAdd    `cmd:"" help:"Enqueue a task for the scheduler to drain onto a free agent."`
-	List   ctlQueueList   `cmd:"" help:"Print the backlog as JSON."`
-	Cancel ctlQueueCancel `cmd:"" help:"Cancel a queued task by id."`
-	Drain  ctlQueueDrain  `cmd:"" help:"Clear every queued task."`
+	Add     ctlQueueAdd     `cmd:"" help:"Enqueue a task for the scheduler to drain onto a free agent."`
+	List    ctlQueueList    `cmd:"" help:"Print the backlog as JSON."`
+	Cancel  ctlQueueCancel  `cmd:"" help:"Cancel a queued task by id."`
+	Promote ctlQueuePromote `cmd:"" help:"Bump a queued task to the head of the backlog."`
+	Demote  ctlQueueDemote  `cmd:"" help:"Drop a queued task to the tail of the backlog."`
+	Drain   ctlQueueDrain   `cmd:"" help:"Clear every queued task."`
 }
 
 type ctlQueueAdd struct {
-	Prompt string `arg:"" help:"The task brief to enqueue."`
-	Group  string `help:"Restrict the task to agents in this work item."`
+	Prompt  string   `arg:"" help:"The task brief to enqueue."`
+	Group   string   `help:"Restrict the task to agents in this work item."`
+	Command string   `help:"Spawn-on-demand: provision an agent running this command when none is free."`
+	Arg     []string `help:"Argument for the spawned command (repeatable)."`
+	Dir     string   `help:"Working directory for the spawned agent."`
+	Close   bool     `help:"Close the spawned agent once the task finishes."`
 }
 
 func (x ctlQueueAdd) Run(c *control.Client) error {
+	if x.Command != "" {
+		return c.EnqueueSpawn(x.Prompt, x.Group, x.Command, x.Arg, x.Dir, x.Close)
+	}
 	return c.Enqueue(x.Prompt, x.Group)
 }
 
@@ -202,6 +211,22 @@ type ctlQueueCancel struct {
 
 func (x ctlQueueCancel) Run(c *control.Client) error {
 	return c.CancelTask(x.ID)
+}
+
+type ctlQueuePromote struct {
+	ID string `arg:"" help:"Queued task id to bump to the head."`
+}
+
+func (x ctlQueuePromote) Run(c *control.Client) error {
+	return c.PromoteTask(x.ID)
+}
+
+type ctlQueueDemote struct {
+	ID string `arg:"" help:"Queued task id to drop to the tail."`
+}
+
+func (x ctlQueueDemote) Run(c *control.Client) error {
+	return c.DemoteTask(x.ID)
 }
 
 type ctlQueueDrain struct{}

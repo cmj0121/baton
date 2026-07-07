@@ -50,22 +50,24 @@ named "report" and pause for me.
 cockpit role; run inside the conductor panel it inherits the conductor identity and is fenced. Each command connects,
 acts, and exits.
 
-| Command                                             | Does                                                                 |
-| --------------------------------------------------- | -------------------------------------------------------------------- |
-| `baton ctl list`                                    | print the fleet as JSON (id, title, state, group, …)                 |
-| `baton ctl spawn [--agent CMD] [--arg A] [--dir D]` | spawn a panel (agent if `--agent`, else a shell); prints the new id  |
-| `baton ctl send <id> <text> [--no-enter]`           | type text into a panel; submits with a newline unless `--no-enter`   |
-| `baton ctl group <name> <id>...`                    | file panels under a work item (a slash-`path` nests: `backend/api`)  |
-| `baton ctl rename [--id ID \| --group G] <name>`    | rename a panel or a group (rename a group to a path to re-parent it) |
-| `baton ctl pin <id>...` / `unpin <id>...`           | pin/unpin panels to live tiles                                       |
-| `baton ctl signal <signal> <id>...`                 | send a signal, e.g. `SIGINT`                                         |
-| `baton ctl close <id>...`                           | close panels                                                         |
-| `baton ctl dispatch <id> <prompt>`                  | assign a task brief to a panel and deliver it as a unit              |
-| `baton ctl dispatch-group <group> <prompt>`         | fan one brief to a work item's whole subtree (nested groups too)     |
-| `baton ctl queue add <prompt> [--group G]`          | enqueue a task for the scheduler to drain onto a free agent          |
-| `baton ctl queue list`                              | print the backlog as JSON (id, prompt, status, panel, group, …)      |
-| `baton ctl queue cancel <id>`                       | cancel a queued task by id                                           |
-| `baton ctl queue drain`                             | clear every queued task                                              |
+| Command                                                            | Does                                                                 |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| `baton ctl list`                                                   | print the fleet as JSON (id, title, state, group, …)                 |
+| `baton ctl spawn [--agent CMD] [--arg A] [--dir D]`                | spawn a panel (agent if `--agent`, else a shell); prints the new id  |
+| `baton ctl send <id> <text> [--no-enter]`                          | type text into a panel; submits with a newline unless `--no-enter`   |
+| `baton ctl group <name> <id>...`                                   | file panels under a work item (a slash-`path` nests: `backend/api`)  |
+| `baton ctl rename [--id ID \| --group G] <name>`                   | rename a panel or a group (rename a group to a path to re-parent it) |
+| `baton ctl pin <id>...` / `unpin <id>...`                          | pin/unpin panels to live tiles                                       |
+| `baton ctl signal <signal> <id>...`                                | send a signal, e.g. `SIGINT`                                         |
+| `baton ctl close <id>...`                                          | close panels                                                         |
+| `baton ctl dispatch <id> <prompt>`                                 | assign a task brief to a panel and deliver it as a unit              |
+| `baton ctl dispatch-group <group> <prompt>`                        | fan one brief to a work item's whole subtree (nested groups too)     |
+| `baton ctl queue add <prompt> [--group G]`                         | enqueue a task for the scheduler to drain onto a free agent          |
+| `baton ctl queue add <prompt> --command <cmd> [--dir D] [--close]` | spawn-on-demand: provision an agent when none is free                |
+| `baton ctl queue list`                                             | print the backlog as JSON (id, prompt, status, panel, group, …)      |
+| `baton ctl queue cancel <id>`                                      | cancel a queued task by id                                           |
+| `baton ctl queue promote <id>` / `demote <id>`                     | move a queued task to the head / tail of the backlog                 |
+| `baton ctl queue drain`                                            | clear every queued task                                              |
 
 ```sh
 # Stand up a reviewer next to a worker and hand it the task.
@@ -77,6 +79,11 @@ baton ctl dispatch "$id" "review the open diff and list correctness risks"
 baton ctl queue add "audit the auth module"   --group review
 baton ctl queue add "audit the billing module" --group review
 baton ctl queue list
+
+# Burst a fresh worker fleet through the backlog: each task spawns its own
+# ephemeral agent when none is free, and closes it when the task is done.
+baton ctl queue add "port module A" --command claude --dir ~/src --close
+baton ctl queue add "port module B" --command claude --dir ~/src --close
 ```
 
 **Dispatch vs. send.** `send` types raw keystrokes; `dispatch` hands the server the _objective_, which it records on the
@@ -90,12 +97,14 @@ interleaving with a running command. See [Tasks and the queue](./SPEC.md#tasks-a
 instead of shelling out:
 
 `baton_list` · `baton_spawn` · `baton_send` · `baton_dispatch` · `baton_dispatch_group` · `baton_enqueue` ·
-`baton_queue` · `baton_group` · `baton_rename` · `baton_pin` · `baton_unpin` · `baton_signal` · `baton_close`
+`baton_queue` · `baton_reorder` · `baton_group` · `baton_rename` · `baton_pin` · `baton_unpin` · `baton_signal` ·
+`baton_close`
 
 `baton_dispatch` / `baton_dispatch_group` assign a task brief to a panel or a whole work item; `baton_enqueue` adds one
-to the backlog and `baton_queue` reads it back. These are the verbs a conductor uses to run the flagship **you →
-conductor → fleet** flow: you hand the conductor a batch of objectives, it enqueues them, and the scheduler drains them
-onto the workers as they come free.
+to the backlog (optionally spawn-on-demand, with a `command` to provision a worker when none is free), `baton_queue`
+reads it back, and `baton_reorder` moves a waiting task to the head or tail. These are the verbs a conductor uses to run
+the flagship **you → conductor → fleet** flow: you hand the conductor a batch of objectives, it enqueues them, and the
+scheduler drains them onto the workers as they come free.
 
 The conductor's workspace ships a `.mcp.json` pointing at this very binary run as `baton mcp`, so a Claude conductor
 auto-loads the tools — no setup. The MCP subprocess inherits the conductor panel's environment, so it is fenced exactly
@@ -113,8 +122,9 @@ declares its identity on the `hello` handshake:
 | `self` | the client's own panel id — the panel the server will refuse to let it act on. |
 
 A dispatch carries two more fields: `prompt` (the brief) and an optional `submit` override (the keys appended to send it,
-default a newline) on `panel.dispatch` / `panel.dispatch-group`; `task.enqueue` / `task.cancel` / `task.drain` /
-`task.list` drive the backlog and reply with a `tasks` snapshot.
+default a newline) on `panel.dispatch` / `panel.dispatch-group`; `task.enqueue` / `task.cancel` / `task.promote` /
+`task.demote` / `task.drain` / `task.list` drive the backlog and reply with a `tasks` snapshot. A spawn-on-demand
+`task.enqueue` carries the worker's `path` / `args` / `dir` and an `ephemeral` close-on-done flag.
 
 Baton injects the wiring into the conductor panel's process, which both `baton ctl` and `baton mcp` read automatically:
 
@@ -135,6 +145,7 @@ always speak the socket directly).
 | list, spawn, group, rename, pin, move     | close, signal, or send input to **its own** panel              |
 | signal and send input to **other** panels | **dispatch a task to its own** panel                           |
 | dispatch to other panels, enqueue tasks   | **drain the queue** — clearing the backlog is operator-only    |
+| reorder queued tasks (promote / demote)   |                                                                |
 | close other panels, purge exited          | reload or stop the server                                      |
 |                                           | spawn faster than the rate cap, or past the fleet ceiling (64) |
 

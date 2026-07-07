@@ -13,7 +13,7 @@ import (
 func TestScheduleAssignsToIdleAgent(t *testing.T) {
 	s, _, written := gateServer(panel.Panel{ID: "1", Kind: panel.Agent, State: panel.Idle, Group: "api"})
 
-	id, err := s.enqueueTask("do it", "api")
+	id, err := s.enqueueTask("do it", "api", nil)
 	if err != nil || id != "t1" {
 		t.Fatalf("enqueue: id=%q err=%v", id, err)
 	}
@@ -42,10 +42,10 @@ func TestScheduleHonoursConcurrencyCap(t *testing.T) {
 		panel.Panel{ID: "2", Kind: panel.Agent, State: panel.Idle, Group: "api"},
 	)
 	s.queueConcurrency = 1
-	if _, err := s.enqueueTask("a", "api"); err != nil {
+	if _, err := s.enqueueTask("a", "api", nil); err != nil {
 		t.Fatalf("enqueue a: %v", err)
 	}
-	if _, err := s.enqueueTask("b", "api"); err != nil {
+	if _, err := s.enqueueTask("b", "api", nil); err != nil {
 		t.Fatalf("enqueue b: %v", err)
 	}
 
@@ -65,7 +65,7 @@ func TestScheduleHonoursConcurrencyCap(t *testing.T) {
 // same work item, never a free agent in another group.
 func TestScheduleRespectsGroup(t *testing.T) {
 	s, _, written := gateServer(panel.Panel{ID: "1", Kind: panel.Agent, State: panel.Idle, Group: "db"})
-	if _, err := s.enqueueTask("api work", "api"); err != nil {
+	if _, err := s.enqueueTask("api work", "api", nil); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	s.monitorTick()
@@ -82,10 +82,10 @@ func TestScheduleRespectsGroup(t *testing.T) {
 func TestQueueMaxRejectsOverflow(t *testing.T) {
 	s, _, _ := gateServer()
 	s.queueMax = 1
-	if _, err := s.enqueueTask("a", ""); err != nil {
+	if _, err := s.enqueueTask("a", "", nil); err != nil {
 		t.Fatalf("first enqueue should fit: %v", err)
 	}
-	if _, err := s.enqueueTask("b", ""); err == nil {
+	if _, err := s.enqueueTask("b", "", nil); err == nil {
 		t.Fatal("an enqueue past queue.max should be refused")
 	}
 }
@@ -94,9 +94,9 @@ func TestQueueMaxRejectsOverflow(t *testing.T) {
 // be cancelled via the queue, and drain clears the remaining backlog.
 func TestCancelAndDrain(t *testing.T) {
 	s, _, _ := gateServer(panel.Panel{ID: "1", Kind: panel.Agent, State: panel.Idle})
-	a, _ := s.enqueueTask("a", "")
-	b, _ := s.enqueueTask("b", "")
-	c, _ := s.enqueueTask("c", "")
+	a, _ := s.enqueueTask("a", "", nil)
+	b, _ := s.enqueueTask("b", "", nil)
+	c, _ := s.enqueueTask("c", "", nil)
 
 	if err := s.cancelTask(a); err != nil {
 		t.Fatalf("cancel queued: %v", err)

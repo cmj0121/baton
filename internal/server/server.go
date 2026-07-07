@@ -128,6 +128,11 @@ type Server struct {
 	panelTask map[string]string
 	taskSeq   int
 
+	// spawning marks the ids of spawn-on-demand tasks with a panel currently being
+	// provisioned for them, so the scheduler asks for one panel per such task
+	// rather than a fresh one every tick until it settles. Guarded by mu.
+	spawning map[string]bool
+
 	// Queue. qstore is the on-disk backlog mirror ("" / nil when persistence is
 	// off). queueMax caps the queued (unassigned) backlog; queueConcurrency caps
 	// how many of a group's tasks run at once (0 = unlimited). taskDirty carries
@@ -284,6 +289,7 @@ func New(ln net.Listener, opts ...Option) *Server {
 		pendingDispatch: make(map[string][]byte),
 		tasks:           make(map[string]*task.Task),
 		panelTask:       make(map[string]string),
+		spawning:        make(map[string]bool),
 		taskDirty:       make(chan string, 256),
 		queueMax:        defaultQueueMax,
 		dirty:           make(chan struct{}, 1),
@@ -347,9 +353,10 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 		if s.panels[i].ID == id {
 			s.panels[i].State = panel.Exited
 			s.panels[i].Activity = "exited"
-			s.mon.forget(id)                     // a dead panel no longer ticks
-			delete(s.pendingDispatch, id)        // a held dispatch dies with the process
-			s.advanceTaskLocked(id, task.Failed) // a task in flight died with its panel
+			s.mon.forget(id)              // a dead panel no longer ticks
+			delete(s.pendingDispatch, id) // a held dispatch dies with the process
+			// A task in flight died with its panel — fail it with the exit code.
+			s.advanceTaskLocked(id, task.Failed, fmt.Sprintf("panel exited (code %d)", exitCode))
 			fields = panelFields(s.panels[i])
 			fields["exit_code"] = exitCode
 			found = true
@@ -389,7 +396,7 @@ func (s *Server) routeOutput(id string, data []byte) {
 			f := panelFields(s.panels[i])
 			f["from"], f["to"] = from.String(), panel.Running.String()
 			s.emit("panel.state", f)
-			s.advanceTaskLocked(id, task.Running) // output means the agent is working its task
+			s.advanceTaskLocked(id, task.Running, "") // output means the agent is working its task
 		}
 		// panel.output is opt-in: emitted only when a plugin registered a handler,
 		// so the hot output path costs nothing otherwise. The byte slice is copied
@@ -535,6 +542,7 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 
 	changed := false
 	var deliver []readyDispatch // pending dispatches whose panel settled this tick
+	var closeAfter []string     // spawn-on-demand panels to reap now their task is done
 	for i := range s.panels {
 		p := &s.panels[i]
 		if p.State == panel.Exited {
@@ -563,9 +571,16 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 				if data, held := s.pendingDispatch[p.ID]; held {
 					delete(s.pendingDispatch, p.ID)
 					deliver = append(deliver, readyDispatch{id: p.ID, data: data})
-					s.advanceTaskLocked(p.ID, task.Dispatched)
+					s.advanceTaskLocked(p.ID, task.Dispatched, "")
 				} else {
-					s.advanceTaskLocked(p.ID, task.Done)
+					s.advanceTaskLocked(p.ID, task.Done, "")
+					// A spawn-on-demand worker asked to be closed when its task
+					// settles — reap it after the lock so the fleet frees up.
+					if tid, ok := s.panelTask[p.ID]; ok {
+						if t := s.tasks[tid]; t != nil && t.Status == task.Done && t.Spawn != nil && t.Spawn.CloseOnDone {
+							closeAfter = append(closeAfter, p.ID)
+						}
+					}
 				}
 			}
 		}
@@ -579,9 +594,12 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 		}
 	}
 
-	// Drain the queued backlog onto any free idle agents this tick assignments
+	// Drain the queued backlog onto any free idle agents this tick; assignments
 	// also produce deliveries and change panels, so they refresh the dashboard.
-	if assigned := s.scheduleLocked(); len(assigned) > 0 {
+	// spawns are spawn-on-demand tasks with no free agent — provisioned below,
+	// off the lock.
+	assigned, spawns := s.scheduleLocked()
+	if len(assigned) > 0 {
 		deliver = append(deliver, assigned...)
 		changed = true
 	}
@@ -599,6 +617,22 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 	// mu, and a panel that just settled is waiting for input, so the write lands.
 	for _, d := range deliver {
 		s.writeInput(d.id, d.data)
+	}
+
+	// Reap finished ephemeral workers and provision new ones for the backlog, both
+	// off the lock (close/create take it themselves). Either reshapes the fleet, so
+	// a fresh authoritative snapshot supersedes this tick's stale telemetry.
+	structural := false
+	for _, id := range closeAfter {
+		if s.closePanel(id) == nil {
+			structural = true
+		}
+	}
+	if len(spawns) > 0 && s.applyScheduledSpawns(spawns) {
+		structural = true
+	}
+	if structural {
+		return s.panelsMsg(), true
 	}
 
 	if out == nil {
@@ -968,16 +1002,30 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			return err
 		})
 	case "task.enqueue":
-		// Add a task to the backlog; the scheduler drains it onto a free agent. The
+		// Add a task to the backlog; the scheduler drains it onto a free agent. When
+		// the command carries a spawn command (Path), the task provisions its own
+		// agent if none is free — Args/Dir shape it, Ephemeral closes it on done. The
 		// reply error names a full queue.
+		var spawn *task.SpawnSpec
+		if cmd.Path != "" {
+			spawn = &task.SpawnSpec{Command: cmd.Path, Args: cmd.Args, Dir: cmd.Dir, CloseOnDone: cmd.Ephemeral}
+		}
 		s.dispatchFiltered(cc, cmd.Prompt, cmd.Group, func(p string) error {
-			_, err := s.enqueueTask(p, cmd.Group)
+			_, err := s.enqueueTask(p, cmd.Group, spawn)
 			return err
 		})
 	case "task.list":
 		send(cc, s.tasksMsg())
 	case "task.cancel":
 		if err := s.cancelTask(cmd.ID); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		send(cc, s.tasksMsg())
+	case "task.promote", "task.demote":
+		// Reorder a queued task within the backlog: promote bumps it to the head,
+		// demote drops it to the tail. Only a waiting task can be reordered.
+		if err := s.reprioritizeTask(cmd.ID, cmd.Action == "task.promote"); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
@@ -1595,6 +1643,8 @@ func taskFields(t *task.Task) map[string]any {
 		"status":   string(t.Status),
 		"panel":    t.Panel,
 		"group":    t.Group,
+		"result":   t.Result,
+		"priority": t.Priority,
 		"attempts": t.Attempts,
 	}
 }
@@ -1631,8 +1681,11 @@ func (s *Server) upsertTaskLocked(panelID, prompt, group string, status task.Sta
 
 // advanceTaskLocked moves a panel's current task to status when the lifecycle
 // permits it (see task.CanAdvance), emitting task.change on a real move. It is the
-// one place the panel lifecycle drives the task lifecycle. Caller holds s.mu.
-func (s *Server) advanceTaskLocked(panelID string, status task.Status) {
+// one place the panel lifecycle drives the task lifecycle. A non-empty result is
+// recorded as the task's terminal note (why it failed), so a finished task carries
+// a reason rather than a blank. A move into a terminal state prunes the finished
+// history so it stays bounded. Caller holds s.mu.
+func (s *Server) advanceTaskLocked(panelID string, status task.Status, result string) {
 	tid, ok := s.panelTask[panelID]
 	if !ok {
 		return
@@ -1642,9 +1695,45 @@ func (s *Server) advanceTaskLocked(panelID string, status task.Status) {
 		return
 	}
 	t.Status = status
+	if result != "" {
+		t.Result = result
+	}
 	t.Updated = s.mon.now()
 	s.emit("task.change", taskFields(t))
 	s.markTaskDirtyLocked(t.ID)
+	if status.Terminal() {
+		s.pruneHistoryLocked()
+	}
+}
+
+// maxTaskHistory caps how many finished (done/failed) tasks linger in memory as
+// history — enough to review a recent burst without the task table (and the queue
+// view) growing without bound over a long session.
+const maxTaskHistory = 50
+
+// pruneHistoryLocked trims finished tasks to the most recently updated
+// maxTaskHistory, dropping the oldest beyond it. Live tasks (queued, dispatched,
+// running) are never touched — only terminal history is bounded. A dropped task's
+// file is already gone (removed when it went terminal); the dirty nudge reconciles
+// any stragglers. Caller holds s.mu.
+func (s *Server) pruneHistoryLocked() {
+	var terminal []*task.Task
+	for _, t := range s.tasks {
+		if t.Status.Terminal() {
+			terminal = append(terminal, t)
+		}
+	}
+	if len(terminal) <= maxTaskHistory {
+		return
+	}
+	sort.Slice(terminal, func(i, j int) bool { return terminal[i].Updated.After(terminal[j].Updated) })
+	for _, t := range terminal[maxTaskHistory:] {
+		delete(s.tasks, t.ID)
+		if t.Panel != "" && s.panelTask[t.Panel] == t.ID {
+			delete(s.panelTask, t.Panel) // drop a mapping left dangling by the pruned task
+		}
+		s.markTaskDirtyLocked(t.ID)
+	}
 }
 
 // dispatchReady reports whether a panel in this state can receive a dispatched
@@ -1658,9 +1747,12 @@ func dispatchReady(st panel.State) bool {
 // onto a free agent. It errors when the queued backlog is at queueMax — the cap is
 // backpressure on a runaway producer, counting only unassigned tasks, so a busy
 // fleet never blocks new work from being queued.
-func (s *Server) enqueueTask(prompt, group string) (string, error) {
+func (s *Server) enqueueTask(prompt, group string, spawn *task.SpawnSpec) (string, error) {
 	if prompt == "" {
 		return "", fmt.Errorf("task.enqueue needs a prompt")
+	}
+	if spawn != nil && spawn.Command == "" {
+		return "", fmt.Errorf("a spawn-on-demand task needs a command to run")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1668,6 +1760,10 @@ func (s *Server) enqueueTask(prompt, group string) (string, error) {
 		return "", fmt.Errorf("queue is full (%d queued); raise queue.max or let it drain", s.queueMax)
 	}
 	t := s.upsertTaskLocked("", prompt, group, task.Queued)
+	if spawn != nil {
+		t.Spawn = spawn
+		s.markTaskDirtyLocked(t.ID) // persist the spawn spec alongside the task
+	}
 	return t.ID, nil
 }
 
@@ -1705,12 +1801,21 @@ func (s *Server) freeIdleAgentLocked(group string) (string, bool) {
 	return "", false
 }
 
-// scheduleLocked drains the queued backlog onto free idle agents, oldest task
-// first, honouring the per-group concurrency cap. It assigns the task to the panel
-// (recording the brief, moving the task to dispatched) and returns the prompts to
-// deliver once the lock is released. The scheduler never spawns a panel — it
-// distributes work across the agents already in the fleet. Caller holds s.mu.
-func (s *Server) scheduleLocked() []readyDispatch {
+// spawnRequest is a queued spawn-on-demand task with no free agent: the panel to
+// provision for it, executed once the monitor lock is released.
+type spawnRequest struct {
+	taskID string
+	spec   task.SpawnSpec
+}
+
+// scheduleLocked drains the queued backlog, highest priority (then oldest) first,
+// honouring the per-group concurrency cap. It assigns each task to a free idle
+// agent — recording the brief, moving the task to dispatched — and returns the
+// prompts to deliver once the lock is released. A queued task that carries a spawn
+// spec and finds no free agent instead yields a spawnRequest: the scheduler
+// provisions a fresh agent for it (below the fleet ceiling) rather than leaving it
+// to wait on the standing fleet. Caller holds s.mu.
+func (s *Server) scheduleLocked() ([]readyDispatch, []spawnRequest) {
 	// One pass over the task table: collect the unassigned backlog and tally each
 	// group's in-flight (dispatched/running) count, so the per-group cap is a map
 	// lookup per candidate rather than a full rescan.
@@ -1725,17 +1830,31 @@ func (s *Server) scheduleLocked() []readyDispatch {
 		}
 	}
 	if len(queued) == 0 {
-		return nil
+		return nil, nil
 	}
-	sort.Slice(queued, func(i, j int) bool { return queued[i].Created.Before(queued[j].Created) })
+	sort.Slice(queued, func(i, j int) bool {
+		if queued[i].Priority != queued[j].Priority {
+			return queued[i].Priority > queued[j].Priority // higher priority drains first
+		}
+		return queued[i].Created.Before(queued[j].Created) // then oldest-first
+	})
 
 	var deliver []readyDispatch
+	var spawns []spawnRequest
 	for _, t := range queued {
 		if s.queueConcurrency > 0 && groupRunning[t.Group] >= s.queueConcurrency {
 			continue
 		}
 		pid, ok := s.freeIdleAgentLocked(t.Group)
 		if !ok {
+			// No standing agent is free. If the task provisions its own, ask for one
+			// panel per task (spawning marks it in flight so a later tick does not
+			// double-spawn), staying below the fleet ceiling.
+			if t.Spawn != nil && !s.spawning[t.ID] && len(s.panels) < maxConductorFleet {
+				s.spawning[t.ID] = true
+				groupRunning[t.Group]++ // the pending worker counts against the cap for later tasks
+				spawns = append(spawns, spawnRequest{taskID: t.ID, spec: *t.Spawn})
+			}
 			continue
 		}
 		if idx := s.indexLocked(pid); idx >= 0 {
@@ -1751,7 +1870,54 @@ func (s *Server) scheduleLocked() []readyDispatch {
 		s.markTaskDirtyLocked(t.ID)
 		deliver = append(deliver, readyDispatch{id: pid, data: dispatchData(t.Prompt, "")})
 	}
-	return deliver
+	return deliver, spawns
+}
+
+// applyScheduledSpawns provisions an agent for each spawn-on-demand task the
+// scheduler could not place, then assigns the task to it: the dispatch is held in
+// pendingDispatch so the monitor delivers the prompt once the new panel settles. A
+// spawn failure fails the task with the reason; a task that vanished mid-spawn
+// (cancelled/drained) leaves an orphan panel, which is closed. It runs with s.mu
+// released — createPanel and closePanel take the lock themselves. Returns whether
+// the fleet changed, so the caller can broadcast a fresh snapshot.
+func (s *Server) applyScheduledSpawns(spawns []spawnRequest) bool {
+	changed := false
+	var orphans []string
+	for _, req := range spawns {
+		pid, err := s.createPanel(proto.KindAgent, req.spec.Command, req.spec.Args, req.spec.Dir, false)
+		s.mu.Lock()
+		delete(s.spawning, req.taskID)
+		t := s.tasks[req.taskID]
+		if err != nil {
+			if t != nil && !t.Status.Terminal() {
+				t.Status, t.Result, t.Updated = task.Failed, "spawn failed: "+err.Error(), s.mon.now()
+				s.emit("task.change", taskFields(t))
+				s.markTaskDirtyLocked(t.ID)
+				s.pruneHistoryLocked()
+			}
+			s.mu.Unlock()
+			continue
+		}
+		changed = true
+		if t == nil || t.Status.Terminal() {
+			orphans = append(orphans, pid) // the task went away mid-spawn — reclaim the panel
+			s.mu.Unlock()
+			continue
+		}
+		if idx := s.indexLocked(pid); idx >= 0 {
+			s.panels[idx].Task = t.Prompt
+		}
+		t.Panel, t.Status, t.Attempts, t.Updated = pid, task.Dispatched, t.Attempts+1, s.mon.now()
+		s.panelTask[pid] = t.ID
+		s.pendingDispatch[pid] = dispatchData(t.Prompt, "") // deliver when the fresh panel settles
+		s.emit("task.change", taskFields(t))
+		s.markTaskDirtyLocked(t.ID)
+		s.mu.Unlock()
+	}
+	for _, id := range orphans {
+		_ = s.closePanel(id)
+	}
+	return changed
 }
 
 // cancelTask removes a queued, unassigned task from the backlog. A task already
@@ -1772,6 +1938,46 @@ func (s *Server) cancelTask(id string) error {
 	return nil
 }
 
+// reprioritizeTask moves a queued task to the head (up) or tail (down) of the
+// backlog by setting its priority just past the current extreme among the other
+// queued tasks — a single, predictable "bump to next" / "drop to last" gesture.
+// Only a waiting task has a queue position: a task already in flight or finished is
+// refused, like cancel.
+func (s *Server) reprioritizeTask(id string, up bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[id]
+	if !ok {
+		return fmt.Errorf("no task %q", id)
+	}
+	if t.Panel != "" || t.Status != task.Queued {
+		return fmt.Errorf("task %q is not queued; only a waiting task can be reordered", id)
+	}
+	hi, lo, seen := 0, 0, false
+	for _, o := range s.tasks {
+		if o.ID == id || o.Panel != "" || o.Status != task.Queued {
+			continue
+		}
+		if !seen {
+			hi, lo, seen = o.Priority, o.Priority, true
+			continue
+		}
+		hi, lo = max(hi, o.Priority), min(lo, o.Priority)
+	}
+	if !seen { // the only queued task — nothing to reorder against
+		return nil
+	}
+	if up {
+		t.Priority = hi + 1
+	} else {
+		t.Priority = lo - 1
+	}
+	t.Updated = s.mon.now()
+	s.emit("task.change", taskFields(t))
+	s.markTaskDirtyLocked(t.ID)
+	return nil
+}
+
 // drainQueued clears every unassigned queued task, returning how many it dropped.
 // In-flight tasks (dispatched/running on a panel) are left to finish — draining the
 // backlog is not the same as stopping the fleet.
@@ -1789,8 +1995,11 @@ func (s *Server) drainQueued() int {
 	return n
 }
 
-// tasksMsg builds the backlog snapshot reply, newest activity first, so a frontend
-// can render the queue/kanban.
+// tasksMsg builds the backlog snapshot reply so a frontend can render the
+// queue/kanban. The order mirrors what will happen: live tasks come first in
+// scheduler order (higher priority, then oldest), so the pending backlog reads
+// top-to-bottom in the sequence it will drain and a reorder visibly moves a row;
+// finished history follows, most recent first.
 func (s *Server) tasksMsg() proto.ServerMsg {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1798,12 +2007,25 @@ func (s *Server) tasksMsg() proto.ServerMsg {
 	for _, t := range s.tasks {
 		tasks = append(tasks, t)
 	}
-	sort.Slice(tasks, func(i, j int) bool { return tasks[i].Updated.After(tasks[j].Updated) })
+	sort.Slice(tasks, func(i, j int) bool {
+		a, b := tasks[i], tasks[j]
+		if a.Status.Terminal() != b.Status.Terminal() {
+			return !a.Status.Terminal() // live tasks before finished history
+		}
+		if a.Status.Terminal() {
+			return a.Updated.After(b.Updated) // history: most recent first
+		}
+		if a.Priority != b.Priority {
+			return a.Priority > b.Priority // backlog: higher priority first
+		}
+		return a.Created.Before(b.Created) // then oldest-first, matching the scheduler
+	})
 	wire := make([]proto.Task, len(tasks))
 	for i, t := range tasks {
 		wire[i] = proto.Task{
 			ID: t.ID, Prompt: t.Prompt, Status: string(t.Status), Panel: t.Panel,
-			Group: t.Group, Result: t.Result, Attempts: t.Attempts,
+			Group: t.Group, Result: t.Result, Priority: t.Priority, Attempts: t.Attempts,
+			Spawn: t.Spawn != nil,
 		}
 	}
 	return proto.ServerMsg{Type: "tasks", Tasks: wire}
@@ -1961,7 +2183,7 @@ func (s *Server) closePanel(id string) error {
 	if s.panels[idx].Conductor {
 		workspace = s.specs[id].Dir
 	}
-	s.advanceTaskLocked(id, task.Failed) // closing a panel mid-task abandons it
+	s.advanceTaskLocked(id, task.Failed, "panel closed") // closing a panel mid-task abandons it
 	s.panels = slices.Delete(s.panels, idx, idx+1)
 	s.mon.forget(id)
 	delete(s.specs, id)           // the panel is gone for good; drop its retained spawn spec

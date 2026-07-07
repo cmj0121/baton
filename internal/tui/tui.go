@@ -171,6 +171,7 @@ type model struct {
 	renameGroup   string // group being renamed via inputRename ("" if a panel)
 	dispatchID    string // agent panel id being dispatched a task via inputDispatch
 	dispatchGroup string // group name being dispatched a task to every member (mutually exclusive with dispatchID)
+	enqueueGroup  string // work item an inputEnqueue task is restricted to ("" = any free agent)
 
 	filter string // dashboard panel filter (substring on titles / group names); "" shows the whole fleet
 
@@ -293,6 +294,7 @@ const (
 	inputGroupName                // naming a new group from the marked panels
 	inputRename                   // renaming the selected panel or group
 	inputDispatch                 // assigning a task brief to the selected agent panel
+	inputEnqueue                  // enqueuing a task brief for the scheduler to drain onto a free agent
 	inputSignalName               // free-form signal name/number for the picker's "other…"
 	inputFilter                   // live dashboard panel filter (f)
 	inputSearch                   // scrollback search term in a zoom / group tile (C-t f)
@@ -1391,6 +1393,8 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		return m.commitRename(buf), nil
 	case inputDispatch:
 		return m.commitDispatch(buf), nil
+	case inputEnqueue:
+		return m.commitEnqueue(buf), nil
 	case inputSignalName:
 		return m.commitOtherSignal(buf)
 	case inputFilter:
@@ -1788,6 +1792,24 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 			}
 			return m.startDispatch(it.panel), nil
 		}
+	case actEnqueue:
+		// Enqueue a task onto the backlog for the scheduler to distribute onto a free
+		// agent — the cockpit path to filling the queue the ctl/MCP surfaces feed. A
+		// selected work item (or the group of a selected panel) restricts the task to
+		// that pool; otherwise it takes any free agent.
+		switch m.mode {
+		case modeGroupZoom:
+			return m.startEnqueue(m.groupName), nil
+		default:
+			it, ok := m.selectedItem()
+			if !ok {
+				return m.startEnqueue(""), nil // no selection — any free agent
+			}
+			if it.kind == itemGroup {
+				return m.startEnqueue(it.name), nil
+			}
+			return m.startEnqueue(it.panel.Group), nil
+		}
 	case actQueue:
 		return m.openQueue(m.mode), nil
 	case actDashboard:
@@ -2042,6 +2064,13 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m.startDispatch(p), nil
+		}
+		if b, ok := m.lookupCmd(key); ok && b.act == actEnqueue { // C-t t → enqueue a task for the zoomed agent's pool
+			p, ok := m.fleetPanel(m.zoomID)
+			if !ok {
+				return m, nil
+			}
+			return m.startEnqueue(p.Group), nil
 		}
 		if b, ok := m.lookupCmd(key); ok && b.act == actQueue { // C-t Q → the task-queue manager
 			return m.openQueue(modeZoom), nil
@@ -3257,6 +3286,8 @@ func (m model) inputView() string {
 		title, prompt, action = "RENAME", "new name", "save"
 	case inputDispatch:
 		title, prompt, action = "DISPATCH TASK", "the task brief for the agent", "send"
+	case inputEnqueue:
+		title, prompt, action = "ENQUEUE TASK", "the task brief to queue for a free agent", "queue"
 	case inputSignalName:
 		title, prompt, action = "SEND SIGNAL", "signal name or number  (e.g. WINCH, TSTP, 28)", "send"
 	case inputFilter:
