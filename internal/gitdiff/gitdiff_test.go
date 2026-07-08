@@ -251,3 +251,28 @@ func TestRenderUntrackedBinary(t *testing.T) {
 		t.Errorf("missing file should be summarised, got %q", got)
 	}
 }
+
+// TestRenderUntrackedByteCap proves a huge untracked file is not pulled into
+// memory in full: renderUntracked stops reading at maxUntrackedBytes, so opening
+// the diff popup on a multi-megabyte artifact an agent left behind cannot balloon
+// the daemon. A single long line (no newlines) bypasses the line cap, so only the
+// byte cap can bound it.
+func TestRenderUntrackedByteCap(t *testing.T) {
+	dir := t.TempDir()
+	huge := make([]byte, maxUntrackedBytes*2)
+	for i := range huge {
+		huge[i] = 'a' // no newlines: the line cap never trips, only the byte cap can
+	}
+	if err := os.WriteFile(filepath.Join(dir, "big.txt"), huge, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := renderUntracked(dir, "big.txt")
+	if !strings.Contains(got, "truncated at") {
+		t.Errorf("an oversized file should be truncated with a marker, got %d bytes", len(got))
+	}
+	// The render must not contain the whole file: bounded by the read cap plus the
+	// small "+"/header/marker overhead, never the full 2x input.
+	if len(got) > maxUntrackedBytes+256 {
+		t.Errorf("render kept %d bytes, want it bounded near the %d-byte read cap", len(got), maxUntrackedBytes)
+	}
+}

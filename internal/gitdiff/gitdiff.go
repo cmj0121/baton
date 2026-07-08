@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -100,6 +101,15 @@ func ResolveCommand(dir, explicit string) (name string, args []string) {
 // diff, so a huge generated file (an agent's build output) cannot bloat the popup
 // payload. Beyond it the body is truncated with a marker.
 const untrackedDiffCap = 2000
+
+// maxUntrackedBytes caps how much of an untracked file is READ into memory before
+// rendering. The line cap above only trims content already loaded; without a read
+// cap, a multi-gigabyte untracked file (a build artifact, a downloaded blob, a
+// runaway log an agent left in its workdir) would be pulled into RAM in full the
+// moment a user opens the diff popup — enough to OOM the daemon that owns the
+// whole fleet. The read stops one byte past the cap so truncation is detectable
+// without loading the rest.
+const maxUntrackedBytes = 2 << 20 // 2 MiB — generous over untrackedDiffCap lines of source
 
 // FileChange is one changed path in a work tree with the diff for each side.
 // Index is the staged (index-side) status letter from `git status --porcelain`,
@@ -210,9 +220,21 @@ func sectionPath(lines []string) string {
 // it reads like the tracked changes beside it. A binary or unreadable file, or one
 // past untrackedDiffCap lines, is summarised rather than dumped in full.
 func renderUntracked(dir, path string) string {
-	data, err := os.ReadFile(filepath.Join(dir, path))
+	f, err := os.Open(filepath.Join(dir, path))
 	if err != nil {
 		return fmt.Sprintf("new file: %s\n(unreadable: %v)\n", path, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	// Read at most maxUntrackedBytes+1: the extra byte reveals a file that ran past
+	// the cap without ever loading the tail into memory.
+	data, err := io.ReadAll(io.LimitReader(f, maxUntrackedBytes+1))
+	if err != nil {
+		return fmt.Sprintf("new file: %s\n(unreadable: %v)\n", path, err)
+	}
+	overBytes := len(data) > maxUntrackedBytes
+	if overBytes {
+		data = data[:maxUntrackedBytes]
 	}
 	if bytes.IndexByte(data, 0) >= 0 {
 		return fmt.Sprintf("new file: %s\n(binary)\n", path)
@@ -223,9 +245,12 @@ func renderUntracked(dir, path string) string {
 	for i, ln := range lines {
 		if i >= untrackedDiffCap {
 			fmt.Fprintf(&b, "@@ … %d more line(s) truncated @@\n", len(lines)-i)
-			break
+			return b.String()
 		}
 		b.WriteString("+" + ln + "\n")
+	}
+	if overBytes {
+		fmt.Fprintf(&b, "@@ … truncated at %d bytes @@\n", maxUntrackedBytes)
 	}
 	return b.String()
 }
