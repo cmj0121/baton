@@ -22,6 +22,17 @@ type APIProvider struct {
 	now    func() time.Time
 }
 
+// maxUsageBody caps how many bytes of an API response body are decoded, so a
+// malformed or oversized reply cannot balloon the daemon's memory. The real
+// reports are a few KB per page; 8 MiB is far past any legitimate page yet still
+// a hard ceiling. maxUsagePages bounds the pagination loop so a reply that keeps
+// reporting has_more (a bug or a bad proxy) cannot spin forever within the
+// request deadline.
+const (
+	maxUsageBody  = 8 << 20 // 8 MiB
+	maxUsagePages = 1000
+)
+
 // NewAPIProvider builds an api source authenticating with the given admin key.
 func NewAPIProvider(key string) *APIProvider {
 	return &APIProvider{
@@ -77,7 +88,7 @@ type usageReport struct {
 func (p *APIProvider) fetchUsage(ctx context.Context, start time.Time, snap *Snapshot) error {
 	from, to := p.window(start)
 	page := ""
-	for {
+	for range maxUsagePages {
 		q := url.Values{}
 		q.Set("starting_at", from)
 		q.Set("ending_at", to)
@@ -102,6 +113,7 @@ func (p *APIProvider) fetchUsage(ctx context.Context, start time.Time, snap *Sna
 		}
 		page = rep.NextPage
 	}
+	return nil // page ceiling hit; report what we summed rather than looping forever
 }
 
 type costReport struct {
@@ -120,7 +132,7 @@ func (p *APIProvider) fetchCost(ctx context.Context, start time.Time, snap *Snap
 	from, to := p.window(start)
 	page := ""
 	var cents float64
-	for {
+	for range maxUsagePages {
 		q := url.Values{}
 		q.Set("starting_at", from)
 		q.Set("ending_at", to)
@@ -165,5 +177,5 @@ func (p *APIProvider) get(ctx context.Context, path string, q url.Values, out an
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("%s: %s: %s", path, resp.Status, body)
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return json.NewDecoder(io.LimitReader(resp.Body, maxUsageBody)).Decode(out)
 }
