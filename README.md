@@ -87,6 +87,7 @@ the current view, and **`C-t k`** to edit the key map.
 |             | `g` / `G` / `u`   | mark / group marked panels / ungroup                |
 |             | `s` / `f` / `D`   | signal / find / diff the selection                  |
 |             | `T` / `Q`         | dispatch a task / manage the task queue             |
+|             | `U`               | toggle the account usage/cost footer                |
 | Group       | `tab`             | focus the next panel                                |
 |             | `+` / `-`         | show more / fewer live tiles                        |
 |             | `L`               | cycle the tile layout                               |
@@ -120,6 +121,9 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
   `stack`, or your own grids from `TUI.yaml`.
 - **Appearance** — `$HOME/.baton/TUI.yaml` reshapes the cockpit: a colour **theme** and the group-split **layouts**,
   hot-reloaded with `C-t R`. See **[docs/TUI.md](docs/TUI.md)**.
+- **Usage footer** — `U` toggles a footer readout of the day's token usage and cost (`⊙ 1.2M tok · ≈$12.34 API`). It
+  reads Claude Code's own transcripts by default (works on a Pro/Max subscription) or the Anthropic Admin API with a key.
+  The cost is API-equivalent, not a subscription charge. See **[docs/USAGE.md](docs/USAGE.md)**.
 - **Persistence & respawn** — Baton remembers its fleet across a restart; panels come back as inert exited slots and
   `r` re-runs them from their retained spec.
 - **Reload** — `C-t R` (or a `SIGHUP` to the daemon) hot-reloads config without restarting the fleet.
@@ -146,6 +150,7 @@ through one `baton` object. See **[docs/PLUGIN.md](docs/PLUGIN.md)**.
 - **[docs/TUI.md](docs/TUI.md)** — the cockpit appearance file (`$HOME/.baton/TUI.yaml`): the colour theme and the
   group-split layouts (presets and custom grids).
 - **[docs/GIT.md](docs/GIT.md)** — the git menu: every op, the commit-editor flow, worktrees, and the config.
+- **[docs/USAGE.md](docs/USAGE.md)** — the account usage footer: the local and Admin-API sources, config, and caveats.
 - **[docs/PLUGIN.md](docs/PLUGIN.md)** — the Lua plugin API: the `baton` object, events, commands, and config.
 - **[docs/CONTROL.md](docs/CONTROL.md)** — driving the fleet by agent: the conductor, the `baton ctl` CLI, the
   `baton mcp` tools, and the guardrails.

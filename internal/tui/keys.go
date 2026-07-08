@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -31,6 +32,7 @@ const (
 	keyDispatch    = "T" // dispatch a task to the focused agent panel (shift+t; C-t T in a zoom)
 	keyEnqueue     = "t" // enqueue a task for the scheduler to drain onto a free agent (bare t, the everyday sibling of T; C-t t in a zoom)
 	keyQueue       = "Q" // open the task-queue manager popup (shift+q; C-t Q in a zoom)
+	keyUsage       = "U" // toggle the account usage/cost footer segment (shift+u)
 	keyHelp        = "?" // view the key list for the current view
 	keyEditMap     = "k" // edit the key map (prefix only: C-t k)
 	keyPanelConfig = "P" // shift+p
@@ -95,6 +97,7 @@ const (
 	actEnqueue
 	actQueue
 	actHelp
+	actUsageToggle
 	actPanelConfig
 	actRestart
 	actReload
@@ -165,6 +168,7 @@ var bindings = []binding{
 	{"favourite", keyFavourite, "favourite the panel or group (sorts it to the front)", actFavourite, "Work items"},
 
 	{"help", keyHelp, "view the keys for this view", actHelp, "View"},
+	{"usage-footer", keyUsage, "toggle the account usage/cost footer", actUsageToggle, "View"},
 	{"key-map", keyEditMap, "edit the key map (prefix)", actEditMap, "View"},
 	{"panel-config", keyPanelConfig, "configure panel defaults (prefix)", actPanelConfig, "View"},
 	{"scroll", keyScroll, "scroll mode — line / page (prefix)", actScroll, "View"},
@@ -186,6 +190,7 @@ type prefs struct {
 	allowNameConflict bool
 	bellEnabled       bool
 	mouseEnabled      bool // mouse reporting (wheel scroll + selection); default off
+	usageFooter       bool // show the account usage/cost footer segment; default on
 	shellPath         string
 	workdir           string                         // default working directory for new panels ("" = home)
 	defaultAgent      string                         // agent profile the new-agent action spawns
@@ -222,7 +227,7 @@ func loadPrefs() prefs {
 // the daemon-pushed config (the "config" event), so the two can never map a field
 // differently.
 func prefsFromConfig(cfg config.Config) prefs {
-	p := prefs{prefix: keyPrefix, binds: append([]binding(nil), bindings...), confirmClose: true, bellEnabled: true}
+	p := prefs{prefix: keyPrefix, binds: append([]binding(nil), bindings...), confirmClose: true, bellEnabled: true, usageFooter: true}
 
 	if cfg.Prefix != "" {
 		p.prefix = cfg.Prefix
@@ -243,6 +248,9 @@ func prefsFromConfig(cfg config.Config) prefs {
 	}
 	if cfg.Settings.Mouse != nil {
 		p.mouseEnabled = *cfg.Settings.Mouse
+	}
+	if cfg.Settings.UsageFooter != nil {
+		p.usageFooter = *cfg.Settings.UsageFooter
 	}
 	p.shellPath = cfg.Panel.Shell
 	p.workdir = cfg.Panel.Workdir
@@ -277,24 +285,32 @@ func (m model) saveConfig() error {
 	allowNameConflict := m.allowNameConflict
 	bellEnabled := m.bellEnabled
 	mouseEnabled := m.mouseEnabled
-	return config.Config{
-		Prefix: prefix,
-		Keys:   keys,
-		Settings: config.Settings{
-			ConfirmClose:      &confirmClose,
-			AllowNameConflict: &allowNameConflict,
-			Bell:              &bellEnabled,
-			Mouse:             &mouseEnabled,
-		},
-		Panel: config.PanelDefaults{
-			Shell:        m.shellPath,
-			Workdir:      m.workdir,
-			DefaultAgent: m.defaultAgent,
-			Agents:       m.agents, // round-trip the user's profiles so a save never drops them
-			ReplayKB:     m.replayKB,
-			DiffCommand:  m.diffCommand,
-		},
-	}.Save()
+	usageFooter := m.usageFooter
+
+	// Start from the current on-disk config so sections the cockpit does not own —
+	// the queue caps and the usage source/interval, both hand-edited in this same
+	// file — survive a settings toggle instead of being dropped on the rewrite. A
+	// load error is surfaced rather than swallowed: overwriting a config we could
+	// not parse would clobber those unowned sections from a near-empty base.
+	out, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("reload config before save: %w", err)
+	}
+	out.Prefix = prefix
+	out.Keys = keys
+	out.Settings.ConfirmClose = &confirmClose
+	out.Settings.AllowNameConflict = &allowNameConflict
+	out.Settings.Bell = &bellEnabled
+	out.Settings.Mouse = &mouseEnabled
+	out.Settings.UsageFooter = &usageFooter
+	out.Panel.Shell = m.shellPath
+	out.Panel.Workdir = m.workdir
+	out.Panel.DefaultAgent = m.defaultAgent
+	out.Panel.Agents = m.agents // round-trip the user's profiles so a save never drops them
+	out.Panel.ReplayKB = m.replayKB
+	out.Panel.DiffCommand = m.diffCommand
+	out.TUI = config.TUIConfig{} // the cockpit appearance lives in TUI.yaml, never the main config
+	return out.Save()
 }
 
 // --- keycap rendering ---------------------------------------------------------

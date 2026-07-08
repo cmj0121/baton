@@ -30,6 +30,9 @@ type Config struct {
 	// Queue holds the task-backlog caps.
 	Queue QueueDefaults `yaml:"queue,omitempty"`
 
+	// Usage configures the account usage/cost footer segment.
+	Usage UsageConfig `yaml:"usage,omitempty"`
+
 	// TUI holds the cockpit appearance — the colour theme and the group-split
 	// layouts. Its canonical source is a separate file ($HOME/.baton/TUI.yaml,
 	// see LoadTUI); it lives here so it rides the same config broadcast to every
@@ -104,6 +107,22 @@ type QueueDefaults struct {
 	Concurrency int `yaml:"concurrency,omitempty"`
 }
 
+// UsageConfig configures the account usage/cost footer segment: which data source
+// feeds it and how often it refreshes. The Admin-API source additionally needs an
+// admin key in $BATON_ANTHROPIC_ADMIN_KEY — deliberately an env var, never this
+// hand-editable file. Applied at daemon start; changing it needs a restart.
+type UsageConfig struct {
+	// Source selects the data source: "local" reads Claude Code's own transcripts,
+	// "api" queries the Anthropic Admin usage/cost API, and "auto" (the default,
+	// and the value for an empty field) prefers the api source when an admin key is
+	// present, else local.
+	Source string `yaml:"source,omitempty"`
+
+	// Interval is the refresh cadence in seconds. 0 uses the built-in default (30s
+	// for the local source, 60s for the api source); values below 10 are clamped up.
+	Interval int `yaml:"interval,omitempty"`
+}
+
 // Settings are the persisted cockpit toggles. Pointers distinguish "unset"
 // (use the default) from an explicit false.
 type Settings struct {
@@ -121,6 +140,10 @@ type Settings struct {
 	// scrollback and moves the dashboard selection. Unset defaults to off, so
 	// the terminal's own selection and copy stay available until you opt in.
 	Mouse *bool `yaml:"mouse,omitempty"`
+
+	// UsageFooter shows the account usage/cost segment in the footer. Unset
+	// defaults to on; toggled live with the usage-footer binding (U).
+	UsageFooter *bool `yaml:"usage-footer,omitempty"`
 }
 
 // PanelDefaults configure how new panels are spawned.

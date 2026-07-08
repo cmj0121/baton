@@ -194,6 +194,8 @@ type model struct {
 	commandFrom    mode                  // the view the command picker was opened from, restored on esc
 	commandCursor  int                   // highlighted row in the command picker
 	pluginFooter   string                // a plugin-set persistent footer segment (baton.footer), shown in every view's footer
+	usageText      string                // the account usage/cost footer segment (internal/usage), pushed by the daemon
+	usageFooter    bool                  // whether the usage segment is shown (toggled with U, persisted)
 
 	// The task-queue manager popup (modeQueue, opened with Q). tasks is the latest
 	// backlog snapshot the server pushes on task.list / each queue mutation;
@@ -335,6 +337,7 @@ func (m model) applyPrefs(p prefs) model {
 	m.allowNameConflict = p.allowNameConflict
 	m.bellEnabled = p.bellEnabled
 	m.mouseEnabled = p.mouseEnabled
+	m.usageFooter = p.usageFooter
 	m.shellPath = p.shellPath
 	m.workdir = p.workdir
 	m.defaultAgent = p.defaultAgent
@@ -489,6 +492,7 @@ type statsEventMsg proto.ServerMsg
 type telemetryEventMsg proto.ServerMsg
 type configEventMsg proto.ServerMsg
 type footerEventMsg proto.ServerMsg
+type usageEventMsg proto.ServerMsg
 type connClosedMsg struct{}
 type tickMsg time.Time
 
@@ -531,13 +535,17 @@ func waitFooter(ch chan proto.ServerMsg) tea.Cmd {
 	return waitMsg(ch, func(m proto.ServerMsg) tea.Msg { return footerEventMsg(m) })
 }
 
+func waitUsage(ch chan proto.ServerMsg) tea.Cmd {
+	return waitMsg(ch, func(m proto.ServerMsg) tea.Msg { return usageEventMsg(m) })
+}
+
 // tick drives the footer clock, firing once a second.
 func tick() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
 func (m model) Init() tea.Cmd {
-	cmds := []tea.Cmd{waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), waitTelemetry(m.client.Telemetry), waitConfig(m.client.Config), waitFooter(m.client.Footer), tick()}
+	cmds := []tea.Cmd{waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), waitTelemetry(m.client.Telemetry), waitConfig(m.client.Config), waitFooter(m.client.Footer), waitUsage(m.client.Usage), tick()}
 	if m.mouseEnabled {
 		cmds = append(cmds, tea.EnableMouseCellMotion) // honour the persisted mouse toggle on attach
 	}
@@ -611,6 +619,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case footerEventMsg:
 		m.applyEvent(proto.ServerMsg(msg))
 		return m, waitFooter(m.client.Footer)
+
+	case usageEventMsg:
+		m.applyEvent(proto.ServerMsg(msg))
+		return m, waitUsage(m.client.Usage)
 
 	case connClosedMsg:
 		// The backend dropped. Rather than vanish, stay up and alert in the footer
@@ -842,6 +854,8 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		m.pluginFooter = sm.Footer // current footer value, so a fresh attach shows it immediately
 	case "footer":
 		m.pluginFooter = sm.Footer
+	case "usage":
+		m.usageText = sm.Usage
 	case "tasks":
 		// The latest backlog snapshot — the reply to task.list and to every queue
 		// mutation. Store it and keep the manager popup's cursor in range as the
@@ -1820,6 +1834,13 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		m.status = "dashboard"
 	case actHelp:
 		return m.openHelp(m.mode), nil
+	case actUsageToggle:
+		m.usageFooter = !m.usageFooter
+		m.status = "usage footer: " + onOff(m.usageFooter)
+		if err := m.saveConfig(); err != nil {
+			m.status = "toggled, but save failed: " + err.Error()
+		}
+		return m, nil
 	case actEditMap:
 		return m.openEditMap(m.mode), nil
 	case actScroll:
@@ -3406,6 +3427,17 @@ func (m model) pluginFooterCap() string {
 	return seg(truncate(m.pluginFooter, 32), colDark, colBrandHi)
 }
 
+// usageCap renders the account usage/cost segment (internal/usage), e.g.
+// "⊙ 1.2M tok · ≈$12.34 API" — the cost is API-equivalent, not a bill. It is empty
+// when the toggle is off (U) or the daemon has nothing to report yet, so the strip
+// stays clean until real usage lands.
+func (m model) usageCap() string {
+	if !m.usageFooter || m.usageText == "" {
+		return ""
+	}
+	return seg("⊙ "+truncate(m.usageText, 30), colInk, colBlue)
+}
+
 // frontendVersion is this build's version, defaulting to "dev" when unset (a
 // zero-value model in tests, or an unstamped build).
 func (m model) frontendVersion() string {
@@ -3441,7 +3473,7 @@ func (m model) statusBar(left, hint string) string {
 	if strings.HasPrefix(m.status, "error") {
 		statusBg = colRed
 	}
-	caps := prefixBadge + m.outageCap() + m.attentionBadge() + m.pluginFooterCap() + stats + clock
+	caps := prefixBadge + m.outageCap() + m.attentionBadge() + m.pluginFooterCap() + m.usageCap() + stats + clock
 	right := caps
 	if budget := m.width - lipgloss.Width(left) - lipgloss.Width(caps) - 4; budget > 0 {
 		right += seg("● "+truncate(m.status, budget), colInk, statusBg) // "● " + cap padding
