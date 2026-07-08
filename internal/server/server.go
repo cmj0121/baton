@@ -4,6 +4,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -32,6 +33,7 @@ import (
 	"github.com/cmj0121/baton/internal/signals"
 	"github.com/cmj0121/baton/internal/state"
 	"github.com/cmj0121/baton/internal/task"
+	"github.com/cmj0121/baton/internal/usage"
 )
 
 // statsInterval is how often the server samples host CPU/memory for the footer.
@@ -107,6 +109,14 @@ type Server struct {
 	clientConfig json.RawMessage
 	pluginCmds   []proto.PluginCommand
 	footerText   string // a plugin-set persistent footer segment (baton.footer); carried on config + pushed live
+
+	// Account usage footer. usageProvider polls the current account's daily
+	// token/cost usage (internal/usage); a nil provider disables the segment.
+	// usageInterval is the poll cadence; usageText is the last formatted value,
+	// held so a freshly attaching client is seeded on hello. Guarded by mu.
+	usageProvider usage.Provider
+	usageInterval time.Duration
+	usageText     string
 
 	mu      sync.Mutex
 	seq     int
@@ -270,6 +280,16 @@ func WithQueue(max, concurrency int) Option {
 		if concurrency >= 0 {
 			s.queueConcurrency = concurrency
 		}
+	}
+}
+
+// WithUsage wires the account usage/cost footer: p polls the current usage and
+// interval is the poll cadence. A nil provider (or non-positive interval) leaves
+// the segment off, so usage is opt-in and costs nothing when unconfigured.
+func WithUsage(p usage.Provider, interval time.Duration) Option {
+	return func(s *Server) {
+		s.usageProvider = p
+		s.usageInterval = interval
 	}
 }
 
@@ -466,6 +486,7 @@ func (s *Server) Serve() error {
 	stop := make(chan struct{})
 	defer close(stop)
 	go s.statsLoop(stop)
+	go s.usageLoop(stop)
 	go s.monitorLoop(stop)
 	go s.saverLoop(stop)
 	go s.taskSaverLoop(stop)
@@ -512,6 +533,67 @@ func statsMsg() proto.ServerMsg {
 		msg.MemUsed, msg.MemTotal = vm.Used, vm.Total
 	}
 	return msg
+}
+
+// usageLoop polls the account's usage/cost on a fixed interval and broadcasts the
+// formatted footer segment when it changes. It seeds the held value once at boot
+// (so hello can serve it) and thereafter fetches only while a client is attached,
+// since the footer is the only consumer. A nil provider disables it entirely.
+func (s *Server) usageLoop(stop <-chan struct{}) {
+	if s.usageProvider == nil {
+		return
+	}
+	s.refreshUsage() // seed the held value before the first client attaches
+	t := time.NewTicker(s.usageInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			s.mu.Lock()
+			n := len(s.clients)
+			s.mu.Unlock()
+			if n == 0 {
+				continue // nobody watching — skip the fetch until someone attaches
+			}
+			s.refreshUsage()
+		}
+	}
+}
+
+// refreshUsage fetches a fresh snapshot, formats it, and broadcasts it when the
+// value moved. On a fetch error it keeps the last good value if the new one is
+// empty (a transient failure should not blank the footer), but still shows a
+// partial snapshot that carries data (e.g. the api source got tokens but not cost).
+func (s *Server) refreshUsage() {
+	ctx, cancel := context.WithTimeout(context.Background(), s.usageInterval)
+	defer cancel()
+	snap, err := s.usageProvider.Fetch(ctx)
+	text := usage.Format(snap)
+	if err != nil {
+		if text == "" {
+			log.Warn().Err(err).Msg("usage fetch failed; keeping the last value")
+			return
+		}
+		log.Warn().Err(err).Msg("usage fetch partial; showing what returned")
+	}
+	s.mu.Lock()
+	changed := s.usageText != text
+	s.usageText = text
+	s.mu.Unlock()
+	if changed {
+		s.broadcast(proto.ServerMsg{Type: "usage", Usage: text})
+	}
+}
+
+// usageMsg is the held usage segment as a wire message, used to seed a freshly
+// attaching client on hello (before its first poll tick).
+func (s *Server) usageMsg() proto.ServerMsg {
+	s.mu.Lock()
+	text := s.usageText
+	s.mu.Unlock()
+	return proto.ServerMsg{Type: "usage", Usage: text}
 }
 
 // monitorLoop is the Monitor's heartbeat: on each tick it advances every panel's
@@ -835,6 +917,9 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		send(cc, proto.ServerMsg{Type: "welcome", Version: proto.ProtocolVersion, ServerVer: s.version})
 		send(cc, s.panelsMsg())
 		send(cc, statsMsg()) // seed the footer immediately, before the first tick
+		if s.usageProvider != nil {
+			send(cc, s.usageMsg()) // seed the account usage segment from the held value
+		}
 	case "panel.list":
 		send(cc, s.panelsMsg())
 	case "panel.create":

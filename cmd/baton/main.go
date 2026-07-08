@@ -38,6 +38,7 @@ import (
 	"github.com/cmj0121/baton/internal/plugin"
 	"github.com/cmj0121/baton/internal/server"
 	"github.com/cmj0121/baton/internal/tui"
+	"github.com/cmj0121/baton/internal/usage"
 )
 
 const version = "0.3.0"
@@ -250,6 +251,23 @@ func buildServerOptions(rc reloadable, stateF string) []server.Option {
 	return opts
 }
 
+// usageOption builds the account-usage footer option from the config: it picks the
+// data source (see usage.NewProvider) and the poll cadence, defaulting per source
+// and clamping to a floor so a hand-edited interval can never hammer the poller.
+// Usage source/interval are construction-time (a restart picks up a change); the
+// show/hide toggle is client-side and live.
+func usageOption(cfg config.Config) server.Option {
+	p := usage.NewProvider(cfg.Usage.Source)
+	interval := time.Duration(cfg.Usage.Interval) * time.Second
+	if interval <= 0 {
+		interval = usage.DefaultInterval(p)
+	}
+	if interval < 10*time.Second {
+		interval = 10 * time.Second
+	}
+	return server.WithUsage(p, interval)
+}
+
 // runServerOn runs the long-lived server loop on an already-bound listener for
 // the given socket path. It is the body of runServer, split out so the loop can
 // be driven without re-binding the socket: it records the PID, builds the server
@@ -274,7 +292,7 @@ func runServerOn(ln net.Listener, sock string) error {
 	}
 	rc := reloadableSettings(cfg)
 	stateF := paths.StateFile(sock)
-	srv := server.New(ln, buildServerOptions(rc, stateF)...)
+	srv := server.New(ln, append(buildServerOptions(rc, stateF), usageOption(cfg))...)
 	srv.Restore() // seed the fleet from the last snapshot (all as exited dead slots) before serving
 
 	// The Lua plugin subsystem (docs/PLUGIN.md). Wire the server's event sink and

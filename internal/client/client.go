@@ -44,6 +44,9 @@ type Client struct {
 	// Footer delivers a plugin's persistent footer segment. It is latest-wins like
 	// telemetry, since a plugin may refresh it rapidly (e.g. a live token counter).
 	Footer chan proto.ServerMsg
+	// Usage delivers the account usage/cost footer segment. Latest-wins like Footer:
+	// only the freshest sample matters, and it must never stall structural events.
+	Usage chan proto.ServerMsg
 }
 
 // Dial connects to the server at socket, says hello, and starts reading events.
@@ -62,6 +65,7 @@ func Dial(socket string) (*Client, error) {
 		Telemetry: make(chan proto.ServerMsg, proto.EventBufferSize),
 		Config:    make(chan proto.ServerMsg, proto.EventBufferSize),
 		Footer:    make(chan proto.ServerMsg, proto.EventBufferSize),
+		Usage:     make(chan proto.ServerMsg, proto.EventBufferSize),
 	}
 	go c.readLoop()
 
@@ -112,6 +116,7 @@ func (c *Client) readLoop() {
 	defer close(c.Telemetry)
 	defer close(c.Config)
 	defer close(c.Footer)
+	defer close(c.Usage)
 	dec := json.NewDecoder(c.conn)
 	// The connection is persistent but may be legitimately idle, so liveness rides
 	// on the server's heartbeat: set an idle read deadline up front and reset it on
@@ -153,6 +158,12 @@ func (c *Client) readLoop() {
 			// structural events; the freshest value is the only one that matters.
 			select {
 			case c.Footer <- msg:
+			default:
+			}
+		case "usage":
+			// Latest-wins like the footer: only the freshest usage sample matters.
+			select {
+			case c.Usage <- msg:
 			default:
 			}
 		default:

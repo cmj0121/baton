@@ -150,12 +150,13 @@ type PluginCommand struct {
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "scratch" | "diff" | "gitout" | "notice" | "config" | "footer" | "tasks" | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline)
+	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "scratch" | "diff" | "gitout" | "notice" | "config" | "footer" | "usage" | "tasks" | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline)
 	Version   string      `json:"version,omitempty"`    // protocol version, set on "welcome"
 	ServerVer string      `json:"server_ver,omitempty"` // the server's build version, set on "welcome"
 	Error     string      `json:"error,omitempty"`      // set on "error"
 	Notice    string      `json:"notice,omitempty"`     // a plugin-originated transient notice, set on "notice"
 	Footer    string      `json:"footer,omitempty"`     // a plugin-set persistent footer segment, set on "footer" and carried on "config"; empty clears it
+	Usage     string      `json:"usage,omitempty"`      // the account's usage/cost footer segment (internal/usage), set on "usage" and seeded on "hello"; empty means nothing to show
 	Panels    []Panel     `json:"panels,omitempty"`     // full snapshot on "panels"; live state/spark refresh on "telemetry"
 	Groups    []GroupView `json:"groups,omitempty"`     // per-group view settings on the "panels" snapshot, alongside Panels
 	Tasks     []Task      `json:"tasks,omitempty"`      // the backlog snapshot on "tasks" (reply to task.list)
