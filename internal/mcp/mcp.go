@@ -12,6 +12,8 @@
 package mcp
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -53,24 +55,45 @@ func New(version string) *Server {
 // notifications (no id) are handled for their side effects and answered with
 // nothing, per JSON-RPC.
 func (s *Server) Serve(in io.Reader, out io.Writer) error {
-	dec := json.NewDecoder(in)
+	// Frame the stream as newline-delimited JSON-RPC (the MCP stdio transport), so a
+	// single malformed line is isolated to its own frame. A json.Decoder cannot
+	// resync after a syntax error mid-stream, so one bad byte from a misbehaving
+	// client — or a truncated write — would otherwise tear down the whole server and
+	// silently drop every later tool call, stranding the conductor with no recovery.
+	r := bufio.NewReader(in)
 	enc := json.NewEncoder(out)
 	for {
-		var req rpcRequest
-		if err := dec.Decode(&req); err != nil {
+		line, err := r.ReadBytes('\n')
+		if trimmed := bytes.TrimSpace(line); len(trimmed) > 0 {
+			if resp, reply := s.handleLine(trimmed); reply {
+				if encErr := enc.Encode(resp); encErr != nil {
+					return encErr
+				}
+			}
+		}
+		if err != nil {
 			if err == io.EOF {
 				return nil
 			}
 			return err
 		}
-		resp, reply := s.handle(req)
-		if !reply {
-			continue
-		}
-		if err := enc.Encode(resp); err != nil {
-			return err
-		}
 	}
+}
+
+// handleLine parses one framed message and dispatches it. A frame that is not
+// valid JSON is answered with a JSON-RPC parse error (null id, since the id
+// cannot be recovered from unparseable bytes) and the loop continues, so one bad
+// frame never stops the server.
+func (s *Server) handleLine(line []byte) (rpcResponse, bool) {
+	var req rpcRequest
+	if err := json.Unmarshal(line, &req); err != nil {
+		return rpcResponse{
+			JSONRPC: "2.0",
+			ID:      json.RawMessage("null"),
+			Error:   &rpcError{Code: -32700, Message: "parse error"},
+		}, true
+	}
+	return s.handle(req)
 }
 
 // handle dispatches one message. The second return is false for a notification,
