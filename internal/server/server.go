@@ -389,10 +389,31 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 			delete(cc.attached, id)
 		}
 	}
+
+	var stop []string       // PTYs to reap after the lock: pruned dead slots + a self-exited ephemeral
+	var workspaces []string // conductor workspaces to remove after the lock
 	if found {
 		s.emit("panel.exit", fields)
+		stop, workspaces = s.pruneExitedLocked()
+	} else if _, ok := s.ephemeral[id]; ok {
+		// A diff/scratch ephemeral panel exited on its own (it never lives in
+		// s.panels). Drop it from the ephemeral set and every conn's, so it stops
+		// counting against maxEphemeralPerConn and its dead pane is freed, rather
+		// than lingering until the client explicitly closes it or disconnects.
+		delete(s.ephemeral, id)
+		for cc := range s.clients {
+			delete(cc.ephemeral, id)
+		}
+		stop = append(stop, id)
 	}
 	s.mu.Unlock()
+
+	for _, sid := range stop {
+		s.pty.Stop(sid)
+	}
+	for _, ws := range workspaces {
+		_ = os.RemoveAll(ws)
+	}
 
 	if found {
 		log.Info().Str("panel", id).Int("exit_code", exitCode).Msg("panel process exited")
@@ -540,7 +561,10 @@ func statsMsg() proto.ServerMsg {
 // (so hello can serve it) and thereafter fetches only while a client is attached,
 // since the footer is the only consumer. A nil provider disables it entirely.
 func (s *Server) usageLoop(stop <-chan struct{}) {
-	if s.usageProvider == nil {
+	// A nil provider or a non-positive interval disables the segment: guard both so a
+	// hand-wired interval of zero cannot panic time.NewTicker and take the loop's
+	// goroutine down with it (the doc promises a non-positive interval is a no-op).
+	if s.usageProvider == nil || s.usageInterval <= 0 {
 		return
 	}
 	s.refreshUsage() // seed the held value before the first client attaches
@@ -1588,7 +1612,11 @@ func (s *Server) restoreTasksLocked() {
 	for _, t := range tasks {
 		tk := t
 		if tk.Status.Terminal() {
-			continue // a terminal task should not have a live file; drop it
+			// A terminal task should not have a live file — its removal nudge was
+			// dropped under a full taskDirty channel when it finished. Delete the
+			// orphan now so it cannot accumulate across restarts.
+			_ = s.qstore.Remove(tk.ID)
+			continue
 		}
 		if tk.Panel != "" { // was in flight on a now-dead panel — orphaned, re-queue it
 			tk.Panel = ""
@@ -1819,6 +1847,53 @@ func (s *Server) pruneHistoryLocked() {
 		}
 		s.markTaskDirtyLocked(t.ID)
 	}
+}
+
+// maxExitedPanels caps how many exited panels linger as dead slots in the fleet
+// (and therefore in the persisted snapshot). Exited panels are kept so their final
+// output can still be reviewed, but a long-lived daemon that spawns and reaps many
+// panels would otherwise grow s.panels — and state.json, which reloads them as
+// dead slots — without bound until a manual purge. Like maxTaskHistory it bounds
+// retained history rather than live state.
+const maxExitedPanels = 128
+
+// pruneExitedLocked drops the oldest exited panels beyond maxExitedPanels, freeing
+// their retained spec and monitor state so a busy daemon's fleet cannot grow
+// without bound. Live panels are never touched, and the newest exited slots (the
+// ones a user is most likely reviewing) are kept. It returns the ids whose PTY the
+// caller must Stop and any conductor workspaces to remove — both AFTER releasing
+// s.mu, since they touch the PTY manager and the filesystem. Caller holds s.mu.
+func (s *Server) pruneExitedLocked() (stop, workspaces []string) {
+	exited := 0
+	for i := range s.panels {
+		if s.panels[i].State == panel.Exited {
+			exited++
+		}
+	}
+	drop := exited - maxExitedPanels
+	if drop <= 0 {
+		return nil, nil
+	}
+	kept := make([]panel.Panel, 0, len(s.panels))
+	for _, p := range s.panels {
+		if drop > 0 && p.State == panel.Exited {
+			drop--
+			stop = append(stop, p.ID)
+			if p.Conductor {
+				if ws := s.specs[p.ID].Dir; ws != "" {
+					workspaces = append(workspaces, ws)
+				}
+			}
+			s.mon.forget(p.ID)
+			delete(s.specs, p.ID)
+			delete(s.pendingDispatch, p.ID)
+			delete(s.panelTask, p.ID) // the panel is gone; its task history is bounded separately
+			continue
+		}
+		kept = append(kept, p)
+	}
+	s.panels = kept
+	return stop, workspaces
 }
 
 // dispatchReady reports whether a panel in this state can receive a dispatched
