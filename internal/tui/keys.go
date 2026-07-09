@@ -28,6 +28,7 @@ const (
 	keyPurge       = "x"
 	keySignal      = "s" // open the send-signal picker for the selection / panel / group
 	keySearch      = "f" // find: filter panels on the dashboard, search the scrollback in a zoom (C-t f)
+	keyFleetSearch = "/" // grep every panel's output for a term (dashboard; C-t / in a zoom)
 	keyDiff        = "D" // show the work-tree diff of the focused agent panel (shift+d; C-t D in a zoom)
 	keyDispatch    = "T" // dispatch a task to the focused agent panel (shift+t; C-t T in a zoom)
 	keyEnqueue     = "t" // enqueue a task for the scheduler to drain onto a free agent (bare t, the everyday sibling of T; C-t t in a zoom)
@@ -92,6 +93,7 @@ const (
 	actPurge
 	actSignal
 	actSearch
+	actFleetSearch
 	actDiff
 	actDispatch
 	actEnqueue
@@ -155,6 +157,7 @@ var bindings = []binding{
 	{"purge-exited", keyPurge, "purge all exited panels", actPurge, "Panels"},
 	{"signal", keySignal, "send a signal to the panel(s)", actSignal, "Panels"},
 	{"search", keySearch, "find panels · search the scrollback (zoom)", actSearch, "Panels"},
+	{"fleet-search", keyFleetSearch, "search every panel's output for a term", actFleetSearch, "Panels"},
 	{"diff", keyDiff, "show the work-tree diff (agent panel)", actDiff, "Panels"},
 	{"dispatch", keyDispatch, "dispatch a task to the agent panel", actDispatch, "Panels"},
 	{"enqueue", keyEnqueue, "enqueue a task for any free agent (a work item, if selected)", actEnqueue, "Panels"},
