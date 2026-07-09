@@ -86,6 +86,7 @@ the current view, and **`C-t k`** to edit the key map.
 |             | `r`               | re-run the exited panel(s) under the focus          |
 |             | `g` / `G` / `u`   | mark / group marked panels / ungroup                |
 |             | `s` / `f` / `D`   | signal / find / diff the selection                  |
+|             | `/`               | search every panel's output (grep the fleet)        |
 |             | `T` / `Q`         | dispatch a task / manage the task queue             |
 |             | `U`               | toggle the account usage/cost footer                |
 | Group       | `tab`             | focus the next panel                                |
@@ -104,7 +105,8 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
 
 - **Signals** — `s` sends any signal to the selection, the focused tile, or the whole group; the picker lists the common
   ones, `o` types any name or number.
-- **Find, search, copy** — `f` filters the fleet by title or group; `C-t f` regex-searches a panel's scrollback; scroll
+- **Find, search, copy** — `f` filters the fleet by title or group; `/` greps every panel's output at once and lists the
+  hits grouped by panel — `enter` zooms the one you pick, landed on the match; `C-t f` regex-searches a panel's scrollback; scroll
   mode (`C-t [`) selects and copies over OSC52, so it works over SSH with no helper binary.
 - **Diff** — `D` (or `C-t D` in a zoom) pops up the agent panel's work-tree diff — staged and unstaged at once,
   untracked included — in a master-detail overlay.
