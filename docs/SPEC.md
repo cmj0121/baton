@@ -290,7 +290,13 @@ the [task hooks](./PLUGIN.md#tasks-and-the-queue) in PLUGIN.md.
 — match stay, the heading shows the match count, `enter` keeps the filter and `esc` clears it. **Search** (`C-t f`, in a
 zoom or over a focused group tile) runs a case-insensitive regular expression over the scrollback: the view jumps to the
 newest hit and holds in scroll mode with the match highlighted, `n` / `N` walk older / newer matches, and a term that is
-not a valid regexp is matched literally. **Copy** lives in scroll mode (`C-t [`): `v` starts a selection and `y` copies
+not a valid regexp is matched literally. **Fleet search** (`/`, on the dashboard; `C-t /` in a zoom) greps _every_ panel
+at once: the server scans each panel's retained output for the term and returns the matching lines, which the popup lists
+grouped by panel with the term highlighted. `j` / `k` (or `n` / `N`) walk the hits and `enter` zooms the hit's panel,
+re-running the term there as a scrollback search so the zoom opens on the match — the fleet grep handing straight off to
+the exact per-panel search. It reads the same bounded replay buffer the scrollback shows, so it searches recent output,
+not all history, and the same literal-fallback rule applies. **Copy** lives in scroll mode (`C-t [`): `v` starts a
+selection and `y` copies
 the selected lines — or, with no selection, the visible page — to the system clipboard via OSC52, so it works over SSH
 with no helper binary. `V` instead starts a **block** (rectangular) selection — the same rows, but only the columns `[0,
 n]`, with `h`/`l` pulling the right edge in and out — so you can lift a narrow left column out of aligned output.
@@ -347,6 +353,7 @@ and the key-map editor — are reached after the prefix in every mode. Everythin
 |                        | `x`                         | purge exited panels                             |
 |                        | `s`                         | send a signal to the selection                  |
 |                        | `f`                         | find — filter panels by title / group           |
+|                        | `/`                         | fleet search — grep every panel's output        |
 |                        | `S-←` / `S-→`               | reorder the selected item                       |
 |                        | `g`                         | mark / unmark a panel                           |
 |                        | `G`                         | group the marked panels                         |
@@ -376,6 +383,7 @@ and the key-map editor — are reached after the prefix in every mode. Everythin
 |                        | `C-t C-t`                   | send a literal `C-t`                            |
 |                        | `C-t s`                     | send a signal to this panel                     |
 |                        | `C-t f`                     | search the scrollback                           |
+|                        | `C-t /`                     | fleet search — grep every panel                 |
 | Scroll mode (`C-t [`)  | `↑` / `↓` (`k`/`j`)         | scroll a line                                   |
 |                        | `b` / `Spc` (`PgUp`/`PgDn`) | scroll a page                                   |
 |                        | `g` / `G`                   | jump to top / bottom                            |

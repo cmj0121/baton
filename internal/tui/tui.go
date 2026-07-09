@@ -104,12 +104,13 @@ const (
 	modeKeyMap         // the editable key map (C-t k)
 	modeHelp           // the read-only key list for a view (?)
 	modePanelConfig
-	modeSignal  // the send-signal picker (s / C-t s)
-	modeCommand // the plugin command picker (C-t c)
-	modeGit     // the git menu (C-t g in a zoom)
-	modeDiff    // the master-detail diff popup (the diff action)
-	modeGitOut  // the scrollable text popup for a captured git op (log/status/…)
-	modeQueue   // the task-queue manager popup (Q): list / cancel / drain the backlog
+	modeSignal      // the send-signal picker (s / C-t s)
+	modeCommand     // the plugin command picker (C-t c)
+	modeGit         // the git menu (C-t g in a zoom)
+	modeDiff        // the master-detail diff popup (the diff action)
+	modeGitOut      // the scrollable text popup for a captured git op (log/status/…)
+	modeQueue       // the task-queue manager popup (Q): list / cancel / drain the backlog
+	modeFleetSearch // the fleet-wide search results popup (/): matching lines grouped by panel
 	modeZoom
 	modeGroupZoom
 	modeScreensaver // the hidden Matrix-rain + clock Easter egg (C-t E / idle auto-start)
@@ -179,6 +180,18 @@ type model struct {
 	searchRe    *regexp.Regexp // compiled, case-insensitive matcher for searchQuery (nil = no search)
 	searchHits  []int          // combined scrollback+screen line indices matching the term, ascending
 	searchAt    int            // index into searchHits of the current match
+
+	// Fleet-wide search (modeFleetSearch), fed by the server's "search" reply. fsHits
+	// is the matching lines from across every panel; fsCursor selects one; fsQuery is
+	// the term, kept so jumping to a hit can re-run it as a scrollback search in the
+	// zoomed panel. searchSeedPending marks that next zoom: once the panel's replay
+	// output lands, runSearch fires so the view opens on the match rather than the
+	// live bottom.
+	fsHits            []proto.SearchHit
+	fsCursor          int
+	fsQuery           string
+	fsFrom            mode // the view the results popup was opened over, restored on esc
+	searchSeedPending bool
 
 	copySelecting bool // a copy selection is being made in scroll mode (v marks the anchor)
 	copyAnchor    int  // combined line index the selection is anchored at; the span runs to the current top
@@ -300,6 +313,7 @@ const (
 	inputSignalName               // free-form signal name/number for the picker's "other…"
 	inputFilter                   // live dashboard panel filter (f)
 	inputSearch                   // scrollback search term in a zoom / group tile (C-t f)
+	inputFleetSearch              // fleet-wide search term: grep every panel's output (/)
 	inputGitBranch                // new branch name for the git menu (b)
 	inputGitWorktree              // new-worktree branch name for the git menu (w)
 	inputGitRemove                // worktree path to remove for the git menu (x)
@@ -593,6 +607,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		sm := proto.ServerMsg(msg)
 		if m.mode == modeZoom && m.emu != nil && sm.ID == m.zoomID {
 			writeEmu(m.emu, sm.Data)
+			if m.searchSeedPending {
+				// Jumped here from a fleet-search hit: the panel's replay has now landed
+				// in the emulator, so run the same term as a scrollback search — the view
+				// opens on the match rather than the live bottom. One-shot.
+				m.searchSeedPending = false
+				m = m.runSearch(m.fsQuery)
+			}
 		}
 		if m.mode == modeGroupZoom {
 			if emu := m.groupEmus[sm.ID]; emu != nil {
@@ -827,6 +848,11 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		}
 		m.pendingEphemeralTitle = ""
 		*m = m.openDiffPopup(title, sm.Files)
+	case "search":
+		// The server scanned every panel for the term and returned the matching lines.
+		// Open the results popup grouped by panel; it owns nothing server-side, so esc
+		// just closes it. An empty set stays out of the popup and says so.
+		*m = m.openFleetResults(sm.Hits)
 	case "gitout":
 		// A non-interactive git op (log/status/add/push/branch/worktrees) ran
 		// server-side and returned its captured output; show it in a scrollable text
@@ -984,6 +1010,12 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// cancels/drains the backlog.
 	if m.mode == modeQueue {
 		return m.handleQueueKey(key)
+	}
+
+	// The fleet-search results popup owns the keyboard until esc; it walks the hits
+	// and zooms the one under the cursor.
+	if m.mode == modeFleetSearch {
+		return m.handleFleetSearchKey(key)
 	}
 
 	// A text-input overlay is open: route the keystroke to it.
@@ -1427,6 +1459,8 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		}
 	case inputSearch:
 		return m.runSearch(buf), nil
+	case inputFleetSearch:
+		return m.sendFleetSearch(buf)
 	case inputGitBranch:
 		return m.commitGitBranch(buf)
 	case inputGitWorktree:
@@ -1769,6 +1803,11 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		// On the dashboard, f opens the live panel filter. In a zoom it is reached
 		// after the prefix (handleZoomKey) and searches the scrollback instead.
 		return m.openFilter(), nil
+	case actFleetSearch:
+		// Grep every panel's retained output for a term. Unlike f (filter by title) and
+		// C-t f (search one panel), this scans the whole fleet server-side and lists the
+		// matching lines grouped by panel.
+		return m.openFleetSearch(), nil
 	case actDiff:
 		// Pop up the work-tree diff of the selected agent panel. On the dashboard the
 		// target is the highlighted item; the group split reaches this on the focused
@@ -2071,6 +2110,9 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if b, ok := m.lookupCmd(key); ok && b.act == actSearch { // C-t f → search the scrollback
 			return m.openSearch(), nil
+		}
+		if b, ok := m.lookupCmd(key); ok && b.act == actFleetSearch { // C-t / → search every panel
+			return m.openFleetSearch(), nil
 		}
 		if b, ok := m.lookupCmd(key); ok && b.act == actDiff { // C-t D → diff of the zoomed agent panel
 			if m.zoomEphemeral { // already a diff zoom — no diff-of-a-diff
@@ -2562,6 +2604,8 @@ func (m model) render() string {
 		body = m.gitOutView()
 	case m.mode == modeQueue:
 		body = m.queueView()
+	case m.mode == modeFleetSearch:
+		body = m.fleetSearchView()
 	default:
 		body = m.dashboardView()
 	}
@@ -3322,6 +3366,8 @@ func (m model) inputView() string {
 		title, prompt, action = "FIND PANELS", "filter by title or group  (live)", "apply"
 	case inputSearch:
 		title, prompt, action = "SEARCH", "find in the scrollback", "find"
+	case inputFleetSearch:
+		title, prompt, action = "FLEET SEARCH", "grep every panel's output  (regexp)", "search"
 	case inputGitBranch:
 		title, prompt, action = "NEW BRANCH", "branch name  (git checkout -b)", "create"
 	case inputGitWorktree:

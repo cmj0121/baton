@@ -1034,6 +1034,15 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
+	case "fleet.search":
+		// Scan every panel's retained output for the term and reply "search" with the
+		// matching lines; the cockpit renders them grouped by panel. Read-only — it
+		// touches no panel state and spawns nothing — so a failure (only an empty term)
+		// just surfaces as an error, like panel.diff.
+		if err := s.sendSearch(cc, cmd.Query); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
 	case "panel.scratch":
 		// Spawn the cockpit's floating scratch shell as a transient ephemeral PTY —
 		// off the fleet snapshot and the persisted state, reaped on close/disconnect —
