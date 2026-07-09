@@ -52,7 +52,7 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.diff | panel.git | panel.scratch | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run
+	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.diff | panel.git | panel.scratch | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run
 	Kind      string   `json:"kind,omitempty"`      // panel kind for "panel.create" (default "shell")
 	ID        string   `json:"id,omitempty"`        // target panel for close/attach/input/resize/diff, or the panel to rename
 	Path      string   `json:"path,omitempty"`      // init command (binary path) for "panel.create"; empty = default shell
@@ -72,6 +72,7 @@ type Command struct {
 	Count     int      `json:"count,omitempty"`  // absolute visible count for "group.show": how many members stream as live tiles
 	Git       string   `json:"git,omitempty"`    // git op for "panel.git", e.g. "log", "commit", "worktree-add"; Name carries a branch, Dir a worktree path
 	Layout    string   `json:"layout,omitempty"` // layout name for "group.layout": the named split arrangement the group opens with
+	Query     string   `json:"query,omitempty"`  // the search term for "fleet.search": a case-insensitive regexp matched against every panel's retained output
 
 	// Role and Self are declared on "hello" by a control client (the conductor
 	// agent driving the fleet over the socket). Role "conductor" puts the
@@ -141,6 +142,18 @@ type DiffFile struct {
 	Unstaged string `json:"unstaged_diff,omitempty"` // `git diff` text for this file
 }
 
+// SearchHit is one matching line found by a fleet-wide search (fleet.search): the
+// panel it is in and the matched line's plain text, carried with the panel's title
+// and group so the results list needs no join back to the fleet snapshot. The
+// cockpit renders the set grouped by panel; selecting a hit zooms that panel and
+// re-runs the same term as a scrollback search there.
+type SearchHit struct {
+	Panel string `json:"panel"`           // panel id the match is in
+	Title string `json:"title"`           // panel title, so the results list stands alone
+	Group string `json:"group,omitempty"` // work item the panel belongs to, for grouping the hits
+	Text  string `json:"text"`            // the matched line, plain (escape sequences stripped)
+}
+
 // PluginCommand is one command a Lua plugin registered, surfaced to frontends so
 // the cockpit's command picker can list it and invoke it with command.run.
 type PluginCommand struct {
@@ -150,7 +163,7 @@ type PluginCommand struct {
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "scratch" | "diff" | "gitout" | "notice" | "config" | "footer" | "usage" | "tasks" | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline)
+	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "scratch" | "diff" | "gitout" | "search" | "notice" | "config" | "footer" | "usage" | "tasks" | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline)
 	Version   string      `json:"version,omitempty"`    // protocol version, set on "welcome"
 	ServerVer string      `json:"server_ver,omitempty"` // the server's build version, set on "welcome"
 	Error     string      `json:"error,omitempty"`      // set on "error"
@@ -163,6 +176,7 @@ type ServerMsg struct {
 	ID        string      `json:"id,omitempty"`         // panel id on "output"; the new transient panel id on "ephemeral" (a git op); the diffed agent panel id on "diff"
 	Data      []byte      `json:"data,omitempty"`       // pty output bytes on "output"
 	Files     []DiffFile  `json:"files,omitempty"`      // per-file staged/unstaged diffs on "diff"; ID carries the target panel
+	Hits      []SearchHit `json:"hits,omitempty"`       // matching lines on "search" (reply to fleet.search), grouped by panel on the frontend
 	Text      string      `json:"text,omitempty"`       // a non-interactive git op's captured output on "gitout"; ID carries the target panel
 	Failed    bool        `json:"failed,omitempty"`     // on "gitout", the op exited non-zero (its message is in Text)
 
