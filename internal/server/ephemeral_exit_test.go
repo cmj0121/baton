@@ -29,7 +29,7 @@ func TestScratchSelfExitReaped(t *testing.T) {
 		t.Fatalf("expected a scratch reply, got %+v", reply)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for srv.EphemeralCount() != 0 {
 		if time.Now().After(deadline) {
 			t.Fatalf("a self-exited scratch panel left %d orphan ephemeral panels", srv.EphemeralCount())

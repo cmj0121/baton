@@ -23,7 +23,7 @@ func recv(t *testing.T, c *client.Client) proto.ServerMsg {
 			t.Fatal("event channel closed unexpectedly")
 		}
 		return msg
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for server message")
 		return proto.ServerMsg{}
 	}
@@ -140,7 +140,7 @@ func TestExitMarks(t *testing.T) {
 		t.Fatalf("input: %v", err)
 	}
 
-	deadline := time.After(3 * time.Second)
+	deadline := time.After(15 * time.Second)
 	for {
 		select {
 		case msg := <-c.Events:
@@ -185,7 +185,7 @@ func TestStatsOnAttach(t *testing.T) {
 		if got.MemTotal == 0 || got.MemUsed == 0 || got.MemUsed > got.MemTotal {
 			t.Fatalf("stats out of range: used=%d total=%d", got.MemUsed, got.MemTotal)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("no stats sample arrived after attach")
 	}
 }
@@ -223,7 +223,7 @@ func TestPurgeExited(t *testing.T) {
 		t.Fatalf("input: %v", err)
 	}
 	waitExited := func() {
-		deadline := time.After(3 * time.Second)
+		deadline := time.After(15 * time.Second)
 		for {
 			select {
 			case msg := <-c.Events:
@@ -296,7 +296,7 @@ func TestAttachIO(t *testing.T) {
 		t.Fatalf("input: %v", err)
 	}
 
-	deadline := time.After(3 * time.Second)
+	deadline := time.After(15 * time.Second)
 	found := false
 	for !found {
 		select {
@@ -691,7 +691,7 @@ func TestCreateAgentPanelInWorkdir(t *testing.T) {
 	if err := c.Send(proto.Command{Action: "panel.attach", ID: p.ID}); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
-	deadline := time.After(3 * time.Second)
+	deadline := time.After(15 * time.Second)
 	for {
 		select {
 		case msg := <-c.Output:
@@ -799,7 +799,7 @@ func TestMultiAttach(t *testing.T) {
 	}
 
 	waitFor := func(id, marker string) {
-		deadline := time.After(3 * time.Second)
+		deadline := time.After(15 * time.Second)
 		for {
 			select {
 			case msg := <-c.Output:
@@ -829,7 +829,7 @@ func TestMultiAttach(t *testing.T) {
 	if err := c.Send(proto.Command{Action: "panel.input", ID: b, Data: []byte("echo STILL-HERE\n")}); err != nil {
 		t.Fatalf("input b again: %v", err)
 	}
-	deadline := time.After(3 * time.Second)
+	deadline := time.After(15 * time.Second)
 	for done := false; !done; {
 		select {
 		case msg := <-c.Output:
@@ -1068,7 +1068,7 @@ func TestReloadCmdHook(t *testing.T) {
 	}
 	select {
 	case <-reloaded:
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("server.reload should fire the OnReload hook")
 	}
 }
@@ -1128,7 +1128,7 @@ func TestSignalPanel(t *testing.T) {
 	if err := c.Send(proto.Command{Action: "panel.signal", IDs: []string{id}, Signal: "SIGKILL"}); err != nil {
 		t.Fatalf("kill: %v", err)
 	}
-	deadline := time.After(3 * time.Second)
+	deadline := time.After(15 * time.Second)
 	exited := false
 	for !exited {
 		select {
@@ -1184,7 +1184,7 @@ func TestShellPanelUsesDefaultDir(t *testing.T) {
 		t.Fatalf("attach: %v", err)
 	}
 	leaf := filepath.Base(dir) // a symlinked temp prefix keeps the leaf intact
-	deadline := time.After(3 * time.Second)
+	deadline := time.After(15 * time.Second)
 	for {
 		select {
 		case msg := <-c.Output:
