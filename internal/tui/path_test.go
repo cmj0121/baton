@@ -52,6 +52,24 @@ func TestCompletePath(t *testing.T) {
 	}
 }
 
+// TestCompletePathTilde guards the home-relative inputs that used to panic:
+// completing "~" or "~/" derived base from the home-EXPANDED path, which is not a
+// suffix of the typed text, so `in[:len(in)-len(base)]` went negative and tore
+// down the cockpit. Every tilde form must now return safely with the "~/" prefix
+// preserved.
+func TestCompletePathTilde(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home directory to complete against")
+	}
+	for _, in := range []string{"~", "~/"} {
+		got, _ := completePath(in) // must not panic
+		if !strings.HasPrefix(got, "~/") {
+			t.Errorf("completePath(%q) = %q, want a ~/-prefixed result", in, got)
+		}
+	}
+}
+
 // TestInputTabAndCtrlB drives the overlay keys: tab completes a path input and
 // Ctrl-B deletes a word, while a non-path overlay ignores tab.
 func TestInputTabAndCtrlB(t *testing.T) {

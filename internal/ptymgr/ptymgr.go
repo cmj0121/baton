@@ -174,6 +174,13 @@ func (m *Manager) pump(id string, p *pane, cmd *exec.Cmd) {
 			break
 		}
 	}
+	// The PTY master hit EOF: the child and its process group have closed the slave,
+	// so the process is already gone (a zombie until reaped). Mark the pane dead
+	// BEFORE cmd.Wait reaps it — reaping frees the pid for OS reuse, so a concurrent
+	// Signal/KillAll that read the pane as live in the window between the reap and
+	// the dead flag could otherwise deliver a signal to a reused pid's group. With
+	// the flag set first, livePane rejects the signal before Wait ever runs.
+	m.markDead(id)
 	exitCode := 0
 	if err := cmd.Wait(); err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
@@ -182,7 +189,6 @@ func (m *Manager) pump(id string, p *pane, cmd *exec.Cmd) {
 			exitCode = -1 // waited, but the failure was not an exit status
 		}
 	}
-	m.markDead(id)
 	if m.onClose != nil {
 		m.onClose(id, exitCode)
 	}
@@ -334,8 +340,13 @@ func (m *Manager) Stop(id string) { m.remove(id) }
 func (m *Manager) remove(id string) {
 	m.mu.Lock()
 	if p, ok := m.ptys[id]; ok {
-		if err := p.f.Close(); err != nil {
-			log.Warn().Str("id", id).Err(err).Msg("ptymgr: closing PTY on remove failed")
+		// A live pane still holds an open master; closing it hangs up the child. A
+		// dead pane's master was already closed by markDead when the process exited,
+		// so closing again would just log a spurious "file already closed".
+		if !p.dead {
+			if err := p.f.Close(); err != nil {
+				log.Warn().Str("id", id).Err(err).Msg("ptymgr: closing PTY on remove failed")
+			}
 		}
 		delete(m.ptys, id)
 	}

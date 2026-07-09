@@ -1322,13 +1322,20 @@ func deleteLastWord(s string) string {
 // several share their longest common prefix and the candidates become the hint.
 // It returns the (possibly unchanged) text and a hint to show under the field.
 func completePath(in string) (string, string) {
+	if in == "~" {
+		in = "~/" // a bare ~ is the home dir; normalise so base stays a suffix of in
+	}
 	expanded := in
 	if home, err := os.UserHomeDir(); err == nil {
-		switch {
-		case in == "~":
-			expanded = home
-		case strings.HasPrefix(in, "~/"):
+		if strings.HasPrefix(in, "~/") {
 			expanded = filepath.Join(home, in[2:])
+			// filepath.Join strips a trailing separator; restore it so the split
+			// below yields the same empty base it would for the typed text. Without
+			// this, base came from the home-expanded path and was not a suffix of in,
+			// so `in[:len(in)-len(base)]` went negative and panicked on "~/" + Tab.
+			if strings.HasSuffix(in, "/") && !strings.HasSuffix(expanded, string(os.PathSeparator)) {
+				expanded += string(os.PathSeparator)
+			}
 		}
 	}
 

@@ -188,6 +188,33 @@ func TestMCPAllTools(t *testing.T) {
 	}
 }
 
+// TestMCPBadFrame proves one bad line no longer tears down the server: a
+// malformed frame between two valid requests is answered with a JSON-RPC parse
+// error (-32700), and the request after it is still served. Before framing was
+// line-based, a single syntax error returned from Serve and dropped every later
+// tool call, stranding the conductor.
+func TestMCPBadFrame(t *testing.T) {
+	sock := startServer(t)
+
+	resps := run(t, sock,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`,
+		`{ this is not json`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
+	)
+	if len(resps) != 3 {
+		t.Fatalf("want 3 responses (list, parse-error, list), got %d: %+v", len(resps), resps)
+	}
+	if resps[0].Error != nil || resps[0].Result == nil {
+		t.Fatalf("first request should succeed, got %+v", resps[0])
+	}
+	if resps[1].Error == nil || resps[1].Error.Code != -32700 {
+		t.Fatalf("malformed frame should be a -32700 parse error, got %+v", resps[1])
+	}
+	if resps[2].Error != nil || resps[2].Result == nil {
+		t.Fatalf("request after the bad frame must still be served, got %+v", resps[2])
+	}
+}
+
 func contentText(t *testing.T, result map[string]any) string {
 	t.Helper()
 	content, ok := result["content"].([]any)
