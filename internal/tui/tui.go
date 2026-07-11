@@ -1300,7 +1300,10 @@ func (m model) handleInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inputBuf += " "
 		m.inputHint = ""
 	case tea.KeyRunes:
-		m.inputBuf += string(k.Runes)
+		if k.Alt { // an Alt/Meta chord (e.g. Alt+f) is a shortcut, not text — don't leak its rune into the field
+			return m, nil
+		}
+		m.inputBuf += printableRunes(k.Runes) // a paste can carry newlines / ESC / control bytes; keep only what a field may show
 		m.inputHint = ""
 	}
 	// The filter narrows the dashboard live as you type, so mirror the field into
