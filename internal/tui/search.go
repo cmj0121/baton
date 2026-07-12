@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	vt "github.com/charmbracelet/x/vt"
 )
 
@@ -151,12 +152,24 @@ func (m model) searchSeg() string {
 	return seg("⌕ SEARCH", colDark, colCyan)
 }
 
-// searchPromptFooter is the footer shown while the find prompt is open: the brand
-// and search caps with the term being typed, so the screen behind stays visible
-// rather than being hidden under a centred popup.
+// searchPromptFooter is the footer shown while the find prompt is open: a clean
+// strip of just the search cap and the term being typed, so the screen behind
+// stays visible rather than being hidden under a centred popup. It deliberately
+// does not route through statusBar — the brand cap and the status/attention caps
+// name unrelated panels ("◆ … needs you"), which is noise crowding the field the
+// operator is typing into. A right-aligned hint and clock fill the rest.
 func (m model) searchPromptFooter() string {
-	left := seg("◈ BATON", colDark, colBrand) + m.searchSeg() + m.barStrong().Render(" "+m.inputBuf+"▌ ")
-	return m.statusBar(left, "")
+	left := m.searchSeg() + m.barStrong().Render(" "+m.inputBuf+"▌ ")
+	clock := seg("⏱ "+m.now.Format("15:04:05"), colDark, colCyan)
+	hint := m.bar().Render(" enter finds · esc cancels ")
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(clock)
+	if gap < 0 {
+		gap = 0
+	}
+	if lipgloss.Width(hint) > gap {
+		hint = ""
+	}
+	return left + m.bar().Width(gap).Render(hint) + clock
 }
 
 // combinedPlain returns the panel's full text — every scrollback line followed by
