@@ -1215,6 +1215,7 @@ func (m *model) resetToDashboard(status string) {
 	m.groupPinned = nil
 	m.scrollOff = 0
 	m.scrolling = false
+	m.scrollArmed = false
 	m.copySelecting = false
 	*m = m.clearSearch()
 	m.status = status
@@ -1234,6 +1235,7 @@ func (m model) exitGroupZoom() (tea.Model, tea.Cmd) {
 // It detaches the panel and tears down its emulator, just like a detach to the
 // dashboard, but lands back on the group.
 func (m model) backToGroup() (tea.Model, tea.Cmd) {
+	m.rememberScroll() // save this panel's scroll position before we reset it
 	m.sendf(proto.Command{Action: "panel.detach", ID: m.zoomID})
 	closeZoom(m.emu)
 	m.mode = modeGroupZoom
@@ -1244,6 +1246,7 @@ func (m model) backToGroup() (tea.Model, tea.Cmd) {
 	m.groupFocus = 0
 	m.scrollOff = 0
 	m.scrolling = false
+	m.scrollArmed = false
 	m.cursorHidden = nil
 	m.emu = nil
 	m.zoomID, m.zoomTitle, m.zoomArmed, m.zoomExited, m.zoomGroupOrigin = "", "", false, false, ""
