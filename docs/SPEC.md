@@ -17,8 +17,10 @@ once, or one fully — and the group split sits between them, showing one work i
   press `i`.
 - **Zoom** — see one thing fully. Drive a single panel as if it were your only terminal; `C-t [` opens a tmux-style
   scroll mode (`↑`/`↓` a line, `b`/`space` or `PgUp`/`PgDn` a page, `g`/`G` top/bottom, `esc` exits) to read back through
-  its history. Every bare key drives the program (vim, a BBS), never baton, so the leader works on any terminal — then
-  pop back out to the dashboard. How much history is
+  its history. The `C-t` leader stays live while you scroll — every escape (`C-t d` to the dashboard, `C-t f` to search
+  the scrollback, `C-t /`, `C-t ~`) fires without leaving scroll first — and a panel remembers where you scrolled to, so
+  re-zooming it drops you back at the same offset, still in scroll mode. Every bare key drives the program (vim, a BBS),
+  never baton, so the leader works on any terminal — then pop back out to the dashboard. How much history is
   kept and replayed on attach is `panel.replay-kb` in the config (a larger value pages back further; full-screen programs
   keep no scrollback).
 
@@ -393,6 +395,7 @@ and the key-map editor — are reached after the prefix in every mode. Everythin
 |                        | `V` (then `h`/`l`)          | start a block selection / set its columns       |
 |                        | `n` / `N`                   | next / previous search match                    |
 |                        | `esc` / `q`                 | exit scroll mode                                |
+|                        | `C-t d` / `C-t b` / …       | leave for dashboard / back (leader stays live)  |
 
 ## Architecture
 
