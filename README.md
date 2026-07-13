@@ -132,6 +132,16 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
 - **Mouse** — off by default so your terminal's own selection stays available; toggle it in the key map to scroll and
   select with the wheel.
 
+## Screensaver
+
+Walk away and let it sit. After a few idle minutes — or on the hidden `C-t E` — the cockpit drops into a full-screen
+Matrix rain with the **BATON** wordmark and a big clock floating in the middle. It's a frontend-only takeover: nothing is
+sent to the server, and any key or click brings your view straight back.
+
+![Baton screensaver — a Matrix digital rain with the BATON wordmark and a big clock](docs/assets/baton-screensaver.png)
+
+_Clip generated from [`baton-screensaver.tape`](docs/assets/baton-screensaver.tape) — regeneration steps are in the tape header._
+
 ## Architecture
 
 A headless **baton server** (a background daemon) owns all state and every terminal. Pluggable frontends attach over a
