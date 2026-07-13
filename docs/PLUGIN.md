@@ -1,5 +1,7 @@
 # Baton — Plugins (Lua)
 
+**English** · [繁體中文](PLUGIN.zh-TW.md)
+
 > **Status: shipped.** All four pillars are live — fleet API, hooks, commands, and Lua config — plus the
 > client-fetches-config wire, so a plugin can reshape the cockpit, not just the daemon. The implementation lives in
 > [`internal/plugin`](../internal/plugin); this document is its contract.

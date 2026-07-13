@@ -1,5 +1,7 @@
 # Account usage footer
 
+**English** · [繁體中文](USAGE.zh-TW.md)
+
 Baton can show your account's **token usage and cost for the day** as a footer
 segment — `⊙ 1.2M tok · ≈$12.34 API` — in every view. The server polls it in the
 background and pushes it to every attached cockpit; press **`U`** to show or hide

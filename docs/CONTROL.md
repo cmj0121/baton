@@ -1,5 +1,7 @@
 # Baton — Control
 
+**English** · [繁體中文](CONTROL.zh-TW.md)
+
 > Let an agent conduct the fleet. Baton's socket is a full control plane: the same commands the cockpit sends can be
 > driven by a program. The **conductor** is an agent baton spawns to do exactly that — it spawns, groups, signals, and
 > prompts the other panels, the way you would.

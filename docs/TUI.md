@@ -1,5 +1,7 @@
 # Baton — Cockpit appearance (`TUI.yaml`)
 
+**English** · [繁體中文](TUI.zh-TW.md)
+
 The cockpit reads its **look** from `$HOME/.baton/TUI.yaml`: the colour **theme** and the group-split **layouts**. It is a
 separate file from the main `config` so you can reshape the appearance without touching your bindings and behaviour
 settings. The server reads it, merges it into the effective config, and broadcasts it to every frontend, so a `C-t R` (or a
