@@ -5,6 +5,8 @@
 [![CI](https://github.com/cmj0121/baton/actions/workflows/ci.yml/badge.svg)](https://github.com/cmj0121/baton/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/cmj0121/baton/branch/main/graph/badge.svg)](https://codecov.io/gh/cmj0121/baton)
 
+**English** · [繁體中文](README.zh-TW.md)
+
 Running a handful of AI coding agents at once? It gets messy fast — windows to juggle, sessions scattered across tabs, and
 no single place to see who's working, who's stuck, and who's waiting on you.
 
