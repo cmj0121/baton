@@ -3420,7 +3420,8 @@ func seg(text string, fg, bg lipgloss.Color) string {
 // status cap on the right. The key hints live in the C-t k key map, not here, so
 // the strip stays a status readout.
 func (m model) footer() string {
-	// Left caps: brand · mode · (attention).
+	// Left cap: the mode. The header already carries the wordmark, so the footer
+	// no longer repeats the brand cap beside it.
 	mode := "DASHBOARD"
 	switch {
 	case m.input != inputNone:
@@ -3430,7 +3431,7 @@ func (m model) footer() string {
 	case m.mode == modePanelConfig:
 		mode = "PANEL CONFIG"
 	}
-	left := seg("◈ BATON", colDark, colBrand) + seg(mode, colInk, colBlue)
+	left := seg(mode, colInk, colBlue)
 	return m.statusBar(left, m.helpHint())
 }
 

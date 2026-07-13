@@ -1614,9 +1614,10 @@ func (m model) tileBody(p panel.Panel, emuCols, emuRows int, focused, showCursor
 	return rows
 }
 
-// groupZoomFooter is the split's status bar: the brand and GROUP caps with the
-// work-item name on the left, the ? help hint in the middle, and the shared
-// host stats, clock, and connection status on the right.
+// groupZoomFooter is the split's status bar: the GROUP cap and the work-item name
+// on the left, the ? help hint in the middle, and the shared host stats, clock,
+// and connection status on the right. The header already carries the wordmark, so
+// the strip omits the brand cap rather than repeat it beside the work item.
 func (m model) groupZoomFooter() string {
 	if m.input == inputSearch { // typing a find term over the focused tile
 		return m.searchPromptFooter()
@@ -1637,8 +1638,7 @@ func (m model) groupZoomFooter() string {
 	case m.groupInteract:
 		mode = seg("⌨ INTERACT", colDark, colGreen) // typing into the focused tile
 	}
-	left := seg("◈ BATON", colDark, colBrand) +
-		mode +
+	left := mode +
 		seg(truncate(groupBreadcrumb(m.groupName), 32), colDark, colBrandHi) +
 		scrollSeg(m.scrollOff)
 	return m.statusBar(left, m.helpHint())
