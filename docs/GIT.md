@@ -1,5 +1,7 @@
 # Baton — Git
 
+**English** · [繁體中文](GIT.zh-TW.md)
+
 > Do common git work without leaving the agent you are watching. The **git menu**
 > is a keyed pop-up, opened with the leader **`C-t g`** while zoomed into an agent
 > panel, that runs git against that agent's working directory.

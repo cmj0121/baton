@@ -1,5 +1,7 @@
 # Baton — Specification
 
+**English** · [繁體中文](SPEC.zh-TW.md)
+
 Design detail behind the concept sketched in the [README](../README.md). Start there for the pitch and vocabulary;
 this document covers how the pieces fit together.
 
