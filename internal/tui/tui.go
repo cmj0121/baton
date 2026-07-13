@@ -249,16 +249,18 @@ type model struct {
 	gitOutFailed bool
 	gitOutFrom   mode
 
-	zoomID                string           // panel being zoomed (modeZoom)
-	zoomTitle             string           // its title, for the zoom footer
-	zoomEphemeral         bool             // the current zoom is a transient diff panel — dismissing it closes the panel server-side
-	pendingEphemeralTitle string           // title for the next transient (diff/git) zoom, stashed when the op is sent, read on the "ephemeral" reply
-	zoomArmed             bool             // prefix pressed inside a zoom, awaiting the verb
-	zoomExited            bool             // the zoomed panel has exited — a read-only result view
-	emu                   *vt.SafeEmulator // terminal emulator rendering the zoomed panel
-	scrollOff             int              // scrollback offset (lines above the live bottom) for the zoom / focused tile
-	scrolling             bool             // scroll mode (C-t [): arrows / page keys navigate history, keys are not sent to the program
-	cursorHidden          *bool            // tracks the zoomed program's cursor visibility (DECTCEM); nil when not zooming
+	zoomID                string                 // panel being zoomed (modeZoom)
+	zoomTitle             string                 // its title, for the zoom footer
+	zoomEphemeral         bool                   // the current zoom is a transient diff panel — dismissing it closes the panel server-side
+	pendingEphemeralTitle string                 // title for the next transient (diff/git) zoom, stashed when the op is sent, read on the "ephemeral" reply
+	zoomArmed             bool                   // prefix pressed inside a zoom, awaiting the verb
+	zoomExited            bool                   // the zoomed panel has exited — a read-only result view
+	emu                   *vt.SafeEmulator       // terminal emulator rendering the zoomed panel
+	scrollOff             int                    // scrollback offset (lines above the live bottom) for the zoom / focused tile
+	scrolling             bool                   // scroll mode (C-t [): arrows / page keys navigate history, keys are not sent to the program
+	scrollArmed           bool                   // prefix pressed while scrolling, awaiting the leader verb (delegated to the zoom / group handler)
+	scrollMem             map[string]scrollState // per-panel remembered scroll position, keyed by panel ID, restored on re-zoom
+	cursorHidden          *bool                  // tracks the zoomed program's cursor visibility (DECTCEM); nil when not zooming
 
 	groupName       string                      // work item being split-viewed (modeGroupZoom)
 	groupFocus      int                         // focused member, indexing tiles then the summary slot
@@ -335,6 +337,7 @@ func New(c *client.Client, appVersion string) tea.Model {
 		status:     "attaching…",
 		endpoint:   c.Endpoint(),
 		now:        time.Now(),
+		scrollMem:  map[string]scrollState{},
 	}
 	return m.applyPrefs(loadPrefs())
 }
@@ -2000,6 +2003,26 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// scrollState is a panel's remembered scrollback position: how far it was
+// scrolled and whether scroll mode was active. Kept in scrollMem, keyed by
+// panel ID, so re-zooming a panel lands back where you left it.
+type scrollState struct {
+	off int
+	on  bool
+}
+
+// rememberScroll saves the current zoom's scroll position under its panel ID, so
+// reopening that panel restores where you were. A no-op outside a single zoom.
+func (m *model) rememberScroll() {
+	if m.zoomID == "" {
+		return
+	}
+	if m.scrollMem == nil {
+		m.scrollMem = map[string]scrollState{}
+	}
+	m.scrollMem[m.zoomID] = scrollState{off: m.scrollOff, on: m.scrolling}
+}
+
 // zoomInto opens a terminal emulator for panel p and attaches to its PTY: output
 // streams into the emulator and keystrokes are forwarded back. baton owns the
 // screen, so the footer (rendered in View) is always safe.
@@ -2009,8 +2032,12 @@ func (m model) zoomInto(p panel.Panel) model {
 	m.zoomTitle = p.Title
 	m.zoomArmed = false
 	m.zoomEphemeral = false // a fresh zoom is normal; the diff path sets this true after
-	m.scrollOff = 0         // a fresh zoom opens at the live bottom
-	m.scrolling = false
+	m.scrollArmed = false
+	if st, ok := m.scrollMem[p.ID]; ok { // restore where we left this panel last time
+		m.scrollOff, m.scrolling = st.off, st.on
+	} else {
+		m.scrollOff, m.scrolling = 0, false // never seen: open at the live bottom
+	}
 	m.zoomGroupOrigin = "" // a direct zoom; the group path sets this after
 	m.zoomExited = p.State == panel.Exited
 	m.cursorHidden = nil
@@ -2031,6 +2058,9 @@ func (m model) zoomInto(p panel.Panel) model {
 		m.status = "result · " + p.Title + " (exited)"
 	} else {
 		m.status = "zoomed · " + p.Title
+	}
+	if m.scrolling { // restored straight into scroll mode — show the scroll hint, not the zoom status
+		m.status = scrollHintStatus
 	}
 	return m
 }
@@ -2179,15 +2209,22 @@ func (m model) enterScroll() model {
 		return m
 	}
 	m.scrolling = true
+	m.scrollArmed = false                       // a fresh scroll session starts un-armed
 	m.copySelecting, m.copyBlock = false, false // a fresh scroll session starts with no selection
-	m.status = "scroll · ↑↓ line · b/Spc page · v select · V block · y copy · esc exits"
+	m.status = scrollHintStatus
 	return m
 }
+
+// scrollHintStatus is the status-bar hint shown whenever scroll mode is active —
+// on entry (enterScroll) and when a re-zoom restores straight into scroll mode
+// (zoomInto).
+const scrollHintStatus = "scroll · ↑↓ line · b/Spc page · v select · V block · y copy · esc exits"
 
 // exitScroll leaves scroll mode and returns to the live bottom, dropping any
 // active search along with it.
 func (m model) exitScroll() model {
 	m.scrolling = false
+	m.scrollArmed = false
 	m.scrollOff = 0
 	m.copySelecting, m.copyBlock = false, false
 	m = m.clearSearch()
@@ -2218,6 +2255,29 @@ func (m model) handleScrollKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	emu, rows := m.scrollTarget()
 	if emu == nil {
 		return m.exitScroll(), nil
+	}
+	// The leader stays live in scroll mode: the prefix arms, and the follow-up key
+	// is delegated to the existing zoom / group leader so every escape (dashboard,
+	// back, search, scratch…) works without leaving scroll mode first.
+	if m.scrollArmed {
+		m.scrollArmed = false
+		if k.String() == m.effPrefix() {
+			return m, nil // prefix+prefix is a literal send elsewhere — a no-op here
+		}
+		switch m.mode {
+		case modeZoom:
+			m.zoomArmed = true
+			return m.handleZoomKey(k)
+		case modeGroupZoom:
+			m.groupArmed = true
+			return m.handleGroupZoomKey(k)
+		default:
+			return m, nil
+		}
+	}
+	if k.String() == m.effPrefix() {
+		m.scrollArmed = true
+		return m, nil
 	}
 	page := max(1, rows-1)
 	switch k.String() {
@@ -2327,6 +2387,7 @@ func (m model) cursorHiddenNow() bool {
 
 // zoomDetach leaves the zoom, returning to a refreshed dashboard.
 func (m model) zoomDetach() (tea.Model, tea.Cmd) {
+	m.rememberScroll() // save this panel's scroll position before we reset it
 	m.sendf(proto.Command{Action: "panel.detach", ID: m.zoomID})
 	// A transient diff panel is reaped when the zoom that shows it is dismissed —
 	// it is never persisted, so leaving its zoom must also close it server-side.
@@ -2339,6 +2400,7 @@ func (m model) zoomDetach() (tea.Model, tea.Cmd) {
 	m.emu = nil
 	m.scrollOff = 0
 	m.scrolling = false
+	m.scrollArmed = false
 	m.copySelecting = false
 	m = m.clearSearch()
 	m.cursorHidden = nil

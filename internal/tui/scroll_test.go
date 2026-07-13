@@ -173,3 +173,172 @@ func TestScrollModeKeys(t *testing.T) {
 		t.Fatalf("G should jump to the live bottom, off = %d", m.scrollOff)
 	}
 }
+
+// TestScrollRestoreStaleOffset covers re-zooming a panel we left mid-scroll onto
+// a re-attached emulator whose replayed scrollback is shallower than the restored
+// offset. The first arrow step must move the view, not be swallowed re-clamping
+// the stale offset — otherwise the arrows look dead after a switch-away-and-back.
+func TestScrollRestoreStaleOffset(t *testing.T) {
+	emu := vt.NewSafeEmulator(20, 4)
+	fillLines(emu, 60) // shallow re-attached buffer
+	depth := emu.ScrollbackLen()
+	if depth == 0 || depth >= 300 {
+		t.Fatalf("test setup: want a shallow buffer, got depth %d", depth)
+	}
+
+	// scrollOff restored from a deeper original zoom, far beyond this buffer.
+	m := model{emu: emu, mode: modeZoom, width: 20, height: 8, scrolling: true, scrollOff: 300}
+
+	next, _ := m.handleScrollKey(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(model)
+	if m.scrollOff >= depth {
+		t.Fatalf("one ↓ should move off the clamped top: off=%d depth=%d", m.scrollOff, depth)
+	}
+	if m.scrollOff != depth-1 {
+		t.Fatalf("one ↓ from the top should land one line down: off=%d want %d", m.scrollOff, depth-1)
+	}
+}
+
+// TestScrollLeaderToDashboard proves the leader stays live in scroll mode: the
+// prefix arms and C-t d leaves for the dashboard, and the panel's scroll position
+// is remembered on the way out.
+func TestScrollLeaderToDashboard(t *testing.T) {
+	emu := vt.NewSafeEmulator(20, 6)
+	fillLines(emu, 40)
+	m := model{emu: emu, mode: modeZoom, zoomID: "A", width: 20, height: 8, scrolling: true,
+		scrollMem: map[string]scrollState{},
+		binds:     append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+
+	drive := func(k tea.KeyMsg) {
+		next, _ := m.handleScrollKey(k)
+		m = next.(model)
+	}
+
+	drive(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")}) // scroll to the oldest line
+	off := m.scrollOff
+	if off == 0 {
+		t.Fatal("g should scroll back before we leave")
+	}
+
+	drive(tea.KeyMsg{Type: tea.KeyCtrlT}) // arm the leader
+	if !m.scrollArmed {
+		t.Fatal("the prefix should arm the leader in scroll mode")
+	}
+	drive(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")}) // C-t d → dashboard
+
+	if m.mode != modeDashboard {
+		t.Fatalf("C-t d should leave for the dashboard, mode = %v", m.mode)
+	}
+	if st := m.scrollMem["A"]; !st.on || st.off != off {
+		t.Fatalf("scroll should be remembered, got %+v want {off:%d on:true}", st, off)
+	}
+}
+
+// TestZoomIntoFreshPanel proves a fresh zoom of a panel with no memory opens at
+// the live bottom, never inheriting another panel's remembered offset.
+func TestZoomIntoFreshPanel(t *testing.T) {
+	m := model{mode: modeDashboard, // width 0 keeps it hermetic: no emulator, no reader goroutine
+		scrollMem: map[string]scrollState{"A": {off: 5, on: true}},
+		binds:     append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+
+	m = m.zoomInto(panel.Panel{ID: "B", Title: "B"})
+	if m.scrollOff != 0 || m.scrolling {
+		t.Fatalf("a fresh zoom should open at the bottom, off=%d scrolling=%v", m.scrollOff, m.scrolling)
+	}
+}
+
+// TestZoomIntoRestores proves re-zooming a remembered panel restores its saved
+// offset and scroll mode.
+func TestZoomIntoRestores(t *testing.T) {
+	m := model{mode: modeDashboard, // width 0 keeps it hermetic
+		scrollMem: map[string]scrollState{"A": {off: 7, on: true}},
+		binds:     append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+
+	m = m.zoomInto(panel.Panel{ID: "A", Title: "A"})
+	if !m.scrolling || m.scrollOff != 7 {
+		t.Fatalf("re-zoom should restore scroll, scrolling=%v off=%d", m.scrolling, m.scrollOff)
+	}
+}
+
+// TestScrollLeaderStaysInScroll proves a non-leaving leader command (C-t ~ scratch)
+// is delegated without abandoning scroll mode — the arm→delegate wiring routes the
+// follow-up key and leaves the view scrolling.
+func TestScrollLeaderStaysInScroll(t *testing.T) {
+	emu := vt.NewSafeEmulator(20, 6)
+	fillLines(emu, 40)
+	m := model{emu: emu, mode: modeZoom, zoomID: "A", width: 20, height: 8, scrolling: true,
+		binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+
+	drive := func(k tea.KeyMsg) {
+		next, _ := m.handleScrollKey(k)
+		m = next.(model)
+	}
+
+	drive(tea.KeyMsg{Type: tea.KeyCtrlT}) // arm
+	if !m.scrollArmed {
+		t.Fatal("the prefix should arm the leader")
+	}
+	drive(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("~")}) // C-t ~ → toggle scratch
+
+	if m.scrollArmed {
+		t.Fatal("the follow-up key should disarm the leader")
+	}
+	if !m.scrolling {
+		t.Fatal("a non-leaving leader command should not abandon scroll mode")
+	}
+}
+
+// TestScrollLeaderGroupToDashboard proves the leader stays live in a group split's
+// scroll mode too: the prefix arms and C-t d delegates through handleGroupZoomKey
+// to exitGroupZoom, landing on the dashboard.
+func TestScrollLeaderGroupToDashboard(t *testing.T) {
+	emu := vt.NewSafeEmulator(20, 4)
+	fillLines(emu, 30)
+	m := model{mode: modeGroupZoom, groupName: "g", width: 80, height: 24, scrolling: true,
+		fleet:      []panel.Panel{{ID: "A", Group: "g", Title: "A"}},
+		groupEmus:  map[string]*vt.SafeEmulator{"A": emu},
+		groupFocus: 0, binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+
+	drive := func(k tea.KeyMsg) {
+		next, _ := m.handleScrollKey(k)
+		m = next.(model)
+	}
+
+	drive(tea.KeyMsg{Type: tea.KeyCtrlT}) // arm the leader in the split's scroll mode
+	if !m.scrollArmed {
+		t.Fatal("the prefix should arm the leader in group scroll mode")
+	}
+	drive(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")}) // C-t d → dashboard
+
+	if m.mode != modeDashboard {
+		t.Fatalf("C-t d should leave the split for the dashboard, mode = %v", m.mode)
+	}
+}
+
+// TestExitScrollThenReZoomFromBottom proves an explicit esc before leaving is
+// remembered as "not scrolling", so re-zooming that panel opens at the live bottom.
+func TestExitScrollThenReZoomFromBottom(t *testing.T) {
+	emu := vt.NewSafeEmulator(20, 6)
+	fillLines(emu, 40)
+	// width 0 keeps the re-zoom hermetic (no emulator, no reader goroutine); the
+	// directly-assigned emu still drives scroll mode for the esc path below.
+	m := model{emu: emu, mode: modeZoom, zoomID: "A", height: 8, scrolling: true,
+		scrollMem: map[string]scrollState{},
+		binds:     append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+
+	drive := func(k tea.KeyMsg) {
+		next, _ := m.handleScrollKey(k)
+		m = next.(model)
+	}
+
+	drive(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")}) // scroll back
+	drive(tea.KeyMsg{Type: tea.KeyEsc})                       // esc: leave scroll mode at the bottom
+	if m.scrolling {
+		t.Fatal("esc should leave scroll mode")
+	}
+	m.zoomDetach()                                   // remembers on=false, off=0 for panel A
+	m = m.zoomInto(panel.Panel{ID: "A", Title: "A"}) // re-zoom the same panel
+	if m.scrolling || m.scrollOff != 0 {
+		t.Fatalf("re-zoom after esc should open at the bottom, scrolling=%v off=%d", m.scrolling, m.scrollOff)
+	}
+}

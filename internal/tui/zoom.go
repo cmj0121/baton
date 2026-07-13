@@ -79,15 +79,27 @@ func scrollSeg(off int) string {
 // positive scrolls toward older output, negative back toward the live bottom. It
 // clamps to the live bottom (0) and to the buffer's depth, so holding the key at
 // either end simply rests there.
+//
+// The current offset is re-synced to the live depth *before* the delta is
+// applied, not just after. A restored scroll position (re-zooming a panel we
+// left mid-scroll) can sit far beyond the re-attached emulator's shallower
+// scrollback — the replay only rebuilds a bounded buffer — so the very first
+// arrow / wheel step would otherwise be swallowed clamping the stale offset back
+// down instead of moving the view.
 func (m *model) scrollEmu(emu *vt.SafeEmulator, delta int) {
 	if emu == nil {
 		return
 	}
-	off := m.scrollOff + delta
+	depth := emu.ScrollbackLen()
+	off := m.scrollOff
+	if off > depth { // re-sync a stale offset to what the buffer actually holds
+		off = depth
+	}
+	off += delta
 	if off < 0 {
 		off = 0
 	}
-	if depth := emu.ScrollbackLen(); off > depth {
+	if off > depth {
 		off = depth
 	}
 	m.scrollOff = off
