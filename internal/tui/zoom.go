@@ -41,10 +41,11 @@ func cellWidth(r rune) int {
 	return 0
 }
 
-// zoomFooter builds the coloured strip below the emulated panel: a brand cap, a
-// state cap (green live ZOOM, or grey EXITED for a finished program), a scrollback
-// marker when the view is scrolled off the live bottom, the panel title, the C-t ?
-// help hint, and — like every view — the host stats, clock, and connection status.
+// zoomFooter builds the coloured strip below the emulated panel: a state cap
+// (green live ZOOM, or grey EXITED for a finished program), a scrollback marker
+// when the view is scrolled off the live bottom, the panel title, the C-t ? help
+// hint, and — like every view — the host stats, clock, and connection status. The
+// header carries the wordmark, so the strip omits the brand cap beside the title.
 func (m model) zoomFooter() string {
 	if m.input == inputSearch { // typing a find term: show it in the footer, screen stays visible
 		return m.searchPromptFooter()
@@ -60,7 +61,7 @@ func (m model) zoomFooter() string {
 	case m.zoomExited:
 		state = seg("◼ EXITED", colDark, colMuted)
 	}
-	left := seg("◈ BATON", colDark, colBrand) + state + scrollSeg(m.scrollOff) + m.barStrong().Render(" "+m.zoomTitle+" ")
+	left := state + scrollSeg(m.scrollOff) + m.barStrong().Render(" "+m.zoomTitle+" ")
 	return m.statusBar(left, m.helpHint())
 }
 

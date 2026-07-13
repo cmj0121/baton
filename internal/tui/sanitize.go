@@ -87,6 +87,24 @@ func isControl(r rune) bool {
 	}
 }
 
+// printableRunes drops the control and non-printable runes from a key event's
+// runes, keeping only what a single-line text field may safely show. A bracketed
+// paste arrives as one KeyRunes event whose runes can carry newlines, tabs, a raw
+// ESC, or other control bytes; appended verbatim they render as stray glyphs in
+// the field (and could smuggle an escape to the real terminal). Tab is a control
+// here too — a field is one line, so it has no place in the buffer.
+func printableRunes(rs []rune) string {
+	var b strings.Builder
+	b.Grow(len(rs))
+	for _, r := range rs {
+		if r == '\t' || isControl(r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 // sanitizeLines applies sanitizeText to every line of a block of untrusted text.
 func sanitizeLines(lines []string) []string {
 	for i, l := range lines {

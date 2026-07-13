@@ -6,6 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	vt "github.com/charmbracelet/x/vt"
+
+	"github.com/cmj0121/baton/internal/panel"
 )
 
 // TestStripANSI drops escapes and keeps the visible text.
@@ -221,6 +223,26 @@ func TestUpdateRoutesSearchPrompt(t *testing.T) {
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
 	if next.(model).scrollOff != 1 {
 		t.Fatalf("with no overlay, a key should reach the scroll handler, off=%d", next.(model).scrollOff)
+	}
+}
+
+// TestSearchPromptFooterIsClean proves the find-prompt strip carries only the
+// search cap and the typed term — not the ◈ BATON brand, and not the name of an
+// unrelated panel that happens to want attention (which statusBar would otherwise
+// splice in as "◆ … needs you"). Both crowded the field the operator types into.
+func TestSearchPromptFooterIsClean(t *testing.T) {
+	m := model{width: 80, inputBuf: "needle"}
+	m.fleet = []panel.Panel{{ID: "p1", State: panel.Attention, Title: "db-migrate"}}
+
+	got := stripANSI(m.searchPromptFooter())
+	if !strings.Contains(got, "needle") {
+		t.Fatalf("the prompt must show the typed term, got %q", got)
+	}
+	if strings.Contains(got, "BATON") {
+		t.Fatalf("the prompt must not carry the brand cap, got %q", got)
+	}
+	if strings.Contains(got, "db-migrate") {
+		t.Fatalf("the prompt must not name an unrelated attention panel, got %q", got)
 	}
 }
 

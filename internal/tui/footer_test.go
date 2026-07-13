@@ -10,6 +10,40 @@ import (
 	"github.com/cmj0121/baton/internal/proto"
 )
 
+// TestFootersOmitBrandCap proves the ◈ BATON brand cap is gone from every footer
+// strip (dashboard, zoom, group split). The header already carries the wordmark,
+// and the cap read as a stray "baton" crowding the panel/work-item name beside it
+// — most visibly when switching between groups. The mode/state caps stay.
+func TestFootersOmitBrandCap(t *testing.T) {
+	mk := func() model {
+		return model{
+			width: 120, height: 30, endpoint: "local", status: "dashboard",
+			groupName: "api", zoomTitle: "claude",
+			binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t",
+		}
+	}
+	footers := map[string]string{
+		"dashboard": mk().footer(),
+		"zoom":      mk().zoomFooter(),
+		"group":     mk().groupZoomFooter(),
+	}
+	for name, foot := range footers {
+		if strings.Contains(foot, "BATON") {
+			t.Errorf("%s footer should not carry the brand cap, got:\n%s", name, foot)
+		}
+	}
+	// The mode/state caps that identify the view are still there.
+	if !strings.Contains(footers["dashboard"], "DASHBOARD") {
+		t.Error("dashboard footer lost its mode cap")
+	}
+	if !strings.Contains(footers["zoom"], "ZOOM") {
+		t.Error("zoom footer lost its state cap")
+	}
+	if !strings.Contains(footers["group"], "GROUP") {
+		t.Error("group footer lost its mode cap")
+	}
+}
+
 func TestMemLabel(t *testing.T) {
 	const g = 1 << 30
 	cases := []struct {
