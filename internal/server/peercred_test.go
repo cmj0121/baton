@@ -51,6 +51,26 @@ func TestSameUserPeerAllowsNonUnix(t *testing.T) {
 	}
 }
 
+// TestSameUserPeerFailsClosedOnUnreadableUnixPeer proves the check fails CLOSED:
+// when the peer is a real unix socket but its credentials cannot be read (here the
+// connection is closed first, so the kernel query on its fd errors), sameUserPeer
+// returns the error rather than admitting the connection. An unverifiable unix peer
+// is rejected, never trusted.
+func TestSameUserPeerFailsClosedOnUnreadableUnixPeer(t *testing.T) {
+	server := acceptOneUnix(t)
+	if err := server.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	ok, err := sameUserPeer(server)
+	if err == nil {
+		t.Skip("this platform still reports peer creds on a closed conn; cannot exercise the error path")
+	}
+	if ok {
+		t.Fatalf("sameUserPeer admitted a peer whose creds could not be read (err=%v); it must fail closed", err)
+	}
+}
+
 // acceptOneUnix binds a throwaway unix socket, dials it, and returns the server
 // side of the resulting connection — a real unix peer whose kernel-recorded uid
 // is this test process's own.

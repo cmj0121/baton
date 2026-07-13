@@ -2,6 +2,7 @@ package control_test
 
 import (
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -208,6 +209,140 @@ func TestControlDialErrors(t *testing.T) {
 	}
 	if _, err := c.TasksJSON(); err == nil {
 		t.Fatal("tasks-json on a closed client should error")
+	}
+}
+
+// TestControlQueueOps exercises the backlog wrappers that reorder or spawn:
+// EnqueueSpawn, PromoteTask, and DemoteTask, over a real server.
+func TestControlQueueOps(t *testing.T) {
+	sock := startServer(t)
+
+	c, err := control.DialSocket(sock, "", "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	// EnqueueSpawn records a spawn-on-demand backlog task that carries the
+	// command shape and the close-on-done flag.
+	if err := c.EnqueueSpawn("do the thing", "team", "/bin/cat", []string{"-u"}, t.TempDir(), true); err != nil {
+		t.Fatalf("enqueue-spawn: %v", err)
+	}
+	// A second plain task so there are two entries to reorder.
+	if err := c.Enqueue("second", "team"); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	tasks, err := c.Tasks()
+	if err != nil {
+		t.Fatalf("tasks: %v", err)
+	}
+	var spawnID, secondID string
+	for _, tk := range tasks {
+		switch tk.Prompt {
+		case "do the thing":
+			spawnID = tk.ID
+		case "second":
+			secondID = tk.ID
+		}
+	}
+	if spawnID == "" || secondID == "" {
+		t.Fatalf("both enqueued tasks should appear, got %+v", tasks)
+	}
+
+	// Promote the tail task to the head, then demote it back — both are accepted
+	// by the server and reorder the visible backlog.
+	if err := c.PromoteTask(secondID); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	if tasks, err = c.Tasks(); err != nil {
+		t.Fatalf("tasks after promote: %v", err)
+	}
+	if len(tasks) < 2 || tasks[0].ID != secondID {
+		t.Fatalf("promoted task should lead the backlog, got %+v", tasks)
+	}
+	if err := c.DemoteTask(secondID); err != nil {
+		t.Fatalf("demote: %v", err)
+	}
+	if tasks, err = c.Tasks(); err != nil {
+		t.Fatalf("tasks after demote: %v", err)
+	}
+	if len(tasks) < 2 || tasks[len(tasks)-1].ID != secondID {
+		t.Fatalf("demoted task should trail the backlog, got %+v", tasks)
+	}
+
+	// Unknown ids are rejected by the server and surfaced through the wrappers.
+	if err := c.PromoteTask("nope"); err == nil {
+		t.Fatal("promoting an unknown task should error")
+	}
+	if err := c.DemoteTask("nope"); err == nil {
+		t.Fatal("demoting an unknown task should error")
+	}
+}
+
+// TestControlClosedClient covers the write-failure fast paths of the remaining
+// wrappers: once the connection is closed every send-first method surfaces the
+// encode error instead of blocking or panicking.
+func TestControlClosedClient(t *testing.T) {
+	sock := startServer(t)
+	c, err := control.DialSocket(sock, "", "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	_ = c.Close()
+
+	// Spawn calls List first, so its initial send fails on the closed conn.
+	if _, err := c.Spawn(proto.Command{Action: "panel.create", Kind: proto.KindShell}); err == nil {
+		t.Fatal("spawn on a closed client should error")
+	}
+	// ListJSON wraps List; the underlying send fails.
+	if _, err := c.ListJSON(); err == nil {
+		t.Fatal("list-json on a closed client should error")
+	}
+	if _, err := c.SpawnPanel("/bin/cat", nil, ""); err == nil {
+		t.Fatal("spawn-panel on a closed client should error")
+	}
+	if err := c.EnqueueSpawn("x", "", "/bin/cat", nil, "", false); err == nil {
+		t.Fatal("enqueue-spawn on a closed client should error")
+	}
+	if err := c.PromoteTask("x"); err == nil {
+		t.Fatal("promote on a closed client should error")
+	}
+	if err := c.DemoteTask("x"); err == nil {
+		t.Fatal("demote on a closed client should error")
+	}
+	if err := c.DrainQueue(); err == nil {
+		t.Fatal("drain on a closed client should error")
+	}
+}
+
+// TestControlDialHandshakeFails covers DialSocket's post-connect failure path:
+// the dial succeeds but the peer closes without ever sending the panels
+// snapshot, so readUntilPanels drains to EOF and Dial returns an error.
+func TestControlDialHandshakeFails(t *testing.T) {
+	// A short temp dir keeps the socket path under the unix-domain length limit.
+	dir, err := os.MkdirTemp("", "bs")
+	if err != nil {
+		t.Fatalf("tempdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "s.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	// Accept one connection and hang up immediately, never sending a snapshot.
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		_ = conn.Close()
+	}()
+
+	if _, err := control.DialSocket(sock, "", ""); err == nil {
+		t.Fatal("dial against a peer that never sends panels should fail")
 	}
 }
 
