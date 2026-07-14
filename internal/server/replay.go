@@ -18,6 +18,16 @@ import "regexp"
 // Query sequences draw nothing, so dropping them from the replay leaves the
 // reconstructed screen identical while stopping the spurious replies. Live output is
 // never filtered, so a program's real-time query is still answered exactly once.
+//
+// One report-*triggering* sequence is not a query: the in-band-resize enable
+// CSI ? 2048 h (SetInBandResizeMode). A TUI (claude, anything on bubbletea) writes it
+// once at startup to subscribe to resize notifications; the emulator answers the enable
+// with an immediate size report CSI 48 ; rows ; cols … t. Replayed through a fresh
+// emulator, that report is re-emitted as input — a bogus resize (at the replay
+// emulator's transient size, not the panel's) delivered to the program every re-attach,
+// which reflows its UI and garbles the prompt. Dropping the enable from the replay costs
+// nothing (it subscribes the throwaway replay emulator to nothing and draws nothing);
+// the live enable is untouched, so the real subscription still happens exactly once.
 var replayQueries = regexp.MustCompile(
 	// CSI device-attributes / device-status reports: CSI … c (DA1/2/3), CSI … n (DSR,
 	// incl. cursor-position request CSI 6 n) — and the XTVERSION query CSI > … q.
@@ -25,7 +35,9 @@ var replayQueries = regexp.MustCompile(
 		// DECRQM mode query: CSI ? … $ p.
 		`|` + `\x1b\[\?[0-9;]*\$p` +
 		// OSC colour / palette queries: OSC … ; ? terminated by BEL or ST.
-		`|` + `\x1b\][0-9;]*;\?(?:\x07|\x1b\\)`,
+		`|` + `\x1b\][0-9;]*;\?(?:\x07|\x1b\\)` +
+		// In-band-resize enable: CSI ? 2048 h — answered with an immediate size report.
+		`|` + `\x1b\[\?2048h`,
 )
 
 // stripReplayQueries removes terminal report-triggering query sequences from a replay
