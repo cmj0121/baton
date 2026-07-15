@@ -1101,6 +1101,10 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		}
 	case "panel.attach":
 		s.attach(cc, cmd.ID)
+		// Nudge the size so the program repaints a full frame over the replay: a fresh
+		// emulator cannot losslessly reconstruct a differential renderer (claude) from
+		// the bounded ring, leaving ghost cells until a real SIGWINCH forces a clean paint.
+		s.pty.ForceRepaint(cmd.ID)
 	case "panel.detach":
 		s.detach(cc, cmd.ID)
 	case "panel.input":
