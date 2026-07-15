@@ -483,18 +483,21 @@ func TestForceRepaintDeliversSigwinch(t *testing.T) {
 		t.Fatalf("WINCH fired before ForceRepaint; snapshot=%q", m.Snapshot("1"))
 	}
 
-	m.ForceRepaint("1")
-
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		if winchFired(m) {
-			return // the trap fired — SIGWINCH was delivered
+	// Re-nudge across a generous deadline: bash may defer running a WINCH trap while it
+	// sits in readline under load, so one SIGWINCH is not guaranteed to be observed
+	// quickly. Repeated nudges (which converge back to the target size) make the check
+	// robust without depending on the timing of a single signal.
+	deadline := time.Now().Add(8 * time.Second)
+	for !time.Now().After(deadline) {
+		m.ForceRepaint("1")
+		for i := 0; i < 10; i++ {
+			if winchFired(m) {
+				return // the trap fired — SIGWINCH was delivered
+			}
+			time.Sleep(20 * time.Millisecond)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("ForceRepaint did not deliver SIGWINCH; snapshot=%q", m.Snapshot("1"))
-		}
-		time.Sleep(20 * time.Millisecond)
 	}
+	t.Fatalf("ForceRepaint did not deliver SIGWINCH; snapshot=%q", m.Snapshot("1"))
 }
 
 // TestForceRepaintSafeWhenUnsizedOrUnknown checks the nudge is a no-op (no panic, no

@@ -37,9 +37,11 @@ func drainEmu(emu *vt.SafeEmulator) (get func() []byte, stop func()) {
 		return append([]byte(nil), got...)
 	}
 	stop = func() {
-		if pw, ok := emu.InputPipe().(*io.PipeWriter); ok {
-			_ = pw.Close()
+		pw, ok := emu.InputPipe().(*io.PipeWriter)
+		if !ok {
+			return // cannot unblock the reader's Read; do not wait forever
 		}
+		_ = pw.Close()
 		<-done
 	}
 	return get, stop
