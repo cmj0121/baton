@@ -7,10 +7,17 @@ import (
 	"os/exec"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/rs/zerolog/log"
 )
+
+// repaintNudgeDelay separates ForceRepaint's two size changes. The kernel only raises
+// SIGWINCH on an actual size change, and a program that reads the size once after both
+// changes would see it unchanged and skip repainting; the gap lets it process the first
+// (grown) size before the resize back, so a full repaint is guaranteed.
+const repaintNudgeDelay = 50 * time.Millisecond
 
 // DefaultRingCap is how much recent output is kept per panel for replay on
 // attach when none is configured. It seeds the scrollback a frontend can page
@@ -25,10 +32,11 @@ const minRingCap = 4 * 1024
 // exits the pane is kept (dead) so its final output can still be replayed; it is
 // freed only when the panel is closed or purged.
 type pane struct {
-	f    *os.File
-	pid  int // child process id; with pty.Start it leads its own process group
-	ring []byte
-	dead bool // process exited: f is closed, ring retained for replay
+	f          *os.File
+	pid        int // child process id; with pty.Start it leads its own process group
+	ring       []byte
+	dead       bool // process exited: f is closed, ring retained for replay
+	rows, cols int  // last window size set on the PTY, for ForceRepaint's nudge
 }
 
 // Manager tracks the live PTYs keyed by panel id and fans their output out
@@ -319,14 +327,62 @@ func (m *Manager) KillAll(sig syscall.Signal) int {
 	return len(pids)
 }
 
-// Resize sets a panel's window size (in cells). A no-op for an unknown or exited
-// (dead) panel.
+// Resize sets a panel's window size (in cells) and records it for ForceRepaint. A no-op
+// for an unknown or exited (dead) panel.
 func (m *Manager) Resize(id string, rows, cols int) {
-	if p, live := m.livePane(id); live {
-		if err := pty.Setsize(p.f, &pty.Winsize{Rows: clampCell(rows), Cols: clampCell(cols)}); err != nil {
-			log.Warn().Str("id", id).Int("rows", rows).Int("cols", cols).Err(err).Msg("ptymgr: resizing PTY failed")
-		}
+	m.mu.Lock()
+	p, ok := m.ptys[id]
+	if !ok || p.dead {
+		m.mu.Unlock()
+		return
 	}
+	p.rows, p.cols = rows, cols
+	f := p.f
+	m.mu.Unlock()
+	if err := pty.Setsize(f, &pty.Winsize{Rows: clampCell(rows), Cols: clampCell(cols)}); err != nil {
+		log.Warn().Str("id", id).Int("rows", rows).Int("cols", cols).Err(err).Msg("ptymgr: resizing PTY failed")
+	}
+}
+
+// ForceRepaint nudges a panel's window size to one row taller and back, so the kernel
+// delivers SIGWINCH and a differential-rendering TUI (claude, any bubbletea program)
+// emits one full, self-contained repaint at the target size.
+//
+// Re-attach feeds a fresh client emulator the bounded replay ring. A program that never
+// sends a full-screen reset — claude clears with cursor moves + erase-to-end-of-line, no
+// CSI 2J, no alt-screen — cannot be reconstructed losslessly once the ring has evicted
+// its opening paint, so the rebuilt screen carries ghost cells (a stale welcome banner in
+// the input line). The forced repaint hands the emulator a complete frame that overwrites
+// them. Called after attach replays the ring, so the repaint lands last.
+//
+// A no-op for an unknown, dead, or never-sized panel. The temporary +1 row is a size the
+// PTY always accepts; the resize back leaves the program at its real size. The resize back
+// runs on its own goroutine after the delay and re-reads the recorded size, so a real
+// resize arriving mid-nudge is honoured rather than snapped back to a stale value.
+func (m *Manager) ForceRepaint(id string) {
+	if !m.nudgeRows(id, 1) { // grow by a row; false when there is nothing live to nudge
+		return
+	}
+	go func() {
+		time.Sleep(repaintNudgeDelay)
+		m.nudgeRows(id, 0) // back to the current recorded size
+	}()
+}
+
+// nudgeRows sets a live panel's PTY to its recorded size with deltaRows added, under the
+// lock so the ioctl cannot race markDead closing the PTY. Reports whether a live, sized
+// panel was found.
+func (m *Manager) nudgeRows(id string, deltaRows int) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.ptys[id]
+	if !ok || p.dead || p.rows <= 0 || p.cols <= 0 {
+		return false
+	}
+	if err := pty.Setsize(p.f, &pty.Winsize{Rows: clampCell(p.rows + deltaRows), Cols: clampCell(p.cols)}); err != nil {
+		log.Warn().Str("id", id).Err(err).Msg("ptymgr: repaint nudge resize failed")
+	}
+	return true
 }
 
 // StartShell launches the user's default shell. Equivalent to Start(id, "").

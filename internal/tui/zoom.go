@@ -14,19 +14,28 @@ import (
 
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/vtquery"
 )
 
 // writeEmu feeds program output into the emulator, isolating the cockpit from a
 // panic in the terminal parser: a single misbehaving program (or a parser edge
 // case) degrades its own panel rather than taking down the whole TUI. The stack
 // is logged so the underlying fault can be pinned down.
+//
+// Query sequences are stripped first: the emulator answers a program's terminal
+// queries onto its input pipe, which zoomReader forwards back to the program as
+// panel.input. On live output that means a program re-emitting its probes (every
+// bubbletea TUI does so on /clear) gets its own reply injected into its input line as
+// garbage. Stripping the queries here — the single choke point every emulator-bound
+// byte passes through (zoom, group tile, scratch; replay too, idempotently) — stops the
+// reply at the source. Queries draw nothing, so the reconstructed screen is unchanged.
 func writeEmu(emu *vt.SafeEmulator, data []byte) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().Interface("panic", r).Bytes("stack", debug.Stack()).Msg("recovered an emulator write panic")
 		}
 	}()
-	_, _ = emu.Write(data)
+	_, _ = emu.Write(vtquery.Strip(data))
 }
 
 // cellCond gives wcwidth-style cell widths — 2 for wide (CJK) glyphs, 1 for the

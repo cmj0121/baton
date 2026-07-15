@@ -65,6 +65,11 @@ func TestStripReplayQueries(t *testing.T) {
 		{"osc bg colour query (BEL)", "\x1b]11;?\x07", ""},
 		{"osc fg colour query (ST)", "\x1b]10;?\x1b\\", ""},
 		{"osc palette query", "\x1b]4;1;?\x07", ""},
+		{"in-band-resize enable", "\x1b[?2048h", ""}, // answered with an immediate "48;rows;cols…t" report — a bogus resize on every re-attach
+		{"in-band-resize enable amid output", "row\x1b[?2048hcol", "rowcol"},
+		{"keeps in-band-resize disable", "\x1b[?2048l", "\x1b[?2048l"}, // reset triggers no report; nothing to strip
+		{"keeps alt-screen enable", "\x1b[?1049h", "\x1b[?1049h"},      // a mode-set that draws — must survive for trimToLastScreenReset
+		{"keeps cursor-visibility set", "\x1b[?25h", "\x1b[?25h"},      // an ordinary mode-set, not a report trigger
 		{
 			// The exact shape the bug report showed: a DA reply and an OSC-11 reply that a
 			// replay re-triggers. Both their query forms are stripped from the replay.

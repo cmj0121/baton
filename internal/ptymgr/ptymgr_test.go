@@ -455,3 +455,66 @@ func TestAppendRingAmortizedTrim(t *testing.T) {
 		t.Fatalf("ringView tail mismatch:\n got %q\nwant %q", got, want)
 	}
 }
+
+// The WINCH trap echoes WINCH""FIRED: the shell prints WINCHFIRED (quotes removed) only
+// when the handler runs, while the echoed command line keeps the quotes (WINCH""FIRED),
+// so searching for winchMark counts real firings and never the command echo.
+const winchArm = "trap 'echo WINCH\"\"FIRED' WINCH\n"
+const winchMark = "WINCHFIRED"
+
+func winchFired(m *Manager) bool {
+	return strings.Contains(string(m.Snapshot("1")), winchMark)
+}
+
+// TestForceRepaintDeliversSigwinch checks the attach nudge actually reaches the process:
+// a shell WINCH trap fires only when signalled, proving ForceRepaint's size toggle
+// delivered SIGWINCH (a TUI's repaint trigger). The delay between the toggle's two resizes
+// is what stops the kernel coalescing them into a no-change no-op.
+func TestForceRepaintDeliversSigwinch(t *testing.T) {
+	m := New()
+	defer m.KillAll(syscall.SIGKILL)
+	if err := m.Start("1", ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	m.Resize("1", 24, 80)
+	m.Write("1", []byte(winchArm))
+	time.Sleep(400 * time.Millisecond) // let the trap install (it must not fire from this)
+	if winchFired(m) {
+		t.Fatalf("WINCH fired before ForceRepaint; snapshot=%q", m.Snapshot("1"))
+	}
+
+	// Re-nudge across a generous deadline: bash may defer running a WINCH trap while it
+	// sits in readline under load, so one SIGWINCH is not guaranteed to be observed
+	// quickly. Repeated nudges (which converge back to the target size) make the check
+	// robust without depending on the timing of a single signal.
+	deadline := time.Now().Add(8 * time.Second)
+	for !time.Now().After(deadline) {
+		m.ForceRepaint("1")
+		for i := 0; i < 10; i++ {
+			if winchFired(m) {
+				return // the trap fired — SIGWINCH was delivered
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	t.Fatalf("ForceRepaint did not deliver SIGWINCH; snapshot=%q", m.Snapshot("1"))
+}
+
+// TestForceRepaintSafeWhenUnsizedOrUnknown checks the nudge is a no-op (no panic, no
+// signal) for an unknown id and for a live panel whose size was never set — there is no
+// target size to toggle to, so the WINCH trap must not fire.
+func TestForceRepaintSafeWhenUnsizedOrUnknown(t *testing.T) {
+	m := New()
+	defer m.KillAll(syscall.SIGKILL)
+	m.ForceRepaint("nope") // unknown id: must not panic
+	if err := m.Start("1", ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	m.Write("1", []byte(winchArm))
+	time.Sleep(400 * time.Millisecond)
+	m.ForceRepaint("1") // never Resize'd: rows/cols are 0, so nothing to nudge
+	time.Sleep(400 * time.Millisecond)
+	if winchFired(m) {
+		t.Fatalf("ForceRepaint signalled an unsized panel; snapshot=%q", m.Snapshot("1"))
+	}
+}
