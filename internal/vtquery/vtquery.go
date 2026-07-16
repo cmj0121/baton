@@ -58,3 +58,52 @@ func Strip(b []byte) []byte {
 	}
 	return queries.ReplaceAll(b, nil)
 }
+
+// deviceAttrs matches a device-attributes query and captures its private-marker so the
+// primary (DA1), secondary (DA2) and tertiary (DA3) forms can be told apart:
+//
+//	CSI    Ps  c   → DA1 (marker "")
+//	CSI  > Ps  c   → DA2 (marker ">")
+//	CSI  = Ps  c   → DA3 (marker "=")
+//
+// The marker set is exactly [>=] so it never matches a CSI ending in c that carries a
+// different private marker or an intermediate byte (e.g. CSI > 4 ; 0 m is not a c).
+var deviceAttrs = regexp.MustCompile(`\x1b\[([>=]?)[0-9;]*c`)
+
+// Canned answers, byte-identical to what the client-side x/vt emulator returns, so the
+// server responder is a drop-in for the emulator that answered these live before the
+// live-strip landed. A DA reply is state-independent, which is exactly why the server —
+// which keeps no emulator — can answer it.
+const (
+	da1Reply = "\x1b[?62;1;6;22c" // VT220 + 132-col + selective-erase + ANSI colour
+	da2Reply = "\x1b[>1;10;0c"    // VT220, firmware 10, no cartridge
+)
+
+// Reply returns the terminal's canned answers to the device-attributes queries present
+// in b, in the order they appear, so a server with no emulator can answer them on the
+// PTY the way a real terminal does — immediately, before a round-tripped emulator reply
+// could arrive late at the program's prompt as garbage. A full-screen program (vim,
+// nvim) blocks on this reply during its terminal handshake, including around suspend, so
+// a missing answer wedges it. State-dependent queries (cursor position DSR 6 n, mode
+// DECRQM, colours) are deliberately NOT answered here — only the client emulator, which
+// tracks screen state, can answer those; they stay live-answered as before.
+//
+// Returns nil when b holds no answerable query, so the common no-query chunk is
+// allocation-free.
+func Reply(b []byte) []byte {
+	ms := deviceAttrs.FindAllSubmatch(b, -1)
+	if ms == nil {
+		return nil
+	}
+	var out []byte
+	for _, m := range ms {
+		switch string(m[1]) {
+		case "": // DA1
+			out = append(out, da1Reply...)
+		case ">": // DA2
+			out = append(out, da2Reply...)
+			// "=" (DA3): the emulator returns nothing, so neither do we.
+		}
+	}
+	return out
+}

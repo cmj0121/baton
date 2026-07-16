@@ -11,6 +11,8 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/rs/zerolog/log"
+
+	"github.com/cmj0121/baton/internal/vtquery"
 )
 
 // repaintNudgeDelay separates ForceRepaint's two size changes. The kernel only raises
@@ -174,6 +176,14 @@ func (m *Manager) pump(id string, p *pane, cmd *exec.Cmd) {
 		if n > 0 {
 			chunk := append([]byte(nil), buf[:n]...)
 			m.appendRing(p, chunk)
+			// Answer device-attributes queries on the PTY the way a real terminal does.
+			// baton keeps no server-side emulator, so without this the only responder is
+			// the client's emulator, whose reply round-trips back as late input; the client
+			// therefore strips these queries, leaving a full-screen program (nvim) blocked
+			// on a handshake reply that never comes — notably wedging Ctrl-Z suspend.
+			if reply := vtquery.Reply(chunk); len(reply) > 0 {
+				_, _ = p.f.Write(reply)
+			}
 			if m.onOutput != nil {
 				m.onOutput(id, chunk)
 			}
