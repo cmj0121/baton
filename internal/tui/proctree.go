@@ -52,11 +52,11 @@ func (m model) renderProcTree() []string {
 	for i, p := range m.fleet {
 		panels[i] = p.ToProto()
 	}
-	children, comm, err := proctree.OSProcessTable()
+	children, comm, stats, err := proctree.OSProcessTable()
 	if err != nil {
-		children, comm = map[int][]int{}, map[int]string{}
+		children, comm, stats = map[int][]int{}, map[int]string{}, map[int]proctree.Stat{}
 	}
-	root := proctree.Build(proctree.DaemonPid(), panels, children, comm)
+	root := proctree.Build(proctree.DaemonPid(), panels, children, comm, stats)
 	// The tree carries panel titles and OS process names — neither is fully under
 	// baton's control — so strip any embedded terminal escapes before they reach the
 	// real terminal, the way the git-output popup guards untrusted text.
