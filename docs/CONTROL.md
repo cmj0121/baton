@@ -55,7 +55,7 @@ acts, and exits.
 | Command                                                            | Does                                                                 |
 | ------------------------------------------------------------------ | -------------------------------------------------------------------- |
 | `baton ctl list`                                                   | print the fleet as JSON (id, title, state, group, …)                 |
-| `baton ctl tree [--json]`                                          | draw the daemon's process tree: groups → panels → their OS children  |
+| `baton ctl tree [--json]`                                          | draw the process tree (groups → panels → OS children), with CPU%/RSS |
 | `baton ctl spawn [--agent CMD] [--arg A] [--dir D]`                | spawn a panel (agent if `--agent`, else a shell); prints the new id  |
 | `baton ctl send <id> <text> [--no-enter]`                          | type text into a panel; submits with a newline unless `--no-enter`   |
 | `baton ctl group <name> <id>...`                                   | file panels under a work item (a slash-`path` nests: `backend/api`)  |
@@ -95,16 +95,18 @@ baton ctl tree
 
 **The process tree.** `tree` roots at the daemon, scaffolds the fleet's nested work-item groups, files each panel under
 its group with its process-group-leader pid, and hangs the panel's live OS descendant processes beneath it — the picture
-`ps`/`pstree` can't give you because only baton knows which pid is which agent:
+`ps`/`pstree` can't give you because only baton knows which pid is which agent. Each pid-bearing line also trails its
+cumulative CPU% since start and resident memory (RSS); groups and exited panels carry no columns. `--json` carries the
+same figures as `cpu`/`rss` fields on every node.
 
 ```text
-baton (daemon) pid=41022  baton
+baton (daemon) pid=41022  baton  0.3%  28.4M
 ├─ [group: feature-x]
-│  ├─ [hale/running] pid=41180  claude
-│  │  └─ pid=41199  node
-│  └─ [ellis/idle] pid=41205  bash
+│  ├─ [hale/running] pid=41180  claude  12.5%  180.2M
+│  │  └─ pid=41199  node  3.1%  95.7M
+│  └─ [ellis/idle] pid=41205  bash  0.0%  2.1M
 └─ [ungrouped]
-   └─ [shell/running] pid=41240  zsh
+   └─ [shell/running] pid=41240  zsh  0.0%  3.4M
 ```
 
 **Dispatch vs. send.** `send` types raw keystrokes; `dispatch` hands the server the _objective_, which it records on the

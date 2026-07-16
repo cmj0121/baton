@@ -52,7 +52,7 @@ named "report" and pause for me.
 | 指令                                                               | 作用                                                       |
 | ------------------------------------------------------------------ | ---------------------------------------------------------- |
 | `baton ctl list`                                                   | 以 JSON 印出隊伍(id、title、state、group、…)               |
-| `baton ctl tree [--json]`                                          | 畫出 daemon 的行程樹:group → panel → 各自的 OS 子行程      |
+| `baton ctl tree [--json]`                                          | 畫出行程樹(group → panel → OS 子行程),附 CPU%/RSS          |
 | `baton ctl spawn [--agent CMD] [--arg A] [--dir D]`                | 開一個面板(有 `--agent` 就是 agent,否則是 shell);印出新 id |
 | `baton ctl send <id> <text> [--no-enter]`                          | 把文字打進某個面板;除非 `--no-enter`,否則以換行送出        |
 | `baton ctl group <name> <id>...`                                   | 把面板歸入一個工作項目(斜線 `path` 可巢狀:`backend/api`)   |
@@ -92,16 +92,17 @@ baton ctl tree
 
 **行程樹。** `tree` 以 daemon 為根,鋪出隊伍裡巢狀的工作項目群組,把每個面板依群組歸位並標上它 process group
 leader 的 pid,再把該面板底下即時的 OS 子孫行程掛上去——這是 `ps`/`pstree` 給不了的畫面,因為只有 baton 知道哪個
-pid 是哪個 agent:
+pid 是哪個 agent。每個帶 pid 的行還會附上該行程自啟動以來的累計 CPU% 與常駐記憶體(RSS);群組與已結束的面板不
+帶欄位。`--json` 會把同樣的數字放進每個節點的 `cpu`/`rss` 欄位。
 
 ```text
-baton (daemon) pid=41022  baton
+baton (daemon) pid=41022  baton  0.3%  28.4M
 ├─ [group: feature-x]
-│  ├─ [hale/running] pid=41180  claude
-│  │  └─ pid=41199  node
-│  └─ [ellis/idle] pid=41205  bash
+│  ├─ [hale/running] pid=41180  claude  12.5%  180.2M
+│  │  └─ pid=41199  node  3.1%  95.7M
+│  └─ [ellis/idle] pid=41205  bash  0.0%  2.1M
 └─ [ungrouped]
-   └─ [shell/running] pid=41240  zsh
+   └─ [shell/running] pid=41240  zsh  0.0%  3.4M
 ```
 
 **dispatch 與 send 的差別。** `send` 打的是原始按鍵;`dispatch` 交給伺服器的是那份 _目標_,伺服器會把它記在
