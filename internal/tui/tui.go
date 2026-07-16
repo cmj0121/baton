@@ -111,6 +111,7 @@ const (
 	modeGitOut      // the scrollable text popup for a captured git op (log/status/…)
 	modeQueue       // the task-queue manager popup (Q): list / cancel / drain the backlog
 	modeFleetSearch // the fleet-wide search results popup (/): matching lines grouped by panel
+	modeProcTree    // the process-tree overlay (C-t o): the daemon, its panels, and their OS descendants
 	modeZoom
 	modeGroupZoom
 	modeScreensaver // the hidden Matrix-rain + clock Easter egg (C-t E / idle auto-start)
@@ -248,6 +249,13 @@ type model struct {
 	gitOutScroll int
 	gitOutFailed bool
 	gitOutFrom   mode
+
+	// The process-tree overlay (modeProcTree): procLines is the tree rendered to
+	// lines (sampled from the OS at open/refresh, not every frame); procScroll is
+	// the first visible line; procFrom is the view to restore on close.
+	procLines  []string
+	procScroll int
+	procFrom   mode
 
 	zoomID                string                 // panel being zoomed (modeZoom)
 	zoomTitle             string                 // its title, for the zoom footer
@@ -1019,6 +1027,12 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// and zooms the one under the cursor.
 	if m.mode == modeFleetSearch {
 		return m.handleFleetSearchKey(key)
+	}
+
+	// The process-tree overlay owns the keyboard until esc; it scrolls the tree and
+	// refreshes the OS snapshot.
+	if m.mode == modeProcTree {
+		return m.handleProcTreeKey(key)
 	}
 
 	// A text-input overlay is open: route the keystroke to it.
@@ -1878,6 +1892,8 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		}
 	case actQueue:
 		return m.openQueue(m.mode), nil
+	case actProcTree:
+		return m.openProcTree(m.mode), nil
 	case actDashboard:
 		m.mode = modeDashboard
 		m.cursor = 0
@@ -2671,6 +2687,8 @@ func (m model) render() string {
 		body = m.queueView()
 	case m.mode == modeFleetSearch:
 		body = m.fleetSearchView()
+	case m.mode == modeProcTree:
+		body = m.procTreeView()
 	default:
 		body = m.dashboardView()
 	}
@@ -3114,6 +3132,7 @@ func (m model) helpContent() (title string, body []string) {
 			{"View", kc(keyLabel(m.bindingKey(actBack))) + " " + kc(dash) + " " + kc("esc"), "back to the dashboard"},
 			{"View", kc(pfx) + " " + kc(keyLabel(keyInteract)), "stop interacting (while in interact)"},
 			{"View", kc(pfx) + " " + kc(dash), "dashboard (works in every view)"},
+			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actProcTree))), "process tree · the daemon's OS processes"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), "edit the key map"},
 			{"Session", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actReload))), "reload config (backend + cockpit)"},
 			{"Session", kc(pfx) + " " + kc(detach), "detach (server keeps running)"},
@@ -3128,6 +3147,7 @@ func (m model) helpContent() (title string, body []string) {
 			{"Panels", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actSignal))), "send a signal to this panel"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actBack))), "back one level (to the split / dashboard)"},
 			{"View", kc(pfx) + " " + kc(dash), "straight to the dashboard"},
+			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actProcTree))), "process tree · the daemon's OS processes"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), "edit the key map"},
 			{"Session", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actReload))), "reload config (backend + cockpit)"},

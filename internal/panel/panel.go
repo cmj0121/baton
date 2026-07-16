@@ -121,6 +121,11 @@ type Panel struct {
 	// spawned in a server-managed ephemeral workspace and wired to drive the
 	// fleet over the socket. At most one exists at a time.
 	Conductor bool
+
+	// Pid is the OS pid of the panel's process-group leader, reported by the
+	// server, or 0 once the process has exited. It roots the panel's OS descendant
+	// subtree in the process-tree overlay (and `baton ctl tree`).
+	Pid int
 }
 
 // IsAgent reports whether the panel runs an agent CLI rather than a shell.
@@ -140,6 +145,7 @@ func FromProto(p proto.Panel) Panel {
 		Pinned:    p.Pinned,
 		Favourite: p.Favourite,
 		Conductor: p.Conductor,
+		Pid:       p.Pid,
 	}
 }
 
@@ -161,5 +167,6 @@ func (p Panel) ToProto() proto.Panel {
 		Pinned:    p.Pinned,
 		Favourite: p.Favourite,
 		Conductor: p.Conductor,
+		Pid:       p.Pid,
 	}
 }
