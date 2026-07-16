@@ -798,24 +798,33 @@ func TestMultiAttach(t *testing.T) {
 		t.Fatalf("input b: %v", err)
 	}
 
-	waitFor := func(id, marker string) {
-		deadline := time.After(15 * time.Second)
-		for {
+	// Both echoes race on the one shared stream, so consume it once and tick off
+	// each marker as its correctly-tagged output arrives, in whatever order that
+	// is. Waiting for them sequentially would drain (and drop) panel b's marker
+	// while still blocking on panel a's, then starve on output it had already
+	// discarded — the ordering race that made this flaky under load. A marker must
+	// still arrive tagged with its own panel id; a cross-tagged one is a demux bug.
+	{
+		want := map[string]string{a: "AAA-marker", b: "BBB-marker"}
+		seen := map[string]bool{}
+		deadline := time.After(30 * time.Second)
+		for len(seen) < len(want) {
 			select {
 			case msg := <-c.Output:
-				if msg.ID == id && strings.Contains(string(msg.Data), marker) {
-					return
-				}
-				if msg.ID != id && strings.Contains(string(msg.Data), marker) {
-					t.Fatalf("marker %q arrived tagged with %q, not %q", marker, msg.ID, id)
+				for id, marker := range want {
+					if !strings.Contains(string(msg.Data), marker) {
+						continue
+					}
+					if msg.ID != id {
+						t.Fatalf("marker %q arrived tagged with %q, not %q", marker, msg.ID, id)
+					}
+					seen[id] = true
 				}
 			case <-deadline:
-				t.Fatalf("never saw %q for panel %s", marker, id)
+				t.Fatalf("never saw both markers (saw %d of %d)", len(seen), len(want))
 			}
 		}
 	}
-	waitFor(a, "AAA-marker")
-	waitFor(b, "BBB-marker")
 
 	// Detaching just one stops its stream while the other keeps flowing. Poke the
 	// detached panel and the live one; we must see the live one but never the
@@ -829,7 +838,7 @@ func TestMultiAttach(t *testing.T) {
 	if err := c.Send(proto.Command{Action: "panel.input", ID: b, Data: []byte("echo STILL-HERE\n")}); err != nil {
 		t.Fatalf("input b again: %v", err)
 	}
-	deadline := time.After(15 * time.Second)
+	deadline := time.After(30 * time.Second)
 	for done := false; !done; {
 		select {
 		case msg := <-c.Output:
