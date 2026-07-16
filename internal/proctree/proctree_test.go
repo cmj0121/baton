@@ -234,3 +234,31 @@ func TestJSONShape(t *testing.T) {
 		t.Fatalf("panel OS descendant missing in JSON: %+v", hale.Children)
 	}
 }
+
+// `baton ctl tree --json` must carry the resource sample: the cpu/rss fields
+// round-trip on every pid-bearing node, and a node with no sample omits them.
+func TestJSONCarriesStats(t *testing.T) {
+	panels := []proto.Panel{{ID: "1", Title: "hale", State: "running", Pid: 100}}
+	stats := map[int]Stat{100: {CPU: 12.5, RSS: 47448064}}
+	root := Build(1, panels, map[int][]int{}, map[int]string{100: "claude"}, stats)
+
+	out, err := json.Marshal(root)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got Node
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// The daemon (pid 1) has no stat entry, so cpu/rss must be omitted, not zero-filled.
+	if strings.Contains(string(out), `"cpu"`) == false || strings.Contains(string(out), `"rss"`) == false {
+		t.Fatalf("cpu/rss fields missing from JSON: %s", out)
+	}
+	panelNode := got.Children[0].Children[0] // [ungrouped] -> hale
+	if panelNode.CPU != 12.5 || panelNode.RSS != 47448064 {
+		t.Fatalf("panel cpu/rss not carried in JSON: %+v", panelNode)
+	}
+	if got.CPU != 0 || got.RSS != 0 {
+		t.Fatalf("daemon without a stat should carry zero cpu/rss: %+v", got)
+	}
+}
