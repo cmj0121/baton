@@ -54,6 +54,7 @@ const (
 	keyDashboard = "d" // C-t d → the dashboard
 	keyCommands  = "c" // C-t c → the plugin command picker
 	keyScratch   = "~" // C-t ~ → toggle the floating scratch shell (any view)
+	keyProcTree  = "o" // C-t o → the process-tree overlay (daemon → panels → OS descendants)
 
 	keyRemove    = "x" // in the group split: remove the focused member from the group
 	keyInteract  = "i" // in the group split: drive the focused tile in place, no zoom
@@ -122,6 +123,7 @@ const (
 	actScroll
 	actCommands
 	actScratch
+	actProcTree
 )
 
 // isEscape reports whether an action is reached after the prefix rather than on a
@@ -129,7 +131,7 @@ const (
 // and the key-map editor work after the prefix in every mode; panel config opens
 // this way from command mode.
 func isEscape(a action) bool {
-	return a == actDashboard || a == actEditMap || a == actPanelConfig || a == actScroll || a == actCommands || a == actScratch
+	return a == actDashboard || a == actEditMap || a == actPanelConfig || a == actScroll || a == actCommands || a == actScratch || a == actProcTree
 }
 
 // binding is one editable command: a stable name (used to persist the key), the
@@ -176,6 +178,7 @@ var bindings = []binding{
 	{"panel-config", keyPanelConfig, "configure panel defaults (prefix)", actPanelConfig, "View"},
 	{"scroll", keyScroll, "scroll mode — line / page (prefix)", actScroll, "View"},
 	{"dashboard", keyDashboard, "jump to the dashboard (prefix)", actDashboard, "View"},
+	{"proc-tree", keyProcTree, "process tree — the daemon's OS processes (prefix)", actProcTree, "View"},
 	{"back", keyBack, "back one level: zoom→group→dashboard (C-t b in a zoom)", actBack, "View"},
 	{"commands", keyCommands, "open the plugin command picker (prefix)", actCommands, "View"},
 	{"scratch", keyScratch, "toggle a floating scratch shell (prefix)", actScratch, "View"},

@@ -55,6 +55,7 @@ acts, and exits.
 | Command                                                            | Does                                                                 |
 | ------------------------------------------------------------------ | -------------------------------------------------------------------- |
 | `baton ctl list`                                                   | print the fleet as JSON (id, title, state, group, …)                 |
+| `baton ctl tree [--json]`                                          | draw the daemon's process tree: groups → panels → their OS children  |
 | `baton ctl spawn [--agent CMD] [--arg A] [--dir D]`                | spawn a panel (agent if `--agent`, else a shell); prints the new id  |
 | `baton ctl send <id> <text> [--no-enter]`                          | type text into a panel; submits with a newline unless `--no-enter`   |
 | `baton ctl group <name> <id>...`                                   | file panels under a work item (a slash-`path` nests: `backend/api`)  |
@@ -86,6 +87,24 @@ baton ctl queue list
 # ephemeral agent when none is free, and closes it when the task is done.
 baton ctl queue add "port module A" --command claude --dir ~/src --close
 baton ctl queue add "port module B" --command claude --dir ~/src --close
+
+# Inspect what the daemon is actually running: the fleet joined to the real OS
+# processes each panel spawned. --json feeds a monitor or a script.
+baton ctl tree
+```
+
+**The process tree.** `tree` roots at the daemon, scaffolds the fleet's nested work-item groups, files each panel under
+its group with its process-group-leader pid, and hangs the panel's live OS descendant processes beneath it — the picture
+`ps`/`pstree` can't give you because only baton knows which pid is which agent:
+
+```text
+baton (daemon) pid=41022  baton
+├─ [group: feature-x]
+│  ├─ [hale/running] pid=41180  claude
+│  │  └─ pid=41199  node
+│  └─ [ellis/idle] pid=41205  bash
+└─ [ungrouped]
+   └─ [shell/running] pid=41240  zsh
 ```
 
 **Dispatch vs. send.** `send` types raw keystrokes; `dispatch` hands the server the _objective_, which it records on the

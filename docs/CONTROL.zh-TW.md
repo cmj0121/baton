@@ -52,6 +52,7 @@ named "report" and pause for me.
 | 指令                                                               | 作用                                                       |
 | ------------------------------------------------------------------ | ---------------------------------------------------------- |
 | `baton ctl list`                                                   | 以 JSON 印出隊伍(id、title、state、group、…)               |
+| `baton ctl tree [--json]`                                          | 畫出 daemon 的行程樹:group → panel → 各自的 OS 子行程      |
 | `baton ctl spawn [--agent CMD] [--arg A] [--dir D]`                | 開一個面板(有 `--agent` 就是 agent,否則是 shell);印出新 id |
 | `baton ctl send <id> <text> [--no-enter]`                          | 把文字打進某個面板;除非 `--no-enter`,否則以換行送出        |
 | `baton ctl group <name> <id>...`                                   | 把面板歸入一個工作項目(斜線 `path` 可巢狀:`backend/api`)   |
@@ -83,6 +84,24 @@ baton ctl queue list
 # ephemeral agent when none is free, and closes it when the task is done.
 baton ctl queue add "port module A" --command claude --dir ~/src --close
 baton ctl queue add "port module B" --command claude --dir ~/src --close
+
+# 看看 daemon 實際在跑什麼:把隊伍接上每個面板真正開出的 OS 行程。--json 餵給
+# 監看程式或腳本。
+baton ctl tree
+```
+
+**行程樹。** `tree` 以 daemon 為根,鋪出隊伍裡巢狀的工作項目群組,把每個面板依群組歸位並標上它 process group
+leader 的 pid,再把該面板底下即時的 OS 子孫行程掛上去——這是 `ps`/`pstree` 給不了的畫面,因為只有 baton 知道哪個
+pid 是哪個 agent:
+
+```text
+baton (daemon) pid=41022  baton
+├─ [group: feature-x]
+│  ├─ [hale/running] pid=41180  claude
+│  │  └─ pid=41199  node
+│  └─ [ellis/idle] pid=41205  bash
+└─ [ungrouped]
+   └─ [shell/running] pid=41240  zsh
 ```
 
 **dispatch 與 send 的差別。** `send` 打的是原始按鍵;`dispatch` 交給伺服器的是那份 _目標_,伺服器會把它記在

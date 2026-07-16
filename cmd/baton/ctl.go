@@ -16,6 +16,7 @@ import (
 // (where baton injects BATON_ROLE/BATON_PANEL_ID) the server fences it.
 type ctlCLI struct {
 	List          ctlList          `cmd:"" help:"Print the fleet as JSON."`
+	Tree          ctlTree          `cmd:"" help:"Print the daemon's process tree: groups, panels, and their OS descendants."`
 	Spawn         ctlSpawn         `cmd:"" help:"Spawn a panel and print its id."`
 	Close         ctlClose         `cmd:"" help:"Close panels by id."`
 	Group         ctlGroup         `cmd:"" help:"Group panels under a work item."`

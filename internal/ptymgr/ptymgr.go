@@ -290,6 +290,24 @@ func (m *Manager) livePane(id string) (*pane, bool) {
 	return p, ok && !p.dead
 }
 
+// Pids returns a snapshot of every live panel's process-group-leader pid, keyed by
+// panel id, taking the manager lock once. Dead panes are omitted — a dead pane's
+// pid is meaningless once the OS is free to reuse it. Each pid roots the panel's
+// whole OS descendant subtree (every PTY child leads its own group via pty.Start),
+// so this is the batch the fleet snapshot joins — one lock acquisition per
+// broadcast rather than one per panel on a path the output pump also contends.
+func (m *Manager) Pids() map[string]int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pids := make(map[string]int, len(m.ptys))
+	for id, p := range m.ptys {
+		if !p.dead && p.pid > 0 {
+			pids[id] = p.pid
+		}
+	}
+	return pids
+}
+
 // Write forwards input bytes to a panel's process. A no-op for an unknown or
 // exited (dead) panel.
 func (m *Manager) Write(id string, data []byte) {

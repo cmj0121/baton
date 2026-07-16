@@ -113,6 +113,7 @@ type Panel struct {
 	Pinned    bool   `json:"pinned,omitempty"`    // pinned to a live tile in its group's split view
 	Favourite bool   `json:"favourite,omitempty"` // a dashboard favourite: sorts the card to the front
 	Conductor bool   `json:"conductor,omitempty"` // the singleton control agent (server-managed workspace), so a frontend can badge it
+	Pid       int    `json:"pid,omitempty"`       // OS pid of the panel's process-group leader; 0 once the process has exited. Roots the panel's OS descendant subtree (baton ctl tree).
 }
 
 // Task is the wire view of a backlog task: a prompt assigned (or waiting to be

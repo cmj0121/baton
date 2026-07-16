@@ -3221,8 +3221,10 @@ func (s *Server) panelsMsg() proto.ServerMsg {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]proto.Panel, len(s.panels))
+	pids := s.pty.Pids() // one lock acquisition, then a map lookup per panel — the ptymgr lock is contended by the output pump
 	for i, p := range s.panels {
 		out[i] = p.ToProto()
+		out[i].Pid = pids[p.ID] // join the live group-leader pid so frontends can walk the OS tree
 	}
 	// Per-group view settings ride the snapshot, sorted by name for determinism.
 	// A group appears when it carries a non-default visible count, a non-default

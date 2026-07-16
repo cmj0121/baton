@@ -124,6 +124,7 @@ These ride alongside the appearance config (full key reference in [SPEC.md](./SP
 | Where                  | Key       | Does                                                             |
 | ---------------------- | --------- | ---------------------------------------------------------------- |
 | Any view               | `C-t ~`   | toggle the floating scratch pane (a throwaway shell)             |
+| Any view               | `C-t o`   | process tree — the daemon, its panels, and their OS descendants  |
 | Group split            | `L`       | cycle the tile layout (presets, then your custom layouts)        |
 |                        | `z`       | resize mode — arrows grow / shrink the focused tile (view-local) |
 | Scroll mode (`C-t [`)  | `v`       | start a whole-line selection                                     |
