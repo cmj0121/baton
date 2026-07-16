@@ -2,9 +2,11 @@ package proctree
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/proto"
 )
 
@@ -80,6 +82,81 @@ func TestNestedGroupsScaffold(t *testing.T) {
 	if idxAPI, idxPanel := strings.Index(got, "[group: api]"), strings.Index(got, "[api/running]"); idxAPI > idxPanel {
 		t.Fatalf("nested group must precede its panel:\n%s", got)
 	}
+}
+
+// A pid-reuse cycle in the OS table must terminate (the seen guard), and an OS
+// descendant with no comm entry renders as a bare pid.
+func TestBuildCycleAndEmptyComm(t *testing.T) {
+	panels := []proto.Panel{{ID: "1", Title: "root", State: "running", Pid: 100}}
+	children := map[int][]int{100: {200}, 200: {100}} // 200's child loops back to 100
+	comm := map[int]string{100: "sh"}                 // 200 has no comm
+
+	got := Render(Build(1, panels, children, comm)) // must not hang
+	if !strings.Contains(got, "pid=200") {
+		t.Fatalf("descendant with no comm should render as a bare pid:\n%s", got)
+	}
+	if strings.Count(got, "pid=100") != 1 {
+		t.Fatalf("the cycle back to 100 must not re-emit it:\n%s", got)
+	}
+}
+
+func TestDaemonPid(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		write   bool
+		want    int
+	}{
+		{"valid", "12345\n", true, 12345},
+		{"malformed", "not-a-pid", true, 0},
+		{"nonpositive", "0", true, 0},
+		{"missing", "", false, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sock := t.TempDir() + "/baton.sock"
+			t.Setenv("BATON_SOCK", sock)
+			if tc.write {
+				if err := os.WriteFile(paths.PidFile(sock), []byte(tc.content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := DaemonPid(); got != tc.want {
+				t.Fatalf("DaemonPid() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// OSProcessTable samples the live host table; the test process itself must appear,
+// which exercises the ppid/comm reads and the adjacency build.
+func TestOSProcessTable(t *testing.T) {
+	children, comm, err := OSProcessTable()
+	if err != nil {
+		t.Fatalf("OSProcessTable: %v", err)
+	}
+	if len(children) == 0 {
+		t.Fatal("expected a non-empty process table")
+	}
+	// This process's own name is always readable, so it must be in the comm map.
+	if comm[os.Getpid()] == "" {
+		t.Fatalf("the running test process (pid %d) should be in the comm map", os.Getpid())
+	}
+	// Children lists are sorted for determinism.
+	for _, kids := range children {
+		if !sortedInts(kids) {
+			t.Fatalf("children not sorted: %v", kids)
+		}
+	}
+}
+
+func sortedInts(xs []int) bool {
+	for i := 1; i < len(xs); i++ {
+		if xs[i-1] > xs[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestJSONShape(t *testing.T) {
