@@ -176,31 +176,57 @@ func sortedPanels(ps []proto.Panel) []proto.Panel {
 	return out
 }
 
-// Render draws the node tree with box-drawing connectors: the root on its own line
-// and every descendant under an ├─/└─ branch. The trailing newline makes it
-// drop-in for fmt.Print.
-func Render(root *Node) string {
-	lines := appendChildren([]string{lineLabel(root)}, root.Children, "")
-	return strings.Join(lines, "\n") + "\n"
+// Row is one rendered line: its box-drawing prefix (empty for the root) and the
+// node it belongs to. Rows lets a caller reuse the tree walk while formatting each
+// node's text itself — the cockpit overlay does this to colour a CPU bar into the
+// line, where the plaintext Render cannot.
+type Row struct {
+	Prefix string
+	Node   *Node
 }
 
-func appendChildren(lines []string, nodes []*Node, prefix string) []string {
+// Rows flattens the tree to a depth-first slice of rendered rows, computing the
+// ├─/└─ connectors as it descends. The root carries an empty prefix.
+func Rows(root *Node) []Row {
+	rows := []Row{{Prefix: "", Node: root}}
+	return appendRows(rows, root.Children, "")
+}
+
+func appendRows(rows []Row, nodes []*Node, prefix string) []Row {
 	for i, n := range nodes {
 		last := i == len(nodes)-1
 		branch, childPrefix := "├─ ", prefix+"│  "
 		if last {
 			branch, childPrefix = "└─ ", prefix+"   "
 		}
-		lines = append(lines, prefix+branch+lineLabel(n))
-		lines = appendChildren(lines, n.Children, childPrefix)
+		rows = append(rows, Row{Prefix: prefix + branch, Node: n})
+		rows = appendRows(rows, n.Children, childPrefix)
 	}
-	return lines
+	return rows
 }
 
-// lineLabel formats a node's single line: groups print their bare label, a raw
-// process leads with its pid, and daemon/panel nodes append their pid and comm.
-// Any node with a live resource sample (RSS > 0) trails its CPU% and memory.
+// Render draws the node tree with box-drawing connectors: the root on its own line
+// and every descendant under an ├─/└─ branch. The trailing newline makes it
+// drop-in for fmt.Print.
+func Render(root *Node) string {
+	rows := Rows(root)
+	lines := make([]string, len(rows))
+	for i, r := range rows {
+		lines[i] = r.Prefix + lineLabel(r.Node)
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+// lineLabel is a node's full plaintext line: its label plus its resource columns.
 func lineLabel(n *Node) string {
+	return LabelText(n) + ResourceText(n)
+}
+
+// LabelText formats a node's identity without its resource columns: groups print
+// their bare label, a raw process leads with its pid, and daemon/panel nodes append
+// their pid and comm. Callers that render the resource columns their own way (the
+// cockpit's coloured CPU bar) pair this with their own suffix.
+func LabelText(n *Node) string {
 	switch n.Kind {
 	case KindGroup:
 		return n.Label
@@ -209,7 +235,7 @@ func lineLabel(n *Node) string {
 		if n.Comm != "" {
 			s += "  " + n.Comm
 		}
-		return s + resourceSuffix(n)
+		return s
 	}
 	s := n.Label
 	if n.Pid > 0 {
@@ -218,13 +244,13 @@ func lineLabel(n *Node) string {
 	if n.Comm != "" {
 		s += "  " + n.Comm
 	}
-	return s + resourceSuffix(n)
+	return s
 }
 
-// resourceSuffix renders the CPU%/memory columns, gated on a live sample: a node
-// with no stats entry (an exited panel, a group, or a process gone between samples)
-// has RSS 0 and trails nothing, so the tree never shows a bogus "0.0%  0B".
-func resourceSuffix(n *Node) string {
+// ResourceText renders the CPU%/memory columns, gated on a live sample: a node with
+// no stats entry (an exited panel, a group, or a process gone between samples) has
+// RSS 0 and trails nothing, so the tree never shows a bogus "0.0%  0B".
+func ResourceText(n *Node) string {
 	if n.RSS == 0 {
 		return ""
 	}
