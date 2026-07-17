@@ -2,11 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proctree"
 	"github.com/cmj0121/baton/internal/proto"
 )
@@ -46,21 +48,107 @@ func (m model) closeProcTree() (tea.Model, tea.Cmd) {
 // snapshot into display lines. Each panel carries its pid on the wire, so the
 // domain fleet is re-encoded to feed the shared builder. A process-table read error
 // still yields a tree (the fleet with no OS descendants) rather than a blank
-// overlay.
+// overlay. Unlike the plaintext `baton ctl tree`, the overlay draws each node's CPU
+// as a load-coloured bar before the numbers, so it composes the line from the
+// shared walk itself rather than taking proctree.Render's flat string.
 func (m model) renderProcTree() []string {
 	panels := make([]proto.Panel, len(m.fleet))
 	for i, p := range m.fleet {
 		panels[i] = p.ToProto()
 	}
-	children, comm, err := proctree.OSProcessTable()
+	children, comm, stats, err := proctree.OSProcessTable()
 	if err != nil {
-		children, comm = map[int][]int{}, map[int]string{}
+		children, comm, stats = map[int][]int{}, map[int]string{}, map[int]proctree.Stat{}
 	}
-	root := proctree.Build(proctree.DaemonPid(), panels, children, comm)
-	// The tree carries panel titles and OS process names — neither is fully under
-	// baton's control — so strip any embedded terminal escapes before they reach the
-	// real terminal, the way the git-output popup guards untrusted text.
-	return sanitizeLines(strings.Split(strings.TrimRight(proctree.Render(root), "\n"), "\n"))
+	root := proctree.Build(proctree.DaemonPid(), panels, children, comm, stats)
+
+	ink := lipgloss.NewStyle().Foreground(colInk)
+	rows := proctree.Rows(root)
+	lines := make([]string, len(rows))
+	for i, r := range rows {
+		n := r.Node
+		// Panel titles and OS process names are not fully under baton's control, so
+		// strip any embedded terminal escapes from that text before it is styled and
+		// reaches the real terminal — the way the git-output popup guards untrusted
+		// text. The state LED, CPU bar, and numbers are added after, from our values.
+		var label string
+		if n.Kind == proctree.KindPanel && n.Panel != nil {
+			label = procPanelLabel(n, ink)
+		} else {
+			label = ink.Render(sanitizeText(proctree.LabelText(n)))
+		}
+		line := ink.Render(r.Prefix) + label
+		if n.RSS > 0 {
+			line += "  " + cpuBar(n.CPU) + ink.Render(proctree.ResourceText(n))
+		}
+		lines[i] = line
+	}
+	return lines
+}
+
+// procPanelLabel renders a panel node for the overlay: its lifecycle as a single
+// coloured LED — no "/running" word, the colour is what splits running (green) from
+// idle (amber) — then the panel title and its pid/comm. Title and comm are
+// untrusted, so they are sanitised before styling.
+func procPanelLabel(n *proctree.Node, ink lipgloss.Style) string {
+	info := states[panel.ParseState(n.Panel.State)]
+	s := lipgloss.NewStyle().Foreground(info.color).Render(info.led) + " " + ink.Render(sanitizeText(n.Panel.Name))
+	if n.Pid > 0 {
+		s += ink.Render(fmt.Sprintf(" pid=%d", n.Pid))
+	}
+	if n.Comm != "" {
+		s += ink.Render("  " + sanitizeText(n.Comm))
+	}
+	return s
+}
+
+// Load-band colours for the CPU bar: green under half, amber past half, red near
+// saturation — the LED palette's running / idle / attention hues.
+var (
+	colLoadLo  = lipgloss.Color("42")  // green
+	colLoadMid = lipgloss.Color("220") // amber
+	colLoadHi  = lipgloss.Color("203") // red
+)
+
+// cpuBar renders pct (0–100, clamped) as a fixed 8-cell meter with eighth-of-a-cell
+// resolution: the filled run coloured by load band, the empty track faint. A
+// multi-core process that reads above 100% simply saturates the bar.
+func cpuBar(pct float64) string {
+	const cells = 8
+	// CPUPercent can return NaN for a process sampled at its very creation (0/0);
+	// NaN slips past the < and > clamps, and int(NaN) is min-int on amd64, which
+	// would blow strings.Repeat's count into an allocation panic. Fold it to empty.
+	if math.IsNaN(pct) || pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	eighths := int(pct/100*float64(cells*8) + 0.5)
+	full := eighths / 8
+	var b strings.Builder
+	for i := 0; i < full; i++ {
+		b.WriteRune('█')
+	}
+	if rem := eighths % 8; rem > 0 && full < cells {
+		b.WriteRune([]rune("▏▎▍▌▋▊▉")[rem-1])
+		full++
+	}
+	return lipgloss.NewStyle().Foreground(loadColor(pct)).Render(b.String()) +
+		lipgloss.NewStyle().Foreground(colFaint).Render(strings.Repeat("░", cells-full))
+}
+
+// loadColor picks the CPU bar's fill hue from the load band: green under half,
+// amber from half, red near saturation.
+func loadColor(pct float64) lipgloss.Color {
+	switch {
+	case pct >= 80:
+		return colLoadHi
+	case pct >= 50:
+		return colLoadMid
+	default:
+		return colLoadLo
+	}
 }
 
 // handleProcTreeKey drives the overlay: j/k and the arrows scroll a line, the page
@@ -122,7 +210,10 @@ func (m model) procTreeView() string {
 
 	body := make([]string, 0, rows)
 	for _, l := range m.procLines[off:end] {
-		body = append(body, lipgloss.NewStyle().Foreground(colInk).Width(width).Render(clipVisible(l, width)))
+		// Each line is already styled (colInk text, a load-coloured CPU bar), so only
+		// clip and pad it to width here — a second Foreground would cut the bar's
+		// colour at its reset.
+		body = append(body, lipgloss.NewStyle().Width(width).Render(clipVisible(l, width)))
 	}
 	body = padBlock(body, rows, width)
 

@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"math"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/cmj0121/baton/internal/panel"
 )
@@ -25,12 +28,17 @@ func TestOpenProcTree(t *testing.T) {
 	if m.procFrom != modeDashboard || m.procScroll != 0 {
 		t.Fatalf("overlay state wrong: from=%v scroll=%d", m.procFrom, m.procScroll)
 	}
-	// The daemon root and every panel appear regardless of the host's OS table.
+	// The daemon root, group scaffolds, and every panel appear regardless of the
+	// host's OS table. Panels now show their state as a coloured LED, not a
+	// "[title/state]" word, so the title stands alone and no "/running" text remains.
 	joined := strings.Join(m.procLines, "\n")
-	for _, want := range []string{"baton (daemon)", "[group: feature-x]", "[hale/running]", "[ungrouped]", "[shell/running]"} {
+	for _, want := range []string{"baton (daemon)", "[group: feature-x]", "hale", "[ungrouped]", "shell", states[panel.Running].led} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("tree missing %q:\n%s", want, joined)
 		}
+	}
+	if strings.Contains(joined, "/running") {
+		t.Fatalf("panel state should be an icon, not the word:\n%s", joined)
 	}
 }
 
@@ -78,6 +86,52 @@ func TestProcTreeScroll(t *testing.T) {
 	m = press(m, "k")
 	if m.procScroll != 0 {
 		t.Fatalf("k at the top should stay at 0, got %d", m.procScroll)
+	}
+}
+
+func TestCPUBar(t *testing.T) {
+	// Always a fixed 8 visible cells, whatever the value (clamped both ends).
+	for _, pct := range []float64{-10, 0, 12.5, 50, 99.9, 100, 250} {
+		if w := lipgloss.Width(cpuBar(pct)); w != 8 {
+			t.Fatalf("cpuBar(%v) visible width = %d, want 8", pct, w)
+		}
+	}
+	// Fill tracks the value: 12.5% fills one of eight cells, 50% four, and
+	// saturation fills every cell with none of the faint track left.
+	count := func(s string, r rune) int { return strings.Count(s, string(r)) }
+	if full, empty := count(cpuBar(12.5), '█'), count(cpuBar(12.5), '░'); full != 1 || empty != 7 {
+		t.Fatalf("cpuBar(12.5) = %d full / %d empty, want 1/7", full, empty)
+	}
+	if full := count(cpuBar(50), '█'); full != 4 {
+		t.Fatalf("cpuBar(50) full cells = %d, want 4", full)
+	}
+	if count(cpuBar(0), '█') != 0 {
+		t.Fatalf("cpuBar(0) should have no filled cell: %q", cpuBar(0))
+	}
+	if count(cpuBar(100), '░') != 0 {
+		t.Fatalf("cpuBar(100) should have no empty cell: %q", cpuBar(100))
+	}
+	// A NaN reading (a process sampled at creation, 0/0) must fold to an empty bar,
+	// never panic — int(NaN) is min-int on amd64 and would blow strings.Repeat.
+	if w, full := lipgloss.Width(cpuBar(math.NaN())), count(cpuBar(math.NaN()), '█'); w != 8 || full != 0 {
+		t.Fatalf("cpuBar(NaN) = width %d / %d full, want 8/0", w, full)
+	}
+}
+
+// loadColor bands the fill hue, boundaries inclusive at the lower edge.
+func TestLoadColor(t *testing.T) {
+	cases := []struct {
+		pct  float64
+		want lipgloss.Color
+	}{
+		{0, colLoadLo}, {49.9, colLoadLo},
+		{50, colLoadMid}, {79.9, colLoadMid},
+		{80, colLoadHi}, {100, colLoadHi},
+	}
+	for _, c := range cases {
+		if got := loadColor(c.pct); got != c.want {
+			t.Fatalf("loadColor(%v) = %v, want %v", c.pct, got, c.want)
+		}
 	}
 }
 

@@ -27,7 +27,7 @@ func sampleTree() *Node {
 		41022: "baton", 41180: "claude", 41199: "node",
 		41205: "bash", 41240: "zsh", 41250: "vim",
 	}
-	return Build(41022, panels, children, comm)
+	return Build(41022, panels, children, comm, nil)
 }
 
 func TestRenderGolden(t *testing.T) {
@@ -52,7 +52,7 @@ func TestRenderGolden(t *testing.T) {
 // nothing in the fleet silently vanishes from the tree.
 func TestExitedPanelHasNoDescendants(t *testing.T) {
 	panels := []proto.Panel{{ID: "1", Title: "gone", State: "exited", Pid: 0}}
-	root := Build(41022, panels, map[int][]int{41022: {999}}, map[int]string{999: "leftover"})
+	root := Build(41022, panels, map[int][]int{41022: {999}}, map[int]string{999: "leftover"}, nil)
 
 	got := Render(root)
 
@@ -70,7 +70,7 @@ func TestNestedGroupsScaffold(t *testing.T) {
 		{ID: "1", Title: "api", State: "running", Group: "backend/api", Pid: 100},
 		{ID: "2", Title: "db", State: "idle", Group: "backend", Pid: 200},
 	}
-	root := Build(1, panels, map[int][]int{}, map[int]string{})
+	root := Build(1, panels, map[int][]int{}, map[int]string{}, nil)
 
 	got := Render(root)
 
@@ -91,7 +91,7 @@ func TestBuildCycleAndEmptyComm(t *testing.T) {
 	children := map[int][]int{100: {200}, 200: {100}} // 200's child loops back to 100
 	comm := map[int]string{100: "sh"}                 // 200 has no comm
 
-	got := Render(Build(1, panels, children, comm)) // must not hang
+	got := Render(Build(1, panels, children, comm, nil)) // must not hang
 	if !strings.Contains(got, "pid=200") {
 		t.Fatalf("descendant with no comm should render as a bare pid:\n%s", got)
 	}
@@ -131,12 +131,15 @@ func TestDaemonPid(t *testing.T) {
 // OSProcessTable samples the live host table; the test process itself must appear,
 // which exercises the ppid/comm reads and the adjacency build.
 func TestOSProcessTable(t *testing.T) {
-	children, comm, err := OSProcessTable()
+	children, comm, stats, err := OSProcessTable()
 	if err != nil {
 		t.Fatalf("OSProcessTable: %v", err)
 	}
 	if len(children) == 0 {
 		t.Fatal("expected a non-empty process table")
+	}
+	if stats == nil {
+		t.Fatal("expected a non-nil stats map")
 	}
 	// This process's own name is always readable, so it must be in the comm map.
 	if comm[os.Getpid()] == "" {
@@ -146,6 +149,54 @@ func TestOSProcessTable(t *testing.T) {
 	for _, kids := range children {
 		if !sortedInts(kids) {
 			t.Fatalf("children not sorted: %v", kids)
+		}
+	}
+}
+
+// With a stats sample joined in, every pid-bearing node trails its CPU% and memory,
+// while a node without a stat entry (here the daemon) shows no resource columns.
+func TestRenderWithStats(t *testing.T) {
+	panels := []proto.Panel{{ID: "1", Title: "hale", State: "running", Pid: 100}}
+	children := map[int][]int{100: {200}}
+	comm := map[int]string{1: "baton", 100: "claude", 200: "node"}
+	stats := map[int]Stat{
+		100: {CPU: 12.5, RSS: 47448064}, // 45.2M
+		200: {CPU: 0.0, RSS: 1572864},   // 1.5M
+	}
+
+	got := Render(Build(1, panels, children, comm, stats))
+
+	for _, want := range []string{
+		"[hale/running] pid=100  claude  12.5%  45.2M",
+		"pid=200  node  0.0%  1.5M",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	// The daemon (pid 1) has no stat entry, so it must not sprout a bogus 0.0%/0B.
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "baton (daemon)") && (strings.Contains(line, "%") || strings.Contains(line, "B")) {
+			t.Fatalf("a node without a stat entry must show no resource columns: %q", line)
+		}
+	}
+}
+
+func TestHumanBytes(t *testing.T) {
+	cases := []struct {
+		in   uint64
+		want string
+	}{
+		{0, "0.0B"},
+		{512, "512.0B"},
+		{1536, "1.5K"},
+		{47448064, "45.2M"},
+		{1 << 30, "1.0G"},
+		{3 * (1 << 40), "3.0T"},
+	}
+	for _, tc := range cases {
+		if got := humanBytes(tc.in); got != tc.want {
+			t.Fatalf("humanBytes(%d) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }
@@ -181,5 +232,33 @@ func TestJSONShape(t *testing.T) {
 	}
 	if len(hale.Children) != 1 || hale.Children[0].Pid != 41199 {
 		t.Fatalf("panel OS descendant missing in JSON: %+v", hale.Children)
+	}
+}
+
+// `baton ctl tree --json` must carry the resource sample: the cpu/rss fields
+// round-trip on every pid-bearing node, and a node with no sample omits them.
+func TestJSONCarriesStats(t *testing.T) {
+	panels := []proto.Panel{{ID: "1", Title: "hale", State: "running", Pid: 100}}
+	stats := map[int]Stat{100: {CPU: 12.5, RSS: 47448064}}
+	root := Build(1, panels, map[int][]int{}, map[int]string{100: "claude"}, stats)
+
+	out, err := json.Marshal(root)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got Node
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// The daemon (pid 1) has no stat entry, so cpu/rss must be omitted, not zero-filled.
+	if strings.Contains(string(out), `"cpu"`) == false || strings.Contains(string(out), `"rss"`) == false {
+		t.Fatalf("cpu/rss fields missing from JSON: %s", out)
+	}
+	panelNode := got.Children[0].Children[0] // [ungrouped] -> hale
+	if panelNode.CPU != 12.5 || panelNode.RSS != 47448064 {
+		t.Fatalf("panel cpu/rss not carried in JSON: %+v", panelNode)
+	}
+	if got.CPU != 0 || got.RSS != 0 {
+		t.Fatalf("daemon without a stat should carry zero cpu/rss: %+v", got)
 	}
 }

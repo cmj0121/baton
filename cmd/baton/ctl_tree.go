@@ -24,11 +24,11 @@ func (t ctlTree) Run(c *control.Client) error {
 	if err != nil {
 		return err
 	}
-	children, comm, err := proctree.OSProcessTable()
+	children, comm, stats, err := proctree.OSProcessTable()
 	if err != nil {
 		return fmt.Errorf("read OS process table: %w", err)
 	}
-	root := proctree.Build(proctree.DaemonPid(), panels, children, comm)
+	root := proctree.Build(proctree.DaemonPid(), panels, children, comm, stats)
 
 	if t.JSON {
 		out, err := json.MarshalIndent(root, "", "  ")

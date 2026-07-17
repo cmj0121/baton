@@ -41,8 +41,20 @@ type Node struct {
 	Label    string     `json:"label,omitempty"` // empty for proc nodes, which render from Comm
 	Pid      int        `json:"pid,omitempty"`
 	Comm     string     `json:"comm,omitempty"`
+	CPU      float64    `json:"cpu,omitempty"` // cumulative CPU% since the process started
+	RSS      uint64     `json:"rss,omitempty"` // resident set size in bytes
 	Panel    *PanelInfo `json:"panel,omitempty"`
 	Children []*Node    `json:"children,omitempty"`
+}
+
+// Stat is a per-pid resource sample joined onto the tree: CPU is the process's
+// cumulative CPU% since it started (a direct read, not an interval sample), and RSS
+// is its resident set size in bytes. A pid absent from the stats map — an exited
+// panel, or a process gone between the ppid and stat reads — carries a zero Stat and
+// renders without the resource columns.
+type Stat struct {
+	CPU float64
+	RSS uint64
 }
 
 // PanelInfo is the baton-side identity attached to a panel node, surfaced in JSON.
@@ -58,8 +70,8 @@ type PanelInfo struct {
 // lives in OSProcessTable/DaemonPid — so the layout is unit-testable with a
 // synthetic table. Traversal roots at each panel's pid, never at dpid, so a
 // zero/unknown daemon pid only blanks the root label.
-func Build(dpid int, panels []proto.Panel, children map[int][]int, comm map[int]string) *Node {
-	root := &Node{Kind: KindDaemon, Label: "baton (daemon)", Pid: dpid, Comm: comm[dpid]}
+func Build(dpid int, panels []proto.Panel, children map[int][]int, comm map[int]string, stats map[int]Stat) *Node {
+	root := &Node{Kind: KindDaemon, Label: "baton (daemon)", Pid: dpid, Comm: comm[dpid], CPU: stats[dpid].CPU, RSS: stats[dpid].RSS}
 
 	// Panels bucketed by their exact group path (""=ungrouped), and the set of
 	// every group path plus its ancestors, so the scaffold has intermediate nodes
@@ -83,7 +95,7 @@ func Build(dpid int, panels []proto.Panel, children map[int][]int, comm map[int]
 			into.Children = append(into.Children, g)
 			addGroups(gpath, g)
 			for _, p := range sortedPanels(byGroup[gpath]) {
-				g.Children = append(g.Children, panelNode(p, children, comm))
+				g.Children = append(g.Children, panelNode(p, children, comm, stats))
 			}
 		}
 	}
@@ -95,7 +107,7 @@ func Build(dpid int, panels []proto.Panel, children map[int][]int, comm map[int]
 		u := &Node{Kind: KindGroup, Label: "[ungrouped]"}
 		root.Children = append(root.Children, u)
 		for _, p := range sortedPanels(ung) {
-			u.Children = append(u.Children, panelNode(p, children, comm))
+			u.Children = append(u.Children, panelNode(p, children, comm, stats))
 		}
 	}
 	return root
@@ -103,7 +115,7 @@ func Build(dpid int, panels []proto.Panel, children map[int][]int, comm map[int]
 
 // panelNode builds a panel's node — the group-leader line — and hangs its live OS
 // descendant processes beneath it. A panel with pid 0 (exited) has no descendants.
-func panelNode(p proto.Panel, children map[int][]int, comm map[int]string) *Node {
+func panelNode(p proto.Panel, children map[int][]int, comm map[int]string, stats map[int]Stat) *Node {
 	label := "[" + p.Title
 	if p.State != "" {
 		label += "/" + p.State
@@ -114,10 +126,12 @@ func panelNode(p proto.Panel, children map[int][]int, comm map[int]string) *Node
 		Label: label,
 		Pid:   p.Pid,
 		Comm:  comm[p.Pid],
+		CPU:   stats[p.Pid].CPU,
+		RSS:   stats[p.Pid].RSS,
 		Panel: &PanelInfo{ID: p.ID, Name: p.Title, Group: p.Group, State: p.State},
 	}
 	if p.Pid > 0 {
-		attachDescendants(n, p.Pid, children, comm, map[int]bool{p.Pid: true})
+		attachDescendants(n, p.Pid, children, comm, stats, map[int]bool{p.Pid: true})
 	}
 	return n
 }
@@ -125,15 +139,15 @@ func panelNode(p proto.Panel, children map[int][]int, comm map[int]string) *Node
 // attachDescendants walks the OS process subtree rooted at pid, appending a proc
 // node per descendant. seen guards against a pid-reuse cycle so the walk always
 // terminates.
-func attachDescendants(node *Node, pid int, children map[int][]int, comm map[int]string, seen map[int]bool) {
+func attachDescendants(node *Node, pid int, children map[int][]int, comm map[int]string, stats map[int]Stat, seen map[int]bool) {
 	for _, kid := range children[pid] {
 		if seen[kid] {
 			continue
 		}
 		seen[kid] = true
-		k := &Node{Kind: KindProc, Pid: kid, Comm: comm[kid]}
+		k := &Node{Kind: KindProc, Pid: kid, Comm: comm[kid], CPU: stats[kid].CPU, RSS: stats[kid].RSS}
 		node.Children = append(node.Children, k)
-		attachDescendants(k, kid, children, comm, seen)
+		attachDescendants(k, kid, children, comm, stats, seen)
 	}
 }
 
@@ -162,38 +176,66 @@ func sortedPanels(ps []proto.Panel) []proto.Panel {
 	return out
 }
 
-// Render draws the node tree with box-drawing connectors: the root on its own line
-// and every descendant under an ├─/└─ branch. The trailing newline makes it
-// drop-in for fmt.Print.
-func Render(root *Node) string {
-	lines := appendChildren([]string{lineLabel(root)}, root.Children, "")
-	return strings.Join(lines, "\n") + "\n"
+// Row is one rendered line: its box-drawing prefix (empty for the root) and the
+// node it belongs to. Rows lets a caller reuse the tree walk while formatting each
+// node's text itself — the cockpit overlay does this to colour a CPU bar into the
+// line, where the plaintext Render cannot.
+type Row struct {
+	Prefix string
+	Node   *Node
 }
 
-func appendChildren(lines []string, nodes []*Node, prefix string) []string {
+// Rows flattens the tree to a depth-first slice of rendered rows, computing the
+// ├─/└─ connectors as it descends. The root carries an empty prefix.
+func Rows(root *Node) []Row {
+	rows := []Row{{Prefix: "", Node: root}}
+	return appendRows(rows, root.Children, "")
+}
+
+func appendRows(rows []Row, nodes []*Node, prefix string) []Row {
 	for i, n := range nodes {
 		last := i == len(nodes)-1
 		branch, childPrefix := "├─ ", prefix+"│  "
 		if last {
 			branch, childPrefix = "└─ ", prefix+"   "
 		}
-		lines = append(lines, prefix+branch+lineLabel(n))
-		lines = appendChildren(lines, n.Children, childPrefix)
+		rows = append(rows, Row{Prefix: prefix + branch, Node: n})
+		rows = appendRows(rows, n.Children, childPrefix)
 	}
-	return lines
+	return rows
 }
 
-// lineLabel formats a node's single line: groups print their bare label, a raw
-// process leads with its pid, and daemon/panel nodes append their pid and comm.
+// Render draws the node tree with box-drawing connectors: the root on its own line
+// and every descendant under an ├─/└─ branch. The trailing newline makes it
+// drop-in for fmt.Print.
+func Render(root *Node) string {
+	rows := Rows(root)
+	lines := make([]string, len(rows))
+	for i, r := range rows {
+		lines[i] = r.Prefix + lineLabel(r.Node)
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+// lineLabel is a node's full plaintext line: its label plus its resource columns.
 func lineLabel(n *Node) string {
+	return LabelText(n) + ResourceText(n)
+}
+
+// LabelText formats a node's identity without its resource columns: groups print
+// their bare label, a raw process leads with its pid, and daemon/panel nodes append
+// their pid and comm. Callers that render the resource columns their own way (the
+// cockpit's coloured CPU bar) pair this with their own suffix.
+func LabelText(n *Node) string {
 	switch n.Kind {
 	case KindGroup:
 		return n.Label
 	case KindProc:
+		s := fmt.Sprintf("pid=%d", n.Pid)
 		if n.Comm != "" {
-			return fmt.Sprintf("pid=%d  %s", n.Pid, n.Comm)
+			s += "  " + n.Comm
 		}
-		return fmt.Sprintf("pid=%d", n.Pid)
+		return s
 	}
 	s := n.Label
 	if n.Pid > 0 {
@@ -205,16 +247,41 @@ func lineLabel(n *Node) string {
 	return s
 }
 
+// ResourceText renders the CPU%/memory columns, gated on a live sample: a node with
+// no stats entry (an exited panel, a group, or a process gone between samples) has
+// RSS 0 and trails nothing, so the tree never shows a bogus "0.0%  0B".
+func ResourceText(n *Node) string {
+	if n.RSS == 0 {
+		return ""
+	}
+	return fmt.Sprintf("  %.1f%%  %s", n.CPU, humanBytes(n.RSS))
+}
+
+// humanBytes renders a byte count in the largest unit that keeps it >= 1, to one
+// decimal place (e.g. 1536 -> "1.5K", 47448064 -> "45.2M").
+func humanBytes(n uint64) string {
+	units := []string{"B", "K", "M", "G", "T", "P"}
+	div, exp := uint64(1), 0
+	for n/div >= 1024 && exp < len(units)-1 {
+		div *= 1024
+		exp++
+	}
+	return fmt.Sprintf("%.1f%s", float64(n)/float64(div), units[exp])
+}
+
 // OSProcessTable samples the whole OS process table into a children-by-ppid
-// adjacency map and a comm-by-pid map. A process whose ppid cannot be read is
-// skipped (it cannot be placed); a missing comm just leaves the name blank.
-func OSProcessTable() (children map[int][]int, comm map[int]string, err error) {
+// adjacency map, a comm-by-pid map, and a stats-by-pid map. A process whose ppid
+// cannot be read is skipped (it cannot be placed); a missing comm just leaves the
+// name blank, and a CPU%/RSS read that fails just leaves that pid without a stat —
+// the process still appears, only without its resource columns.
+func OSProcessTable() (children map[int][]int, comm map[int]string, stats map[int]Stat, err error) {
 	procs, err := process.Processes()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	children = map[int][]int{}
 	comm = map[int]string{}
+	stats = map[int]Stat{}
 	for _, p := range procs {
 		pid := int(p.Pid)
 		ppid, e := p.Ppid()
@@ -225,11 +292,21 @@ func OSProcessTable() (children map[int][]int, comm map[int]string, err error) {
 		if name, e := p.Name(); e == nil {
 			comm[pid] = name
 		}
+		var st Stat
+		if cpu, e := p.CPUPercent(); e == nil {
+			st.CPU = cpu
+		}
+		if mi, e := p.MemoryInfo(); e == nil && mi != nil {
+			st.RSS = mi.RSS
+		}
+		if st.RSS > 0 || st.CPU > 0 {
+			stats[pid] = st
+		}
 	}
 	for _, kids := range children {
 		sort.Ints(kids)
 	}
-	return children, comm, nil
+	return children, comm, stats, nil
 }
 
 // DaemonPid reads this session's daemon pid from its pid file, returning 0 when the
