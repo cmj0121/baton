@@ -121,16 +121,16 @@ and reflows when the terminal resizes.
 
 These ride alongside the appearance config (full key reference in [SPEC.md](./SPEC.md#keys)):
 
-| Where                  | Key       | Does                                                              |
-| ---------------------- | --------- | ----------------------------------------------------------------- |
-| Any view               | `C-t ~`   | toggle the floating scratch pane (a throwaway shell)              |
-| Any view               | `C-t o`   | process tree — daemon, panels, OS descendants, each with CPU%/mem |
-| Group split            | `L`       | cycle the tile layout (presets, then your custom layouts)         |
-|                        | `z`       | resize mode — arrows grow / shrink the focused tile (view-local)  |
-| Scroll mode (`C-t [`)  | `v`       | start a whole-line selection                                      |
-|                        | `V`       | start a **block** (rectangular) selection                         |
-|                        | `h` / `l` | in a block selection, pull the column edge in / out               |
-| Group split (mouse on) | click     | focus the tile under the pointer (toggle the mouse in `C-t k`)    |
+| Where                  | Key       | Does                                                                            |
+| ---------------------- | --------- | ------------------------------------------------------------------------------- |
+| Any view               | `C-t ~`   | toggle the floating scratch pane (a throwaway shell)                            |
+| Any view               | `C-t o`   | process tree — daemon, panels, OS descendants; CPU as a load-coloured bar + mem |
+| Group split            | `L`       | cycle the tile layout (presets, then your custom layouts)                       |
+|                        | `z`       | resize mode — arrows grow / shrink the focused tile (view-local)                |
+| Scroll mode (`C-t [`)  | `v`       | start a whole-line selection                                                    |
+|                        | `V`       | start a **block** (rectangular) selection                                       |
+|                        | `h` / `l` | in a block selection, pull the column edge in / out                             |
+| Group split (mouse on) | click     | focus the tile under the pointer (toggle the mouse in `C-t k`)                  |
 
 See [PLUGIN.md](./PLUGIN.md#programmable-titles--paneltitle) for the `panel.title` hook, which makes the per-panel title
 itself programmable from Lua.
