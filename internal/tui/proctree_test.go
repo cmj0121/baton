@@ -28,12 +28,17 @@ func TestOpenProcTree(t *testing.T) {
 	if m.procFrom != modeDashboard || m.procScroll != 0 {
 		t.Fatalf("overlay state wrong: from=%v scroll=%d", m.procFrom, m.procScroll)
 	}
-	// The daemon root and every panel appear regardless of the host's OS table.
+	// The daemon root, group scaffolds, and every panel appear regardless of the
+	// host's OS table. Panels now show their state as a coloured LED, not a
+	// "[title/state]" word, so the title stands alone and no "/running" text remains.
 	joined := strings.Join(m.procLines, "\n")
-	for _, want := range []string{"baton (daemon)", "[group: feature-x]", "[hale/running]", "[ungrouped]", "[shell/running]"} {
+	for _, want := range []string{"baton (daemon)", "[group: feature-x]", "hale", "[ungrouped]", "shell", states[panel.Running].led} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("tree missing %q:\n%s", want, joined)
 		}
+	}
+	if strings.Contains(joined, "/running") {
+		t.Fatalf("panel state should be an icon, not the word:\n%s", joined)
 	}
 }
 

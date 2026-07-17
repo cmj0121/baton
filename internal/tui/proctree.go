@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proctree"
 	"github.com/cmj0121/baton/internal/proto"
 )
@@ -65,17 +66,40 @@ func (m model) renderProcTree() []string {
 	rows := proctree.Rows(root)
 	lines := make([]string, len(rows))
 	for i, r := range rows {
+		n := r.Node
 		// Panel titles and OS process names are not fully under baton's control, so
 		// strip any embedded terminal escapes from that text before it is styled and
 		// reaches the real terminal — the way the git-output popup guards untrusted
-		// text. The CPU bar and numbers are added after, from our own values.
-		line := ink.Render(sanitizeText(r.Prefix + proctree.LabelText(r.Node)))
-		if r.Node.RSS > 0 {
-			line += "  " + cpuBar(r.Node.CPU) + ink.Render(proctree.ResourceText(r.Node))
+		// text. The state LED, CPU bar, and numbers are added after, from our values.
+		var label string
+		if n.Kind == proctree.KindPanel && n.Panel != nil {
+			label = procPanelLabel(n, ink)
+		} else {
+			label = ink.Render(sanitizeText(proctree.LabelText(n)))
+		}
+		line := ink.Render(r.Prefix) + label
+		if n.RSS > 0 {
+			line += "  " + cpuBar(n.CPU) + ink.Render(proctree.ResourceText(n))
 		}
 		lines[i] = line
 	}
 	return lines
+}
+
+// procPanelLabel renders a panel node for the overlay: its lifecycle as a single
+// coloured LED — no "/running" word, the colour is what splits running (green) from
+// idle (amber) — then the panel title and its pid/comm. Title and comm are
+// untrusted, so they are sanitised before styling.
+func procPanelLabel(n *proctree.Node, ink lipgloss.Style) string {
+	info := states[panel.ParseState(n.Panel.State)]
+	s := lipgloss.NewStyle().Foreground(info.color).Render(info.led) + " " + ink.Render(sanitizeText(n.Panel.Name))
+	if n.Pid > 0 {
+		s += ink.Render(fmt.Sprintf(" pid=%d", n.Pid))
+	}
+	if n.Comm != "" {
+		s += ink.Render("  " + sanitizeText(n.Comm))
+	}
+	return s
 }
 
 // Load-band colours for the CPU bar: green under half, amber past half, red near
