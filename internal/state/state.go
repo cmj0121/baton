@@ -33,15 +33,16 @@ type State struct {
 // PanelState is a single panel's persisted identity plus its immutable spawn
 // inputs. Live telemetry (state/activity/spark) is intentionally not persisted.
 type PanelState struct {
-	ID        string `json:"id"`
-	Kind      string `json:"kind"`
-	Title     string `json:"title"`
-	Group     string `json:"group"`
-	Task      string `json:"task,omitempty"` // last dispatched brief; additive and optional, so old snapshots (no field) still load
-	Pinned    bool   `json:"pinned"`
-	Favourite bool   `json:"favourite,omitempty"` // a dashboard favourite: additive and optional, so old snapshots still load
-	Conductor bool   `json:"conductor,omitempty"` // the singleton control agent; respawned into a fresh server-managed workspace
-	Spec      Spec   `json:"spec"`                // immutable spawn inputs only
+	ID          string `json:"id"`
+	Kind        string `json:"kind"`
+	Title       string `json:"title"`
+	Group       string `json:"group"`
+	Task        string `json:"task,omitempty"` // last dispatched brief; additive and optional, so old snapshots (no field) still load
+	Pinned      bool   `json:"pinned"`
+	Favourite   bool   `json:"favourite,omitempty"`    // a dashboard favourite: additive and optional, so old snapshots still load
+	Conductor   bool   `json:"conductor,omitempty"`    // the singleton control agent; respawned into a fresh server-managed workspace
+	GlobalShell bool   `json:"global_shell,omitempty"` // the singleton global shell; respawned as a plain host shell in $HOME
+	Spec        Spec   `json:"spec"`                   // immutable spawn inputs only
 }
 
 // Spec is a panel's immutable spawn inputs, frozen at create time.
