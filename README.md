@@ -49,12 +49,13 @@ Lost? **`?`** always shows the keys for wherever you are.
 - **Dashboard, not windows.** A live overview of everything at once, not a pile of tabs.
 - **Headless core, replaceable frontends.** The brain is a background daemon; the face that renders it is swappable.
 
-| Concept       | What it is                                                                                              |
-| ------------- | ------------------------------------------------------------------------------------------------------- |
-| **Panel**     | One live terminal — an _agent_ panel (an agent CLI) or a _shell_ panel.                                 |
-| **Work item** | A named group of panels that belong to one task.                                                        |
-| **Task**      | A brief you dispatch to an agent — tracked through its lifecycle, queued and scheduled if it must wait. |
-| **Conductor** | An agent that drives the fleet for you — spawns, groups, and prompts the other panels over the socket.  |
+| Concept          | What it is                                                                                                             |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **Panel**        | One live terminal — an _agent_ panel (an agent CLI) or a _shell_ panel.                                                |
+| **Work item**    | A named group of panels that belong to one task.                                                                       |
+| **Task**         | A brief you dispatch to an agent — tracked through its lifecycle, queued and scheduled if it must wait.                |
+| **Conductor**    | An agent that drives the fleet for you — spawns, groups, and prompts the other panels over the socket.                 |
+| **Global shell** | A singleton plain host shell the server holds in `$HOME`, always one keystroke away — a home base, not a fleet driver. |
 
 ## Views
 
@@ -84,6 +85,7 @@ the current view, and **`C-t k`** to edit the key map.
 |             | `enter`           | open / zoom the selection                           |
 |             | `p` / `A` / `c`   | new shell / agent / pick-command panel              |
 |             | `C`               | open the conductor (an agent that drives the fleet) |
+|             | `H`               | open the global shell (a host shell in `$HOME`)     |
 |             | `w` / `x`         | close the selection / purge exited                  |
 |             | `r`               | re-run the exited panel(s) under the focus          |
 |             | `g` / `G` / `u`   | mark / group marked panels / ungroup                |
@@ -117,6 +119,10 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
 - **Conductor & control** — `C` opens a conductor: an agent that drives the fleet for you. It spawns, groups, signals,
   and prompts the other panels over the socket — through `baton ctl` or the `baton mcp` tools — fenced so it can't wreck
   its own host. Set its goal in `$HOME/.baton/CONDUCTOR.md`. See **[docs/CONTROL.md](docs/CONTROL.md)**.
+- **Global shell** — `H` opens the global shell: a single plain host shell the server holds in `$HOME`, always one
+  keystroke away. Like the conductor it is a mark in the FLEET heading rather than a card, and the server keeps just one —
+  it survives a restart as a dead slot you re-run with `r`. Unlike the conductor it drives nothing: no scoped role, no
+  managed workspace. (Distinct from the floating **scratch** shell `C-t ~`, which is transient and dies on detach.)
 - **Tasks & the queue** — `T` dispatches a brief to an agent (or fans it to a whole work item), recorded on the card and
   delivered when the agent is ready. `Q` manages a persistent backlog a server-owned scheduler drains onto free agents —
   the **you → conductor → fleet** flow. A `task.pre` Lua hook can rewrite or veto a brief; `task.change` watches it.

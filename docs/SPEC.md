@@ -38,6 +38,12 @@ A panel is one PTY (pseudo-terminal) the server owns. There are two kinds:
 Both are ordinary PTYs and share the lifecycle below; they differ only in what process they launch and in how loudly the
 Monitor flags them for your attention.
 
+Two shell/agent panels are **singletons** the server holds at most one of, each surfaced as a mark in the FLEET heading
+rather than a card. The **conductor** (`C`) is a control agent that drives the fleet (see [CONTROL.md](./CONTROL.md)). The
+**global shell** (`H`) is a plain host shell the server opens in `$HOME` — a home base always one keystroke away; unlike
+the conductor it drives nothing (no scoped role, no managed workspace). Both persist across a restart as a dead slot you
+re-run with `r`. Distinct from the floating **scratch** pane (`C-t ~`), which is a transient popup that dies on detach.
+
 **Agent profiles.** An agent panel is spawned from a named **profile** — a command and its arguments — run in a **working
 directory** you choose, the directory the agent operates on. **Claude** is the built-in profile (`claude`); more are
 defined under `panel.agents` in the config, with `panel.default-agent` naming the one the new-agent action spawns. The
@@ -351,6 +357,7 @@ and the key-map editor — are reached after the prefix in every mode. Everythin
 |                        | `p`                         | new shell panel                                 |
 |                        | `A`                         | new agent panel                                 |
 |                        | `C`                         | open the conductor (find-or-create)             |
+|                        | `H`                         | open the global shell (find-or-create)          |
 |                        | `c`                         | new panel (pick the command)                    |
 |                        | `w`                         | close the selection                             |
 |                        | `r`                         | re-run exited panel(s) in the selection         |
