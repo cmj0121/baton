@@ -186,6 +186,12 @@ type Server struct {
 	// pass the "no conductor exists yet" check. Guarded by mu.
 	conductorPending bool
 
+	// globalShellPending reserves the global-shell singleton across the unlocked
+	// spawn in createPanel, the same way conductorPending guards the conductor, so
+	// two near-simultaneous global-shell creates cannot both pass the check.
+	// Guarded by mu.
+	globalShellPending bool
+
 	// Persistence. stateF is the snapshot path ("" disables persistence); dirty is
 	// a 1-deep "save pending" nudge the saverLoop drains; saveMu serializes the
 	// disk writes; bootTime is when this server (re)booted, persisted as LastBoot.
@@ -947,7 +953,7 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "panel.list":
 		send(cc, s.panelsMsg())
 	case "panel.create":
-		if _, err := s.createPanel(cmd.Kind, cmd.Path, cmd.Args, cmd.Dir, cmd.Conductor); err != nil {
+		if _, err := s.createPanel(cmd.Kind, cmd.Path, cmd.Args, cmd.Dir, cmd.Conductor, cmd.GlobalShell); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
@@ -1172,12 +1178,15 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 // in a fresh ephemeral workspace (not any source tree) instead of dir, and
 // injects the socket + identity env so the agent inside can drive the fleet under
 // the scoped conductor role.
-func (s *Server) createPanel(kind, path string, args []string, dir string, conductor bool) (string, error) {
+func (s *Server) createPanel(kind, path string, args []string, dir string, conductor, globalShell bool) (string, error) {
 	if kind == "" {
 		kind = proto.KindShell
 	}
 	if conductor {
 		kind = proto.KindAgent // a conductor is always an agent
+	}
+	if globalShell {
+		kind = proto.KindShell // a global shell is always a plain host shell
 	}
 
 	s.mu.Lock()
@@ -1185,8 +1194,15 @@ func (s *Server) createPanel(kind, path string, args []string, dir string, condu
 		s.mu.Unlock()
 		return "", fmt.Errorf("a conductor already exists")
 	}
+	if globalShell && s.hasGlobalShellLocked() {
+		s.mu.Unlock()
+		return "", fmt.Errorf("a global shell already exists")
+	}
 	if conductor {
 		s.conductorPending = true // reserve the singleton across the unlocked spawn below
+	}
+	if globalShell {
+		s.globalShellPending = true // reserve the singleton across the unlocked spawn below
 	}
 	s.seq++
 	id := fmt.Sprintf("%d", s.seq)
@@ -1206,6 +1222,13 @@ func (s *Server) createPanel(kind, path string, args []string, dir string, condu
 			return "", err
 		}
 		dir, env = ws, s.conductorEnv(id)
+	}
+	// A global shell always opens in $HOME — a stable "home base", never dir or the
+	// configured default. No workspace, no identity env: it drives nothing.
+	if globalShell {
+		if home, err := os.UserHomeDir(); err == nil {
+			dir = home
+		}
 	}
 
 	// Build the spawn spec once, then use the same value to start the PTY and to
@@ -1229,19 +1252,26 @@ func (s *Server) createPanel(kind, path string, args []string, dir string, condu
 			_ = os.RemoveAll(dir) // drop the workspace we just made
 			s.clearConductorPending()
 		}
+		if globalShell {
+			s.clearGlobalShellPending()
+		}
 		return "", err
 	}
 
 	p := panel.Panel{
-		ID:        id,
-		Kind:      panel.ParseKind(kind),
-		Title:     panelTitle(kind, path, dir, id),
-		State:     panel.Spawning,
-		Activity:  activityText(panel.Spawning, 0), // the Monitor keeps it live from here
-		Conductor: conductor,
+		ID:          id,
+		Kind:        panel.ParseKind(kind),
+		Title:       panelTitle(kind, path, dir, id),
+		State:       panel.Spawning,
+		Activity:    activityText(panel.Spawning, 0), // the Monitor keeps it live from here
+		Conductor:   conductor,
+		GlobalShell: globalShell,
 	}
 	if conductor {
 		p.Title = "conductor · " + id
+	}
+	if globalShell {
+		p.Title = "shell · " + id
 	}
 	s.mu.Lock()
 	s.panels = append(s.panels, p)
@@ -1249,6 +1279,9 @@ func (s *Server) createPanel(kind, path string, args []string, dir string, condu
 	s.mon.spawned(id)  // start the Monitor's clock; first output wakes it to running
 	if conductor {
 		s.conductorPending = false // the singleton is now a real panel
+	}
+	if globalShell {
+		s.globalShellPending = false // the singleton is now a real panel
 	}
 	s.emit("panel.spawn", panelFields(p))
 	s.mu.Unlock()
@@ -1276,6 +1309,28 @@ func (s *Server) hasConductorLocked() bool {
 func (s *Server) clearConductorPending() {
 	s.mu.Lock()
 	s.conductorPending = false
+	s.mu.Unlock()
+}
+
+// hasGlobalShellLocked reports whether a global shell already exists or is mid-
+// spawn. It holds the singleton invariant exactly like hasConductorLocked: a
+// second global-shell create is refused while the first is live (running or an
+// exited dead slot) or being created. Caller holds s.mu.
+func (s *Server) hasGlobalShellLocked() bool {
+	if s.globalShellPending {
+		return true
+	}
+	for _, p := range s.panels {
+		if p.GlobalShell {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) clearGlobalShellPending() {
+	s.mu.Lock()
+	s.globalShellPending = false
 	s.mu.Unlock()
 }
 
@@ -1487,15 +1542,16 @@ func (s *Server) snapshotState() state.State {
 	for i, p := range s.panels {
 		spec := s.specs[p.ID]
 		panels[i] = state.PanelState{
-			ID:        p.ID,
-			Kind:      p.Kind.String(),
-			Title:     p.Title,
-			Group:     p.Group,
-			Task:      p.Task,
-			Pinned:    p.Pinned,
-			Favourite: p.Favourite,
-			Conductor: p.Conductor,
-			Spec:      state.Spec{Command: spec.Command, Args: spec.Args, Dir: spec.Dir},
+			ID:          p.ID,
+			Kind:        p.Kind.String(),
+			Title:       p.Title,
+			Group:       p.Group,
+			Task:        p.Task,
+			Pinned:      p.Pinned,
+			Favourite:   p.Favourite,
+			Conductor:   p.Conductor,
+			GlobalShell: p.GlobalShell,
+			Spec:        state.Spec{Command: spec.Command, Args: spec.Args, Dir: spec.Dir},
 		}
 	}
 	// Per-group view settings (the visible counts and the chosen layout), keyed by
@@ -1570,16 +1626,17 @@ func (s *Server) Restore() {
 	max := s.seq
 	for _, ps := range st.Panels {
 		s.panels = append(s.panels, panel.Panel{
-			ID:        ps.ID,
-			Kind:      panel.ParseKind(ps.Kind),
-			Title:     ps.Title,
-			Group:     ps.Group,
-			Task:      ps.Task,
-			Pinned:    ps.Pinned,
-			Favourite: ps.Favourite,
-			Conductor: ps.Conductor,
-			State:     panel.Exited,
-			Activity:  "restored · press r to re-run",
+			ID:          ps.ID,
+			Kind:        panel.ParseKind(ps.Kind),
+			Title:       ps.Title,
+			Group:       ps.Group,
+			Task:        ps.Task,
+			Pinned:      ps.Pinned,
+			Favourite:   ps.Favourite,
+			Conductor:   ps.Conductor,
+			GlobalShell: ps.GlobalShell,
+			State:       panel.Exited,
+			Activity:    "restored · press r to re-run",
 		})
 		s.specs[ps.ID] = ptymgr.Spec{Command: ps.Spec.Command, Args: ps.Spec.Args, Dir: ps.Spec.Dir}
 		if n, err := strconv.Atoi(ps.ID); err == nil && n > max {
@@ -2057,7 +2114,7 @@ func (s *Server) applyScheduledSpawns(spawns []spawnRequest) bool {
 	changed := false
 	var orphans []string
 	for _, req := range spawns {
-		pid, err := s.createPanel(proto.KindAgent, req.spec.Command, req.spec.Args, req.spec.Dir, false)
+		pid, err := s.createPanel(proto.KindAgent, req.spec.Command, req.spec.Args, req.spec.Dir, false, false)
 		s.mu.Lock()
 		delete(s.spawning, req.taskID)
 		t := s.tasks[req.taskID]
@@ -2632,7 +2689,7 @@ func (s *Server) gitWorktreeAdd(targetID, branch string) error {
 	// Spawn the agent in the new worktree and file it under the branch, so it lands
 	// as a work item immediately. A spawn failure leaves the worktree in place — the
 	// user can retire it with worktree-remove rather than us guessing.
-	id, err := s.createPanel(proto.KindAgent, spec.Command, spec.Args, path, false)
+	id, err := s.createPanel(proto.KindAgent, spec.Command, spec.Args, path, false, false)
 	if err != nil {
 		return fmt.Errorf("worktree created at %s, but the agent did not start: %w", path, err)
 	}

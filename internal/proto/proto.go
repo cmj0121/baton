@@ -89,6 +89,11 @@ type Command struct {
 	// enforces at most one, gives it a server-managed ephemeral workspace, and
 	// injects the socket/identity env so the agent inside can drive the fleet.
 	Conductor bool `json:"conductor,omitempty"`
+
+	// GlobalShell marks a "panel.create" as the singleton global shell. The server
+	// enforces at most one, runs it as a plain host shell in $HOME, and injects no
+	// scoped-role env — unlike the conductor it does not drive the fleet.
+	GlobalShell bool `json:"global_shell,omitempty"`
 }
 
 // GroupView carries a group's view settings on a snapshot: Shown is how many
@@ -102,18 +107,19 @@ type GroupView struct {
 
 // Panel is the server-side view of a single live terminal.
 type Panel struct {
-	ID        string `json:"id"`
-	Kind      string `json:"kind"`                // "shell" | "agent"
-	Title     string `json:"title"`               // human label shown on the dashboard
-	State     string `json:"state,omitempty"`     // lifecycle: spawning|running|idle|attention|exited
-	Group     string `json:"group,omitempty"`     // work item the panel belongs to, if any
-	Task      string `json:"task,omitempty"`      // the brief the panel was last dispatched, if any
-	Activity  string `json:"activity,omitempty"`  // short status line the Monitor keeps live
-	Spark     string `json:"spark,omitempty"`     // output-rate sparkline over the recent window
-	Pinned    bool   `json:"pinned,omitempty"`    // pinned to a live tile in its group's split view
-	Favourite bool   `json:"favourite,omitempty"` // a dashboard favourite: sorts the card to the front
-	Conductor bool   `json:"conductor,omitempty"` // the singleton control agent (server-managed workspace), so a frontend can badge it
-	Pid       int    `json:"pid,omitempty"`       // OS pid of the panel's process-group leader; 0 once the process has exited. Roots the panel's OS descendant subtree (baton ctl tree).
+	ID          string `json:"id"`
+	Kind        string `json:"kind"`                   // "shell" | "agent"
+	Title       string `json:"title"`                  // human label shown on the dashboard
+	State       string `json:"state,omitempty"`        // lifecycle: spawning|running|idle|attention|exited
+	Group       string `json:"group,omitempty"`        // work item the panel belongs to, if any
+	Task        string `json:"task,omitempty"`         // the brief the panel was last dispatched, if any
+	Activity    string `json:"activity,omitempty"`     // short status line the Monitor keeps live
+	Spark       string `json:"spark,omitempty"`        // output-rate sparkline over the recent window
+	Pinned      bool   `json:"pinned,omitempty"`       // pinned to a live tile in its group's split view
+	Favourite   bool   `json:"favourite,omitempty"`    // a dashboard favourite: sorts the card to the front
+	Conductor   bool   `json:"conductor,omitempty"`    // the singleton control agent (server-managed workspace), so a frontend can badge it
+	GlobalShell bool   `json:"global_shell,omitempty"` // the singleton global shell (plain host shell in $HOME), so a frontend can badge it
+	Pid         int    `json:"pid,omitempty"`          // OS pid of the panel's process-group leader; 0 once the process has exited. Roots the panel's OS descendant subtree (baton ctl tree).
 }
 
 // Task is the wire view of a backlog task: a prompt assigned (or waiting to be

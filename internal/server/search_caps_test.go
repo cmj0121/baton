@@ -32,7 +32,7 @@ func TestSendSearchCapsAndDisplayTitle(t *testing.T) {
 	t.Cleanup(func() { _ = ln.Close() })
 	s := New(ln)
 
-	id, err := s.createPanel("shell", "", nil, dir, false)
+	id, err := s.createPanel("shell", "", nil, dir, false, false)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

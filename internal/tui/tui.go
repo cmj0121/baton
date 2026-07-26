@@ -138,14 +138,15 @@ type model struct {
 	attnSeen    map[string]bool // panel ids currently flagged for attention, to fire the notification only on the rising edge
 	bellPending bool            // a panel just entered attention — ring the terminal bell on the next render
 
-	confirmClose      bool      // ask y/n before closing a panel (toggled in the key map)
-	allowNameConflict bool      // let two work items share a name (server enforces; kept to round-trip config)
-	bellEnabled       bool      // ring the terminal bell when a panel needs you (toggled in the key map)
-	mouseEnabled      bool      // mouse reporting on — the wheel scrolls and moves the selection (toggled in the key map)
-	pendingClose      bool      // a close is awaiting y/n confirmation
-	pendingRestart    bool      // a force-restart is awaiting y/n confirmation
-	pendingConductor  bool      // a conductor spawn is in flight; zoom it when it lands in a snapshot
-	now               time.Time // wall clock shown in the footer, ticked every second
+	confirmClose       bool      // ask y/n before closing a panel (toggled in the key map)
+	allowNameConflict  bool      // let two work items share a name (server enforces; kept to round-trip config)
+	bellEnabled        bool      // ring the terminal bell when a panel needs you (toggled in the key map)
+	mouseEnabled       bool      // mouse reporting on — the wheel scrolls and moves the selection (toggled in the key map)
+	pendingClose       bool      // a close is awaiting y/n confirmation
+	pendingRestart     bool      // a force-restart is awaiting y/n confirmation
+	pendingConductor   bool      // a conductor spawn is in flight; zoom it when it lands in a snapshot
+	pendingGlobalShell bool      // a global-shell spawn is in flight; zoom it when it lands in a snapshot
+	now                time.Time // wall clock shown in the footer, ticked every second
 
 	cpuPct   float64 // system-wide CPU load %, sampled each tick for the footer
 	memUsed  uint64  // system memory in use, bytes
@@ -825,6 +826,16 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 				}
 			}
 		}
+		// The same spawn-then-view for the global shell: it too is a heading mark,
+		// not a card, so zoom it the moment the fresh spawn lands in a snapshot.
+		if m.pendingGlobalShell {
+			if p, ok := m.globalShellPanel(); ok {
+				m.pendingGlobalShell = false
+				if m.mode == modeDashboard {
+					*m = m.zoomInto(p)
+				}
+			}
+		}
 	case "stats":
 		m.cpuPct = sm.CPU
 		m.memUsed, m.memTotal = sm.MemUsed, sm.MemTotal
@@ -942,10 +953,10 @@ func (m *model) applyTelemetry(sm proto.ServerMsg) {
 func (m *model) refreshAttention() {
 	cur := make(map[string]bool)
 	var fresh []string
-	// Inline conductor skip (not m.visibleFleet()): this fires on every snapshot and
+	// Inline singleton skip (not m.visibleFleet()): this fires on every snapshot and
 	// telemetry tick, so it avoids allocating a filtered slice per event.
 	for _, p := range m.fleet {
-		if p.Conductor || p.State != panel.Attention {
+		if p.Conductor || p.GlobalShell || p.State != panel.Attention {
 			continue
 		}
 		cur[p.ID] = true
@@ -1552,15 +1563,25 @@ func (m model) conductorPanel() (panel.Panel, bool) {
 	return panel.Panel{}, false
 }
 
-// visibleFleet is the fleet the dashboard shows: every panel except the conductor,
-// which is surfaced as a mark in the FLEET heading (conductorMark) rather than a
-// card. It drives the roster, the counts, and the attention nudges, so the conductor
-// stays clear of all of them; everywhere else — zoom, telemetry, id lookups — the
-// conductor is a first-class fleet member, so those still read m.fleet.
+// globalShellPanel returns the singleton global shell if the fleet has one.
+func (m model) globalShellPanel() (panel.Panel, bool) {
+	for _, p := range m.fleet {
+		if p.GlobalShell {
+			return p, true
+		}
+	}
+	return panel.Panel{}, false
+}
+
+// visibleFleet is the fleet the dashboard shows: every panel except the two
+// singletons — the conductor and the global shell — each surfaced as a mark in the
+// FLEET heading rather than a card. It drives the roster, the counts, and the
+// attention nudges, so both stay clear of all of them; everywhere else — zoom,
+// telemetry, id lookups — they are first-class fleet members, so those read m.fleet.
 func (m model) visibleFleet() []panel.Panel {
 	out := make([]panel.Panel, 0, len(m.fleet))
 	for _, p := range m.fleet {
-		if !p.Conductor {
+		if !p.Conductor && !p.GlobalShell {
 			out = append(out, p)
 		}
 	}
@@ -1583,6 +1604,21 @@ func (m model) conductorMark() string {
 	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", info.label, keyLabel(m.bindingKey(actConductor))))
 }
 
+// globalShellMark is the FLEET-heading badge for the singleton global shell — the
+// counterpart to conductorMark. Shown in place of a card, since the global shell is
+// a home-base host shell you summon rather than one of the fleet; it carries the
+// shell's live state LED and the key that opens it. Empty when none exists.
+func (m model) globalShellMark() string {
+	p, ok := m.globalShellPanel()
+	if !ok {
+		return ""
+	}
+	info := states[p.State]
+	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
+	name := lipgloss.NewStyle().Foreground(colBrandHi).Render("shell")
+	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", info.label, keyLabel(m.bindingKey(actGlobalShell))))
+}
+
 // spawnConductor asks the server to create the conductor: the resolved agent
 // profile, run as the singleton control agent. The cockpit only names the
 // command — the server places it in a managed ephemeral workspace and injects the
@@ -1601,6 +1637,22 @@ func (m model) spawnConductor() model {
 		}
 	}
 	m.status = fmt.Sprintf("opening the conductor (%s)", name)
+	return m
+}
+
+// spawnGlobalShell asks the server to create the singleton global shell: a plain
+// host shell the server opens in $HOME. The cockpit only flags the request as a
+// global shell — the server forces the shell kind, picks $HOME, and injects no
+// scoped-role env, so unlike the conductor it drives nothing.
+func (m model) spawnGlobalShell() model {
+	if m.client != nil {
+		cmd := proto.Command{Action: "panel.create", Kind: proto.KindShell, GlobalShell: true}
+		if err := m.client.Send(cmd); err != nil {
+			m.status = "send failed: " + err.Error()
+			return m
+		}
+	}
+	m.status = "opening the global shell"
 	return m
 }
 
@@ -1734,6 +1786,21 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		}
 		m.pendingConductor = true // zoom it the moment the spawn lands in the fleet
 		return m.spawnConductor(), nil
+	case actGlobalShell:
+		// Open the global shell: like the conductor it is a mark in the FLEET
+		// heading, not a card, so H is how you reach it. Zoom a live one; re-run an
+		// exited one (the server re-opens it in $HOME) and zoom the restart; else
+		// spawn one and zoom it once it lands in a snapshot (pendingGlobalShell).
+		if p, ok := m.globalShellPanel(); ok {
+			if p.State == panel.Exited {
+				m.sendf(proto.Command{Action: "panel.respawn", ID: p.ID})
+				p.State = panel.Spawning // zoom the re-run as a live panel, not a read-only result
+				m.status = "re-running the global shell"
+			}
+			return m.zoomInto(p), nil
+		}
+		m.pendingGlobalShell = true // zoom it the moment the spawn lands in the fleet
+		return m.spawnGlobalShell(), nil
 	case actClose:
 		it, ok := m.selectedItem()
 		switch {
@@ -2520,7 +2587,7 @@ func (m model) itemCount() int {
 func (m model) countState(s panel.State) int {
 	n := 0
 	for _, p := range m.fleet {
-		if !p.Conductor && p.State == s { // conductor kept off the dashboard counters
+		if !p.Conductor && !p.GlobalShell && p.State == s { // the two singletons stay off the dashboard counters
 			n++
 		}
 	}
@@ -2760,6 +2827,9 @@ func (m model) dashboardView() string {
 	heading := sectionStyle.Render(spaced("FLEET")) +
 		mutedStyle.Render(fmt.Sprintf("   %d panel(s)  ", len(shown))) + fleetBreakdown(shown, items)
 	if mark := m.conductorMark(); mark != "" {
+		heading += mutedStyle.Render("   ·   ") + mark
+	}
+	if mark := m.globalShellMark(); mark != "" {
 		heading += mutedStyle.Render("   ·   ") + mark
 	}
 	if m.filter != "" {
@@ -3524,10 +3594,10 @@ func (m model) footer() string {
 // fleet is calm.
 func (m model) attentionBadge() string {
 	var names []string
-	// Range m.fleet with an inline conductor skip rather than m.visibleFleet(): this
+	// Range m.fleet with an inline singleton skip rather than m.visibleFleet(): this
 	// runs in every view's footer on every frame, so it must not allocate a slice.
 	for _, p := range m.fleet {
-		if !p.Conductor && p.State == panel.Attention {
+		if !p.Conductor && !p.GlobalShell && p.State == panel.Attention {
 			names = append(names, p.Title)
 		}
 	}

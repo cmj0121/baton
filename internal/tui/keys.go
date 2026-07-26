@@ -23,6 +23,7 @@ const (
 	keyNewForm     = "c" // "choose the command" (n is rename)
 	keyNewAgent    = "A" // spawn an agent panel (shift+a)
 	keyConductor   = "C" // find-or-create the singleton conductor agent (shift+c)
+	keyGlobalShell = "H" // find-or-create the singleton global shell (shift+h)
 	keyClose       = "w"
 	keyRespawn     = "r" // re-run the exited panel(s) under the focus — a lone dead slot, or every exited member of the focused group
 	keyPurge       = "x"
@@ -89,6 +90,7 @@ const (
 	actNewForm
 	actNewAgent
 	actConductor
+	actGlobalShell
 	actClose
 	actRespawn
 	actPurge
@@ -154,6 +156,7 @@ var bindings = []binding{
 	{"new-panel-form", keyNewForm, "new panel (choose the command)", actNewForm, "Panels"},
 	{"new-agent", keyNewAgent, "spawn an agent panel in a workdir", actNewAgent, "Panels"},
 	{"conductor", keyConductor, "open the conductor — an agent that drives the fleet", actConductor, "Panels"},
+	{"global-shell", keyGlobalShell, "open the global shell — a host shell always one key away", actGlobalShell, "Panels"},
 	{"close", keyClose, "close the selected panel", actClose, "Panels"},
 	{"respawn", keyRespawn, "re-run exited panel(s) in the selection", actRespawn, "Panels"},
 	{"purge-exited", keyPurge, "purge all exited panels", actPurge, "Panels"},

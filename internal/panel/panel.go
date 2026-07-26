@@ -122,6 +122,11 @@ type Panel struct {
 	// fleet over the socket. At most one exists at a time.
 	Conductor bool
 
+	// GlobalShell marks the singleton global shell: a plain host shell the server
+	// holds in $HOME, always one keystroke away. Unlike the conductor it drives
+	// nothing — no scoped role, no managed workspace. At most one exists at a time.
+	GlobalShell bool
+
 	// Pid is the OS pid of the panel's process-group leader, reported by the
 	// server, or 0 once the process has exited. It roots the panel's OS descendant
 	// subtree in the process-tree overlay (and `baton ctl tree`).
@@ -134,18 +139,19 @@ func (p Panel) IsAgent() bool { return p.Kind == Agent }
 // FromProto decodes a wire panel into the domain model.
 func FromProto(p proto.Panel) Panel {
 	return Panel{
-		ID:        p.ID,
-		Kind:      ParseKind(p.Kind),
-		Title:     p.Title,
-		State:     ParseState(p.State),
-		Group:     p.Group,
-		Task:      p.Task,
-		Activity:  p.Activity,
-		Spark:     p.Spark,
-		Pinned:    p.Pinned,
-		Favourite: p.Favourite,
-		Conductor: p.Conductor,
-		Pid:       p.Pid,
+		ID:          p.ID,
+		Kind:        ParseKind(p.Kind),
+		Title:       p.Title,
+		State:       ParseState(p.State),
+		Group:       p.Group,
+		Task:        p.Task,
+		Activity:    p.Activity,
+		Spark:       p.Spark,
+		Pinned:      p.Pinned,
+		Favourite:   p.Favourite,
+		Conductor:   p.Conductor,
+		GlobalShell: p.GlobalShell,
+		Pid:         p.Pid,
 	}
 }
 
@@ -156,17 +162,18 @@ func (p Panel) ToProto() proto.Panel {
 		title = p.DisplayTitle // a panel.title hook's override wins on the frontends
 	}
 	return proto.Panel{
-		ID:        p.ID,
-		Kind:      p.Kind.String(),
-		Title:     title,
-		State:     p.State.String(),
-		Group:     p.Group,
-		Task:      p.Task,
-		Activity:  p.Activity,
-		Spark:     p.Spark,
-		Pinned:    p.Pinned,
-		Favourite: p.Favourite,
-		Conductor: p.Conductor,
-		Pid:       p.Pid,
+		ID:          p.ID,
+		Kind:        p.Kind.String(),
+		Title:       title,
+		State:       p.State.String(),
+		Group:       p.Group,
+		Task:        p.Task,
+		Activity:    p.Activity,
+		Spark:       p.Spark,
+		Pinned:      p.Pinned,
+		Favourite:   p.Favourite,
+		Conductor:   p.Conductor,
+		GlobalShell: p.GlobalShell,
+		Pid:         p.Pid,
 	}
 }

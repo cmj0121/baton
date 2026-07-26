@@ -36,6 +36,12 @@ Baton 是純鍵盤操作的,提供三種觀看 agent 的方式。儀表板與放
 兩者都是普通的 PTY,共用底下的生命週期;它們只差在啟動的是哪個行程,以及 Monitor 為了引起你的注意會把它們喊得
 多大聲。
 
+有兩個 shell/agent 面板是伺服器至多只留一個的**單例**,各自以 FLEET 標題上的一個標記呈現,而非卡片。**conductor**
+(`C`)是一個驅動整支隊伍的控制 agent(見 [CONTROL.md](./CONTROL.md))。**global shell**(`H`)是伺服器開在
+`$HOME` 的純宿主 shell——一個永遠一個按鍵之遙的主基地;與 conductor 不同,它不驅動任何東西(沒有受限角色、沒有受管理
+的工作區)。兩者重啟後都會以已結束的空位保留,按 `r` 重跑。這與浮動的 **scratch** 面板(`C-t ~`)不同,後者是卸離即
+消失的短暫彈出視窗。
+
 **Agent 設定檔(profiles)。** 一個 agent 面板是從一份具名的 **profile**(一個指令與它的引數)產生的,並在你選定的
 **工作目錄**(agent 操作的目錄)裡執行。**Claude** 是內建的 profile(`claude`);更多的則定義在設定中的
 `panel.agents` 下,而 `panel.default-agent` 指名新增 agent 這個動作要產生的是哪一個。客戶端解析 profile 後送出
@@ -316,6 +322,7 @@ close-on-done 旗標。當排程器找不到空閒 agent 時,它會替這樣的�
 |                         | `p`                        | 新的 shell 面板                               |
 |                         | `A`                        | 新的 agent 面板                               |
 |                         | `C`                        | 開啟 conductor(尋找或建立)                    |
+|                         | `H`                        | 開啟 global shell(尋找或建立)                 |
 |                         | `c`                        | 新面板(挑選指令)                              |
 |                         | `w`                        | 關閉所選                                      |
 |                         | `r`                        | 重跑所選中已結束的面板                        |
