@@ -33,35 +33,35 @@ Sleep 3.5s
 Show
 
 # --- Dashboard: your home base -------------------------------------------
-Sleep 2s
+Sleep 1.5s
 
 # Spawn a few panels — a live grid of everything at once
 Type "p"
-Sleep 1.4s
+Sleep 1.2s
 Type "p"
-Sleep 1.4s
+Sleep 1.2s
 Type "p"
-Sleep 1.8s
+Sleep 1.5s
 
 # Move the cursor around the grid
 Type "l"
-Sleep 0.7s
+Sleep 0.6s
 Type "h"
-Sleep 0.9s
+Sleep 0.7s
 
 # --- Zoom: one panel as your only terminal -------------------------------
 Enter
-Sleep 1.2s
+Sleep 1s
 Type "echo 'a real terminal — drive it directly' && uname -sm"
 Sleep 0.4s
 Enter
-Sleep 2s
+Sleep 1.6s
 
 # Step back out to the dashboard (leader C-t, then d)
 Ctrl+T
 Sleep 0.4s
 Type "d"
-Sleep 1.4s
+Sleep 1.2s
 
 # --- Work items: group panels into one task ------------------------------
 Type "g"
@@ -71,14 +71,42 @@ Sleep 0.4s
 Type "g"
 Sleep 0.6s
 Type "G"
-Sleep 1s
+Sleep 0.8s
 Type "refactor-api"
 Sleep 0.5s
 Enter
+Sleep 1.6s
+
+# --- Conductor: the agent that drives the fleet for you ------------------
+# C finds-or-creates the singleton conductor and zooms it. In this recording the
+# agent CLI is a stand-in (see demo-agent.sh) — the control wiring it shows is
+# real, the reasoning is not. The long sleep is for its `baton ctl tree`: sampling
+# the OS process table takes a few seconds while vhs is hogging the machine.
+Type "C"
+Sleep 8s
+
+# Back out: the conductor is a mark in the FLEET heading, not a card.
+Ctrl+T
+Sleep 0.4s
+Type "d"
 Sleep 2s
+
+# --- Global shell: a host shell always one key away ----------------------
+# H opens the singleton plain shell the server holds in $HOME.
+Type "H"
+Sleep 1.4s
+Type "pwd"
+Sleep 0.4s
+Enter
+Sleep 1.8s
+
+Ctrl+T
+Sleep 0.4s
+Type "d"
+Sleep 1.6s
 
 # --- Help is always a keystroke away -------------------------------------
 Type "?"
-Sleep 3s
+Sleep 2.6s
 Escape
-Sleep 1.5s
+Sleep 1.2s
