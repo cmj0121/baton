@@ -15,11 +15,14 @@ agent, grouped into the tasks they belong to, any one a keystroke away.
 
 You hold the baton. The agents play. You conduct. 🎼
 
-![Baton cockpit demo — panels on a dashboard, zoom to drive one, group into a work item](docs/assets/baton-demo.png)
+![Baton cockpit demo — panels on a dashboard, zoom to drive one, group into a work item, open the conductor and the global shell](docs/assets/baton-demo.png)
 
-_Spawn panels, zoom into one to drive it, group two into a work item — and `?` is always there for the keys._
+_Spawn panels, zoom into one to drive it, group two into a work item, call the conductor with `C` and the global shell with
+`H` — and `?` is always there for the keys._
 
-_Clip generated from [`baton-demo.tape`](docs/assets/baton-demo.tape) — regeneration steps are in the tape header._
+_Clip generated from [`baton-demo.tape`](docs/assets/baton-demo.tape) — regeneration steps are in the tape header. The
+conductor's agent CLI is a stand-in ([`demo-agent.sh`](docs/assets/demo-agent.sh)) so the clip records the same on any
+machine; the fleet it drives over the socket is real._
 
 ## Get started
 

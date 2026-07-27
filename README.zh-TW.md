@@ -15,11 +15,14 @@ agent,依所屬任務分組,任何一個都只差一個按鍵。
 
 指揮棒在你手上,agent 們負責演奏,你來指揮。🎼
 
-![Baton 座艙示範——儀表板上的面板、放大以驅動其中一個、把兩個併成一個工作項目](docs/assets/baton-demo.png)
+![Baton 座艙示範——儀表板上的面板、放大以驅動其中一個、把兩個併成一個工作項目、開啟 conductor 與 global shell](docs/assets/baton-demo.png)
 
-_開面板、放大進其中一個來操作、把兩個併成一個工作項目——而 `?` 隨時都在,告訴你按鍵。_
+_開面板、放大進其中一個來操作、把兩個併成一個工作項目、用 `C` 叫出 conductor、用 `H` 叫出 global shell——而 `?`
+隨時都在,告訴你按鍵。_
 
-_影片由 [`baton-demo.tape`](docs/assets/baton-demo.tape) 產生——重製步驟寫在該 tape 檔的檔頭。_
+_影片由 [`baton-demo.tape`](docs/assets/baton-demo.tape) 產生——重製步驟寫在該 tape 檔的檔頭。片中 conductor 的
+agent CLI 是替身([`demo-agent.sh`](docs/assets/demo-agent.sh)),好讓任何機器都錄得出同一支影片;它透過 socket
+驅動的隊伍則是真的。_
 
 ## 開始使用
 
