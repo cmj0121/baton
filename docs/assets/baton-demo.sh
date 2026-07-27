@@ -19,9 +19,23 @@ fi
 
 unset BATON_DAEMON
 export TERM=xterm-256color
-export HOME="$(mktemp -d "${TMPDIR:-/tmp}/baton-demo.XXXXXX")" # fresh state → empty dashboard every take
-export BATON_SOCK="/tmp/baton-demo.sock"                       # keep it short: unix socket paths cap at ~104 chars
+export HOME="/tmp/baton-demo-home"       # short and fixed, so the paths on screen stay readable
+export BATON_SOCK="/tmp/baton-demo.sock" # keep it short: unix socket paths cap at ~104 chars
+rm -rf "$HOME"                           # fresh state → empty dashboard every take
 export PS1='\[\e[38;5;39m\]baton\[\e[0m\]:\[\e[38;5;245m\]demo\[\e[0m\]$ '
+export BATON_BIN="$bin" # demo-agent.sh dials the socket back with the same binary
 rm -f "$BATON_SOCK" "${BATON_SOCK%.sock}.state.json"
+
+# The fresh HOME has no agent CLI set up, so the conductor key (C) would land in
+# the real agent's first-run wizard. Point the default profile at the stand-in
+# instead — see demo-agent.sh for what it does and does not fake.
+mkdir -p "$HOME/.baton"
+cat >"$HOME/.baton/config" <<YAML
+panel:
+  agents:
+    claude:
+      command: bash
+      args: ["$here/demo-agent.sh"]
+YAML
 
 exec "$bin" -f
