@@ -34,6 +34,7 @@ import (
 
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/config"
+	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/plugin"
 	"github.com/cmj0121/baton/internal/server"
@@ -237,16 +238,17 @@ func runServer() error {
 func buildServerOptions(rc reloadable, stateF string) []server.Option {
 	opts := []server.Option{
 		server.WithVersion(version),
-		server.WithAllowNameConflict(rc.allowNameConflict),
-		server.WithDefaultDir(rc.defaultDir),
-		server.WithDiffCommand(rc.diffCommand),
-		server.WithEditor(rc.editor),
-		server.WithWorktreeDir(rc.worktreeDir),
+		server.WithAllowNameConflict(rc.settings.AllowNameConflict),
+		server.WithDefaultDir(rc.settings.DefaultDir),
+		server.WithDiffCommand(rc.settings.DiffCommand),
+		server.WithEditor(rc.settings.Editor),
+		server.WithWorktreeDir(rc.settings.WorktreeDir),
+		server.WithLimits(rc.settings.Limits, rc.settings.AgentLimits),
 		server.WithStateFile(stateF),
 		server.WithQueue(rc.queueMax, rc.queueConcurrency),
 	}
-	if rc.replayBytes > 0 {
-		opts = append(opts, server.WithReplayBytes(rc.replayBytes))
+	if rc.settings.ReplayBytes > 0 {
+		opts = append(opts, server.WithReplayBytes(rc.settings.ReplayBytes))
 	}
 	return opts
 }
@@ -328,7 +330,7 @@ func runServerOn(ln net.Listener, sock string) error {
 			res.Config.TUI = tcfg
 		}
 		rc := reloadableSettings(res.Config)
-		srv.Reload(rc.allowNameConflict, rc.defaultDir, rc.replayBytes, rc.diffCommand, rc.editor, rc.worktreeDir)
+		srv.Reload(rc.settings)
 		srv.SetOutputEvents(res.WantOutput)
 		srv.SetTitleHook(res.WantTitle)
 		if data, mErr := json.Marshal(res.Config); mErr == nil {
@@ -399,28 +401,31 @@ func runServerOn(ln net.Listener, sock string) error {
 
 // reloadable holds the server settings that can change on a SIGHUP without
 // restarting the daemon: the only knobs both the initial options and the reload
-// path derive from the config, so the two can never drift.
+// path derive from the config, so the two can never drift. settings is what
+// Reload swaps in wholesale; the queue caps are seeded at construction only.
 type reloadable struct {
-	allowNameConflict bool
-	defaultDir        string
-	replayBytes       int    // 0 keeps the server's built-in replay default
-	diffCommand       string // explicit diff command for the agent diff pop-up; empty falls back to git diff.tool then a built-in diff
-	editor            string // commit editor for the git menu (GIT_EDITOR); empty falls back to git's own editor chain
-	worktreeDir       string // base dir for new git-menu worktrees; empty falls back to a sibling of the agent's repo
-	queueMax          int    // most queued tasks the backlog holds; -1 keeps the server default
-	queueConcurrency  int    // most tasks one work item runs at once; 0 = unlimited
+	settings         server.Settings
+	queueMax         int // most queued tasks the backlog holds; -1 keeps the server default
+	queueConcurrency int // most tasks one work item runs at once; 0 = unlimited
 }
 
 // reloadableSettings projects a config onto the hot-reloadable settings, applying
 // the same defaults the server expects: strict names, the home workdir, and the
 // built-in replay buffer when the config leaves a field unset.
 func reloadableSettings(cfg config.Config) reloadable {
-	rc := reloadable{defaultDir: cfg.Panel.Workdir, diffCommand: cfg.Panel.DiffCommand, editor: cfg.Panel.Editor, worktreeDir: cfg.Panel.WorktreeDir}
+	rc := reloadable{settings: server.Settings{
+		DefaultDir:  cfg.Panel.Workdir,
+		DiffCommand: cfg.Panel.DiffCommand,
+		Editor:      cfg.Panel.Editor,
+		WorktreeDir: cfg.Panel.WorktreeDir,
+		Limits:      cfg.Panel.Limits,
+		AgentLimits: agentLimits(cfg.Panel.Agents),
+	}}
 	if cfg.Settings.AllowNameConflict != nil {
-		rc.allowNameConflict = *cfg.Settings.AllowNameConflict
+		rc.settings.AllowNameConflict = *cfg.Settings.AllowNameConflict
 	}
 	if cfg.Panel.ReplayKB > 0 {
-		rc.replayBytes = cfg.Panel.ReplayKB * 1024
+		rc.settings.ReplayBytes = cfg.Panel.ReplayKB * 1024
 	}
 	// queueMax -1 keeps the server's built-in default; a positive config caps the
 	// backlog. Concurrency passes straight through (0 = unlimited).
@@ -430,6 +435,23 @@ func reloadableSettings(cfg config.Config) reloadable {
 	}
 	rc.queueConcurrency = cfg.Queue.Concurrency
 	return rc
+}
+
+// agentLimits projects the configured agent profiles onto the caps-only table the
+// server keeps. The server is handed the limits and never the commands: it
+// resolves policy, the cockpit resolves what to run — which is also why a profile
+// with no caps of its own is left out entirely rather than stored empty.
+func agentLimits(profiles map[string]config.AgentProfile) map[string]limits.Limits {
+	out := make(map[string]limits.Limits, len(profiles))
+	for name, prof := range profiles {
+		if !prof.Limits.IsZero() {
+			out[name] = prof.Limits
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // runClient attaches a TUI cockpit to this session's server. If the cockpit

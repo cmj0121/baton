@@ -120,6 +120,11 @@ func (c *Client) ListJSON() (string, error) {
 // args when agent is non-empty, otherwise a shell. dir is the working directory
 // (empty falls back to the server default). It is the one place the agent-vs-shell
 // spawn shape lives, shared by the CLI and the MCP tool.
+//
+// agent is a binary, not a profile name, so these spawns carry no profile and
+// resolve to the fleet-wide resource limits alone. That is deliberate: this path
+// is what the conductor drives, and an agent must not be able to name its way
+// into a profile whose caps are wider than the fleet's.
 func (c *Client) SpawnPanel(agent string, args []string, dir string) (string, error) {
 	cmd := proto.Command{Action: "panel.create", Kind: proto.KindShell, Dir: dir}
 	if agent != "" {

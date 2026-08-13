@@ -14,7 +14,7 @@ import (
 // sets SHELL so a shell panel spawns a real, short-lived process whose spec is
 // stashed for respawn. The socket lives in a short-named temp dir to stay under
 // macOS's unix path cap.
-func newHostServer(t *testing.T) *Server {
+func newHostServer(t *testing.T, opts ...Option) *Server {
 	t.Helper()
 	t.Setenv("SHELL", "/bin/sh")
 	dir, err := os.MkdirTemp("", "bt")
@@ -27,7 +27,8 @@ func newHostServer(t *testing.T) *Server {
 		t.Fatalf("listen: %v", err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
-	return New(ln)
+	t.Setenv("BATON_TEST_DIR", dir) // the temp dir, for a test that needs a workdir too
+	return New(ln, opts...)
 }
 
 // TestHostSettersToggle covers the wiring setters that only store or push state:

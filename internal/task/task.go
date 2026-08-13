@@ -54,6 +54,7 @@ func CanAdvance(from, to Status) bool {
 // idle agent.
 type SpawnSpec struct {
 	Command     string   `json:"command"`                 // agent CLI to run (already resolved from a profile by the caller)
+	Profile     string   `json:"profile,omitempty"`       // the profile that command came from, so the provisioned agent resolves that profile's resource limits
 	Args        []string `json:"args,omitempty"`          // arguments to the command
 	Dir         string   `json:"dir,omitempty"`           // working directory ("" = the server default)
 	CloseOnDone bool     `json:"close_on_done,omitempty"` // close the spawned panel when the task finishes

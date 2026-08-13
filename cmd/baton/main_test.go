@@ -12,7 +12,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/cmj0121/baton/internal/config"
+	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/paths"
+	"github.com/cmj0121/baton/internal/server"
 )
 
 // testDaemonChildEnv marks a daemon child that THIS TEST BINARY fork-exec'd, as
@@ -262,22 +264,22 @@ func TestRestartRequested(t *testing.T) {
 func TestReloadableSettings(t *testing.T) {
 	t.Run("empty config uses defaults", func(t *testing.T) {
 		rc := reloadableSettings(config.Config{})
-		if rc.allowNameConflict {
+		if rc.settings.AllowNameConflict {
 			t.Error("unset allow-name-conflict should default to false (strict names)")
 		}
-		if rc.defaultDir != "" {
-			t.Errorf("defaultDir: got %q, want empty", rc.defaultDir)
+		if rc.settings.DefaultDir != "" {
+			t.Errorf("defaultDir: got %q, want empty", rc.settings.DefaultDir)
 		}
-		if rc.replayBytes != 0 {
-			t.Errorf("replayBytes: got %d, want 0 (server default)", rc.replayBytes)
+		if rc.settings.ReplayBytes != 0 {
+			t.Errorf("replayBytes: got %d, want 0 (server default)", rc.settings.ReplayBytes)
 		}
-		if rc.diffCommand != "" {
+		if rc.settings.DiffCommand != "" {
 			t.Errorf("diffCommand should be empty: %+v", rc)
 		}
-		if rc.editor != "" {
+		if rc.settings.Editor != "" {
 			t.Errorf("editor should be empty: %+v", rc)
 		}
-		if rc.worktreeDir != "" {
+		if rc.settings.WorktreeDir != "" {
 			t.Errorf("worktreeDir should be empty: %+v", rc)
 		}
 	})
@@ -294,23 +296,23 @@ func TestReloadableSettings(t *testing.T) {
 			},
 		}
 		rc := reloadableSettings(cfg)
-		if !rc.allowNameConflict {
+		if !rc.settings.AllowNameConflict {
 			t.Error("allow-name-conflict=true should map through")
 		}
-		if rc.defaultDir != "/work" {
-			t.Errorf("defaultDir: got %q, want /work", rc.defaultDir)
+		if rc.settings.DefaultDir != "/work" {
+			t.Errorf("defaultDir: got %q, want /work", rc.settings.DefaultDir)
 		}
-		if rc.replayBytes != 8*1024 {
-			t.Errorf("replayBytes: got %d, want %d", rc.replayBytes, 8*1024)
+		if rc.settings.ReplayBytes != 8*1024 {
+			t.Errorf("replayBytes: got %d, want %d", rc.settings.ReplayBytes, 8*1024)
 		}
-		if rc.diffCommand != "delta" {
-			t.Errorf("diffCommand: got %q, want delta", rc.diffCommand)
+		if rc.settings.DiffCommand != "delta" {
+			t.Errorf("diffCommand: got %q, want delta", rc.settings.DiffCommand)
 		}
-		if rc.editor != "vim" {
-			t.Errorf("editor: got %q, want vim", rc.editor)
+		if rc.settings.Editor != "vim" {
+			t.Errorf("editor: got %q, want vim", rc.settings.Editor)
 		}
-		if rc.worktreeDir != "/wt" {
-			t.Errorf("worktreeDir: got %q, want /wt", rc.worktreeDir)
+		if rc.settings.WorktreeDir != "/wt" {
+			t.Errorf("worktreeDir: got %q, want /wt", rc.settings.WorktreeDir)
 		}
 	})
 
@@ -318,30 +320,30 @@ func TestReloadableSettings(t *testing.T) {
 		rc := reloadableSettings(config.Config{
 			Settings: config.Settings{AllowNameConflict: boolPtr(false)},
 		})
-		if rc.allowNameConflict {
+		if rc.settings.AllowNameConflict {
 			t.Error("explicit false should stay false")
 		}
 	})
 
 	t.Run("zero replay-kb keeps the server default", func(t *testing.T) {
 		rc := reloadableSettings(config.Config{Panel: config.PanelDefaults{ReplayKB: 0}})
-		if rc.replayBytes != 0 {
-			t.Errorf("replayBytes: got %d, want 0", rc.replayBytes)
+		if rc.settings.ReplayBytes != 0 {
+			t.Errorf("replayBytes: got %d, want 0", rc.settings.ReplayBytes)
 		}
 	})
 
 	t.Run("negative replay-kb is treated as unset", func(t *testing.T) {
 		rc := reloadableSettings(config.Config{Panel: config.PanelDefaults{ReplayKB: -5}})
-		if rc.replayBytes != 0 {
-			t.Errorf("replayBytes: got %d, want 0 for a non-positive replay-kb", rc.replayBytes)
+		if rc.settings.ReplayBytes != 0 {
+			t.Errorf("replayBytes: got %d, want 0 for a non-positive replay-kb", rc.settings.ReplayBytes)
 		}
 	})
 }
 
 func TestBuildServerOptions(t *testing.T) {
 	// Without a replay size, the replay option is omitted (server keeps its default).
-	base := buildServerOptions(reloadable{defaultDir: "/work"}, "/state.json")
-	withReplay := buildServerOptions(reloadable{defaultDir: "/work", replayBytes: 4096}, "/state.json")
+	base := buildServerOptions(reloadable{settings: server.Settings{DefaultDir: "/work"}}, "/state.json")
+	withReplay := buildServerOptions(reloadable{settings: server.Settings{DefaultDir: "/work", ReplayBytes: 4096}}, "/state.json")
 	if len(withReplay) != len(base)+1 {
 		t.Fatalf("a positive replayBytes should add exactly one option: base=%d withReplay=%d", len(base), len(withReplay))
 	}
@@ -586,5 +588,49 @@ func TestStopDaemon(t *testing.T) {
 	}
 	if err := stopDaemon(sock); err == nil {
 		t.Fatal("stopDaemon should fail signalling a non-existent PID")
+	}
+}
+
+// TestAgentLimitsProjection checks what reaches the server: the caps keyed by
+// profile name and nothing else. A profile that sets no caps of its own is left
+// out entirely, so the server's lookup misses and falls through to the
+// fleet-wide limits instead of hitting an empty override.
+func TestAgentLimitsProjection(t *testing.T) {
+	profiles := map[string]config.AgentProfile{
+		"heavy": {Command: "claude", Limits: limits.Limits{Memory: "16Gi"}},
+		"plain": {Command: "other"},
+	}
+	got := agentLimits(profiles)
+	if len(got) != 1 {
+		t.Fatalf("only the capped profile should travel, got %v", got)
+	}
+	if got["heavy"].Memory != "16Gi" {
+		t.Errorf(`agentLimits["heavy"] = %+v`, got["heavy"])
+	}
+	if agentLimits(nil) != nil {
+		t.Error("no profiles should project to a nil table, not an empty map")
+	}
+	if agentLimits(map[string]config.AgentProfile{"plain": {Command: "other"}}) != nil {
+		t.Error("profiles with no caps should project to a nil table")
+	}
+}
+
+// TestReloadableSettingsCarriesLimits is the config→server hand-off for the
+// resource policy: both layers must land on the Settings the reload path swaps in.
+func TestReloadableSettingsCarriesLimits(t *testing.T) {
+	cfg := config.Config{Panel: config.PanelDefaults{
+		Limits: limits.Limits{CPUs: "2", Memory: "4Gi"},
+		Agents: map[string]config.AgentProfile{"heavy": {Command: "claude", Limits: limits.Limits{Memory: "16Gi"}}},
+	}}
+	rc := reloadableSettings(cfg)
+
+	if rc.settings.Limits != (limits.Limits{CPUs: "2", Memory: "4Gi"}) {
+		t.Errorf("the fleet-wide limits should map through, got %+v", rc.settings.Limits)
+	}
+	if rc.settings.AgentLimits["heavy"].Memory != "16Gi" {
+		t.Errorf("the per-profile limits should map through, got %+v", rc.settings.AgentLimits)
+	}
+	if rc := reloadableSettings(config.Config{}); !rc.settings.Limits.IsZero() || rc.settings.AgentLimits != nil {
+		t.Errorf("an empty config should cap nothing, got %+v", rc.settings)
 	}
 }

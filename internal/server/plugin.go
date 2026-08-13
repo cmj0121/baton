@@ -124,6 +124,10 @@ func (s *Server) PushConfig() {
 	s.mu.Lock()
 	msg := proto.ServerMsg{Type: "config", Config: s.clientConfig, Commands: s.pluginCmds, Footer: s.footerText}
 	s.mu.Unlock()
+	// The reload that introduces the first cap is also what commits to a backend,
+	// so the mode rides the push as well as the welcome — otherwise a cockpit that
+	// was already attached would keep showing the pre-reload answer.
+	msg.Enforce, msg.EnforceWhy = string(s.sand.Mode()), s.sand.Reason()
 	s.broadcast(msg)
 }
 
@@ -203,7 +207,7 @@ func (s *Server) Notify(msg string) {
 // Spawn creates a panel and, when group is non-empty, files it under that work item;
 // it returns the new panel's id. It is baton.spawn.
 func (s *Server) Spawn(kind, command string, args []string, dir, group string) (string, error) {
-	id, err := s.createPanel(kind, command, args, dir, false, false)
+	id, err := s.createPanel(kind, command, args, dir, "", false, false)
 	if err != nil {
 		return "", err
 	}
