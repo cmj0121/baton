@@ -9,6 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/paths"
 )
 
@@ -176,6 +177,10 @@ type PanelDefaults struct {
 	// empty defaults to a sibling "<repo>-worktrees/<branch>" of the agent's repo.
 	WorktreeDir string `yaml:"worktree-dir,omitempty"`
 
+	// Limits caps the OS resources every new panel may use — the fleet-wide floor
+	// a per-agent limit would later narrow. The zero value caps nothing.
+	Limits limits.Limits `yaml:"limits,omitempty"`
+
 	// Agents are the named agent profiles, e.g. {"claude": {command: "claude"}}.
 	// A built-in "claude" profile is always available unless overridden here.
 	Agents map[string]AgentProfile `yaml:"agents,omitempty"`
@@ -186,6 +191,11 @@ type PanelDefaults struct {
 type AgentProfile struct {
 	Command string   `yaml:"command"`        // the agent CLI binary, e.g. "claude"
 	Args    []string `yaml:"args,omitempty"` // arguments passed on every spawn
+
+	// Limits are this profile's resource caps, layered over the fleet-wide
+	// panel.limits: a field set here wins, one left unset inherits. So a heavy
+	// profile restates only what it changes, not the whole policy.
+	Limits limits.Limits `yaml:"limits,omitempty"`
 }
 
 // Load reads the config file. A missing file yields an empty Config and no
@@ -228,10 +238,16 @@ func LoadTUI() (TUIConfig, error) {
 // normalize coerces a parsed config back into sane bounds so a hand-edited file
 // cannot smuggle a nonsensical value past Load. A negative replay buffer is
 // meaningless — clamp it to zero, which every consumer already reads as "use the
-// built-in default".
+// built-in default" — and an unreadable resource limit falls back to "no cap"
+// rather than travelling on as a value nothing downstream can parse.
 func (c *Config) normalize() {
 	if c.Panel.ReplayKB < 0 {
 		c.Panel.ReplayKB = 0
+	}
+	c.Panel.Limits = c.Panel.Limits.DropInvalid()
+	for name, prof := range c.Panel.Agents {
+		prof.Limits = prof.Limits.DropInvalid()
+		c.Panel.Agents[name] = prof
 	}
 }
 
