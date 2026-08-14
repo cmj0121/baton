@@ -20,15 +20,15 @@ func TestMouseSetting(t *testing.T) {
 	if settingMouse == settingBell || settingMouse == settingConfirmClose {
 		t.Fatal("the mouse toggle must be its own settings row")
 	}
-	if numSettings != 3 {
-		t.Fatalf("expected three settings rows, got %d", numSettings)
+	if numSettings != 4 {
+		t.Fatalf("expected four settings rows, got %d", numSettings)
 	}
 	on := model{mouseEnabled: true}
 	off := model{mouseEnabled: false}
 	if !on.settingValue(settingMouse) || off.settingValue(settingMouse) {
 		t.Fatal("settingValue should track mouseEnabled")
 	}
-	if settingLabel(settingMouse) == settingLabel(settingBell) {
+	if on.settingLabel(settingMouse) == on.settingLabel(settingBell) {
 		t.Fatal("the mouse toggle needs its own label")
 	}
 }

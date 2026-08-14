@@ -431,7 +431,7 @@ func TestKeyMapScrollsOnSmallScreen(t *testing.T) {
 	if h := lipgloss.Height(view); h > m.height-1 {
 		t.Fatalf("key map box height %d should fit within %d", h, m.height-1)
 	}
-	if !strings.Contains(view, settingLabel(settingBell)) {
+	if !strings.Contains(view, m.settingLabel(settingBell)) {
 		t.Fatal("the selected row should stay in view when scrolled")
 	}
 	if strings.Contains(view, "prefix · leader key") {
@@ -447,7 +447,7 @@ func TestKeyMapScrollsOnSmallScreen(t *testing.T) {
 	// A tall screen shows everything with no counter.
 	full := model{mode: modeKeyMap, width: 90, height: 80,
 		binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}.keyMapView()
-	if !strings.Contains(full, "prefix · leader key") || !strings.Contains(full, settingLabel(settingBell)) {
+	if !strings.Contains(full, "prefix · leader key") || !strings.Contains(full, m.settingLabel(settingBell)) {
 		t.Fatal("a tall screen should render the whole key map")
 	}
 	if strings.Contains(full, fmt.Sprintf("/%d", total)) {

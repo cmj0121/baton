@@ -22,6 +22,7 @@ import (
 
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/config"
+	"github.com/cmj0121/baton/internal/i18n"
 	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
@@ -180,6 +181,7 @@ type model struct {
 	limitRow    int
 	diffCommand string           // configured diff command for the agent diff pop-up, round-tripped so a save never drops it
 	tuiCfg      config.TUIConfig // cockpit appearance (theme + layouts) pushed from the daemon
+	lang        i18n.Lang        // message language for the help surfaces ("" = the built-in English)
 	input       inputPurpose     // active text-input overlay, or inputNone
 	inputBuf    string           // text typed into the overlay
 	inputHint   string           // path-completion hint shown under the field (tab), cleared on edit
@@ -389,8 +391,34 @@ func (m model) applyPrefs(p prefs) model {
 	m.limits = p.limits
 	m.diffCommand = p.diffCommand
 	m.tuiCfg = p.tui
+	m.lang = p.lang
 	applyTheme(p.tui.Theme) // resolve the colour tokens into the package palette
 	return m
+}
+
+// effLang is the language the cockpit renders its help in, defaulting a model
+// that has not applied any prefs yet (the first frame, and unit tests) to the
+// built-in English.
+func (m model) effLang() i18n.Lang {
+	if m.lang == "" {
+		return i18n.Default
+	}
+	return m.lang
+}
+
+// tr looks a help message up in the active language, with the English written at
+// the call site as the fallback. Reading `m.tr("bind.close", "close the selected
+// panel")` still tells you what the row says, so an untranslated key degrades to
+// the English the code already carries rather than to a bare key.
+func (m model) tr(key, english string) string {
+	return i18n.T(m.effLang(), key, english)
+}
+
+// trCat translates a purpose-section header ("Panels", "Work items") by folding
+// its display name into a message key, so the bindings table stays the single
+// place a section is named.
+func (m model) trCat(cat string) string {
+	return m.tr("cat."+strings.ReplaceAll(strings.ToLower(cat), " ", "-"), cat)
 }
 
 // editPrefix is the editIdx sentinel meaning the leader key is being rebound.
@@ -405,37 +433,61 @@ const (
 	rowSetting                // a toggle in the settings block (the last rows)
 )
 
-// The settings block of the key map, one toggle per row in display order. idx
-// values are stable so keyMapRow, activate, and the renderer agree on them.
+// The settings block of the key map, one row per setting in display order. idx
+// values are stable so keyMapRow, activate, and the renderer agree on them. All
+// but the last are booleans; settingLanguage cycles the supported languages.
 const (
 	settingConfirmClose = iota // ask y/n before closing a panel
 	settingBell                // ring the bell when a panel needs you
 	settingMouse               // enable mouse reporting (wheel scroll + selection)
+	settingLanguage            // the language the help surfaces render in
 	numSettings
 )
 
-// settingLabel is the human label for a settings-block row.
-func settingLabel(idx int) string {
+// settingBadgeCols is the width every settings-row value chip is padded to — the
+// widest value any row shows (a language tag) — so the labels beside them line up
+// whether the row carries an ON/OFF or a language.
+const settingBadgeCols = 5
+
+// settingLabel is the human label for a settings-block row, in the cockpit's
+// language.
+func (m model) settingLabel(idx int) string {
 	switch idx {
 	case settingBell:
-		return "ring the bell when a panel needs you"
+		return m.tr("setting.bell", "ring the bell when a panel needs you")
 	case settingMouse:
-		return "enable the mouse (wheel scroll + selection)"
+		return m.tr("setting.mouse", "enable the mouse (wheel scroll + selection)")
+	case settingLanguage:
+		return m.tr("setting.language", "cockpit language")
 	default:
-		return "confirm before closing a panel"
+		return m.tr("setting.confirm-close", "confirm before closing a panel")
 	}
 }
 
-// settingValue reports whether a settings-block toggle is currently on.
+// settingValue reports whether a settings-block toggle is currently on. The
+// language row is not a toggle and always reports false; settingBadge renders it.
 func (m model) settingValue(idx int) bool {
 	switch idx {
 	case settingBell:
 		return m.bellEnabled
 	case settingMouse:
 		return m.mouseEnabled
+	case settingLanguage:
+		return false
 	default:
 		return m.confirmClose
 	}
+}
+
+// settingBadge renders a settings row's value chip: ON/OFF for a toggle, the
+// language tag for the language row, every one padded to settingBadgeCols.
+func (m model) settingBadge(idx int) string {
+	text, bg := onOff(m.settingValue(idx)), checkColor(m.settingValue(idx))
+	if idx == settingLanguage {
+		text, bg = string(m.effLang()), colBrand
+	}
+	return lipgloss.NewStyle().Foreground(colDark).Background(bg).Bold(true).Padding(0, 1).
+		Render(fmt.Sprintf("%-*s", settingBadgeCols, text))
 }
 
 // keyMapRow resolves the current cursor to a key-map row: its kind and, for a
@@ -2204,6 +2256,9 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 				m.mouseEnabled = !m.mouseEnabled
 				m.status = "mouse: " + onOff(m.mouseEnabled)
 				cmd = mouseCmd(m.mouseEnabled) // flip the terminal's mouse reporting now
+			case settingLanguage:
+				m.lang = i18n.Next(m.effLang()) // a cycle, not a toggle: enter advances it
+				m.status = "language: " + string(m.lang)
 			default:
 				m.confirmClose = !m.confirmClose
 				m.status = "confirm on close: " + onOff(m.confirmClose)
@@ -3298,15 +3353,16 @@ func metaRow(label, value string, valColor lipgloss.Color) string {
 func (m model) helpView() string {
 	title, body := m.helpContent()
 	pfx := keyLabel(m.effPrefix())
-	legend := mutedStyle.Render("esc  back   ·   " + pfx + " " + keyLabel(m.bindingKey(actEditMap)) + "  edit")
+	legend := mutedStyle.Render("esc  " + m.tr("help.legend.back", "back") +
+		"   ·   " + pfx + " " + keyLabel(m.bindingKey(actEditMap)) + "  " + m.tr("help.legend.edit", "edit"))
 	return m.renderScrollPanel(scrollPanel{
-		title:    title + " KEYS",
+		title:    title + " " + m.tr("help.title.keys", "KEYS"),
 		body:     body,
 		footer:   []string{"", legend},
 		reserved: helpReserved,
 		anchor:   m.helpScroll, // read-only: the arrows drive this offset directly
 		centered: false,
-		clipHint: mutedStyle.Render("   ↑↓ scroll"),
+		clipHint: mutedStyle.Render("   " + m.tr("help.legend.scroll", "↑↓ scroll")),
 	})
 }
 
@@ -3320,70 +3376,75 @@ func (m model) helpContent() (title string, body []string) {
 	detach := keyLabel(m.bindingKey(actDetach))
 
 	// helpRow is one key line tagged with the purpose section it sorts under, so
-	// every stage's list groups by category just like the editable key map.
+	// every stage's list groups by category just like the editable key map. desc
+	// is looked up by the row's message key, with the English written here as the
+	// fallback — so this table stays readable as the list it renders.
 	type helpRow struct{ cat, keys, desc string }
+	tr := m.tr
 
 	var rows []helpRow
 	switch m.helpFrom {
 	case modeGroupZoom:
-		title = "GROUP VIEW"
+		title = tr("help.title.group", "GROUP VIEW")
 		rows = []helpRow{
-			{"Navigation", kc("tab") + " " + kc("S-tab"), "focus the next / previous panel"},
-			{"Navigation", kc(keyLabel(keyInteract)), "interact: type into the focused panel in place"},
-			{"Navigation", kc("enter"), "zoom the focused panel"},
-			{"Navigation", kc("+") + " " + kc("-"), "show more / fewer live tiles"},
-			{"Navigation", kc(keyLabel(keyLayout)), "cycle the tile layout"},
-			{"Navigation", kc(keyLabel(keyResize)), "resize mode · arrows grow/shrink the focused tile"},
-			{"Navigation", kc("S-←→"), "reorder the focused panel"},
-			{"Navigation", kc(pfx) + " " + kc(keyScroll), "scroll mode · the focused panel (↑↓ line, b/Spc page)"},
-			{"Navigation", kc(pfx) + " " + kc(keySearch), "search the focused panel · n older, N newer"},
-			{"Work items", kc(keyLabel(keyPin)), "pin / unpin the focused panel to a live tile"},
-			{"Work items", kc(keyLabel(keySignal)) + " " + kc(keyLabel(keySignalAll)), "signal the focused panel · the whole group"},
-			{"Work items", kc(keyLabel(keyRemove)), "remove the focused panel from the group"},
-			{"View", kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
-			{"View", kc(keyLabel(m.bindingKey(actBack))) + " " + kc(dash) + " " + kc("esc"), "back to the dashboard"},
-			{"View", kc(pfx) + " " + kc(keyLabel(keyInteract)), "stop interacting (while in interact)"},
-			{"View", kc(pfx) + " " + kc(dash), "dashboard (works in every view)"},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actProcTree))), "process tree · the daemon's OS processes"},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), "edit the key map"},
-			{"Session", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actReload))), "reload config (backend + cockpit)"},
-			{"Session", kc(pfx) + " " + kc(detach), "detach (server keeps running)"},
+			{"Navigation", kc("tab") + " " + kc("S-tab"), tr("help.group.focus", "focus the next / previous panel")},
+			{"Navigation", kc(keyLabel(keyInteract)), tr("help.group.interact", "interact: type into the focused panel in place")},
+			{"Navigation", kc("enter"), tr("help.group.zoom", "zoom the focused panel")},
+			{"Navigation", kc("+") + " " + kc("-"), tr("help.group.tiles", "show more / fewer live tiles")},
+			{"Navigation", kc(keyLabel(keyLayout)), tr("help.group.layout", "cycle the tile layout")},
+			{"Navigation", kc(keyLabel(keyResize)), tr("help.group.resize", "resize mode · arrows grow/shrink the focused tile")},
+			{"Navigation", kc("S-←→"), tr("help.group.reorder", "reorder the focused panel")},
+			{"Navigation", kc(pfx) + " " + kc(keyScroll), tr("help.group.scroll", "scroll mode · the focused panel (↑↓ line, b/Spc page)")},
+			{"Navigation", kc(pfx) + " " + kc(keySearch), tr("help.group.search", "search the focused panel · n older, N newer")},
+			{"Work items", kc(keyLabel(keyPin)), tr("help.group.pin", "pin / unpin the focused panel to a live tile")},
+			{"Work items", kc(keyLabel(keySignal)) + " " + kc(keyLabel(keySignalAll)), tr("help.group.signal", "signal the focused panel · the whole group")},
+			{"Work items", kc(keyLabel(keyRemove)), tr("help.group.remove", "remove the focused panel from the group")},
+			{"View", kc(keyLabel(m.bindingKey(actHelp))), tr("help.common.keys", "this key list")},
+			{"View", kc(keyLabel(m.bindingKey(actBack))) + " " + kc(dash) + " " + kc("esc"), tr("help.group.back", "back to the dashboard")},
+			{"View", kc(pfx) + " " + kc(keyLabel(keyInteract)), tr("help.group.stop-interact", "stop interacting (while in interact)")},
+			{"View", kc(pfx) + " " + kc(dash), tr("help.group.dashboard", "dashboard (works in every view)")},
+			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actProcTree))), tr("help.common.proc-tree", "process tree · the daemon's OS processes")},
+			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), tr("help.common.edit-map", "edit the key map")},
+			{"Session", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actReload))), tr("help.common.reload", "reload config (backend + cockpit)")},
+			{"Session", kc(pfx) + " " + kc(detach), tr("help.common.detach", "detach (server keeps running)")},
 		}
 	case modeZoom:
-		title = "ZOOM"
+		title = tr("help.title.zoom", "ZOOM")
 		rows = []helpRow{
-			{"Navigation", kc("type"), "drive the program directly (PgUp/PgDn included)"},
-			{"Navigation", kc(pfx) + " " + kc(keyScroll), "scroll mode · ↑↓ line, b/Spc page, esc exits"},
-			{"Navigation", kc(pfx) + " " + kc(keySearch), "search the scrollback · n older, N newer"},
-			{"Navigation", kc(pfx) + " " + kc(pfx), "send a literal " + pfx},
-			{"Panels", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actSignal))), "send a signal to this panel"},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actBack))), "back one level (to the split / dashboard)"},
-			{"View", kc(pfx) + " " + kc(dash), "straight to the dashboard"},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actProcTree))), "process tree · the daemon's OS processes"},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actHelp))), "this key list"},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), "edit the key map"},
-			{"Session", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actReload))), "reload config (backend + cockpit)"},
-			{"Session", kc(pfx) + " " + kc(detach), "detach (server keeps running)"},
+			{"Navigation", kc("type"), tr("help.zoom.type", "drive the program directly (PgUp/PgDn included)")},
+			{"Navigation", kc(pfx) + " " + kc(keyScroll), tr("help.zoom.scroll", "scroll mode · ↑↓ line, b/Spc page, esc exits")},
+			{"Navigation", kc(pfx) + " " + kc(keySearch), tr("help.zoom.search", "search the scrollback · n older, N newer")},
+			{"Navigation", kc(pfx) + " " + kc(pfx), tr("help.zoom.literal", "send a literal ") + pfx},
+			{"Panels", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actSignal))), tr("help.zoom.signal", "send a signal to this panel")},
+			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actBack))), tr("help.zoom.back", "back one level (to the split / dashboard)")},
+			{"View", kc(pfx) + " " + kc(dash), tr("help.zoom.dashboard", "straight to the dashboard")},
+			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actProcTree))), tr("help.common.proc-tree", "process tree · the daemon's OS processes")},
+			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actHelp))), tr("help.common.keys", "this key list")},
+			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), tr("help.common.edit-map", "edit the key map")},
+			{"Session", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actReload))), tr("help.common.reload", "reload config (backend + cockpit)")},
+			{"Session", kc(pfx) + " " + kc(detach), tr("help.common.detach", "detach (server keeps running)")},
 		}
 	default: // dashboard — single keys for commands, C-t for the escapes
-		title = "DASHBOARD"
+		title = tr("help.title.dashboard", "DASHBOARD")
 		rows = []helpRow{
-			{"Navigation", kc("hjkl") + " " + kc("↑↓←→"), "move"},
-			{"Navigation", kc("S-←→"), "reorder the selected item"},
-			{"Navigation", kc("enter"), "open / zoom"},
-			{"Navigation", kc("esc"), "clear the selection"},
+			{"Navigation", kc("hjkl") + " " + kc("↑↓←→"), tr("help.dash.move", "move")},
+			{"Navigation", kc("S-←→"), tr("help.dash.reorder", "reorder the selected item")},
+			{"Navigation", kc("enter"), tr("help.dash.open", "open / zoom")},
+			{"Navigation", kc("esc"), tr("help.dash.clear", "clear the selection")},
 		}
 		for _, b := range m.keymap() {
 			keys := kc(keyLabel(b.key))
 			if isEscape(b.act) {
 				keys = kc(pfx) + " " + kc(keyLabel(b.key))
 			}
-			rows = append(rows, helpRow{b.cat, keys, b.desc})
+			rows = append(rows, helpRow{b.cat, keys, m.bindDesc(b)})
 		}
 	}
 
 	// Render category by category in a stable order, so the list always reads the
-	// same way and matches the editable key map's grouping.
+	// same way and matches the editable key map's grouping. The subheaders carry
+	// the untranslated category as the row tag and translate only on the way out,
+	// so a translation can never split a section in two.
 	keyCol := lipgloss.NewStyle().Width(20)
 	subhead := lipgloss.NewStyle().Foreground(colFaint).Bold(true)
 	for _, cat := range []string{"Navigation", "Panels", "Work items", "View", "Session"} {
@@ -3393,7 +3454,7 @@ func (m model) helpContent() (title string, body []string) {
 				continue
 			}
 			if !shown {
-				body = append(body, "", "  "+subhead.Render(cat))
+				body = append(body, "", "  "+subhead.Render(m.trCat(cat)))
 				shown = true
 			}
 			body = append(body, keyCol.Render(r.keys)+mutedStyle.Render(r.desc))
@@ -3436,7 +3497,7 @@ func (m model) keyMapView() string {
 	if m.editing && m.editIdx == editPrefix {
 		prefKeys = keycapHotStyle.Render("…type a key")
 	}
-	body = append(body, fmt.Sprintf("%s%s   %s", caret(prefSel), prefKeys, desc(prefSel, "prefix · leader key")))
+	body = append(body, fmt.Sprintf("%s%s   %s", caret(prefSel), prefKeys, desc(prefSel, m.tr("keymap.prefix", "prefix · leader key"))))
 	if prefSel {
 		selLine = len(body) - 1
 	}
@@ -3448,7 +3509,7 @@ func (m model) keyMapView() string {
 	prevCat := ""
 	for i, b := range binds {
 		if b.cat != prevCat {
-			body = append(body, "", "  "+subhead.Render(b.cat))
+			body = append(body, "", "  "+subhead.Render(m.trCat(b.cat)))
 			prevCat = b.cat
 		}
 		selected := i+1 == m.cursor
@@ -3469,24 +3530,21 @@ func (m model) keyMapView() string {
 			}
 			keys = cap.Render(keyLabel(b.key))
 		}
-		body = append(body, fmt.Sprintf("%s%s   %s", caret(selected), keys, desc(selected, b.desc)))
+		body = append(body, fmt.Sprintf("%s%s   %s", caret(selected), keys, desc(selected, m.bindDesc(b))))
 		if selected {
 			selLine = len(body) - 1
 		}
 	}
 
-	// Settings: one selectable toggle per row, after the prefix and bindings.
-	body = append(body, "", sectionStyle.Render(spaced("SETTINGS")), "")
+	// Settings: one selectable row per setting, after the prefix and bindings.
+	body = append(body, "", sectionStyle.Render(spaced(m.tr("keymap.settings", "SETTINGS"))), "")
 	for i := 0; i < numSettings; i++ {
 		selected := m.cursor == len(binds)+1+i
-		on := m.settingValue(i)
-		box := lipgloss.NewStyle().Foreground(colDark).Background(checkColor(on)).Bold(true).Padding(0, 1)
-		check := box.Render(onOff(on))
-		label := mutedStyle.Render(settingLabel(i))
+		label := mutedStyle.Render(m.settingLabel(i))
 		if selected {
-			label = inkStyle.Render(settingLabel(i))
+			label = inkStyle.Render(m.settingLabel(i))
 		}
-		body = append(body, fmt.Sprintf("%s%s   %s", caret(selected), check, label))
+		body = append(body, fmt.Sprintf("%s%s   %s", caret(selected), m.settingBadge(i), label))
 		if selected {
 			selLine = len(body) - 1
 		}
@@ -3494,11 +3552,13 @@ func (m model) keyMapView() string {
 
 	// In-panel legend (the footer no longer carries key hints) and the negotiated
 	// protocol version, pinned below the scrolling body.
-	hints := legend("↑↓", "move", "tab", "section", "e", "edit", "enter", "run", "esc", "back")
+	hints := legend("↑↓", m.tr("keymap.legend.move", "move"), "tab", m.tr("keymap.legend.section", "section"),
+		"e", m.tr("keymap.legend.edit", "edit"), "enter", m.tr("keymap.legend.run", "run"),
+		"esc", m.tr("keymap.legend.back", "back"))
 	about := lipgloss.NewStyle().Foreground(colFaint).Render(m.versionLine())
 
 	return m.renderScrollPanel(scrollPanel{
-		title:    "KEY BINDINGS",
+		title:    m.tr("keymap.title", "KEY BINDINGS"),
 		body:     body,
 		footer:   []string{"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(hints))), hints, about},
 		reserved: keyMapReserved,
@@ -3629,7 +3689,14 @@ func (m model) popupBox(body string) string {
 func popupBoxAt(body string, width int) string {
 	lines := strings.Split(body, "\n")
 	for i, l := range lines {
-		lines[i] = takeCols(l, width) + "\x1b[0m" // reset: a clip mid-style must not bleed
+		clipped := lipgloss.Width(l) > width
+		lines[i] = takeCols(l, width)
+		if clipped {
+			// The cut may have landed inside a styled run, dropping its closing
+			// reset. Restore it — but only here: a reset on an unclipped line would
+			// end the surface background early and leave the box's own padding bare.
+			lines[i] += "\x1b[0m"
+		}
 	}
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -3895,7 +3962,7 @@ func (m model) helpHint() string {
 	if m.mode == modeZoom {
 		k = keyLabel(m.effPrefix()) + " " + k
 	}
-	return m.barStrong().Render(" "+k) + m.bar().Render(" keys ")
+	return m.barStrong().Render(" "+k) + m.bar().Render(" "+m.tr("footer.keys", "keys")+" ")
 }
 
 // statsStrip renders the system CPU and memory readout as a surface-coloured

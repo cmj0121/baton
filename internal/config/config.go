@@ -145,6 +145,11 @@ type Settings struct {
 	// UsageFooter shows the account usage/cost segment in the footer. Unset
 	// defaults to on; toggled live with the usage-footer binding (U).
 	UsageFooter *bool `yaml:"usage-footer,omitempty"`
+
+	// Language selects the cockpit's message language — "en" or "zh-TW". Unset
+	// (or a language baton does not ship) follows the environment instead:
+	// $BATON_LANG, then $LC_ALL / $LC_MESSAGES / $LANG, then English.
+	Language string `yaml:"language,omitempty"`
 }
 
 // PanelDefaults configure how new panels are spawned.
