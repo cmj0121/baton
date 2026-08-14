@@ -162,7 +162,7 @@ func (m model) diffViewportRows() int {
 // divider). rows is diffViewportRows.
 func (m model) diffLayout() (fileColW, detailW, rows int) {
 	rows = m.diffViewportRows()
-	innerW := min(clampInt(m.width-16, 24, 140), m.width-8) // bounded, but never wider than the screen
+	innerW := m.popupWidth() // the shared pop-up width: the two columns fill the frame
 	fileColW = min(diffFileColWidth, innerW-14)
 	fileColW = max(fileColW, 8)
 	detailW = max(innerW-fileColW-3, 10)
@@ -173,7 +173,7 @@ func (m model) diffLayout() (fileColW, detailW, rows int) {
 // file's diff (right), divided by a hairline, under a header and a key legend.
 func (m model) diffView() string {
 	if len(m.diffFiles) == 0 {
-		return configBox(mutedStyle.Render("no changes to diff"))
+		return m.popupBox(mutedStyle.Render("no changes to diff"))
 	}
 	fileColW, detailW, rows := m.diffLayout()
 
@@ -195,7 +195,7 @@ func (m model) diffView() string {
 		mutedStyle.Render(fmt.Sprintf("  ·  %d file(s)", len(m.diffFiles)))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", m.diffLegend())
-	return configBox(content)
+	return m.popupBox(content)
 }
 
 // diffFileRows builds the file-list column: a status marker (the porcelain XY,

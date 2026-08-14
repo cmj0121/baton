@@ -86,17 +86,17 @@ func (m model) gitOutViewportRows() int {
 	return clampInt(m.height-14, 5, 40)
 }
 
-// gitOutWidth is the popup's inner text width, bounded and never wider than the
-// screen, matching the diff popup's detail column sizing.
+// gitOutWidth is the popup's inner text width — the shared pop-up width, so the
+// output column fills the frame exactly rather than sizing itself.
 func (m model) gitOutWidth() int {
-	return min(clampInt(m.width-16, 24, 140), m.width-8)
+	return m.popupWidth()
 }
 
 // gitOutView renders the popup: a header (the op, tinted red on failure) with a
 // scroll indicator, the windowed output, and a key legend, in the cockpit's box.
 func (m model) gitOutView() string {
 	if len(m.gitOutLines) == 0 {
-		return configBox(mutedStyle.Render("no output"))
+		return m.popupBox(mutedStyle.Render("no output"))
 	}
 	width, rows := m.gitOutWidth(), m.gitOutViewportRows()
 	off := clampInt(m.gitOutScroll, 0, max(0, len(m.gitOutLines)-rows))
@@ -120,7 +120,7 @@ func (m model) gitOutView() string {
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		header, "", lipgloss.JoinVertical(lipgloss.Left, body...), "", m.gitOutLegend())
-	return configBox(content)
+	return m.popupBox(content)
 }
 
 // gitOutLegend is the popup's key hint.

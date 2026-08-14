@@ -176,7 +176,7 @@ func (m model) queueView() string {
 			mutedStyle.Render("the backlog is empty · dispatch or enqueue to fill it"),
 			"",
 			legend("esc", "close"))
-		return configBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
+		return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 	}
 
 	rows = append(rows, mutedStyle.Render(fmt.Sprintf("%d task(s) · newest first", len(m.tasks))), "")
@@ -200,5 +200,5 @@ func (m model) queueView() string {
 	rows = append(rows, "",
 		mutedStyle.Render("K/J reorder · d cancels a queued task · in-flight tasks finish on their panel"),
 		"", legend("↑↓", "move", "K/J", "reorder", "d", "cancel", "D", "drain all", "esc", "close"))
-	return configBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
+	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }

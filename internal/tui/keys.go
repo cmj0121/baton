@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/cmj0121/baton/internal/config"
+	"github.com/cmj0121/baton/internal/i18n"
 	"github.com/cmj0121/baton/internal/limits"
 )
 
@@ -192,6 +193,13 @@ var bindings = []binding{
 	{"detach", keyDetach, "detach (server keeps running)", actDetach, "Session"},
 }
 
+// bindDesc is a binding's description in the active language. The lookup is
+// keyed by the binding's stable name, not by its key or its English text, so a
+// rebind — or a reworded English line — never orphans a translation.
+func (m model) bindDesc(b binding) string {
+	return m.tr("bind."+b.name, b.desc)
+}
+
 // prefs is the cockpit state persisted to $HOME/.baton/config.
 type prefs struct {
 	prefix            string
@@ -209,6 +217,7 @@ type prefs struct {
 	limits            limits.Limits                  // fleet-wide resource caps for new panels
 	diffCommand       string                         // explicit diff command for the agent diff pop-up ("" = git diff.tool then a built-in diff)
 	tui               config.TUIConfig               // cockpit appearance: colour theme and group-split layouts
+	lang              i18n.Lang                      // resolved message language for the cockpit's help surfaces
 }
 
 // defaultAgentName is the built-in agent profile, used when none is configured —
@@ -271,6 +280,7 @@ func prefsFromConfig(cfg config.Config) prefs {
 	p.limits = cfg.Panel.Limits
 	p.diffCommand = cfg.Panel.DiffCommand
 	p.tui = cfg.TUI
+	p.lang = i18n.Detect(cfg.Settings.Language)
 	return p
 }
 
@@ -315,6 +325,7 @@ func (m model) saveConfig() error {
 	out.Settings.Bell = &bellEnabled
 	out.Settings.Mouse = &mouseEnabled
 	out.Settings.UsageFooter = &usageFooter
+	out.Settings.Language = string(m.effLang())
 	out.Panel.Shell = m.shellPath
 	out.Panel.Workdir = m.workdir
 	out.Panel.DefaultAgent = m.defaultAgent

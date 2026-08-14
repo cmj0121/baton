@@ -79,7 +79,7 @@ func (m model) commandPickerView() string {
 
 	rows = append(rows, "", mutedStyle.Render("registered by your Lua plugin · "+keyLabel(m.effPrefix())+" R reloads it"), "",
 		legend("↑↓", "move", "enter", "run", "esc", "cancel"))
-	return configBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
+	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
 
 // pluginHint is the human path to the plugin file, for the empty-picker nudge.

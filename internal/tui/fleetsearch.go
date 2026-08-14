@@ -124,7 +124,7 @@ func (m model) fleetSearchStatus() string {
 // highlighted on every line, windowed around the cursor so a long result scrolls.
 func (m model) fleetSearchView() string {
 	if len(m.fsHits) == 0 {
-		return configBox(mutedStyle.Render("no matches"))
+		return m.popupBox(mutedStyle.Render("no matches"))
 	}
 	rows, anchor := m.fleetSearchRows()
 	visible := clampInt(m.height-12, 5, 40)
@@ -134,7 +134,7 @@ func (m model) fleetSearchView() string {
 		mutedStyle.Render(fmt.Sprintf("%q  ·  %d hit(s) in %d panel(s)", m.fsQuery, len(m.fsHits), countHitPanels(m.fsHits)))
 	legendLine := legend("j/k", "move", "n/N", "walk", "enter", "open panel", "esc", "close")
 	body := lipgloss.JoinVertical(lipgloss.Left, shown...)
-	return configBox(lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", legendLine))
+	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", legendLine))
 }
 
 // fleetSearchRows builds the styled result rows — a header line when the panel

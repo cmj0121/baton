@@ -227,5 +227,5 @@ func (m model) gitPickerView() string {
 	rows = append(rows, "",
 		mutedStyle.Render("acts on the zoomed agent · "+keyLabel(m.effPrefix())+" R reloads baton"),
 		"", hints)
-	return configBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
+	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }

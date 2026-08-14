@@ -117,6 +117,32 @@ and reflows when the terminal resizes.
 | `width`   | box width as a fraction of the terminal (0 = `0.8`)  |
 | `height`  | box height as a fraction of the terminal (0 = `0.6`) |
 
+## Language
+
+The cockpit's **help surfaces** — the `?` key list and the `C-t k` key-bindings screen it shares its descriptions with —
+render in English or Traditional Chinese. Unlike everything else on this page the choice lives in the **main config**
+(`$HOME/.baton/config`), not `TUI.yaml`, because it is a behaviour setting rather than a colour:
+
+```yaml
+# $HOME/.baton/config
+settings:
+  language: zh-TW # "en" or "zh-TW"; absent follows the environment
+```
+
+| Value   | Language                       |
+| ------- | ------------------------------ |
+| `en`    | English (the default)          |
+| `zh-TW` | 繁體中文 (Traditional Chinese) |
+
+`C-t k` carries a **language** row in its settings block. It is the one row there that **cycles** rather than toggles —
+`enter` advances it and saves — so you can switch without leaving the cockpit. With nothing set, baton follows the
+environment: `$BATON_LANG` first, then `$LC_ALL` / `$LC_MESSAGES` / `$LANG` (so an already-exported `zh_TW.UTF-8` is
+enough), then English.
+
+English is the **source** language, and anything a translation does not cover falls back to it — a partial catalog shows a
+mixed screen, never a blank one. **Key names stay untranslated** on purpose, as do the words you type elsewhere in the
+system (`shell`, `agent`, `signal`, `server`, `git`): a translated key is a key nobody can press.
+
 ## Related cockpit keys
 
 These ride alongside the appearance config (full key reference in [SPEC.md](./SPEC.md#keys)):
