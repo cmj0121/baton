@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -8,6 +9,7 @@ import (
 
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/i18n"
+	"github.com/cmj0121/baton/internal/proto"
 )
 
 // helpModel is a cockpit sized to render a whole key list, in the given language
@@ -116,6 +118,31 @@ func TestLanguageDetectedFromConfig(t *testing.T) {
 	m := model{}.applyPrefs(prefsFromConfig(cfg))
 	if m.lang != i18n.ZhTW {
 		t.Errorf("applyPrefs should carry the language onto the model, got %q", m.lang)
+	}
+}
+
+// TestLanguageSurvivesTheDaemonPush walks the reload path end to end: the daemon
+// re-reads the config, marshals it, and pushes it to every open cockpit, which
+// projects it back onto its prefs. This is what makes an edited settings.language
+// a reload rather than a restart, and the JSON hop in the middle is the link that
+// would break silently — the yaml tags do not travel with it.
+func TestLanguageSurvivesTheDaemonPush(t *testing.T) {
+	t.Setenv("BATON_LANG", "")
+	t.Setenv("LC_ALL", "en_US.UTF-8")
+	t.Setenv("LC_MESSAGES", "")
+	t.Setenv("LANG", "")
+
+	var cfg config.Config
+	cfg.Settings.Language = "zh-TW"
+	data, err := json.Marshal(cfg) // exactly what the daemon's applyConfig sends
+	if err != nil {
+		t.Fatalf("marshalling the effective config: %v", err)
+	}
+
+	m := model{binds: append([]binding(nil), bindings...)}
+	m.applyEvent(proto.ServerMsg{Type: "config", Config: data})
+	if m.lang != i18n.ZhTW {
+		t.Fatalf("a pushed config should carry the language, got %q", m.lang)
 	}
 }
 
