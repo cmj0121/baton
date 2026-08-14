@@ -146,6 +146,8 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
 - **Reload** — `C-t R` (or a `SIGHUP` to the daemon) hot-reloads config without restarting the fleet.
 - **Mouse** — off by default so your terminal's own selection stays available; toggle it in the key map to scroll and
   select with the wheel.
+- **Language** — the `?` key list and the `C-t k` key map read in English or 繁體中文. Set `settings.language`, cycle it
+  live from the key map, or just let your `$LANG` decide. See **[docs/TUI.md](docs/TUI.md#language)**.
 
 ## Screensaver
 
