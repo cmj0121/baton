@@ -22,8 +22,10 @@ import (
 
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/config"
+	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/sandbox"
 )
 
 const banner = `██████╗  █████╗ ████████╗ ██████╗ ███╗   ██╗
@@ -72,6 +74,11 @@ var (
 	inkStyle    = lipgloss.NewStyle().Foreground(colInk)
 
 	sectionStyle = lipgloss.NewStyle().Bold(true).Foreground(colBrandHi)
+
+	// The settings-row pair, built once rather than per row per frame: the cursor
+	// caret and the value column of the config screens.
+	caretStyle = lipgloss.NewStyle().Bold(true).Foreground(colBrand)
+	valueStyle = lipgloss.NewStyle().Foreground(colCyan)
 
 	// The footer fill, prebuilt once per mode: the standing light blue, and a warm
 	// amber while scrolling so the whole status bar signals "history / navigation"
@@ -162,13 +169,22 @@ type model struct {
 	defaultAgent string                         // agent profile the new-agent action spawns ("" = claude)
 	agents       map[string]config.AgentProfile // user-configured agent profiles
 	replayKB     int                            // per-panel replay buffer in KiB, round-tripped so a save never drops it
-	diffCommand  string                         // configured diff command for the agent diff pop-up, round-tripped so a save never drops it
-	tuiCfg       config.TUIConfig               // cockpit appearance (theme + layouts) pushed from the daemon
-	input        inputPurpose                   // active text-input overlay, or inputNone
-	inputBuf     string                         // text typed into the overlay
-	inputHint    string                         // path-completion hint shown under the field (tab), cleared on edit
-	helpFrom     mode                           // the view the key map (?) was opened from, to restore on esc
-	helpScroll   int                            // scroll offset for the read-only help list (it has no cursor)
+	limits       limits.Limits                  // fleet-wide resource caps for new panels (the zero value caps nothing)
+	enforce      string                         // the daemon's resource-limit backend, from the welcome/config ("" until attached)
+	enforceWhy   string                         // why it is not enforcing, when it is not
+	// limitRow is the resource-limit row the inputLimit overlay is editing. It
+	// currently always equals the cursor — nothing moves the cursor while an
+	// overlay is open — but it is held explicitly because the failure mode if that
+	// ever stops holding is silent: the overlay would save into a different cap
+	// than the one it is titled with.
+	limitRow    int
+	diffCommand string           // configured diff command for the agent diff pop-up, round-tripped so a save never drops it
+	tuiCfg      config.TUIConfig // cockpit appearance (theme + layouts) pushed from the daemon
+	input       inputPurpose     // active text-input overlay, or inputNone
+	inputBuf    string           // text typed into the overlay
+	inputHint   string           // path-completion hint shown under the field (tab), cleared on edit
+	helpFrom    mode             // the view the key map (?) was opened from, to restore on esc
+	helpScroll  int              // scroll offset for the read-only help list (it has no cursor)
 
 	renameID      string // panel id being renamed via inputRename ("" if a group)
 	renameGroup   string // group being renamed via inputRename ("" if a panel)
@@ -315,6 +331,7 @@ const (
 	inputNone        inputPurpose = iota
 	inputShellPath                // editing the default shell in panel config
 	inputReplayKB                 // editing the per-panel replay buffer (KiB) in panel config
+	inputLimit                    // editing one resource-limit row in panel config (which one: model.limitRow)
 	inputNewPanelCmd              // the prefix+n new-panel command popup
 	inputAgentDir                 // the workdir for a new agent panel
 	inputGroupName                // naming a new group from the marked panels
@@ -369,6 +386,7 @@ func (m model) applyPrefs(p prefs) model {
 	m.defaultAgent = p.defaultAgent
 	m.agents = p.agents
 	m.replayKB = p.replayKB
+	m.limits = p.limits
 	m.diffCommand = p.diffCommand
 	m.tuiCfg = p.tui
 	applyTheme(p.tui.Theme) // resolve the colour tokens into the package palette
@@ -777,6 +795,7 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 	case "welcome":
 		m.version = sm.Version
 		m.serverVer = sm.ServerVer
+		m.enforce, m.enforceWhy = sm.Enforce, sm.EnforceWhy
 		m.backendDown = false // a fresh welcome means the backend is live again
 		if sm.Version != proto.ProtocolVersion {
 			m.status = "error: server speaks " + sm.Version + ", client " + proto.ProtocolVersion
@@ -1230,17 +1249,73 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// The panel-config screen's rows, in display order; the cursor indexes them.
+// The panel-config screen's rows, in display order; the cursor indexes them. The
+// resource-limit rows sit under their own section header in the view, but they
+// stay part of this one flat sequence so the cursor still counts rows, not lines.
 const (
-	panelRowShell    = iota // the default shell new panels run
-	panelRowReplayKB        // the per-panel replay buffer (KiB)
+	panelRowShell      = iota // the default shell new panels run
+	panelRowReplayKB          // the per-panel replay buffer (KiB)
+	panelRowCPUs              // resource limits: CPU cores
+	panelRowMemory            // resource limits: hard memory cap
+	panelRowMemoryHigh        // resource limits: throttle-before-kill watermark
+	panelRowPids              // resource limits: process/thread cap
+	panelRowNOFile            // resource limits: open-file-descriptor cap
 	numPanelConfigRows
+
+	firstLimitRow = panelRowCPUs // where the resource-limits section starts
 )
+
+// limitField describes one editable row of the resource-limits section: where it
+// reads and writes on limits.Limits, and how it is labelled in the row and in the
+// edit overlay. One table drives the rendering, the editor, and the commit, so a
+// new limit is a single entry rather than five parallel switch arms.
+type limitField struct {
+	label  string // the row label in the panel-config list
+	title  string // the edit overlay's title
+	prompt string // the edit overlay's prompt line
+	get    func(limits.Limits) string
+	set    func(*limits.Limits, string)
+}
+
+// limitFields lists the resource-limit rows in display order, matching the
+// panelRow* constants above.
+var limitFields = []limitField{
+	{"cpus", "CPU LIMIT", "CPU cores, e.g. 2 or 1.5  (blank = no cap)",
+		func(l limits.Limits) string { return l.CPUs },
+		func(l *limits.Limits, v string) { l.CPUs = v }},
+	{"memory", "MEMORY LIMIT", "hard cap, e.g. 4Gi  (blank = no cap)",
+		func(l limits.Limits) string { return l.Memory },
+		func(l *limits.Limits, v string) { l.Memory = v }},
+	{"memory-high", "MEMORY WATERMARK", "throttle before kill, e.g. 3Gi  (blank = no cap)",
+		func(l limits.Limits) string { return l.MemoryHigh },
+		func(l *limits.Limits, v string) { l.MemoryHigh = v }},
+	{"pids", "PROCESS LIMIT", "most processes in the panel tree  (blank = no cap)",
+		func(l limits.Limits) string { return l.Pids },
+		func(l *limits.Limits, v string) { l.Pids = v }},
+	{"nofile", "OPEN FILES", "open file descriptors per process  (blank = no cap)",
+		func(l limits.Limits) string { return l.NOFile },
+		func(l *limits.Limits, v string) { l.NOFile = v }},
+}
+
+// limitFieldFor returns the resource-limit row's descriptor, and whether the row
+// index names one at all. The rows are contiguous from firstLimitRow in the same
+// order as the table, so the position is the index — one ordering to keep, not
+// two that can drift.
+func limitFieldFor(row int) (limitField, bool) {
+	i := row - firstLimitRow
+	if i < 0 || i >= len(limitFields) {
+		return limitField{}, false
+	}
+	return limitFields[i], true
+}
 
 // editPanelRow opens the editor for the selected panel-config row.
 func (m model) editPanelRow() (tea.Model, tea.Cmd) {
-	if m.cursor == panelRowReplayKB {
+	switch {
+	case m.cursor == panelRowReplayKB:
 		return m.editReplayKB(), nil
+	case m.cursor >= firstLimitRow:
+		return m.editLimit(m.cursor), nil
 	}
 	return m.editShellPath(), nil
 }
@@ -1297,6 +1372,71 @@ func (m model) commitReplayKB(s string) model {
 		return m
 	}
 	m.status = "replay buffer · " + replayLabel(m.replayKB) + " · restart to apply"
+	return m
+}
+
+// editLimit opens the text-input overlay on one resource-limit row, seeded with
+// the current value so reopening it refines rather than restarts. The row is
+// remembered on the model because all five rows share one input purpose.
+func (m model) editLimit(row int) model {
+	f, ok := limitFieldFor(row)
+	if !ok {
+		return m
+	}
+	m.input, m.limitRow = inputLimit, row
+	m.inputBuf = f.get(m.limits)
+	m.status = f.label + " · enter a value (blank = no cap), enter to save"
+	return m
+}
+
+// enforceLabel says whether the limits on this screen actually bite, from what
+// the daemon reported on attach. A host with no backend is named outright rather
+// than left to look enforcing — editing a cap that nothing holds is the one
+// outcome the panel must not present as protection.
+func (m model) enforceLabel() string {
+	switch sandbox.Mode(m.enforce) {
+	case "":
+		return "enforcement unknown until attached"
+	case sandbox.ModeNone:
+		return "NOT enforced here · " + m.enforceWhy
+	default:
+		return "enforced by " + m.enforce
+	}
+}
+
+// limitLabel describes a resource-limit value for its panel-config row. An unset
+// field and an explicit "unlimited" both mean the same thing to the fleet, so
+// they read the same way — "no cap" — rather than leaking the config spelling.
+func limitLabel(v string) string {
+	trimmed, uncapped := limits.Uncapped(v)
+	if uncapped {
+		return "no cap"
+	}
+	return trimmed
+}
+
+// commitLimit applies the typed value to the resource-limit row being edited:
+// blank clears the cap, a readable quantity sets it, and anything else is
+// rejected with the overlay left open on the attempt — so a limit that reaches
+// the config file can always be read back.
+func (m model) commitLimit(s string) model {
+	f, ok := limitFieldFor(m.limitRow)
+	if !ok {
+		return m
+	}
+	next := m.limits
+	f.set(&next, s)
+	if err := next.Validate(); err != nil {
+		m.input, m.inputBuf = inputLimit, s // keep the overlay open with the attempt
+		m.status = "limits · " + err.Error()
+		return m
+	}
+	m.limits = next
+	if err := m.saveConfig(); err != nil {
+		m.status = "save failed: " + err.Error()
+		return m
+	}
+	m.status = f.label + " · " + limitLabel(f.get(m.limits)) + " · applies to new panels"
 	return m
 }
 
@@ -1467,6 +1607,8 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		}
 	case inputReplayKB:
 		return m.commitReplayKB(buf), nil
+	case inputLimit:
+		return m.commitLimit(buf), nil
 	case inputNewPanelCmd:
 		return m.spawnPanel(buf), nil
 	case inputAgentDir:
@@ -1543,7 +1685,7 @@ func (m model) spawnAgent(dir string) model {
 	}
 	dir = expandDir(dir)
 	if m.client != nil {
-		cmd := proto.Command{Action: "panel.create", Kind: proto.KindAgent, Path: prof.Command, Args: prof.Args, Dir: dir}
+		cmd := proto.Command{Action: "panel.create", Kind: proto.KindAgent, Path: prof.Command, Args: prof.Args, Dir: dir, Profile: name}
 		if err := m.client.Send(cmd); err != nil {
 			m.status = "send failed: " + err.Error()
 			return m
@@ -1630,7 +1772,7 @@ func (m model) spawnConductor() model {
 		return m
 	}
 	if m.client != nil {
-		cmd := proto.Command{Action: "panel.create", Kind: proto.KindAgent, Path: prof.Command, Args: prof.Args, Conductor: true}
+		cmd := proto.Command{Action: "panel.create", Kind: proto.KindAgent, Path: prof.Command, Args: prof.Args, Profile: name, Conductor: true}
 		if err := m.client.Send(cmd); err != nil {
 			m.status = "send failed: " + err.Error()
 			return m
@@ -2576,7 +2718,7 @@ func (m model) itemCount() int {
 	case modeKeyMap:
 		return len(m.keymap()) + 1 + numSettings // prefix row + bindings + the settings toggles
 	case modePanelConfig:
-		return numPanelConfigRows // default shell + replay buffer
+		return numPanelConfigRows // spawn defaults + the resource-limit rows
 	default:
 		return len(m.dashItems())
 	}
@@ -3371,7 +3513,7 @@ func (m model) keyMapView() string {
 // so panelVisibleRows can size the body to never overflow the screen.
 const (
 	keyMapReserved      = 11 // header+blank, body, blank, rule, legend, about
-	panelConfigReserved = 12 // header+blank, body, blank, hint, blank, rule, legend
+	panelConfigReserved = 13 // header+blank, body, blank, two hints, blank, rule, legend
 	helpReserved        = 9  // header+blank, body, blank, legend
 )
 
@@ -3460,25 +3602,31 @@ func configBox(body string) string {
 		Render(body)
 }
 
-// panelConfigView renders the panel-defaults tab: the default shell and the
-// per-panel replay buffer, one selectable row each.
+// panelConfigView renders the panel-defaults tab: the spawn defaults (shell,
+// replay buffer) and, under their own section header, the resource limits new
+// panels are capped by.
 func (m model) panelConfigView() string {
-	row := func(idx int, label, value string) string {
+	body := make([]string, 0, numPanelConfigRows+3) // +3: the section header and its blanks
+	selLine := 0                                    // the selected row's body line, for the scroll anchor
+
+	// The section header makes the body longer than the row count, so the selected
+	// row records the line it landed on rather than assuming the two indexes match.
+	row := func(idx int, label, value string) {
 		caret := "  "
 		labelStyle := mutedStyle
 		if m.cursor == idx {
-			caret = lipgloss.NewStyle().Foreground(colBrand).Bold(true).Render("▸ ")
+			caret = caretStyle.Render("▸ ")
 			labelStyle = inkStyle
+			selLine = len(body)
 		}
-		val := lipgloss.NewStyle().Foreground(colCyan).Render(value)
-		return fmt.Sprintf("%s%-16s%s", caret, labelStyle.Render(label), val)
+		body = append(body, fmt.Sprintf("%s%-16s%s", caret, labelStyle.Render(label), valueStyle.Render(value)))
 	}
 
-	// One body line per row, so the cursor indexes it directly; the shared widget
-	// windows it so a tiny terminal scrolls via the arrows.
-	body := []string{
-		row(panelRowShell, "default shell", shellLabel(m.shellPath)),
-		row(panelRowReplayKB, "replay buffer", replayLabel(m.replayKB)),
+	row(panelRowShell, "default shell", shellLabel(m.shellPath))
+	row(panelRowReplayKB, "replay buffer", replayLabel(m.replayKB))
+	body = append(body, "", sectionStyle.Render(spaced("RESOURCE LIMITS")), "")
+	for i, f := range limitFields {
+		row(firstLimitRow+i, f.label, limitLabel(f.get(m.limits)))
 	}
 	hints := legend("↑↓", "move", "e", "edit", "esc", "back")
 
@@ -3487,9 +3635,10 @@ func (m model) panelConfigView() string {
 		body:  body,
 		footer: []string{"",
 			mutedStyle.Render("replay buffer seeds scrollback · change applies on server restart"),
+			mutedStyle.Render("limits cap a panel's whole process tree · " + m.enforceLabel()),
 			"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(hints))), hints},
 		reserved: panelConfigReserved,
-		anchor:   m.cursor,
+		anchor:   selLine,
 		centered: true,
 		clipHint: mutedStyle.Render(fmt.Sprintf("   %d/%d", m.cursor+1, numPanelConfigRows)),
 	})
@@ -3503,6 +3652,10 @@ func (m model) inputView() string {
 		title, prompt = "DEFAULT SHELL", "shell path  (blank = system default)"
 	case inputReplayKB:
 		title, prompt = "REPLAY BUFFER", "KiB of history per panel  (blank = default)"
+	case inputLimit:
+		if f, ok := limitFieldFor(m.limitRow); ok {
+			title, prompt = f.title, f.prompt
+		}
 	case inputNewPanelCmd:
 		title, prompt, action = "NEW PANEL", "command to run  (blank = system shell)", "spawn"
 	case inputAgentDir:

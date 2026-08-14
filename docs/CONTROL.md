@@ -30,6 +30,8 @@ the box), with three differences:
 
 The isolation is a **guardrail, not a sandbox**: the agent still runs as your user, so it could reach outside the
 workspace with an absolute path. Baton shapes the environment so control is the easy path; it does not jail the process.
+[Resource limits](LIMITS.md) do put a real ceiling on what it can consume — CPU, memory, processes — but that is a
+resource boundary, not a filesystem or network one.
 
 ### The operator's brief — `$HOME/.baton/CONDUCTOR.md`
 
@@ -171,8 +173,13 @@ always speak the socket directly).
 | reorder queued tasks (promote / demote)   |                                                                |
 | close other panels, purge exited          | reload or stop the server                                      |
 |                                           | spawn faster than the rate cap, or past the fleet ceiling (64) |
+|                                           | **name an agent profile** on a spawn — see below               |
 
 So a conductor can fill and dispatch from the backlog but cannot wipe it, and the queue gives it no way around the
 self-fence: a brief it enqueues is drained by the scheduler onto _other_ idle agents, never back onto itself.
+
+A spawn from a conductor has its **profile name stripped**, so the panels it creates resolve to the fleet-wide
+[resource limits](LIMITS.md) rather than to any profile's own. The name is what a panel's caps resolve through, so an
+agent free to name one would be an agent free to name its way into wider caps than the fleet's.
 
 A plain cockpit connection declares no role and is never fenced.

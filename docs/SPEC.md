@@ -169,8 +169,8 @@ signal still reads as sent). The target follows the view: the selection on the d
 (`s`) or every member (`S`), this panel in a zoom (`C-t s`). Exited panels are skipped on both sides, so the reported
 count is the count delivered. The name→signal table lives in one place (`internal/signals`), shared by the picker and the
 server, so the menu and the accepted set cannot drift. **Reload.** `C-t R` (or a `SIGHUP` to the daemon) re-reads the
-config in place — the name policy, default workdir, and replay buffer change under a running fleet, no restart, no panel
-lost.
+config in place — the name policy, default workdir, replay buffer, and resource limits change under a running fleet, no
+restart, no panel lost.
 
 **Diff.** `D` (the `diff` binding, `C-t D` in a zoom) shows the working-tree diff of the focused **agent** panel. It is
 agent-only by design — a shell, a group card, or an empty selection never resolves a target and the client just hints
@@ -330,6 +330,12 @@ config:
 - **bell** (on by default) — rings the terminal when a panel enters `attention`.
 - **mouse** (off by default) — see above.
 
+**Resource limits.** `panel.limits` caps what a panel may use — CPU, memory, processes — and holds its whole process tree
+to it; an agent profile's own `limits` layer over the fleet-wide block field by field. The fleet-wide caps are editable
+under `C-t P`, which also reports whether this host can enforce them at all. They are resolved server-side from the
+profile _name_ a spawn carries, so a reload re-points every live panel with nothing to restart, and a client — one of
+which is an agent — never carries a policy it could have widened. Full reference: **[LIMITS.md](LIMITS.md)**.
+
 ## Keys
 
 Keys are modal. On the **dashboard** and in a **group** each action fires on a single key; in a **zoom** or **interact**
@@ -345,7 +351,7 @@ and the key-map editor — are reached after the prefix in every mode. Everythin
 |                        | `C-t [`                     | enter scroll mode                               |
 |                        | `C-t k`                     | edit the key map                                |
 |                        | `C-t c`                     | open the plugin command picker                  |
-|                        | `C-t P`                     | panel config (default shell, workdir, …)        |
+|                        | `C-t P`                     | panel config (shell, replay, resource limits)   |
 |                        | `C-t R`                     | reload config (backend + cockpit)               |
 |                        | `C-t S`                     | force-restart the server (kills the fleet)      |
 |                        | `C-t D`                     | diff the selected agent panel                   |

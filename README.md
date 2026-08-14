@@ -132,6 +132,10 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
 - **Groups & summary** — `+` / `-` dial how many members stream as live tiles; the rest fold into one summary tile.
   Pinned members always stream. `L` cycles the split's **layout** — the even grid, `main-vertical`, `main-horizontal`,
   `stack`, or your own grids from `TUI.yaml`.
+- **Resource limits** — cap what a panel may use — CPU, memory, processes — and hold its **whole process tree** to it, so
+  a runaway build cannot take the machine with it. Set a fleet-wide floor and per-agent overrides in the config or under
+  `C-t P`; `C-t R` applies them to the running fleet. Enforced with cgroup v2 on Linux, and the panel says plainly when a
+  host cannot enforce them. See **[docs/LIMITS.md](docs/LIMITS.md)**.
 - **Appearance** — `$HOME/.baton/TUI.yaml` reshapes the cockpit: a colour **theme** and the group-split **layouts**,
   hot-reloaded with `C-t R`. See **[docs/TUI.md](docs/TUI.md)**.
 - **Usage footer** — `U` toggles a footer readout of the day's token usage and cost (`⊙ 1.2M tok · ≈$12.34 API`). It
@@ -172,6 +176,8 @@ through one `baton` object. See **[docs/PLUGIN.md](docs/PLUGIN.md)**.
   persistence, the per-view key reference, and the architecture diagram.
 - **[docs/TUI.md](docs/TUI.md)** — the cockpit appearance file (`$HOME/.baton/TUI.yaml`): the colour theme and the
   group-split layouts (presets and custom grids).
+- **[docs/LIMITS.md](docs/LIMITS.md)** — resource limits: the config, the two layers, hot reload, and where they are
+  actually enforced.
 - **[docs/GIT.md](docs/GIT.md)** — the git menu: every op, the commit-editor flow, worktrees, and the config.
 - **[docs/USAGE.md](docs/USAGE.md)** — the account usage footer: the local and Admin-API sources, config, and caveats.
 - **[docs/PLUGIN.md](docs/PLUGIN.md)** — the Lua plugin API: the `baton` object, events, commands, and config.

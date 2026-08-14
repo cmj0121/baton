@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/cmj0121/baton/internal/panel"
-	"github.com/cmj0121/baton/internal/ptymgr"
 )
 
 // TestPruneExitedCapsFleet proves exited panels cannot grow without bound: past
@@ -29,7 +28,7 @@ func TestPruneExitedCapsFleet(t *testing.T) {
 	for i := 0; i < maxExitedPanels+over; i++ {
 		id := fmt.Sprintf("e%d", i)
 		s.panels = append(s.panels, panel.Panel{ID: id, State: panel.Exited})
-		s.specs[id] = ptymgr.Spec{}
+		s.specs[id] = spawnSpec{}
 	}
 	s.panels = append(s.panels, panel.Panel{ID: "live2", State: panel.Running})
 

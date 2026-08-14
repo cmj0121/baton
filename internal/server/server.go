@@ -25,11 +25,13 @@ import (
 
 	"github.com/cmj0121/baton/internal/gitdiff"
 	"github.com/cmj0121/baton/internal/gitops"
+	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/ptymgr"
 	"github.com/cmj0121/baton/internal/queue"
+	"github.com/cmj0121/baton/internal/sandbox"
 	"github.com/cmj0121/baton/internal/signals"
 	"github.com/cmj0121/baton/internal/state"
 	"github.com/cmj0121/baton/internal/task"
@@ -76,6 +78,34 @@ type clientConn struct {
 	lastSpawn time.Time
 }
 
+// spawnSpec is what a panel was launched from: the exact process spec ptymgr
+// ran, plus the agent profile it came from. The profile is kept as a name rather
+// than as the resolved limits so a reload re-reads the policy for panels that are
+// already running, instead of freezing it at spawn time.
+type spawnSpec struct {
+	ptymgr.Spec
+	Profile string // agent profile name; empty for a shell or a profile-less spawn
+}
+
+// Settings are the server knobs a running daemon can adopt without a restart —
+// what Reload swaps in, and what the construction options seed. They travel as
+// one value so the reload path does not grow another positional parameter every
+// time a knob lands.
+type Settings struct {
+	AllowNameConflict bool   // when false, panel titles and group names stay unique
+	DefaultDir        string // workdir for a panel that asks for none; empty → the user's home
+	ReplayBytes       int    // per-panel replay buffer; 0 keeps the ptymgr default
+	DiffCommand       string // explicit diff command for the agent diff pop-up
+	Editor            string // commit editor for the git menu (GIT_EDITOR)
+	WorktreeDir       string // base dir for new git-menu worktrees
+
+	// Limits is the fleet-wide resource cap and AgentLimits the per-profile caps
+	// layered over it, keyed by profile name. Only the caps are passed, never the
+	// profiles' commands: the server resolves policy, the client resolves what to run.
+	Limits      limits.Limits
+	AgentLimits map[string]limits.Limits
+}
+
 // Server owns all state and every PTY. It is safe for concurrent use.
 type Server struct {
 	ln  net.Listener
@@ -88,6 +118,20 @@ type Server struct {
 	editor            string // commit editor for the git menu (GIT_EDITOR); empty → git's own editor chain
 	worktreeDir       string // base dir for new git-menu worktrees; empty → a sibling of the agent's repo
 	version           string // the server's build version, reported in the welcome
+
+	// Resource limits. limits is the fleet-wide cap every panel runs under and
+	// agentLimits holds the per-profile caps layered over it (see Settings). The
+	// server keeps the policy rather than the client, so a connection can never
+	// spawn itself a wider one; it is resolved on demand from the profile name
+	// recorded with each panel, so a reload takes hold without touching the fleet.
+	limits      limits.Limits
+	agentLimits map[string]limits.Limits
+
+	// sand is the enforcement backend the resolved limits are handed to: it makes
+	// each panel's process tree actually run under its caps, or reports that this
+	// host cannot and leaves every panel uncapped. Built once at construction and
+	// thereafter read without the lock; it guards its own state.
+	sand *sandbox.Manager
 
 	onReload func() // invoked on a server.reload command; re-reads config and Reloads
 
@@ -122,8 +166,8 @@ type Server struct {
 	seq     int
 	panels  []panel.Panel
 	clients map[*clientConn]struct{}
-	mon     *monitor               // lifecycle + telemetry bookkeeping, guarded by mu
-	specs   map[string]ptymgr.Spec // immutable spawn spec per panel id, for persistence + respawn (guarded by mu)
+	mon     *monitor             // lifecycle + telemetry bookkeeping, guarded by mu
+	specs   map[string]spawnSpec // immutable spawn spec per panel id, for persistence + respawn (guarded by mu)
 
 	// pendingDispatch holds a dispatch whose panel was not yet ready to receive it
 	// (still spawning or mid-output): the bytes to write once the panel settles to
@@ -251,6 +295,13 @@ func WithWorktreeDir(dir string) Option {
 	return func(s *Server) { s.worktreeDir = dir }
 }
 
+// WithLimits seeds the resource-limit policy: the fleet-wide caps and the
+// per-agent-profile caps layered over them. Reload swaps both together, so this
+// only sets the policy the daemon boots with.
+func WithLimits(limits limits.Limits, agents map[string]limits.Limits) Option {
+	return func(s *Server) { s.limits, s.agentLimits = limits, agents }
+}
+
 // WithVersion sets the server's build version, reported to a frontend in the
 // welcome so it can show the backend version and flag a mismatch.
 func WithVersion(v string) Option {
@@ -307,7 +358,7 @@ func New(ln net.Listener, opts ...Option) *Server {
 		ln:              ln,
 		clients:         make(map[*clientConn]struct{}),
 		mon:             newMonitor(),
-		specs:           make(map[string]ptymgr.Spec),
+		specs:           make(map[string]spawnSpec),
 		ephemeral:       make(map[string]struct{}),
 		groupShown:      make(map[string]int),
 		groupLayout:     make(map[string]string),
@@ -320,10 +371,12 @@ func New(ln net.Listener, opts ...Option) *Server {
 		queueMax:        defaultQueueMax,
 		dirty:           make(chan struct{}, 1),
 		heartbeat:       proto.HeartbeatInterval,
+		sand:            sandbox.New(),
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
+	s.probeEnforcement()
 
 	// The task backlog mirrors to disk alongside the fleet snapshot, so it shares
 	// the same on/off switch: a state file implies a sibling queue directory.
@@ -352,20 +405,117 @@ func (s *Server) OnReload(fn func()) { s.onReload = fn }
 
 // Reload applies the hot-reloadable settings from a freshly read config without
 // restarting the daemon or disturbing a single live panel — the SIGHUP path. The
-// name-conflict policy, the default workdir, and the per-panel replay buffer can
-// all change under a running fleet; settings fixed at construction (the listener,
-// the build version) are left alone. A replayBytes of zero resets the buffer to
-// its built-in default.
-func (s *Server) Reload(allowNameConflict bool, defaultDir string, replayBytes int, diffCommand, editor, worktreeDir string) {
+// name-conflict policy, the default workdir, the per-panel replay buffer, and the
+// resource limits can all change under a running fleet; settings fixed at
+// construction (the listener, the build version) are left alone. A ReplayBytes of
+// zero resets the buffer to its built-in default.
+//
+// The limits swap is the whole policy at once: because a panel records the agent
+// profile it came from rather than the caps that profile resolved to, every live
+// panel re-reads the new policy from here on with nothing to migrate.
+func (s *Server) Reload(set Settings) {
 	s.mu.Lock()
-	s.allowNameConflict = allowNameConflict
-	s.defaultDir = defaultDir
-	s.diffCommand = diffCommand
-	s.editor = editor
-	s.worktreeDir = worktreeDir
+	s.allowNameConflict = set.AllowNameConflict
+	s.defaultDir = set.DefaultDir
+	s.diffCommand = set.DiffCommand
+	s.editor = set.Editor
+	s.worktreeDir = set.WorktreeDir
+	s.limits, s.agentLimits = set.Limits, set.AgentLimits
 	s.mu.Unlock()
-	s.pty.SetRingCap(replayBytes)
-	log.Info().Bool("allow_name_conflict", allowNameConflict).Str("default_dir", defaultDir).Int("replay_bytes", replayBytes).Str("diff_command", diffCommand).Str("editor", editor).Str("worktree_dir", worktreeDir).Msg("settings reloaded")
+	s.pty.SetRingCap(set.ReplayBytes)
+	s.probeEnforcement() // a reload may be the first thing to configure a cap
+
+	// Push the new caps onto the live cgroups. This is the half a reload cannot do
+	// by re-resolving alone: the kernel holds the old numbers until they are
+	// rewritten. Anything that cannot take hold under a running process comes back
+	// as needing a respawn, so it can be reported rather than quietly missed.
+	s.mu.Lock()
+	resolved := make(map[string]limits.Limits, len(s.specs))
+	for id, spec := range s.specs {
+		resolved[id] = s.effectiveLimitsLocked(spec.Profile)
+	}
+	fleetWide := s.effectiveLimitsLocked("")
+	s.mu.Unlock()
+	updated, deferred := s.sand.Update(func(id string) limits.Limits {
+		if caps, ok := resolved[id]; ok {
+			return caps
+		}
+		return fleetWide // an ephemeral: it holds no spec, so it takes the fleet's
+	})
+	log.Info().Bool("allow_name_conflict", set.AllowNameConflict).Str("default_dir", set.DefaultDir).
+		Int("replay_bytes", set.ReplayBytes).Str("diff_command", set.DiffCommand).Str("editor", set.Editor).
+		Str("worktree_dir", set.WorktreeDir).Interface("limits", set.Limits.Fields()).Int("agent_limits", len(set.AgentLimits)).
+		Int("panels_recapped", updated).Strs("respawn_to_apply", deferred).
+		Msg("settings reloaded")
+}
+
+// startPanel is the daemon's one fork point: it resolves the caps the panel is
+// to run under, places it inside them, and starts it. Every spawn — a fleet
+// panel, a re-run, a diff pop-up, the scratch shell — goes through here, so a
+// panel cannot be added later that quietly escapes the policy.
+//
+// profile names the agent profile the caps resolve through; empty resolves to
+// the fleet-wide caps alone, which is what a shell or a profile-less spawn gets.
+//
+// A policy the backend cannot express fails the START. A panel that was asked to
+// be capped and silently is not is the one outcome worse than not starting it,
+// because it reads as protection that is not there. A host with no backend at all
+// is the exception: that degradation is reported once at startup, and failing
+// every spawn on a machine that simply cannot enforce would make the setting
+// unusable rather than safe.
+func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
+	s.mu.Lock()
+	caps := s.effectiveLimitsLocked(profile)
+	s.mu.Unlock()
+
+	h, err := s.sand.Prepare(id, caps)
+	if err != nil {
+		return fmt.Errorf("resource limits for panel %s: %w", id, err)
+	}
+	if h != nil {
+		if skipped := append(s.sand.Unenforced(caps), h.Skipped()...); len(skipped) > 0 {
+			log.Warn().Str("panel", id).Strs("limits", skipped).Msg("limits this backend cannot enforce")
+		}
+		// Hooked onto the copy that is launched, never onto the spec the server
+		// retains: a stored hook would pin the handle long after Release drops it.
+		spec.Confine = h.Confine
+	}
+	if err := s.pty.StartCmd(id, spec); err != nil {
+		s.sand.Release(id) // the cgroup outlived the process it was made for
+		return err
+	}
+	return nil
+}
+
+// probeEnforcement commits to a backend once there is a policy to enforce, and
+// reports what the host can actually hold a panel to. Probing creates cgroups and
+// moves the daemon into one, so a fleet with no caps configured never pays for it
+// — and a reload that introduces the first cap calls this, not just startup.
+func (s *Server) probeEnforcement() {
+	s.mu.Lock()
+	configured := !s.limits.IsZero() || len(s.agentLimits) > 0
+	s.mu.Unlock()
+	if configured {
+		s.sand.Probe()
+	}
+	log.Info().Str("enforcement", s.sand.Describe()).Msg("resource limits")
+}
+
+// EffectiveLimits resolves the resource caps a live panel runs under: the
+// fleet-wide limits with its agent profile's own layered over them. It reads the
+// policy as it stands now, not as it stood when the panel spawned, so a reload is
+// visible here immediately. An unknown panel resolves to the fleet-wide limits.
+func (s *Server) EffectiveLimits(id string) limits.Limits {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.effectiveLimitsLocked(s.specs[id].Profile)
+}
+
+// effectiveLimitsLocked layers the named agent profile's caps over the fleet-wide
+// ones. An empty or unknown profile — a shell panel, or an agent spawned without
+// one — resolves to the fleet-wide limits alone. Caller holds s.mu.
+func (s *Server) effectiveLimitsLocked(profile string) limits.Limits {
+	return s.limits.Merge(s.agentLimits[profile])
 }
 
 // onPanelExit marks a panel exited when its process ends on its own, notifies
@@ -416,6 +566,7 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 
 	for _, sid := range stop {
 		s.pty.Stop(sid)
+		s.sand.Release(sid) // the panel is gone for good; drop its cgroup with it
 	}
 	for _, ws := range workspaces {
 		_ = os.RemoveAll(ws)
@@ -941,10 +1092,19 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		send(cc, proto.ServerMsg{Type: "error", Error: reason})
 		return
 	}
+	// A scoped connection does not get to choose its own policy. The profile name
+	// is what a panel's resource caps resolve through, so an agent free to name one
+	// is an agent free to name its way into caps wider than the fleet's; dropping
+	// it here makes that a property of the server rather than a convention the
+	// clients happen to keep.
+	if cc.role == roleConductor {
+		cmd.Profile = ""
+	}
 	switch cmd.Action {
 	case "hello":
 		cc.role, cc.self = cmd.Role, cmd.Self
-		send(cc, proto.ServerMsg{Type: "welcome", Version: proto.ProtocolVersion, ServerVer: s.version})
+		send(cc, proto.ServerMsg{Type: "welcome", Version: proto.ProtocolVersion, ServerVer: s.version,
+			Enforce: string(s.sand.Mode()), EnforceWhy: s.sand.Reason()})
 		send(cc, s.panelsMsg())
 		send(cc, statsMsg()) // seed the footer immediately, before the first tick
 		if s.usageProvider != nil {
@@ -953,7 +1113,7 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "panel.list":
 		send(cc, s.panelsMsg())
 	case "panel.create":
-		if _, err := s.createPanel(cmd.Kind, cmd.Path, cmd.Args, cmd.Dir, cmd.Conductor, cmd.GlobalShell); err != nil {
+		if _, err := s.createPanel(cmd.Kind, cmd.Path, cmd.Args, cmd.Dir, cmd.Profile, cmd.Conductor, cmd.GlobalShell); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
@@ -1136,7 +1296,7 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		// reply error names a full queue.
 		var spawn *task.SpawnSpec
 		if cmd.Path != "" {
-			spawn = &task.SpawnSpec{Command: cmd.Path, Args: cmd.Args, Dir: cmd.Dir, CloseOnDone: cmd.Ephemeral}
+			spawn = &task.SpawnSpec{Command: cmd.Path, Profile: cmd.Profile, Args: cmd.Args, Dir: cmd.Dir, CloseOnDone: cmd.Ephemeral}
 		}
 		s.dispatchFiltered(cc, cmd.Prompt, cmd.Group, func(p string) error {
 			_, err := s.enqueueTask(p, cmd.Group, spawn)
@@ -1174,11 +1334,16 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 // directory; an empty dir falls back to the configured default (then the user's
 // home), so a panel never inherits the directory the daemon was launched from.
 //
+// profile names the agent profile the spawn came from. It is recorded with the
+// panel and is what its resource limits resolve through, so the caps follow the
+// config rather than being frozen here; an empty name resolves to the fleet-wide
+// limits alone.
+//
 // A conductor panel is a special agent: the server enforces at most one, runs it
 // in a fresh ephemeral workspace (not any source tree) instead of dir, and
 // injects the socket + identity env so the agent inside can drive the fleet under
 // the scoped conductor role.
-func (s *Server) createPanel(kind, path string, args []string, dir string, conductor, globalShell bool) (string, error) {
+func (s *Server) createPanel(kind, path string, args []string, dir, profile string, conductor, globalShell bool) (string, error) {
 	if kind == "" {
 		kind = proto.KindShell
 	}
@@ -1247,7 +1412,8 @@ func (s *Server) createPanel(kind, path string, args []string, dir string, condu
 	default:
 		return "", fmt.Errorf("unknown panel kind %q", kind)
 	}
-	if err := s.pty.StartCmd(id, spec); err != nil {
+
+	if err := s.startPanel(id, profile, spec); err != nil {
 		if conductor {
 			_ = os.RemoveAll(dir) // drop the workspace we just made
 			s.clearConductorPending()
@@ -1275,18 +1441,23 @@ func (s *Server) createPanel(kind, path string, args []string, dir string, condu
 	}
 	s.mu.Lock()
 	s.panels = append(s.panels, p)
-	s.specs[id] = spec // the exact spec StartCmd launched, so respawn reproduces it
-	s.mon.spawned(id)  // start the Monitor's clock; first output wakes it to running
+	s.specs[id] = spawnSpec{Spec: spec, Profile: profile} // the exact spec StartCmd launched, so respawn reproduces it
+	s.mon.spawned(id)                                     // start the Monitor's clock; first output wakes it to running
 	if conductor {
 		s.conductorPending = false // the singleton is now a real panel
 	}
 	if globalShell {
 		s.globalShellPending = false // the singleton is now a real panel
 	}
-	s.emit("panel.spawn", panelFields(p))
+	fields := panelFields(p)
+	caps := s.effectiveLimitsLocked(profile).Fields()
+	if caps != nil {
+		fields["limits"] = caps // the caps this panel resolved to, so a plugin sees the policy it spawned under
+	}
+	s.emit("panel.spawn", fields)
 	s.mu.Unlock()
 
-	log.Info().Str("panel", p.Title).Msg("panel created")
+	log.Info().Str("panel", p.Title).Str("profile", profile).Interface("limits", caps).Msg("panel created")
 	return id, nil
 }
 
@@ -1551,7 +1722,7 @@ func (s *Server) snapshotState() state.State {
 			Favourite:   p.Favourite,
 			Conductor:   p.Conductor,
 			GlobalShell: p.GlobalShell,
-			Spec:        state.Spec{Command: spec.Command, Args: spec.Args, Dir: spec.Dir},
+			Spec:        state.Spec{Command: spec.Command, Args: spec.Args, Dir: spec.Dir, Profile: spec.Profile},
 		}
 	}
 	// Per-group view settings (the visible counts and the chosen layout), keyed by
@@ -1638,7 +1809,10 @@ func (s *Server) Restore() {
 			State:       panel.Exited,
 			Activity:    "restored · press r to re-run",
 		})
-		s.specs[ps.ID] = ptymgr.Spec{Command: ps.Spec.Command, Args: ps.Spec.Args, Dir: ps.Spec.Dir}
+		s.specs[ps.ID] = spawnSpec{
+			Spec:    ptymgr.Spec{Command: ps.Spec.Command, Args: ps.Spec.Args, Dir: ps.Spec.Dir},
+			Profile: ps.Spec.Profile,
+		}
 		if n, err := strconv.Atoi(ps.ID); err == nil && n > max {
 			max = n
 		}
@@ -2114,7 +2288,7 @@ func (s *Server) applyScheduledSpawns(spawns []spawnRequest) bool {
 	changed := false
 	var orphans []string
 	for _, req := range spawns {
-		pid, err := s.createPanel(proto.KindAgent, req.spec.Command, req.spec.Args, req.spec.Dir, false, false)
+		pid, err := s.createPanel(proto.KindAgent, req.spec.Command, req.spec.Args, req.spec.Dir, req.spec.Profile, false, false)
 		s.mu.Lock()
 		delete(s.spawning, req.taskID)
 		t := s.tasks[req.taskID]
@@ -2332,7 +2506,10 @@ func (s *Server) respawnPanel(id string) error {
 		s.mu.Unlock()
 	}
 
-	if err := s.pty.StartCmd(id, spec); err != nil {
+	// Re-resolve on every re-run rather than reusing what the first spawn landed
+	// on, so a respawn is also how a deferred cap (a lowered memory ceiling)
+	// finally takes hold.
+	if err := s.startPanel(id, spec.Profile, spec.Spec); err != nil {
 		return err
 	}
 
@@ -2402,6 +2579,7 @@ func (s *Server) closePanel(id string) error {
 			// normal panel close keeps its SIGHUP-via-close semantics.
 			s.pty.Signal(id, syscall.SIGKILL)
 			s.pty.Stop(id)
+			s.sand.Release(id) // the ephemeral is gone; drop its cgroup with it
 			log.Info().Str("panel", id).Msg("ephemeral diff panel closed")
 			return nil
 		}
@@ -2422,7 +2600,8 @@ func (s *Server) closePanel(id string) error {
 	s.emit("panel.close", map[string]any{"id": id, "title": title})
 	s.mu.Unlock()
 
-	s.pty.Stop(id) // no-op for a panel with no live process
+	s.pty.Stop(id)     // no-op for a panel with no live process
+	s.sand.Release(id) // the panel is gone for good; drop its cgroup with it
 	if workspace != "" {
 		_ = os.RemoveAll(workspace)
 	}
@@ -2578,7 +2757,9 @@ func (s *Server) openEphemeral(cc *clientConn, targetID, label string, resolve e
 		log.Warn().Str("target", targetID).Str("action", label).Err(err).Msg("ephemeral rejected")
 		return err
 	}
-	if err := s.pty.StartCmd(ephID, ptymgr.Spec{Command: name, Args: args, Env: env, Dir: dir}); err != nil {
+	// An ephemeral runs in the agent's workdir on the agent's behalf, so it belongs
+	// under the agent's caps rather than beside them.
+	if err := s.startPanel(ephID, spec.Profile, ptymgr.Spec{Command: name, Args: args, Env: env, Dir: dir}); err != nil {
 		unwind()
 		err = fmt.Errorf("could not open %s: %w", label, err)
 		log.Warn().Str("target", targetID).Str("dir", dir).Str("action", label).Err(err).Msg("ephemeral spawn failed")
@@ -2631,7 +2812,10 @@ func (s *Server) openScratch(cc *clientConn, cmd, dir string) error {
 	if err != nil {
 		return err
 	}
-	if err := s.pty.StartCmd(ephID, ptymgr.Spec{Command: cmd, Dir: dir}); err != nil {
+	// The scratch shell belongs to no agent, so it takes the fleet-wide caps. It is
+	// the panel a user types arbitrary commands into, which makes leaving it
+	// uncapped the least defensible exemption of the four.
+	if err := s.startPanel(ephID, "", ptymgr.Spec{Command: cmd, Dir: dir}); err != nil {
 		unwind()
 		return fmt.Errorf("could not open the scratch shell: %w", err)
 	}
@@ -2646,19 +2830,19 @@ func (s *Server) openScratch(cc *clientConn, cmd, dir string) error {
 // worktree add and remove) routes through here. label names the action in the gate
 // error ("diff"/"git"). Returns the panel's immutable spec, or an error for an
 // unknown id or a non-agent target.
-func (s *Server) agentTargetSpec(targetID, label string) (ptymgr.Spec, error) {
+func (s *Server) agentTargetSpec(targetID, label string) (spawnSpec, error) {
 	s.mu.Lock()
 	idx := s.indexLocked(targetID)
 	if idx < 0 {
 		s.mu.Unlock()
-		return ptymgr.Spec{}, fmt.Errorf("no panel with id %q", targetID)
+		return spawnSpec{}, fmt.Errorf("no panel with id %q", targetID)
 	}
 	kind := s.panels[idx].Kind
 	spec := s.specs[targetID]
 	s.mu.Unlock()
 
 	if kind != panel.Agent {
-		return ptymgr.Spec{}, fmt.Errorf("%s is available on agent panels", label)
+		return spawnSpec{}, fmt.Errorf("%s is available on agent panels", label)
 	}
 	return spec, nil
 }
@@ -2689,7 +2873,7 @@ func (s *Server) gitWorktreeAdd(targetID, branch string) error {
 	// Spawn the agent in the new worktree and file it under the branch, so it lands
 	// as a work item immediately. A spawn failure leaves the worktree in place — the
 	// user can retire it with worktree-remove rather than us guessing.
-	id, err := s.createPanel(proto.KindAgent, spec.Command, spec.Args, path, false, false)
+	id, err := s.createPanel(proto.KindAgent, spec.Command, spec.Args, path, spec.Profile, false, false)
 	if err != nil {
 		return fmt.Errorf("worktree created at %s, but the agent did not start: %w", path, err)
 	}
@@ -2760,6 +2944,7 @@ func (s *Server) closeEphemeral(cc *clientConn) {
 		// could outlive the dropped client. Ephemeral panels are safe to SIGKILL.
 		s.pty.Signal(id, syscall.SIGKILL)
 		s.pty.Stop(id)
+		s.sand.Release(id) // the ephemeral is gone; drop its cgroup with it
 	}
 	if len(ids) > 0 {
 		log.Info().Int("count", len(ids)).Msg("reaped ephemeral diff panels on disconnect")
@@ -2792,6 +2977,7 @@ func (s *Server) purgeExited() int {
 
 	for _, id := range gone {
 		s.pty.Stop(id)
+		s.sand.Release(id) // purged for good; drop its cgroup with it
 	}
 	for _, ws := range workspaces {
 		_ = os.RemoveAll(ws)

@@ -107,6 +107,15 @@ type Spec struct {
 	Args    []string // arguments, e.g. an agent profile's flags
 	Dir     string   // working directory; empty falls back to the user's home
 	Env     []string // extra "KEY=value" entries appended to the inherited env (e.g. GIT_EDITOR)
+
+	// Confine, when set, is handed the assembled command just before it is
+	// started — the hook the resource-limit backend uses to have the child born
+	// inside its cgroup. It takes the command rather than its fork attributes so a
+	// backend is not limited to what SysProcAttr can express: an rlimit or a
+	// wrapper around the argv is reachable through the same hook. Either way the
+	// PTY manager stays free of any notion of what a limit is — it launches
+	// processes, something else decides what they may use.
+	Confine func(*exec.Cmd) error
 }
 
 // PanelDir is the directory a panel runs in: the requested dir, or the user's
@@ -145,6 +154,15 @@ func (m *Manager) StartCmd(id string, spec Spec) error {
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 	cmd.Env = append(cmd.Env, spec.Env...) // per-spec overrides (e.g. GIT_EDITOR for a commit)
 	cmd.Dir = PanelDir(spec.Dir)           // empty → home, never the daemon's cwd
+
+	// pty.Start layers its own Setsid/Setctty onto whatever attributes are already
+	// on the command, so the confinement hook composes with the session setup
+	// rather than replacing it.
+	if spec.Confine != nil {
+		if err := spec.Confine(cmd); err != nil {
+			return err
+		}
+	}
 
 	f, err := pty.Start(cmd)
 	if err != nil {

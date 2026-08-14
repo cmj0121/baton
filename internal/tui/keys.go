@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/cmj0121/baton/internal/config"
+	"github.com/cmj0121/baton/internal/limits"
 )
 
 // Keybindings are modal. In the command-mode views (dashboard, group split) an
@@ -205,6 +206,7 @@ type prefs struct {
 	defaultAgent      string                         // agent profile the new-agent action spawns
 	agents            map[string]config.AgentProfile // user-configured agent profiles
 	replayKB          int                            // per-panel replay buffer in KiB (0 = server default)
+	limits            limits.Limits                  // fleet-wide resource caps for new panels
 	diffCommand       string                         // explicit diff command for the agent diff pop-up ("" = git diff.tool then a built-in diff)
 	tui               config.TUIConfig               // cockpit appearance: colour theme and group-split layouts
 }
@@ -266,6 +268,7 @@ func prefsFromConfig(cfg config.Config) prefs {
 	p.defaultAgent = cfg.Panel.DefaultAgent
 	p.agents = cfg.Panel.Agents
 	p.replayKB = cfg.Panel.ReplayKB
+	p.limits = cfg.Panel.Limits
 	p.diffCommand = cfg.Panel.DiffCommand
 	p.tui = cfg.TUI
 	return p
@@ -317,6 +320,7 @@ func (m model) saveConfig() error {
 	out.Panel.DefaultAgent = m.defaultAgent
 	out.Panel.Agents = m.agents // round-trip the user's profiles so a save never drops them
 	out.Panel.ReplayKB = m.replayKB
+	out.Panel.Limits = m.limits
 	out.Panel.DiffCommand = m.diffCommand
 	out.TUI = config.TUIConfig{} // the cockpit appearance lives in TUI.yaml, never the main config
 	return out.Save()

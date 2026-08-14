@@ -57,6 +57,7 @@ type Command struct {
 	ID        string   `json:"id,omitempty"`        // target panel for close/attach/input/resize/diff, or the panel to rename
 	Path      string   `json:"path,omitempty"`      // init command (binary path) for "panel.create"; empty = default shell
 	Args      []string `json:"args,omitempty"`      // command arguments for "panel.create" (an agent profile's args)
+	Profile   string   `json:"profile,omitempty"`   // the agent profile the spawn came from; the server resolves THAT profile's resource limits from its own config, so a client never carries a policy it could widen
 	Dir       string   `json:"dir,omitempty"`       // working directory the new panel's process runs in ("panel.create")
 	Data      []byte   `json:"data,omitempty"`      // input bytes for "panel.input"
 	Prompt    string   `json:"prompt,omitempty"`    // the task brief for "panel.dispatch"/"panel.dispatch-group": recorded on the panel(s) and delivered to the process as a unit
@@ -170,22 +171,24 @@ type PluginCommand struct {
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type      string      `json:"type"`                 // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "scratch" | "diff" | "gitout" | "search" | "notice" | "config" | "footer" | "usage" | "tasks" | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline)
-	Version   string      `json:"version,omitempty"`    // protocol version, set on "welcome"
-	ServerVer string      `json:"server_ver,omitempty"` // the server's build version, set on "welcome"
-	Error     string      `json:"error,omitempty"`      // set on "error"
-	Notice    string      `json:"notice,omitempty"`     // a plugin-originated transient notice, set on "notice"
-	Footer    string      `json:"footer,omitempty"`     // a plugin-set persistent footer segment, set on "footer" and carried on "config"; empty clears it
-	Usage     string      `json:"usage,omitempty"`      // the account's usage/cost footer segment (internal/usage), set on "usage" and seeded on "hello"; empty means nothing to show
-	Panels    []Panel     `json:"panels,omitempty"`     // full snapshot on "panels"; live state/spark refresh on "telemetry"
-	Groups    []GroupView `json:"groups,omitempty"`     // per-group view settings on the "panels" snapshot, alongside Panels
-	Tasks     []Task      `json:"tasks,omitempty"`      // the backlog snapshot on "tasks" (reply to task.list)
-	ID        string      `json:"id,omitempty"`         // panel id on "output"; the new transient panel id on "ephemeral" (a git op); the diffed agent panel id on "diff"
-	Data      []byte      `json:"data,omitempty"`       // pty output bytes on "output"
-	Files     []DiffFile  `json:"files,omitempty"`      // per-file staged/unstaged diffs on "diff"; ID carries the target panel
-	Hits      []SearchHit `json:"hits,omitempty"`       // matching lines on "search" (reply to fleet.search), grouped by panel on the frontend
-	Text      string      `json:"text,omitempty"`       // a non-interactive git op's captured output on "gitout"; ID carries the target panel
-	Failed    bool        `json:"failed,omitempty"`     // on "gitout", the op exited non-zero (its message is in Text)
+	Type       string      `json:"type"`                  // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "scratch" | "diff" | "gitout" | "search" | "notice" | "config" | "footer" | "usage" | "tasks" | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline)
+	Version    string      `json:"version,omitempty"`     // protocol version, set on "welcome"
+	ServerVer  string      `json:"server_ver,omitempty"`  // the server's build version, set on "welcome"
+	Enforce    string      `json:"enforce,omitempty"`     // the resource-limit backend in force on the host the panels run on ("cgroup", "none"), set on "welcome" and "config" so a frontend offering to edit limits can say whether they bite
+	EnforceWhy string      `json:"enforce_why,omitempty"` // why Enforce is "none", e.g. "cgroup v2 is Linux-only"; empty when enforcing
+	Error      string      `json:"error,omitempty"`       // set on "error"
+	Notice     string      `json:"notice,omitempty"`      // a plugin-originated transient notice, set on "notice"
+	Footer     string      `json:"footer,omitempty"`      // a plugin-set persistent footer segment, set on "footer" and carried on "config"; empty clears it
+	Usage      string      `json:"usage,omitempty"`       // the account's usage/cost footer segment (internal/usage), set on "usage" and seeded on "hello"; empty means nothing to show
+	Panels     []Panel     `json:"panels,omitempty"`      // full snapshot on "panels"; live state/spark refresh on "telemetry"
+	Groups     []GroupView `json:"groups,omitempty"`      // per-group view settings on the "panels" snapshot, alongside Panels
+	Tasks      []Task      `json:"tasks,omitempty"`       // the backlog snapshot on "tasks" (reply to task.list)
+	ID         string      `json:"id,omitempty"`          // panel id on "output"; the new transient panel id on "ephemeral" (a git op); the diffed agent panel id on "diff"
+	Data       []byte      `json:"data,omitempty"`        // pty output bytes on "output"
+	Files      []DiffFile  `json:"files,omitempty"`       // per-file staged/unstaged diffs on "diff"; ID carries the target panel
+	Hits       []SearchHit `json:"hits,omitempty"`        // matching lines on "search" (reply to fleet.search), grouped by panel on the frontend
+	Text       string      `json:"text,omitempty"`        // a non-interactive git op's captured output on "gitout"; ID carries the target panel
+	Failed     bool        `json:"failed,omitempty"`      // on "gitout", the op exited non-zero (its message is in Text)
 
 	// The merged effective client config, set on "config": defaults <- YAML <-
 	// plugin. The cockpit applies it over its local config on attach and reload, so

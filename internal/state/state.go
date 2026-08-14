@@ -50,6 +50,11 @@ type Spec struct {
 	Command string   `json:"command"`
 	Args    []string `json:"args"`
 	Dir     string   `json:"dir"`
+
+	// Profile is the agent profile the panel was spawned from, kept so a restored
+	// panel resolves its resource limits through the same profile the live one did.
+	// Additive and optional, so snapshots written before it still load.
+	Profile string `json:"profile,omitempty"`
 }
 
 // GroupLayout is one group's persisted view settings. Shown is how many members
