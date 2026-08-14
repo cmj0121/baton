@@ -3574,7 +3574,7 @@ type scrollPanel struct {
 }
 
 // renderScrollPanel windows p.body to the height and wraps it, the title, and the
-// footer in the shared configBox.
+// footer in the shared popupBox.
 func (m model) renderScrollPanel(p scrollPanel) string {
 	visible := m.panelVisibleRows(p.reserved)
 	body, clipped := windowFrom(p.body, p.anchor, visible)
@@ -3589,17 +3589,54 @@ func (m model) renderScrollPanel(p scrollPanel) string {
 	out = append(out, header, "")
 	out = append(out, body...)
 	out = append(out, p.footer...)
-	return configBox(lipgloss.JoinVertical(lipgloss.Left, out...))
+	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, out...))
 }
 
-// configBox wraps a settings/overlay panel in the cockpit's bordered surface.
-func configBox(body string) string {
+// Every overlay pop-up renders at one width, not at its content's width, so the
+// bordered surface stays put as you page a list, switch tabs, or move between
+// pop-ups — content no longer breathes the frame in and out. popupCols is that
+// content width; the box around it is popupCols + 2*popupPadX + 2 (the border).
+// A terminal too narrow for it shrinks the content instead of overflowing.
+const (
+	popupCols    = 88 // the fixed inner content width of every overlay pop-up
+	popupPadX    = 3  // horizontal padding between the content and the border
+	popupMinCols = 24 // the narrowest content width still worth rendering
+)
+
+// popupWidth is the inner content width of every overlay pop-up: the fixed
+// popupCols, capped to what the terminal can actually hold (border + padding
+// included). An unsized model — the first frame, and unit tests — reports the
+// fixed width, so a pop-up rendered before the first WindowSizeMsg looks the same
+// as one rendered after it.
+func (m model) popupWidth() int {
+	if m.width <= 0 {
+		return popupCols
+	}
+	return clampInt(m.width-2*popupPadX-2, popupMinCols, popupCols)
+}
+
+// popupBox wraps a settings/overlay panel in the cockpit's bordered surface at the
+// fixed pop-up width.
+func (m model) popupBox(body string) string {
+	return popupBoxAt(body, m.popupWidth())
+}
+
+// popupBoxAt renders body in the bordered surface at an exact content width. Each
+// line is clipped and space-padded to that width first (takeCols measures display
+// cells and copies escapes verbatim, so a CJK glyph or a styled row is neither
+// miscounted nor wrapped), which both pins the frame and keeps a long row from
+// re-flowing into a second line.
+func popupBoxAt(body string, width int) string {
+	lines := strings.Split(body, "\n")
+	for i, l := range lines {
+		lines[i] = takeCols(l, width) + "\x1b[0m" // reset: a clip mid-style must not bleed
+	}
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colBrand).
 		Background(colSurface).
-		Padding(1, 3).
-		Render(body)
+		Padding(1, popupPadX).
+		Render(strings.Join(lines, "\n"))
 }
 
 // panelConfigView renders the panel-defaults tab: the spawn defaults (shell,
@@ -3695,7 +3732,7 @@ func (m model) inputView() string {
 		rows = append(rows, lipgloss.NewStyle().Foreground(colCyan).Width(46).Render(truncate(m.inputHint, 46)))
 	}
 	rows = append(rows, "", hints)
-	return configBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
+	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
 
 // onOff renders a boolean as a fixed-width ON/OFF label.

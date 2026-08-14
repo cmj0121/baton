@@ -128,5 +128,5 @@ func (m model) signalPickerView() string {
 	rows = append(rows, "",
 		mutedStyle.Render("delivered to the panel's process group · "+keyLabel(m.effPrefix())+" R reloads baton"),
 		"", legend("↑↓", "move", "enter", "send", "esc", "cancel"))
-	return configBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
+	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }

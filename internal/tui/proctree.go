@@ -202,7 +202,7 @@ func (m model) procWidth() int {
 // tree, and a key legend, in the cockpit's box.
 func (m model) procTreeView() string {
 	if len(m.procLines) == 0 {
-		return configBox(mutedStyle.Render("no processes"))
+		return m.popupBox(mutedStyle.Render("no processes"))
 	}
 	width, rows := m.procWidth(), m.procViewportRows()
 	off := clampInt(m.procScroll, 0, max(0, len(m.procLines)-rows))
@@ -224,7 +224,7 @@ func (m model) procTreeView() string {
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		header, "", lipgloss.JoinVertical(lipgloss.Left, body...), "", m.procTreeLegend())
-	return configBox(content)
+	return m.popupBox(content)
 }
 
 // procTreeLegend is the overlay's key hint.
