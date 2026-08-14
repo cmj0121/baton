@@ -29,8 +29,14 @@ rm -f "$BATON_SOCK" "${BATON_SOCK%.sock}.state.json"
 # The fresh HOME has no agent CLI set up, so the conductor key (C) would land in
 # the real agent's first-run wizard. Point the default profile at the stand-in
 # instead — see demo-agent.sh for what it does and does not fake.
+#
+# Pin the language too. With nothing set, the cockpit follows the recorder's
+# locale, so a machine with LANG=zh_TW would record the English README's hero in
+# Chinese. The clip has to look the same wherever it is recorded, so state it.
 mkdir -p "$HOME/.baton"
 cat >"$HOME/.baton/config" <<YAML
+settings:
+  language: en
 panel:
   agents:
     claude:
