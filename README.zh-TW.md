@@ -129,6 +129,9 @@ Baton 會啟動它的背景伺服器,並把你帶到**儀表板**——你的大
 - **群組與摘要** — `+` / `-` 調整有多少成員以即時磚串流;其餘收摺成一個摘要磚。被釘選的成員永遠串流。
   `L` 輪替分割畫面的**版面配置**——均勻網格、`main-vertical`、`main-horizontal`、`stack`,
   或你自己在 `TUI.yaml` 裡定義的網格。
+- **資源上限** — 限制一個面板能用多少 CPU、記憶體、行程數,而且管的是它**整棵行程樹**,讓失控的建置沒辦法把整台
+  機器一起拖下水。全隊底線與 per-agent 覆寫都寫在設定檔裡,也能在 `C-t P` 裡編;`C-t R` 會把新上限套用到正在跑
+  的隊伍。Linux 上以 cgroup v2 強制,而主機若無法強制,面板會直說。見 **[docs/LIMITS.md](docs/LIMITS.zh-TW.md)**。
 - **外觀** — `$HOME/.baton/TUI.yaml` 重塑座艙:一組色彩**主題**與群組分割的**版面配置**,用 `C-t R` 熱重載。
   見 **[docs/TUI.md](docs/TUI.md)**。
 - **用量頁尾** — `U` 切換一列頁尾,顯示當日的 token 用量與成本(`⊙ 1.2M tok · ≈$12.34 API`)。它預設讀取
@@ -166,6 +169,7 @@ socket 接上——指令往上、事件往下——所以你卸離再重新接�
   逐畫面按鍵參照,以及架構圖。
 - **[docs/TUI.md](docs/TUI.md)** — 座艙外觀檔(`$HOME/.baton/TUI.yaml`):色彩主題與群組分割的版面配置
   (預設與自訂網格)。
+- **[docs/LIMITS.md](docs/LIMITS.zh-TW.md)** — 資源上限:設定寫法、兩層疊加、熱重載,以及它們實際在哪裡被強制。
 - **[docs/GIT.md](docs/GIT.md)** — git 選單:每個操作、commit 編輯流程、worktree,以及設定。
 - **[docs/USAGE.md](docs/USAGE.md)** — 帳號用量頁尾:本機與 Admin-API 兩種來源、設定,以及注意事項。
 - **[docs/PLUGIN.md](docs/PLUGIN.md)** — Lua 外掛 API:`baton` 物件、事件、指令,以及設定。
