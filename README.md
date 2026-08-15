@@ -33,8 +33,13 @@ Baton is a single static binary. On macOS, tap it with [Homebrew](https://brew.s
 brew install cmj0121/tap/baton
 ```
 
-On Linux, take a prebuilt tarball from the [releases](https://github.com/cmj0121/baton/releases) — or, on any platform,
-grab it with [Go](https://go.dev) 1.26+:
+On Linux, one line does it:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/cmj0121/baton/main/scripts/install.sh | sh
+```
+
+…or, on any platform, grab it with [Go](https://go.dev) 1.26+:
 
 ```sh
 go install github.com/cmj0121/baton/cmd/baton@latest

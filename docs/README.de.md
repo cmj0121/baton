@@ -33,8 +33,13 @@ Baton ist eine einzelne, statisch gelinkte Binärdatei. Unter macOS holst du sie
 brew install cmj0121/tap/baton
 ```
 
-Unter Linux nimmst du ein vorgebautes Tarball aus den [Releases](https://github.com/cmj0121/baton/releases) — oder,
-auf jeder Plattform, holst du sie dir mit [Go](https://go.dev) 1.26+:
+Unter Linux genügt eine Zeile:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/cmj0121/baton/main/scripts/install.sh | sh
+```
+
+… oder, auf jeder Plattform, holst du sie dir mit [Go](https://go.dev) 1.26+:
 
 ```sh
 go install github.com/cmj0121/baton/cmd/baton@latest
