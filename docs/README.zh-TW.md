@@ -33,8 +33,13 @@ Baton 是單一的靜態執行檔。在 macOS 上,用 [Homebrew](https://brew.sh
 brew install cmj0121/tap/baton
 ```
 
-在 Linux 上,從 [releases](https://github.com/cmj0121/baton/releases) 取用預先編好的 tarball;或者不分平台,
-都能用 [Go](https://go.dev) 1.26+ 取得它:
+在 Linux 上,一行就好:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/cmj0121/baton/main/scripts/install.sh | sh
+```
+
+……或者不分平台,都能用 [Go](https://go.dev) 1.26+ 取得它:
 
 ```sh
 go install github.com/cmj0121/baton/cmd/baton@latest

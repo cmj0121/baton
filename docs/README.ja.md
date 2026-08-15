@@ -34,8 +34,13 @@ Baton は単一の静的バイナリです。macOS なら、[Homebrew](https://b
 brew install cmj0121/tap/baton
 ```
 
-Linux では [releases](https://github.com/cmj0121/baton/releases) のビルド済み tarball を使ってください。プラットフォームを
-問わず、[Go](https://go.dev) 1.26+ で取得することもできます:
+Linux なら、一行で済みます:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/cmj0121/baton/main/scripts/install.sh | sh
+```
+
+……あるいはプラットフォームを問わず、[Go](https://go.dev) 1.26+ で取得することもできます:
 
 ```sh
 go install github.com/cmj0121/baton/cmd/baton@latest

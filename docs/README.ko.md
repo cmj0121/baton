@@ -34,8 +34,13 @@ Baton은 단일 정적 실행 파일입니다. macOS에서는 [Homebrew](https:/
 brew install cmj0121/tap/baton
 ```
 
-Linux에서는 [releases](https://github.com/cmj0121/baton/releases)의 미리 빌드된 tarball을 받으세요. 플랫폼을 가리지 않고
-[Go](https://go.dev) 1.26+ 로 받을 수도 있습니다.
+Linux에서는 한 줄이면 됩니다.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/cmj0121/baton/main/scripts/install.sh | sh
+```
+
+…또는 플랫폼을 가리지 않고 [Go](https://go.dev) 1.26+ 로 받을 수도 있습니다.
 
 ```sh
 go install github.com/cmj0121/baton/cmd/baton@latest
