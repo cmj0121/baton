@@ -5,7 +5,8 @@
 [![CI](https://github.com/cmj0121/baton/actions/workflows/ci.yml/badge.svg)](https://github.com/cmj0121/baton/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/cmj0121/baton/branch/main/graph/badge.svg)](https://codecov.io/gh/cmj0121/baton)
 
-**English** · [繁體中文](README.zh-TW.md)
+**English** · [繁體中文](docs/README.zh-TW.md) · [日本語](docs/README.ja.md) · [한국어](docs/README.ko.md) ·
+[Français](docs/README.fr.md) · [Deutsch](docs/README.de.md) · [Español](docs/README.es.md)
 
 Running a handful of AI coding agents at once? It gets messy fast — windows to juggle, sessions scattered across tabs, and
 no single place to see who's working, who's stuck, and who's waiting on you.
@@ -26,7 +27,14 @@ machine; the fleet it drives over the socket is real._
 
 ## Get started
 
-Baton is a single static binary. Grab it with [Go](https://go.dev) 1.26+:
+Baton is a single static binary. On macOS, tap it with [Homebrew](https://brew.sh):
+
+```sh
+brew install cmj0121/tap/baton
+```
+
+On Linux, take a prebuilt tarball from the [releases](https://github.com/cmj0121/baton/releases) — or, on any platform,
+grab it with [Go](https://go.dev) 1.26+:
 
 ```sh
 go install github.com/cmj0121/baton/cmd/baton@latest
