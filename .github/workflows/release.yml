@@ -3,7 +3,8 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      # semver only — `v*` also caught things like `v0.7.0-rc` or a stray `vnext`.
+      - "v*.*.*"
 
 permissions:
   contents: write
@@ -36,3 +37,21 @@ jobs:
           # a PAT with `contents: write` on cmj0121/homebrew-tap — the workflow's
           # own GITHUB_TOKEN is scoped to this repository only.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Mirror the release note to the tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # the tap carries one release per tool per version, so namespace the
+          # tag — a second tool in this tap must not collide with baton's.
+          {
+            git tag -l --format='%(contents)' "${TAG}"
+            printf '\n---\n\n'
+            printf 'Install: `brew install cmj0121/tap/baton`\n\n'
+            printf 'Full release: https://github.com/cmj0121/baton/releases/tag/%s\n' "${TAG}"
+          } > tap-note.md
+          gh release create "baton-${TAG}" \
+            --repo cmj0121/homebrew-tap \
+            --title "baton ${TAG}" \
+            --notes-file tap-note.md
