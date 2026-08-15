@@ -143,6 +143,32 @@ English is the **source** language, and anything a translation does not cover fa
 mixed screen, never a blank one. **Key names stay untranslated** on purpose, as do the words you type elsewhere in the
 system (`shell`, `agent`, `signal`, `server`, `git`): a translated key is a key nobody can press.
 
+## Keycast
+
+The cockpit is modal — quick once you know it, opaque while you are learning it, and invisible on a screen recording,
+where a viewer sees results without the keys that caused them. **`K`** turns on a readout beside `? keys` that names the
+key you just pressed and what it did:
+
+```text
+ DASHBOARD │ ? keys │ G group          CPU 22%  MEM 11.5/16G  ⏱ 09:34:49  ● attached · local
+```
+
+The leader shows as it is typed: `C-t …` while it waits for the second half, then `C-t d dashboard` once you complete
+it. Each press stays for three seconds and clears itself, so an idle cockpit is not still advertising the last thing you
+did. When the bar runs out of room the readout is dropped before `? keys` is.
+
+It reads **only baton's own keys**. In a zoom, an interact tile, the scratch pane or a text field the keystrokes belong
+to the program you are driving, and those are never shown — the leader is the one exception, because it is baton's key
+wherever it is pressed. This is a teaching and recording aid, not a keylogger.
+
+Off by default. `K` toggles it live and persists the choice:
+
+```yaml
+# $HOME/.baton/config
+settings:
+  keycast: true # show the key-press readout (also toggled live with K)
+```
+
 ## Related cockpit keys
 
 These ride alongside the appearance config (full key reference in [SPEC.md](./SPEC.md#keys)):

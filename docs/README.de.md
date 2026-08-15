@@ -106,6 +106,7 @@ Tastenbelegung zu bearbeiten.
 |             | `/`               | die Ausgabe jedes Panels durchsuchen (die Flotte greppen)      |
 |             | `T` / `Q`         | eine Task vergeben / die Task-Warteschlange verwalten          |
 |             | `U`               | die Fußzeile für Kontonutzung/Kosten umschalten                |
+|             | `K`               | die Tastenanzeige in der Fußzeile umschalten                   |
 | Group       | `tab`             | das nächste Panel fokussieren                                  |
 |             | `+` / `-`         | mehr / weniger Live-Kacheln zeigen                             |
 |             | `L`               | das Kachel-Layout durchschalten                                |

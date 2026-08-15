@@ -104,6 +104,7 @@ the current view, and **`C-t k`** to edit the key map.
 |             | `/`               | search every panel's output (grep the fleet)        |
 |             | `T` / `Q`         | dispatch a task / manage the task queue             |
 |             | `U`               | toggle the account usage/cost footer                |
+|             | `K`               | toggle the key-press readout in the footer          |
 | Group       | `tab`             | focus the next panel                                |
 |             | `+` / `-`         | show more / fewer live tiles                        |
 |             | `L`               | cycle the tile layout                               |
