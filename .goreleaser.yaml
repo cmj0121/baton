@@ -1,0 +1,101 @@
+# GoReleaser builds the cross-platform binaries for a tag and pushes the Homebrew
+# formula to cmj0121/homebrew-tap, so `brew install cmj0121/tap/baton` lands a
+# prebuilt binary instead of compiling from source.
+#
+# Dry-run locally with:  goreleaser release --snapshot --clean
+version: 2
+
+project_name: baton
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: baton
+    main: ./cmd/baton
+    binary: baton
+    env:
+      # pure-Go build so the release binary is static and cross-compiles without
+      # a C toolchain on the runner.
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      # mirror the Makefile: strip the symbol table (-s) and DWARF debug info (-w).
+      - -s -w
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: baton
+    ids:
+      - baton
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+      - src: docs/*.md
+        dst: docs
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  # the release notes are hand-written per the release convention; keep the
+  # generated list as a short appendix of what actually landed.
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "^style:"
+
+# casks, not formulas: `brews` has been deprecated since goreleaser v2.10 and
+# `goreleaser check` now fails on it. Casks are macOS-only, so Linux keeps the
+# release tarball and `go install` as its install paths.
+homebrew_casks:
+  - name: baton
+    ids:
+      - baton
+    binaries:
+      - baton
+    repository:
+      owner: cmj0121
+      name: homebrew-tap
+      branch: main
+      # a PAT with write access to the tap repo; the default GITHUB_TOKEN of a
+      # workflow cannot push to another repository.
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Casks
+    homepage: "https://github.com/cmj0121/baton"
+    description: "An extensible, agent-friendly terminal multiplexer"
+    commit_author:
+      name: cmj
+      email: cmj0121@gmail.com
+    commit_msg_template: "brew: bump baton to {{ .Tag }}"
+    hooks:
+      post:
+        # the binary is downloaded rather than built locally, so Gatekeeper
+        # quarantines it; strip the flag or the first run is blocked.
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/baton"]
+          end
+
+release:
+  github:
+    owner: cmj0121
+    name: baton
+  # the annotated tag's own message is the release body; goreleaser appends the
+  # changelog under it.
+  mode: append
