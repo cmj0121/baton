@@ -1,0 +1,65 @@
+name: Bug report
+description: Something in the cockpit or the daemon does not behave
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. Baton runs a background daemon, so the most useful
+        reports say which side broke — the cockpit you were looking at, or the server
+        behind it.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `baton --version`.
+      placeholder: "1.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS, architecture, and terminal emulator.
+      placeholder: "macOS 15.5 arm64, Ghostty 1.2"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The key sequence or command that gets there from a fresh `baton`.
+      placeholder: |
+        1. baton
+        2. press A, pick ~/src/foo
+        3. press enter
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Daemon log
+      description: >
+        Relevant lines from the daemon. Redact anything private — the log can carry
+        working directory paths and agent output.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I am on the latest release, or I checked that the issue is still open on it.
+          required: true

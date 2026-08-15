@@ -1,0 +1,49 @@
+name: Feature request
+description: Something baton should do and does not
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Baton is built from what its author actually needs while shepherding a fleet, so
+        the most persuasive requests describe the moment you wanted it, not the feature
+        in the abstract.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What were you trying to do
+      description: The situation where baton got in the way.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What should happen instead
+      description: The behaviour you want. A key, a view, a config knob — whatever fits.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do today
+      description: The workaround, if you have one, and why it is not enough.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Dashboard / group / zoom
+        - Tasks and the queue
+        - Conductor, ctl, or MCP
+        - Git and diff
+        - Resource limits
+        - Config, theme, or key map
+        - Plugins (Lua)
+        - Packaging and install
+        - Something else
+    validations:
+      required: true

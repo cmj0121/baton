@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or idea
+    url: https://github.com/cmj0121/baton/discussions
+    about: Ask how something works, or float an idea before it is a request.
+  - name: Documentation
+    url: https://github.com/cmj0121/baton/blob/main/docs/SPEC.md
+    about: The full specification — views, panel lifecycle, keys, and the architecture.
