@@ -96,6 +96,12 @@ release:
   github:
     owner: cmj0121
     name: baton
-  # the annotated tag's own message is the release body; goreleaser appends the
-  # changelog under it.
-  mode: append
+  # the annotated tag's message *is* the release note, so lift it straight out
+  # of the tag: the subject (minus the `baton ` prefix) becomes the title, the
+  # body becomes the note, and the changelog lands underneath.
+  name_template: '{{ trimprefix .TagSubject "baton " }}'
+  header: |
+    {{ .TagBody }}
+  # goreleaser owns the release body from here on, so a re-run rewrites it
+  # cleanly instead of stacking a second changelog onto the first.
+  mode: replace
