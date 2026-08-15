@@ -114,6 +114,7 @@ touches.
 |                 | `/`               | chercher dans la sortie de chaque panneau (grep de la flotte) |
 |                 | `T` / `Q`         | assigner une tâche / gérer la file de tâches                  |
 |                 | `U`               | afficher/masquer le pied de page usage et coût du compte      |
+|                 | `K`               | afficher/masquer le rappel des touches dans le pied de page   |
 | Groupe          | `tab`             | passer au panneau suivant                                     |
 |                 | `+` / `-`         | afficher plus / moins de tuiles vivantes                      |
 |                 | `L`               | faire défiler la disposition des tuiles                       |

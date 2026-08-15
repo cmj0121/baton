@@ -230,6 +230,14 @@ type model struct {
 	usageText      string                // the account usage/cost footer segment (internal/usage), pushed by the daemon
 	usageFooter    bool                  // whether the usage segment is shown (toggled with U, persisted)
 
+	// The key-press readout (toggled with K, persisted). keycastKey is the key
+	// as it is shown — "G", or "C-t d" once the leader is completed — and
+	// keycastAct what it did; both clear keycastFor after the press.
+	keycast    bool
+	keycastKey string
+	keycastAct string
+	keycastAt  time.Time
+
 	// The task-queue manager popup (modeQueue, opened with Q). tasks is the latest
 	// backlog snapshot the server pushes on task.list / each queue mutation;
 	// queueFrom is the view to restore on esc; queueCursor is the highlighted row.
@@ -383,6 +391,7 @@ func (m model) applyPrefs(p prefs) model {
 	m.bellEnabled = p.bellEnabled
 	m.mouseEnabled = p.mouseEnabled
 	m.usageFooter = p.usageFooter
+	m.keycast = p.keycast
 	m.shellPath = p.shellPath
 	m.workdir = p.workdir
 	m.defaultAgent = p.defaultAgent
@@ -741,6 +750,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		m.now = time.Time(msg)
 		m.ageStatus()
+		m = m.ageKeycast()
 		if cmd := m.maybeAutoSaver(); cmd != nil { // auto-start the saver after saverIdle
 			return m, tea.Batch(cmd, tick())
 		}
@@ -770,6 +780,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		m.lastInput = m.now // any key resets the idle timer, in every mode
+		m = m.noteKey(msg.String())
 		if m.mode == modeScreensaver {
 			return m.exitScreensaver(), nil // any key dismisses the saver, swallowed whole
 		}
@@ -2166,6 +2177,14 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 	case actUsageToggle:
 		m.usageFooter = !m.usageFooter
 		m.status = "usage footer: " + onOff(m.usageFooter)
+		if err := m.saveConfig(); err != nil {
+			m.status = "toggled, but save failed: " + err.Error()
+		}
+		return m, nil
+	case actKeycastToggle:
+		m.keycast = !m.keycast
+		m.keycastKey, m.keycastAct = "", "" // never leave the last key stranded on the bar
+		m.status = "keycast: " + onOff(m.keycast)
 		if err := m.saveConfig(); err != nil {
 			m.status = "toggled, but save failed: " + err.Error()
 		}
@@ -3948,6 +3967,11 @@ func (m model) statusBar(left, hint string) string {
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 0 {
 		gap = 0
+	}
+	// The key readout rides beside the help hint. It is the first thing to go
+	// when the bar runs out of room — losing "? keys" would cost more.
+	if cast := m.keycastSeg(); cast != "" && lipgloss.Width(hint)+lipgloss.Width(cast) <= gap {
+		hint += cast
 	}
 	if lipgloss.Width(hint) > gap {
 		hint = ""

@@ -33,10 +33,14 @@ rm -f "$BATON_SOCK" "${BATON_SOCK%.sock}.state.json"
 # Pin the language too. With nothing set, the cockpit follows the recorder's
 # locale, so a machine with LANG=zh_TW would record the English README's hero in
 # Chinese. The clip has to look the same wherever it is recorded, so state it.
+#
+# Keycast is on for the same reason the clip exists: without it a viewer sees
+# panels appear and group themselves with no sign of the keys that did it.
 mkdir -p "$HOME/.baton"
 cat >"$HOME/.baton/config" <<YAML
 settings:
   language: en
+  keycast: true
 panel:
   agents:
     claude:

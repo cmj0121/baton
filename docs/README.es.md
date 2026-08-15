@@ -113,6 +113,7 @@ teclas.
 |             | `/`               | buscar en la salida de todos los paneles (grep a la flota) |
 |             | `T` / `Q`         | despachar una tarea / gestionar la cola de tareas          |
 |             | `U`               | alternar el pie de uso/coste de la cuenta                  |
+|             | `K`               | alternar el indicador de teclas en el pie                  |
 | Group       | `tab`             | dar el foco al siguiente panel                             |
 |             | `+` / `-`         | mostrar más / menos mosaicos en vivo                       |
 |             | `L`               | rotar la disposición de los mosaicos                       |

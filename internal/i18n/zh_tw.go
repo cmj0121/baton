@@ -109,6 +109,7 @@ var zhTW = map[string]string{
 
 	"bind.help":         "檢視這個畫面的按鍵",
 	"bind.usage-footer": "切換帳號用量／費用狀態列",
+	"bind.keycast":      "切換狀態列上的按鍵提示",
 	"bind.key-map":      "編輯按鍵對應（前綴鍵）",
 	"bind.panel-config": "設定面板預設值（前綴鍵）",
 	"bind.scroll":       "捲動模式 — 逐行／逐頁（前綴鍵）",

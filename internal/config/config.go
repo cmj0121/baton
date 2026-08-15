@@ -146,6 +146,12 @@ type Settings struct {
 	// defaults to on; toggled live with the usage-footer binding (U).
 	UsageFooter *bool `yaml:"usage-footer,omitempty"`
 
+	// Keycast shows the key you just pressed, and what it did, in the footer.
+	// Unset defaults to off — it is a teaching and screen-recording aid, not
+	// something an everyday cockpit needs. Toggled live with the keycast
+	// binding (K).
+	Keycast *bool `yaml:"keycast,omitempty"`
+
 	// Language selects the cockpit's message language — "en" or "zh-TW". Unset
 	// (or a language baton does not ship) follows the environment instead:
 	// $BATON_LANG, then $LC_ALL / $LC_MESSAGES / $LANG, then English.

@@ -37,6 +37,7 @@ const (
 	keyEnqueue     = "t" // enqueue a task for the scheduler to drain onto a free agent (bare t, the everyday sibling of T; C-t t in a zoom)
 	keyQueue       = "Q" // open the task-queue manager popup (shift+q; C-t Q in a zoom)
 	keyUsage       = "U" // toggle the account usage/cost footer segment (shift+u)
+	keyKeycast     = "K" // toggle the key-press readout in the footer (shift+k; the sibling of U)
 	keyHelp        = "?" // view the key list for the current view
 	keyEditMap     = "k" // edit the key map (prefix only: C-t k)
 	keyPanelConfig = "P" // shift+p
@@ -105,6 +106,7 @@ const (
 	actQueue
 	actHelp
 	actUsageToggle
+	actKeycastToggle
 	actPanelConfig
 	actRestart
 	actReload
@@ -179,6 +181,7 @@ var bindings = []binding{
 
 	{"help", keyHelp, "view the keys for this view", actHelp, "View"},
 	{"usage-footer", keyUsage, "toggle the account usage/cost footer", actUsageToggle, "View"},
+	{"keycast", keyKeycast, "toggle the key-press readout in the footer", actKeycastToggle, "View"},
 	{"key-map", keyEditMap, "edit the key map (prefix)", actEditMap, "View"},
 	{"panel-config", keyPanelConfig, "configure panel defaults (prefix)", actPanelConfig, "View"},
 	{"scroll", keyScroll, "scroll mode — line / page (prefix)", actScroll, "View"},
@@ -209,6 +212,7 @@ type prefs struct {
 	bellEnabled       bool
 	mouseEnabled      bool // mouse reporting (wheel scroll + selection); default off
 	usageFooter       bool // show the account usage/cost footer segment; default on
+	keycast           bool // show the key-press readout in the footer; default off
 	shellPath         string
 	workdir           string                         // default working directory for new panels ("" = home)
 	defaultAgent      string                         // agent profile the new-agent action spawns
@@ -272,6 +276,9 @@ func prefsFromConfig(cfg config.Config) prefs {
 	if cfg.Settings.UsageFooter != nil {
 		p.usageFooter = *cfg.Settings.UsageFooter
 	}
+	if cfg.Settings.Keycast != nil {
+		p.keycast = *cfg.Settings.Keycast
+	}
 	p.shellPath = cfg.Panel.Shell
 	p.workdir = cfg.Panel.Workdir
 	p.defaultAgent = cfg.Panel.DefaultAgent
@@ -308,6 +315,7 @@ func (m model) saveConfig() error {
 	bellEnabled := m.bellEnabled
 	mouseEnabled := m.mouseEnabled
 	usageFooter := m.usageFooter
+	keycast := m.keycast
 
 	// Start from the current on-disk config so sections the cockpit does not own —
 	// the queue caps and the usage source/interval, both hand-edited in this same
@@ -325,6 +333,7 @@ func (m model) saveConfig() error {
 	out.Settings.Bell = &bellEnabled
 	out.Settings.Mouse = &mouseEnabled
 	out.Settings.UsageFooter = &usageFooter
+	out.Settings.Keycast = &keycast
 	out.Settings.Language = string(m.effLang())
 	out.Panel.Shell = m.shellPath
 	out.Panel.Workdir = m.workdir
