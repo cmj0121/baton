@@ -14,6 +14,7 @@ import (
 
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/vtirm"
 	"github.com/cmj0121/baton/internal/vtquery"
 )
 
@@ -29,13 +30,18 @@ import (
 // garbage. Stripping the queries here — the single choke point every emulator-bound
 // byte passes through (zoom, group tile, scratch; replay too, idempotently) — stops the
 // reply at the source. Queries draw nothing, so the reconstructed screen is unchanged.
-func writeEmu(emu *vt.SafeEmulator, data []byte) {
+//
+// The same choke point is where insert mode is honoured: irm rewrites a shell's IRM
+// bursts into the ICH the emulator implements, so a character typed into the middle of a
+// line pushes its neighbours right instead of landing on top of one. It carries state
+// across chunks, so each emulator needs its own; a nil filter leaves the stream alone.
+func writeEmu(emu *vt.SafeEmulator, irm *vtirm.Filter, data []byte) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().Interface("panic", r).Bytes("stack", debug.Stack()).Msg("recovered an emulator write panic")
 		}
 	}()
-	_, _ = emu.Write(vtquery.Strip(data))
+	_, _ = emu.Write(irm.Rewrite(vtquery.Strip(data)))
 }
 
 // cellCond gives wcwidth-style cell widths — 2 for wide (CJK) glyphs, 1 for the

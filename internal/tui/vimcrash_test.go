@@ -8,6 +8,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	vt "github.com/charmbracelet/x/vt"
 
+	"github.com/cmj0121/baton/internal/vtirm"
+
 	"github.com/cmj0121/baton/internal/panel"
 )
 
@@ -42,8 +44,9 @@ var vimSeqs = []string{
 func TestEmulatorSurvivesVimSequences(t *testing.T) {
 	emu := vt.NewSafeEmulator(80, 24)
 	drainInput(emu)
+	irm := &vtirm.Filter{}
 	for _, s := range vimSeqs {
-		writeEmu(emu, []byte(s))
+		writeEmu(emu, irm, []byte(s))
 		_ = emu.Render()
 		_ = emu.CursorPosition()
 	}
@@ -60,7 +63,7 @@ func TestZoomVimDetach(t *testing.T) {
 	emu := m.emu // stable pointer, like the product's zoomReader
 	drainInput(emu)
 	for _, s := range vimSeqs {
-		writeEmu(emu, []byte(s))
+		writeEmu(emu, m.emuIRM, []byte(s))
 		_ = m.View()
 	}
 	m2, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
@@ -84,7 +87,7 @@ func TestZoomRealVimOutput(t *testing.T) {
 	drainInput(emu)
 	for i := 0; i < len(raw); i += 37 {
 		end := min(i+37, len(raw))
-		writeEmu(emu, raw[i:end])
+		writeEmu(emu, m.emuIRM, raw[i:end])
 		_ = m.View()
 	}
 	m2, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
