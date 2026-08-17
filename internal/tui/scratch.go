@@ -79,6 +79,7 @@ func (m model) killScratch() model {
 	}
 	m.scratchID = ""
 	m.scratchEmu = nil
+	m.scratchIRM = nil
 	m.scratchOpen = false
 	m.scratchArmed = false
 	m.status = "scratch closed"

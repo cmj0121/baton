@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	vt "github.com/charmbracelet/x/vt"
+
+	"github.com/cmj0121/baton/internal/vtirm"
 )
 
 // drainEmu spins up a zoomReader-style drain of the emulator's input pipe and returns
@@ -57,7 +59,7 @@ func TestWriteEmuStripsQueryReplies(t *testing.T) {
 
 	// A /clear re-init burst: alt-screen re-enter + clear draw; the DA and in-band-resize
 	// probes would each be answered onto the input pipe if not stripped.
-	writeEmu(emu, []byte("\x1b[?1049h\x1b[2J\x1b[c\x1b[?2048hready$ "))
+	writeEmu(emu, &vtirm.Filter{}, []byte("\x1b[?1049h\x1b[2J\x1b[c\x1b[?2048hready$ "))
 
 	stop()
 	if leaked := get(); len(leaked) != 0 {

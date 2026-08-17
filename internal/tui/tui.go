@@ -27,6 +27,7 @@ import (
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/sandbox"
+	"github.com/cmj0121/baton/internal/vtirm"
 )
 
 const banner = `██████╗  █████╗ ████████╗ ██████╗ ███╗   ██╗
@@ -291,6 +292,7 @@ type model struct {
 	zoomArmed             bool                   // prefix pressed inside a zoom, awaiting the verb
 	zoomExited            bool                   // the zoomed panel has exited — a read-only result view
 	emu                   *vt.SafeEmulator       // terminal emulator rendering the zoomed panel
+	emuIRM                *vtirm.Filter          // insert-mode state of the stream feeding emu
 	scrollOff             int                    // scrollback offset (lines above the live bottom) for the zoom / focused tile
 	scrolling             bool                   // scroll mode (C-t [): arrows / page keys navigate history, keys are not sent to the program
 	scrollArmed           bool                   // prefix pressed while scrolling, awaiting the leader verb (delegated to the zoom / group handler)
@@ -309,6 +311,7 @@ type model struct {
 	summaryScope    bool                        // the split is scoped to a group's collapsed (summarised) members
 	groupPinned     map[string]bool             // member ids pinned to a live tile, derived from the fleet's server-owned Pinned flags
 	groupEmus       map[string]*vt.SafeEmulator // live emulator per member tile
+	groupIRMs       map[string]*vtirm.Filter    // insert-mode state of each tile's stream, keyed alike
 	zoomGroupOrigin string                      // group to return to from a single zoom, "" if none
 
 	// The floating scratch pane (C-t ~): a transient ephemeral shell overlaid on any
@@ -317,6 +320,7 @@ type model struct {
 	// box and gives it the keyboard; scratchArmed is the prefix pressed inside it.
 	scratchID    string
 	scratchEmu   *vt.SafeEmulator
+	scratchIRM   *vtirm.Filter
 	scratchOpen  bool
 	scratchArmed bool
 
@@ -697,7 +701,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case panelOutputMsg:
 		sm := proto.ServerMsg(msg)
 		if m.mode == modeZoom && m.emu != nil && sm.ID == m.zoomID {
-			writeEmu(m.emu, sm.Data)
+			writeEmu(m.emu, m.emuIRM, sm.Data)
 			if m.searchSeedPending {
 				// Jumped here from a fleet-search hit: the panel's replay has now landed
 				// in the emulator, so run the same term as a scrollback search — the view
@@ -708,11 +712,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.mode == modeGroupZoom {
 			if emu := m.groupEmus[sm.ID]; emu != nil {
-				writeEmu(emu, sm.Data) // demux by id into the member's tile
+				writeEmu(emu, m.groupIRMs[sm.ID], sm.Data) // demux by id into the member's tile
 			}
 		}
 		if m.scratchEmu != nil && sm.ID == m.scratchID {
-			writeEmu(m.scratchEmu, sm.Data) // the floating pane streams in any mode
+			writeEmu(m.scratchEmu, m.scratchIRM, sm.Data) // the floating pane streams in any mode
 		}
 		return m, waitOutput(m.client.Output)
 
@@ -941,6 +945,7 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		m.scratchID = sm.ID
 		cols, rows := m.scratchEmuSize()
 		m.scratchEmu = m.attachEmu(m.scratchID, cols, rows)
+		m.scratchIRM = &vtirm.Filter{}
 		*m = m.showScratch()
 	case "diff":
 		// The server computed the target agent's structured work-tree diff. Open the
@@ -2342,6 +2347,7 @@ func (m model) zoomInto(p panel.Panel) model {
 	m.cursorHidden = nil
 	if m.width > 0 && m.height > 1 {
 		m.emu = vt.NewSafeEmulator(m.width, m.zoomRows())
+		m.emuIRM = &vtirm.Filter{}
 		// Track the program's cursor visibility (DECTCEM) so a program that hides
 		// its cursor — vim, a BBS reader — does not get a phantom one drawn over it.
 		hidden := false
@@ -2697,6 +2703,7 @@ func (m model) zoomDetach() (tea.Model, tea.Cmd) {
 	closeZoom(m.emu) // stops the zoomReader goroutine (Read returns io.EOF)
 	m.mode = modeDashboard
 	m.emu = nil
+	m.emuIRM = nil
 	m.scrollOff = 0
 	m.scrolling = false
 	m.scrollArmed = false

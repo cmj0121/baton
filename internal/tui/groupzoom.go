@@ -11,6 +11,7 @@ import (
 
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/vtirm"
 )
 
 // The group split: zooming a work item lays its panels out as live tiles you
@@ -112,7 +113,11 @@ func (m *model) attachGroupMembers() {
 // fed, so the tile only ever relays the query replies a live program emits. The
 // shared per-member step of building the split and of reconciling it.
 func (m *model) attachTile(p panel.Panel, emuCols, emuRows int) {
+	if m.groupIRMs == nil {
+		m.groupIRMs = make(map[string]*vtirm.Filter)
+	}
 	m.groupEmus[p.ID] = m.attachEmu(p.ID, emuCols, emuRows)
+	m.groupIRMs[p.ID] = &vtirm.Filter{}
 }
 
 // attachEmu opens a live, correctly-sized emulator for a panel id: it streams the
@@ -613,6 +618,7 @@ func (m *model) reconcileGroupTiles(focusID string) {
 				m.sendf(proto.Command{Action: "panel.detach", ID: id})
 				closeZoom(emu)
 				delete(m.groupEmus, id)
+				delete(m.groupIRMs, id)
 				changed = true
 			}
 		}
@@ -686,6 +692,7 @@ func (m *model) closeGroupEmus() {
 		closeZoom(emu)
 	}
 	m.groupEmus = nil
+	m.groupIRMs = nil
 }
 
 // groupMembers is the panels the split currently navigates, in fleet order. In
@@ -1249,6 +1256,7 @@ func (m model) backToGroup() (tea.Model, tea.Cmd) {
 	m.scrollArmed = false
 	m.cursorHidden = nil
 	m.emu = nil
+	m.emuIRM = nil
 	m.zoomID, m.zoomTitle, m.zoomArmed, m.zoomExited, m.zoomGroupOrigin = "", "", false, false, ""
 	m.attachGroupMembers() // re-subscribe every tile's live stream
 	m.status = "group · " + m.groupName

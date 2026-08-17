@@ -6,6 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	vt "github.com/charmbracelet/x/vt"
+
+	"github.com/cmj0121/baton/internal/vtirm"
 )
 
 // TestDropCells: the complement of clipCells drops the first n display columns.
@@ -42,7 +44,7 @@ func TestSelectCellsHighlightsColumns(t *testing.T) {
 // edge clamped to the width, and V again clears it.
 func TestBlockToggleAndColumnAdjust(t *testing.T) {
 	emu := vt.NewSafeEmulator(20, 5)
-	writeEmu(emu, []byte("hello world"))
+	writeEmu(emu, &vtirm.Filter{}, []byte("hello world"))
 	m := baseModel()
 	m.mode = modeZoom
 	m.emu = emu
