@@ -238,6 +238,14 @@ type Server struct {
 	declared    map[string]*declaration
 	taskSettled map[string]bool
 
+	// exitedAt is when each dead panel's process ended. It exists because the
+	// Monitor forgets a panel the moment it exits, which takes its state clock
+	// with it — and an exited panel still needs one, since a queue that lists
+	// failures has to sort them oldest-first like everything else. Written once on
+	// exit, read by wirePanel as the fallback, dropped with every other per-panel
+	// map when the panel is closed, pruned, or re-run. Guarded by mu.
+	exitedAt map[string]time.Time
+
 	// Working-directory tracking. trackCwd is how a panel's live directory is
 	// learned and restoreCwd which panels are re-run in it; osc7Tail carries the
 	// last few bytes of each panel's output so a report split across two reads is
@@ -468,6 +476,9 @@ func New(ln net.Listener, opts ...Option) *Server {
 		groupLayout:     make(map[string]string),
 		groupFavourite:  make(map[string]bool),
 		pendingDispatch: make(map[string][]byte),
+		declared:        make(map[string]*declaration),
+		taskSettled:     make(map[string]bool),
+		exitedAt:        make(map[string]time.Time),
 		tasks:           make(map[string]*task.Task),
 		panelTask:       make(map[string]string),
 		spawning:        make(map[string]bool),
@@ -665,8 +676,13 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 	for i := range s.panels {
 		if s.panels[i].ID == id {
 			s.panels[i].State = panel.Exited
+			s.panels[i].ExitCode = exitCode // the daemon reports it; the cockpit renders a non-zero one as failed
+			s.panels[i].Reason = ""         // a dead process is not asking for anything
 			s.panels[i].Activity = "exited"
+			s.exitedAt[id] = time.Now()   // the Monitor is about to forget it; keep the instant the queue sorts on
 			s.mon.forget(id)              // a dead panel no longer ticks
+			delete(s.declared, id)        // …and its raised hand goes with it
+			delete(s.taskSettled, id)     // …as does any pending done edge
 			delete(s.pendingDispatch, id) // a held dispatch dies with the process
 			// A task in flight died with its panel — fail it with the exit code.
 			s.advanceTaskLocked(id, task.Failed, fmt.Sprintf("panel exited (code %d)", exitCode))
@@ -1121,9 +1137,10 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 
 	var out []proto.Panel
 	if changed && len(s.clients) > 0 {
+		pids := s.pty.Pids()
 		out = make([]proto.Panel, len(s.panels))
 		for i, p := range s.panels {
-			out[i] = p.ToProto()
+			out[i] = s.wirePanel(p, pids)
 		}
 	}
 	s.mu.Unlock()
@@ -2407,6 +2424,9 @@ func (s *Server) pruneExitedLocked() (stop, workspaces []string) {
 			delete(s.sessions, p.ID)
 			s.forgetRestartLocked(p.ID)
 			s.forgetCwdLocked(p.ID)
+			delete(s.declared, p.ID)
+			delete(s.taskSettled, p.ID)
+			delete(s.exitedAt, p.ID)
 			delete(s.pendingDispatch, p.ID)
 			delete(s.panelTask, p.ID) // the panel is gone; its task history is bounded separately
 			continue
@@ -2857,6 +2877,8 @@ func (s *Server) respawnPanel(id string) error {
 	s.mu.Lock()
 	if i := s.indexLocked(id); i >= 0 {
 		s.panels[i].State = panel.Spawning
+		s.panels[i].ExitCode = 0 // the old process's status says nothing about the new one
+		delete(s.exitedAt, id)   // …nor does when it died
 		s.panels[i].Activity = activityText(panel.Spawning, 0)
 		// The new process starts in the directory just resolved, whatever the old
 		// one had wandered to; the tracker re-learns from there.
@@ -2943,6 +2965,9 @@ func (s *Server) closePanel(id string) error {
 	delete(s.sessions, id)        // …and the session ids its usage was attributed through
 	s.forgetRestartLocked(id)     // …and any restart armed for it: it must not come back
 	s.forgetCwdLocked(id)         // …and the output tail kept to read its directory reports
+	delete(s.declared, id)        // …and whatever it had said about needing a human
+	delete(s.taskSettled, id)     // …and any pending done edge
+	delete(s.exitedAt, id)        // …and the instant it died, if it had
 	delete(s.pendingDispatch, id) // and any dispatch held for it
 	delete(s.panelTask, id)       // and its task mapping (the task record stays as history)
 	s.emit("panel.close", map[string]any{"id": id, "title": title})
@@ -3812,6 +3837,34 @@ func (s *Server) setGroupFavourite(group string, fav bool) error {
 	return nil
 }
 
+// wirePanel encodes one panel for the wire and joins in everything the domain
+// model deliberately does not carry: the live group-leader pid and the state
+// clock. Both fleet messages a client sees — the "panels" snapshot and the
+// "telemetry" refresh — are built through here, so the two can never disagree:
+// before this helper existed the snapshot joined the pid and the telemetry frame
+// did not, which is exactly the drift two hand-written builders of the same
+// message accumulate.
+//
+// Since travels as an instant rather than as the rendered Activity string
+// because a queue has to SORT on it: a rendered "3m" cannot be ordered, and a
+// client's own clock cannot be trusted across the --remote ssh hop. It keeps
+// nanoseconds so panels that settled in the same tick still order stably. For a
+// dead panel it falls back to when the process ended, because the Monitor forgets
+// a panel on exit and a queue listing failures still has to order them.
+// Caller holds s.mu.
+func (s *Server) wirePanel(p panel.Panel, pids map[string]int) proto.Panel {
+	out := p.ToProto()
+	out.Pid = pids[p.ID]
+	since := s.mon.enteredAt(p.ID)
+	if since.IsZero() {
+		since = s.exitedAt[p.ID]
+	}
+	if !since.IsZero() {
+		out.Since = since.Format(time.RFC3339Nano)
+	}
+	return out
+}
+
 // panelsMsg builds the full "panels" snapshot broadcast to clients: every panel
 // in wire form plus each group's non-default view settings, sorted by name for a
 // deterministic frame.
@@ -3821,8 +3874,7 @@ func (s *Server) panelsMsg() proto.ServerMsg {
 	out := make([]proto.Panel, len(s.panels))
 	pids := s.pty.Pids() // one lock acquisition, then a map lookup per panel — the ptymgr lock is contended by the output pump
 	for i, p := range s.panels {
-		out[i] = p.ToProto()
-		out[i].Pid = pids[p.ID] // join the live group-leader pid so frontends can walk the OS tree
+		out[i] = s.wirePanel(p, pids)
 	}
 	// Per-group view settings ride the snapshot, sorted by name for determinism.
 	// A group appears when it carries a non-default visible count, a non-default
