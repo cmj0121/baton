@@ -32,7 +32,7 @@ func TestLocalFetchContextCancelled(t *testing.T) {
 // TestScanTranscriptOpenError: scanning an unopenable path leaves the snapshot
 // untouched (the file is skipped, not fatal).
 func TestScanTranscriptOpenError(t *testing.T) {
-	sc := newScan(fixedNow)
+	sc := newScan(fixedNow, fixedNow)
 	sc.transcript(filepath.Join(t.TempDir(), "does-not-exist.jsonl"), "sess1")
 	if !sc.snapshot(sc.cutoff).Empty() {
 		t.Fatalf("open error should leave snapshot empty: %+v", sc.snapshot(sc.cutoff))
@@ -42,7 +42,7 @@ func TestScanTranscriptOpenError(t *testing.T) {
 // TestFoldEntryBadJSON: a line that carries the "usage" substring but is not
 // valid JSON is ignored without panicking or mutating the snapshot.
 func TestFoldEntryBadJSON(t *testing.T) {
-	sc := newScan(fixedNow)
+	sc := newScan(fixedNow, fixedNow)
 	sc.fold([]byte(`{ this is not "usage" json `), "sess1")
 	if !sc.snapshot(sc.cutoff).Empty() {
 		t.Fatalf("bad JSON should be ignored: %+v", sc.snapshot(sc.cutoff))
@@ -52,7 +52,7 @@ func TestFoldEntryBadJSON(t *testing.T) {
 // TestFoldEntryNilUsage: a well-formed line whose message has no usage block
 // (usage:null) is ignored — the "usage" substring gate can pass on such lines.
 func TestFoldEntryNilUsage(t *testing.T) {
-	sc := newScan(fixedNow)
+	sc := newScan(fixedNow, fixedNow)
 	line := `{"type":"assistant","timestamp":"2026-07-08T09:00:00Z","message":{"id":"m","usage":null}}`
 	sc.fold([]byte(line), "sess1")
 	if !sc.snapshot(sc.cutoff).Empty() {
@@ -63,7 +63,7 @@ func TestFoldEntryNilUsage(t *testing.T) {
 // TestFoldEntryBadTimestamp: a usage line with an unparseable timestamp is
 // filtered out (the time.Parse error path), leaving the snapshot empty.
 func TestFoldEntryBadTimestamp(t *testing.T) {
-	sc := newScan(fixedNow)
+	sc := newScan(fixedNow, fixedNow)
 	line := `{"type":"assistant","timestamp":"not-a-time","message":{"id":"m","model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":50}}}`
 	sc.fold([]byte(line), "sess1")
 	if !sc.snapshot(sc.cutoff).Empty() {
@@ -75,7 +75,7 @@ func TestFoldEntryBadTimestamp(t *testing.T) {
 // cache_creation_input_tokens total but no cache_creation tier breakdown, the
 // whole write is priced at the 5-minute rate rather than dropped.
 func TestFoldEntryNoCacheCreationTier(t *testing.T) {
-	sc := newScan(startOfDay(fixedNow))
+	sc := newScan(startOfDay(fixedNow), fixedNow)
 	ts := fixedNow.Add(-time.Hour).Format(time.RFC3339)
 	line := `{"type":"assistant","requestId":"r","timestamp":"` + ts + `","message":{"id":"m","model":"claude-opus-4-8","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":400}}}`
 	sc.fold([]byte(line), "sess1")
@@ -93,7 +93,7 @@ func TestFoldEntryNoCacheCreationTier(t *testing.T) {
 // TestFoldEntryNoDedupKeys: a usage line with neither a message id nor a
 // requestId skips the dedup map and is still counted (the empty-key branch).
 func TestFoldEntryNoDedupKeys(t *testing.T) {
-	sc := newScan(startOfDay(fixedNow))
+	sc := newScan(startOfDay(fixedNow), fixedNow)
 	ts := fixedNow.Add(-time.Hour).Format(time.RFC3339)
 	line := `{"type":"assistant","timestamp":"` + ts + `","message":{"model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":5}}}`
 	sc.fold([]byte(line), "sess1")

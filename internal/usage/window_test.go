@@ -68,6 +68,31 @@ func TestLocalFetchWindowOpensAtAMessage(t *testing.T) {
 	}
 }
 
+// TestLocalFetchIgnoresMessagesAheadOfTheClock: a transcript stamped in the
+// future — a clock corrected backwards, a ~/.claude synced from a machine running
+// ahead — must not open a window. One that had opened would not have started yet,
+// and counting down to its end reports more time left than a window is long.
+func TestLocalFetchIgnoresMessagesAheadOfTheClock(t *testing.T) {
+	const window = 5 * time.Hour
+	root := t.TempDir()
+	writeTranscript(t, root, "proj1", "sess1", fixedNow,
+		assistantLine("here", "r1", "claude-opus-4-8", fixedNow.Add(-time.Hour), 100, 0, 0, 0, 0),
+		assistantLine("ahead", "r2", "claude-opus-4-8", fixedNow.Add(window), 999, 0, 0, 0, 0),
+	)
+
+	snap, err := newLocalWindow(filepath.Join(root, "projects"), window).Fetch(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, ok := snap.Countdown(fixedNow)
+	if !ok || d > window {
+		t.Errorf("countdown = %v/%v, want at most the %v window", d, ok, window)
+	}
+	if snap.Input != 100 {
+		t.Errorf("Input = %d, want 100 — the message from the future left out", snap.Input)
+	}
+}
+
 // TestLocalFetchWindowRunsDownAndRestarts is the regression for a countdown that
 // hung at 0:00:00. The window used to be anchored on the oldest message still
 // inside "the last N hours", so its end moved with the clock: under continuous

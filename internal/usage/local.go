@@ -70,7 +70,7 @@ func (p *LocalProvider) Fetch(ctx context.Context) (Snapshot, error) {
 		// along with it, which is exactly how a countdown ends up pinned at zero.
 		cutoff = cutoff.Add(-p.window)
 	}
-	sc := newScan(cutoff)
+	sc := newScan(cutoff, now)
 
 	err := filepath.WalkDir(p.dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -142,18 +142,19 @@ type counted struct {
 	cost       float64
 }
 
-// scan is the running state of one Fetch: the floor every message is tested
-// against, the dedup set shared across every file, and the messages kept so far.
-// The dedup set has to span the whole walk, not one file, because the same
+// scan is the running state of one Fetch: the floor and the ceiling every message
+// is tested against, the dedup set shared across every file, and the messages kept
+// so far. The dedup set has to span the whole walk, not one file, because the same
 // message can appear in two transcripts (see fold).
 type scan struct {
 	cutoff  time.Time
+	now     time.Time
 	seen    map[string]struct{}
 	entries []counted
 }
 
-func newScan(cutoff time.Time) *scan {
-	return &scan{cutoff: cutoff, seen: make(map[string]struct{})}
+func newScan(cutoff, now time.Time) *scan {
+	return &scan{cutoff: cutoff, now: now, seen: make(map[string]struct{})}
 }
 
 // window is the window in progress at now: the messages are walked in time order,
@@ -161,6 +162,10 @@ func newScan(cutoff time.Time) *scan {
 // the start is always a message that really did open a window. It reports false
 // once the last window has closed with nothing after it — the next window opens
 // on the next message, and until that lands there is nothing to count down to.
+//
+// A start the clock has not reached yet is refused as well: a window that has not
+// begun is not the one in progress, and counting down to its end would report
+// more time left than a window even is long.
 //
 // Anchoring on a message rather than on "now minus the window" is the whole
 // point. A sliding anchor drags the window's end along with the clock, so under
@@ -172,12 +177,12 @@ func (sc *scan) window(now time.Time, length time.Duration) (start time.Time, op
 	}
 	sort.Slice(sc.entries, func(i, j int) bool { return sc.entries[i].ts.Before(sc.entries[j].ts) })
 	start = sc.entries[0].ts
-	for _, e := range sc.entries[1:] {
+	for _, e := range sc.entries {
 		if !e.ts.Before(start.Add(length)) {
 			start = e.ts
 		}
 	}
-	return start, now.Before(start.Add(length))
+	return start, !now.Before(start) && now.Before(start.Add(length))
 }
 
 // snapshot sums every message from since onward, totals and per-session alike. A
@@ -268,6 +273,13 @@ func (sc *scan) fold(line []byte, session string) {
 	}
 	ts, err := time.Parse(time.RFC3339, e.Timestamp)
 	if err != nil || ts.Before(sc.cutoff) {
+		return
+	}
+	if ts.After(sc.now) {
+		// A message stamped after now — a clock corrected backwards, a ~/.claude synced
+		// from a machine running ahead — cannot be placed in a window that has begun.
+		// Counted, it would open a window in the future and leave the countdown showing
+		// more time than a window is long.
 		return
 	}
 	if e.Message.ID != "" || e.RequestID != "" {
