@@ -208,6 +208,8 @@ tus propios comandos y define configuración, todo a través de un único objeto
   disposiciones de la división de grupo (preajustes y cuadrículas propias).
 - **[docs/LIMITS.md](LIMITS.md)** — límites de recursos: la configuración, las dos capas, la recarga en caliente y dónde
   se imponen realmente.
+- **[docs/RESTART.md](RESTART.md)** — la política de reinicio: qué cuenta como fallo y qué no, el backoff y el límite,
+  y por qué no existe `always`.
 - **[docs/GIT.md](GIT.md)** — el menú de git: cada operación, el flujo del editor de commits, los worktrees y la
   configuración.
 - **[docs/USAGE.md](USAGE.md)** — el pie de uso de la cuenta: las fuentes local y de Admin API, la configuración y las

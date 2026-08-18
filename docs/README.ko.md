@@ -206,6 +206,8 @@ Lua 파일 하나(`$HOME/.baton/plug-in.lua`)면 Baton을 당신의 워크플로
 - **[docs/TUI.md](TUI.md)** — 조종석 외관 파일(`$HOME/.baton/TUI.yaml`): 색상 테마와 그룹 분할 레이아웃
   (프리셋과 사용자 정의 그리드).
 - **[docs/LIMITS.md](LIMITS.md)** — 자원 상한: 설정, 두 개의 계층, 핫 리로드, 그리고 실제로 어디서 강제되는지.
+- **[docs/RESTART.md](RESTART.md)** — 재시작 정책: 무엇이 실패이고 무엇이 아닌지, 백오프와 한도, 그리고
+  `always` 가 없는 이유.
 - **[docs/GIT.md](GIT.md)** — git 메뉴: 모든 동작, commit 편집 흐름, worktree, 그리고 설정.
 - **[docs/USAGE.md](USAGE.md)** — 계정 사용량 푸터: 로컬과 Admin-API 두 가지 소스, 설정, 그리고 유의 사항.
 - **[docs/PLUGIN.md](PLUGIN.md)** — Lua 플러그인 API: `baton` 객체, 이벤트, 명령, 그리고 설정.

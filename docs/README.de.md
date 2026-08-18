@@ -207,6 +207,8 @@ Siehe **[docs/PLUGIN.md](PLUGIN.md)**.
   und die Layouts der Gruppenaufteilung (Presets und eigene Raster).
 - **[docs/LIMITS.md](LIMITS.md)** — Ressourcenlimits: die Konfiguration, die zwei Ebenen, das Hot Reload und wo sie
   tatsächlich durchgesetzt werden.
+- **[docs/RESTART.md](RESTART.md)** — die Neustart-Richtlinie: was als Fehler zählt und was nicht, Backoff und Limit,
+  und warum es kein `always` gibt.
 - **[docs/GIT.md](GIT.md)** — das Git-Menü: jede Operation, der Ablauf im Commit-Editor, Worktrees und die Konfiguration.
 - **[docs/USAGE.md](USAGE.md)** — die Fußzeile zur Kontonutzung: die lokale Quelle und die Admin-API-Quelle, die
   Konfiguration und die Vorbehalte.

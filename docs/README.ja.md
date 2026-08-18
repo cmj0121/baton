@@ -205,6 +205,8 @@ fleet を動かし、自分のコマンドを足し、設定を書く——す�
 - **[docs/TUI.md](TUI.md)** — コックピットの外観ファイル(`$HOME/.baton/TUI.yaml`):配色テーマと
   グループ分割のレイアウト(プリセットとカスタムグリッド)。
 - **[docs/LIMITS.md](LIMITS.md)** — リソース上限:設定、2 つの層、ホットリロード、そして実際にどこで強制されるか。
+- **[docs/RESTART.md](RESTART.md)** — 再起動ポリシー:何が失敗で何が失敗でないか、バックオフと上限、そして
+  `always` が存在しない理由。
 - **[docs/GIT.md](GIT.md)** — git メニュー:各操作、commit エディタの流れ、worktree、そして設定。
 - **[docs/USAGE.md](USAGE.md)** — アカウント使用量フッタ:ローカルと Admin-API の 2 つのソース、設定、注意点。
 - **[docs/PLUGIN.md](PLUGIN.md)** — Lua プラグイン API:`baton` オブジェクト、イベント、コマンド、そして設定。
