@@ -472,6 +472,8 @@ func (m model) applyPrefs(p prefs) model {
 	m.lang = p.lang
 	m.foldSimilar = p.foldSimilar
 	m.foldQuiet = p.foldQuiet
+	m.inboxDone = p.inboxDone
+	m.inboxSnooze = p.inboxSnooze
 	applyTheme(p.tui.Theme) // resolve the colour tokens into the package palette
 	return m
 }
