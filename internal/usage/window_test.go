@@ -68,6 +68,88 @@ func TestLocalFetchWindowOpensAtAMessage(t *testing.T) {
 	}
 }
 
+// growingTranscript writes one transcript that grows with the clock: each call
+// appends every message up to now and stamps the file, so a scan never sees a
+// message the clock has not reached. It returns the grow function.
+func growingTranscript(t *testing.T, root string, from time.Time, every time.Duration) func(now time.Time) {
+	t.Helper()
+	dir := filepath.Join(root, "projects", "proj1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "sess1.jsonl")
+	body, next := "", from
+	return func(now time.Time) {
+		t.Helper()
+		for ; !next.After(now); next = next.Add(every) {
+			body += assistantLine("m"+next.String(), "r"+next.String(), "claude-opus-4-8", next, 5, 0, 0, 0, 0) + "\n"
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestLocalFetchAnchorHoldsAcrossMidnight: the window must not move because the
+// calendar did. The scan reaches back a fixed distance from the day's start, so
+// under unbroken use the oldest message it can see sits on that floor — and
+// working the window out from it on every poll pinned the boundaries to local
+// midnight. At 00:01 the countdown jumped back up by four hours and the reported
+// spend collapsed to a single message, every night, for exactly the usage that
+// produced the original report.
+//
+// The window in progress is carried from poll to poll instead, so midnight is not
+// an event: the same window keeps running down and its spend keeps accumulating.
+func TestLocalFetchAnchorHoldsAcrossMidnight(t *testing.T) {
+	const window = 5 * time.Hour
+	root := t.TempDir()
+	day := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)
+	grow := growingTranscript(t, root, day, 5*time.Minute)
+
+	var now time.Time
+	p := &LocalProvider{dir: filepath.Join(root, "projects"), window: window, now: func() time.Time { return now }}
+	seen := map[time.Time]Snapshot{}
+	for now = day.Add(6 * time.Hour); now.Before(day.Add(30 * time.Hour)); now = now.Add(15 * time.Minute) {
+		grow(now)
+		snap, err := p.Fetch(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen[now] = snap
+	}
+
+	// Two polls astride midnight, both inside the window that opened at 20:00.
+	beforeAt, afterAt := day.Add(23*time.Hour+45*time.Minute), day.Add(24*time.Hour+15*time.Minute)
+	before, after := seen[beforeAt], seen[afterAt]
+	if !before.Since.Equal(after.Since) || !before.Until.Equal(after.Until) {
+		t.Fatalf("midnight moved the window: %v..%v became %v..%v",
+			before.Since, before.Until, after.Since, after.Until)
+	}
+	bd, _ := before.Countdown(beforeAt)
+	ad, _ := after.Countdown(afterAt)
+	if ad >= bd {
+		t.Errorf("countdown went from %v to %v across midnight, want it still falling", bd, ad)
+	}
+	if after.TotalTokens() < before.TotalTokens() {
+		t.Errorf("spend collapsed across midnight: %d became %d", before.TotalTokens(), after.TotalTokens())
+	}
+
+	// A carried anchor is only good while the scan still covers it. Days later, with
+	// nothing since, it is dropped rather than chained off — and nothing recent is
+	// left to open a window, so there is none.
+	now = day.Add(72 * time.Hour)
+	stale, err := p.Fetch(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stale.Resets || !stale.Empty() {
+		t.Errorf("an anchor older than the scan should be dropped, got %+v", stale)
+	}
+}
+
 // TestLocalFetchIgnoresMessagesAheadOfTheClock: a transcript stamped in the
 // future — a clock corrected backwards, a ~/.claude synced from a machine running
 // ahead — must not open a window. One that had opened would not have started yet,

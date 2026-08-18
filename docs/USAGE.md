@@ -39,8 +39,10 @@ The **local** source is the default and the one that works for a subscription:
 every Claude Code run — including the agent panels Baton spawns — appends a JSONL
 transcript with per-message token counts, and Baton sums the window's messages
 and prices each by its model. It reads only files touched recently enough to hold
-one, so a fleet of hundreds of sessions still scans in a fraction of a second.
-Set `CLAUDE_CONFIG_DIR` to point it somewhere other than `~/.claude`.
+one — the last calendar day plus a window, so up to six times as many files just
+before midnight as just after it — and a fleet of hundreds of sessions still
+scans in a fraction of a second. Set `CLAUDE_CONFIG_DIR` to point it somewhere
+other than `~/.claude`.
 
 The **api** source reports your whole organization's Console/API-key billing from
 the Admin API. It needs an **Admin API key** (`sk-ant-admin01-…`), which Baton
@@ -57,12 +59,21 @@ the message that opened it — the first one to land after the previous window r
 out. The reset is that start plus `usage.window`, and Baton counts down to it on
 the cockpit's own clock — once a second, not once per poll.
 
-The window stays where it opened. That matters: anchoring it on "the last
-`usage.window` of activity" instead would drag the reset along with the clock, so
-under continuous use the reset would forever be a moment away and the countdown
-would sit at `0:00:00`. Once a window closes with nothing after it there is no
-countdown at all — the next message opens the next window, with the whole of it
-to run.
+The window stays where it opened, and Baton carries it from one poll to the next
+rather than working it out afresh each time. That matters: a scan only reaches so
+far back, so the oldest message it can see is not reliably the one that opened
+anything, and re-deriving from it every poll drags the boundaries onto the edge
+of whatever the scan covered — at which point the reset moves with the clock, the
+countdown sits at `0:00:00`, and the spend appears to reset at midnight.
+
+**Baton re-derives the window when it has none to carry** — on daemon start, or
+after a stretch with no cockpit attached (it stops polling when nobody is
+watching) long enough that the carried window falls outside the scan. It then
+reads the oldest message it can see as a window start, which it may not be, so
+the boundaries can be off for that first reading. They settle from there.
+
+Once a window closes with nothing after it there is no countdown at all — the
+next message opens the next window, with the whole of it to run.
 
 The **api** source has no such handle. Rate limits surface on real API response
 headers, which Baton never receives, and the admin reports carry no limit at all.
@@ -109,7 +120,7 @@ The main config (`$HOME/.baton/config`):
 usage:
   source: auto # auto | local | api  (auto: api when an admin key is set, else local)
   interval: 30 # refresh seconds; 0 = default (30s local / 60s api); clamped to ≥ 10
-  window: 5h # how long a window lasts once use opens one; 0 = no countdown, calendar day
+  window: 5h # window length once use opens one; 0 = no countdown, calendar day
   countdown-format: auto # auto (2:14:31, widening to 3d 04:12) | dd:hh:mm
   warn-at: 0.75 # fraction of the window spent before the segment turns amber
   alarm-at: 0.9 # …and red

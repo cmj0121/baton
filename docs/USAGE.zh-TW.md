@@ -35,9 +35,10 @@ Baton 可以在每個畫面上,以一段頁尾顯示你帳號在**目前計費�
 
 **local** 來源是預設,也是訂閱可用的那一種:每次 Claude Code 執行——包括 Baton 開出的
 agent 面板——都會附加一份 JSONL transcript,記錄每則訊息的 token 數,而 Baton 會加總
-窗口內的訊息,並依各自的模型計價。它只讀取近期被異動、有可能裝著這些訊息的檔案,
-所以就算是數百個 session 的隊伍,也能在幾分之一秒內掃描完。設定 `CLAUDE_CONFIG_DIR` 可讓它指向
-`~/.claude` 以外的位置。
+窗口內的訊息,並依各自的模型計價。它只讀取近期被異動、有可能裝著這些訊息的檔案
+——最近一個日曆日再加上一個窗口,所以午夜前要讀的檔案量約是午夜後的六倍——就算是
+數百個 session 的隊伍,也能在幾分之一秒內掃描完。設定 `CLAUDE_CONFIG_DIR` 可讓它
+指向 `~/.claude` 以外的位置。
 
 **api** 來源會從 Admin API 回報你整個組織的 Console／API 金鑰帳務。它需要一把
 **Admin API 金鑰**(`sk-ant-admin01-…`),Baton 從 `BATON_ANTHROPIC_ADMIN_KEY`
@@ -51,10 +52,18 @@ transcript 帶時間戳,所以窗口的起點是**可以推得的**:它是開啟
 ——上一個窗口用完之後,第一則落下來的訊息。重置時間就是該起點加上 `usage.window`,而
 Baton 以座艙自己的時鐘倒數它——每秒一次,不是每次輪詢一次。
 
-窗口會停在它開啟的地方。這件事很要緊:若改以「最近 `usage.window` 之內的活動」為錨,
-重置時間就會跟著時鐘一起往前拖,於是在持續使用下,重置永遠只差一瞬,倒數會卡在
-`0:00:00`。而當一個窗口結束、其後沒有任何訊息時,就完全沒有倒數——下一則訊息會開啟
-下一個窗口,並帶著完整的一整個窗口可以跑。
+窗口會停在它開啟的地方,而且 Baton 會把它從上一次輪詢帶到下一次,而不是每次重新
+推算。這件事很要緊:掃描能回溯的距離有限,所以它看得到的最舊訊息未必真的開啟過任何
+窗口;若每次輪詢都拿它來推,窗口邊界就會被拖到掃描範圍的邊緣上——到那個地步,重置
+時間會跟著時鐘走、倒數卡在 `0:00:00`,用量看起來還會在午夜歸零。
+
+**當 Baton 沒有可以帶的窗口時,它會重新推算**——daemon 剛啟動,或是有一段時間沒有
+座艙連著(沒人在看時它就不輪詢),久到帶著的窗口已經落在掃描範圍之外。這時它會把
+看得到的最舊訊息當成窗口起點,而它未必是;所以第一次讀數的邊界可能偏掉,之後才會
+穩定下來。
+
+而當一個窗口結束、其後沒有任何訊息時,就完全沒有倒數——下一則訊息會開啟下一個窗口,
+並帶著完整的一整個窗口可以跑。
 
 **api** 來源沒有這樣的把手。速率上限出現在真實 API 回應的 header 上,而 Baton 從來
 收不到它;admin 報表裡也完全沒有上限這回事。所以它只回報自己實際查詢的期間,並且
@@ -93,7 +102,7 @@ Baton 以座艙自己的時鐘倒數它——每秒一次,不是每次輪詢一�
 usage:
   source: auto # auto | local | api  (auto: api when an admin key is set, else local)
   interval: 30 # refresh seconds; 0 = default (30s local / 60s api); clamped to ≥ 10
-  window: 5h # how long a window lasts once use opens one; 0 = no countdown, calendar day
+  window: 5h # window length once use opens one; 0 = no countdown, calendar day
   countdown-format: auto # auto (2:14:31, widening to 3d 04:12) | dd:hh:mm
   warn-at: 0.75 # fraction of the window spent before the segment turns amber
   alarm-at: 0.9 # …and red

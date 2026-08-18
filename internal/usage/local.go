@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,10 +25,20 @@ import (
 // real countdown rather than a guess, and it is why a personal Pro/Max
 // subscription — whose usage never reaches the Admin API — is exactly the case
 // this source serves.
+//
+// A provider outlives its polls, and it has to: where a window opened cannot be
+// worked out afresh every time. A scan only reaches so far back, so the oldest
+// message it can see is not reliably the one that opened anything — read as one,
+// it drags the window boundaries onto the edge of whatever the scan happened to
+// cover, which moves as the calendar does. So the anchor is carried instead, and
+// derived only when there is none to carry.
 type LocalProvider struct {
 	dir    string           // the .../projects root scanned for transcripts
 	window time.Duration    // window length; 0 falls back to a calendar day
 	now    func() time.Time // injectable clock (tests pin "now")
+
+	mu     sync.Mutex // guards anchor; a Provider is reachable from any goroutine
+	anchor time.Time  // where the window last seen opened, carried across polls
 }
 
 // NewLocalProvider builds a local source rooted at the user's Claude Code project
@@ -45,6 +56,36 @@ func NewLocalProvider(window time.Duration) *LocalProvider {
 // Source implements Provider.
 func (p *LocalProvider) Source() string { return "local" }
 
+// recall is the anchor to continue the window chain from, or the zero time when
+// there is none to trust. An anchor is trusted only while it sits inside the range
+// the scan covers: the chain steps from one window's start to the first message
+// after that window ends, so an anchor from before the floor would step over
+// messages the scan never read and land the window in the wrong place. Better then
+// to start the chain over from the oldest message actually in hand.
+func (p *LocalProvider) recall(floor, now time.Time) time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.anchor.Before(floor) || p.anchor.After(now) {
+		return time.Time{}
+	}
+	return p.anchor
+}
+
+// remember keeps where the chain reached, so the next poll continues it rather
+// than deriving it again — which is the whole point, since deriving it again is
+// what let the calendar move it. A window that has already closed is worth
+// keeping too: it is the link the next message chains off. Only a chain that
+// found nothing at all leaves the anchor alone, so a quiet stretch does not
+// discard a perfectly good one.
+func (p *LocalProvider) remember(start time.Time) {
+	if start.IsZero() {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.anchor = start
+}
+
 // usageKey is the cheap substring gate: only lines that mention a usage block are
 // worth JSON-parsing, and most transcript lines (user turns, tool results) do not.
 var usageKey = []byte(`"usage"`)
@@ -55,6 +96,12 @@ var usageKey = []byte(`"usage"`)
 // transcript last written before it cannot hold a message after it — which keeps
 // a fleet of hundreds of sessions down to reading only the active few.
 //
+// The floor is a day plus a window back, not a window, so the read is up to six
+// times the files just before midnight and shrinks through the day. That is the
+// price of the floor being a calendar instant: it has to hold still while the
+// clock moves, or the chain it seeds moves with the clock. It is paid on a poll
+// every thirty seconds, against files an append-only writer leaves cheap to skip.
+//
 // The window opens at a message and lasts a fixed length from there, so the
 // countdown runs that length down and the next message opens the next window.
 // Once the last window has closed with nothing after it, there is no window in
@@ -64,10 +111,8 @@ func (p *LocalProvider) Fetch(ctx context.Context) (Snapshot, error) {
 	cutoff := startOfDay(now)
 	if p.window > 0 {
 		// Reach one whole window back past the day's start: a window still running now
-		// can have opened that early, and the scan has to see the message that opened
-		// it to anchor on it. The floor is a calendar instant rather than "now minus a
-		// window" on purpose — an anchor that slides with the clock drags the reset
-		// along with it, which is exactly how a countdown ends up pinned at zero.
+		// can have opened that early, and the chain has to see the message that opened
+		// it whenever there is no anchor to continue from.
 		cutoff = cutoff.Add(-p.window)
 	}
 	sc := newScan(cutoff, now)
@@ -96,12 +141,13 @@ func (p *LocalProvider) Fetch(ctx context.Context) (Snapshot, error) {
 	if p.window <= 0 {
 		return sc.snapshot(cutoff), nil // the calendar-day fallback: totals, no reset
 	}
-	start, open := sc.window(now, p.window)
+	start, open := sc.window(now, p.window, p.recall(cutoff, now))
+	p.remember(start)
 	if !open {
-		// Every window the scan saw has already closed, and the next one opens on the
-		// next message. Report nothing rather than a countdown to a window the account
-		// is no longer in — and rather than the spend of a window that is over, which
-		// would read as this window's.
+		// Every window the chain reached has already closed, and the next one opens on
+		// the next message. Report nothing rather than a countdown to a window the
+		// account is no longer in — and rather than the spend of a window that is over,
+		// which would read as this window's.
 		return Snapshot{Since: cutoff, Source: "local"}, nil
 	}
 	snap := sc.snapshot(start)
@@ -146,6 +192,11 @@ type counted struct {
 // is tested against, the dedup set shared across every file, and the messages kept
 // so far. The dedup set has to span the whole walk, not one file, because the same
 // message can appear in two transcripts (see fold).
+//
+// entries buffers every message in the whole floor..now range, not just the ones
+// that end up counted — which window a message falls in is not known until the
+// walk is over. That is one struct per assistant turn across a day plus a window,
+// paid once per poll and released with the scan.
 type scan struct {
 	cutoff  time.Time
 	now     time.Time
@@ -157,26 +208,31 @@ func newScan(cutoff, now time.Time) *scan {
 	return &scan{cutoff: cutoff, now: now, seen: make(map[string]struct{})}
 }
 
-// window is the window in progress at now: the messages are walked in time order,
-// and one that lands at or after the running window's end opens the next one, so
-// the start is always a message that really did open a window. It reports false
-// once the last window has closed with nothing after it — the next window opens
-// on the next message, and until that lands there is nothing to count down to.
+// window is the window in progress at now. The chain starts at anchor — where the
+// caller last saw a window open — and steps forward: a message landing at or after
+// the running window's end opens the next one. With no anchor to continue from it
+// starts at the oldest message in hand, which is only a guess at where a window
+// opened, and is the reason an anchor is carried at all.
 //
-// A start the clock has not reached yet is refused as well: a window that has not
-// begun is not the one in progress, and counting down to its end would report
-// more time left than a window even is long.
+// It reports false once the chain's last window has closed with nothing after it:
+// the next window opens on the next message, and until that lands there is nothing
+// to count down to. A start the clock has not reached yet is refused as well: a
+// window that has not begun is not the one in progress, and counting down to its
+// end would report more time left than a window even is long.
 //
 // Anchoring on a message rather than on "now minus the window" is the whole
 // point. A sliding anchor drags the window's end along with the clock, so under
 // continuous use the reset is always a moment away: the countdown reads zero,
 // stays zero, and never runs a window down and starts the next one.
-func (sc *scan) window(now time.Time, length time.Duration) (start time.Time, open bool) {
-	if len(sc.entries) == 0 {
-		return time.Time{}, false
-	}
+func (sc *scan) window(now time.Time, length time.Duration, anchor time.Time) (start time.Time, open bool) {
 	sort.Slice(sc.entries, func(i, j int) bool { return sc.entries[i].ts.Before(sc.entries[j].ts) })
-	start = sc.entries[0].ts
+	start = anchor
+	if start.IsZero() {
+		if len(sc.entries) == 0 {
+			return time.Time{}, false
+		}
+		start = sc.entries[0].ts
+	}
 	for _, e := range sc.entries {
 		if !e.ts.Before(start.Add(length)) {
 			start = e.ts
