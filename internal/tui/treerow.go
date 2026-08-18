@@ -155,6 +155,12 @@ func (m model) rowLead(it dashItem) string {
 	if m.itemFavourite(it) {
 		b.WriteString(lipgloss.NewStyle().Foreground(colBrandHi).Render("⊙"))
 	}
+	// A carried row is marked where it still SITS. Nothing is sent until the drop,
+	// so drawing it under the cursor would be drawing a move that has not happened
+	// — and the row you are about to displace is exactly the one you need to see.
+	if m.grabbedRow(it) {
+		b.WriteString(lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render("⇅"))
+	}
 
 	switch it.kind {
 	case itemFold:

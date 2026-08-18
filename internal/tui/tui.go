@@ -404,6 +404,11 @@ type model struct {
 	foldOpen   map[string]bool
 	foldKeepID string
 
+	// grab is the row currently being carried through the tree, or nil. Held by
+	// identity rather than row number: the list reflows under a grab — a snapshot
+	// lands, a level folds — and an index would then be carrying something else.
+	grab *grabState
+
 	// preview shows the detail pane beside the dashboard tree
 	// (settings.dashboard-preview, toggled with the preview binding).
 	//
@@ -1339,6 +1344,10 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.move(m.cols())
 		return m, nil
+	case " ", "space":
+		if m.mode == modeDashboard {
+			return m.toggleGrab(), nil
+		}
 	case "left", "h":
 		// ← and → walk the dashboard tree: out and in. They used to move the cursor
 		// one card left or right, which only ever meant anything in the multi-column
@@ -1385,8 +1394,19 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
+		// A carried row lands before enter means anything else: while a grab is open
+		// the whole dashboard is one gesture, and enter is how you let go.
+		if m.grabbing() {
+			return m.dropGrab(), nil
+		}
 		return m.activate()
 	case "esc":
+		// esc is the way out of a grab, and it comes first for the same reason: it
+		// must never be the key that also folds something or clears a filter while a
+		// row is in the air.
+		if m.grabbing() {
+			return m.cancelGrab(), nil
+		}
 		// The help and the key map restore whichever view opened them (the split
 		// and zoom keep their live state); other overlays fall back to the dashboard.
 		if m.mode == modeHelp || m.mode == modeKeyMap {
@@ -4041,6 +4061,14 @@ func (m model) footer() string {
 		mode = "PANEL CONFIG"
 	}
 	left := seg(mode, colInk, colBlue)
+	// A grab takes over the mode cap and the hint. It is a modal gesture on a view
+	// that has none otherwise, and it is brand new — so while a row is in the air
+	// the footer says so and spells out the three keys, rather than leaving a
+	// person to discover that enter now means something different.
+	if m.grabbing() {
+		left = seg("MOVING", colDark, colBrandHi)
+		return m.statusBar(left, m.grabHint())
+	}
 	return m.statusBar(left, m.helpHint())
 }
 
