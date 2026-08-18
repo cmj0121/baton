@@ -4,6 +4,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/paths"
+	"github.com/cmj0121/baton/internal/restart"
 	"github.com/cmj0121/baton/internal/usage"
 )
 
@@ -260,9 +262,84 @@ type PanelDefaults struct {
 	// a per-agent limit would later narrow. The zero value caps nothing.
 	Limits limits.Limits `yaml:"limits,omitempty"`
 
+	// Restart is the fleet-wide policy for bringing a dead panel back — the floor
+	// a per-agent restart would later override. Unset restarts nothing.
+	Restart RestartConfig `yaml:",inline"`
+
 	// Agents are the named agent profiles, e.g. {"claude": {command: "claude"}}.
 	// A built-in "claude" profile is always available unless overridden here.
 	Agents map[string]AgentProfile `yaml:"agents,omitempty"`
+}
+
+// RestartConfig is the on-disk form of a restart policy: durations as Go duration
+// strings, so the file reads the way a human writes it. It is inlined into both
+// the fleet-wide panel block and each agent profile, which is what makes a
+// profile able to restate only the one field it changes.
+type RestartConfig struct {
+	// Restart is when a dead panel comes back: "never" (the default) or
+	// "on-failure". "always" is deliberately not offered — see internal/restart.
+	Restart string `yaml:"restart,omitempty"`
+
+	// RestartMax is how many consecutive failures to tolerate before giving up
+	// and settling the panel with the reason. 0 uses the built-in default.
+	RestartMax int `yaml:"restart-max,omitempty"`
+
+	// RestartBackoff is the base of the exponential wait between attempts, e.g.
+	// "2s". Empty uses the built-in default.
+	RestartBackoff string `yaml:"restart-backoff,omitempty"`
+
+	// RestartHealthy is how long a run must last to count as a good one and reset
+	// the failure counter, e.g. "30s". Empty uses the built-in default.
+	RestartHealthy string `yaml:"restart-healthy,omitempty"`
+}
+
+// Policy is the parsed policy, and an error naming anything the file got wrong.
+// A bad value never silently becomes a working policy: the field is left unset,
+// which restarts nothing — the failure a user can see and correct, rather than
+// one that quietly starts processes on their behalf.
+func (r RestartConfig) Policy() (restart.Policy, error) {
+	var p restart.Policy
+	var err error
+	if s := strings.TrimSpace(r.Restart); s != "" {
+		mode, ok := restart.ParseMode(s)
+		if !ok {
+			err = fmt.Errorf("panel.restart %q is not a mode baton offers (never, on-failure)", s)
+		} else {
+			p.Mode = mode
+		}
+	}
+	if r.RestartMax > 0 {
+		p.Max = r.RestartMax
+	}
+	if d, derr := parseOptionalDuration(r.RestartBackoff); derr != nil {
+		err = errors.Join(err, fmt.Errorf("panel.restart-backoff: %w", derr))
+	} else {
+		p.Backoff = d
+	}
+	if d, derr := parseOptionalDuration(r.RestartHealthy); derr != nil {
+		err = errors.Join(err, fmt.Errorf("panel.restart-healthy: %w", derr))
+	} else {
+		p.Healthy = d
+	}
+	return p, err
+}
+
+// parseOptionalDuration reads a duration field that may be empty, which means
+// "unset" rather than zero. A negative value is rejected: a wait that has already
+// passed is not a wait.
+func parseOptionalDuration(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, err
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("%q is negative", s)
+	}
+	return d, nil
 }
 
 // AgentProfile is one named way to launch an agent: the CLI binary and its
@@ -275,6 +352,11 @@ type AgentProfile struct {
 	// panel.limits: a field set here wins, one left unset inherits. So a heavy
 	// profile restates only what it changes, not the whole policy.
 	Limits limits.Limits `yaml:"limits,omitempty"`
+
+	// Restart is this profile's restart policy, layered over the fleet-wide one
+	// the same way. The common case is one line — `restart: never` on an agent you
+	// would rather look at yourself than have quietly re-run.
+	Restart RestartConfig `yaml:",inline"`
 }
 
 // Load reads the config file. A missing file yields an empty Config and no
