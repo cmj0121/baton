@@ -46,15 +46,23 @@ type panelMon struct {
 // silence and the tail heuristic is a guess about text, while this is the only
 // signal that came from the thing being described.
 //
-// Reason is why and Since is when, on the agent's own clock rather than on the
-// tick that noticed — so a queue sorts oldest-first on when the agent raised its
-// hand, not on the tick that happened to see it.
+// Reason is why. There is deliberately no "when": a queue sorts on the state
+// clock the wire already carries (proto.Panel.Since), so that a declared
+// attention and a heuristic one order by the same rule, and a second instant
+// kept here would be one nothing reads.
+//
+// Cleared is the inverse, with teeth: when a resolve withdraws the reason the
+// entry stays behind carrying the instant it was withdrawn, and while that
+// instant is at or after the panel's last byte of output the tail heuristic is
+// suppressed for it (see Server.suppressedLocked). Without that, the unchanged
+// tail that raised the flag would simply raise it again on the next tick and a
+// resolve would be a verb that undoes itself.
 //
 // It is deliberately not persisted. A declaration is a live process's statement
 // about itself, and restore brings every panel back as an exited slot.
 type declaration struct {
-	Reason string
-	Since  time.Time
+	Reason  string
+	Cleared time.Time
 }
 
 // monitor is the MONITOR core block: it watches each panel's output stream and
@@ -114,6 +122,18 @@ func (mo *monitor) quiet(id string) bool { return mo.quietFor(id, idleAfter) }
 func (mo *monitor) quietFor(id string, d time.Duration) bool {
 	pm := mo.panels[id]
 	return pm == nil || mo.now().Sub(pm.lastOutput) >= d
+}
+
+// lastByte is when a panel last produced output, or the zero time when it is not
+// tracked. It is the raw reading behind quietFor, exposed because the heuristic
+// suppression a resolve installs is not a duration but a comparison against this
+// instant: it holds until the panel says something NEW.
+func (mo *monitor) lastByte(id string) time.Time {
+	pm := mo.panels[id]
+	if pm == nil {
+		return time.Time{}
+	}
+	return pm.lastOutput
 }
 
 // enteredAt is when a panel entered its current state, or the zero time when it
@@ -282,7 +302,7 @@ func (s *Server) signalsLocked(p panel.Panel, taskDone bool) stateSignals {
 			sig.stuckDue = s.mon.quietFor(p.ID, w)
 		}
 	}
-	if sig.wantsTail() {
+	if sig.wantsTail() && !s.suppressedLocked(p.ID) {
 		sig.looksAtt = looksLikeAttention(s.pty.Tail(p.ID, attnTailBytes))
 	}
 	return sig

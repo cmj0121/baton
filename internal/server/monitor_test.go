@@ -434,7 +434,7 @@ func TestSignalsLocked(t *testing.T) {
 
 	// A declaration is reported, and it skips the tail read entirely: a rung the
 	// agent itself decided leaves nothing for the heuristic to decide.
-	s.declared["p1"] = &declaration{Reason: "which migration?", Since: clk.t}
+	s.declared["p1"] = &declaration{Reason: "which migration?"}
 	if sig := s.signalsLocked(s.panels[0], false); !sig.declared || sig.looksAtt {
 		t.Fatalf("a declaration should stand and skip the tail, got %+v", sig)
 	}

@@ -1342,6 +1342,16 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 		if cc.self != "" && slices.Contains(targetIDs(cmd), cc.self) {
 			return "conductor role: cannot act on its own panel"
 		}
+	case "panel.attention", "panel.resolve":
+		// The one pair that is fenced the other way round. Raising a hand is not
+		// destructive, so a conductor is allowed to do it — but only ABOUT ITSELF. A
+		// declaration takes its panel out of the scheduler's free pool until
+		// something withdraws it, so a conductor free to raise hands across the fleet
+		// is a conductor that can freeze the backlog for every other agent, one
+		// looping call at a time. An empty id already means "my own panel".
+		if cc.self != "" && cmd.ID != "" && cmd.ID != cc.self {
+			return "conductor role: may only raise its own hand"
+		}
 	case "panel.create":
 		now := time.Now()
 		if !cc.lastSpawn.IsZero() && now.Sub(cc.lastSpawn) < minConductorSpawnGap {
@@ -1596,6 +1606,14 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "task.drain":
 		s.drainQueued()
 		send(cc, s.tasksMsg())
+	case "panel.attention":
+		// An agent raising its own hand, with a reason — the top of the detection
+		// precedence. Reply and re-derive both happen in attention.go.
+		s.declareAttention(cc, cmd)
+	case "panel.resolve":
+		// …and putting it back down, without waiting for its next byte of output to
+		// be downgraded by a timer.
+		s.resolveAttention(cc, cmd)
 	case "panel.resize":
 		s.pty.Resize(cmd.ID, cmd.Rows, cmd.Cols)
 	default:
