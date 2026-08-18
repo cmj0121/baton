@@ -6,10 +6,10 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/cmj0121/baton/internal/cgroup"
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/proto"
-	"github.com/cmj0121/baton/internal/sandbox"
 )
 
 // newLimitsModel is the shared cockpit sitting on the panel-config screen with
@@ -223,12 +223,12 @@ func TestEnforceLabelTellsTheTruth(t *testing.T) {
 	if got := m.enforceLabel(); !strings.Contains(got, "unknown") {
 		t.Errorf("before attaching, enforcement is unknown, got %q", got)
 	}
-	m.enforce, m.enforceWhy = string(sandbox.ModeNone), "cgroup v2 is Linux-only"
+	m.enforce, m.enforceWhy = string(cgroup.ModeNone), "cgroup v2 is Linux-only"
 	got := m.enforceLabel()
 	if !strings.Contains(got, "NOT enforced") || !strings.Contains(got, "Linux-only") {
 		t.Errorf("an unenforcing host should be named outright, got %q", got)
 	}
-	m.enforce, m.enforceWhy = string(sandbox.ModeCgroup), ""
+	m.enforce, m.enforceWhy = string(cgroup.ModeCgroup), ""
 	if got := m.enforceLabel(); got != "enforced by cgroup" {
 		t.Errorf("an enforcing host should say so, got %q", got)
 	}
@@ -244,8 +244,8 @@ func TestEnforceLabelTellsTheTruth(t *testing.T) {
 func TestWelcomeCarriesTheEnforcementMode(t *testing.T) {
 	m := baseModel()
 	m.applyEvent(proto.ServerMsg{Type: "welcome", Version: proto.ProtocolVersion,
-		Enforce: string(sandbox.ModeNone), EnforceWhy: "cgroup v2 is Linux-only"})
-	if m.enforce != string(sandbox.ModeNone) || m.enforceWhy != "cgroup v2 is Linux-only" {
+		Enforce: string(cgroup.ModeNone), EnforceWhy: "cgroup v2 is Linux-only"})
+	if m.enforce != string(cgroup.ModeNone) || m.enforceWhy != "cgroup v2 is Linux-only" {
 		t.Fatalf("the welcome should carry the mode and the reason, got %q/%q", m.enforce, m.enforceWhy)
 	}
 }

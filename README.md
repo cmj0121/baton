@@ -153,6 +153,11 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
   a runaway build cannot take the machine with it. Set a fleet-wide floor and per-agent overrides in the config or under
   `C-t P`; `C-t R` applies them to the running fleet. Enforced with cgroup v2 on Linux, and the panel says plainly when a
   host cannot enforce them. See **[docs/LIMITS.md](docs/LIMITS.md)**.
+- **Container isolation** — opt-in per agent profile: `isolate: docker` runs that profile's panels inside a container
+  with your worktree mounted, so an agent that goes wrong is confined to a workspace. You name the image (Baton ships
+  none); `mount`, `network`, `env-allow` and `user` decide what else crosses, and nothing from your environment does
+  unless you name it. The caps still apply, enforced by the runtime. Off by default, and not a boundary against a
+  hostile agent. See **[docs/ISOLATION.md](docs/ISOLATION.md)**.
 - **Restart policy** — off by default; set `panel.restart: on-failure` and a panel whose process dies abnormally comes
   back, with an exponential backoff and a limit that settles it loudly rather than looping. A clean exit, a panel you
   closed, and one you signalled are all left alone. Overridable per agent profile.
@@ -211,6 +216,8 @@ through one `baton` object. See **[docs/PLUGIN.md](docs/PLUGIN.md)**.
   group-split layouts (presets and custom grids).
 - **[docs/LIMITS.md](docs/LIMITS.md)** — resource limits: the config, the two layers, hot reload, and where they are
   actually enforced.
+- **[docs/ISOLATION.md](docs/ISOLATION.md)** — container isolation: the per-profile config, what the agent keeps, how
+  the caps are enforced inside a container, and what it is not a boundary for.
 - **[docs/RESTART.md](docs/RESTART.md)** — the restart policy: what is and is not a failure, the backoff and the limit,
   and why there is no `always`.
 - **[docs/GIT.md](docs/GIT.md)** — the git menu: every op, the commit-editor flow, worktrees, and the config.

@@ -164,6 +164,12 @@ Tout ce dont vous avez besoin pour mener une flotte, à une frappe de distance :
   plancher pour toute la flotte et des surcharges par agent dans la config ou sous `C-t P` ; `C-t R` les applique à la
   flotte en cours. Imposées par cgroup v2 sous Linux, et le panneau le dit franchement quand un hôte ne peut pas les
   imposer. Voir **[docs/LIMITS.md](LIMITS.md)**.
+- **Isolation par conteneur** — optionnelle, par profil d'agent : `isolate: docker` exécute les panneaux de ce profil
+  dans un conteneur avec votre arbre de travail monté, si bien qu'un agent qui se trompe reste confiné à un espace de
+  travail. Vous nommez l'image (Baton n'en fournit aucune) ; `mount`, `network`, `env-allow` et `user` décident de ce qui
+  franchit la frontière, et rien de votre environnement ne passe sans être nommé. Les limites s'appliquent toujours,
+  imposées par le runtime. Désactivée par défaut, et ce n'est pas une barrière contre un agent hostile. Voir
+  **[docs/ISOLATION.md](ISOLATION.md)**.
 - **Apparence** — `$HOME/.baton/TUI.yaml` remodèle le cockpit : un **thème** de couleurs et les **dispositions** de la vue
   divisée des groupes, rechargés à chaud avec `C-t R`. Voir **[docs/TUI.md](TUI.md)**.
 - **Pied de page d'usage** — `U` affiche ou masque un pied de page indiquant la consommation de tokens et le coût du jour
@@ -220,6 +226,8 @@ la flotte, ajouter vos propres commandes et définir la config — le tout à tr
   dispositions de la vue divisée des groupes (préréglages et grilles personnalisées).
 - **[docs/LIMITS.md](LIMITS.md)** — les limites de ressources : la config, les deux couches, le rechargement à chaud et où
   elles sont réellement imposées.
+- **[docs/ISOLATION.md](ISOLATION.md)** — l'isolation par conteneur : la config par profil, ce que l'agent conserve,
+  comment les limites sont imposées dans un conteneur, et ce dont ce n'est pas une frontière.
 - **[docs/RESTART.md](RESTART.md)** — la politique de redémarrage : ce qui compte comme un échec et ce qui n'en est
   pas, le backoff et la limite, et pourquoi `always` n'existe pas.
 - **[docs/GIT.md](GIT.md)** — le menu git : chaque opération, le flux de l'éditeur de commit, les worktrees et la config.

@@ -24,9 +24,11 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 
 	"github.com/cmj0121/baton/internal/attn"
+	"github.com/cmj0121/baton/internal/cgroup"
 	"github.com/cmj0121/baton/internal/cwd"
 	"github.com/cmj0121/baton/internal/gitdiff"
 	"github.com/cmj0121/baton/internal/gitops"
+	"github.com/cmj0121/baton/internal/isolate"
 	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/panellog"
@@ -35,7 +37,6 @@ import (
 	"github.com/cmj0121/baton/internal/ptymgr"
 	"github.com/cmj0121/baton/internal/queue"
 	"github.com/cmj0121/baton/internal/restart"
-	"github.com/cmj0121/baton/internal/sandbox"
 	"github.com/cmj0121/baton/internal/signals"
 	"github.com/cmj0121/baton/internal/state"
 	"github.com/cmj0121/baton/internal/task"
@@ -124,6 +125,13 @@ type Settings struct {
 	Attention      attn.Policy
 	AgentAttention map[string]attn.Policy
 
+	// AgentIsolate holds the per-profile container isolation, keyed by profile
+	// name. There is no fleet-wide counterpart, unlike every other policy above:
+	// an isolated panel needs an image with the right toolchain, and no single
+	// image is right for a whole fleet. A profile absent from the table runs on
+	// the host exactly as it does today.
+	AgentIsolate map[string]isolate.Policy
+
 	// TrackCwd is how a panel's live working directory is learned and RestoreCwd
 	// which panels a re-run puts back in it.
 	TrackCwd   cwd.Track
@@ -162,11 +170,19 @@ type Server struct {
 	limits      limits.Limits
 	agentLimits map[string]limits.Limits
 
-	// sand is the enforcement backend the resolved limits are handed to: it makes
+	// cg is the enforcement backend the resolved limits are handed to: it makes
 	// each panel's process tree actually run under its caps, or reports that this
 	// host cannot and leaves every panel uncapped. Built once at construction and
 	// thereafter read without the lock; it guards its own state.
-	sand *sandbox.Manager
+	cg *cgroup.Manager
+
+	// agentIsolate is the per-profile container isolation, resolved at spawn from
+	// the profile name the same way the caps are. containers maps a live panel to
+	// the container name it was launched under, which is what teardown needs back:
+	// with a TTY attached the runtime does not proxy signals, so killing the client
+	// leaves the container running and only the recorded name can find it again.
+	agentIsolate map[string]isolate.Policy
+	containers   map[string]string
 
 	onReload func() // invoked on a server.reload command; re-reads config and Reloads
 
@@ -536,7 +552,8 @@ func New(ln net.Listener, opts ...Option) *Server {
 		queueMax:        defaultQueueMax,
 		dirty:           make(chan struct{}, 1),
 		heartbeat:       proto.HeartbeatInterval,
-		sand:            sandbox.New(),
+		cg:              cgroup.New(),
+		containers:      make(map[string]string),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -591,6 +608,7 @@ func (s *Server) Reload(set Settings) {
 	s.limits, s.agentLimits = set.Limits, set.AgentLimits
 	s.restart, s.agentRestart = set.Restart, set.AgentRestart
 	s.attention, s.agentAttention = set.Attention, set.AgentAttention
+	s.agentIsolate = set.AgentIsolate // resolved per spawn, so live panels keep the runtime they started under
 	s.trackCwd, s.restoreCwd = set.TrackCwd, set.RestoreCwd
 	// The logging policy swaps whole, like the caps: a panel records its PROFILE,
 	// so every resolution from here on reads the new destination. Files ALREADY
@@ -612,7 +630,7 @@ func (s *Server) Reload(set Settings) {
 	}
 	fleetWide := s.effectiveLimitsLocked("")
 	s.mu.Unlock()
-	updated, deferred := s.sand.Update(func(id string) limits.Limits {
+	updated, deferred := s.cg.Update(func(id string) limits.Limits {
 		if caps, ok := resolved[id]; ok {
 			return caps
 		}
@@ -643,6 +661,7 @@ func (s *Server) Reload(set Settings) {
 func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 	s.mu.Lock()
 	caps := s.effectiveLimitsLocked(profile)
+	iso := s.agentIsolate[profile]
 	s.mu.Unlock()
 
 	// Hand an agent panel a session of its own, on the launched copy only — the
@@ -655,20 +674,31 @@ func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 		s.mu.Unlock()
 	}
 
-	h, err := s.sand.Prepare(id, caps)
-	if err != nil {
-		return fmt.Errorf("resource limits for panel %s: %w", id, err)
-	}
-	if h != nil {
-		if skipped := append(s.sand.Unenforced(caps), h.Skipped()...); len(skipped) > 0 {
-			log.Warn().Str("panel", id).Strs("limits", skipped).Msg("limits this backend cannot enforce")
+	if iso.Enabled() {
+		// No cgroup here, and that is deliberate: it would confine the runtime
+		// CLIENT, leaving the container — the daemon's child, not ours — entirely
+		// uncapped. The caps ride the runtime's own flags instead, so an isolated
+		// panel is held to the same policy by a different enforcer.
+		if err := s.isolateSpec(id, iso, &spec, caps); err != nil {
+			return err
 		}
-		// Hooked onto the copy that is launched, never onto the spec the server
-		// retains: a stored hook would pin the handle long after Release drops it.
-		spec.Confine = h.Confine
+	} else {
+		h, err := s.cg.Prepare(id, caps)
+		if err != nil {
+			return fmt.Errorf("resource limits for panel %s: %w", id, err)
+		}
+		if h != nil {
+			if skipped := append(s.cg.Unenforced(caps), h.Skipped()...); len(skipped) > 0 {
+				log.Warn().Str("panel", id).Strs("limits", skipped).Msg("limits this backend cannot enforce")
+			}
+			// Hooked onto the copy that is launched, never onto the spec the server
+			// retains: a stored hook would pin the handle long after Release drops it.
+			spec.Confine = h.Confine
+		}
 	}
 	if err := s.pty.StartCmd(id, spec); err != nil {
-		s.sand.Release(id) // the cgroup outlived the process it was made for
+		s.cg.Release(id)       // the cgroup outlived the process it was made for
+		s.releaseContainer(id) // and so did the container name, if this was an isolated spawn
 		return err
 	}
 	// The run's clock starts here, at the one fork point, so every way a panel can
@@ -689,9 +719,9 @@ func (s *Server) probeEnforcement() {
 	configured := !s.limits.IsZero() || len(s.agentLimits) > 0
 	s.mu.Unlock()
 	if configured {
-		s.sand.Probe()
+		s.cg.Probe()
 	}
-	log.Info().Str("enforcement", s.sand.Describe()).Msg("resource limits")
+	log.Info().Str("enforcement", s.cg.Describe()).Msg("resource limits")
 }
 
 // EffectiveLimits resolves the resource caps a live panel runs under: the
@@ -724,6 +754,12 @@ func (s *Server) effectiveAttentionLocked(profile string) attn.Policy {
 // and detaches any client zoomed into it, and broadcasts the change. It is a
 // no-op for a panel already gone (e.g. an explicit panel.close).
 func (s *Server) onPanelExit(id string, exitCode int) {
+	// The runtime client has exited, so an isolated panel's container is either
+	// already gone (it exited on its own, and --rm took it) or orphaned (baton
+	// killed the client and the container never heard). Removing by name settles
+	// both; a respawn mints a fresh name, so nothing here is reused.
+	s.releaseContainer(id)
+
 	s.mu.Lock()
 	found := false
 	var fields map[string]any
@@ -784,7 +820,8 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 
 	for _, sid := range stop {
 		s.pty.Stop(sid)
-		s.sand.Release(sid)               // the panel is gone for good; drop its cgroup with it
+		s.cg.Release(sid)                 // the panel is gone for good; drop its cgroup with it
+		s.releaseContainer(sid)           // and the container it was launched in, if it had one
 		s.stopLogging(sid, logMarkClosed) // …and its transcript is finished rather than abandoned
 	}
 	for _, ws := range workspaces {
@@ -1497,7 +1534,7 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "hello":
 		cc.role, cc.self = cmd.Role, cmd.Self
 		send(cc, proto.ServerMsg{Type: "welcome", Version: proto.ProtocolVersion, ServerVer: s.version,
-			Enforce: string(s.sand.Mode()), EnforceWhy: s.sand.Reason()})
+			Enforce: string(s.cg.Mode()), EnforceWhy: s.cg.Reason()})
 		send(cc, s.panelsMsg())
 		send(cc, statsMsg()) // seed the footer immediately, before the first tick
 		if s.usageProvider != nil {
@@ -2182,6 +2219,10 @@ func (s *Server) Shutdown() int {
 	if n > 0 {
 		log.Info().Int("panels", n).Msg("killed live panels on shutdown")
 	}
+	// The kills above ended the runtime CLIENTS of any isolated panels; the
+	// containers they were attached to are the daemon's children, not ours, and
+	// survive unless they are removed by name.
+	s.sweepContainers()
 	// Every open transcript is flushed and closed with a marker saying why, so a
 	// log never simply stops mid-line with nothing to say what happened.
 	s.closeAllLogs(logMarkShutdown)
@@ -3191,7 +3232,8 @@ func (s *Server) closePanel(id string) error {
 			// normal panel close keeps its SIGHUP-via-close semantics.
 			s.pty.Signal(id, syscall.SIGKILL)
 			s.pty.Stop(id)
-			s.sand.Release(id) // the ephemeral is gone; drop its cgroup with it
+			s.cg.Release(id)       // the ephemeral is gone; drop its cgroup with it
+			s.releaseContainer(id) // and the container it was launched in, if it had one
 			log.Info().Str("panel", id).Msg("ephemeral diff panel closed")
 			return nil
 		}
@@ -3220,7 +3262,8 @@ func (s *Server) closePanel(id string) error {
 	s.mu.Unlock()
 
 	s.pty.Stop(id)                   // no-op for a panel with no live process
-	s.sand.Release(id)               // the panel is gone for good; drop its cgroup with it
+	s.cg.Release(id)                 // the panel is gone for good; drop its cgroup with it
+	s.releaseContainer(id)           // and the container it was launched in, if it had one
 	s.stopLogging(id, logMarkClosed) // …and its transcript is finished rather than abandoned
 	if workspace != "" {
 		_ = os.RemoveAll(workspace)
@@ -3564,7 +3607,8 @@ func (s *Server) closeEphemeral(cc *clientConn) {
 		// could outlive the dropped client. Ephemeral panels are safe to SIGKILL.
 		s.pty.Signal(id, syscall.SIGKILL)
 		s.pty.Stop(id)
-		s.sand.Release(id) // the ephemeral is gone; drop its cgroup with it
+		s.cg.Release(id)       // the ephemeral is gone; drop its cgroup with it
+		s.releaseContainer(id) // and the container it was launched in, if it had one
 	}
 	if len(ids) > 0 {
 		log.Info().Int("count", len(ids)).Msg("reaped ephemeral diff panels on disconnect")
@@ -3600,7 +3644,8 @@ func (s *Server) purgeExited() int {
 
 	for _, id := range gone {
 		s.pty.Stop(id)
-		s.sand.Release(id)               // purged for good; drop its cgroup with it
+		s.cg.Release(id)                 // purged for good; drop its cgroup with it
+		s.releaseContainer(id)           // and the container it was launched in, if it had one
 		s.stopLogging(id, logMarkClosed) // …and its transcript is finished rather than abandoned
 	}
 	for _, ws := range workspaces {
@@ -3951,7 +3996,7 @@ func (s *Server) signalPanels(ids []string, name string) error {
 	s.noteStopRequested(targets)
 
 	for _, id := range targets {
-		s.pty.Signal(id, sig)
+		s.signalPanel(id, name, sig)
 	}
 	log.Info().Str("signal", name).Int("panels", len(targets)).Msg("signal sent")
 	return nil

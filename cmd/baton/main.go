@@ -36,6 +36,7 @@ import (
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/cwd"
+	"github.com/cmj0121/baton/internal/isolate"
 	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/panellog"
 	"github.com/cmj0121/baton/internal/paths"
@@ -461,6 +462,7 @@ func reloadableSettings(cfg config.Config) reloadable {
 	rc.settings.LogMaxBytes = panellog.MaxBytes(cfg.Panel.LogMaxMB)
 	rc.settings.Restart, rc.settings.AgentRestart = restartPolicies(cfg)
 	rc.settings.Attention, rc.settings.AgentAttention = attentionPolicies(cfg)
+	rc.settings.AgentIsolate = isolationPolicies(cfg)
 	rc.settings.TrackCwd, rc.settings.RestoreCwd = cwdPolicy(cfg)
 	if cfg.Settings.AllowNameConflict != nil {
 		rc.settings.AllowNameConflict = *cfg.Settings.AllowNameConflict
@@ -553,6 +555,32 @@ func restartPolicies(cfg config.Config) (restart.Policy, map[string]restart.Poli
 		perAgent[name] = p
 	}
 	return fleet, perAgent
+}
+
+// isolationPolicies projects the config's per-profile container isolation.
+//
+// It is the one policy here that does NOT drop what it cannot read. A malformed
+// restart block simply restarts nothing and a bad track-cwd falls back to the
+// default, because the forgiving direction costs a convenience. Isolation's
+// forgiving direction is a panel running unconfined on the host — the outcome the
+// user wrote the setting to prevent — so a broken policy is kept, poisoned, and
+// fails every spawn of that profile with the reason until the file is fixed.
+func isolationPolicies(cfg config.Config) map[string]isolate.Policy {
+	var out map[string]isolate.Policy
+	for name, prof := range cfg.Panel.Agents {
+		p, err := prof.Isolation()
+		if err != nil {
+			log.Warn().Err(err).Str("agent", name).Msg("agent isolation is not usable; spawns of this profile will fail")
+		}
+		if !p.Enabled() {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]isolate.Policy, len(cfg.Panel.Agents))
+		}
+		out[name] = p
+	}
+	return out
 }
 
 // cwdPolicy projects the config's working-directory settings, reporting anything

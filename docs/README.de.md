@@ -161,6 +161,12 @@ Alles, wonach du beim Hüten einer Flotte greifen würdest, nur einen Tastendruc
   flottenweite Untergrenze und Overrides pro Agent setzt du in der Konfiguration oder unter `C-t P`; `C-t R` wendet sie
   auf die laufende Flotte an. Unter Linux mit cgroup v2 durchgesetzt — und das Panel sagt klar, wenn ein Host sie nicht
   durchsetzen kann. Siehe **[docs/LIMITS.md](LIMITS.md)**.
+- **Container-Isolation** — pro Agent-Profil zuschaltbar: `isolate: docker` führt die Panels dieses Profils in einem
+  Container aus, in den dein Arbeitsbaum eingehängt ist — ein Agent, der etwas falsch macht, bleibt damit auf einen
+  Arbeitsbereich beschränkt. Das Image benennst du selbst (Baton liefert keines); `mount`, `network`, `env-allow` und
+  `user` entscheiden, was sonst noch hinüberkommt, und aus deiner Umgebung geht nichts hinüber, was du nicht nennst. Die
+  Limits gelten weiterhin, durchgesetzt von der Runtime. Standardmäßig aus, und keine Grenze gegen einen feindseligen
+  Agenten. Siehe **[docs/ISOLATION.md](ISOLATION.md)**.
 - **Erscheinungsbild** — `$HOME/.baton/TUI.yaml` formt das Cockpit um: ein Farb-**Theme** und die **Layouts** der
   Gruppenaufteilung, per `C-t R` heiß neu geladen. Siehe **[docs/TUI.md](TUI.md)**.
 - **Nutzungs-Fußzeile** — `U` schaltet eine Fußzeile mit dem Tokenverbrauch und den Kosten des Tages um
@@ -218,6 +224,8 @@ Siehe **[docs/PLUGIN.md](PLUGIN.md)**.
   und die Layouts der Gruppenaufteilung (Presets und eigene Raster).
 - **[docs/LIMITS.md](LIMITS.md)** — Ressourcenlimits: die Konfiguration, die zwei Ebenen, das Hot Reload und wo sie
   tatsächlich durchgesetzt werden.
+- **[docs/ISOLATION.md](ISOLATION.md)** — Container-Isolation: die Konfiguration pro Profil, was der Agent behält, wie
+  die Limits im Container durchgesetzt werden, und wogegen sie keine Grenze ist.
 - **[docs/RESTART.md](RESTART.md)** — die Neustart-Richtlinie: was als Fehler zählt und was nicht, Backoff und Limit,
   und warum es kein `always` gibt.
 - **[docs/GIT.md](GIT.md)** — das Git-Menü: jede Operation, der Ablauf im Commit-Editor, Worktrees und die Konfiguration.

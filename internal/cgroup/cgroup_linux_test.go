@@ -1,6 +1,6 @@
 //go:build linux
 
-package sandbox
+package cgroup
 
 import (
 	"os"

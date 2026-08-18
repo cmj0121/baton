@@ -161,6 +161,11 @@ fleet の面倒を見るときに手を伸ばしたくなるものは、すべ�
   上書きを設定ファイル、あるいは `C-t P` で指定し、`C-t R` で走っている fleet に適用します。Linux では cgroup v2 で
   強制され、ホストが強制できない場合は panel がはっきりそう告げます。**[docs/LIMITS.md](LIMITS.md)** を
   参照してください。
+- **コンテナ隔離** — agent profile ごとのオプトイン:`isolate: docker` はその profile の panel を、あなたの
+  worktree をマウントしたコンテナの中で実行します。壊れた動きをする agent が届く範囲はワークスペースだけになります。
+  image はあなたが指定します(Baton は同梱しません)。ほかに何が越えるかは `mount`、`network`、`env-allow`、`user`
+  が決め、環境変数は名前を挙げたものしか渡りません。リソース上限は runtime 側で引き続き有効です。既定はオフで、
+  敵対的な agent に対する境界ではありません。**[docs/ISOLATION.md](ISOLATION.md)** を参照してください。
 - **外観** — `$HOME/.baton/TUI.yaml` がコックピットを作り替えます:配色の**テーマ**と、グループ分割の
   **レイアウト**。`C-t R` でホットリロードされます。**[docs/TUI.md](TUI.md)** を参照してください。
 - **使用量フッタ** — `U` は、その日の token 使用量とコスト(`⊙ 1.2M tok · ≈$12.34 API`)を表示するフッタを
@@ -215,6 +220,7 @@ fleet を動かし、自分のコマンドを足し、設定を書く——す�
 - **[docs/TUI.md](TUI.md)** — コックピットの外観ファイル(`$HOME/.baton/TUI.yaml`):配色テーマと
   グループ分割のレイアウト(プリセットとカスタムグリッド)。
 - **[docs/LIMITS.md](LIMITS.md)** — リソース上限:設定、2 つの層、ホットリロード、そして実際にどこで強制されるか。
+- **[docs/ISOLATION.md](ISOLATION.md)** — コンテナ隔離:profile ごとの設定、agent が保持するもの、コンテナ内で上限がどう強制されるか、そして何の境界ではないか。
 - **[docs/RESTART.md](RESTART.md)** — 再起動ポリシー:何が失敗で何が失敗でないか、バックオフと上限、そして
   `always` が存在しない理由。
 - **[docs/GIT.md](GIT.md)** — git メニュー:各操作、commit エディタの流れ、worktree、そして設定。

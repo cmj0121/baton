@@ -43,6 +43,14 @@ agent accidents, not a sandbox against a hostile program:
 - **Resource limits** ([docs/LIMITS.md](docs/LIMITS.md)) cap cpu, memory and pids
   for a panel's whole process tree via cgroup v2. They keep a runaway build from
   taking the machine; they are not a security boundary, and the docs say so.
+- **Container isolation** ([docs/ISOLATION.md](docs/ISOLATION.md)) is opt-in per
+  agent profile and confines an agent that is **wrong** — it reaches only the
+  workspace you mounted, only the environment you named, and writes as your uid
+  rather than root. It is **not** a boundary against an agent that is trying to
+  escape: the runtime is driven by your uid over your docker socket, and anything
+  that can reach that socket can reach the host. Read "container" as "workspace
+  boundary", never as "sandbox". An isolated panel is also not given `BATON_SOCK`,
+  so it cannot drive the fleet.
 - **Panel logs** ([docs/LOGGING.md](docs/LOGGING.md)) are plain-text transcripts
   the daemon writes into a directory you named, as you, with mode 0600. They are
   a record, not an audit trail: anything that can reach your uid — including the
@@ -71,6 +79,7 @@ This **is** worth reporting:
 - Terminal-escape handling that lets panel output forge cockpit UI, drive the
   host terminal, or leak one panel's scrollback into another.
 - Secrets landing somewhere they should not: the state file, the daemon log, the
-  usage footer, or a crash dump.
+  usage footer, or a crash dump. An isolated panel receiving an environment
+  variable `env-allow` does not name counts here too.
 - A crash or hang the daemon cannot recover from that is reachable from panel
   output or a socket message.

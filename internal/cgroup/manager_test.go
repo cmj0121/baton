@@ -1,4 +1,4 @@
-package sandbox
+package cgroup
 
 import (
 	"os"
