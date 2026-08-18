@@ -250,6 +250,35 @@ func defaultTools() []tool {
 			},
 		},
 		{
+			name: "baton_attention",
+			desc: "Say that you need a human before you can go on, and why. Use this the moment you are blocked on a decision, an approval, or a credential — it puts your panel at the top of the human's queue with your reason on it, which no timer or output-sniffing guess can do. Omit 'id' to mean your own panel. Call baton_resolve once the need has passed.",
+			schema: obj(map[string]any{
+				"why": str("why you need a human — one sentence, shown to the person as-is"),
+				"id":  str("panel id to raise the hand for; omit for your own panel"),
+			}, "why"),
+			run: func(c *control.Client, a args) (string, error) {
+				why := a.str("why")
+				if why == "" {
+					return "", fmt.Errorf("why is required: a declaration is only worth more than a guess because it says why")
+				}
+				if err := c.DeclareAttention(a.str("id"), why); err != nil {
+					return "", err
+				}
+				return "raised a hand: " + why, nil
+			},
+		},
+		{
+			name:   "baton_resolve",
+			desc:   "Say the reason you needed a human has passed, so your panel leaves the queue without waiting to be noticed. Omit 'id' to mean your own panel. Safe to call when nothing is standing.",
+			schema: obj(map[string]any{"id": str("panel id to stand down; omit for your own panel")}),
+			run: func(c *control.Client, a args) (string, error) {
+				if err := c.ResolveAttention(a.str("id")); err != nil {
+					return "", err
+				}
+				return "stood down", nil
+			},
+		},
+		{
 			name: "baton_dispatch",
 			desc: "Assign a task to a panel: record the brief and deliver the prompt to the agent as a unit. Prefer this over baton_send for handing an agent work — the brief shows on its card and survives a restart.",
 			schema: obj(map[string]any{

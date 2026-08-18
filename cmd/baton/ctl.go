@@ -25,6 +25,8 @@ type ctlCLI struct {
 	Unpin         ctlUnpin         `cmd:"" help:"Unpin panels."`
 	Signal        ctlSignal        `cmd:"" help:"Send a signal to panels."`
 	Send          ctlSend          `cmd:"" help:"Send text (a prompt) to a panel."`
+	Attention     ctlAttention     `cmd:"" help:"Say this panel needs a human, and why."`
+	Resolve       ctlResolve       `cmd:"" help:"Say the reason this panel needed a human has passed."`
 	Dispatch      ctlDispatch      `cmd:"" help:"Assign a task brief to a panel and deliver it as a unit."`
 	DispatchGroup ctlDispatchGroup `cmd:"" name:"dispatch-group" help:"Dispatch one task to every member of a work item."`
 	Queue         ctlQueue         `cmd:"" help:"Manage the task backlog (add/list/cancel/drain)."`
@@ -149,6 +151,34 @@ type ctlSend struct {
 
 func (x ctlSend) Run(c *control.Client) error {
 	return c.SendText(x.ID, x.Text, !x.NoEnter)
+}
+
+// ctlAttention is the verb an agent runs on itself. Everything else in this file
+// is something you do TO a panel; this is the one thing a panel says about
+// itself, and it outranks both of the guesses baton would otherwise make (the
+// quiet timer, the tail heuristic) for exactly that reason.
+//
+// --id is optional because the useful form has no argument: run inside a panel
+// baton identified, the connection already carries which panel it is, so the
+// agent never has to discover its own id.
+type ctlAttention struct {
+	Why string `required:"" help:"Why this panel needs a human — the sentence shown in the queue."`
+	ID  string `help:"Target panel id. Omit to mean the panel this command is running in."`
+}
+
+func (x ctlAttention) Run(c *control.Client) error {
+	return c.DeclareAttention(x.ID, x.Why)
+}
+
+// ctlResolve is the inverse, and the reason a declaration can be trusted: an
+// agent that can put its hand down is one whose raised hand means something. It
+// is a no-op when nothing stands, so it is safe to run unconditionally.
+type ctlResolve struct {
+	ID string `help:"Target panel id. Omit to mean the panel this command is running in."`
+}
+
+func (x ctlResolve) Run(c *control.Client) error {
+	return c.ResolveAttention(x.ID)
 }
 
 type ctlDispatch struct {
