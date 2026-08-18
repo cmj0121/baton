@@ -26,8 +26,8 @@ import (
 // plain YAML file the user hand-edits.
 const AdminKeyEnv = "BATON_ANTHROPIC_ADMIN_KEY"
 
-// DefaultWindow is the rolling window the local source counts down when the
-// config leaves usage.window unset. It is configurable rather than baked in
+// DefaultWindow is how long a window lasts for the local source when the config
+// leaves usage.window unset. It is configurable rather than baked in
 // because plans differ and the vendor can change the figure — tracking that
 // should not need a baton release.
 const DefaultWindow = 5 * time.Hour
@@ -56,7 +56,7 @@ type Snapshot struct {
 
 	// Resets marks Until as a real reset to count down to, rather than merely the
 	// far edge of whatever period the source happened to query. Only a source that
-	// can infer the rolling window sets it, and the footer counts down solely when
+	// can infer where the window opened sets it, and the footer counts down solely when
 	// it is true: a wrong countdown is worse than none, because the whole point of
 	// the number is that a decision gets made on it.
 	Resets bool
@@ -75,8 +75,15 @@ func (s Snapshot) Empty() bool { return s.TotalTokens() == 0 && s.CostUSD == 0 }
 
 // Countdown is how long is left before the window resets, and whether there is a
 // reset to count down to at all. It reports false — never a zero and never a
-// guess — when the source cannot see one, and clamps at zero once the window has
-// run out rather than counting into the negative.
+// guess — when the source cannot see a reset, and equally once the window it
+// named has run out: that window is over, the one after it has not opened yet,
+// and a zero would assert a reset happening right now that nothing backs.
+//
+// Reporting it rather than clamping is what keeps the footer honest between
+// polls. The cockpit ticks a held snapshot once a second while the daemon
+// refreshes once every thirty, so a snapshot outlives its own window routinely —
+// and a clamp turned that into a segment resting at 0:00:00 for as long as the
+// snapshot was held, which for a daemon that had stopped answering was forever.
 func (s Snapshot) Countdown(now time.Time) (time.Duration, bool) {
 	if !s.Resets || s.Until.IsZero() {
 		return 0, false
@@ -84,14 +91,19 @@ func (s Snapshot) Countdown(now time.Time) (time.Duration, bool) {
 	if d := s.Until.Sub(now); d > 0 {
 		return d, true
 	}
-	return 0, true
+	return 0, false
 }
 
 // Spent is the fraction of the window already elapsed, 0 to 1, and whether there
 // is a window to measure against. A caller colouring a segment by pressure leaves
 // it alone when this reports false, rather than painting an invented reading.
+//
+// A window that has run out reports false, the same as Countdown: it is the same
+// statement, and the two have to agree or the segment says two things at once —
+// no time left to show, yet still coloured as if the account were up against a
+// limit it is no longer measured against.
 func (s Snapshot) Spent(now time.Time) (float64, bool) {
-	if !s.Resets || s.Since.IsZero() || s.Until.IsZero() {
+	if !s.Resets || s.Since.IsZero() || s.Until.IsZero() || !now.Before(s.Until) {
 		return 0, false
 	}
 	total := s.Until.Sub(s.Since)
@@ -127,7 +139,7 @@ type Provider interface {
 // falls back to local. An "api" request with no key also falls back to local, so
 // the footer always has a working source rather than silently going dark.
 //
-// window is the rolling window the local source counts down; zero disables the
+// window is how long a window lasts for the local source; zero disables the
 // countdown and falls back to a calendar-day total. The api source ignores it —
 // it cannot see a reset (see APIProvider).
 func NewProvider(source string, window time.Duration) Provider {

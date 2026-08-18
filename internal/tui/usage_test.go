@@ -109,6 +109,43 @@ func TestUsageCapWindowNoReset(t *testing.T) {
 	}
 }
 
+// TestUsageCapWindowPastTheReset is the regression for a segment that hung at
+// 0:00:00. The cockpit ticks the payload it was last sent once a second while the
+// daemon polls once every thirty, so the held window routinely outlives itself —
+// and the countdown used to floor at zero and rest there until something newer
+// arrived, which, with a daemon that had stopped answering, was never.
+//
+// Walking the cockpit's clock through and past the reset: the countdown falls,
+// and the moment the window is over it is gone rather than pinned at zero. The
+// spend stays — that number is still the last thing known to be true.
+func TestUsageCapWindowPastTheReset(t *testing.T) {
+	m := usageModel(usageWindow)
+	for _, tick := range []struct {
+		on   time.Duration
+		want string
+	}{
+		{0, "4:00:00"},
+		{2 * time.Hour, "2:00:00"},
+		{4*time.Hour - time.Second, "0:00:01"},
+	} {
+		m.now = usageNow.Add(tick.on)
+		if got := m.usageCap(); !strings.Contains(got, tick.want) {
+			t.Errorf("%v on, segment = %q, want a countdown of %s", tick.on, got, tick.want)
+		}
+	}
+
+	for _, on := range []time.Duration{4 * time.Hour, 4*time.Hour + time.Second, 30 * time.Hour} {
+		m.now = usageNow.Add(on)
+		got := m.usageCap()
+		if strings.Contains(got, "⏳") || strings.Contains(got, "0:00:00") {
+			t.Errorf("%v on, the window is over: segment = %q, want no countdown at all", on, got)
+		}
+		if !strings.Contains(got, "1.2M tok") {
+			t.Errorf("%v on, the spend should still show: %q", on, got)
+		}
+	}
+}
+
 // TestUsagePanelView: the panel view answers "who is burning it" — the focused
 // panel's spend and its share of the window, which is the number the decision to
 // stop an agent is made on.
@@ -174,6 +211,13 @@ func TestUsagePressureColour(t *testing.T) {
 	m.now = usageNow.Add(3*time.Hour + 45*time.Minute) // 4.75h of 5h = 0.95
 	if got := m.usagePressureColor(); got != colRed {
 		t.Errorf("past the alarm = %v, want red", got)
+	}
+
+	// Once the window has run out the colour stops reporting too, rather than
+	// staying locked on red while the countdown beside it has already gone.
+	m.now = usageNow.Add(4 * time.Hour)
+	if got := m.usagePressureColor(); got != colBlue {
+		t.Errorf("a window that has run out = %v, want no pressure reading at all", got)
 	}
 
 	m.usageInfo.Resets = false

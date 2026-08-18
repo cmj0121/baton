@@ -110,6 +110,12 @@ func (m model) usageSegment() string {
 // cannot see a reset — a countdown baton had to invent would be worse than none.
 // The remaining time is computed here, against the cockpit's own clock, because
 // it has to tick every second while the daemon polls once every thirty.
+//
+// That gap is why the reading goes through Snapshot.Countdown rather than a plain
+// subtraction: a held payload outlives its own window between polls, and once it
+// has, the cockpit no longer knows when anything resets. The segment drops the
+// countdown then, instead of resting on the 0:00:00 a subtraction would floor at
+// — a number that would sit there for as long as nothing newer arrived.
 func (m model) usageCountdown() string {
 	info := m.usageInfo
 	if info == nil || !info.Resets || info.Until == "" {
@@ -119,7 +125,11 @@ func (m model) usageCountdown() string {
 	if err != nil {
 		return ""
 	}
-	return "⏳ " + usage.FormatCountdown(until.Sub(m.now), info.CountdownFormat)
+	left, ok := usage.Snapshot{Until: until, Resets: true}.Countdown(m.now)
+	if !ok {
+		return ""
+	}
+	return "⏳ " + usage.FormatCountdown(left, info.CountdownFormat)
 }
 
 // usagePanelText is the focused work's line: what it has spent inside this window
