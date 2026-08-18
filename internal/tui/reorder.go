@@ -23,7 +23,17 @@ func moveTarget(fleet []panel.Panel, units [][]string, sel, dir int) (block []st
 	if sel < 0 || sel >= len(units) || dir == 0 {
 		return nil, 0, false
 	}
+	// Step over any unit that covers no panels. The dashboard's quiet fold row is
+	// one — it stands for panels without carrying them, deliberately, so that no
+	// bulk verb can reach them through it — and without this skip a real card
+	// sitting next to the row could not be moved past it: the neighbour would come
+	// back empty and the reorder would report "already first" at the top of a list
+	// the card is plainly not at the top of. At fifty panels the fold row is
+	// routinely index 0, so that lie would be the normal case rather than an edge.
 	neighbor := sel + dir
+	for neighbor >= 0 && neighbor < len(units) && len(units[neighbor]) == 0 {
+		neighbor += dir
+	}
 	if neighbor < 0 || neighbor >= len(units) {
 		return nil, 0, false // already at the corresponding end
 	}
@@ -48,10 +58,7 @@ func moveTarget(fleet []panel.Panel, units [][]string, sel, dir int) (block []st
 		n++
 	}
 
-	nb := units[neighbor]
-	if len(nb) == 0 {
-		return nil, 0, false
-	}
+	nb := units[neighbor] // non-empty: the skip loop above guaranteed it
 	if dir < 0 {
 		index, ok = restIndex[nb[0]] // land where the previous unit begins
 	} else {
@@ -93,6 +100,14 @@ func (m model) reorderSelection(units [][]string, sel, dir int, title string) mo
 func (m model) reorderDashItem(dir int) model {
 	items := m.dashItems()
 	if m.cursor < 0 || m.cursor >= len(items) {
+		return m
+	}
+	// shift+arrow is dispatched straight from handleKey and never passes through
+	// lookupCmd, so the fold row's blanket refusal does not cover it. Refuse here,
+	// in the same words: moving a row that stands for twelve panels would have to
+	// move all twelve, which is exactly the bulk action the row does not own.
+	if items[m.cursor].kind == itemFold {
+		m.status = "expand the quiet group first"
 		return m
 	}
 	units := make([][]string, len(items))

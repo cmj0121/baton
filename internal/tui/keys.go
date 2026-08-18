@@ -229,6 +229,7 @@ type prefs struct {
 	diffCommand       string                         // explicit diff command for the agent diff pop-up ("" = git diff.tool then a built-in diff)
 	tui               config.TUIConfig               // cockpit appearance: colour theme and group-split layouts
 	lang              i18n.Lang                      // resolved message language for the cockpit's help surfaces
+	foldQuiet         int                            // settings.fold-quiet: how many quiet dashboard cards before they fold into one row; 0 = never
 	foldSimilar       bool                           // group summary tile folds the lookalikes, not the latecomers; default on
 	inboxDone         bool                           // a finished agent joins the attention inbox as a "review me" row; default on
 	inboxSnooze       time.Duration                  // how long the inbox's `-` defers a row; default defaultInboxSnooze
@@ -263,8 +264,8 @@ func loadPrefs() prefs {
 // the daemon-pushed config (the "config" event), so the two can never map a field
 // differently.
 func prefsFromConfig(cfg config.Config) prefs {
-	p := prefs{prefix: keyPrefix, binds: append([]binding(nil), bindings...), confirmClose: true, bellEnabled: true, usageMode: usageWindow, foldSimilar: true,
-		inboxDone: true, inboxSnooze: defaultInboxSnooze}
+	p := prefs{prefix: keyPrefix, binds: append([]binding(nil), bindings...), confirmClose: true, bellEnabled: true, usageMode: usageWindow,
+		foldQuiet: defaultFoldQuiet, foldSimilar: true, inboxDone: true, inboxSnooze: defaultInboxSnooze}
 
 	if cfg.Prefix != "" {
 		p.prefix = cfg.Prefix
@@ -307,6 +308,9 @@ func prefsFromConfig(cfg config.Config) prefs {
 	p.diffCommand = cfg.Panel.DiffCommand
 	p.tui = cfg.TUI
 	p.lang = i18n.Detect(cfg.Settings.Language)
+	if cfg.Settings.FoldQuiet != nil {
+		p.foldQuiet = *cfg.Settings.FoldQuiet // 0 (or anything below it) reads as "never fold"
+	}
 	if cfg.Settings.FoldSimilar != nil {
 		p.foldSimilar = *cfg.Settings.FoldSimilar
 	}

@@ -236,6 +236,26 @@ type Settings struct {
 	// $BATON_LANG, then $LC_ALL / $LC_MESSAGES / $LANG, then English.
 	Language string `yaml:"language,omitempty"`
 
+	// FoldQuiet is how many quiet panels the dashboard tolerates before it folds
+	// them into one expandable "▸ N quiet" row: a panel that is merely idle, or
+	// that exited cleanly, and that you have not favourited, pinned or marked.
+	//
+	// It exists because a fleet is mostly fine. At fifty panels the handful that
+	// want something are buried under forty that do not, and scrolling past them
+	// to find the one asking a question is the cost this whole feature set is
+	// aimed at. Folding is by INTEREST rather than by position, and it is a fold
+	// and not a filter — the row expands, so nothing is ever hidden with no way
+	// back to it.
+	//
+	// Unset defaults to 8, which is roughly where a card grid stops fitting on
+	// one screen; 0 switches folding off entirely, which is the right setting for
+	// anyone who wants the dashboard to keep showing every panel it has. Below
+	// the threshold nothing folds at all, so a small fleet looks exactly as it
+	// does today. It is a pointer for the reason every other setting here is: an
+	// explicit 0 has to survive a rewrite of the file, and an omitted int cannot
+	// be told from one somebody meant.
+	FoldQuiet *int `yaml:"fold-quiet,omitempty"`
+
 	// FoldSimilar folds a group's summary tile by what its members LOOK like
 	// rather than by where they sit in the group. At scale the members worth a
 	// live tile are the ones that differ — after a broadcast to fifty shells the

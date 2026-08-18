@@ -177,3 +177,39 @@ func TestFoldSimilarSetting(t *testing.T) {
 		t.Fatal("an unset fold-similar should load as nil so the default applies")
 	}
 }
+
+// TestFoldQuietSetting: the dashboard's quiet threshold reaches the file under the
+// name the docs give it, and an EXPLICIT 0 survives the round trip.
+//
+// That last part is why the field is a pointer rather than a plain int, and it is
+// not pedantry: 0 is the value that means "never fold". A bare int with omitempty
+// would drop the line on the next rewrite of the file — which the cockpit does
+// every time you toggle a setting — and the user who switched folding off would
+// find it back on, with nothing in the config to explain why.
+func TestFoldQuietSetting(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	never := 0
+	if err := (Config{Settings: Settings{FoldQuiet: &never}}).Save(); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	raw, err := os.ReadFile(paths.ConfigFile())
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(raw), "fold-quiet: 0") {
+		t.Fatalf("an explicit 0 must be written out, got:\n%s", raw)
+	}
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got.Settings.FoldQuiet == nil || *got.Settings.FoldQuiet != 0 {
+		t.Fatalf("fold-quiet should round-trip as 0, got %+v", got.Settings.FoldQuiet)
+	}
+	if err := (Config{}).Save(); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if got, _ := Load(); got.Settings.FoldQuiet != nil {
+		t.Fatal("an unset fold-quiet should load as nil so the default applies")
+	}
+}
