@@ -267,6 +267,11 @@ type PanelDefaults struct {
 	// a per-agent restart would later override. Unset restarts nothing.
 	Restart RestartConfig `yaml:",inline"`
 
+	// Attention is the fleet-wide quiet ladder — done-on-quiet, done-after,
+	// stuck-after — the floor a per-agent profile would later restate one line of.
+	// Unset runs on the built-in defaults.
+	Attention AttentionConfig `yaml:",inline"`
+
 	// TrackCwd is how a panel's live working directory is learned: "auto" (the
 	// default — the shell's own report when it makes one, the process table
 	// otherwise), "osc7", "proc", or "off" to not track it at all.
@@ -400,6 +405,12 @@ type AgentProfile struct {
 	// the same way. The common case is one line — `restart: never` on an agent you
 	// would rather look at yourself than have quietly re-run.
 	Restart RestartConfig `yaml:",inline"`
+
+	// Attention is this profile's quiet ladder, layered the same way. It is the
+	// override that matters most in practice: how long silence means "thinking"
+	// rather than "wedged" is a property of the agent, and no fleet-wide number
+	// can be right for both a one-shot `--print` run and an interactive session.
+	Attention AttentionConfig `yaml:",inline"`
 }
 
 // Load reads the config file. A missing file yields an empty Config and no

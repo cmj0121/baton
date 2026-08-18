@@ -23,6 +23,7 @@ import (
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/mem"
 
+	"github.com/cmj0121/baton/internal/attn"
 	"github.com/cmj0121/baton/internal/cwd"
 	"github.com/cmj0121/baton/internal/gitdiff"
 	"github.com/cmj0121/baton/internal/gitops"
@@ -112,6 +113,15 @@ type Settings struct {
 	// name — the same shape as the resource caps above, and resolved the same way.
 	Restart      restart.Policy
 	AgentRestart map[string]restart.Policy
+
+	// Attention is the fleet-wide quiet ladder — how long silence means a turn is
+	// over, and how much longer it means something is wrong — and AgentAttention
+	// the per-profile ladders layered over it. Same shape and same resolution as
+	// the caps and the restart policy, which is what makes all three hot-reload on
+	// SIGHUP without touching a single live panel: a panel records its PROFILE
+	// name, and every tick resolves the policy afresh from it.
+	Attention      attn.Policy
+	AgentAttention map[string]attn.Policy
 
 	// TrackCwd is how a panel's live working directory is learned and RestoreCwd
 	// which panels a re-run puts back in it.
@@ -208,6 +218,13 @@ type Server struct {
 	agentRestart map[string]restart.Policy
 	restarts     map[string]*restartState
 	shuttingDown bool
+
+	// The quiet ladder. attention is the fleet-wide policy and agentAttention the
+	// per-profile ones layered over it (see Settings), resolved per tick from the
+	// profile each panel records rather than frozen at spawn — which is what lets
+	// a SIGHUP change the thresholds under a running fleet. Guarded by mu.
+	attention      attn.Policy
+	agentAttention map[string]attn.Policy
 
 	// Working-directory tracking. trackCwd is how a panel's live directory is
 	// learned and restoreCwd which panels are re-run in it; osc7Tail carries the
@@ -500,6 +517,7 @@ func (s *Server) Reload(set Settings) {
 	s.worktreeDir = set.WorktreeDir
 	s.limits, s.agentLimits = set.Limits, set.AgentLimits
 	s.restart, s.agentRestart = set.Restart, set.AgentRestart
+	s.attention, s.agentAttention = set.Attention, set.AgentAttention
 	s.trackCwd, s.restoreCwd = set.TrackCwd, set.RestoreCwd
 	s.mu.Unlock()
 	s.pty.SetRingCap(set.ReplayBytes)
@@ -525,6 +543,7 @@ func (s *Server) Reload(set Settings) {
 	log.Info().Bool("allow_name_conflict", set.AllowNameConflict).Str("default_dir", set.DefaultDir).
 		Int("replay_bytes", set.ReplayBytes).Str("diff_command", set.DiffCommand).Str("editor", set.Editor).
 		Str("worktree_dir", set.WorktreeDir).Interface("limits", set.Limits.Fields()).Int("agent_limits", len(set.AgentLimits)).
+		Dur("done_after", set.Attention.Done()).Dur("stuck_after", set.Attention.Stuck()).Int("agent_attention", len(set.AgentAttention)).
 		Int("panels_recapped", updated).Strs("respawn_to_apply", deferred).
 		Msg("settings reloaded")
 }
