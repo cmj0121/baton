@@ -256,6 +256,14 @@ type Settings struct {
 	// run few enough agents to be watching them anyway, where a finished turn is
 	// something you saw rather than something you need told.
 	InboxDone *bool `yaml:"inbox-done,omitempty"`
+
+	// InboxSnooze is how long the inbox's `-` defers a row, as a Go duration
+	// ("10m", "1h"). It is applied by the COCKPIT — the absolute instant is
+	// computed here and sent to the daemon — so two cockpits with different
+	// values each get what they configured without the daemon holding a
+	// per-client policy. Unset, unparseable, or non-positive falls back to ten
+	// minutes; a snooze that silently did nothing would read as a dropped key.
+	InboxSnooze string `yaml:"inbox-snooze,omitempty"`
 }
 
 // PanelDefaults configure how new panels are spawned.

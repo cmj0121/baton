@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -230,6 +231,7 @@ type prefs struct {
 	lang              i18n.Lang                      // resolved message language for the cockpit's help surfaces
 	foldSimilar       bool                           // group summary tile folds the lookalikes, not the latecomers; default on
 	inboxDone         bool                           // a finished agent joins the attention inbox as a "review me" row; default on
+	inboxSnooze       time.Duration                  // how long the inbox's `-` defers a row; default defaultInboxSnooze
 }
 
 // defaultAgentName is the built-in agent profile, used when none is configured —
@@ -260,7 +262,7 @@ func loadPrefs() prefs {
 // differently.
 func prefsFromConfig(cfg config.Config) prefs {
 	p := prefs{prefix: keyPrefix, binds: append([]binding(nil), bindings...), confirmClose: true, bellEnabled: true, usageMode: usageWindow, foldSimilar: true,
-		inboxDone: true}
+		inboxDone: true, inboxSnooze: defaultInboxSnooze}
 
 	if cfg.Prefix != "" {
 		p.prefix = cfg.Prefix
@@ -309,6 +311,7 @@ func prefsFromConfig(cfg config.Config) prefs {
 	if cfg.Settings.InboxDone != nil {
 		p.inboxDone = *cfg.Settings.InboxDone
 	}
+	p.inboxSnooze = parseSnooze(cfg.Settings.InboxSnooze)
 	return p
 }
 

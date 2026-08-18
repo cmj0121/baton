@@ -25,9 +25,9 @@ import (
 //
 // It borrows the diff popup's master-detail shape: the queue on the left, on the
 // right the tail that raised the flag (pulled per row with panel.tail, never
-// carried on a snapshot). The verbs it offers act WITHOUT leaving the overlay —
-// i answers where you stand — and the one verb that does leave, enter, leaves
-// deliberately because sometimes you really do have to look.
+// carried on a snapshot). Every verb it offers acts WITHOUT leaving the overlay —
+// i answers, - defers, x dismisses — and the one verb that does leave, enter,
+// leaves deliberately because sometimes you really do have to look.
 //
 // Two rules shape everything below, and both are about trust rather than
 // convenience:
@@ -36,9 +36,9 @@ import (
 //     under your hand is a queue where the thing you press x on is not the thing
 //     you read, so an arriving snapshot may change what a row SAYS but never
 //     where it IS. r is the explicit re-sort.
-//   - Nothing leaves the queue by accident. A row is cleared only by a verb that
-//     says so — never by merely opening the panel or zooming into it — because a
-//     queue you can consume by looking at it is a queue you stop trusting.
+//   - Nothing leaves the queue by accident. A `done` panel is cleared only by x
+//     or i — never by merely opening it or zooming into it — because a queue you
+//     can consume by looking at it is a queue you stop trusting.
 
 // inboxListColWidth is the queue column's preferred width; like the diff popup's
 // file column it shrinks on a narrow terminal so the tail pane keeps room.
@@ -56,6 +56,11 @@ const inboxTailCache = 32
 // unix-socket round trip and far shorter than a human's patience with a pane that
 // will not say anything.
 const inboxTailStale = 3 * time.Second
+
+// defaultInboxSnooze is how long `-` defers a row when settings.inbox-snooze says
+// nothing. Ten minutes is long enough that the row is genuinely out of the way for
+// one pass down the queue, and short enough that "later" still means today.
+const defaultInboxSnooze = 10 * time.Minute
 
 // inboxRow is one line in the queue, and it is a VALUE rather than a pointer into
 // the fleet on purpose: the row keeps its own copy of what it showed, so a panel
@@ -374,8 +379,8 @@ func (m *model) applyTail(id string, data []byte) {
 
 // --- clearing a row -----------------------------------------------------------
 
-// clearRow is the one path every clearing verb takes — i sends text with it, the
-// deferring verbs will send an until. It sends, removes the row, and leaves the
+// clearRow is the one path all three clearing verbs take: i (with text), - (with
+// an until), and x (with neither). It sends, removes the row, and leaves the
 // cursor at the same INDEX — because the slice shrank underneath it, that index
 // now holds the next item, which is the whole ergonomic claim of this feature.
 //
@@ -469,6 +474,10 @@ func (m model) handleInboxKey(key string, k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.zoomInboxRow()
 	case "i":
 		return m.startInboxReply()
+	case "-":
+		return m.snoozeInboxRow()
+	case "x":
+		return m.dismissInboxRow()
 	}
 	return m, nil
 }
@@ -501,6 +510,34 @@ func (m model) zoomInboxRow() (tea.Model, tea.Cmd) {
 	return mm.zoomInto(p), cmd
 }
 
+// snoozeInboxRow defers the row. The cockpit computes the absolute instant from
+// its OWN settings.inbox-snooze and sends that, rather than sending a duration and
+// letting the daemon apply a policy: two cockpits with different snooze settings
+// then each get what they configured, without the server holding a per-client one.
+func (m model) snoozeInboxRow() (tea.Model, tea.Cmd) {
+	r, ok := m.inboxSelected()
+	if !ok {
+		return m, nil
+	}
+	m = m.clearRow(m.inboxCursor, m.now.Add(m.effSnooze()), "")
+	m.status = "snoozed " + truncate(sanitizeText(r.title), 20) + " · " + compactAge(m.effSnooze())
+	return m.afterClear()
+}
+
+// dismissInboxRow drops the row until the panel next SPEAKS. Not until its state
+// changes: a dismissed `done` that came back as `stuck` ten minutes later, on a
+// timer the human did nothing to cause, is exactly the resurrection dismiss exists
+// to prevent. Output is the panel doing something; a timer expiring is not.
+func (m model) dismissInboxRow() (tea.Model, tea.Cmd) {
+	r, ok := m.inboxSelected()
+	if !ok {
+		return m, nil
+	}
+	m = m.clearRow(m.inboxCursor, time.Time{}, "")
+	m.status = "dismissed " + truncate(sanitizeText(r.title), 24)
+	return m.afterClear()
+}
+
 // afterClear closes the overlay once the last row is gone. Holding an empty box
 // open would make the human press esc to be told nothing is left; closing says it
 // and puts them back where they were in one move.
@@ -513,6 +550,15 @@ func (m model) afterClear() (tea.Model, tea.Cmd) {
 	mm, _ := out.(model)
 	mm.status = cleared + " · inbox: clear"
 	return mm, cmd
+}
+
+// effSnooze is how long `-` defers a row: settings.inbox-snooze, or the built-in
+// default for a model that has not applied any prefs (the first frame, and tests).
+func (m model) effSnooze() time.Duration {
+	if m.inboxSnooze <= 0 {
+		return defaultInboxSnooze
+	}
+	return m.inboxSnooze
 }
 
 // --- the composer -------------------------------------------------------------
@@ -532,7 +578,7 @@ func (m model) startInboxReply() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if r.state == panel.Exited {
-		m.status = "cannot reply to an exited panel"
+		m.status = "cannot reply to an exited panel — x dismisses it"
 		return m, nil
 	}
 	if r.stale {
@@ -776,8 +822,14 @@ func (m model) inboxFooter() string {
 		return lipgloss.JoinVertical(lipgloss.Left, head,
 			fitLegend(m.popupWidth(), "enter", "send", "esc", "cancel", "no echo", "enter zooms"))
 	}
-	return fitLegend(m.popupWidth(),
-		"j/k", "move", "i", "reply", "enter", "zoom", "r", "re-sort", "esc", "close")
+	// Two groups, not one line: navigation and the way out, then the verbs that
+	// clear a row. Each group is packed to the width on its own, so the grouping
+	// survives a wide terminal and nothing is lost on a narrow one.
+	w := m.popupWidth()
+	return lipgloss.JoinVertical(lipgloss.Left,
+		fitLegend(w, "j/k", "move", "enter", "zoom", "r", "re-sort", "esc", "close"),
+		fitLegend(w, "i", "reply", "-", "snooze", "x", "dismiss"),
+	)
 }
 
 // compactAge renders a short, single-unit age: seconds under a minute, then
@@ -793,6 +845,21 @@ func compactAge(d time.Duration) string {
 	default:
 		return fmt.Sprintf("%dh", int(d.Hours()))
 	}
+}
+
+// parseSnooze reads settings.inbox-snooze. An unparseable or non-positive value
+// falls back to the default rather than disabling the verb: "-" with a broken
+// config should still defer the row, since a snooze that silently did nothing
+// would look like a dropped keystroke.
+func parseSnooze(s string) time.Duration {
+	if s == "" {
+		return defaultInboxSnooze
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return defaultInboxSnooze
+	}
+	return d
 }
 
 // observeWire files the newest fleet snapshot exactly as it came off the wire, and

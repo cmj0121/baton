@@ -375,7 +375,8 @@ type model struct {
 	inboxTailOrder []string
 	inboxTailWant  string
 	inboxTailAt    time.Time
-	inboxDone      bool // settings.inbox-done: does a finished agent join the queue at all
+	inboxDone      bool          // settings.inbox-done: does a finished agent join the queue at all
+	inboxSnooze    time.Duration // settings.inbox-snooze: how long `-` defers a row
 }
 
 // inputPurpose is what an active text-input overlay feeds on submit.

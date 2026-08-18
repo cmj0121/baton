@@ -35,6 +35,7 @@ func inboxModel(panels ...proto.Panel) model {
 	m := baseModel()
 	m.now = inboxEpoch
 	m.inboxDone = true
+	m.inboxSnooze = defaultInboxSnooze
 	m.observeWire(panels)
 	m.fleet = mergeFleet(panels)
 	return m
@@ -145,11 +146,24 @@ func TestInboxDoneOffRemovesTheBucket(t *testing.T) {
 // a setting that loads into nothing is the failure nobody notices.
 func TestInboxDoneOffIsWhatThePrefsSay(t *testing.T) {
 	off := false
-	if p := prefsFromConfig(config.Config{Settings: config.Settings{InboxDone: &off}}); p.inboxDone {
+	p := prefsFromConfig(config.Config{Settings: config.Settings{InboxDone: &off, InboxSnooze: "45s"}})
+	if p.inboxDone {
 		t.Error("inbox-done: false should reach the prefs")
 	}
-	if def := prefsFromConfig(config.Config{}); !def.inboxDone {
-		t.Error("an unset config should default the bucket on")
+	if p.inboxSnooze != 45*time.Second {
+		t.Errorf("inbox-snooze = %v, want 45s", p.inboxSnooze)
+	}
+
+	def := prefsFromConfig(config.Config{})
+	if !def.inboxDone || def.inboxSnooze != defaultInboxSnooze {
+		t.Errorf("an unset config should default to on/%v, got %v/%v", defaultInboxSnooze, def.inboxDone, def.inboxSnooze)
+	}
+	// A snooze that silently did nothing would read as a dropped keystroke, so a
+	// broken value falls back rather than disabling the verb.
+	for _, bad := range []string{"nonsense", "-5m", "0"} {
+		if got := parseSnooze(bad); got != defaultInboxSnooze {
+			t.Errorf("parseSnooze(%q) = %v, want the default", bad, got)
+		}
 	}
 }
 
@@ -835,10 +849,82 @@ func TestInboxReplyRefusedOnAnExitedPanel(t *testing.T) {
 	if m.inboxComposing {
 		t.Fatal("an exited panel cannot be replied to")
 	}
-	if !strings.Contains(m.status, "cannot reply") {
-		t.Errorf("the refusal should say so, got %q", m.status)
+	if !strings.Contains(m.status, "x dismisses it") {
+		t.Errorf("the refusal should name the verb that does work, got %q", m.status)
 	}
 	if len(m.inboxRows) != 1 {
 		t.Error("a refused reply must not clear the row")
+	}
+}
+
+// TestInboxDismissIsABareAck. x means "until the panel produces output again", so
+// it carries no expiry at all — the daemon drops the record on the panel's next
+// byte, and nothing else.
+func TestInboxDismissIsABareAck(t *testing.T) {
+	m, cmds := clientInbox(t, wire("1", "stuck", 2*time.Minute), wire("2", "done", time.Minute))
+
+	m = press(m, "x")
+
+	ack := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "panel.ack" })
+	if ack.ID != "1" || ack.Until != "" {
+		t.Errorf("a dismiss carries no until, got %+v", ack)
+	}
+	if got := rowIDs(m); !eqIDs(got, "2") || m.inboxCursor != 0 {
+		t.Errorf("the row should leave and the cursor stay, got %v at %d", got, m.inboxCursor)
+	}
+}
+
+// TestInboxSnoozeCarriesAnAbsoluteInstant. The cockpit applies its OWN
+// settings.inbox-snooze and sends the resulting instant, so two cockpits with
+// different values each get what they configured and the daemon holds no
+// per-client policy.
+func TestInboxSnoozeCarriesAnAbsoluteInstant(t *testing.T) {
+	m, cmds := clientInbox(t, wire("1", "stuck", time.Minute), wire("2", "done", time.Minute))
+	m.inboxSnooze = 90 * time.Second
+
+	m = press(m, "-")
+
+	ack := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "panel.ack" })
+	until, err := time.Parse(time.RFC3339Nano, ack.Until)
+	if err != nil {
+		t.Fatalf("until should be an RFC 3339 instant, got %q (%v)", ack.Until, err)
+	}
+	if want := inboxEpoch.Add(90 * time.Second); !until.Equal(want) {
+		t.Errorf("until = %v, want %v", until, want)
+	}
+	if got := rowIDs(m); !eqIDs(got, "2") {
+		t.Errorf("a snoozed row should leave the queue, got %v", got)
+	}
+}
+
+// TestInboxClosesWhenTheLastRowGoes. Holding an empty box open would make the
+// human press esc to be told nothing is left; closing says it and puts them back
+// where they were in one move.
+func TestInboxClosesWhenTheLastRowGoes(t *testing.T) {
+	m, _ := clientInbox(t, wire("1", "attention", time.Minute))
+	m.inboxFrom = modeDashboard
+
+	m = press(m, "x")
+
+	if m.mode != modeDashboard {
+		t.Fatalf("an emptied queue should close, got mode %v", m.mode)
+	}
+	if !strings.Contains(m.status, "inbox: clear") {
+		t.Errorf("status = %q, want it to say the queue is clear", m.status)
+	}
+}
+
+// TestInboxClearingTheLastRowMovesTheCursorUp. The cursor stays at its index and
+// is clamped, so removing the bottom row leaves it on the new bottom rather than
+// off the end of the list.
+func TestInboxClearingTheLastRowMovesTheCursorUp(t *testing.T) {
+	m, _ := clientInbox(t,
+		wire("1", "attention", 2*time.Minute),
+		wire("2", "attention", time.Minute))
+
+	m = press(m, "j", "x")
+
+	if m.inboxCursor != 0 || len(m.inboxRows) != 1 {
+		t.Fatalf("cursor = %d over %v, want 0 over one row", m.inboxCursor, rowIDs(m))
 	}
 }
