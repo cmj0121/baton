@@ -29,6 +29,7 @@ var zhTW = map[string]string{
 	"help.common.keys":      "這份按鍵清單",
 	"help.common.proc-tree": "行程樹 · daemon 底下的作業系統行程",
 	"help.common.edit-map":  "編輯按鍵對應",
+	"help.common.log":       "把這個面板的輸出寫入檔案 · 讀回來看",
 	"help.common.reload":    "重新載入設定（後端＋操作介面）",
 	"help.common.detach":    "離開（server 繼續執行）",
 
@@ -100,6 +101,8 @@ var zhTW = map[string]string{
 	"bind.dispatch":       "派送任務給 agent 面板",
 	"bind.enqueue":        "把任務排進佇列交給空閒 agent（有選取則限該工作項目）",
 	"bind.queue":          "管理任務佇列（列出 · 重排 · 取消 · 排空）",
+	"bind.log":            "開始／停止把面板輸出寫入檔案（需 prefix）",
+	"bind.log-view":       "以臨時面板開啟該記錄檔並持續追蹤（需 prefix）",
 
 	"bind.mark":      "標記面板以便分組",
 	"bind.group":     "把已標記的面板組成群組",

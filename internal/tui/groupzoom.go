@@ -939,6 +939,10 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.openProcTree(modeGroupZoom), nil
 			case actCommands: // C-t c → the plugin command picker
 				return m.openCommandPicker(modeGroupZoom), nil
+			case actLogToggle: // C-t l → log the focused member's output to a file
+				return m.toggleLog()
+			case actLogView: // C-t L → read that log back, following it
+				return m.viewLog()
 			}
 		}
 		if key == keyScreensaver { // C-t E → the hidden screensaver, over the split
@@ -1104,6 +1108,10 @@ func (m model) handleGroupInteractKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.openProcTree(modeGroupZoom), nil
 			case actCommands: // C-t c → the plugin command picker
 				return m.openCommandPicker(modeGroupZoom), nil
+			case actLogToggle: // C-t l → log the focused member's output to a file
+				return m.toggleLog()
+			case actLogView: // C-t L → read that log back, following it
+				return m.viewLog()
 			}
 			return m, nil
 		}
