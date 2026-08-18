@@ -20,12 +20,18 @@ func TestLocalFetchContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := newLocal(filepath.Join(root, "projects")).Fetch(ctx)
+	snap, err := newLocal(filepath.Join(root, "projects")).Fetch(ctx)
 	if err == nil {
 		t.Fatal("cancelled context should surface an error from Fetch")
 	}
 	if err != context.Canceled {
 		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	// A walk that stopped partway read some transcripts and not others, so its
+	// total covers no period anyone can name. It reports nothing rather than a
+	// number the caller would show as a reading.
+	if !snap.Empty() {
+		t.Fatalf("a halted scan should report nothing, got %+v", snap)
 	}
 }
 

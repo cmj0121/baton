@@ -136,7 +136,11 @@ func (p *LocalProvider) Fetch(ctx context.Context) (Snapshot, error) {
 	// A missing projects dir (Claude Code never run here) is not an error — it just
 	// means zero usage. WalkDir surfaces it via the root callback, which we ignore.
 	if err != nil && !os.IsNotExist(err) {
-		return sc.snapshot(cutoff), err
+		// A halted walk read some files and not others, so its total spans neither a
+		// window nor a day — it is a fraction of one, with no way to say which. Report
+		// nothing and let the caller hold whatever it had; a number that looks like a
+		// reading but under-counts by an unknown amount is the one thing worse.
+		return Snapshot{Source: "local"}, err
 	}
 	if p.window <= 0 {
 		return sc.snapshot(cutoff), nil // the calendar-day fallback: totals, no reset
@@ -147,8 +151,9 @@ func (p *LocalProvider) Fetch(ctx context.Context) (Snapshot, error) {
 		// Every window the chain reached has already closed, and the next one opens on
 		// the next message. Report nothing rather than a countdown to a window the
 		// account is no longer in — and rather than the spend of a window that is over,
-		// which would read as this window's.
-		return Snapshot{Since: cutoff, Source: "local"}, nil
+		// which would read as this window's. Since stays zero: there is no window for it
+		// to be the start of, and the scan floor is not one.
+		return Snapshot{Source: "local"}, nil
 	}
 	snap := sc.snapshot(start)
 	snap.Until, snap.Resets = start.Add(p.window), true

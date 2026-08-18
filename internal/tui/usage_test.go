@@ -213,6 +213,13 @@ func TestUsagePressureColour(t *testing.T) {
 		t.Errorf("past the alarm = %v, want red", got)
 	}
 
+	// Once the window has run out the colour stops reporting too, rather than
+	// staying locked on red while the countdown beside it has already gone.
+	m.now = usageNow.Add(4 * time.Hour)
+	if got := m.usagePressureColor(); got != colBlue {
+		t.Errorf("a window that has run out = %v, want no pressure reading at all", got)
+	}
+
 	m.usageInfo.Resets = false
 	if got := m.usagePressureColor(); got != colBlue {
 		t.Errorf("no window means no pressure reading, got %v", got)

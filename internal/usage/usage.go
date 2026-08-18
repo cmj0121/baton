@@ -97,8 +97,13 @@ func (s Snapshot) Countdown(now time.Time) (time.Duration, bool) {
 // Spent is the fraction of the window already elapsed, 0 to 1, and whether there
 // is a window to measure against. A caller colouring a segment by pressure leaves
 // it alone when this reports false, rather than painting an invented reading.
+//
+// A window that has run out reports false, the same as Countdown: it is the same
+// statement, and the two have to agree or the segment says two things at once —
+// no time left to show, yet still coloured as if the account were up against a
+// limit it is no longer measured against.
 func (s Snapshot) Spent(now time.Time) (float64, bool) {
-	if !s.Resets || s.Since.IsZero() || s.Until.IsZero() {
+	if !s.Resets || s.Since.IsZero() || s.Until.IsZero() || !now.Before(s.Until) {
 		return 0, false
 	}
 	total := s.Until.Sub(s.Since)

@@ -391,14 +391,19 @@ func TestSnapshotCountdown(t *testing.T) {
 }
 
 // TestSnapshotSpent: the elapsed fraction drives the segment's colour, so it is
-// clamped to 0–1 and refuses to report at all without a real window.
+// clamped to 0–1 and refuses to report at all without a real window — including a
+// window that has run out, so the colour and the countdown always say the same
+// thing about whether there is a window at all.
 func TestSnapshotSpent(t *testing.T) {
 	s := Snapshot{Since: fixedNow, Until: fixedNow.Add(4 * time.Hour), Resets: true}
 	if f, ok := s.Spent(fixedNow.Add(3 * time.Hour)); !ok || math.Abs(f-0.75) > 1e-9 {
 		t.Errorf("Spent = %v/%v, want 0.75/true", f, ok)
 	}
-	if f, ok := s.Spent(fixedNow.Add(9 * time.Hour)); !ok || f != 1 {
-		t.Errorf("past the reset = %v/%v, want 1/true", f, ok)
+	if f, ok := s.Spent(fixedNow.Add(9 * time.Hour)); ok || f != 0 {
+		t.Errorf("past the reset = %v/%v, want 0/false — no window left to measure", f, ok)
+	}
+	if _, ok := s.Spent(s.Until); ok {
+		t.Error("at the reset itself the window is over, so there is nothing to measure")
 	}
 	if f, ok := s.Spent(fixedNow.Add(-time.Hour)); !ok || f != 0 {
 		t.Errorf("before the start = %v/%v, want 0/true", f, ok)

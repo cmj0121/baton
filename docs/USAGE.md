@@ -72,8 +72,12 @@ watching) long enough that the carried window falls outside the scan. It then
 reads the oldest message it can see as a window start, which it may not be, so
 the boundaries can be off for that first reading. They settle from there.
 
-Once a window closes with nothing after it there is no countdown at all — the
-next message opens the next window, with the whole of it to run.
+**Between windows the whole segment goes away**, not just the countdown. Once a
+window closes with nothing after it, there is no window to report on: the next
+message opens the next one, with the whole of it to run, and until then Baton
+shows nothing rather than a finished window's spend that would read as this
+one's. So an idle stretch longer than `usage.window` empties the segment, and the
+next agent turn brings it back.
 
 The **api** source has no such handle. Rate limits surface on real API response
 headers, which Baton never receives, and the admin reports carry no limit at all.
@@ -84,7 +88,8 @@ on it.
 
 The segment takes colour as the window fills — quiet, then amber, then red — for
 the same reason: the point is to act _before_ it runs out, not to watch it hit
-zero.
+zero. The colour follows the countdown exactly: with no window to measure
+against, it does not move at all rather than staying locked on the last reading.
 
 ## Per-panel attribution
 
