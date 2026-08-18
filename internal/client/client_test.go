@@ -327,6 +327,7 @@ func TestMessageTypesRouteToChannels(t *testing.T) {
 		_ = enc.Encode(proto.ServerMsg{Type: "telemetry"})
 		_ = enc.Encode(proto.ServerMsg{Type: "config", Footer: "f"})
 		_ = enc.Encode(proto.ServerMsg{Type: "footer", Footer: "live"})
+		_ = enc.Encode(proto.ServerMsg{Type: "tail", ID: "p1", Data: []byte("Apply? [y/N] ")})
 		time.Sleep(100 * time.Millisecond)
 	}()
 
@@ -352,6 +353,11 @@ func TestMessageTypesRouteToChannels(t *testing.T) {
 	recv("Telemetry", c.Telemetry, "telemetry")
 	recv("Config", c.Config, "config")
 	recv("Footer", c.Footer, "footer")
+	// A pulled tail is a control message, not PTY data: it carries Data like an
+	// "output" frame does, and routing it by that resemblance would feed an
+	// inbox row's bytes into a zoom's emulator. It belongs with "diff" and
+	// "search" on Events.
+	recv("Events", c.Events, "tail")
 }
 
 // shortSock returns a unix socket path under a short-named temp root. macOS caps

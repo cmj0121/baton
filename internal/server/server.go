@@ -1357,6 +1357,15 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 		if cc.self != "" && cmd.ID != "" && cmd.ID != cc.self {
 			return "conductor role: may only raise its own hand"
 		}
+	case "panel.tail":
+		// An inbox verb, and the inbox is an operator surface. There is no conductor
+		// queue — an agent triaging the fleet's attention is a design this round
+		// deliberately did not build (DESIGN §12) — and the fence is where that
+		// decision is ENFORCED rather than merely intended. Reading another panel's
+		// trailing output is not destructive, so this is a boundary rather than a
+		// guardrail; opening it later is deleting one line, and interface room is
+		// left for exactly that.
+		return "conductor role: the inbox is an operator surface"
 	case "panel.create":
 		now := time.Now()
 		if !cc.lastSpawn.IsZero() && now.Sub(cc.lastSpawn) < minConductorSpawnGap {
@@ -1619,6 +1628,10 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		// …and putting it back down, without waiting for its next byte of output to
 		// be downgraded by a timer.
 		s.resolveAttention(cc, cmd)
+	case "panel.tail":
+		// The inbox pulling one row's trailing output, so its detail pane shows the
+		// same bytes the Monitor sniffed. The clamp and the reply live in tail.go.
+		s.sendTail(cc, cmd.ID, cmd.Count)
 	case "panel.resize":
 		s.pty.Resize(cmd.ID, cmd.Rows, cmd.Cols)
 	default:
