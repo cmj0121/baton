@@ -68,16 +68,20 @@ The Monitor moves a panel through a small set of states, from the moment you spa
      │ running  │  ──── output quiet ────>  │   idle   │
      │          │  <─── output resumes ───  │          │
      └──┬────▲──┘                           └────┬─────┘
-        │    │                                   │
-  needs │    │ replies                           │
-  input ▼    │                      needs input  │
+        │    │                                   │ agent, and still quiet
+  needs │    │ replies                           ▼
+  input ▼    │                              ┌──────────┐
+     ┌──────────┐                           │   done   │  review me
+     │ attention│ <── panel.attention       └────┬─────┘
+     │          │ ──> panel.resolve              │ agent, and STILL quiet
+     └────┬─────┘                                ▼
+          │                                 ┌──────────┐
+          │                                 │  stuck   │  something is wrong
+          │                                 └────┬─────┘
+          ▼                                      │
      ┌──────────┐                                │
-     │ attention│ <──────────────────────────────┘
-     └────┬─────┘
-          │ process exits      (also from running / idle)
-          ▼
-     ┌──────────┐
-     │  exited  │
+     │  exited  │ <──────────────────────────────┘
+     │ + code   │        process exits (from any live state)
      └────┬─────┘
           │ user dismisses
           ▼
@@ -88,14 +92,51 @@ The Monitor moves a panel through a small set of states, from the moment you spa
 
 - **spawning** — the PTY and process are being set up.
 - **running** — the process is actively producing output.
-- **idle** — no output for a while; an agent is waiting, or a shell sits at its prompt.
-- **attention** — you are needed: the agent asked a question, finished its task, or printed something notable.
-- **exited** — the process ended on its own; its exit code is kept until you dismiss it.
+- **idle** — no output for a while; a shell sits at its prompt, or an agent has gone quiet but not for long enough to
+  claim its turn is over.
+- **attention** — you are needed: the agent asked a question, or said so itself with `panel.attention`.
+- **done** — an agent's turn looks over: review it. Only an **agent** reaches it, either because the task it was
+  dispatched finished or because it has been quiet for `panel.done-after` (default 60s).
+- **stuck** — an agent has been quiet far past what its work should take (`panel.stuck-after`, default 10m). It says
+  nothing about why; only that silence has outlasted the budget configured for that agent.
+- **exited** — the process ended on its own; its **exit code** is kept until you dismiss it.
 - **closed** — the panel is retired and leaves the dashboard.
 
-`running`, `idle`, and `attention` are the live states the Monitor shuttles a panel between as output ebbs and flows. A
-panel can be **killed from any state**, jumping straight to `closed`, and it reaches `exited` whenever its process stops
-on its own — from `running`, `idle`, or `attention` alike.
+Everything above `idle` is measured on one clock: the **quiet clock**, the time since the panel's last byte of output.
+That is what makes the ladder `idle` (10s) → `done` (60s) → `stuck` (10m) one monotonically growing number, and it is why
+a panel that already settled to `done` keeps climbing to `stuck` rather than resting there. **One byte of output takes
+the whole ladder back to `running`** — the single exception being a declaration the agent raised itself (see below),
+which only `panel.resolve` or the process ending withdraws.
+
+**`done` and `stuck` are agent-only.** A shell nobody has touched since Tuesday is `idle` on purpose: it is not waiting
+to be reviewed and it is not wedged, and putting every quiet shell in front of a human is exactly the noise the
+distinction exists to prevent. A shell still reaches `attention` when its own output asks a question.
+
+**How a state is decided.** Higher wins, and the first that matches decides: an agent's own **declaration**
+(`panel.attention`, which carries a reason) beats the **timers** (`stuck-after`, a finished task, `done-after`), which
+beat the **tail heuristic** (the last line reads like a question). A certain timer outranks a guess about text; a
+question asked *now* outranks a review that could wait.
+
+**`failed` is not a state.** A panel that exited badly is `exited` with a non-zero exit code, and the cockpit renders
+that as failed. The daemon reports the fact; the frontend draws the conclusion — which keeps failure a *rendering* of
+something the lifecycle already carries rather than a state the Monitor has to shuttle panels in and out of.
+
+`running`, `idle`, `attention`, `done`, and `stuck` are the live states the Monitor moves a panel between as output ebbs
+and flows. A panel can be **killed from any state**, jumping straight to `closed`, and it reaches `exited` whenever its
+process stops on its own — from any live state alike.
+
+The thresholds are configured under `panel` and take a **per-agent-profile override**, because how long silence means
+"thinking" rather than "wedged" is a property of the agent rather than of baton:
+
+```yaml
+panel:
+  done-on-quiet: true # a quiet agent climbs to done at all (default true)
+  done-after: 60s # …after this much silence (0 = never)
+  stuck-after: 10m # and to stuck after this much (0 = never)
+  agents:
+    claude:
+      stuck-after: 30m # this profile legitimately thinks for longer
+```
 
 ## Work items
 
@@ -123,7 +164,8 @@ dashboard shows only the **top level** — a group card folds its whole subtree 
 in the split.
 
 On the dashboard a work item collapses into a single card: a member count and a state that **rolls up to its most urgent
-member** (attention beats running beats spawning beats idle beats exited), so one card speaks for the whole task.
+member** (attention beats stuck beats done beats running beats spawning beats idle beats exited), so one card speaks for
+the whole task.
 
 **Favourites.** `*` **favourites** the selected dashboard item — a lone panel or a whole group card — and favourited cards
 sort to the **front** of the dashboard, in both the grid and the tree, each marked with a `⊙`. It is **server-owned state**
