@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// newLocalWindow is newLocal with a rolling window, so the countdown paths are
+// newLocalWindow is newLocal with a window length, so the countdown paths are
 // exercised rather than the calendar-day fallback.
 func newLocalWindow(dir string, window time.Duration) *LocalProvider {
 	return &LocalProvider{dir: dir, window: window, now: func() time.Time { return fixedNow }}
@@ -37,11 +37,11 @@ func writeSubagentTranscript(t *testing.T, root, project, session, name string, 
 	}
 }
 
-// TestLocalFetchRollingWindow: with a window configured, the window opens at the
-// oldest message still inside it — not at "now" and not at midnight — the reset
-// is that start plus the window length, and a message older than the cutoff is
-// left out of both the totals and the window's start.
-func TestLocalFetchRollingWindow(t *testing.T) {
+// TestLocalFetchWindowOpensAtAMessage: with a window configured, the window opens
+// at the message that opened it — not at "now" and not at midnight — the reset is
+// that start plus the window length, and a message belonging to a window that has
+// already closed is left out of both the totals and the start.
+func TestLocalFetchWindowOpensAtAMessage(t *testing.T) {
 	root := t.TempDir()
 	oldest := fixedNow.Add(-3 * time.Hour)
 	writeTranscript(t, root, "proj1", "sess1", fixedNow,
@@ -58,13 +58,86 @@ func TestLocalFetchRollingWindow(t *testing.T) {
 		t.Fatal("a windowed local snapshot should carry a reset to count down to")
 	}
 	if !snap.Since.Equal(oldest) {
-		t.Errorf("Since = %v, want the oldest in-window message %v", snap.Since, oldest)
+		t.Errorf("Since = %v, want the message that opened the window %v", snap.Since, oldest)
 	}
 	if want := oldest.Add(5 * time.Hour); !snap.Until.Equal(want) {
 		t.Errorf("Until = %v, want %v", snap.Until, want)
 	}
 	if snap.Input != 110 || snap.Output != 55 {
-		t.Errorf("totals = %d/%d, want 110/55 (the pre-cutoff message excluded)", snap.Input, snap.Output)
+		t.Errorf("totals = %d/%d, want 110/55 (the earlier window's message excluded)", snap.Input, snap.Output)
+	}
+}
+
+// TestLocalFetchWindowRunsDownAndRestarts is the regression for a countdown that
+// hung at 0:00:00. The window used to be anchored on the oldest message still
+// inside "the last N hours", so its end moved with the clock: under continuous
+// use the oldest message was always a window old, the reset was always this
+// instant, and the footer sat at zero forever instead of ever restarting.
+//
+// The window now opens at a message and stays where it opened, so the countdown
+// falls as the clock advances and the first message after the window closes opens
+// the next one with a full window to run.
+func TestLocalFetchWindowRunsDownAndRestarts(t *testing.T) {
+	const window = 5 * time.Hour
+	root := t.TempDir()
+	projects := filepath.Join(root, "projects")
+
+	// Six hours of unbroken use, one message every five minutes: the shape that
+	// used to pin the countdown, since some message is always a window old.
+	var lines []string
+	for at := fixedNow.Add(-6 * time.Hour); at.Before(fixedNow); at = at.Add(5 * time.Minute) {
+		lines = append(lines, assistantLine("m"+at.String(), "r"+at.String(), "claude-opus-4-8", at, 10, 5, 0, 0, 0))
+	}
+	writeTranscript(t, root, "proj1", "sess1", fixedNow, lines...)
+
+	at := func(now time.Time) Snapshot {
+		t.Helper()
+		p := &LocalProvider{dir: projects, window: window, now: func() time.Time { return now }}
+		snap, err := p.Fetch(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return snap
+	}
+
+	// The window opened an hour ago (six hours of use is two windows: the first
+	// closed a window in, the second opened on the next message).
+	opened := fixedNow.Add(-time.Hour)
+	first := at(fixedNow)
+	if !first.Resets || !first.Since.Equal(opened) {
+		t.Fatalf("window = %v..%v resets=%v, want one opened at %v", first.Since, first.Until, first.Resets, opened)
+	}
+	if d, ok := first.Countdown(fixedNow); !ok || d != 4*time.Hour {
+		t.Errorf("countdown = %v/%v, want 4h/true", d, ok)
+	}
+
+	// Advancing the clock spends the window down rather than pushing its end along.
+	later := fixedNow.Add(3 * time.Hour)
+	if d, ok := at(later).Countdown(later); !ok || d != time.Hour {
+		t.Errorf("three hours on, countdown = %v/%v, want 1h/true", d, ok)
+	}
+
+	// Past the reset with nothing since: no window is in progress, so there is no
+	// countdown at all — never a zero that would read as "resets right now".
+	past := opened.Add(window + time.Minute)
+	if closed := at(past); closed.Resets || !closed.Empty() {
+		t.Errorf("a closed window should report neither a reset nor spend, got %+v", closed)
+	}
+
+	// The next message opens the next window, with the whole of it left to run.
+	reopened := past.Add(10 * time.Minute)
+	writeTranscript(t, root, "proj1", "sess2", reopened,
+		assistantLine("next", "rnext", "claude-opus-4-8", reopened, 100, 50, 0, 0, 0),
+	)
+	fresh := at(reopened)
+	if !fresh.Resets || !fresh.Since.Equal(reopened) {
+		t.Fatalf("window = %v..%v resets=%v, want one opened at %v", fresh.Since, fresh.Until, fresh.Resets, reopened)
+	}
+	if d, ok := fresh.Countdown(reopened); !ok || d != window {
+		t.Errorf("a freshly opened window = %v/%v, want the full %v", d, ok, window)
+	}
+	if fresh.Input != 100 {
+		t.Errorf("Input = %d, want 100 — only the new window's spend", fresh.Input)
 	}
 }
 

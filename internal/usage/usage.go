@@ -26,8 +26,8 @@ import (
 // plain YAML file the user hand-edits.
 const AdminKeyEnv = "BATON_ANTHROPIC_ADMIN_KEY"
 
-// DefaultWindow is the rolling window the local source counts down when the
-// config leaves usage.window unset. It is configurable rather than baked in
+// DefaultWindow is how long a window lasts for the local source when the config
+// leaves usage.window unset. It is configurable rather than baked in
 // because plans differ and the vendor can change the figure — tracking that
 // should not need a baton release.
 const DefaultWindow = 5 * time.Hour
@@ -56,7 +56,7 @@ type Snapshot struct {
 
 	// Resets marks Until as a real reset to count down to, rather than merely the
 	// far edge of whatever period the source happened to query. Only a source that
-	// can infer the rolling window sets it, and the footer counts down solely when
+	// can infer where the window opened sets it, and the footer counts down solely when
 	// it is true: a wrong countdown is worse than none, because the whole point of
 	// the number is that a decision gets made on it.
 	Resets bool
@@ -127,7 +127,7 @@ type Provider interface {
 // falls back to local. An "api" request with no key also falls back to local, so
 // the footer always has a working source rather than silently going dark.
 //
-// window is the rolling window the local source counts down; zero disables the
+// window is how long a window lasts for the local source; zero disables the
 // countdown and falls back to a calendar-day total. The api source ignores it —
 // it cannot see a reset (see APIProvider).
 func NewProvider(source string, window time.Duration) Provider {

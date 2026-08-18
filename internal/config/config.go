@@ -129,8 +129,8 @@ type UsageConfig struct {
 	// for the local source, 60s for the api source); values below 10 are clamped up.
 	Interval int `yaml:"interval,omitempty"`
 
-	// Window is the rolling billing window to count down to, as a Go duration
-	// ("5h", "168h"). Empty uses the built-in default; "0" switches the countdown
+	// Window is how long a billing window lasts once use opens one, as a Go
+	// duration ("5h", "168h"). Empty uses the built-in default; "0" switches the countdown
 	// off and reports a calendar day instead. It is configurable because plans
 	// differ and the vendor can change the figure — tracking that should not need
 	// a baton release. Only the local source can honour it; the api source cannot
@@ -156,7 +156,7 @@ const (
 	DefaultUsageAlarmAt = 0.90
 )
 
-// WindowDuration is the configured rolling window, or usage.DefaultWindow when
+// WindowDuration is the configured window length, or usage.DefaultWindow when
 // the field is empty. An explicit "0" (or any non-positive duration) returns 0,
 // which switches the countdown off. An unparseable value also falls back to the
 // default: a typo should not silently disable the number the feature exists for.

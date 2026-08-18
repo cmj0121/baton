@@ -32,42 +32,42 @@ func TestLocalFetchContextCancelled(t *testing.T) {
 // TestScanTranscriptOpenError: scanning an unopenable path leaves the snapshot
 // untouched (the file is skipped, not fatal).
 func TestScanTranscriptOpenError(t *testing.T) {
-	sc := newScan(fixedNow, "local")
+	sc := newScan(fixedNow)
 	sc.transcript(filepath.Join(t.TempDir(), "does-not-exist.jsonl"), "sess1")
-	if !sc.snap.Empty() {
-		t.Fatalf("open error should leave snapshot empty: %+v", sc.snap)
+	if !sc.snapshot(sc.cutoff).Empty() {
+		t.Fatalf("open error should leave snapshot empty: %+v", sc.snapshot(sc.cutoff))
 	}
 }
 
 // TestFoldEntryBadJSON: a line that carries the "usage" substring but is not
 // valid JSON is ignored without panicking or mutating the snapshot.
 func TestFoldEntryBadJSON(t *testing.T) {
-	sc := newScan(fixedNow, "local")
+	sc := newScan(fixedNow)
 	sc.fold([]byte(`{ this is not "usage" json `), "sess1")
-	if !sc.snap.Empty() {
-		t.Fatalf("bad JSON should be ignored: %+v", sc.snap)
+	if !sc.snapshot(sc.cutoff).Empty() {
+		t.Fatalf("bad JSON should be ignored: %+v", sc.snapshot(sc.cutoff))
 	}
 }
 
 // TestFoldEntryNilUsage: a well-formed line whose message has no usage block
 // (usage:null) is ignored — the "usage" substring gate can pass on such lines.
 func TestFoldEntryNilUsage(t *testing.T) {
-	sc := newScan(fixedNow, "local")
+	sc := newScan(fixedNow)
 	line := `{"type":"assistant","timestamp":"2026-07-08T09:00:00Z","message":{"id":"m","usage":null}}`
 	sc.fold([]byte(line), "sess1")
-	if !sc.snap.Empty() {
-		t.Fatalf("nil usage should be ignored: %+v", sc.snap)
+	if !sc.snapshot(sc.cutoff).Empty() {
+		t.Fatalf("nil usage should be ignored: %+v", sc.snapshot(sc.cutoff))
 	}
 }
 
 // TestFoldEntryBadTimestamp: a usage line with an unparseable timestamp is
 // filtered out (the time.Parse error path), leaving the snapshot empty.
 func TestFoldEntryBadTimestamp(t *testing.T) {
-	sc := newScan(fixedNow, "local")
+	sc := newScan(fixedNow)
 	line := `{"type":"assistant","timestamp":"not-a-time","message":{"id":"m","model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":50}}}`
 	sc.fold([]byte(line), "sess1")
-	if !sc.snap.Empty() {
-		t.Fatalf("bad timestamp should be ignored: %+v", sc.snap)
+	if !sc.snapshot(sc.cutoff).Empty() {
+		t.Fatalf("bad timestamp should be ignored: %+v", sc.snapshot(sc.cutoff))
 	}
 }
 
@@ -75,32 +75,32 @@ func TestFoldEntryBadTimestamp(t *testing.T) {
 // cache_creation_input_tokens total but no cache_creation tier breakdown, the
 // whole write is priced at the 5-minute rate rather than dropped.
 func TestFoldEntryNoCacheCreationTier(t *testing.T) {
-	sc := newScan(startOfDay(fixedNow), "local")
+	sc := newScan(startOfDay(fixedNow))
 	ts := fixedNow.Add(-time.Hour).Format(time.RFC3339)
 	line := `{"type":"assistant","requestId":"r","timestamp":"` + ts + `","message":{"id":"m","model":"claude-opus-4-8","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":400}}}`
 	sc.fold([]byte(line), "sess1")
 
-	if sc.snap.CacheWrite != 400 {
-		t.Fatalf("CacheWrite = %d, want 400", sc.snap.CacheWrite)
+	if sc.snapshot(sc.cutoff).CacheWrite != 400 {
+		t.Fatalf("CacheWrite = %d, want 400", sc.snapshot(sc.cutoff).CacheWrite)
 	}
 	// opus input rate $5/MTok, 5-minute write multiplier 1.25.
 	want := 400.0 / 1e6 * 5 * 1.25
-	if math.Abs(sc.snap.CostUSD-want) > 1e-9 {
-		t.Fatalf("cost = %v, want %v (whole write priced at 5m rate)", sc.snap.CostUSD, want)
+	if math.Abs(sc.snapshot(sc.cutoff).CostUSD-want) > 1e-9 {
+		t.Fatalf("cost = %v, want %v (whole write priced at 5m rate)", sc.snapshot(sc.cutoff).CostUSD, want)
 	}
 }
 
 // TestFoldEntryNoDedupKeys: a usage line with neither a message id nor a
 // requestId skips the dedup map and is still counted (the empty-key branch).
 func TestFoldEntryNoDedupKeys(t *testing.T) {
-	sc := newScan(startOfDay(fixedNow), "local")
+	sc := newScan(startOfDay(fixedNow))
 	ts := fixedNow.Add(-time.Hour).Format(time.RFC3339)
 	line := `{"type":"assistant","timestamp":"` + ts + `","message":{"model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":5}}}`
 	sc.fold([]byte(line), "sess1")
 	sc.fold([]byte(line), "sess1")
 
-	if sc.snap.Input != 20 || sc.snap.Output != 10 {
-		t.Fatalf("keyless lines should each count: in=%d out=%d, want 20/10", sc.snap.Input, sc.snap.Output)
+	if sc.snapshot(sc.cutoff).Input != 20 || sc.snapshot(sc.cutoff).Output != 10 {
+		t.Fatalf("keyless lines should each count: in=%d out=%d, want 20/10", sc.snapshot(sc.cutoff).Input, sc.snapshot(sc.cutoff).Output)
 	}
 	if len(sc.seen) != 0 {
 		t.Fatalf("keyless lines should not populate the dedup map, got %d entries", len(sc.seen))
