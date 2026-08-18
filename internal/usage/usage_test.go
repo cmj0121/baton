@@ -141,17 +141,17 @@ func TestPriceFor(t *testing.T) {
 
 func TestNewProviderSelection(t *testing.T) {
 	t.Setenv(AdminKeyEnv, "")
-	if p := NewProvider("auto"); p.Source() != "local" {
+	if p := NewProvider("auto", DefaultWindow); p.Source() != "local" {
 		t.Errorf("auto without key = %q, want local", p.Source())
 	}
-	if p := NewProvider("api"); p.Source() != "local" {
+	if p := NewProvider("api", DefaultWindow); p.Source() != "local" {
 		t.Errorf("api without key falls back to %q, want local", p.Source())
 	}
 	t.Setenv(AdminKeyEnv, "sk-ant-admin01-test")
-	if p := NewProvider("auto"); p.Source() != "api" {
+	if p := NewProvider("auto", DefaultWindow); p.Source() != "api" {
 		t.Errorf("auto with key = %q, want api", p.Source())
 	}
-	if p := NewProvider("local"); p.Source() != "local" {
+	if p := NewProvider("local", DefaultWindow); p.Source() != "local" {
 		t.Errorf("explicit local = %q, want local", p.Source())
 	}
 }

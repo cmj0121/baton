@@ -108,7 +108,7 @@ var zhTW = map[string]string{
 	"bind.favourite": "收藏面板或群組（排到最前面）",
 
 	"bind.help":         "檢視這個畫面的按鍵",
-	"bind.usage-footer": "切換帳號用量／費用狀態列",
+	"bind.usage-footer": "切換用量狀態列：關閉、計費窗口、目前面板",
 	"bind.keycast":      "切換狀態列上的按鍵提示",
 	"bind.key-map":      "編輯按鍵對應（前綴鍵）",
 	"bind.panel-config": "設定面板預設值（前綴鍵）",
@@ -122,4 +122,12 @@ var zhTW = map[string]string{
 	"bind.restart": "強制重啟 server",
 	"bind.reload":  "重新載入設定（後端＋操作介面）",
 	"bind.detach":  "離開（server 繼續執行）",
+
+	// The usage footer's views, and what the per-panel view says when it has
+	// nothing to attribute.
+	"usage.mode.off":           "關閉",
+	"usage.mode.window":        "計費窗口",
+	"usage.mode.panel":         "目前面板",
+	"usage.panel.unattributed": "無法歸屬",
+	"usage.panel.of-window":    "／本窗口",
 }

@@ -169,6 +169,48 @@ type PluginCommand struct {
 	Desc string `json:"desc,omitempty"` // one-line description shown in the picker
 }
 
+// PanelUsage is one panel's share of the billing window: what the agent running
+// in it has spent since the window opened, subagents included.
+type PanelUsage struct {
+	Tokens  int64   `json:"tokens"`
+	CostUSD float64 `json:"cost_usd,omitempty"`
+}
+
+// UsageInfo is the account's usage over the current billing window, sent
+// alongside the pre-rendered Usage string so a frontend can show more than one
+// view of it without a round-trip.
+//
+// The countdown is deliberately not pre-rendered: it has to tick every second,
+// while the daemon polls once every 30. The frontend is given the reset instant
+// and the presentation settings and does the arithmetic on its own clock.
+type UsageInfo struct {
+	Tokens  int64   `json:"tokens"`
+	CostUSD float64 `json:"cost_usd,omitempty"`
+	Source  string  `json:"source,omitempty"` // "local" | "api"
+
+	// Since and Until bound the window, as RFC 3339 instants. Resets marks Until
+	// as a real reset to count down to rather than the edge of the period the
+	// source happened to query; a frontend shows no countdown without it, because
+	// a wrong one is worse than none.
+	Since  string `json:"since,omitempty"`
+	Until  string `json:"until,omitempty"`
+	Resets bool   `json:"resets,omitempty"`
+
+	// WarnAt and AlarmAt are the fractions of the window spent at which the
+	// segment should turn amber and then red. They ride the message because the
+	// thresholds are configured on the daemon, where usage.* lives.
+	WarnAt  float64 `json:"warn_at,omitempty"`
+	AlarmAt float64 `json:"alarm_at,omitempty"`
+
+	// CountdownFormat is "auto" or "dd:hh:mm"; see usage.FormatCountdown.
+	CountdownFormat string `json:"countdown_format,omitempty"`
+
+	// Panels is the per-panel breakdown, keyed by panel id. Only a source that can
+	// attribute spend fills it in, and only for panels the daemon launched with a
+	// session of their own — so a missing entry means "not known", never "zero".
+	Panels map[string]PanelUsage `json:"panels,omitempty"`
+}
+
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
 	Type       string      `json:"type"`                  // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "scratch" | "diff" | "gitout" | "search" | "notice" | "config" | "footer" | "usage" | "tasks" | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline)
@@ -180,6 +222,7 @@ type ServerMsg struct {
 	Notice     string      `json:"notice,omitempty"`      // a plugin-originated transient notice, set on "notice"
 	Footer     string      `json:"footer,omitempty"`      // a plugin-set persistent footer segment, set on "footer" and carried on "config"; empty clears it
 	Usage      string      `json:"usage,omitempty"`       // the account's usage/cost footer segment (internal/usage), set on "usage" and seeded on "hello"; empty means nothing to show
+	UsageInfo  *UsageInfo  `json:"usage_info,omitempty"`  // the same usage as structured data, so a frontend can render its own view (the window countdown, a per-panel breakdown) instead of only the pre-rendered Usage string; nil when there is nothing to report
 	Panels     []Panel     `json:"panels,omitempty"`      // full snapshot on "panels"; live state/spark refresh on "telemetry"
 	Groups     []GroupView `json:"groups,omitempty"`      // per-group view settings on the "panels" snapshot, alongside Panels
 	Tasks      []Task      `json:"tasks,omitempty"`       // the backlog snapshot on "tasks" (reply to task.list)

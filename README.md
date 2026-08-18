@@ -91,32 +91,32 @@ Keys are **modal**: on the dashboard and in a group each action is a single key;
 drive the program, so a Baton action is the leader **`C-t`** then the key. Press **`?`** for the full, rebindable list of
 the current view, and **`C-t k`** to edit the key map.
 
-| Where       | Key               | Does                                                |
-| ----------- | ----------------- | --------------------------------------------------- |
-| After `C-t` | `d` / `b`         | jump to the dashboard / back one level              |
-|             | `[`               | enter scroll mode                                   |
-|             | `R` / `S`         | reload config / force-restart the server            |
-|             | `q`               | detach (server keeps running)                       |
-| Dashboard   | `hjkl` / arrows   | move the cursor                                     |
-|             | `enter`           | open / zoom the selection                           |
-|             | `p` / `A` / `c`   | new shell / agent / pick-command panel              |
-|             | `C`               | open the conductor (an agent that drives the fleet) |
-|             | `H`               | open the global shell (a host shell in `$HOME`)     |
-|             | `w` / `x`         | close the selection / purge exited                  |
-|             | `r`               | re-run the exited panel(s) under the focus          |
-|             | `g` / `G` / `u`   | mark / group marked panels / ungroup                |
-|             | `s` / `f` / `D`   | signal / find / diff the selection                  |
-|             | `/`               | search every panel's output (grep the fleet)        |
-|             | `T` / `Q`         | dispatch a task / manage the task queue             |
-|             | `U`               | toggle the account usage/cost footer                |
-|             | `K`               | toggle the key-press readout in the footer          |
-| Group       | `tab`             | focus the next panel                                |
-|             | `+` / `-`         | show more / fewer live tiles                        |
-|             | `L`               | cycle the tile layout                               |
-|             | `p` / `i`         | pin / interact with the focused panel               |
-|             | `enter`           | zoom the focused panel                              |
-| Zoom        | type              | drive the program directly                          |
-|             | `C-t f` / `C-t g` | search the scrollback / git menu (agent)            |
+| Where       | Key               | Does                                                 |
+| ----------- | ----------------- | ---------------------------------------------------- |
+| After `C-t` | `d` / `b`         | jump to the dashboard / back one level               |
+|             | `[`               | enter scroll mode                                    |
+|             | `R` / `S`         | reload config / force-restart the server             |
+|             | `q`               | detach (server keeps running)                        |
+| Dashboard   | `hjkl` / arrows   | move the cursor                                      |
+|             | `enter`           | open / zoom the selection                            |
+|             | `p` / `A` / `c`   | new shell / agent / pick-command panel               |
+|             | `C`               | open the conductor (an agent that drives the fleet)  |
+|             | `H`               | open the global shell (a host shell in `$HOME`)      |
+|             | `w` / `x`         | close the selection / purge exited                   |
+|             | `r`               | re-run the exited panel(s) under the focus           |
+|             | `g` / `G` / `u`   | mark / group marked panels / ungroup                 |
+|             | `s` / `f` / `D`   | signal / find / diff the selection                   |
+|             | `/`               | search every panel's output (grep the fleet)         |
+|             | `T` / `Q`         | dispatch a task / manage the task queue              |
+|             | `U`               | cycle the usage footer: off / window / focused panel |
+|             | `K`               | toggle the key-press readout in the footer           |
+| Group       | `tab`             | focus the next panel                                 |
+|             | `+` / `-`         | show more / fewer live tiles                         |
+|             | `L`               | cycle the tile layout                                |
+|             | `p` / `i`         | pin / interact with the focused panel                |
+|             | `enter`           | zoom the focused panel                               |
+| Zoom        | type              | drive the program directly                           |
+|             | `C-t f` / `C-t g` | search the scrollback / git menu (agent)             |
 
 See **[docs/SPEC.md](docs/SPEC.md)** for the complete, per-view key reference and the design behind every view.
 
@@ -152,7 +152,8 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
   host cannot enforce them. See **[docs/LIMITS.md](docs/LIMITS.md)**.
 - **Appearance** — `$HOME/.baton/TUI.yaml` reshapes the cockpit: a colour **theme** and the group-split **layouts**,
   hot-reloaded with `C-t R`. See **[docs/TUI.md](docs/TUI.md)**.
-- **Usage footer** — `U` toggles a footer readout of the day's token usage and cost (`⊙ 1.2M tok · ≈$12.34 API`). It
+- **Usage footer** — `U` cycles a footer readout of the billing window: the account's token usage and cost with a
+  countdown to the reset (`⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31`), or the focused panel's share of that window. It
   reads Claude Code's own transcripts by default (works on a Pro/Max subscription) or the Anthropic Admin API with a key.
   The cost is API-equivalent, not a subscription charge. See **[docs/USAGE.md](docs/USAGE.md)**.
 - **Persistence & respawn** — Baton remembers its fleet across a restart; panels come back as inert exited slots and

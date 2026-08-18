@@ -2,11 +2,25 @@
 
 [English](USAGE.md) · **繁體中文**
 
-Baton 可以在每個畫面上,以一段頁尾顯示你帳號**當日的 token 用量與成本**——
-`⊙ 1.2M tok · ≈$12.34 API`。伺服器在背景輪詢它,並推送到每一個已接上的座艙;
-按 **`U`** 顯示或隱藏它(此選擇會持久保存,且預設為開)。
+Baton 可以在每個畫面上,以一段頁尾顯示你帳號在**目前計費窗口內的 token 用量**,
+以及**距離重置還有多久**:
 
-成本刻意寫成 `≈…$ API`:它是當日 token 的 **API 等值換算**價格,而不是帳單。
+```text
+⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31
+```
+
+按 **`U`** 在這幾種檢視之間循環;選擇會持久保存。
+
+| 檢視     | 顯示                                        | 回答的問題        |
+| -------- | ------------------------------------------- | ----------------- |
+| `window` | 帳號的用量,以及距離窗口重置的倒數           | 「我撐不撐得到?」 |
+| `panel`  | 聚焦面板(或群組)的用量,以及它佔本窗口的比例 | 「是誰在燒?」     |
+| `off`    | 不顯示                                      | —                 |
+
+第二種檢視才是一整隊 agent 真正需要的。當你同時跑十二個 agent、窗口只剩兩小時,
+要做的決定是「該關掉誰」——而那需要的是**佔本窗口的比例**,不是絕對的 token 數。
+
+成本刻意寫成 `≈…$ API`:它是 token 的 **API 等值換算**價格,而不是帳單。
 見[它是什麼——又不是什麼](#它是什麼又不是什麼)。
 
 ## 資料來源
@@ -21,13 +35,50 @@ Baton 可以在每個畫面上,以一段頁尾顯示你帳號**當日的 token �
 
 **local** 來源是預設,也是訂閱可用的那一種:每次 Claude Code 執行——包括 Baton 開出的
 agent 面板——都會附加一份 JSONL transcript,記錄每則訊息的 token 數,而 Baton 會加總
-當日的訊息,並依各自的模型計價。它只讀取自本機午夜以來被異動過的檔案,所以就算是
+窗口內的訊息,並依各自的模型計價。它只讀取自窗口開啟以來被異動過的檔案,所以就算是
 數百個 session 的隊伍,也能在幾分之一秒內掃描完。設定 `CLAUDE_CONFIG_DIR` 可讓它指向
 `~/.claude` 以外的位置。
 
 **api** 來源會從 Admin API 回報你整個組織的 Console／API 金鑰帳務。它需要一把
 **Admin API 金鑰**(`sk-ant-admin01-…`),Baton 從 `BATON_ANTHROPIC_ADMIN_KEY`
 環境變數讀取它——絕不從設定檔讀。資料會比實際用量落後約五分鐘。
+
+## 窗口與倒數
+
+只有 **local** 來源能倒數,而理由值得直說,而不是藏在一個數字後面。
+
+transcript 帶時間戳,所以滾動窗口的起點是**可以推得的**:它是仍落在最近一個
+`usage.window` 之內、最舊的那一則訊息。重置時間就是該起點加上窗口長度,而 Baton
+以座艙自己的時鐘倒數它——每秒一次,不是每次輪詢一次。
+
+**api** 來源沒有這樣的把手。速率上限出現在真實 API 回應的 header 上,而 Baton 從來
+收不到它;admin 報表裡也完全沒有上限這回事。所以它只回報自己實際查詢的期間,並且
+**不顯示倒數**。當重置時間未知,Baton 什麼都不顯示——不顯示 0,也不用猜的。這裡一個
+錯的數字比沒有數字更糟,因為這個數字存在的意義,就是你要拿它做決定。
+
+這段頁尾也會隨著窗口被填滿而變色——安靜、轉琥珀、再轉紅——理由相同:重點是在它用完
+*之前*行動,而不是看著它歸零。
+
+## 逐面板歸屬
+
+在 `panel` 檢視中,Baton 回報聚焦面板在這個窗口內花掉多少。它做得到,是因為它給每個
+自己開出的 Claude Code 面板一個**專屬的 session id**(`--session-id`),而那個 id 就是
+該面板 transcript 的檔名——於是用量可以被追回到花掉它的那個面板,連 subagent 也算進去。
+
+這個 flag 的運作方式帶來幾個後果,而它們在頁尾上看得見:
+
+- **不是 Claude Code 的面板沒有歸屬。** 其他 agent CLI 會拒絕這個未知選項,所以 Baton
+  不會傳。頁尾會寫 `無法歸屬`,而不是顯示一個看起來像「這個不用錢」的 0。
+- **你自己指定 session 時也一樣。** 如果 profile 的 `args` 裡已經有 `--session-id`、
+  `--resume` 或 `--continue`,Baton 會原封不動照你寫的跑。
+- **每次 spawn 都是新的 id。** 重用 id 在 Claude Code 是硬錯誤,所以重新執行(`r`)會
+  鑄一個新的 session;一個面板的用量是這些 id 的總和。
+- **還原回來的面板從空白開始。** daemon 重啟後,面板會以已結束的空位回來、沒有活著的
+  行程,所以舊的 session 不會被沿用。
+- **`api` 來源完全無法歸屬。** 它的報表是整個組織的彙總。
+
+選取一個**群組**時會把成員全部加總——「是誰在燒」這個問題,對一個工作項目問和對單一
+面板問一樣自然。
 
 ## 設定
 
@@ -37,10 +88,21 @@ agent 面板——都會附加一份 JSONL transcript,記錄每則訊息的 toke
 usage:
   source: auto # auto | local | api  (auto: api when an admin key is set, else local)
   interval: 30 # refresh seconds; 0 = default (30s local / 60s api); clamped to ≥ 10
+  window: 5h # the rolling window to count down; 0 = no countdown, report a calendar day
+  countdown-format: auto # auto (2:14:31, widening to 3d 04:12) | dd:hh:mm
+  warn-at: 0.75 # fraction of the window spent before the segment turns amber
+  alarm-at: 0.9 # …and red
 
 settings:
-  usage-footer: true # show the segment (also toggled live with U)
+  usage-mode: window # off | window | panel  (also cycled live with U)
 ```
+
+`window` 之所以可設定而非寫死,是因為各種方案不同、廠商也可能改動這個數字——追上這種
+變動不該需要發一版 Baton。如果你的方案是以 Baton 無法建模的方式計費,把它設成 `0`:
+沒有倒數,好過一個錯的倒數。
+
+`warn-at` 與 `alarm-at` 是成對生效的。一組無法描述「壓力遞增」的設定——超出 0–1,或
+alarm 小於等於 warn——會整組退回預設值,這樣顏色才會永遠是它看起來的意思。
 
 使用 `api` 來源時,Admin 金鑰放在環境變數裡:
 
@@ -48,16 +110,19 @@ settings:
 export BATON_ANTHROPIC_ADMIN_KEY=sk-ant-admin01-…
 ```
 
-`usage.source` 與 `usage.interval` 在常駐程式啟動時讀取;更動它們後需重啟伺服器
-(`C-t S`)才會生效。`U` 這個切換則是即時的。
+`usage:` 底下的所有設定都在常駐程式啟動時讀取;更動後需重啟伺服器(`C-t S`)才會
+生效。`U` 這個循環則是即時的。
+
+> 舊設定檔裡的 `settings.usage-footer: false` 仍然會隱藏這段頁尾。`usage-mode` 取代了
+> 它,兩者同時存在時以 `usage-mode` 為準。
 
 ## 它是什麼——又不是什麼
 
 - **成本是 API 等值換算,不是帳單。** 這個數字以官方公布的各模型費率替你的 token
   計價。在固定費率的 Pro/Max 訂閱下,它是一個「這在 API 上會花多少」的量表,而不是
   你實際被收取的金額。
-- **它不會顯示剩餘額度。** 訂閱的剩餘配額沒有 API 可查,所以 Baton 回報的是你今天
-  已*消耗*的量,而不是還剩下多少。
+- **它不會顯示剩餘額度。** 訂閱的剩餘配額沒有 API 可查,所以 Baton 回報的是你在這個
+  窗口內已*消耗*的量、以及窗口還剩多久——而不是窗口裡還剩多少 token。
 - **local 來源只涵蓋 Claude Code。** 其他 agent CLI(Copilot、……)不在 transcript
   裡,所以不會被計入。
 - **api 來源需要一個組織。** Admin API 對個人帳號不開放,也不承載 Pro/Max 訂閱的
