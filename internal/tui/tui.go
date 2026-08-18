@@ -67,6 +67,7 @@ const (
 
 	colBar    = lipgloss.Color("111") // light-blue status-bar fill (the footer)
 	colScroll = lipgloss.Color("179") // warm amber footer fill while in scroll mode
+	colAmber  = lipgloss.Color("172") // usage segment past the warning threshold, before the alarm
 )
 
 var (
@@ -229,7 +230,8 @@ type model struct {
 	commandCursor  int                   // highlighted row in the command picker
 	pluginFooter   string                // a plugin-set persistent footer segment (baton.footer), shown in every view's footer
 	usageText      string                // the account usage/cost footer segment (internal/usage), pushed by the daemon
-	usageFooter    bool                  // whether the usage segment is shown (toggled with U, persisted)
+	usageInfo      *proto.UsageInfo      // the same usage as structured data, so the segment can be re-rendered per mode and the countdown ticked on the cockpit's own clock
+	usageMode      usageMode             // which usage view the footer shows (cycled with U, persisted)
 
 	// The key-press readout (toggled with K, persisted). keycastKey is the key
 	// as it is shown — "G", or "C-t d" once the leader is completed — and
@@ -394,7 +396,7 @@ func (m model) applyPrefs(p prefs) model {
 	m.allowNameConflict = p.allowNameConflict
 	m.bellEnabled = p.bellEnabled
 	m.mouseEnabled = p.mouseEnabled
-	m.usageFooter = p.usageFooter
+	m.usageMode = p.usageMode
 	m.keycast = p.keycast
 	m.shellPath = p.shellPath
 	m.workdir = p.workdir
@@ -990,7 +992,7 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 	case "footer":
 		m.pluginFooter = sm.Footer
 	case "usage":
-		m.usageText = sm.Usage
+		m.usageText, m.usageInfo = sm.Usage, sm.UsageInfo
 	case "tasks":
 		// The latest backlog snapshot — the reply to task.list and to every queue
 		// mutation. Store it and keep the manager popup's cursor in range as the
@@ -2180,8 +2182,8 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 	case actHelp:
 		return m.openHelp(m.mode), nil
 	case actUsageToggle:
-		m.usageFooter = !m.usageFooter
-		m.status = "usage footer: " + onOff(m.usageFooter)
+		m.usageMode = m.usageMode.next()
+		m.status = "usage footer: " + m.usageMode.label(m.effLang())
 		if err := m.saveConfig(); err != nil {
 			m.status = "toggled, but save failed: " + err.Error()
 		}
@@ -3917,17 +3919,6 @@ func (m model) pluginFooterCap() string {
 		return ""
 	}
 	return seg(truncate(m.pluginFooter, 32), colDark, colBrandHi)
-}
-
-// usageCap renders the account usage/cost segment (internal/usage), e.g.
-// "⊙ 1.2M tok · ≈$12.34 API" — the cost is API-equivalent, not a bill. It is empty
-// when the toggle is off (U) or the daemon has nothing to report yet, so the strip
-// stays clean until real usage lands.
-func (m model) usageCap() string {
-	if !m.usageFooter || m.usageText == "" {
-		return ""
-	}
-	return seg("⊙ "+truncate(m.usageText, 30), colInk, colBlue)
 }
 
 // frontendVersion is this build's version, defaulting to "dev" when unset (a

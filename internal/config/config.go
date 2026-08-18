@@ -203,8 +203,16 @@ type Settings struct {
 	Mouse *bool `yaml:"mouse,omitempty"`
 
 	// UsageFooter shows the account usage/cost segment in the footer. Unset
-	// defaults to on; toggled live with the usage-footer binding (U).
+	// defaults to on. It is the older on/off form of UsageMode, kept so a config
+	// written before the segment gained views still hides what it was hiding;
+	// UsageMode wins whenever it is set.
 	UsageFooter *bool `yaml:"usage-footer,omitempty"`
+
+	// UsageMode is which view the usage segment shows: "off", "window" (the
+	// account's spend and the countdown to the reset) or "panel" (the focused
+	// panel's spend and its share of the window). Unset defaults to the window
+	// view; cycled live with the usage-footer binding (U).
+	UsageMode string `yaml:"usage-mode,omitempty"`
 
 	// Keycast shows the key you just pressed, and what it did, in the footer.
 	// Unset defaults to off — it is a teaching and screen-recording aid, not

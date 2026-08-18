@@ -180,7 +180,7 @@ var bindings = []binding{
 	{"favourite", keyFavourite, "favourite the panel or group (sorts it to the front)", actFavourite, "Work items"},
 
 	{"help", keyHelp, "view the keys for this view", actHelp, "View"},
-	{"usage-footer", keyUsage, "toggle the account usage/cost footer", actUsageToggle, "View"},
+	{"usage-footer", keyUsage, "cycle the usage footer: off, window, focused panel", actUsageToggle, "View"},
 	{"keycast", keyKeycast, "toggle the key-press readout in the footer", actKeycastToggle, "View"},
 	{"key-map", keyEditMap, "edit the key map (prefix)", actEditMap, "View"},
 	{"panel-config", keyPanelConfig, "configure panel defaults (prefix)", actPanelConfig, "View"},
@@ -210,9 +210,9 @@ type prefs struct {
 	confirmClose      bool
 	allowNameConflict bool
 	bellEnabled       bool
-	mouseEnabled      bool // mouse reporting (wheel scroll + selection); default off
-	usageFooter       bool // show the account usage/cost footer segment; default on
-	keycast           bool // show the key-press readout in the footer; default off
+	mouseEnabled      bool      // mouse reporting (wheel scroll + selection); default off
+	usageMode         usageMode // which account usage/cost view the footer shows; default the window view
+	keycast           bool      // show the key-press readout in the footer; default off
 	shellPath         string
 	workdir           string                         // default working directory for new panels ("" = home)
 	defaultAgent      string                         // agent profile the new-agent action spawns
@@ -251,7 +251,7 @@ func loadPrefs() prefs {
 // the daemon-pushed config (the "config" event), so the two can never map a field
 // differently.
 func prefsFromConfig(cfg config.Config) prefs {
-	p := prefs{prefix: keyPrefix, binds: append([]binding(nil), bindings...), confirmClose: true, bellEnabled: true, usageFooter: true}
+	p := prefs{prefix: keyPrefix, binds: append([]binding(nil), bindings...), confirmClose: true, bellEnabled: true, usageMode: usageWindow}
 
 	if cfg.Prefix != "" {
 		p.prefix = cfg.Prefix
@@ -273,8 +273,14 @@ func prefsFromConfig(cfg config.Config) prefs {
 	if cfg.Settings.Mouse != nil {
 		p.mouseEnabled = *cfg.Settings.Mouse
 	}
-	if cfg.Settings.UsageFooter != nil {
-		p.usageFooter = *cfg.Settings.UsageFooter
+	// usage-footer is the older on/off form of the same setting: honour it when it
+	// says "off", so an existing config that hid the segment keeps hiding it, and
+	// let the richer usage-mode win whenever it is set.
+	if cfg.Settings.UsageFooter != nil && !*cfg.Settings.UsageFooter {
+		p.usageMode = usageOff
+	}
+	if cfg.Settings.UsageMode != "" {
+		p.usageMode = parseUsageMode(cfg.Settings.UsageMode)
 	}
 	if cfg.Settings.Keycast != nil {
 		p.keycast = *cfg.Settings.Keycast
@@ -314,7 +320,7 @@ func (m model) saveConfig() error {
 	allowNameConflict := m.allowNameConflict
 	bellEnabled := m.bellEnabled
 	mouseEnabled := m.mouseEnabled
-	usageFooter := m.usageFooter
+	usageFooter := m.usageMode != usageOff
 	keycast := m.keycast
 
 	// Start from the current on-disk config so sections the cockpit does not own —
@@ -332,7 +338,8 @@ func (m model) saveConfig() error {
 	out.Settings.AllowNameConflict = &allowNameConflict
 	out.Settings.Bell = &bellEnabled
 	out.Settings.Mouse = &mouseEnabled
-	out.Settings.UsageFooter = &usageFooter
+	out.Settings.UsageFooter = &usageFooter // kept in step so an older cockpit reading this file still hides an off segment
+	out.Settings.UsageMode = m.usageMode.String()
 	out.Settings.Keycast = &keycast
 	out.Settings.Language = string(m.effLang())
 	out.Panel.Shell = m.shellPath
