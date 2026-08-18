@@ -85,6 +85,17 @@ genuinely needs it (one that installs packages on start), or an explicit `1000:1
 An image with no passwd entry for your uid has no `$HOME`, and a tool writing to an unset `$HOME` writes to `/`. When
 `$HOME` is not mounted, baton points it at `/tmp` inside the container.
 
+### Signals
+
+A signal from the cockpit is handed to the container's PID 1 rather than to the panel's process group — that group is the
+runtime client, and ending it would close the panel instead of interrupting the job the key was aimed at. `--init` runs a
+reaper as PID 1 that forwards the signal on, so the same key does the same thing isolated or not. Typing `Ctrl-C` into
+the panel is unchanged either way: that is a byte on the terminal, delivered by the container's own TTY.
+
+A signal the runtime refuses is reported rather than retried against the client, because delivering it there would be a
+different action from the one you asked for. Closing the panel force-removes the container, so "make it stop" always has
+a working key.
+
 ## Resource limits still apply
 
 The caps from **[LIMITS.md](LIMITS.md)** work exactly as before — the same config, the same two layers, the same

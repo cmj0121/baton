@@ -414,3 +414,29 @@ func TestInvalidStaysEnabled(t *testing.T) {
 		t.Fatal("Wrap must refuse a poisoned policy rather than fall through to the host")
 	}
 }
+
+func TestSignalIsANoOpWhenThereIsNothingToSignal(t *testing.T) {
+	// None of these may reach a runtime: no mode, no container, no signal.
+	for _, tc := range []struct{ mode, name, sig string }{
+		{string(ModeNone), "baton-1", "SIGINT"},
+		{string(ModeDocker), "", "SIGINT"},
+		{string(ModeDocker), "baton-1", ""},
+	} {
+		if err := Signal(Mode(tc.mode), tc.name, tc.sig); err != nil {
+			t.Errorf("Signal(%q,%q,%q) = %v, want nil", tc.mode, tc.name, tc.sig, err)
+		}
+	}
+}
+
+// TestSignalReportsTheRuntimesOwnMessage covers the failure a person actually
+// hits — the container is gone — and asserts the runtime's words survive, since
+// there is no fallback delivery to explain it away.
+func TestSignalReportsTheRuntimesOwnMessage(t *testing.T) {
+	err := Signal(ModeDocker, "baton-no-such-container-4f2a91", "SIGINT")
+	if err == nil {
+		t.Skip("no container runtime on this host, or it accepted a name that does not exist")
+	}
+	if !strings.Contains(err.Error(), "docker") {
+		t.Fatalf("the error must name the runtime it came from, got %v", err)
+	}
+}

@@ -3996,7 +3996,7 @@ func (s *Server) signalPanels(ids []string, name string) error {
 	s.noteStopRequested(targets)
 
 	for _, id := range targets {
-		s.pty.Signal(id, sig)
+		s.signalPanel(id, name, sig)
 	}
 	log.Info().Str("signal", name).Int("panels", len(targets)).Msg("signal sent")
 	return nil

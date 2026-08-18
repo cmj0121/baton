@@ -364,6 +364,54 @@ func resourceArgs(l limits.Limits) ([]string, error) {
 // exists so the spawn path can ask the same question of either backend.
 func (p Policy) Unenforced(limits.Limits) []string { return nil }
 
+// Signal delivers a signal to the container's PID 1 by name.
+//
+// It exists because a cockpit signal cannot go where it goes for an unisolated
+// panel. Baton signals a panel's process GROUP, which under isolation is the
+// runtime client — so a SIGINT meant to interrupt the agent's current job would
+// instead end the client and take the whole panel with it. `kill` hands the
+// signal to the container's own PID 1, which with --init is a reaper that
+// forwards it on: the same key does the same thing, isolated or not.
+//
+// The signal is named the way baton names it ("SIGINT"), which is also how the
+// runtime spells it. An error is the runtime's own message.
+func Signal(mode Mode, name, signal string) error {
+	p := Policy{Mode: mode}
+	if !p.Enabled() || name == "" || signal == "" {
+		return nil
+	}
+	out, err := run(exec.Command(p.Runtime(), "kill", "--signal", signal, name))
+	if err != nil {
+		if msg := strings.TrimSpace(string(out)); msg != "" {
+			return fmt.Errorf("%s: %s", p.Runtime(), msg)
+		}
+		return fmt.Errorf("%s kill: %w", p.Runtime(), err)
+	}
+	return nil
+}
+
+// run executes a runtime command, bounded by removeTimeout, returning whatever it
+// printed. The bound matters because both callers sit on a path a person is
+// waiting on — a keypress, a panel closing, a daemon shutting down — and a wedged
+// runtime must cost a moment rather than the whole action.
+func run(cmd *exec.Cmd) ([]byte, error) {
+	var buf strings.Builder
+	cmd.Stdout, cmd.Stderr = &buf, &buf
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return []byte(buf.String()), err
+	case <-time.After(removeTimeout):
+		_ = cmd.Process.Kill()
+		<-done
+		return nil, fmt.Errorf("timed out after %s", removeTimeout)
+	}
+}
+
 // Remove tears a container down by name, best effort. It is the teardown the
 // `--rm` on the run does not cover: with a TTY attached the runtime does not
 // proxy signals, so killing the client — which is what closing a panel or
@@ -377,18 +425,7 @@ func Remove(mode Mode, name string) {
 	if !p.Enabled() || name == "" {
 		return
 	}
-	cmd := exec.Command(p.Runtime(), "rm", "--force", name)
-	if err := cmd.Start(); err != nil {
-		return
-	}
-	done := make(chan struct{})
-	go func() { _ = cmd.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(removeTimeout):
-		_ = cmd.Process.Kill()
-		<-done
-	}
+	_, _ = run(exec.Command(p.Runtime(), "rm", "--force", name))
 }
 
 // ContainerName is the name a panel's container is given: a baton- prefix so a

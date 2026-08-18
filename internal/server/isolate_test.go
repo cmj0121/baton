@@ -3,10 +3,12 @@ package server
 import (
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/cmj0121/baton/internal/isolate"
 	"github.com/cmj0121/baton/internal/limits"
+	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/ptymgr"
@@ -189,5 +191,40 @@ func TestIsolationModeSurvivesAReload(t *testing.T) {
 
 	if got != isolate.ModeDocker {
 		t.Fatalf("mode = %q; a forgotten runtime must not become a leaked container", got)
+	}
+}
+
+// TestSignalPanelRoutesByIsolation is the acceptance criterion for signals: the
+// same key must do the same thing isolated or not, which means it cannot go to
+// the process group when that group is the runtime client.
+func TestSignalPanelRoutesByIsolation(t *testing.T) {
+	s, dir := isolatedServer(t, dockerPolicy())
+
+	// An unisolated panel still takes it on its own process group — a live shell
+	// survives a SIGWINCH, so this asserts delivery without ending the panel.
+	id, err := s.createPanel(proto.KindShell, "", nil, dir, "", false, false)
+	if err != nil {
+		t.Fatalf("create shell: %v", err)
+	}
+	s.signalPanel(id, "SIGWINCH", syscall.SIGWINCH)
+	s.mu.Lock()
+	state := s.panels[0].State
+	s.mu.Unlock()
+	if state == panel.Exited {
+		t.Fatal("an unisolated panel must take the signal on its group, not lose the panel")
+	}
+
+	// An isolated panel routes through the runtime. The container does not exist,
+	// so this asserts the ROUTE rather than the delivery: what must not happen is
+	// the fallback that would kill the client and end the panel.
+	s.mu.Lock()
+	s.containers[id] = "baton-no-such-container-4f2a91"
+	s.mu.Unlock()
+	s.signalPanel(id, "SIGKILL", syscall.SIGKILL)
+	s.mu.Lock()
+	state = s.panels[0].State
+	s.mu.Unlock()
+	if state == panel.Exited {
+		t.Fatal("a failed runtime signal must not fall back to killing the client")
 	}
 }

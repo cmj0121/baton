@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/rs/zerolog/log"
 
@@ -59,6 +60,33 @@ func withoutFleetSocket(spec ptymgr.Spec) ptymgr.Spec {
 	}
 	spec.Env = kept
 	return spec
+}
+
+// signalPanel delivers a signal to a panel, choosing where it has to land.
+//
+// An unisolated panel takes it on its process group, the way it always has. An
+// isolated one cannot: that group is the runtime client, so a SIGINT meant to
+// interrupt the agent's current job would end the client and take the panel with
+// it — a different action from the one the key asked for. The runtime hands it to
+// the container's PID 1 instead.
+//
+// A failed delivery is reported and NOT retried against the client, for the same
+// reason: the fallback is a strictly different action. Closing the panel already
+// force-removes the container, so "make it stop" still has a working key.
+func (s *Server) signalPanel(id, name string, sig syscall.Signal) {
+	s.mu.Lock()
+	container := s.containers[id]
+	mode := s.isolationModeLocked(id)
+	s.mu.Unlock()
+
+	if container == "" {
+		s.pty.Signal(id, sig)
+		return
+	}
+	if err := isolate.Signal(mode, container, name); err != nil {
+		log.Warn().Str("panel", id).Str("container", container).Str("signal", name).Err(err).
+			Msg("signalling an isolated panel failed")
+	}
 }
 
 // releaseContainer tears down the container a panel was launched in, if it had
