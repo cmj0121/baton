@@ -238,6 +238,15 @@ type Server struct {
 	declared    map[string]*declaration
 	taskSettled map[string]bool
 
+	// acked records that a human has dealt with a panel from the inbox:
+	// dismissed it, snoozed it, or replied to it. It is fleet state rather than
+	// per-cockpit state because the queue's promise is "the fleet needs a human",
+	// and a second cockpit re-offering work the first just cleared is exactly the
+	// untrustworthy queue this feature exists to fix. A zero value means "until
+	// the panel speaks again"; a set one is a snooze's expiry, evaluated where it
+	// is read (ackedLocked) rather than by a sweeper. Guarded by mu; see ack.go.
+	acked map[string]time.Time
+
 	// exitedAt is when each dead panel's process ended. It exists because the
 	// Monitor forgets a panel the moment it exits, which takes its state clock
 	// with it — and an exited panel still needs one, since a queue that lists
@@ -478,6 +487,7 @@ func New(ln net.Listener, opts ...Option) *Server {
 		pendingDispatch: make(map[string][]byte),
 		declared:        make(map[string]*declaration),
 		taskSettled:     make(map[string]bool),
+		acked:           make(map[string]time.Time),
 		exitedAt:        make(map[string]time.Time),
 		tasks:           make(map[string]*task.Task),
 		panelTask:       make(map[string]string),
@@ -682,6 +692,7 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 			s.exitedAt[id] = time.Now()   // the Monitor is about to forget it; keep the instant the queue sorts on
 			s.mon.forget(id)              // a dead panel no longer ticks
 			delete(s.declared, id)        // …and its raised hand goes with it
+			delete(s.acked, id)           // …and any acknowledgement of it
 			delete(s.taskSettled, id)     // …as does any pending done edge
 			delete(s.pendingDispatch, id) // a held dispatch dies with the process
 			// A task in flight died with its panel — fail it with the exit code.
@@ -756,6 +767,15 @@ func (s *Server) routeOutput(id string, data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mon.observed(id, len(data))
+	// An acknowledgement stands only until the panel next SPEAKS, and this is that
+	// edge — the literal one, not the quiet→noisy wake below. A panel whose own
+	// declaration stands never takes the wake branch, so clearing the ack there
+	// would leave a dismissed row suppressed for as long as the declaration held.
+	// The length check keeps the steady output path free of a map hash: the map is
+	// empty whenever nobody has triaged anything.
+	if len(s.acked) > 0 {
+		delete(s.acked, id)
+	}
 	s.noteOutputCwdLocked(id, data)
 	if i := s.indexLocked(id); i >= 0 {
 		// A byte of output wakes every resting state back to running — but NOT
@@ -1357,6 +1377,15 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 		if cc.self != "" && cmd.ID != "" && cmd.ID != cc.self {
 			return "conductor role: may only raise its own hand"
 		}
+	case "panel.tail", "panel.ack":
+		// The inbox verbs, and the inbox is an operator surface. There is no conductor
+		// queue — an agent triaging the fleet's attention is a design this round
+		// deliberately did not build (DESIGN §12) — and the fence is where that
+		// decision is ENFORCED rather than merely intended. Reading another panel's
+		// trailing output is not destructive, so this is a boundary rather than a
+		// guardrail; opening it later is deleting one line, and interface room is
+		// left for exactly that.
+		return "conductor role: the inbox is an operator surface"
 	case "panel.create":
 		now := time.Now()
 		if !cc.lastSpawn.IsZero() && now.Sub(cc.lastSpawn) < minConductorSpawnGap {
@@ -1619,6 +1648,14 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		// …and putting it back down, without waiting for its next byte of output to
 		// be downgraded by a timer.
 		s.resolveAttention(cc, cmd)
+	case "panel.tail":
+		// The inbox pulling one row's trailing output, so its detail pane shows the
+		// same bytes the Monitor sniffed. The clamp and the reply live in tail.go.
+		s.sendTail(cc, cmd.ID, cmd.Count)
+	case "panel.ack":
+		// A human dealt with a panel from the inbox — dismissed, snoozed, or
+		// answered it. The record is fleet state; the reasoning is in ack.go.
+		s.ackPanel(cc, cmd)
 	case "panel.resize":
 		s.pty.Resize(cmd.ID, cmd.Rows, cmd.Cols)
 	default:
@@ -2516,6 +2553,7 @@ func (s *Server) pruneExitedLocked() (stop, workspaces []string) {
 			s.forgetRestartLocked(p.ID)
 			s.forgetCwdLocked(p.ID)
 			delete(s.declared, p.ID)
+			delete(s.acked, p.ID)
 			delete(s.taskSettled, p.ID)
 			delete(s.exitedAt, p.ID)
 			delete(s.pendingDispatch, p.ID)
@@ -2986,6 +3024,7 @@ func (s *Server) respawnPanel(id string) error {
 		s.panels[i].State = panel.Spawning
 		s.panels[i].ExitCode = 0 // the old process's status says nothing about the new one
 		delete(s.exitedAt, id)   // …nor does when it died
+		delete(s.acked, id)      // …nor does a human having dealt with the run that ended
 		s.panels[i].Activity = activityText(panel.Spawning, 0)
 		// The new process starts in the directory just resolved, whatever the old
 		// one had wandered to; the tracker re-learns from there.
@@ -3073,6 +3112,7 @@ func (s *Server) closePanel(id string) error {
 	s.forgetRestartLocked(id)     // …and any restart armed for it: it must not come back
 	s.forgetCwdLocked(id)         // …and the output tail kept to read its directory reports
 	delete(s.declared, id)        // …and whatever it had said about needing a human
+	delete(s.acked, id)           // …and any acknowledgement a human left on it
 	delete(s.taskSettled, id)     // …and any pending done edge
 	delete(s.exitedAt, id)        // …and the instant it died, if it had
 	delete(s.pendingDispatch, id) // and any dispatch held for it
@@ -3970,6 +4010,7 @@ func (s *Server) wirePanel(p panel.Panel, pids map[string]int) proto.Panel {
 		out.Since = since.Format(time.RFC3339Nano)
 	}
 	out.Sig = s.mon.sig(p.ID)
+	out.Acked = s.ackedLocked(p.ID)
 	return out
 }
 

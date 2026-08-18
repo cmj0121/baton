@@ -914,6 +914,13 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := k.String()
 	// The split is command-mode, so the prefix is only needed for the universal
 	// escapes — C-t d leaves for the dashboard; bare b (back) does the same.
+	//
+	// These switches ENUMERATE the escapes rather than deferring to runAction, and
+	// the cost of that is that an escape added elsewhere silently does nothing here
+	// until it is listed. isEscape is what makes a key prefix-reachable; it is not
+	// what makes it work in a view that owns its own keyboard. Anything added to
+	// isEscape and meant to work "from any view" belongs in this switch and in the
+	// interact one below it.
 	if m.groupArmed {
 		m.groupArmed = false
 		if b, ok := m.lookupEscape(key); ok {
@@ -926,6 +933,12 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.enterScroll(), nil
 			case actScratch: // C-t ~ → float the scratch pane over the split
 				return m.toggleScratch()
+			case actInbox: // C-t a → the attention inbox, over the split
+				return m.openInbox()
+			case actProcTree: // C-t o → the process-tree overlay
+				return m.openProcTree(modeGroupZoom), nil
+			case actCommands: // C-t c → the plugin command picker
+				return m.openCommandPicker(modeGroupZoom), nil
 			}
 		}
 		if key == keyScreensaver { // C-t E → the hidden screensaver, over the split
@@ -1085,6 +1098,12 @@ func (m model) handleGroupInteractKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.enterScroll(), nil
 			case actScratch: // C-t ~ → float the scratch pane over the split
 				return m.toggleScratch()
+			case actInbox: // C-t a → the attention inbox, over the split
+				return m.openInbox()
+			case actProcTree: // C-t o → the process-tree overlay
+				return m.openProcTree(modeGroupZoom), nil
+			case actCommands: // C-t c → the plugin command picker
+				return m.openCommandPicker(modeGroupZoom), nil
 			}
 			return m, nil
 		}

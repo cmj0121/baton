@@ -122,6 +122,7 @@ const (
 	modeQueue       // the task-queue manager popup (Q): list / cancel / drain the backlog
 	modeFleetSearch // the fleet-wide search results popup (/): matching lines grouped by panel
 	modeProcTree    // the process-tree overlay (C-t o): the daemon, its panels, and their OS descendants
+	modeInbox       // the attention inbox (C-t a): the queue of panels wanting a human, cleared in place
 	modeZoom
 	modeGroupZoom
 	modeScreensaver // the hidden Matrix-rain + clock Easter egg (C-t E / idle auto-start)
@@ -343,6 +344,39 @@ type model struct {
 	// members that look like the majority and spends the live tiles on the
 	// outliers; false keeps the positional fold. See partitionSimilar.
 	foldSimilar bool
+
+	// The attention inbox (modeInbox, C-t a). See inbox.go.
+	//
+	// inboxWire is the last fleet snapshot AS IT CAME OFF THE WIRE, kept because
+	// the queue needs two fields the domain model deliberately does not carry:
+	// Since (the instant the queue sorts on) and Acked (whether a human has
+	// already dealt with the panel, which is fleet state, not cockpit state).
+	// mergeFleet drops both on the way into m.fleet, and widening panel.Panel to
+	// hold presentation and server bookkeeping is the thing that model exists not
+	// to do — so the inbox reads the wire and the rest of the cockpit reads the
+	// fleet.
+	//
+	// inboxRows is the FROZEN order: rows re-sort on open and on r only, so a
+	// snapshot arriving mid-triage can change what a row says but never where it
+	// is. inboxCleared holds the ids this cockpit removed optimistically, until
+	// the server's ack broadcast confirms them. inboxTails caches pulled tails
+	// (at most inboxTailCache, oldest insertion evicted) with inboxTailWant the
+	// single request in flight and inboxTailAt when it went out — the daemon may
+	// drop an outbound frame under load, so the gate has to expire or one lost
+	// reply wedges the detail pane for good.
+	inboxWire      []proto.Panel
+	inboxRows      []inboxRow
+	inboxCleared   map[string]bool
+	inboxCursor    int
+	inboxFrom      mode
+	inboxComposing bool
+	inboxReply     string
+	inboxTails     map[string][]byte
+	inboxTailOrder []string
+	inboxTailWant  string
+	inboxTailAt    time.Time
+	inboxDone      bool          // settings.inbox-done: does a finished agent join the queue at all
+	inboxSnooze    time.Duration // settings.inbox-snooze: how long `-` defers a row
 }
 
 // inputPurpose is what an active text-input overlay feeds on submit.
@@ -888,6 +922,7 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 			selKind, selID, selGroup, hadSel = m.selectedKey()
 		}
 		m.fleet = mergeFleet(sm.Panels)
+		m.observeWire(sm.Panels) // the inbox reads Since/Acked, which the fleet model does not carry
 		m.groupShown = shownForGroups(sm.Groups)
 		m.groupLayout = layoutForGroups(sm.Groups)
 		m.favGroups = favForGroups(sm.Groups)
@@ -965,6 +1000,12 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		}
 		m.pendingEphemeralTitle = ""
 		*m = m.openDiffPopup(title, sm.Files)
+	case "tail":
+		// The trailing output of one inbox row, pulled with panel.tail — the same
+		// window the Monitor sniffed when it raised the flag. It rides the control
+		// channel rather than the output stream because it is a request/response
+		// reply, not a subscription: the inbox never attaches.
+		m.applyTail(sm.ID, sm.Data)
 	case "search":
 		// The server scanned every panel for the term and returned the matching lines.
 		// Open the results popup grouped by panel; it owns nothing server-side, so esc
@@ -1036,6 +1077,7 @@ func (m *model) applyTelemetry(sm proto.ServerMsg) {
 			m.fleet[i].Sig = p.Sig
 		}
 	}
+	m.observeWire(sm.Panels) // the inbox reads Since/Acked, which the fleet model does not carry
 	m.refreshAttention()
 }
 
@@ -1140,6 +1182,12 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// refreshes the OS snapshot.
 	if m.mode == modeProcTree {
 		return m.handleProcTreeKey(key)
+	}
+
+	// The attention inbox owns the keyboard until esc; it walks the queue and
+	// clears rows in place, and its composer owns it outright while open.
+	if m.mode == modeInbox {
+		return m.handleInboxKey(key, k)
 	}
 
 	// A text-input overlay is open: route the keystroke to it.
@@ -2241,6 +2289,8 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		return m.openQueue(m.mode), nil
 	case actProcTree:
 		return m.openProcTree(m.mode), nil
+	case actInbox:
+		return m.openInbox()
 	case actDashboard:
 		m.mode = modeDashboard
 		m.cursor = 0
@@ -2486,6 +2536,12 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.enterScroll(), nil
 			case actScratch: // C-t ~ → float the scratch pane over the zoom
 				return m.toggleScratch()
+			case actInbox: // C-t a → the attention inbox, over the zoom
+				// A zoom is where you land after `enter` on a row, so the way back to
+				// the queue has to be reachable from inside one — otherwise "answer
+				// one, look at the next" costs a trip through the dashboard, which is
+				// the screen swap this feature exists to remove.
+				return m.openInbox()
 			}
 			// back (C-t b) is what leaves a zoom — it returns to the split it came
 			// from, or the dashboard. Any other escape no-ops here.
@@ -3049,6 +3105,8 @@ func (m model) render() string {
 		body = m.fleetSearchView()
 	case m.mode == modeProcTree:
 		body = m.procTreeView()
+	case m.mode == modeInbox:
+		body = m.inboxView()
 	default:
 		body = m.dashboardView()
 	}

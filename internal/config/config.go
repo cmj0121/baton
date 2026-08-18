@@ -244,6 +244,26 @@ type Settings struct {
 	// defaults to on; set false to keep the positional fold. Either way a group
 	// that fits inside its visible-tile count never folds at all.
 	FoldSimilar *bool `yaml:"fold-similar,omitempty"`
+
+	// InboxDone decides whether a finished agent joins the attention inbox at
+	// all — the queue's "review me" bucket, always sorted below the panels that
+	// are actually asking a question.
+	//
+	// Unset defaults to on, because that bucket is what makes the queue
+	// CLEARABLE: with it off the inbox holds only questions, failures, and
+	// wedges, which is a strictly smaller promise than "here is everything that
+	// wants a human, and here is how you finish with it". Set it false when you
+	// run few enough agents to be watching them anyway, where a finished turn is
+	// something you saw rather than something you need told.
+	InboxDone *bool `yaml:"inbox-done,omitempty"`
+
+	// InboxSnooze is how long the inbox's `-` defers a row, as a Go duration
+	// ("10m", "1h"). It is applied by the COCKPIT — the absolute instant is
+	// computed here and sent to the daemon — so two cockpits with different
+	// values each get what they configured without the daemon holding a
+	// per-client policy. Unset, unparseable, or non-positive falls back to ten
+	// minutes; a snooze that silently did nothing would read as a dropped key.
+	InboxSnooze string `yaml:"inbox-snooze,omitempty"`
 }
 
 // PanelDefaults configure how new panels are spawned.

@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -60,6 +61,7 @@ const (
 	keyCommands  = "c" // C-t c → the plugin command picker
 	keyScratch   = "~" // C-t ~ → toggle the floating scratch shell (any view)
 	keyProcTree  = "o" // C-t o → the process-tree overlay (daemon → panels → OS descendants)
+	keyInbox     = "a" // C-t a → the attention inbox (the queue of panels wanting a human)
 
 	keyRemove    = "x" // in the group split: remove the focused member from the group
 	keyInteract  = "i" // in the group split: drive the focused tile in place, no zoom
@@ -132,6 +134,7 @@ const (
 	actCommands
 	actScratch
 	actProcTree
+	actInbox
 )
 
 // isEscape reports whether an action is reached after the prefix rather than on a
@@ -139,7 +142,7 @@ const (
 // and the key-map editor work after the prefix in every mode; panel config opens
 // this way from command mode.
 func isEscape(a action) bool {
-	return a == actDashboard || a == actEditMap || a == actPanelConfig || a == actScroll || a == actCommands || a == actScratch || a == actProcTree
+	return a == actDashboard || a == actEditMap || a == actPanelConfig || a == actScroll || a == actCommands || a == actScratch || a == actProcTree || a == actInbox
 }
 
 // binding is one editable command: a stable name (used to persist the key), the
@@ -190,6 +193,7 @@ var bindings = []binding{
 	{"scroll", keyScroll, "scroll mode — line / page (prefix)", actScroll, "View"},
 	{"dashboard", keyDashboard, "jump to the dashboard (prefix)", actDashboard, "View"},
 	{"proc-tree", keyProcTree, "process tree — the daemon's OS processes (prefix)", actProcTree, "View"},
+	{"inbox", keyInbox, "the attention inbox — clear what needs a human (prefix)", actInbox, "View"},
 	{"back", keyBack, "back one level: zoom→group→dashboard (C-t b in a zoom)", actBack, "View"},
 	{"commands", keyCommands, "open the plugin command picker (prefix)", actCommands, "View"},
 	{"scratch", keyScratch, "toggle a floating scratch shell (prefix)", actScratch, "View"},
@@ -226,6 +230,8 @@ type prefs struct {
 	tui               config.TUIConfig               // cockpit appearance: colour theme and group-split layouts
 	lang              i18n.Lang                      // resolved message language for the cockpit's help surfaces
 	foldSimilar       bool                           // group summary tile folds the lookalikes, not the latecomers; default on
+	inboxDone         bool                           // a finished agent joins the attention inbox as a "review me" row; default on
+	inboxSnooze       time.Duration                  // how long the inbox's `-` defers a row; default defaultInboxSnooze
 }
 
 // defaultAgentName is the built-in agent profile, used when none is configured —
@@ -255,7 +261,8 @@ func loadPrefs() prefs {
 // the daemon-pushed config (the "config" event), so the two can never map a field
 // differently.
 func prefsFromConfig(cfg config.Config) prefs {
-	p := prefs{prefix: keyPrefix, binds: append([]binding(nil), bindings...), confirmClose: true, bellEnabled: true, usageMode: usageWindow, foldSimilar: true}
+	p := prefs{prefix: keyPrefix, binds: append([]binding(nil), bindings...), confirmClose: true, bellEnabled: true, usageMode: usageWindow, foldSimilar: true,
+		inboxDone: true, inboxSnooze: defaultInboxSnooze}
 
 	if cfg.Prefix != "" {
 		p.prefix = cfg.Prefix
@@ -301,6 +308,10 @@ func prefsFromConfig(cfg config.Config) prefs {
 	if cfg.Settings.FoldSimilar != nil {
 		p.foldSimilar = *cfg.Settings.FoldSimilar
 	}
+	if cfg.Settings.InboxDone != nil {
+		p.inboxDone = *cfg.Settings.InboxDone
+	}
+	p.inboxSnooze = parseSnooze(cfg.Settings.InboxSnooze)
 	return p
 }
 
