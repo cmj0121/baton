@@ -1,9 +1,11 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/cmj0121/baton/internal/config"
+	"github.com/cmj0121/baton/internal/isolate"
 	"github.com/cmj0121/baton/internal/restart"
 )
 
@@ -100,5 +102,55 @@ func TestRestartPoliciesDropsAMalformedPolicy(t *testing.T) {
 	}
 	if _, listed := perAgent["claude"]; listed {
 		t.Error("a malformed profile policy should be dropped, not half-applied")
+	}
+}
+
+// TestIsolationPoliciesProjectsConfig covers the seam between the config file and
+// the daemon: a profile that asks to isolate reaches the server as a policy, and
+// one that does not is absent rather than stored empty.
+func TestIsolationPoliciesProjectsConfig(t *testing.T) {
+	cfg := config.Config{Panel: config.PanelDefaults{Agents: map[string]config.AgentProfile{
+		"walled": {Command: "claude", Isolate: "docker", Image: "example/agent:1", Network: "bridge"},
+		"plain":  {Command: "claude"},
+	}}}
+
+	got := isolationPolicies(cfg)
+	if len(got) != 1 {
+		t.Fatalf("only the profile that asked for it belongs in the table, got %v", got)
+	}
+	p := got["walled"]
+	if p.Mode != isolate.ModeDocker || p.Image != "example/agent:1" || p.Network != isolate.NetworkBridge {
+		t.Fatalf("the policy did not survive the projection: %+v", p)
+	}
+	if _, ok := got["plain"]; ok {
+		t.Error("a profile with no isolation must not be carried at all")
+	}
+}
+
+// TestIsolationPoliciesKeepsABrokenPolicy is the property that makes this
+// projection different from every other one here: a policy baton cannot read is
+// kept and poisoned, because dropping it would spawn the panel on the host.
+func TestIsolationPoliciesKeepsABrokenPolicy(t *testing.T) {
+	cfg := config.Config{Panel: config.PanelDefaults{Agents: map[string]config.AgentProfile{
+		"walled": {Command: "claude", Isolate: "dockerr", Image: "example/agent:1"},
+	}}}
+
+	p, ok := isolationPolicies(cfg)["walled"]
+	if !ok {
+		t.Fatal("a broken policy must reach the daemon, or the panel spawns unconfined")
+	}
+	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "dockerr") {
+		t.Fatalf("it must carry the reason to fail the spawn with, got %v", err)
+	}
+}
+
+// TestReloadableSettingsCarriesIsolation checks the table is actually attached to
+// the settings the daemon reloads from, not merely computable.
+func TestReloadableSettingsCarriesIsolation(t *testing.T) {
+	cfg := config.Config{Panel: config.PanelDefaults{Agents: map[string]config.AgentProfile{
+		"walled": {Command: "claude", Isolate: "docker", Image: "example/agent:1"},
+	}}}
+	if got := reloadableSettings(cfg).settings.AgentIsolate; len(got) != 1 {
+		t.Fatalf("AgentIsolate = %v, want the walled profile", got)
 	}
 }
