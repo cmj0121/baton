@@ -8,35 +8,47 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 // LocalProvider reads Claude Code's session transcripts and aggregates the token
-// usage inside the current rolling window. Every Claude Code run — baton's own
-// agent panels included — appends a JSONL transcript under
+// usage inside the current window. Every Claude Code run — baton's own agent
+// panels included — appends a JSONL transcript under
 // $HOME/.claude/projects/<project>/<session>.jsonl, one line per message, with
 // the assistant messages carrying a `usage` block.
 //
 // Because the transcripts are timestamped, this is the one source that can infer
-// where the rolling window opened: the oldest message still inside it. That makes
-// the reset a real countdown rather than a guess, and it is why a personal
-// Pro/Max subscription — whose usage never reaches the Admin API — is exactly the
-// case this source serves.
+// where the window opened: the message that opened it. That makes the reset a
+// real countdown rather than a guess, and it is why a personal Pro/Max
+// subscription — whose usage never reaches the Admin API — is exactly the case
+// this source serves.
+//
+// A provider outlives its polls, and it has to: where a window opened cannot be
+// worked out afresh every time. A scan only reaches so far back, so the oldest
+// message it can see is not reliably the one that opened anything — read as one,
+// it drags the window boundaries onto the edge of whatever the scan happened to
+// cover, which moves as the calendar does. So the anchor is carried instead, and
+// derived only when there is none to carry.
 type LocalProvider struct {
 	dir    string           // the .../projects root scanned for transcripts
-	window time.Duration    // rolling window length; 0 falls back to a calendar day
+	window time.Duration    // window length; 0 falls back to a calendar day
 	now    func() time.Time // injectable clock (tests pin "now")
+
+	mu     sync.Mutex // guards anchor; a Provider is reachable from any goroutine
+	anchor time.Time  // where the window last seen opened, carried across polls
 }
 
 // NewLocalProvider builds a local source rooted at the user's Claude Code project
 // transcripts. CLAUDE_CONFIG_DIR overrides the ~/.claude location, matching Claude
 // Code's own env override.
 //
-// window is the rolling window to measure over. Zero (or negative) opts out of
-// the countdown entirely and reports a calendar day instead — a plan that bills
-// on something baton cannot model is better served by no countdown than a wrong
-// one.
+// window is how long a window lasts once a message opens one. Zero (or negative)
+// opts out of the countdown entirely and reports a calendar day instead — a plan
+// that bills on something baton cannot model is better served by no countdown
+// than a wrong one.
 func NewLocalProvider(window time.Duration) *LocalProvider {
 	return &LocalProvider{dir: claudeProjectsDir(), window: window, now: time.Now}
 }
@@ -44,27 +56,66 @@ func NewLocalProvider(window time.Duration) *LocalProvider {
 // Source implements Provider.
 func (p *LocalProvider) Source() string { return "local" }
 
+// recall is the anchor to continue the window chain from, or the zero time when
+// there is none to trust. An anchor is trusted only while it sits inside the range
+// the scan covers: the chain steps from one window's start to the first message
+// after that window ends, so an anchor from before the floor would step over
+// messages the scan never read and land the window in the wrong place. Better then
+// to start the chain over from the oldest message actually in hand.
+func (p *LocalProvider) recall(floor, now time.Time) time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.anchor.Before(floor) || p.anchor.After(now) {
+		return time.Time{}
+	}
+	return p.anchor
+}
+
+// remember keeps where the chain reached, so the next poll continues it rather
+// than deriving it again — which is the whole point, since deriving it again is
+// what let the calendar move it. A window that has already closed is worth
+// keeping too: it is the link the next message chains off. Only a chain that
+// found nothing at all leaves the anchor alone, so a quiet stretch does not
+// discard a perfectly good one.
+func (p *LocalProvider) remember(start time.Time) {
+	if start.IsZero() {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.anchor = start
+}
+
 // usageKey is the cheap substring gate: only lines that mention a usage block are
 // worth JSON-parsing, and most transcript lines (user turns, tool results) do not.
 var usageKey = []byte(`"usage"`)
 
 // Fetch scans the transcripts for the assistant messages inside the current
 // window and sums their token usage, pricing each message by its own model.
-// Files not touched since the window opened are skipped whole — an append-only
-// transcript last written before the cutoff cannot hold a message after it —
-// which keeps a fleet of hundreds of sessions down to reading only the active few.
+// Files not touched since the scan floor are skipped whole — an append-only
+// transcript last written before it cannot hold a message after it — which keeps
+// a fleet of hundreds of sessions down to reading only the active few.
 //
-// The window's start is the oldest message that is still inside it, so the
-// countdown tracks the window the account is actually in rather than a clock
-// baton picked. With no message inside the cutoff there is no window in progress,
-// and the snapshot says so rather than opening one at "now".
+// The floor is a day plus a window back, not a window, so the read is up to six
+// times the files just before midnight and shrinks through the day. That is the
+// price of the floor being a calendar instant: it has to hold still while the
+// clock moves, or the chain it seeds moves with the clock. It is paid on a poll
+// every thirty seconds, against files an append-only writer leaves cheap to skip.
+//
+// The window opens at a message and lasts a fixed length from there, so the
+// countdown runs that length down and the next message opens the next window.
+// Once the last window has closed with nothing after it, there is no window in
+// progress, and the snapshot says so rather than opening one at "now".
 func (p *LocalProvider) Fetch(ctx context.Context) (Snapshot, error) {
 	now := p.now()
 	cutoff := startOfDay(now)
 	if p.window > 0 {
-		cutoff = now.Add(-p.window)
+		// Reach one whole window back past the day's start: a window still running now
+		// can have opened that early, and the chain has to see the message that opened
+		// it whenever there is no anchor to continue from.
+		cutoff = cutoff.Add(-p.window)
 	}
-	sc := newScan(cutoff, "local")
+	sc := newScan(cutoff, now)
 
 	err := filepath.WalkDir(p.dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -85,14 +136,28 @@ func (p *LocalProvider) Fetch(ctx context.Context) (Snapshot, error) {
 	// A missing projects dir (Claude Code never run here) is not an error — it just
 	// means zero usage. WalkDir surfaces it via the root callback, which we ignore.
 	if err != nil && !os.IsNotExist(err) {
-		return sc.snap, err
+		// A halted walk read some files and not others, so its total spans neither a
+		// window nor a day — it is a fraction of one, with no way to say which. Report
+		// nothing and let the caller hold whatever it had; a number that looks like a
+		// reading but under-counts by an unknown amount is the one thing worse.
+		return Snapshot{Source: "local"}, err
 	}
-	if p.window > 0 && !sc.oldest.IsZero() {
-		sc.snap.Since = sc.oldest
-		sc.snap.Until = sc.oldest.Add(p.window)
-		sc.snap.Resets = true
+	if p.window <= 0 {
+		return sc.snapshot(cutoff), nil // the calendar-day fallback: totals, no reset
 	}
-	return sc.snap, nil
+	start, open := sc.window(now, p.window, p.recall(cutoff, now))
+	p.remember(start)
+	if !open {
+		// Every window the chain reached has already closed, and the next one opens on
+		// the next message. Report nothing rather than a countdown to a window the
+		// account is no longer in — and rather than the spend of a window that is over,
+		// which would read as this window's. Since stays zero: there is no window for it
+		// to be the start of, and the scan floor is not one.
+		return Snapshot{Source: "local"}, nil
+	}
+	snap := sc.snapshot(start)
+	snap.Until, snap.Resets = start.Add(p.window), true
+	return snap, nil
 }
 
 // sessionOf is the session id a transcript belongs to, taken from its path under
@@ -113,24 +178,101 @@ func sessionOf(root, path string) string {
 	return strings.TrimSuffix(parts[1], ".jsonl")
 }
 
-// scan is the running state of one Fetch: the window cutoff every message is
-// tested against, the dedup set shared across every file, the snapshot being
-// folded into, and the oldest in-window message seen so far — which is where the
-// rolling window opened. The dedup set has to span the whole walk, not one file,
-// because the same message can appear in two transcripts (see fold).
-type scan struct {
-	cutoff time.Time
-	seen   map[string]struct{}
-	snap   Snapshot
-	oldest time.Time
+// counted is one deduplicated in-scope message: when it happened, which session
+// spent it, and what it came to. The scan keeps these instead of summing as it
+// goes because which window a message belongs to is not known until the walk is
+// over — the window opens at a message, and which message that is only settles
+// once every file has been read.
+type counted struct {
+	ts         time.Time
+	session    string
+	input      int64
+	output     int64
+	cacheRead  int64
+	cacheWrite int64
+	cost       float64
 }
 
-func newScan(cutoff time.Time, source string) *scan {
-	return &scan{
-		cutoff: cutoff,
-		seen:   make(map[string]struct{}),
-		snap:   Snapshot{Since: cutoff, Source: source},
+// scan is the running state of one Fetch: the floor and the ceiling every message
+// is tested against, the dedup set shared across every file, and the messages kept
+// so far. The dedup set has to span the whole walk, not one file, because the same
+// message can appear in two transcripts (see fold).
+//
+// entries buffers every message in the whole floor..now range, not just the ones
+// that end up counted — which window a message falls in is not known until the
+// walk is over. That is one struct per assistant turn across a day plus a window,
+// paid once per poll and released with the scan.
+type scan struct {
+	cutoff  time.Time
+	now     time.Time
+	seen    map[string]struct{}
+	entries []counted
+}
+
+func newScan(cutoff, now time.Time) *scan {
+	return &scan{cutoff: cutoff, now: now, seen: make(map[string]struct{})}
+}
+
+// window is the window in progress at now. The chain starts at anchor — where the
+// caller last saw a window open — and steps forward: a message landing at or after
+// the running window's end opens the next one. With no anchor to continue from it
+// starts at the oldest message in hand, which is only a guess at where a window
+// opened, and is the reason an anchor is carried at all.
+//
+// It reports false once the chain's last window has closed with nothing after it:
+// the next window opens on the next message, and until that lands there is nothing
+// to count down to. A start the clock has not reached yet is refused as well: a
+// window that has not begun is not the one in progress, and counting down to its
+// end would report more time left than a window even is long.
+//
+// Anchoring on a message rather than on "now minus the window" is the whole
+// point. A sliding anchor drags the window's end along with the clock, so under
+// continuous use the reset is always a moment away: the countdown reads zero,
+// stays zero, and never runs a window down and starts the next one.
+func (sc *scan) window(now time.Time, length time.Duration, anchor time.Time) (start time.Time, open bool) {
+	sort.Slice(sc.entries, func(i, j int) bool { return sc.entries[i].ts.Before(sc.entries[j].ts) })
+	start = anchor
+	if start.IsZero() {
+		if len(sc.entries) == 0 {
+			return time.Time{}, false
+		}
+		start = sc.entries[0].ts
 	}
+	for _, e := range sc.entries {
+		if !e.ts.Before(start.Add(length)) {
+			start = e.ts
+		}
+	}
+	return start, !now.Before(start) && now.Before(start.Add(length))
+}
+
+// snapshot sums every message from since onward, totals and per-session alike. A
+// message before it belongs to a window that has already closed, and folding one
+// in would carry a finished window's spend into the current one — which is the
+// number the whole footer is read off.
+func (sc *scan) snapshot(since time.Time) Snapshot {
+	snap := Snapshot{Since: since, Source: "local"}
+	for _, e := range sc.entries {
+		if e.ts.Before(since) {
+			continue
+		}
+		snap.Input += e.input
+		snap.Output += e.output
+		snap.CacheRead += e.cacheRead
+		snap.CacheWrite += e.cacheWrite
+		snap.CostUSD += e.cost
+		if e.session == "" {
+			continue // a path we cannot attribute; it still counts toward the totals
+		}
+		if snap.Sessions == nil {
+			snap.Sessions = make(map[string]SessionUsage)
+		}
+		b := snap.Sessions[e.session]
+		b.Tokens += e.input + e.output + e.cacheRead + e.cacheWrite
+		b.CostUSD += e.cost
+		snap.Sessions[e.session] = b
+	}
+	return snap
 }
 
 // transcript folds one transcript file's in-window usage in, crediting it to
@@ -177,8 +319,8 @@ type transcriptEntry struct {
 	} `json:"message"`
 }
 
-// fold parses one line and, if it is an in-window assistant message not already
-// counted, adds its tokens and cost to the totals and to session's bucket.
+// fold parses one line and, if it is an in-scope assistant message not already
+// counted, keeps its tokens and cost for the window it lands in.
 //
 // Duplicate lines are keyed out by message id + request id, which matters more
 // than it looks: forking a session (--fork-session) replays the parent's turns
@@ -194,6 +336,13 @@ func (sc *scan) fold(line []byte, session string) {
 	if err != nil || ts.Before(sc.cutoff) {
 		return
 	}
+	if ts.After(sc.now) {
+		// A message stamped after now — a clock corrected backwards, a ~/.claude synced
+		// from a machine running ahead — cannot be placed in a window that has begun.
+		// Counted, it would open a window in the future and leave the countdown showing
+		// more time than a window is long.
+		return
+	}
 	if e.Message.ID != "" || e.RequestID != "" {
 		key := e.Message.ID + "|" + e.RequestID
 		if _, dup := sc.seen[key]; dup {
@@ -201,16 +350,7 @@ func (sc *scan) fold(line []byte, session string) {
 		}
 		sc.seen[key] = struct{}{}
 	}
-	if sc.oldest.IsZero() || ts.Before(sc.oldest) {
-		sc.oldest = ts
-	}
-
 	u := e.Message.Usage
-	sc.snap.Input += u.InputTokens
-	sc.snap.Output += u.OutputTokens
-	sc.snap.CacheRead += u.CacheReadInputTokens
-	sc.snap.CacheWrite += u.CacheCreationInputTokens
-
 	tu := tokenUsage{Uncached: u.InputTokens, Output: u.OutputTokens, CacheRead: u.CacheReadInputTokens}
 	if u.CacheCreation != nil {
 		tu.CacheWrite5m = u.CacheCreation.Ephemeral5m
@@ -220,19 +360,15 @@ func (sc *scan) fold(line []byte, session string) {
 		// common default, rather than dropping it.
 		tu.CacheWrite5m = u.CacheCreationInputTokens
 	}
-	cost := costUSD(e.Message.Model, tu)
-	sc.snap.CostUSD += cost
-
-	if session == "" {
-		return // a path we cannot attribute; it still counts toward the totals
-	}
-	if sc.snap.Sessions == nil {
-		sc.snap.Sessions = make(map[string]SessionUsage)
-	}
-	b := sc.snap.Sessions[session]
-	b.Tokens += u.InputTokens + u.OutputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
-	b.CostUSD += cost
-	sc.snap.Sessions[session] = b
+	sc.entries = append(sc.entries, counted{
+		ts:         ts,
+		session:    session,
+		input:      u.InputTokens,
+		output:     u.OutputTokens,
+		cacheRead:  u.CacheReadInputTokens,
+		cacheWrite: u.CacheCreationInputTokens,
+		cost:       costUSD(e.Message.Model, tu),
+	})
 }
 
 // claudeProjectsDir locates Claude Code's transcript root: $CLAUDE_CONFIG_DIR/projects
