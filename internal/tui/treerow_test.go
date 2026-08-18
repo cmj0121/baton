@@ -213,3 +213,62 @@ func TestClipMeasuresTheWayTheLayoutDoes(t *testing.T) {
 		t.Fatal("a zero budget renders nothing")
 	}
 }
+
+// TestPreviewIsOffByDefault: the tree carries the state, the directory and the
+// task the pane used to be the only place to see, so the pane earns its columns
+// while you are watching a fleet and spends them for nothing while you are
+// reorganising one.
+func TestPreviewIsOffByDefault(t *testing.T) {
+	m := baseModel()
+	if m.preview {
+		t.Fatal("the preview pane should start hidden")
+	}
+	m.mode, m.width, m.height = modeDashboard, 200, 40
+	m.fleet = []panel.Panel{{ID: "1", Title: "solo", State: panel.Running, Cwd: "/work"}}
+
+	// With the pane hidden the tree spends the whole width: a row reaches the task
+	// column, which it could not if 48 columns were going to a pane beside it.
+	wide := stripANSI(m.View())
+	m.preview = true
+	narrow := stripANSI(m.View())
+	if len(wide) == 0 || len(narrow) == 0 {
+		t.Fatal("both layouts should render")
+	}
+	if !strings.Contains(narrow, "state") {
+		t.Fatalf("the preview should show the selected panel's metadata, got:\n%s", narrow)
+	}
+	if strings.Contains(wide, "state") {
+		t.Fatalf("with the pane hidden nothing should draw its metadata block, got:\n%s", wide)
+	}
+}
+
+// TestPreviewToggleBinding: v flips the pane and the flip is persisted, so a
+// cockpit comes back the way it was left.
+func TestPreviewToggleBinding(t *testing.T) {
+	m := baseModel()
+	m.mode = modeDashboard
+	m = press(m, keyPreview)
+	if !m.preview {
+		t.Fatal("v should show the preview pane")
+	}
+	if !strings.Contains(m.status, "preview") {
+		t.Fatalf("the status should say what happened, got %q", m.status)
+	}
+	m = press(m, keyPreview)
+	if m.preview {
+		t.Fatal("v should hide it again")
+	}
+}
+
+// TestPreviewNotOfferedWhenItWouldCrampTheTree: two narrow panes tell you less
+// than one usable one.
+func TestPreviewNotOfferedWhenItWouldCrampTheTree(t *testing.T) {
+	m := baseModel()
+	m.mode, m.preview, m.height = modeDashboard, true, 40
+	m.fleet = []panel.Panel{{ID: "1", Title: "solo", State: panel.Running}}
+
+	m.width = 80 // 80 - chrome - 48 leaves the tree under previewMinTree
+	if strings.Contains(stripANSI(m.View()), "state") {
+		t.Fatal("a narrow terminal should keep the whole width for the tree")
+	}
+}

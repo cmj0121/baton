@@ -504,6 +504,7 @@ func (m model) applyPrefs(p prefs) model {
 	m.mouseEnabled = p.mouseEnabled
 	m.usageMode = p.usageMode
 	m.keycast = p.keycast
+	m.preview = p.preview
 	m.shellPath = p.shellPath
 	m.workdir = p.workdir
 	m.defaultAgent = p.defaultAgent
@@ -2362,6 +2363,13 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		m.keycast = !m.keycast
 		m.keycastKey, m.keycastAct = "", "" // never leave the last key stranded on the bar
 		m.status = "keycast: " + onOff(m.keycast)
+		if err := m.saveConfig(); err != nil {
+			m.status = "toggled, but save failed: " + err.Error()
+		}
+		return m, nil
+	case actPreviewToggle:
+		m.preview = !m.preview
+		m.status = "preview: " + onOff(m.preview)
 		if err := m.saveConfig(); err != nil {
 			m.status = "toggled, but save failed: " + err.Error()
 		}

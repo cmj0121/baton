@@ -40,6 +40,7 @@ const (
 	keyQueue       = "Q" // open the task-queue manager popup (shift+q; C-t Q in a zoom)
 	keyUsage       = "U" // toggle the account usage/cost footer segment (shift+u)
 	keyKeycast     = "K" // toggle the key-press readout in the footer (shift+k; the sibling of U)
+	keyPreview     = "v" // toggle the dashboard's detail pane beside the tree
 	keyHelp        = "?" // view the key list for the current view
 	keyEditMap     = "k" // edit the key map (prefix only: C-t k)
 	keyPanelConfig = "P" // shift+p
@@ -113,6 +114,7 @@ const (
 	actHelp
 	actUsageToggle
 	actKeycastToggle
+	actPreviewToggle
 	actPanelConfig
 	actRestart
 	actReload
@@ -200,6 +202,7 @@ var bindings = []binding{
 	{"help", keyHelp, "view the keys for this view", actHelp, "View"},
 	{"usage-footer", keyUsage, "cycle the usage footer: off, window, focused panel", actUsageToggle, "View"},
 	{"keycast", keyKeycast, "toggle the key-press readout in the footer", actKeycastToggle, "View"},
+	{"preview", keyPreview, "toggle the detail pane beside the dashboard tree", actPreviewToggle, "View"},
 	{"key-map", keyEditMap, "edit the key map (prefix)", actEditMap, "View"},
 	{"panel-config", keyPanelConfig, "configure panel defaults (prefix)", actPanelConfig, "View"},
 	{"scroll", keyScroll, "scroll mode — line / page (prefix)", actScroll, "View"},
@@ -232,6 +235,7 @@ type prefs struct {
 	mouseEnabled      bool      // mouse reporting (wheel scroll + selection); default off
 	usageMode         usageMode // which account usage/cost view the footer shows; default the window view
 	keycast           bool      // show the key-press readout in the footer; default off
+	preview           bool      // show the detail pane beside the dashboard tree; default off
 	shellPath         string
 	workdir           string                         // default working directory for new panels ("" = home)
 	defaultAgent      string                         // agent profile the new-agent action spawns
@@ -311,6 +315,9 @@ func prefsFromConfig(cfg config.Config) prefs {
 	if cfg.Settings.Keycast != nil {
 		p.keycast = *cfg.Settings.Keycast
 	}
+	if cfg.Settings.DashboardPreview != nil {
+		p.preview = *cfg.Settings.DashboardPreview
+	}
 	p.shellPath = cfg.Panel.Shell
 	p.workdir = cfg.Panel.Workdir
 	p.defaultAgent = cfg.Panel.DefaultAgent
@@ -365,6 +372,7 @@ func (m model) saveConfig() error {
 	mouseEnabled := m.mouseEnabled
 	usageFooter := m.usageMode != usageOff
 	keycast := m.keycast
+	preview := m.preview
 
 	// Start from the current on-disk config so sections the cockpit does not own —
 	// the queue caps and the usage source/interval, both hand-edited in this same
@@ -384,6 +392,7 @@ func (m model) saveConfig() error {
 	out.Settings.UsageFooter = &usageFooter // kept in step so an older cockpit reading this file still hides an off segment
 	out.Settings.UsageMode = m.usageMode.String()
 	out.Settings.Keycast = &keycast
+	out.Settings.DashboardPreview = &preview
 	out.Settings.Language = string(m.effLang())
 	out.Panel.Shell = m.shellPath
 	out.Panel.Workdir = m.workdir
