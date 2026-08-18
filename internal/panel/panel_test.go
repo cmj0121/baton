@@ -19,6 +19,8 @@ func TestStateString(t *testing.T) {
 		Idle:      "idle",
 		Attention: "attention",
 		Exited:    "exited",
+		Done:      "done",
+		Stuck:     "stuck",
 		State(99): "unknown",
 	}
 	for s, want := range cases {
@@ -39,6 +41,10 @@ func TestParseKind(t *testing.T) {
 	}
 }
 
+// TestParseState covers every wire string, and the deliberate default: a state
+// this build does not know maps to Idle, so an older cockpit reading a newer
+// daemon under-claims ("nothing is known to be happening") instead of lying
+// ("work is happening").
 func TestParseState(t *testing.T) {
 	cases := map[string]State{
 		"spawning":  Spawning,
@@ -46,8 +52,10 @@ func TestParseState(t *testing.T) {
 		"attention": Attention,
 		"exited":    Exited,
 		"running":   Running,
-		"":          Running, // default
-		"bogus":     Running, // default
+		"done":      Done,
+		"stuck":     Stuck,
+		"":          Idle, // default
+		"bogus":     Idle, // a state from a newer daemon
 	}
 	for s, want := range cases {
 		if got := ParseState(s); got != want {
@@ -63,7 +71,8 @@ func TestIsAgent(t *testing.T) {
 }
 
 func TestProtoRoundTrip(t *testing.T) {
-	p := Panel{ID: "7", Kind: Agent, Title: "claude", State: Attention, Group: "auth", Activity: "needs you", Spark: "▂▃▅▇▆▃▁"}
+	p := Panel{ID: "7", Kind: Agent, Title: "claude", State: Attention, Group: "auth", Activity: "needs you", Spark: "▂▃▅▇▆▃▁",
+		ExitCode: 130, Reason: "which migration should I apply?"}
 	got := FromProto(p.ToProto())
 	if got != p {
 		t.Fatalf("round-trip mismatch:\n got %+v\nwant %+v", got, p)
