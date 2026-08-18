@@ -2987,9 +2987,9 @@ func (s *Server) openEphemeral(cc *clientConn, targetID, label string, resolve e
 		return err
 	}
 
-	// Resolve the effective workdir exactly as a spawn would (empty → home), then
-	// let the caller resolve the command (and its git-specific gates) against it.
-	dir := ptymgr.PanelDir(spec.Dir)
+	// Resolve the workdir the same way every other target does: where the agent is
+	// now when that is known, else where it was launched.
+	dir := s.targetDir(targetID, spec.Spec)
 	name, args, env, err := resolve(dir)
 	if err != nil {
 		log.Warn().Str("target", targetID).Str("dir", dir).Str("action", label).Err(err).Msg("ephemeral rejected")
@@ -3104,7 +3104,7 @@ func (s *Server) gitWorktreeAdd(targetID, branch string) error {
 	base := s.worktreeDir
 	s.mu.Unlock()
 
-	repo := ptymgr.PanelDir(spec.Dir)
+	repo := s.targetDir(targetID, spec.Spec)
 	if !gitdiff.IsWorkTree(repo) {
 		return fmt.Errorf("not a git repository: %s", repo)
 	}
@@ -3137,7 +3137,7 @@ func (s *Server) gitWorktreeRemove(targetID, path string) error {
 	if err != nil {
 		return err
 	}
-	repo := ptymgr.PanelDir(spec.Dir)
+	repo := s.targetDir(targetID, spec.Spec)
 	if err := gitops.WorktreeRemove(repo, path); err != nil {
 		return err
 	}

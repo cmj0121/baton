@@ -314,3 +314,21 @@ func TestPanelCwdUnknownPanel(t *testing.T) {
 		t.Fatalf("panelCwd of an unknown panel = %q", got)
 	}
 }
+
+// TestEveryGitTargetFollowsTheAgent: the git menu resolves its directory in five
+// places — the per-file diff, a captured op, an op opened in a pane, and the two
+// worktree ops. A menu where "log" follows the agent into a worktree but "commit"
+// does not is worse than one that follows nowhere, so this pins that none of them
+// is left behind.
+func TestEveryGitTargetFollowsTheAgent(t *testing.T) {
+	src, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(src), "ptymgr.PanelDir(spec.Dir)"); n != 0 {
+		t.Errorf("%d git target(s) still resolve the spawn directory directly", n)
+	}
+	if n := strings.Count(string(src), "s.targetDir(targetID, spec.Spec)"); n != 5 {
+		t.Errorf("%d targets resolve through targetDir, want all 5", n)
+	}
+}
