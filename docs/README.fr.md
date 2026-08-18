@@ -99,6 +99,7 @@ touches.
 | Où              | Touche            | Action                                                          |
 | --------------- | ----------------- | --------------------------------------------------------------- |
 | Après `C-t`     | `d` / `b`         | aller au tableau de bord / revenir d'un niveau                  |
+|                 | `a`               | la boîte d'attention — traiter ce qui réclame un humain         |
 |                 | `[`               | entrer en mode défilement                                       |
 |                 | `R` / `S`         | recharger la config / forcer le redémarrage du serveur          |
 |                 | `q`               | se détacher (le serveur continue de tourner)                    |
@@ -207,6 +208,8 @@ la flotte, ajouter vos propres commandes et définir la config — le tout à tr
 
 - **[docs/SPEC.md](SPEC.md)** — la spécification complète : les vues, le cycle de vie d'un panneau, les éléments de
   travail, les signaux, le diff, la persistance, la référence des touches vue par vue et le diagramme d'architecture.
+- **[docs/ATTENTION.md](ATTENTION.md)** — l'attention à grande échelle : l'échelle du silence (`done`, `stuck`,
+  failed), la boîte `C-t a`, les deux repliements du tableau de bord, les notifications de bureau et tous leurs réglages.
 - **[docs/TUI.md](TUI.md)** — le fichier d'apparence du cockpit (`$HOME/.baton/TUI.yaml`) : le thème de couleurs et les
   dispositions de la vue divisée des groupes (préréglages et grilles personnalisées).
 - **[docs/LIMITS.md](LIMITS.md)** — les limites de ressources : la config, les deux couches, le rechargement à chaud et où
