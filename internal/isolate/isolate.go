@@ -24,6 +24,7 @@ package isolate
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -107,16 +108,36 @@ type Policy struct {
 	Network  Network
 	EnvAllow []string
 	User     string // "" = the host's own uid:gid; "root" or "1000:1000" to override
+
+	// Invalid, when set, is why this policy could not be read from the config —
+	// an unknown runtime, a missing image, a mount policy baton does not offer.
+	//
+	// It is CARRIED rather than dropped, and that is the whole point of the field.
+	// baton's other policies degrade forgivingly: a malformed restart block simply
+	// restarts nothing, a bad track-cwd falls back to the default. Isolation cannot
+	// do that, because its fallback is a panel running unconfined on the host —
+	// which is precisely the outcome the user was writing config to prevent. So a
+	// policy that cannot be understood stays enabled and fails the spawn with the
+	// reason, rather than quietly becoming no policy at all.
+	Invalid string
 }
 
-// Enabled reports whether this policy actually confines anything.
-func (p Policy) Enabled() bool { return p.Mode != "" && p.Mode != ModeNone }
+// Enabled reports whether this policy is meant to confine something — including
+// a policy that is broken, which must keep failing spawns rather than falling
+// back to an unisolated panel. Use Validate to find out whether it can actually
+// run.
+func (p Policy) Enabled() bool {
+	return p.Invalid != "" || (p.Mode != "" && p.Mode != ModeNone)
+}
 
 // Validate rejects a policy the runtime could not act on, naming the config key
 // the way the user spelled it. It is called when the config loads, so a profile
-// that could never spawn is a startup error rather than a surprise at the moment
-// somebody presses A.
+// that could never spawn is reported at startup rather than at the moment
+// somebody presses A — and again at the spawn, which is what refuses to run.
 func (p Policy) Validate() error {
+	if p.Invalid != "" {
+		return errors.New(p.Invalid)
+	}
 	if !p.Enabled() {
 		return nil
 	}

@@ -397,3 +397,20 @@ func mustWrap(t *testing.T, p Policy, spec ptymgr.Spec, caps ...limits.Limits) p
 	}
 	return out
 }
+
+// TestInvalidStaysEnabled guards the one asymmetry in this package: a policy the
+// config could not read must keep failing spawns, because falling back means an
+// unconfined panel — the outcome the setting existed to prevent.
+func TestInvalidStaysEnabled(t *testing.T) {
+	p := Policy{Invalid: `isolate "dockerr" is not a runtime baton offers`}
+	if !p.Enabled() {
+		t.Fatal("a broken policy must stay enabled")
+	}
+	err := p.Validate()
+	if err == nil || !strings.Contains(err.Error(), "dockerr") {
+		t.Fatalf("Validate must report the config's own reason, got %v", err)
+	}
+	if _, err := p.Wrap("baton-1", ptymgr.Spec{Command: "claude", Dir: t.TempDir()}, limits.Limits{}); err == nil {
+		t.Fatal("Wrap must refuse a poisoned policy rather than fall through to the host")
+	}
+}

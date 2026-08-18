@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/cmj0121/baton/internal/cwd"
+	"github.com/cmj0121/baton/internal/isolate"
 	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/restart"
@@ -514,6 +515,94 @@ type AgentProfile struct {
 	// rather than "wedged" is a property of the agent, and no fleet-wide number
 	// can be right for both a one-shot `--print` run and an interactive session.
 	Attention AttentionConfig `yaml:",inline"`
+
+	// Isolate runs this profile's panels inside a container: "none" (the default)
+	// or "docker". It is per profile and never fleet-wide, unlike the caps and the
+	// restart policy, because an isolated panel needs an IMAGE that has the right
+	// toolchain — and there is no image that is right for every agent you run.
+	Isolate string `yaml:"isolate,omitempty"`
+
+	// Image is the container image the panel runs in. baton ships none: naming one
+	// would mean owning a toolchain matrix it cannot maintain, so the user names an
+	// image that has what their project needs. Required whenever Isolate runs.
+	Image string `yaml:"image,omitempty"`
+
+	// Mount is how much of the filesystem crosses: "workspace" (the default — the
+	// panel's working directory and nothing else) or "workspace+home", which an
+	// agent CLI that authenticates through a file under $HOME needs to start.
+	Mount string `yaml:"mount,omitempty"`
+
+	// Network is what the container may reach: "host" (the default), "bridge", or
+	// "none".
+	Network string `yaml:"network,omitempty"`
+
+	// EnvAllow names the environment variables that cross into the container.
+	// Nothing else does — there is no blanket inheritance, which is the difference
+	// between an isolated panel and a panel that merely runs somewhere else.
+	EnvAllow []string `yaml:"env-allow,omitempty"`
+
+	// User is who the container runs as. Empty means the host's own uid:gid, so an
+	// agent cannot leave root-owned files in the tree it was given; "root" or an
+	// explicit "1000:1000" overrides that for an image that needs it.
+	User string `yaml:"user,omitempty"`
+}
+
+// Isolation is the parsed isolation policy, and an error naming anything the file
+// got wrong.
+//
+// It breaks the "report and drop" discipline the restart and cwd settings follow,
+// on purpose. Dropping a malformed isolation policy would spawn the panel on the
+// host, unconfined — the exact outcome the user wrote the setting to prevent —
+// so a profile that MEANT to isolate and could not be understood carries the
+// reason instead, and every spawn of it fails with that reason until the file is
+// fixed. Keys set on a profile that never asked to isolate are inert, and are
+// reported without poisoning anything: nothing was going to be confined there.
+func (a AgentProfile) Isolation() (isolate.Policy, error) {
+	p := isolate.Policy{
+		Image:    strings.TrimSpace(a.Image),
+		EnvAllow: a.EnvAllow,
+		User:     strings.TrimSpace(a.User),
+	}
+	var err error
+
+	intended := false
+	if s := strings.TrimSpace(a.Isolate); s != "" && !strings.EqualFold(s, string(isolate.ModeNone)) {
+		// Anything other than a bare "none" is an intent to isolate, INCLUDING a
+		// value baton cannot parse — so a typo cannot fall through to no isolation.
+		intended = true
+		if mode, ok := isolate.ParseMode(s); !ok {
+			err = errors.Join(err, fmt.Errorf("isolate %q is not a runtime baton offers (none, docker)", s))
+		} else {
+			p.Mode = mode
+		}
+	}
+	if s := strings.TrimSpace(a.Mount); s != "" {
+		m, ok := isolate.ParseMount(s)
+		if !ok {
+			err = errors.Join(err, fmt.Errorf("mount %q is not one of workspace, workspace+home", s))
+		}
+		p.Mount = m
+	}
+	if s := strings.TrimSpace(a.Network); s != "" {
+		n, ok := isolate.ParseNetwork(s)
+		if !ok {
+			err = errors.Join(err, fmt.Errorf("network %q is not one of host, bridge, none", s))
+		}
+		p.Network = n
+	}
+	if intended {
+		err = errors.Join(err, p.Validate()) // a missing image is a config error, not a spawn-time surprise
+		if err != nil {
+			p.Invalid = err.Error()
+		}
+		return p, err
+	}
+	// Not isolating: the rest of the keys do nothing, which is worth saying out
+	// loud because it looks exactly like a setting that is in force.
+	if p.Image != "" || p.Mount != "" || p.Network != "" || p.User != "" || len(p.EnvAllow) > 0 {
+		err = errors.Join(err, errors.New("image/mount/network/user/env-allow do nothing without isolate"))
+	}
+	return isolate.Policy{}, err
 }
 
 // Load reads the config file. A missing file yields an empty Config and no
