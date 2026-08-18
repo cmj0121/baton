@@ -273,3 +273,53 @@ func TestProfileReachesTheCockpit(t *testing.T) {
 		t.Fatalf("…and encode back onto it, got %q", p.ToProto().Profile)
 	}
 }
+
+// TestLensRefusesTheMutationsThatLookLikeViews covers the two verbs that are easy
+// to miss when scoping a projection, because neither reads like a reorganisation.
+//
+// Favouriting a BUCKET would send group.favourite naming a group the server does
+// not have, and the flag would then sit in its state for a "group" called
+// `attention` for good. Reordering under a lens would write the lens's own
+// ordering back into the fleet as a permanent one, still there after the lens was
+// switched off.
+func TestLensRefusesTheMutationsThatLookLikeViews(t *testing.T) {
+	c, cmds := recordingServer(t)
+	m := lensModel()
+	m.client = c
+	m.mode, m.lens = modeDashboard, lensState
+
+	m.cursorOnGroup(t, "running") // a bucket, not a work item
+	m = press(m, keyFavourite)
+	if !strings.Contains(m.status, "is a view, not a work item") {
+		t.Errorf("favouriting a bucket should be refused, got %q", m.status)
+	}
+	if len(m.favGroups) != 0 {
+		t.Errorf("no bucket should be recorded as a favourite, got %v", m.favGroups)
+	}
+
+	m = press(m, "shift+down")
+	if !strings.Contains(m.status, "is a view, not a work item") {
+		t.Errorf("reordering under a lens should be refused, got %q", m.status)
+	}
+
+	select {
+	case cmd := <-cmds:
+		t.Fatalf("a refused verb must send nothing, got %+v", cmd)
+	default:
+	}
+}
+
+// TestLensStillFavouritesAPanel: a panel is a panel under any lens, so the one
+// mutation that means the same thing everywhere is still allowed.
+func TestLensStillFavouritesAPanel(t *testing.T) {
+	c, cmds := recordingServer(t)
+	m := lensModel()
+	m.client = c
+	m.mode, m.lens = modeDashboard, lensProfile
+	m.cursorOnPanel(t, "1")
+
+	m = press(m, keyFavourite)
+	if got := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "panel.favourite" }); got.ID != "1" {
+		t.Fatalf("favouriting a panel should still work under a lens, got %+v", got)
+	}
+}

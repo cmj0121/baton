@@ -700,6 +700,14 @@ func (m model) toggleFavourite() model {
 		return m
 	}
 	if it.kind == itemGroup {
+		// A lens BUCKET is not a group the server has, so favouriting one would send
+		// group.favourite naming something that does not exist — and the flag would
+		// then sit in the server's state for a "group" called `attention` for good.
+		// Favouriting a PANEL is fine under any lens: a panel is a panel.
+		if why := m.lensRefusal(); why != "" {
+			m.status = why
+			return m
+		}
 		fav := !m.favGroups[it.name]
 		if m.favGroups == nil {
 			m.favGroups = map[string]bool{}

@@ -1373,12 +1373,25 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+up", "shift+left":
 		// Reorder the selected item earlier on the dashboard (no effect in the
 		// single-column overlays, which are not user-orderable).
+		//
+		// Refused under a lens, like every other verb that changes the fleet's shape:
+		// the rows are in the LENS's order, so a move computed from them would write
+		// "sorted by state" back into the fleet as a permanent ordering nobody asked
+		// for, and it would still be there when the lens was switched off.
 		if m.mode == modeDashboard {
+			if why := m.lensRefusal(); why != "" {
+				m.status = why
+				return m, nil
+			}
 			return m.reorderDashItem(-1), nil
 		}
 		return m, nil
 	case "shift+down", "shift+right":
 		if m.mode == modeDashboard {
+			if why := m.lensRefusal(); why != "" {
+				m.status = why
+				return m, nil
+			}
 			return m.reorderDashItem(1), nil
 		}
 		return m, nil
