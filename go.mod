@@ -10,6 +10,7 @@ require (
 	github.com/charmbracelet/x/vt v0.0.0-20260615092313-b57e5e6d29bb
 	github.com/creack/pty v1.1.24
 	github.com/mattn/go-runewidth v0.0.23
+	github.com/muesli/termenv v0.16.0
 	github.com/rs/zerolog v1.35.1
 	github.com/shirou/gopsutil/v4 v4.26.5
 	github.com/yuin/gopher-lua v1.1.2
@@ -38,7 +39,6 @@ require (
 	github.com/mattn/go-localereader v0.0.1 // indirect
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
-	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
