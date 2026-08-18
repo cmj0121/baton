@@ -216,3 +216,97 @@ func (m model) floatFavourites(level []dashItem) []dashItem {
 // the expansion default's — collapsing is for saying "I am done with this work
 // item for now", which is a decision, not a starting position.
 func (m model) groupExpanded(path string) bool { return !m.collapsed[path] }
+
+// --- walking the tree ---------------------------------------------------------
+
+// expandSelected is what → does: open what the cursor is on, or step into it.
+//
+// The three cases are the three kinds of row. A quiet fold opens — it was the only
+// row with something inside it before the tree existed, and → has opened it since.
+// A shut work item opens. An OPEN work item has nothing left to open, so → descends
+// to its first child instead, which is how a tree is walked everywhere else.
+//
+// On a panel it does nothing rather than moving the cursor. A panel is a leaf, and
+// a key that silently walks off it would make → mean "down" on most of the rows in
+// a fleet.
+func (m model) expandSelected() model {
+	it, ok := m.selectedItem()
+	if !ok {
+		return m
+	}
+	switch {
+	case it.kind == itemFold:
+		return m.toggleFold()
+	case it.kind == itemGroup && !it.expanded:
+		return m.setCollapsed(it, false)
+	case it.kind == itemGroup:
+		m.cursorToFirstChild(it)
+		return m
+	}
+	return m
+}
+
+// collapseSelected is what ← does: shut what the cursor is on, or step out of it.
+//
+// An open work item shuts. Anything else — a panel, a shut group, a fold row —
+// jumps to the row that CONTAINS it, so ← walks back up the tree the way → walked
+// down it. That pairing is the whole reason ← is not simply "shut this": from deep
+// inside a work item, the useful meaning of "back" is the parent, not nothing.
+func (m model) collapseSelected() model {
+	it, ok := m.selectedItem()
+	if !ok {
+		return m
+	}
+	if it.kind == itemGroup && it.expanded {
+		return m.setCollapsed(it, true)
+	}
+	m.cursorToParent(it)
+	return m
+}
+
+// setCollapsed opens or shuts one work item and keeps the cursor on it.
+//
+// The re-anchor matters in the closing direction: shutting a group removes every
+// row beneath it, so an index that pointed into those rows now points at something
+// else or past the end. cursorToItem lands it back on the group by identity, which
+// is where the rows it just swallowed now live.
+func (m model) setCollapsed(it dashItem, shut bool) model {
+	if m.collapsed == nil {
+		m.collapsed = map[string]bool{}
+	}
+	if shut {
+		m.collapsed[it.name] = true
+		m.status = "collapsed " + it.name
+	} else {
+		delete(m.collapsed, it.name)
+		m.status = "expanded " + it.name
+	}
+	m.cursorToItem(it)
+	m.clampCursor()
+	return m
+}
+
+// cursorToFirstChild moves onto the first row nested directly inside a group. A
+// group with nothing under it leaves the cursor put, which is the honest answer.
+func (m *model) cursorToFirstChild(it dashItem) {
+	for i, row := range m.dashItems() {
+		if row.parent == it.name && row.depth == it.depth+1 {
+			m.cursor = i
+			return
+		}
+	}
+}
+
+// cursorToParent moves onto the group row that contains the cursor's row. A
+// top-level row has no parent and leaves the cursor put.
+func (m *model) cursorToParent(it dashItem) {
+	if it.parent == "" {
+		return
+	}
+	for i, row := range m.dashItems() {
+		if row.kind == itemGroup && row.name == it.parent {
+			m.cursor = i
+			return
+		}
+	}
+}

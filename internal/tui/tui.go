@@ -1339,17 +1339,18 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.move(m.cols())
 		return m, nil
 	case "left", "h":
+		// ← and → walk the dashboard tree: out and in. They used to move the cursor
+		// one card left or right, which only ever meant anything in the multi-column
+		// card grid — and that is gone, so the pair is free for the job every other
+		// tree in every other program already uses it for.
+		if m.mode == modeDashboard {
+			return m.collapseSelected(), nil
+		}
 		m.move(-1)
 		return m, nil
 	case "right", "l":
-		// → opens the quiet row where it would otherwise step past it: the row is the
-		// only dashboard item with something INSIDE it, and → is how every tree in
-		// this cockpit descends. It closes it again for symmetry, so the key that
-		// opened it is the key that undoes it.
 		if m.mode == modeDashboard {
-			if it, ok := m.selectedItem(); ok && it.kind == itemFold {
-				return m.toggleFold(), nil
-			}
+			return m.expandSelected(), nil
 		}
 		m.move(1)
 		return m, nil
