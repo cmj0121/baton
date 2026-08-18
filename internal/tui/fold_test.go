@@ -140,9 +140,18 @@ func TestGroupNeedCountFoldsTheSubtree(t *testing.T) {
 	})
 	assertNeedMatchesInbox(t, m)
 
-	items := m.dashItems()
-	if len(items) != 1 || items[0].need != 2 {
-		t.Fatalf("expected one backend item needing 2, got %+v", items)
+	// The tree draws the sub-groups too, so the assertion is about the backend ROW
+	// rather than about the dashboard having exactly one of them: its need must
+	// still fold the whole subtree, because a panel asking for help two levels down
+	// is work inside this item however many rows now stand between them.
+	var backend dashItem
+	for _, it := range m.dashItems() {
+		if it.kind == itemGroup && it.name == "backend" {
+			backend = it
+		}
+	}
+	if backend.kind != itemGroup || backend.need != 2 {
+		t.Fatalf("expected the backend row to need 2, got %+v", backend)
 	}
 }
 

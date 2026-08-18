@@ -28,17 +28,26 @@ func TestFilterNarrows(t *testing.T) {
 		t.Fatalf("case-insensitive title match failed, got %v", titles(m.dashItems()))
 	}
 
-	// The group name matches.
+	// The group name matches: the row and everything under it survive, because a
+	// filter naming a work item means that work item.
 	m.filter = "infra"
-	if items := m.dashItems(); len(items) != 1 || items[0].kind != itemGroup {
-		t.Fatalf("group-name match should surface the group, got %v", titles(m.dashItems()))
+	items := m.dashItems()
+	if len(items) != 3 || items[0].kind != itemGroup || items[0].name != "infra" {
+		t.Fatalf("group-name match should surface the group and its panels, got %v", titles(items))
 	}
 
-	// A member title surfaces the whole group.
+	// A member title surfaces that member UNDER its group, so the hit is shown
+	// where it lives rather than as a card standing in for it.
 	m.filter = "redis"
-	items := m.dashItems()
-	if len(items) != 1 || items[0].kind != itemGroup || len(items[0].members) != 2 {
-		t.Fatalf("member match should surface the whole group intact, got %v", titles(items))
+	items = m.dashItems()
+	if len(items) != 2 || items[0].kind != itemGroup || items[1].panel.Title != "redis" {
+		t.Fatalf("member match should surface the member under its group, got %v", titles(items))
+	}
+	// …and the group still OWNS its whole subtree. A filter narrows what is drawn
+	// and never what a bulk verb reaches, or `w` on this row would close one panel
+	// filtered and two unfiltered.
+	if len(items[0].members) != 2 || len(items[0].ids()) != 2 {
+		t.Fatalf("a filtered group row must keep its whole subtree, got %d members", len(items[0].members))
 	}
 
 	// No match yields an empty list (the dashboard renders the empty-state note).
@@ -47,10 +56,10 @@ func TestFilterNarrows(t *testing.T) {
 		t.Fatalf("a non-matching filter should hide everything, got %v", titles(items))
 	}
 
-	// An empty filter shows the whole fleet.
+	// An empty filter shows the whole fleet: two lone panels and the infra group.
 	m.filter = ""
-	if items := m.dashItems(); len(items) != 3 {
-		t.Fatalf("an empty filter should show every item, got %v", titles(items))
+	if got := m.topLevel(); len(got) != 3 {
+		t.Fatalf("an empty filter should show every item, got %v", got)
 	}
 }
 
@@ -68,7 +77,7 @@ func TestFilterLiveTyping(t *testing.T) {
 		m = next.(model)
 	}
 	type_("w")
-	if m.filter != "w" || len(m.dashItems()) != 1 {
+	if m.filter != "w" || len(m.topLevel()) != 1 {
 		t.Fatalf("typing should filter live, filter=%q items=%v", m.filter, titles(m.dashItems()))
 	}
 
@@ -78,8 +87,8 @@ func TestFilterLiveTyping(t *testing.T) {
 	if m.filter != "" || m.input != inputNone {
 		t.Fatalf("esc should clear the filter and close the overlay, filter=%q input=%v", m.filter, m.input)
 	}
-	if len(m.dashItems()) != 3 {
-		t.Fatalf("clearing the filter should restore the fleet, got %v", titles(m.dashItems()))
+	if got := m.topLevel(); len(got) != 3 {
+		t.Fatalf("clearing the filter should restore the fleet, got %v", got)
 	}
 }
 

@@ -378,11 +378,13 @@ type model struct {
 	inboxDone      bool          // settings.inbox-done: does a finished agent join the queue at all
 	inboxSnooze    time.Duration // settings.inbox-snooze: how long `-` defers a row
 
-	// The dashboard's quiet fold (settings.fold-quiet). See foldQuietItems.
+	// The dashboard's quiet fold (settings.fold-quiet). See foldQuietLevel.
 	//
 	// foldQuiet is the threshold: more quiet panels than this and they collapse
-	// into one expandable row; 0 never folds. foldExpanded is that row's state,
-	// and one flag is enough because there is at most one such row.
+	// into one expandable row; 0 never folds. foldOpen is those rows' state, keyed
+	// by the group path each fold sits in ("" at the top level) — the tree folds
+	// each LEVEL separately, so a crowded work item tidies itself without the top
+	// level having to know, and one flag is no longer enough.
 	//
 	// foldKeepID is the panel the fold may not swallow: the one the cursor rested
 	// on before the last snapshot refolded the fleet. It has to be an identity
@@ -398,9 +400,20 @@ type model struct {
 	// keeping a card it would otherwise have lost, until the first snapshot after
 	// you come back; the alternative is a second capture in a view where the
 	// dashboard cursor is not being looked at anyway.
-	foldQuiet    int
-	foldExpanded bool
-	foldKeepID   string
+	foldQuiet  int
+	foldOpen   map[string]bool
+	foldKeepID string
+
+	// collapsed records the group rows a person has explicitly SHUT, keyed by group
+	// path. Groups are expanded by default — a tree that opened closed would show
+	// fewer panels than the card grid it replaced — so this is the exception list
+	// rather than the state.
+	//
+	// It is session-lived on purpose. A collapse that survived a restart would hide
+	// panels for a reason nobody remembers, which is the failure the quiet fold is
+	// careful to avoid by being visibly a fold; a collapsed group after a restart
+	// would just look like a fleet that lost something.
+	collapsed map[string]bool
 
 	// OSC 9 desktop notifications (settings.notify, settings.notify-coalesce).
 	// See notify.go.
@@ -1372,7 +1385,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// esc unwinds the dashboard one layer at a time, innermost first: the quiet
 		// row folds back up before an applied filter is cleared, so escaping out of
 		// an expanded fold does not also throw away the search that got you there.
-		if m.mode == modeDashboard && m.foldExpanded && m.foldRowShowing() {
+		if m.mode == modeDashboard && m.anyFoldOpen() && m.foldRowShowing() {
 			return m.toggleFold(), nil
 		}
 		if m.mode == modeDashboard && m.filter != "" { // esc on the dashboard clears an applied filter first
@@ -2992,12 +3005,17 @@ func (m *model) clampCursor() {
 // nothing is selected.
 func (m model) selectedKey() (kind dashKind, id, group string, ok bool) {
 	it, ok := m.selectedItem()
-	// The quiet fold row has no identity to capture: it is not a panel and not a
-	// group, and it exists only for as long as the fold does. Reporting one would
-	// hand restoreCursor a key that can never match, which is exactly what ok=false
-	// already means — and it keeps foldKeepID from pinning a panel nobody selected.
-	if !ok || it.kind == itemFold {
+	if !ok {
 		return itemPanel, "", "", false
+	}
+	// A quiet fold row is identified by the LEVEL it folds — the group path it sits
+	// in. It used to report no identity at all, on the grounds that there was one
+	// fold row and it existed only while the fold did; with a fold per level that
+	// answer costs the cursor its place every time a snapshot lands while you are
+	// on one, which at fifty panels is most of them. The group is empty at the top
+	// level, which is a real identity here and not a missing one.
+	if it.kind == itemFold {
+		return itemFold, "", it.parent, true
 	}
 	if it.kind == itemGroup {
 		return itemGroup, "", it.name, true
@@ -3015,6 +3033,8 @@ func (m *model) restoreCursor(kind dashKind, id, group string, had bool) {
 	// panel that just went idle under the cursor is not folded away in the same
 	// frame that the cursor is asked to find it again. This is the one place the
 	// pre-change identity exists; everywhere else it has already been overwritten.
+	// It is empty for a group or a fold row, which pins nothing — the right answer,
+	// since neither is a panel the fold could swallow.
 	m.foldKeepID = id
 	if !had {
 		m.clampCursor()
@@ -3024,6 +3044,9 @@ func (m *model) restoreCursor(kind dashKind, id, group string, had bool) {
 	for i, it := range items {
 		switch {
 		case kind == itemGroup && it.kind == itemGroup && it.name == group:
+			m.cursor = i
+			return
+		case kind == itemFold && it.kind == itemFold && it.parent == group:
 			m.cursor = i
 			return
 		case kind == itemPanel && it.kind == itemPanel && it.panel.ID == id:
@@ -3537,7 +3560,7 @@ func (m model) renderTree(items []dashItem, start, end, visible int) string {
 		var glyph, label, need string
 		switch it.kind {
 		case itemFold:
-			glyph = lipgloss.NewStyle().Foreground(states[panel.Idle].color).Render(m.foldGlyph())
+			glyph = lipgloss.NewStyle().Foreground(states[panel.Idle].color).Render(m.foldGlyph(it.parent))
 			label = it.title()
 		case itemGroup:
 			info := states[groupState(it.members)]

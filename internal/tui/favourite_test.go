@@ -29,7 +29,7 @@ func TestFavPanelSendsCmd(t *testing.T) {
 	m := baseModel()
 	m.client = c
 	m.fleet = groupedFleet()
-	m.cursor = 1 // the lone shell, panel id "2"
+	m.cursorOnPanel(t, "2") // the lone shell
 	if it, _ := m.selectedItem(); it.kind != itemPanel || it.panel.ID != "2" {
 		t.Fatalf("setup: cursor should rest on the lone shell 2, got %+v", it)
 	}
@@ -73,7 +73,7 @@ func TestFavGroupSendsCmd(t *testing.T) {
 	m := baseModel()
 	m.client = c
 	m.fleet = groupedFleet()
-	m.cursor = 2 // the db group, third card — it will move to the front once favourited
+	m.cursorOnGroup(t, "db") // it will move to the front once favourited
 	if it, _ := m.selectedItem(); it.kind != itemGroup || it.name != "db" {
 		t.Fatalf("setup: cursor should rest on the db group, got %+v", it)
 	}
@@ -123,19 +123,12 @@ func TestDashItemsSortsFavouritesFirst(t *testing.T) {
 	m.fleet = fleet
 	m.favGroups = map[string]bool{"db": true}
 
-	items := m.dashItems()
-	// Original order is [api(g), shell2(p), db(g), lone5(p)]; the favourites are the
-	// db group and lone panel 5, floated to the front in their original relative order.
+	// Original top level is [api(g), shell2(p), db(g), lone5(p)]; the favourites are
+	// the db group and lone panel 5, floated to the front in their original relative
+	// order. Only the top level is asserted: the float happens per LEVEL, and what a
+	// group contains is a different question from what sits above it.
 	want := []string{"db", "5", "api", "2"}
-	got := make([]string, len(items))
-	for i, it := range items {
-		if it.kind == itemGroup {
-			got[i] = it.name
-		} else {
-			got[i] = it.panel.ID
-		}
-	}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
+	if got := m.topLevel(); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("favourites should float to the front stably: want %v, got %v", want, got)
 	}
 }
