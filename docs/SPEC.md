@@ -113,12 +113,13 @@ to be reviewed and it is not wedged, and putting every quiet shell in front of a
 distinction exists to prevent. A shell still reaches `attention` when its own output asks a question.
 
 **How a state is decided.** Higher wins, and the first that matches decides: an agent's own **declaration**
-(`panel.attention`, which carries a reason) beats the **timers** (`stuck-after`, a finished task, `done-after`), which
-beat the **tail heuristic** (the last line reads like a question). A certain timer outranks a guess about text; a
-question asked *now* outranks a review that could wait.
+(`panel.attention`, which carries a reason) beats every guess baton makes from the outside; the **`stuck` timer** beats
+the **tail heuristic** (the last line reads like a question), because a certain timer outranks a guess about text; and
+the tail heuristic in turn beats the **`done` timer**, because a question asked _now_ outranks a review that could wait.
+Full precedence, and what each rung is for, in **[ATTENTION.md](ATTENTION.md#how-a-state-is-decided)**.
 
 **`failed` is not a state.** A panel that exited badly is `exited` with a non-zero exit code, and the cockpit renders
-that as failed. The daemon reports the fact; the frontend draws the conclusion — which keeps failure a *rendering* of
+that as failed. The daemon reports the fact; the frontend draws the conclusion — which keeps failure a _rendering_ of
 something the lifecycle already carries rather than a state the Monitor has to shuttle panels in and out of.
 
 `running`, `idle`, `attention`, `done`, and `stuck` are the live states the Monitor moves a panel between as output ebbs
@@ -137,6 +138,10 @@ panel:
     claude:
       stuck-after: 30m # this profile legitimately thinks for longer
 ```
+
+The states exist to answer one question — **who needs a human** — and the queue that clears them is `C-t a`, the
+attention inbox. See **[ATTENTION.md](ATTENTION.md)** for the inbox, the dashboard's need counts and quiet fold, the
+desktop notifications, and the whole config surface.
 
 ## Work items
 
@@ -372,6 +377,10 @@ config:
 - **bell** (on by default) — rings the terminal when a panel enters `attention`.
 - **mouse** (off by default) — see above.
 
+**The attention queue.** `settings.inbox-done`, `inbox-snooze`, `notify`, `notify-coalesce`, `fold-quiet` and
+`fold-similar` shape the inbox, the dashboard's quiet fold and the desktop notifications; `panel.done-on-quiet`,
+`done-after` and `stuck-after` shape the quiet ladder above. Full reference: **[ATTENTION.md](ATTENTION.md#configuration)**.
+
 **Resource limits.** `panel.limits` caps what a panel may use — CPU, memory, processes — and holds its whole process tree
 to it; an agent profile's own `limits` layer over the fleet-wide block field by field. The fleet-wide caps are editable
 under `C-t P`, which also reports whether this host can enforce them at all. They are resolved server-side from the
@@ -389,6 +398,8 @@ and the key-map editor — are reached after the prefix in every mode. Everythin
 | ---------------------- | --------------------------- | ----------------------------------------------- |
 | Anywhere (after `C-t`) | `C-t d`                     | go to the dashboard                             |
 |                        | `C-t b`                     | back one level (zoom → group → dashboard)       |
+|                        | `C-t a`                     | the attention inbox — clear what needs a human  |
+|                        | `C-t o`                     | the process tree (daemon → panels → OS)         |
 |                        | `C-t ~`                     | toggle the floating scratch pane                |
 |                        | `C-t [`                     | enter scroll mode                               |
 |                        | `C-t k`                     | edit the key map                                |

@@ -130,17 +130,18 @@ baton ctl attention --why "two migrations conflict — which one wins?"
 baton ctl resolve
 ```
 
-Neither takes an id in the form above, because the connection already knows which panel it is: where baton has injected
-`BATON_PANEL_ID` into the process (the **conductor** panel today — see the table below), the control client declares it
-on `hello` and the daemon addresses that panel, so the agent never has to discover its own id. Anywhere else — a worker
-agent, a script, your own shell — name the panel with `--id`; with neither, the daemon answers
-`no panel id, and this connection declared no self` rather than acting on nothing. A **conductor** connection may only
-ever name itself (see [Guardrails](#guardrails)).
+Neither takes an id in the form above, because the connection already knows which panel it is: baton injects
+`BATON_PANEL_ID` into **every agent panel** (see the table below), the control client declares it on `hello`, and the
+daemon addresses that panel — so an agent raises its own hand without ever having to discover its own id, anywhere in the
+fleet. Anywhere else — a **shell** panel, a script, your own terminal — name the panel with `--id`; with neither, the
+daemon answers `no panel id, and this connection declared no self` rather than acting on nothing. A **conductor**
+connection may only ever name itself (see [Guardrails](#guardrails)).
 
 **Why this outranks everything else.** Baton has two ways to notice a panel needs you, and both are guesses from the
 outside: a **timer** that reads silence, and a **heuristic** that reads the last line of output for a question. A
 declaration is the only signal that came from the thing being described, so it wins — see
-[the lifecycle](./SPEC.md#lifecycle) for the full precedence. Concretely:
+[the lifecycle](./SPEC.md#lifecycle) for the states, and [ATTENTION.md](./ATTENTION.md) for the full precedence and the
+queue a raised hand lands in. Concretely:
 
 - **It takes effect immediately**, not on the next monitor tick. The task scheduler's free pool reads the panel's state,
   so a tick's delay would be a window in which baton hands queued backlog work to an agent that has already said it is
@@ -214,13 +215,23 @@ default a newline) on `panel.dispatch` / `panel.dispatch-group`; `task.enqueue` 
 `task.demote` / `task.drain` / `task.list` drive the backlog and reply with a `tasks` snapshot. A spawn-on-demand
 `task.enqueue` carries the worker's `path` / `args` / `dir` and an `ephemeral` close-on-done flag.
 
-Baton injects the wiring into the conductor panel's process, which both `baton ctl` and `baton mcp` read automatically:
+Baton injects the wiring into an agent panel's process, which both `baton ctl` and `baton mcp` read automatically:
 
-| Variable         | Is                                                |
-| ---------------- | ------------------------------------------------- |
-| `BATON_SOCK`     | the control socket to dial                        |
-| `BATON_ROLE`     | `conductor` — the scoped role to declare on hello |
-| `BATON_PANEL_ID` | the conductor's own panel id (its `self`)         |
+| Variable         | Is                                                | Injected into                            |
+| ---------------- | ------------------------------------------------- | ---------------------------------------- |
+| `BATON_SOCK`     | the control socket to dial                        | **every agent panel**                    |
+| `BATON_PANEL_ID` | the panel's own id — the `self` it declares       | **every agent panel**                    |
+| `BATON_ROLE`     | `conductor` — the scoped role to declare on hello | **the conductor only** (it is the fence) |
+
+Every agent panel is told which panel it is, because a control client that cannot name itself cannot say anything about
+itself — which is the whole point of `attention` and `resolve`. Being told grants nothing: an empty `BATON_ROLE` is the
+plain, unscoped connection an agent panel has always had, so a worker's reach is exactly what it was before an id was
+ever injected. Only the conductor is handed the role, because only the conductor is fenced by it.
+
+A **shell** panel is deliberately given neither. A shell is a launcher — every program a person runs in it would inherit
+the marking — and the human sitting at one already has what an agent lacks: the cockpit names the panel and `--id` is one
+flag away. `BATON_SOCK` still reaches it, but by inheritance rather than injection: the daemon pins it into its own
+environment and every panel starts from that.
 
 ## Guardrails
 
