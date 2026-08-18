@@ -96,37 +96,38 @@ Interagieren steuern deine Tastendrücke das Programm, eine Baton-Aktion ist als
 Taste. Drücke **`?`** für die vollständige, neu belegbare Liste der aktuellen Ansicht und **`C-t k`**, um die
 Tastenbelegung zu bearbeiten.
 
-| Where       | Taste             | Wirkung                                                           |
-| ----------- | ----------------- | ----------------------------------------------------------------- |
-| After `C-t` | `d` / `b`         | zum Dashboard springen / eine Ebene zurück                        |
-|             | `a`               | Attention-Posteingang — erledigen, was einen Menschen braucht     |
-|             | `[`               | in den Scroll-Modus wechseln                                      |
-|             | `l` / `L`         | Panel in eine Datei protokollieren / dieses Protokoll lesen       |
-|             | `R` / `S`         | Konfiguration neu laden / Server-Neustart erzwingen               |
-|             | `q`               | abkoppeln (der Server läuft weiter)                               |
-| Dashboard   | `jk` / `↑↓`       | den Cursor bewegen                                                |
-|             | `hl` / `←→`       | Work Item ein-/ausklappen — heraus- / hineingehen                 |
-|             | `v`               | Detailspalte neben dem Baum umschalten                            |
-|             | `enter`           | die Auswahl öffnen / hineinzoomen                                 |
-|             | `p` / `A` / `c`   | neues shell- / agent- / Befehlsauswahl-Panel                      |
-|             | `.`               | neues Shell-Panel im Verzeichnis des fokussierten Panels          |
-|             | `C`               | den Conductor öffnen (ein Agent, der die Flotte steuert)          |
-|             | `H`               | die Global Shell öffnen (eine Host-Shell in `$HOME`)              |
-|             | `w` / `x`         | die Auswahl schließen / Beendete entfernen                        |
-|             | `r`               | die beendeten Panels unter dem Fokus erneut ausführen             |
-|             | `g` / `G` / `u`   | markieren / markierte Panels gruppieren / Gruppierung aufheben    |
-|             | `s` / `f` / `D`   | der Auswahl ein Signal senden / sie finden / diffen               |
-|             | `/`               | die Ausgabe jedes Panels durchsuchen (die Flotte greppen)         |
-|             | `T` / `Q`         | eine Task vergeben / die Task-Warteschlange verwalten             |
-|             | `U`               | Nutzungs-Fußzeile durchschalten: aus / Abrechnungsfenster / Panel |
-|             | `K`               | die Tastenanzeige in der Fußzeile umschalten                      |
-| Group       | `tab`             | das nächste Panel fokussieren                                     |
-|             | `+` / `-`         | mehr / weniger Live-Kacheln zeigen                                |
-|             | `L`               | das Kachel-Layout durchschalten                                   |
-|             | `p` / `i`         | das fokussierte Panel anpinnen / damit interagieren               |
-|             | `enter`           | das fokussierte Panel zoomen                                      |
-| Zoom        | tippen            | das Programm direkt steuern                                       |
-|             | `C-t f` / `C-t g` | den Scrollback durchsuchen / Git-Menü (agent)                     |
+| Where       | Taste             | Wirkung                                                            |
+| ----------- | ----------------- | ------------------------------------------------------------------ |
+| After `C-t` | `d` / `b`         | zum Dashboard springen / eine Ebene zurück                         |
+|             | `a`               | Attention-Posteingang — erledigen, was einen Menschen braucht      |
+|             | `[`               | in den Scroll-Modus wechseln                                       |
+|             | `l` / `L`         | Panel in eine Datei protokollieren / dieses Protokoll lesen        |
+|             | `R` / `S`         | Konfiguration neu laden / Server-Neustart erzwingen                |
+|             | `q`               | abkoppeln (der Server läuft weiter)                                |
+| Dashboard   | `jk` / `↑↓`       | den Cursor bewegen                                                 |
+|             | `hl` / `←→`       | Work Item ein-/ausklappen — heraus- / hineingehen                  |
+|             | `v` / `z`         | Detailspalte / Gruppierung: Work Item, Verzeichnis, Profil, Status |
+|             | `space`           | eine Zeile aufnehmen — Pfeile tragen sie, `enter` legt sie ab      |
+|             | `enter`           | die Auswahl öffnen / hineinzoomen                                  |
+|             | `p` / `A` / `c`   | neues shell- / agent- / Befehlsauswahl-Panel                       |
+|             | `.`               | neues Shell-Panel im Verzeichnis des fokussierten Panels           |
+|             | `C`               | den Conductor öffnen (ein Agent, der die Flotte steuert)           |
+|             | `H`               | die Global Shell öffnen (eine Host-Shell in `$HOME`)               |
+|             | `w` / `x`         | die Auswahl schließen / Beendete entfernen                         |
+|             | `r`               | die beendeten Panels unter dem Fokus erneut ausführen              |
+|             | `g` / `G` / `u`   | markieren / markierte Panels gruppieren / Gruppierung aufheben     |
+|             | `s` / `f` / `D`   | der Auswahl ein Signal senden / sie finden / diffen                |
+|             | `/`               | die Ausgabe jedes Panels durchsuchen (die Flotte greppen)          |
+|             | `T` / `Q`         | eine Task vergeben / die Task-Warteschlange verwalten              |
+|             | `U`               | Nutzungs-Fußzeile durchschalten: aus / Abrechnungsfenster / Panel  |
+|             | `K`               | die Tastenanzeige in der Fußzeile umschalten                       |
+| Group       | `tab`             | das nächste Panel fokussieren                                      |
+|             | `+` / `-`         | mehr / weniger Live-Kacheln zeigen                                 |
+|             | `L`               | das Kachel-Layout durchschalten                                    |
+|             | `p` / `i`         | das fokussierte Panel anpinnen / damit interagieren                |
+|             | `enter`           | das fokussierte Panel zoomen                                       |
+| Zoom        | tippen            | das Programm direkt steuern                                        |
+|             | `C-t f` / `C-t g` | den Scrollback durchsuchen / Git-Menü (agent)                      |
 
 Die vollständige Tastenreferenz pro Ansicht und die Gestaltung hinter jeder Ansicht stehen in **[docs/SPEC.md](SPEC.md)**.
 

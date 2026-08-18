@@ -98,37 +98,38 @@ interactivo tus pulsaciones manejan el programa, así que una acción de Baton e
 tecla. Pulsa **`?`** para ver la lista completa y reasignable de la vista actual, y **`C-t k`** para editar el mapa de
 teclas.
 
-| Dónde       | Tecla             | Hace                                                       |
-| ----------- | ----------------- | ---------------------------------------------------------- |
-| After `C-t` | `d` / `b`         | ir al tablero / volver un nivel                            |
-|             | `a`               | bandeja de atención — despachar lo que necesita a alguien  |
-|             | `[`               | entrar en modo de desplazamiento                           |
-|             | `l` / `L`         | registrar el panel en un archivo / releer ese registro     |
-|             | `R` / `S`         | recargar la configuración / forzar reinicio del servidor   |
-|             | `q`               | desacoplarse (el servidor sigue en marcha)                 |
-| Dashboard   | `jk` / `↑↓`       | mover el cursor                                            |
-|             | `hl` / `←→`       | plegar / desplegar un work item — salir / entrar           |
-|             | `v`               | alternar el panel de detalle junto al árbol                |
-|             | `enter`           | abrir / hacer zoom en la selección                         |
-|             | `p` / `A` / `c`   | nuevo panel de shell / agente / elegir comando             |
-|             | `.`               | nuevo panel de shell en el directorio del panel enfocado   |
-|             | `C`               | abrir el conductor (un agente que maneja la flota)         |
-|             | `H`               | abrir la global shell (una shell del anfitrión en `$HOME`) |
-|             | `w` / `x`         | cerrar la selección / purgar los terminados                |
-|             | `r`               | reejecutar los paneles terminados bajo el foco             |
-|             | `g` / `G` / `u`   | marcar / agrupar los marcados / desagrupar                 |
-|             | `s` / `f` / `D`   | enviar señal / buscar / diff de la selección               |
-|             | `/`               | buscar en la salida de todos los paneles (grep a la flota) |
-|             | `T` / `Q`         | despachar una tarea / gestionar la cola de tareas          |
-|             | `U`               | alternar el pie de uso: apagado / ventana / panel enfocado |
-|             | `K`               | alternar el indicador de teclas en el pie                  |
-| Group       | `tab`             | dar el foco al siguiente panel                             |
-|             | `+` / `-`         | mostrar más / menos mosaicos en vivo                       |
-|             | `L`               | rotar la disposición de los mosaicos                       |
-|             | `p` / `i`         | fijar / interactuar con el panel enfocado                  |
-|             | `enter`           | hacer zoom en el panel enfocado                            |
-| Zoom        | escribir          | manejar el programa directamente                           |
-|             | `C-t f` / `C-t g` | buscar en el historial / menú de git (agente)              |
+| Dónde       | Tecla             | Hace                                                                  |
+| ----------- | ----------------- | --------------------------------------------------------------------- |
+| After `C-t` | `d` / `b`         | ir al tablero / volver un nivel                                       |
+|             | `a`               | bandeja de atención — despachar lo que necesita a alguien             |
+|             | `[`               | entrar en modo de desplazamiento                                      |
+|             | `l` / `L`         | registrar el panel en un archivo / releer ese registro                |
+|             | `R` / `S`         | recargar la configuración / forzar reinicio del servidor              |
+|             | `q`               | desacoplarse (el servidor sigue en marcha)                            |
+| Dashboard   | `jk` / `↑↓`       | mover el cursor                                                       |
+|             | `hl` / `←→`       | plegar / desplegar un work item — salir / entrar                      |
+|             | `v` / `z`         | panel de detalle / agrupar por: work item, directorio, perfil, estado |
+|             | `space`           | coger una fila — las flechas la llevan, `enter` la suelta             |
+|             | `enter`           | abrir / hacer zoom en la selección                                    |
+|             | `p` / `A` / `c`   | nuevo panel de shell / agente / elegir comando                        |
+|             | `.`               | nuevo panel de shell en el directorio del panel enfocado              |
+|             | `C`               | abrir el conductor (un agente que maneja la flota)                    |
+|             | `H`               | abrir la global shell (una shell del anfitrión en `$HOME`)            |
+|             | `w` / `x`         | cerrar la selección / purgar los terminados                           |
+|             | `r`               | reejecutar los paneles terminados bajo el foco                        |
+|             | `g` / `G` / `u`   | marcar / agrupar los marcados / desagrupar                            |
+|             | `s` / `f` / `D`   | enviar señal / buscar / diff de la selección                          |
+|             | `/`               | buscar en la salida de todos los paneles (grep a la flota)            |
+|             | `T` / `Q`         | despachar una tarea / gestionar la cola de tareas                     |
+|             | `U`               | alternar el pie de uso: apagado / ventana / panel enfocado            |
+|             | `K`               | alternar el indicador de teclas en el pie                             |
+| Group       | `tab`             | dar el foco al siguiente panel                                        |
+|             | `+` / `-`         | mostrar más / menos mosaicos en vivo                                  |
+|             | `L`               | rotar la disposición de los mosaicos                                  |
+|             | `p` / `i`         | fijar / interactuar con el panel enfocado                             |
+|             | `enter`           | hacer zoom en el panel enfocado                                       |
+| Zoom        | escribir          | manejar el programa directamente                                      |
+|             | `C-t f` / `C-t g` | buscar en el historial / menú de git (agente)                         |
 
 Consulta **[docs/SPEC.md](SPEC.md)** para la referencia completa de teclas por vista y el diseño que hay detrás de cada
 una.

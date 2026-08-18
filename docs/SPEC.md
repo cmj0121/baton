@@ -175,6 +175,23 @@ beats running beats spawning beats idle beats exited), so one row speaks for the
 Expansion is a **view state and never a selection one**: a group row owns its whole subtree whether it is open or shut,
 so `w` on `backend` closes the same panels either way. A collapse is remembered for the session only.
 
+**Moving things.** `space` picks the selected row up, the arrows carry it through the tree, `enter` drops it and `esc`
+puts it back. The drop target is the **level** of the row under the cursor, never the row itself — "into this group" and
+"after this group" would otherwise be the same keystroke — so to drop inside a work item you open it and land on one of
+its children. A panel dropped at the top level is **ungrouped**; a work item carried into another **nests** as
+`target/<its name>`, sub-structure and all, which is how a nested work item is made without knowing that a group name is
+a path. Nothing is sent until the drop, and a group carried into its own subtree is refused.
+
+**The group-by lens.** `z` cycles which parents the tree is built from: **work item** (the fleet's own structure),
+**directory**, **profile**, or **state**. A lens is a projection and never a mutation — switching to `group by: state`
+does not move a panel into a group called `attention`, and switching back leaves the fleet exactly as it was. The
+reorganising verbs (`space`, `g`, `G`, `a`, `u`, `e`) are refused under a lens and say so: a bucket is not a work item,
+and there is no meaning to moving a panel "into" a directory. The heading states the lens whenever one is in force.
+
+The directory lens re-bases every path against the fleet's **common prefix** and nests the remainder, so a set of git
+worktrees gathers under the directory that holds them rather than making one bucket per panel; a bucket holding nothing
+but a single panel is promoted away.
+
 **Favourites.** `*` **favourites** the selected dashboard item — a lone panel or a whole work item — and favourited rows
 sort to the **front of their own level**, each marked with a `⊙`. It is **server-owned state**
 (`panel.favourite` / `panel.unfavourite` for a panel, `group.favourite` / `group.unfavourite` for a group), carried on the
