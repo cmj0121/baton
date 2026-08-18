@@ -226,6 +226,18 @@ type Server struct {
 	attention      attn.Policy
 	agentAttention map[string]attn.Policy
 
+	// declared is the top of the detection precedence: what each agent has said
+	// about ITSELF, keyed by panel id, populated lazily and dropped when the panel
+	// exits, closes, or is pruned.
+	//
+	// taskSettled is the other half — the set of panels whose in-flight task went
+	// terminal-done since the last tick. It is an EDGE rather than a state: only
+	// the tick that saw it may promote the panel to done, and a byte of output
+	// clears it, or a panel that woke back to running would be dragged straight
+	// back by work that finished minutes ago. Both guarded by mu.
+	declared    map[string]*declaration
+	taskSettled map[string]bool
+
 	// Working-directory tracking. trackCwd is how a panel's live directory is
 	// learned and restoreCwd which panels are re-run in it; osc7Tail carries the
 	// last few bytes of each panel's output so a report split across two reads is
@@ -633,6 +645,15 @@ func (s *Server) effectiveLimitsLocked(profile string) limits.Limits {
 	return s.limits.Merge(s.agentLimits[profile])
 }
 
+// effectiveAttentionLocked layers the named agent profile's quiet ladder over
+// the fleet-wide one, on the same terms as the caps above. It is resolved on
+// every tick rather than cached because that is what makes the thresholds
+// hot-reloadable: a SIGHUP swaps the policy and the very next tick reads it.
+// Caller holds s.mu.
+func (s *Server) effectiveAttentionLocked(profile string) attn.Policy {
+	return s.attention.Merge(s.agentAttention[profile])
+}
+
 // onPanelExit marks a panel exited when its process ends on its own, notifies
 // and detaches any client zoomed into it, and broadcasts the change. It is a
 // no-op for a panel already gone (e.g. an explicit panel.close).
@@ -721,10 +742,18 @@ func (s *Server) routeOutput(id string, data []byte) {
 	s.mon.observed(id, len(data))
 	s.noteOutputCwdLocked(id, data)
 	if i := s.indexLocked(id); i >= 0 {
-		switch from := s.panels[i].State; from {
-		case panel.Spawning, panel.Idle, panel.Attention:
+		// A byte of output wakes every resting state back to running — but NOT
+		// while the agent's own declaration stands. An agent that prints a spinner
+		// while waiting on you would otherwise lose its raised hand on the next
+		// byte, which defeats the whole point of a declaration outranking the
+		// timers: only panel.resolve, or the process ending, withdraws one.
+		if from := s.panels[i].State; wakesOnOutput(from) && !s.declaredLocked(id) {
 			s.panels[i].State = panel.Running
 			s.mon.entered(id)
+			// A byte of output invalidates any pending "the turn is over" event: the
+			// panel is demonstrably working, so a task that finished a moment ago must
+			// not drag it to done on the next tick.
+			delete(s.taskSettled, id)
 			f := panelFields(s.panels[i])
 			f["from"], f["to"] = from.String(), panel.Running.String()
 			s.emit("panel.state", f)
@@ -1020,9 +1049,11 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 		if p.State == panel.Exited {
 			continue
 		}
-		quiet := s.mon.quiet(p.ID)
-		attention := quiet && p.State == panel.Running && looksLikeAttention(s.pty.Tail(p.ID, attnTailBytes))
-		if ns, ok := nextState(p.State, quiet, attention); ok {
+		// The task event is consumed, not read: the tick that sees a task go
+		// terminal-done is the only one entitled to promote the panel to done.
+		taskDone := s.taskSettled[p.ID]
+		delete(s.taskSettled, p.ID)
+		if ns, ok := nextState(s.signalsLocked(*p, taskDone)); ok {
 			from := p.State
 			p.State = ns
 			s.mon.entered(p.ID)
@@ -2293,6 +2324,11 @@ func (s *Server) advanceTaskLocked(panelID string, status task.Status, result st
 	if result != "" {
 		t.Result = result
 	}
+	if status == task.Done {
+		// The server SAW the work finish rather than inferring it from silence, so
+		// the panel's turn is over now. The tick that reads this edge clears it.
+		s.taskSettled[panelID] = true
+	}
 	t.Updated = s.mon.now()
 	s.emit("task.change", taskFields(t))
 	s.markTaskDirtyLocked(t.ID)
@@ -2382,10 +2418,59 @@ func (s *Server) pruneExitedLocked() (stop, workspaces []string) {
 }
 
 // dispatchReady reports whether a panel in this state can receive a dispatched
-// prompt now: a settled agent (idle or waiting for input) is ready; one still
-// spawning or actively producing output is not, so the dispatch is held.
+// prompt now: a settled agent is ready; one still spawning or actively producing
+// output is not, so the dispatch is held until it settles.
+//
+// done and stuck are settled by definition — both describe a panel that has
+// stopped producing output — and both MUST be listed here. A held dispatch is
+// only ever released by a transition, and neither state moves again without new
+// output, so leaving them out would strand a prompt sent to a panel that had
+// simply been quiet for a minute.
 func dispatchReady(st panel.State) bool {
-	return st == panel.Idle || st == panel.Attention
+	switch st {
+	case panel.Idle, panel.Attention, panel.Done, panel.Stuck:
+		return true
+	}
+	return false
+}
+
+// freeForWork reports whether an agent in this state may be handed a task off
+// the backlog: quiet, and not asking for anything.
+//
+// done and stuck join idle because all three describe an agent that has stopped
+// producing output — which is the whole of what idle meant before the ladder
+// split it in three. Omitting them would silently shrink the scheduler's pool to
+// nothing on any fleet left alone for a minute. attention is excluded on
+// purpose: a panel waiting on a human is not waiting for more work.
+//
+// Including stuck is a deliberate tension, not an oversight: the dashboard is
+// telling a human "this agent looks wedged" while the scheduler hands it more
+// work. It is resolved in favour of behaviour preservation, because stuck is a
+// SUSPICION drawn from silence alone and the panel it describes was plain idle
+// before this ladder existed — one an operator would have dispatched to without
+// a second thought. A wedged agent that takes a prompt and does nothing with it
+// shows up as a task stuck in `dispatched`, which is visible; an agent wrongly
+// withheld from the queue shows up as nothing at all, which is not. If that ever
+// stops being the right trade, this is the one line to change.
+func freeForWork(st panel.State) bool {
+	switch st {
+	case panel.Idle, panel.Done, panel.Stuck:
+		return true
+	}
+	return false
+}
+
+// wakesOnOutput reports whether a byte of output brings a panel back to running.
+// Every resting state does; running is already there and exited is terminal.
+func wakesOnOutput(st panel.State) bool {
+	return st != panel.Running && st != panel.Exited
+}
+
+// declaredLocked reports whether an agent's own panel.attention declaration
+// currently stands for this panel. Caller holds s.mu.
+func (s *Server) declaredLocked(id string) bool {
+	d := s.declared[id]
+	return d != nil && d.Reason != ""
 }
 
 // enqueueTask adds an unassigned task to the backlog for the scheduler to drain
@@ -2430,7 +2515,7 @@ func (s *Server) queuedBacklogLenLocked() int {
 func (s *Server) freeIdleAgentLocked(group string) (string, bool) {
 	for i := range s.panels {
 		p := &s.panels[i]
-		if p.Kind != panel.Agent || p.Conductor || p.State != panel.Idle {
+		if p.Kind != panel.Agent || p.Conductor || !freeForWork(p.State) {
 			continue
 		}
 		if group != "" && p.Group != group {
