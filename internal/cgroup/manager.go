@@ -1,6 +1,13 @@
-// Package sandbox enforces the resource limits a panel runs under. It is the
+// Package cgroup enforces the resource limits a panel runs under. It is the
 // backend behind limits.Limits: the config layer decides WHAT the caps are, this
 // one makes the kernel hold a panel to them.
+//
+// It is named for its backend rather than for what it does, because the obvious
+// name was already a lie. This package was called "sandbox", and the docs had to
+// keep saying that the sandbox is not a sandbox — it is a guardrail against an
+// agent's accidents, not a boundary against its intent. Real confinement lives in
+// internal/isolate, which runs a panel inside a container; keeping one word for
+// both would have made the distinction the documents rest on unsayable in code.
 //
 // The only backend today is cgroup v2, which is Linux-only and needs a delegated
 // subtree (the usual systemd user session provides one). Everywhere else — macOS,
@@ -13,7 +20,7 @@
 // has to be the whole process tree. An agent forks node, git, and test runners;
 // an rlimit is per-process and inherited, so a 4Gi rlimit means every descendant
 // may take 4Gi. A cgroup caps the tree as one.
-package sandbox
+package cgroup
 
 import (
 	"fmt"

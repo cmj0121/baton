@@ -24,6 +24,7 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 
 	"github.com/cmj0121/baton/internal/attn"
+	"github.com/cmj0121/baton/internal/cgroup"
 	"github.com/cmj0121/baton/internal/cwd"
 	"github.com/cmj0121/baton/internal/gitdiff"
 	"github.com/cmj0121/baton/internal/gitops"
@@ -35,7 +36,6 @@ import (
 	"github.com/cmj0121/baton/internal/ptymgr"
 	"github.com/cmj0121/baton/internal/queue"
 	"github.com/cmj0121/baton/internal/restart"
-	"github.com/cmj0121/baton/internal/sandbox"
 	"github.com/cmj0121/baton/internal/signals"
 	"github.com/cmj0121/baton/internal/state"
 	"github.com/cmj0121/baton/internal/task"
@@ -162,11 +162,11 @@ type Server struct {
 	limits      limits.Limits
 	agentLimits map[string]limits.Limits
 
-	// sand is the enforcement backend the resolved limits are handed to: it makes
+	// cg is the enforcement backend the resolved limits are handed to: it makes
 	// each panel's process tree actually run under its caps, or reports that this
 	// host cannot and leaves every panel uncapped. Built once at construction and
 	// thereafter read without the lock; it guards its own state.
-	sand *sandbox.Manager
+	cg *cgroup.Manager
 
 	onReload func() // invoked on a server.reload command; re-reads config and Reloads
 
@@ -536,7 +536,7 @@ func New(ln net.Listener, opts ...Option) *Server {
 		queueMax:        defaultQueueMax,
 		dirty:           make(chan struct{}, 1),
 		heartbeat:       proto.HeartbeatInterval,
-		sand:            sandbox.New(),
+		cg:              cgroup.New(),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -612,7 +612,7 @@ func (s *Server) Reload(set Settings) {
 	}
 	fleetWide := s.effectiveLimitsLocked("")
 	s.mu.Unlock()
-	updated, deferred := s.sand.Update(func(id string) limits.Limits {
+	updated, deferred := s.cg.Update(func(id string) limits.Limits {
 		if caps, ok := resolved[id]; ok {
 			return caps
 		}
@@ -655,12 +655,12 @@ func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 		s.mu.Unlock()
 	}
 
-	h, err := s.sand.Prepare(id, caps)
+	h, err := s.cg.Prepare(id, caps)
 	if err != nil {
 		return fmt.Errorf("resource limits for panel %s: %w", id, err)
 	}
 	if h != nil {
-		if skipped := append(s.sand.Unenforced(caps), h.Skipped()...); len(skipped) > 0 {
+		if skipped := append(s.cg.Unenforced(caps), h.Skipped()...); len(skipped) > 0 {
 			log.Warn().Str("panel", id).Strs("limits", skipped).Msg("limits this backend cannot enforce")
 		}
 		// Hooked onto the copy that is launched, never onto the spec the server
@@ -668,7 +668,7 @@ func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 		spec.Confine = h.Confine
 	}
 	if err := s.pty.StartCmd(id, spec); err != nil {
-		s.sand.Release(id) // the cgroup outlived the process it was made for
+		s.cg.Release(id) // the cgroup outlived the process it was made for
 		return err
 	}
 	// The run's clock starts here, at the one fork point, so every way a panel can
@@ -689,9 +689,9 @@ func (s *Server) probeEnforcement() {
 	configured := !s.limits.IsZero() || len(s.agentLimits) > 0
 	s.mu.Unlock()
 	if configured {
-		s.sand.Probe()
+		s.cg.Probe()
 	}
-	log.Info().Str("enforcement", s.sand.Describe()).Msg("resource limits")
+	log.Info().Str("enforcement", s.cg.Describe()).Msg("resource limits")
 }
 
 // EffectiveLimits resolves the resource caps a live panel runs under: the
@@ -784,7 +784,7 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 
 	for _, sid := range stop {
 		s.pty.Stop(sid)
-		s.sand.Release(sid)               // the panel is gone for good; drop its cgroup with it
+		s.cg.Release(sid)                 // the panel is gone for good; drop its cgroup with it
 		s.stopLogging(sid, logMarkClosed) // …and its transcript is finished rather than abandoned
 	}
 	for _, ws := range workspaces {
@@ -1497,7 +1497,7 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "hello":
 		cc.role, cc.self = cmd.Role, cmd.Self
 		send(cc, proto.ServerMsg{Type: "welcome", Version: proto.ProtocolVersion, ServerVer: s.version,
-			Enforce: string(s.sand.Mode()), EnforceWhy: s.sand.Reason()})
+			Enforce: string(s.cg.Mode()), EnforceWhy: s.cg.Reason()})
 		send(cc, s.panelsMsg())
 		send(cc, statsMsg()) // seed the footer immediately, before the first tick
 		if s.usageProvider != nil {
@@ -3191,7 +3191,7 @@ func (s *Server) closePanel(id string) error {
 			// normal panel close keeps its SIGHUP-via-close semantics.
 			s.pty.Signal(id, syscall.SIGKILL)
 			s.pty.Stop(id)
-			s.sand.Release(id) // the ephemeral is gone; drop its cgroup with it
+			s.cg.Release(id) // the ephemeral is gone; drop its cgroup with it
 			log.Info().Str("panel", id).Msg("ephemeral diff panel closed")
 			return nil
 		}
@@ -3220,7 +3220,7 @@ func (s *Server) closePanel(id string) error {
 	s.mu.Unlock()
 
 	s.pty.Stop(id)                   // no-op for a panel with no live process
-	s.sand.Release(id)               // the panel is gone for good; drop its cgroup with it
+	s.cg.Release(id)                 // the panel is gone for good; drop its cgroup with it
 	s.stopLogging(id, logMarkClosed) // …and its transcript is finished rather than abandoned
 	if workspace != "" {
 		_ = os.RemoveAll(workspace)
@@ -3564,7 +3564,7 @@ func (s *Server) closeEphemeral(cc *clientConn) {
 		// could outlive the dropped client. Ephemeral panels are safe to SIGKILL.
 		s.pty.Signal(id, syscall.SIGKILL)
 		s.pty.Stop(id)
-		s.sand.Release(id) // the ephemeral is gone; drop its cgroup with it
+		s.cg.Release(id) // the ephemeral is gone; drop its cgroup with it
 	}
 	if len(ids) > 0 {
 		log.Info().Int("count", len(ids)).Msg("reaped ephemeral diff panels on disconnect")
@@ -3600,7 +3600,7 @@ func (s *Server) purgeExited() int {
 
 	for _, id := range gone {
 		s.pty.Stop(id)
-		s.sand.Release(id)               // purged for good; drop its cgroup with it
+		s.cg.Release(id)                 // purged for good; drop its cgroup with it
 		s.stopLogging(id, logMarkClosed) // …and its transcript is finished rather than abandoned
 	}
 	for _, ws := range workspaces {

@@ -20,13 +20,13 @@ import (
 	"github.com/mattn/go-runewidth"
 	"github.com/rs/zerolog/log"
 
+	"github.com/cmj0121/baton/internal/cgroup"
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/i18n"
 	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
-	"github.com/cmj0121/baton/internal/sandbox"
 	"github.com/cmj0121/baton/internal/vtirm"
 )
 
@@ -1543,10 +1543,10 @@ func (m model) editLimit(row int) model {
 // than left to look enforcing — editing a cap that nothing holds is the one
 // outcome the panel must not present as protection.
 func (m model) enforceLabel() string {
-	switch sandbox.Mode(m.enforce) {
+	switch cgroup.Mode(m.enforce) {
 	case "":
 		return "enforcement unknown until attached"
-	case sandbox.ModeNone:
+	case cgroup.ModeNone:
 		return "NOT enforced here · " + m.enforceWhy
 	default:
 		return "enforced by " + m.enforce

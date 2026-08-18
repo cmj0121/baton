@@ -127,7 +127,7 @@ func (s *Server) PushConfig() {
 	// The reload that introduces the first cap is also what commits to a backend,
 	// so the mode rides the push as well as the welcome — otherwise a cockpit that
 	// was already attached would keep showing the pre-reload answer.
-	msg.Enforce, msg.EnforceWhy = string(s.sand.Mode()), s.sand.Reason()
+	msg.Enforce, msg.EnforceWhy = string(s.cg.Mode()), s.cg.Reason()
 	s.broadcast(msg)
 }
 
