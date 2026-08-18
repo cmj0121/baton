@@ -137,6 +137,11 @@ Voir **[docs/SPEC.md](SPEC.md)** pour la référence complète des touches vue p
 
 Tout ce dont vous avez besoin pour mener une flotte, à une frappe de distance :
 
+- **Backends d'agent** — baton connaît un catalogue de CLI d'agents (`claude`, `codex`, `gemini`, `aider`, `opencode`)
+  et détecte lesquels la machine où tourne la flotte possède réellement. `A` liste ceux que vous pouvez lancer et démarre
+  celui que vous choisissez ; `C-t P` fixe le défaut de la flotte depuis la même liste ; `C-t R` redétecte après une
+  installation. Ajoutez les vôtres — ou changez la commande, les arguments, les plafonds ou le conteneur d'un préréglage
+  — sous `panel.agents`. Aucune nouvelle touche pour tout cela.
 - **Signaux** — `s` envoie n'importe quel signal à la sélection, à la tuile focalisée ou au groupe entier ; le sélecteur
   liste les plus courants, `o` permet de saisir n'importe quel nom ou numéro.
 - **Rechercher, chercher, copier** — `f` filtre la flotte par titre ou par groupe ; `/` grep la sortie de tous les panneaux
