@@ -4,6 +4,17 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v1.1.0](https://github.com/cmj0121/baton/releases/tag/v1.1.0) — know where to look
+
+2026-08-19
+
+- **Attention at scale** — a quiet ladder (`done`, `stuck`, failed), the `C-t a` inbox, dashboard folds, notifications.
+- **The dashboard is a tree** — work items, groups and panels in one full-width tree; grab a row and carry it, or
+  re-lens the whole fleet with `z`.
+- **Agent backends** — baton detects which agent CLIs the machine actually has, and `A` offers only the ones you can run.
+- **Opt-in per profile** — run an agent in a container, pipe a panel's output to a file, or bring a failed panel back.
+- **A remembered working directory**, and a usage footer that reads the real billing window, per panel.
+
 ## [v1.0.0](https://github.com/cmj0121/baton/releases/tag/v1.0.0) — one line to install
 
 2026-08-15

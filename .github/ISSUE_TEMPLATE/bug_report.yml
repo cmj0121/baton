@@ -14,7 +14,7 @@ body:
     attributes:
       label: Version
       description: Output of `baton --version`.
-      placeholder: "1.0.0"
+      placeholder: "1.1.0"
     validations:
       required: true
 
