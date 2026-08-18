@@ -1010,122 +1010,14 @@ func singlePinned(members []panel.Panel, pins map[string]bool) (panel.Panel, boo
 	return only, n == 1
 }
 
-// renderGroupCard draws a work item as one card: a group glyph and name, the
-// member count, and a row of per-state count chips so the group's health reads at
-// a glance. It mirrors renderCard's three-line shape and selection glow.
-func (m model) renderGroupCard(it dashItem, selected bool) string {
-	st := groupState(it.members)
-	info := states[st]
-
-	border := colFaint
-	titleColor := colInk
-	if selected {
-		border = colBrand
-		titleColor = colBrandHi
-	}
-
-	mark := ""
-	if m.selecting() {
-		mark = markCell(m.itemMarked(it))
-	}
-	// A favourite prefixes a ⊙ before the group glyph, exactly as renderCard marks a
-	// favourited panel. The name's width shrinks by the prefix so the head keeps to
-	// one row and the card stays the same size as a panel card.
-	fav := ""
-	if m.itemFavourite(it) {
-		fav = lipgloss.NewStyle().Foreground(colBrandHi).Render("⊙") + " "
-	}
-	glyph := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render("▣")
-	// A nested group notes its immediate sub-group count right-aligned in the head —
-	// the same place the split's sub-group tile shows it — rather than trailing the
-	// kind line, so that line can never spill onto a second row and grow the card one
-	// taller than a panel card. The need count joins it there, ahead of it, in
-	// attention's own red: a card that folds fifty panels into one glyph otherwise
-	// says how big the group is and nothing about how much of it is waiting on you.
-	tally := needChip(it.need)
-	if n := subGroupCount(it.members, it.name); n > 0 {
-		sub := lipgloss.NewStyle().Foreground(colBrand).Render(fmt.Sprintf("▣%d", n))
-		if tally != "" {
-			sub = " " + sub
-		}
-		tally += sub
-	}
-	avail := cardInner - lipgloss.Width(mark) - lipgloss.Width(fav) - 2 - lipgloss.Width(tally) // glyph + its trailing space = 2
-	if tally != "" {
-		avail-- // a gap before the right-aligned counts
-	}
-	name := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(it.title(), max(1, avail)))
-	head := mark + fav + glyph + " " + name
-	if tally != "" {
-		head = padEnds(head, tally, cardInner)
-	}
-	head = clampWidth(head, cardInner)
-
-	badge := groupBadge()
-	// Split the member count by kind, so a card says what kind of work it holds —
-	// "2 agent · 1 shell" — not just how many panels. Clamp it to the inner width so a
-	// long breakdown truncates rather than wrapping and growing the card.
-	kindLine := clampWidth(badge+"  "+kindBreakdown(it.members), cardInner)
-
-	// The footer is the per-state chips, led by a sparkline in the group's rolled-up
-	// colour while it is active — so a working group animates like a panel card. It is
-	// clamped to the inner width for the same no-wrap, fixed-height reason.
-	footer := groupCountChips(it.members)
-	if activeState(st) {
-		spark := lipgloss.NewStyle().Foreground(info.color).Render(groupSpark(it.members, st))
-		footer = spark + "  " + footer
-	}
-	footer = clampWidth(footer, cardInner)
-
-	style := lipgloss.NewStyle().
-		Width(cardWidth-2).
-		Padding(0, 1).
-		MarginRight(cardGap).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(border)
-
-	return style.Render(lipgloss.JoinVertical(lipgloss.Left, head, kindLine, footer))
-}
-
-// foldGlyph is the fold row's disclosure marker: ▸ closed, ▾ open. The same two
-// glyphs the tree pane already uses for a cursor and a rollup, so the row reads as
-// "there is more under here" without a legend.
+// foldGlyph is a fold row's disclosure marker: ▸ closed, ▾ open. The same two
+// glyphs a group row uses, so "there is more under here" reads the same wherever
+// it appears without a legend.
 func (m model) foldGlyph(parent string) string {
 	if m.foldOpen[parent] {
 		return "▾"
 	}
 	return "▸"
-}
-
-// renderFoldCard draws the quiet row as a card in the grid, in idle's amber — the
-// colour of the panels it stands for, so the row reads as a summary of them rather
-// than as a control.
-//
-// It keeps renderCard's three-line shape. A card that was one line shorter than its
-// neighbours would break the grid's row heights, and a row that told you what it
-// held without telling you how to open it would send you looking for a legend.
-func (m model) renderFoldCard(it dashItem, selected bool) string {
-	info := states[panel.Idle]
-
-	border, titleColor := colFaint, colInk
-	if selected {
-		border, titleColor = colBrand, colBrandHi
-	}
-
-	glyph := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(m.foldGlyph(it.parent))
-	name := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(it.title(), max(1, cardInner-2)))
-	head := clampWidth(glyph+" "+name, cardInner)
-	kindLine := clampWidth(mutedStyle.Render("idle · exited cleanly"), cardInner)
-	footer := clampWidth(legend("enter", m.foldVerb(it.parent)), cardInner)
-
-	style := lipgloss.NewStyle().
-		Width(cardWidth-2).
-		Padding(0, 1).
-		MarginRight(cardGap).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(border)
-
-	return style.Render(lipgloss.JoinVertical(lipgloss.Left, head, kindLine, footer))
 }
 
 // foldVerb is what enter does next on the fold row.

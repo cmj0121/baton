@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cmj0121/baton/internal/client"
+	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 )
 
@@ -156,4 +157,15 @@ func itemForPanel(t *testing.T, m model, id string) dashItem {
 	}
 	t.Fatalf("no dashboard row for panel %q", id)
 	return dashItem{}
+}
+
+// rowAt renders one dashboard row at a width wide enough for every column, which
+// is what a test asserting a row's CONTENT wants: the narrow cases are the
+// business of the width-breakpoint tests, not of every assertion about what a row
+// says.
+const testRowWidth = 160
+
+func (m model) rowOf(it dashItem) string { return m.treeRow(it, false, testRowWidth) }
+func (m model) rowOfPanel(p panel.Panel) string {
+	return m.treeRow(dashItem{kind: itemPanel, panel: p}, false, testRowWidth)
 }

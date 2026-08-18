@@ -233,13 +233,13 @@ func TestNeedChipRendersOnCardAndTree(t *testing.T) {
 			api = it
 		}
 	}
-	if card := m.renderGroupCard(api, false); !strings.Contains(card, "◆4") {
+	if card := m.rowOf(api); !strings.Contains(card, "◆4") {
 		t.Errorf("group card is missing the need count:\n%s", card)
 	}
 	if prev := m.renderGroupPreview(api, 40); !strings.Contains(prev, "◆4") {
 		t.Errorf("group preview is missing the need count:\n%s", prev)
 	}
-	if tree := m.renderTree(items, 0, len(items), len(items)); !strings.Contains(tree, "◆4") {
+	if tree := m.renderRows(items, 0, len(items), len(items), testRowWidth); !strings.Contains(tree, "◆4") {
 		t.Errorf("tree row is missing the need count:\n%s", tree)
 	}
 }
@@ -258,7 +258,7 @@ func TestNeedChipSilentWhenNothingWaits(t *testing.T) {
 		{ID: "2", Kind: "agent", Title: "api b", State: "idle", Group: "api"},
 	})
 	items := m.dashItems()
-	if strings.Contains(m.renderGroupCard(items[0], false), "◆") {
+	if strings.Contains(m.rowOf(items[0]), "◆") {
 		t.Error("a calm group card should carry no need chip")
 	}
 }

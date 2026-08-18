@@ -404,6 +404,16 @@ type model struct {
 	foldOpen   map[string]bool
 	foldKeepID string
 
+	// preview shows the detail pane beside the dashboard tree
+	// (settings.dashboard-preview, toggled with the preview binding).
+	//
+	// It is OFF by default, which is the opposite of what the pane had before it
+	// was optional. The tree is now the thing worth the width — it carries the
+	// state, the directory and the task the pane used to be the only place to see —
+	// so the preview earns its columns while you are watching a fleet and spends
+	// them for nothing while you are reorganising one.
+	preview bool
+
 	// collapsed records the group rows a person has explicitly SHUT, keyed by group
 	// path. Groups are expanded by default — a tree that opened closed would show
 	// fewer panels than the card grid it replaced — so this is the exception list
@@ -3084,21 +3094,11 @@ func (m *model) pruneMarks() {
 	}
 }
 
-// gridCols is how many cards fit on a row at the given width (1–3).
-func gridCols(width int) int {
-	return min(3, max(1, width/(cardWidth+cardGap)))
-}
-
-// cols is how many panel cards sit on a row in the current view. The key map,
-// panel config, and tree view are single-column lists; the card grid uses
-// gridCols (which the grid renderer calls directly, so it never rebuilds the
-// item list just to count columns).
-func (m model) cols() int {
-	if m.mode != modeDashboard || m.treeView() {
-		return 1
-	}
-	return gridCols(m.width)
-}
+// cols is how many items sit on a row in the current view. Every view is a
+// single-column list now that the dashboard is a tree, so up and down step one
+// row — the multi-column card grid was the only thing that ever made this
+// anything else, and it is gone.
+func (m model) cols() int { return 1 }
 
 // --- rendering ---
 
@@ -3257,10 +3257,7 @@ func (m model) dashboardView() string {
 			mutedStyle.Render(fmt.Sprintf("  %d match(es)", len(items)))
 	}
 	summary := m.summaryStrip(shown)
-	body := m.cardGrid(items)
-	if m.useTree(items) {
-		body = m.treeAndPreview(items)
-	}
+	body := m.treeBody(items)
 	if m.filter != "" && len(items) == 0 {
 		body = noticeBox(mutedStyle.Render("no panels match ") +
 			lipgloss.NewStyle().Foreground(colBrandHi).Render("\""+truncate(m.filter, 24)+"\"") +
@@ -3269,19 +3266,10 @@ func (m model) dashboardView() string {
 	return lipgloss.JoinVertical(lipgloss.Center, heading, "", summary, "", body)
 }
 
-// treeView reports whether there are enough dashboard items to swap the card
-// grid for the tree + preview split. Groups count as one item, so collapsing a
-// crowd of panels into a work item can drop the dashboard back to the grid.
-func (m model) treeView() bool {
-	return m.mode == modeDashboard && m.useTree(m.dashItems())
-}
-
-// useTree reports whether the dashboard swaps the card grid for the tree + preview
-// split: enough items to be worth it, and enough width for the preview pane. It is
-// the single gate dashboardView and treeView both read, so they cannot drift.
-func (m model) useTree(items []dashItem) bool {
-	return len(items) > treeThreshold && m.width >= treeMinWidth
-}
+// treeView reports whether the cursor is walking a single-column list. The
+// dashboard is always one now — the card grid it used to swap to below seven items
+// is gone — so this is true for the dashboard and for every single-column overlay.
+func (m model) treeView() bool { return m.mode == modeDashboard }
 
 // summaryStrip is a row of chips counting panels in each state. It takes the
 // already-filtered dashboard fleet so the conductor is excluded without re-scanning.
@@ -3308,120 +3296,29 @@ func (m model) summaryStrip(fleet []panel.Panel) string {
 	return strings.Join(chips, mutedStyle.Render("   ·   "))
 }
 
-// cardGrid lays the dashboard out as a responsive grid of cards: a card per lone
-// panel, and one collapsed card per group.
-func (m model) cardGrid(items []dashItem) string {
-	if len(items) == 0 {
-		return ""
-	}
-	cols := gridCols(m.width) // grid mode here, so always the multi-column count
-	rows := make([]string, 0, (len(items)+cols-1)/cols)
-	for i := 0; i < len(items); i += cols {
-		end := min(i+cols, len(items))
-		cards := make([]string, 0, cols)
-		for j := i; j < end; j++ {
-			cards = append(cards, m.renderItemCard(items[j], j == m.cursor))
-		}
-		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, cards...))
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, rows...)
-}
-
-// renderItemCard draws a dashboard item: a group card for a work item, otherwise
-// a panel card.
-func (m model) renderItemCard(it dashItem, selected bool) string {
-	switch it.kind {
-	case itemGroup:
-		return m.renderGroupCard(it, selected)
-	case itemFold:
-		return m.renderFoldCard(it, selected)
-	}
-	return m.renderCard(it.panel, selected)
-}
-
 const (
-	cardWidth = 32            // outer width of one panel card, incl. border + padding
-	cardGap   = 1             // horizontal margin between cards
-	cardInner = cardWidth - 4 // usable text width inside the border + padding
+	// previewWidth is what the optional preview pane takes when it is showing. The
+	// tree keeps the rest, which is the point of the pane being optional: a preview
+	// is worth its width while you are watching a fleet and in the way while you are
+	// reorganising one.
+	previewWidth = 48
 
-	treeThreshold = 6  // fleets larger than this swap the grid for the tree split
-	treeListWidth = 30 // outer width of the tree pane, incl. border + padding
-
-	// treeMinWidth gates the tree+preview split: below it the preview pane would be
-	// too narrow (even negative), so the dashboard stays on the card grid.
-	treeMinWidth = treeListWidth + 30
+	// previewMinTree is the tree width below which the preview is not offered at
+	// all: two cramped panes tell you less than one usable one.
+	previewMinTree = 60
 
 	// minWidth/minHeight are the smallest viewport the cockpit will lay out. Below
 	// either, render() shows a graceful "terminal too small" notice instead of
 	// flowing into width math that would go negative and render garbage.
-	minWidth  = cardWidth + 2
+	//
+	// The floor used to be a card's width plus its border. A tree row has no border
+	// and no fixed width — it drops columns until only the name is left — so it is
+	// legible in a terminal a card grid could not have been laid out in at all.
+	minWidth  = 24
 	minHeight = 8
 )
 
-// renderCard draws one panel as three tidy lines that never wrap: a status LED +
-// title, a kind badge + state, and a sparkline + meta footer. The selected card
-// glows in the brand colour.
-func (m model) renderCard(p panel.Panel, selected bool) string {
-	info := stateInfoFor(p)
-
-	border := colFaint
-	titleColor := colInk
-	if selected {
-		border = colBrand
-		titleColor = colBrandHi
-	}
-
-	mark := ""
-	if m.selecting() {
-		mark = markCell(m.marked[p.ID])
-	}
-	// A favourite prefixes a ⊙ before the state LED, exactly as the split marks a
-	// pinned tile. The title's width shrinks by the prefix so the head never wraps
-	// and the card stays the same size; clampWidth is a final guard.
-	fav := ""
-	if p.Favourite {
-		fav = lipgloss.NewStyle().Foreground(colBrandHi).Render("⊙") + " "
-	}
-	// A panel being written to disk is badged beside the favourite mark, on the
-	// same terms: it costs the title a column and never a line, so a logging card
-	// is the same size as every other one.
-	rec := m.logBadge(p)
-	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
-	title := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(p.Title, max(1, cardInner-4-lipgloss.Width(fav)-lipgloss.Width(rec))))
-	head := clampWidth(mark+fav+rec+led+" "+title, cardInner)
-
-	badge := kindBadge(p.Kind)
-	state := lipgloss.NewStyle().Foreground(info.color).Render(info.label)
-	kindLine := badge + "  " + state
-	// The directory rides the state line rather than a line of its own: the card is
-	// three lines by design, and the path is what tells fifty panels called
-	// "shell #1"…"#50" apart. It is shortened rather than truncated, so the tail —
-	// the part that identifies the panel — is what survives a narrow card.
-	if room := cardInner - lipgloss.Width(kindLine) - 2; p.Cwd != "" && room > 6 {
-		kindLine += "  " + mutedStyle.Render(shortPath(p.Cwd, room))
-	}
-
-	spark := lipgloss.NewStyle().Foreground(info.color).Render(p.Spark)
-	// When the panel carries a dispatched brief, the task headlines the footer (▸)
-	// instead of the bare activity line — for an agent at work the objective says
-	// more at a glance than "running · 3m". Height stays at three lines either way.
-	footText, glyph := p.Activity, ""
-	if p.Task != "" {
-		footText, glyph = p.Task, "▸ "
-	}
-	footer := spark + "  " + mutedStyle.Render(truncate(glyph+footText, cardInner-lipgloss.Width(spark)-2))
-
-	style := lipgloss.NewStyle().
-		Width(cardWidth-2).
-		Padding(0, 1).
-		MarginRight(cardGap).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(border)
-
-	return style.Render(lipgloss.JoinVertical(lipgloss.Left, head, kindLine, footer))
-}
-
-// shortPath renders a working directory small enough for a card: the home
+// shortPath renders a working directory small enough for a tree row: the home
 // directory becomes "~", and a path still too wide keeps its last components
 // behind an ellipsis. The tail is kept rather than the head because the tail is
 // what distinguishes one panel from another — every worktree under one repo
@@ -3458,38 +3355,54 @@ func kindBadge(kind panel.Kind) string {
 	return lipgloss.NewStyle().Foreground(colDark).Background(bg).Bold(true).Padding(0, 1).Render(label)
 }
 
-// treeAndPreview renders the large-fleet layout: a compact, scrolling tree of
-// items (panels and groups) on the left, and a preview window for the selected
-// item on the right. The two panes share a height so they read as a unit and
-// stay within the dashboard's vertical space.
-func (m model) treeAndPreview(items []dashItem) string {
-	previewW := m.width - treeListWidth - 2 // 1-cell gutter, leave a little air
-	previewW = min(64, max(34, previewW))
+// treeBody is the dashboard: one full-width tree, and the preview pane beside it
+// when it is switched on.
+//
+// The tree gets the width by default, which is the whole reason the preview became
+// a toggle. The layout this replaced pinned the tree at 30 columns and the preview
+// at up to 64, so a 200-column terminal used 95 and left 105 empty — while the rows
+// in those 30 columns had no room for the state, the directory or the task that the
+// card grid had been showing all along.
+func (m model) treeBody(items []dashItem) string {
+	if len(items) == 0 {
+		return ""
+	}
+	// lipgloss counts padding inside Width and the border outside it, so a pane
+	// asked for W lays its content out in W-2. Rendering rows at the pane width
+	// instead of the content width overflows by exactly those two columns, and an
+	// overflowing row WRAPS rather than truncating — one row too wide becomes two,
+	// and the tree's shape is gone.
+	const paneChrome = 2 // the border
+	const panePad = 2    // the padding lipgloss counts inside Width
+
+	treeW := m.width - paneChrome - 2 // leave a little air at the edges
+	previewW := 0
+	if m.preview && treeW-previewWidth >= previewMinTree {
+		previewW = previewWidth
+		treeW -= previewW + 1 // 1-cell gutter
+	}
 
 	visible := m.treeVisibleRows(len(items))
 	start, end := scrollWindow(m.cursor, len(items), visible)
+	tree := m.renderRows(items, start, end, visible, treeW-panePad)
 
-	tree := m.renderTree(items, start, end, visible)
-	preview := m.renderPreview(items, previewW-4) // inner text width
-
-	h := max(lipgloss.Height(tree), lipgloss.Height(preview))
 	pane := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
+	if previewW == 0 {
+		return pane.Width(treeW).BorderForeground(colBrand).Render(tree)
+	}
 
-	leftPane := pane.
-		Width(treeListWidth - 2).Height(h).
-		BorderForeground(colBrand).
-		Render(tree)
-	rightPane := pane.
-		Width(previewW - 2).Height(h).
-		BorderForeground(colFaint).
-		Render(preview)
-
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, " ", rightPane)
+	preview := m.renderPreview(items, previewW-4)
+	h := max(lipgloss.Height(tree), lipgloss.Height(preview))
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		pane.Width(treeW).Height(h).BorderForeground(colBrand).Render(tree),
+		" ",
+		pane.Width(previewW-2).Height(h).BorderForeground(colFaint).Render(preview),
+	)
 }
 
-// treeVisibleRows is how many item rows fit in the tree pane at the current
-// height, after reserving the banner, headings, summary, footer, and borders. It
-// never claims more rows than there are items (count).
+// treeVisibleRows is how many rows fit in the tree pane at the current height,
+// after reserving the banner, headings, summary, footer, and pane chrome. It never
+// claims more rows than there are items (count).
 func (m model) treeVisibleRows(count int) int {
 	const reserved = 18 // banner + headings + summary + footer + pane chrome
 	v := m.height - reserved
@@ -3518,10 +3431,9 @@ func scrollWindow(cursor, count, visible int) (int, int) {
 	return start, start + visible
 }
 
-// renderTree is the left pane: the windowed slice [start,end) of dashboard items,
-// one line each — a panel (LED + name) or a group (▣ + name + count) — with the
-// selected row lit in the brand colour and a position counter when it scrolls.
-func (m model) renderTree(items []dashItem, start, end, visible int) string {
+// renderRows draws the windowed slice [start,end) of the tree, one line each, with
+// the clipped edges marked so it is clear the list continues.
+func (m model) renderRows(items []dashItem, start, end, visible, width int) string {
 	header := sectionStyle.Render(spaced("FLEET"))
 	if visible < len(items) {
 		header += mutedStyle.Render(fmt.Sprintf("  %d/%d", m.cursor+1, len(items)))
@@ -3530,67 +3442,55 @@ func (m model) renderTree(items []dashItem, start, end, visible int) string {
 	rows := make([]string, 0, visible+2)
 	rows = append(rows, header, "")
 	for i := start; i < end; i++ {
-		it := items[i]
-		selected := i == m.cursor
-		caret := "  "
-		if selected {
-			caret = "▸ "
+		row := m.treeRow(items[i], i == m.cursor, width)
+		// The edge markers replace the row's first cell rather than adding a column,
+		// so the tree's indentation is not shifted by whether it happens to be
+		// scrolled — a shape that moved sideways as you scrolled would be worse than
+		// no marker at all.
+		switch {
+		case i == start && start > 0:
+			row = overwriteFirstCell(row, mutedStyle.Render("↑"))
+		case i == end-1 && end < len(items):
+			row = overwriteFirstCell(row, mutedStyle.Render("↓"))
 		}
-		// Mark the clipped edges so it is clear the list continues.
-		if i == start && start > 0 {
-			caret = mutedStyle.Render("↑ ")
-		} else if i == end-1 && end < len(items) {
-			caret = mutedStyle.Render("↓ ")
-		}
-
-		// The cursor caret and the fold row's disclosure marker are the same glyph, so
-		// a selected fold row would read "▸ ▸ 12 quiet". The caret is what goes: the
-		// row is already drawn in inverse video, which says "selected" without
-		// spending a character, whereas the disclosure marker is the only thing on
-		// the row saying which way it will go when you press enter.
-		if it.kind == itemFold && caret == "▸ " {
-			caret = "  "
-		}
-
-		mark := ""
-		if m.selecting() {
-			mark = markCell(m.itemMarked(it))
-		}
-
-		var glyph, label, need string
-		switch it.kind {
-		case itemFold:
-			glyph = lipgloss.NewStyle().Foreground(states[panel.Idle].color).Render(m.foldGlyph(it.parent))
-			label = it.title()
-		case itemGroup:
-			info := states[groupState(it.members)]
-			glyph = lipgloss.NewStyle().Foreground(info.color).Render("▣")
-			label = fmt.Sprintf("%s (%d)", it.title(), len(it.members))
-			// The tree is the view a 50-panel fleet actually lives in, so this — not
-			// the card grid — is where the need count has to land for the issue's
-			// promise to hold. It trails the row rather than replacing anything, and
-			// the name's budget shrinks by its width so a long group name still
-			// truncates instead of pushing the count off the edge.
-			need = " " + needChip(it.need)
-			if it.need <= 0 {
-				need = ""
-			}
-		default:
-			info := stateInfoFor(it.panel)
-			glyph = lipgloss.NewStyle().Foreground(info.color).Render(info.led)
-			label = it.title()
-		}
-		name := truncate(label, treeListWidth-9-lipgloss.Width(mark)-lipgloss.Width(need))
-
-		row := lipgloss.NewStyle().Width(treeListWidth - 4)
-		if selected {
-			row = row.Foreground(colDark).Background(colBrand).Bold(true)
-		} else {
-			row = row.Foreground(colInk)
-		}
-		rows = append(rows, row.Render(caret+mark+glyph+" "+name+need))
+		rows = append(rows, row)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+}
+
+// overwriteFirstCell replaces a rendered row's leading column with a marker,
+// keeping the row's width. It works on the rendered string because the marker is
+// styled differently from the row it lands on.
+func overwriteFirstCell(row, cell string) string {
+	if lipgloss.Width(row) == 0 {
+		return cell
+	}
+	return cell + trimFirstCell(row)
+}
+
+// trimFirstCell drops the first display column of a rendered row, leaving its
+// styling for the rest intact.
+func trimFirstCell(row string) string {
+	seen := false
+	var b strings.Builder
+	inEsc := false
+	for _, r := range row {
+		switch {
+		case inEsc:
+			b.WriteRune(r)
+			if r == 'm' {
+				inEsc = false
+			}
+		case r == 0x1b:
+			inEsc = true
+			b.WriteRune(r)
+		case !seen:
+			seen = true // drop exactly one printable cell
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // renderPreview is the right pane: a metadata block for the selected panel, or a

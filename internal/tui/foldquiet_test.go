@@ -400,17 +400,17 @@ func TestFoldRowRenders(t *testing.T) {
 	items := m.dashItems()
 	row := items[m.cursor]
 
-	if card := m.renderItemCard(row, true); !strings.Contains(card, "12 quiet") || !strings.Contains(card, "▸") {
+	if card := m.rowOf(row); !strings.Contains(card, "12 quiet") || !strings.Contains(card, "▸") {
 		t.Errorf("fold card does not read as a closed quiet row:\n%s", card)
 	}
-	if tree := m.renderTree(items, 0, len(items), len(items)); !strings.Contains(tree, "12 quiet") {
+	if tree := m.renderRows(items, 0, len(items), len(items), testRowWidth); !strings.Contains(tree, "12 quiet") {
 		t.Errorf("tree is missing the fold row:\n%s", tree)
 	}
 	if prev := m.renderPreview(items, 44); !strings.Contains(prev, "12 quiet") {
 		t.Errorf("preview is missing the fold row:\n%s", prev)
 	}
 	m.foldOpen = map[string]bool{"": true}
-	if card := m.renderItemCard(row, false); !strings.Contains(card, "▾") {
+	if card := m.rowOf(row); !strings.Contains(card, "▾") {
 		t.Errorf("an expanded fold row should show the open glyph:\n%s", card)
 	}
 	// The whole dashboard still draws, folded and expanded, in both layouts.
@@ -670,14 +670,14 @@ func TestMoveTargetStepsOverAnEmptyUnit(t *testing.T) {
 func TestSelectedFoldRowShowsOneMarker(t *testing.T) {
 	m := foldedModel(t)
 	items := m.dashItems()
-	tree := m.renderTree(items, 0, len(items), len(items))
+	tree := m.renderRows(items, 0, len(items), len(items), testRowWidth)
 	if n := strings.Count(tree, "▸"); n != 1 {
 		t.Fatalf("the selected fold row should carry exactly one ▸, the tree has %d:\n%s", n, tree)
 	}
 	// And the disclosure glyph is the one that survived: expanding flips it.
 	m.foldOpen = map[string]bool{"": true}
 	items = m.dashItems()
-	if tree := m.renderTree(items, 0, len(items), len(items)); !strings.Contains(tree, "▾") {
+	if tree := m.renderRows(items, 0, len(items), len(items), testRowWidth); !strings.Contains(tree, "▾") {
 		t.Fatalf("an expanded row should show ▾ in the tree:\n%s", tree)
 	}
 }

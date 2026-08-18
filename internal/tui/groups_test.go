@@ -549,12 +549,12 @@ func TestGroupCardSparklineWhenActive(t *testing.T) {
 
 	const bars = "▂▃▅▇▆▃▁"
 	active := dashItem{kind: itemGroup, name: "api", members: []panel.Panel{{State: panel.Running, Spark: bars}}}
-	if !strings.Contains(m.renderGroupCard(active, false), bars) {
+	if !strings.Contains(m.rowOf(active), bars) {
 		t.Fatal("an active group card should show its member's live sparkline")
 	}
 
 	done := dashItem{kind: itemGroup, name: "db", members: []panel.Panel{{State: panel.Exited, Spark: bars}}}
-	if strings.Contains(m.renderGroupCard(done, false), bars) {
+	if strings.Contains(m.rowOf(done), bars) {
 		t.Fatal("a done group card should not animate")
 	}
 }
@@ -833,7 +833,7 @@ func TestDetachWithPrefixQ(t *testing.T) {
 // second row — is exactly the same size as a plain panel card, so the grid stays even.
 func TestGroupCardHeightMatchesPanel(t *testing.T) {
 	m := baseModel()
-	panelCard := m.renderCard(panel.Panel{ID: "9", Kind: panel.Agent, Title: "worker", State: panel.Running, Task: "do the thing"}, false)
+	panelCard := m.rowOfPanel(panel.Panel{ID: "9", Kind: panel.Agent, Title: "worker", State: panel.Running, Task: "do the thing"})
 	wantH, wantW := lipgloss.Height(panelCard), lipgloss.Width(panelCard)
 
 	gog := dashItem{kind: itemGroup, name: "backend", members: []panel.Panel{
@@ -849,7 +849,7 @@ func TestGroupCardHeightMatchesPanel(t *testing.T) {
 			} else {
 				m.marked = nil
 			}
-			card := m.renderGroupCard(gog, sel)
+			card := m.treeRow(gog, sel, testRowWidth)
 			if h, w := lipgloss.Height(card), lipgloss.Width(card); h != wantH || w != wantW {
 				t.Fatalf("group-of-group card sel=%v marking=%v is %dx%d, want %dx%d (a panel card)", sel, marking, w, h, wantW, wantH)
 			}
