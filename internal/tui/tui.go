@@ -3472,17 +3472,26 @@ func (m model) renderTree(items []dashItem, start, end, visible int) string {
 			mark = markCell(m.itemMarked(it))
 		}
 
-		var glyph, label string
+		var glyph, label, need string
 		if it.kind == itemGroup {
 			info := states[groupState(it.members)]
 			glyph = lipgloss.NewStyle().Foreground(info.color).Render("▣")
 			label = fmt.Sprintf("%s (%d)", it.title(), len(it.members))
+			// The tree is the view a 50-panel fleet actually lives in, so this — not
+			// the card grid — is where the need count has to land for the issue's
+			// promise to hold. It trails the row rather than replacing anything, and
+			// the name's budget shrinks by its width so a long group name still
+			// truncates instead of pushing the count off the edge.
+			need = " " + needChip(it.need)
+			if it.need <= 0 {
+				need = ""
+			}
 		} else {
 			info := stateInfoFor(it.panel)
 			glyph = lipgloss.NewStyle().Foreground(info.color).Render(info.led)
 			label = it.title()
 		}
-		name := truncate(label, treeListWidth-9-lipgloss.Width(mark))
+		name := truncate(label, treeListWidth-9-lipgloss.Width(mark)-lipgloss.Width(need))
 
 		row := lipgloss.NewStyle().Width(treeListWidth - 4)
 		if selected {
@@ -3490,7 +3499,7 @@ func (m model) renderTree(items []dashItem, start, end, visible int) string {
 		} else {
 			row = row.Foreground(colInk)
 		}
-		rows = append(rows, row.Render(caret+mark+glyph+" "+name))
+		rows = append(rows, row.Render(caret+mark+glyph+" "+name+need))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }

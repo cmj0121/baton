@@ -28,6 +28,13 @@ type dashItem struct {
 	panel   panel.Panel   // itemPanel: the panel itself
 	name    string        // itemGroup: the work-item name
 	members []panel.Panel // itemGroup: panels filed under name, in fleet order
+
+	// need is how many of a group's members the attention inbox would queue right
+	// now — the ◆N on the card head and the tree row. It is carried on the item
+	// rather than recomputed by each renderer because the dashboard draws the same
+	// group twice (card and preview, or tree row and preview) in one frame, and
+	// counting it once per fold is what keeps a 50-panel render linear.
+	need int
 }
 
 // dashItems projects the flat fleet into the dashboard's cursor model: lone
@@ -36,9 +43,17 @@ type dashItem struct {
 // group folds its **whole subtree** (every descendant panel) into one card, and the
 // hierarchy is walked by descending in the split. Order is stable and follows the
 // fleet, so the cursor never jumps when a snapshot arrives with the same shape.
+//
+// The need counts ride along, and they deliberately do NOT change the order. The
+// issue is explicit that the dashboard must not re-sort by need: a card moving
+// under the cursor because a panel elsewhere started asking a question is the same
+// disorientation the inbox's frozen ordering exists to avoid, and it is worse here
+// because the dashboard is where you are looking when it happens. The tree says
+// WHERE the work is by annotating the shape, never by rearranging it.
 func (m model) dashItems() []dashItem {
 	items := make([]dashItem, 0, len(m.fleet))
 	groupAt := make(map[string]int) // top-level group name -> index into items
+	need := m.needByGroup()
 	for _, p := range m.fleet {
 		if p.Conductor || p.GlobalShell {
 			continue // the two singletons are marks in the FLEET heading, not cards/groups
@@ -53,7 +68,7 @@ func (m model) dashItems() []dashItem {
 			continue
 		}
 		groupAt[top] = len(items)
-		items = append(items, dashItem{kind: itemGroup, name: top, members: []panel.Panel{p}})
+		items = append(items, dashItem{kind: itemGroup, name: top, members: []panel.Panel{p}, need: need[top]})
 	}
 	items = filterItems(items, m.filter)
 	// Float favourited cards to the front, preserving the fleet order within the
@@ -71,6 +86,42 @@ func (m model) dashItems() []dashItem {
 		}
 	})
 	return items
+}
+
+// needByGroup tallies, per top-level group, how many of its panels the attention
+// inbox would queue right now — the ◆N a group header carries.
+//
+// It asks inboxQualifies rather than restating what "needs you" means, and that is
+// the whole point of the function. The dashboard's count and the queue C-t a opens
+// are two renderings of one predicate; the moment they are two predicates, a header
+// says a group has two panels waiting and the queue offers one, and the operator
+// has to decide which of baton's own screens is lying. Reading the WIRE snapshot
+// rather than m.fleet is part of the same argument: Acked — whether a human already
+// dealt with a panel — is fleet state the domain model deliberately does not carry,
+// so counting from m.fleet would keep re-flagging work somebody has already cleared.
+//
+// Lone panels are skipped because their own card already shows the state LED that
+// would have earned them a row; a count beside it would say the same thing twice.
+//
+// Cost: one pass over the snapshot, one map read per group card, and — on the
+// common path of a fleet where nothing is asking — no allocation at all, since the
+// map is built only once something qualifies. That matters because this runs inside
+// dashItems, which the dashboard evaluates several times per frame.
+func (m model) needByGroup() map[string]int {
+	var need map[string]int
+	for _, p := range m.inboxWire {
+		if p.Group == "" {
+			continue
+		}
+		if _, ok := inboxQualifies(p, m.inboxDone); !ok {
+			continue
+		}
+		if need == nil {
+			need = make(map[string]int)
+		}
+		need[panel.GroupTop(p.Group)]++ // the card folds the subtree, so the count must too
+	}
+	return need
 }
 
 // itemFavourite reports whether a dashboard item is a favourite: a lone panel by
@@ -803,19 +854,25 @@ func (m model) renderGroupCard(it dashItem, selected bool) string {
 	// A nested group notes its immediate sub-group count right-aligned in the head —
 	// the same place the split's sub-group tile shows it — rather than trailing the
 	// kind line, so that line can never spill onto a second row and grow the card one
-	// taller than a panel card.
-	sub := ""
+	// taller than a panel card. The need count joins it there, ahead of it, in
+	// attention's own red: a card that folds fifty panels into one glyph otherwise
+	// says how big the group is and nothing about how much of it is waiting on you.
+	tally := needChip(it.need)
 	if n := subGroupCount(it.members, it.name); n > 0 {
-		sub = lipgloss.NewStyle().Foreground(colBrand).Render(fmt.Sprintf("▣%d", n))
+		sub := lipgloss.NewStyle().Foreground(colBrand).Render(fmt.Sprintf("▣%d", n))
+		if tally != "" {
+			sub = " " + sub
+		}
+		tally += sub
 	}
-	avail := cardInner - lipgloss.Width(mark) - lipgloss.Width(fav) - 2 - lipgloss.Width(sub) // glyph + its trailing space = 2
-	if sub != "" {
-		avail-- // a gap before the right-aligned count
+	avail := cardInner - lipgloss.Width(mark) - lipgloss.Width(fav) - 2 - lipgloss.Width(tally) // glyph + its trailing space = 2
+	if tally != "" {
+		avail-- // a gap before the right-aligned counts
 	}
 	name := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(it.title(), max(1, avail)))
 	head := mark + fav + glyph + " " + name
-	if sub != "" {
-		head = padEnds(head, sub, cardInner)
+	if tally != "" {
+		head = padEnds(head, tally, cardInner)
 	}
 	head = clampWidth(head, cardInner)
 
@@ -852,6 +909,9 @@ func (m model) renderGroupPreview(it dashItem, width int) string {
 	title := lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(truncate(it.title(), width))
 	statusLine := groupBadge() + "  " +
 		mutedStyle.Render(fmt.Sprintf("%d panel(s)", len(it.members))) + "  " + kindBreakdown(it.members)
+	if chip := needChip(it.need); chip != "" {
+		statusLine += "  " + chip + mutedStyle.Render(" need you")
+	}
 	if n := subGroupCount(it.members, it.name); n > 0 {
 		statusLine += lipgloss.NewStyle().Foreground(colBrand).Render(fmt.Sprintf("  ▣ %d sub-group(s)", n))
 	}
@@ -869,6 +929,22 @@ func (m model) renderGroupPreview(it dashItem, width int) string {
 	return lipgloss.JoinVertical(lipgloss.Left,
 		title, statusLine, rule, "", lipgloss.JoinVertical(lipgloss.Left, roster...),
 	)
+}
+
+// needChip renders a group's need count — "◆2" in attention's red — or the empty
+// string when nothing in the group is waiting on a human. One helper for the card
+// head, the tree row, and the preview, so the three cannot drift into three
+// different glyphs for one number.
+//
+// It borrows attention's glyph rather than inventing one, because the count is the
+// sum of four different reasons (asking, wedged, failed, finished) and a group card
+// has no room to break them out. ◆ is what the fleet strip already uses for "this
+// wants you", which is the only claim the number is making.
+func needChip(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return lipgloss.NewStyle().Foreground(states[panel.Attention].color).Bold(true).Render(fmt.Sprintf("◆%d", n))
 }
 
 // groupBadge tags a card as a work item, mirroring kindBadge's look.
