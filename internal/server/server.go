@@ -205,6 +205,13 @@ type Server struct {
 	pluginCmds   []proto.PluginCommand
 	footerText   string // a plugin-set persistent footer segment (baton.footer); carried on config + pushed live
 
+	// agents is the set of agent backends this host can actually run, detected by
+	// the daemon at boot and on every reload. It lives on the server rather than
+	// being resolved by each frontend because the PATH that matters is the one the
+	// PANELS are spawned from: a cockpit attached over --remote would otherwise
+	// offer a list of the binaries on its own machine, which is worse than no list.
+	agents []proto.AgentBackend
+
 	// Account usage footer. usageProvider polls the current account's token/cost
 	// usage over the billing window (internal/usage); a nil provider disables the
 	// segment. usageInterval is the poll cadence; usageText and usageInfo are the
@@ -1693,9 +1700,9 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		// fill its command picker. Empty until a plugin sets them — the client then
 		// just keeps its local config.
 		s.mu.Lock()
-		cfg, cmds, footer := s.clientConfig, s.pluginCmds, s.footerText
+		cfg, cmds, footer, backends := s.clientConfig, s.pluginCmds, s.footerText, s.agents
 		s.mu.Unlock()
-		send(cc, proto.ServerMsg{Type: "config", Config: cfg, Commands: cmds, Footer: footer})
+		send(cc, proto.ServerMsg{Type: "config", Config: cfg, Commands: cmds, Footer: footer, Agents: backends})
 	case "command.run":
 		// Invoke a plugin-registered command by name on the Lua worker. The run is
 		// fire-and-forget from the wire's view; any fleet change it makes broadcasts

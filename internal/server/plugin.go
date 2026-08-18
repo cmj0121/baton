@@ -109,6 +109,16 @@ func (s *Server) SetClientConfig(cfg json.RawMessage) {
 	s.mu.Unlock()
 }
 
+// SetAgents publishes the agent backends detected on this host — the list a
+// cockpit offers when spawning an agent panel. The daemon sets it after each
+// config load, so a reload that installs or removes an agent CLI is what
+// refreshes it; there is no separate re-detect command to keep in step.
+func (s *Server) SetAgents(list []proto.AgentBackend) {
+	s.mu.Lock()
+	s.agents = list
+	s.mu.Unlock()
+}
+
 // SetPluginCommands publishes the plugin command list the picker shows. Refreshed on
 // each (re)load; the previous set is replaced wholesale.
 func (s *Server) SetPluginCommands(cmds []proto.PluginCommand) {
@@ -122,7 +132,7 @@ func (s *Server) SetPluginCommands(cmds []proto.PluginCommand) {
 // commands without reattaching.
 func (s *Server) PushConfig() {
 	s.mu.Lock()
-	msg := proto.ServerMsg{Type: "config", Config: s.clientConfig, Commands: s.pluginCmds, Footer: s.footerText}
+	msg := proto.ServerMsg{Type: "config", Config: s.clientConfig, Commands: s.pluginCmds, Footer: s.footerText, Agents: s.agents}
 	s.mu.Unlock()
 	// The reload that introduces the first cap is also what commits to a backend,
 	// so the mode rides the push as well as the welcome — otherwise a cockpit that
