@@ -377,6 +377,30 @@ type model struct {
 	inboxTailAt    time.Time
 	inboxDone      bool          // settings.inbox-done: does a finished agent join the queue at all
 	inboxSnooze    time.Duration // settings.inbox-snooze: how long `-` defers a row
+
+	// The dashboard's quiet fold (settings.fold-quiet). See foldQuietItems.
+	//
+	// foldQuiet is the threshold: more quiet panels than this and they collapse
+	// into one expandable row; 0 never folds. foldExpanded is that row's state,
+	// and one flag is enough because there is at most one such row.
+	//
+	// foldKeepID is the panel the fold may not swallow: the one the cursor rested
+	// on before the last snapshot refolded the fleet. It has to be an identity
+	// rather than an index, and it has to be captured BEFORE the fleet changes,
+	// because the case worth protecting is precisely the one where a card the
+	// cursor is on goes quiet — where an index no longer names the same thing on
+	// either side of the fold. restoreCursor already receives that identity for
+	// its own reasons; this borrows it rather than capturing it twice.
+	//
+	// It therefore goes STALE while you are anywhere but the dashboard, because
+	// restoreCursor only runs on the dashboard path — a zoom or a split takes the
+	// snapshot's clampCursor branch instead. The cost of that is one resting panel
+	// keeping a card it would otherwise have lost, until the first snapshot after
+	// you come back; the alternative is a second capture in a view where the
+	// dashboard cursor is not being looked at anyway.
+	foldQuiet    int
+	foldExpanded bool
+	foldKeepID   string
 }
 
 // inputPurpose is what an active text-input overlay feeds on submit.
@@ -447,6 +471,7 @@ func (m model) applyPrefs(p prefs) model {
 	m.tuiCfg = p.tui
 	m.lang = p.lang
 	m.foldSimilar = p.foldSimilar
+	m.foldQuiet = p.foldQuiet
 	applyTheme(p.tui.Theme) // resolve the colour tokens into the package palette
 	return m
 }
@@ -1314,6 +1339,15 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.move(-1)
 		return m, nil
 	case "right", "l":
+		// → opens the quiet row where it would otherwise step past it: the row is the
+		// only dashboard item with something INSIDE it, and → is how every tree in
+		// this cockpit descends. It closes it again for symmetry, so the key that
+		// opened it is the key that undoes it.
+		if m.mode == modeDashboard {
+			if it, ok := m.selectedItem(); ok && it.kind == itemFold {
+				return m.toggleFold(), nil
+			}
+		}
 		m.move(1)
 		return m, nil
 	case "shift+up", "shift+left":
@@ -1355,6 +1389,12 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = ""
 			return m, nil
 		}
+		// esc unwinds the dashboard one layer at a time, innermost first: the quiet
+		// row folds back up before an applied filter is cleared, so escaping out of
+		// an expanded fold does not also throw away the search that got you there.
+		if m.mode == modeDashboard && m.foldExpanded && m.foldRowShowing() {
+			return m.toggleFold(), nil
+		}
 		if m.mode == modeDashboard && m.filter != "" { // esc on the dashboard clears an applied filter first
 			m.filter, m.cursor = "", 0
 			m.status = "filter cleared"
@@ -1367,6 +1407,10 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// On the dashboard every command is a single key.
 		if m.mode == modeDashboard {
 			if b, ok := m.lookupCmd(key); ok {
+				if m.refusedOnFoldRow(b.act) {
+					m.status = "expand the quiet group first"
+					return m, nil
+				}
 				return m.runAction(b.act)
 			}
 		}
@@ -2417,10 +2461,15 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 	if m.mode == modePanelConfig {
 		return m.editPanelRow()
 	}
-	// Dashboard: zoom into the selected panel, or open the group's split.
+	// Dashboard: zoom into the selected panel, open the group's split, or — on the
+	// quiet row — unfold it. enter means "go into this thing" everywhere else on
+	// the dashboard, and the row's contents are the thing it goes into.
 	if it, ok := m.selectedItem(); ok {
-		if it.kind == itemGroup {
+		switch it.kind {
+		case itemGroup:
 			return m.zoomGroup(it), nil
+		case itemFold:
+			return m.toggleFold(), nil
 		}
 		return m.zoomInto(it.panel), nil
 	}
@@ -2955,7 +3004,11 @@ func (m *model) clampCursor() {
 // nothing is selected.
 func (m model) selectedKey() (kind dashKind, id, group string, ok bool) {
 	it, ok := m.selectedItem()
-	if !ok {
+	// The quiet fold row has no identity to capture: it is not a panel and not a
+	// group, and it exists only for as long as the fold does. Reporting one would
+	// hand restoreCursor a key that can never match, which is exactly what ok=false
+	// already means — and it keeps foldKeepID from pinning a panel nobody selected.
+	if !ok || it.kind == itemFold {
 		return itemPanel, "", "", false
 	}
 	if it.kind == itemGroup {
@@ -2970,6 +3023,11 @@ func (m model) selectedKey() (kind dashKind, id, group string, ok bool) {
 // so the selection follows the panel into its new home. It falls back to a
 // bounds clamp when the item is gone (closed, exited-and-purged).
 func (m *model) restoreCursor(kind dashKind, id, group string, had bool) {
+	// Hand the quiet fold the card the cursor was on BEFORE this snapshot, so a
+	// panel that just went idle under the cursor is not folded away in the same
+	// frame that the cursor is asked to find it again. This is the one place the
+	// pre-change identity exists; everywhere else it has already been overwritten.
+	m.foldKeepID = id
 	if !had {
 		m.clampCursor()
 		return
@@ -3261,8 +3319,11 @@ func (m model) cardGrid(items []dashItem) string {
 // renderItemCard draws a dashboard item: a group card for a work item, otherwise
 // a panel card.
 func (m model) renderItemCard(it dashItem, selected bool) string {
-	if it.kind == itemGroup {
+	switch it.kind {
+	case itemGroup:
 		return m.renderGroupCard(it, selected)
+	case itemFold:
+		return m.renderFoldCard(it, selected)
 	}
 	return m.renderCard(it.panel, selected)
 }
@@ -3467,13 +3528,26 @@ func (m model) renderTree(items []dashItem, start, end, visible int) string {
 			caret = mutedStyle.Render("↓ ")
 		}
 
+		// The cursor caret and the fold row's disclosure marker are the same glyph, so
+		// a selected fold row would read "▸ ▸ 12 quiet". The caret is what goes: the
+		// row is already drawn in inverse video, which says "selected" without
+		// spending a character, whereas the disclosure marker is the only thing on
+		// the row saying which way it will go when you press enter.
+		if it.kind == itemFold && caret == "▸ " {
+			caret = "  "
+		}
+
 		mark := ""
 		if m.selecting() {
 			mark = markCell(m.itemMarked(it))
 		}
 
 		var glyph, label, need string
-		if it.kind == itemGroup {
+		switch it.kind {
+		case itemFold:
+			glyph = lipgloss.NewStyle().Foreground(states[panel.Idle].color).Render(m.foldGlyph())
+			label = it.title()
+		case itemGroup:
 			info := states[groupState(it.members)]
 			glyph = lipgloss.NewStyle().Foreground(info.color).Render("▣")
 			label = fmt.Sprintf("%s (%d)", it.title(), len(it.members))
@@ -3486,7 +3560,7 @@ func (m model) renderTree(items []dashItem, start, end, visible int) string {
 			if it.need <= 0 {
 				need = ""
 			}
-		} else {
+		default:
 			info := stateInfoFor(it.panel)
 			glyph = lipgloss.NewStyle().Foreground(info.color).Render(info.led)
 			label = it.title()
@@ -3511,8 +3585,11 @@ func (m model) renderPreview(items []dashItem, width int) string {
 		return mutedStyle.Render("no panel selected")
 	}
 	it := items[m.cursor]
-	if it.kind == itemGroup {
+	switch it.kind {
+	case itemGroup:
 		return m.renderGroupPreview(it, width)
+	case itemFold:
+		return m.renderFoldPreview(it, width)
 	}
 	p := it.panel
 	info := stateInfoFor(p)

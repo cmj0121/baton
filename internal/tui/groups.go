@@ -17,7 +17,24 @@ type dashKind int
 const (
 	itemPanel dashKind = iota // a single ungrouped panel
 	itemGroup                 // a work item: many panels under one name
+
+	// itemFold is the "▸ N quiet" row: the panels the dashboard has folded away
+	// because nothing about them is asking for anything. It is a DISPLAY device
+	// and owns no verbs beyond opening and closing itself — see foldQuietItems.
+	itemFold
 )
+
+// defaultFoldQuiet is settings.fold-quiet's built-in: how many quiet panels the
+// dashboard shows before it folds them into one row.
+//
+// Eight is chosen off the card grid rather than off a fleet size. It is about
+// where the grid stops fitting on one screen at a normal terminal width, which is
+// the point at which a quiet panel stops being context you take in at a glance and
+// starts being something you scroll past. Below it the dashboard is byte-identical
+// to what it was before this existed, which is the property the number is really
+// picked to preserve: nobody running five panels should be able to tell the fold
+// was added.
+const defaultFoldQuiet = 8
 
 // dashItem is one cursor-addressable cell on the dashboard. A group collapses
 // all of its member panels into a single card; a lone panel stands on its own.
@@ -35,6 +52,13 @@ type dashItem struct {
 	// group twice (card and preview, or tree row and preview) in one frame, and
 	// counting it once per fold is what keeps a 50-panel render linear.
 	need int
+
+	// quiet is how many panels an itemFold row stands for. The panels themselves
+	// are NOT carried here, and members is left empty on a fold row on purpose:
+	// ids() reads members, every bulk verb reads ids(), and a fold row that
+	// answered "these fifty" to `w` would be precisely the destructive surprise
+	// this row is not allowed to be.
+	quiet int
 }
 
 // dashItems projects the flat fleet into the dashboard's cursor model: lone
@@ -85,7 +109,163 @@ func (m model) dashItems() []dashItem {
 			return 0
 		}
 	})
-	return items
+	return m.foldQuietItems(items)
+}
+
+// foldQuietItems collapses the panels nothing is happening in into a single
+// expandable row, once there are more of them than settings.fold-quiet.
+//
+// Folded, never dropped. The row expands in place and the panels come back
+// exactly where they were, because a dashboard that silently stops showing you
+// panels is a dashboard you have to keep double-checking against `baton ctl ls`,
+// and then it has cost you more than it saved. It is also why the row is inserted
+// at the position of the FIRST panel it swallowed rather than pushed to the end:
+// the tree's shape is meant to survive the fold, so that the card above the row
+// and the card below it are the same two cards they were a moment ago.
+//
+// Cost: two O(n) passes over the items and, when the fold fires, one slice. The
+// first pass only counts, because the fold has to know whether it fires before it
+// can decide where to put the row, and counting is cheaper than building a list
+// that a fleet of five would immediately throw away. Nothing is allocated per
+// member on either pass, and below the threshold — the case a small fleet is in
+// permanently — the whole thing is one count and a return of the input.
+func (m model) foldQuietItems(items []dashItem) []dashItem {
+	if m.foldQuiet <= 0 {
+		return items // settings.fold-quiet: 0 — the dashboard shows everything it has
+	}
+	n := 0
+	for i := range items {
+		if m.foldable(items[i]) {
+			n++
+		}
+	}
+	if n <= m.foldQuiet {
+		return items
+	}
+	out := make([]dashItem, 0, len(items)+1)
+	placed := false
+	for _, it := range items {
+		fold := m.foldable(it)
+		if fold && !placed {
+			out = append(out, dashItem{kind: itemFold, quiet: n})
+			placed = true
+		}
+		if !fold || m.foldExpanded {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// foldable reports whether one dashboard item is a candidate for the quiet fold.
+//
+// Quiet means the panel is idle, or exited cleanly — the two states that say
+// nothing happened and nothing is going to. A non-zero exit is not quiet: it is a
+// failure sitting there waiting to be read, and it has a row in the inbox for the
+// same reason.
+//
+// Four things are never folded, and all four are the user having already said this
+// one matters: a favourite, a pin, a member of a pending selection, and the card
+// under the cursor. The first three are the same argument that floats favourites
+// to the front of the dashboard. The last is the one that would be a bug rather
+// than a preference — a fold that swallows what you are pointing at moves the
+// selection somewhere you did not put it, which is the exact failure the tree
+// refuses to re-sort in order to avoid.
+//
+// Groups are never folded either. A group is already one card, it already carries
+// its own need count, and folding a whole work item away because its members
+// happen to be resting would hide the count that says otherwise.
+func (m model) foldable(it dashItem) bool {
+	if it.kind != itemPanel {
+		return false
+	}
+	p := it.panel
+	if p.Favourite || p.Pinned || m.marked[p.ID] || p.ID == m.foldKeepID {
+		return false
+	}
+	return p.State == panel.Idle || (p.State == panel.Exited && p.ExitCode == 0)
+}
+
+// toggleFold opens or closes the quiet row. One flag, because there is at most one
+// fold row on the dashboard: the quiet panels are one set, not one set per group.
+//
+// Both directions move the list under the cursor — collapsing removes every folded
+// row from it — so the cursor is re-anchored by IDENTITY afterwards rather than
+// left on a number that now means something else, or nothing at all. The landing
+// order is deliberate: the fold row first, then the card the cursor was on if it is
+// still on screen. That way a card that just went back INTO the fold leaves the
+// cursor on the row it went into, which is where that card now lives, instead of
+// past the end of a list that just got twelve items shorter.
+func (m model) toggleFold() model {
+	was, had := m.selectedItem()
+	m.foldExpanded = !m.foldExpanded
+	if m.foldExpanded {
+		m.status = "quiet panels shown · esc folds them again"
+	} else {
+		m.status = "quiet panels folded"
+	}
+	if at := m.foldRowIndex(); at >= 0 {
+		m.cursor = at
+	}
+	if had && was.kind != itemFold {
+		m.cursorToItem(was) // a no-match leaves the cursor on the row, which is the honest answer
+	}
+	m.clampCursor()
+	return m
+}
+
+// foldRowIndex is where the quiet row sits in the current projection, or -1 when
+// nothing is folded.
+//
+// esc consults it (through foldRowShowing) before collapsing, so that an expanded
+// flag left standing over a fleet with nothing to fold — filter it down to three
+// panels and there is no row — does not swallow the keystroke and answer "quiet
+// panels folded" to somebody who was trying to clear the filter. It walks the fold
+// once, on a keypress rather than on a frame.
+func (m model) foldRowIndex() int {
+	if m.foldQuiet <= 0 {
+		return -1
+	}
+	for i, it := range m.dashItems() {
+		if it.kind == itemFold {
+			return i
+		}
+	}
+	return -1
+}
+
+// foldRowShowing reports whether the quiet row is actually on the dashboard.
+func (m model) foldRowShowing() bool { return m.foldRowIndex() >= 0 }
+
+// foldRowVerbs are the dashboard actions that act on whatever the cursor is
+// resting on. Each of them is refused on a fold row.
+//
+// The fold row is a display device. Letting `w` close "the quiet ones" would be a
+// bulk destructive action reachable by one keystroke on a row whose whole purpose
+// is that you have not looked at its contents — which is the surprise the plan spun
+// synchronized-input out to avoid, arrived at from the other direction. Expanding
+// first costs one keystroke and puts the panels back under the verbs they already
+// have, individually, where the confirmation prompt names what it is about to do.
+//
+// It is a block list rather than an allow list because the thing being protected is
+// narrow and nameable: a verb that resolves through selectedItem. Everything else a
+// dashboard key does — spawn, filter, help, the inbox, the process tree — is
+// unaffected by where the cursor happens to be and stays reachable from the row.
+var foldRowVerbs = map[action]bool{
+	actClose: true, actRespawn: true, actSignal: true, actDiff: true,
+	actDispatch: true, actEnqueue: true, actMark: true, actAdd: true,
+	actUngroup: true, actRename: true, actFavourite: true, actNewHere: true,
+}
+
+// refusedOnFoldRow reports whether an action must be refused because the cursor is
+// on the quiet row. The action is checked first so the common case — every other
+// key — never pays for a dashItems fold.
+func (m model) refusedOnFoldRow(a action) bool {
+	if !foldRowVerbs[a] {
+		return false
+	}
+	it, ok := m.selectedItem()
+	return ok && it.kind == itemFold
 }
 
 // needByGroup tallies, per top-level group, how many of its panels the attention
@@ -207,8 +387,11 @@ func itemMatches(it dashItem, lf string) bool {
 
 // title is the label shown for an item on the dashboard.
 func (it dashItem) title() string {
-	if it.kind == itemGroup {
+	switch it.kind {
+	case itemGroup:
 		return it.name
+	case itemFold:
+		return fmt.Sprintf("%d quiet", it.quiet)
 	}
 	return it.panel.Title
 }
@@ -223,7 +406,10 @@ func (it dashItem) closePrompt() string {
 	return "close " + it.title() + "? (y/n)"
 }
 
-// ids is the panel ids an item covers: one for a panel, every member for a group.
+// ids is the panel ids an item covers: one for a panel, every member for a group,
+// and NONE for a fold row — see the quiet field. Every bulk verb reads this, so an
+// empty answer is what makes "the fold owns no verbs" true even if a caller forgets
+// to ask.
 func (it dashItem) ids() []string {
 	if it.kind == itemPanel {
 		return []string{it.panel.ID}
@@ -900,6 +1086,80 @@ func (m model) renderGroupCard(it dashItem, selected bool) string {
 		BorderForeground(border)
 
 	return style.Render(lipgloss.JoinVertical(lipgloss.Left, head, kindLine, footer))
+}
+
+// foldGlyph is the fold row's disclosure marker: ▸ closed, ▾ open. The same two
+// glyphs the tree pane already uses for a cursor and a rollup, so the row reads as
+// "there is more under here" without a legend.
+func (m model) foldGlyph() string {
+	if m.foldExpanded {
+		return "▾"
+	}
+	return "▸"
+}
+
+// renderFoldCard draws the quiet row as a card in the grid, in idle's amber — the
+// colour of the panels it stands for, so the row reads as a summary of them rather
+// than as a control.
+//
+// It keeps renderCard's three-line shape. A card that was one line shorter than its
+// neighbours would break the grid's row heights, and a row that told you what it
+// held without telling you how to open it would send you looking for a legend.
+func (m model) renderFoldCard(it dashItem, selected bool) string {
+	info := states[panel.Idle]
+
+	border, titleColor := colFaint, colInk
+	if selected {
+		border, titleColor = colBrand, colBrandHi
+	}
+
+	glyph := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(m.foldGlyph())
+	name := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(it.title(), max(1, cardInner-2)))
+	head := clampWidth(glyph+" "+name, cardInner)
+	kindLine := clampWidth(mutedStyle.Render("idle · exited cleanly"), cardInner)
+	footer := clampWidth(legend("enter", m.foldVerb()), cardInner)
+
+	style := lipgloss.NewStyle().
+		Width(cardWidth-2).
+		Padding(0, 1).
+		MarginRight(cardGap).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(border)
+
+	return style.Render(lipgloss.JoinVertical(lipgloss.Left, head, kindLine, footer))
+}
+
+// foldVerb is what enter does next on the fold row.
+func (m model) foldVerb() string {
+	if m.foldExpanded {
+		return "fold"
+	}
+	return "expand"
+}
+
+// renderFoldPreview is the tree pane's right side for the quiet row. It says what
+// was folded and why, and then stops.
+//
+// It deliberately does NOT list the panels. A roster here would be a second, worse
+// copy of the thing enter already gives you — the real rows, with the real verbs on
+// them — and the whole point of the fold is that these panels are not asking for
+// anything, so a list of their names is the least useful thing the pane could
+// spend its height on.
+func (m model) renderFoldPreview(it dashItem, width int) string {
+	title := lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).
+		Render(truncate(m.foldGlyph()+" "+it.title(), width))
+	rule := mutedStyle.Render(strings.Repeat("─", width))
+	body := []string{
+		mutedStyle.Render(fmt.Sprintf("%d panel(s) folded away: idle, or exited cleanly.", it.quiet)),
+		"",
+		mutedStyle.Render("Nothing here is asking for anything. Favourites, pins,"),
+		mutedStyle.Render("marked panels and the card under the cursor are never"),
+		mutedStyle.Render("folded, so the fold can never hide what you are on."),
+		"",
+		legend("enter", m.foldVerb()),
+	}
+	return lipgloss.JoinVertical(lipgloss.Left,
+		title, rule, "", lipgloss.JoinVertical(lipgloss.Left, body...))
 }
 
 // renderGroupPreview is the tree pane's right side for a selected group: the
