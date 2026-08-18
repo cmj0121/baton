@@ -133,8 +133,10 @@ Agent 會去 fork node、git、測試執行器;而 rlimit 是 per-process 而且
 它是**資源**邊界:不管 agent 跑什麼,它都拿不到超過你允許的 CPU、記憶體或行程數。
 
 它**不是安全邊界**。Agent 仍然以你的身分、在你的檔案系統、用你的網路執行。它能讀你的檔案、能連網,跟以前一模
-一樣——見 **[CONTROL.md](CONTROL.zh-TW.md#護欄)** 的護欄說明。檔案系統與網路的隔離需要另一種後端(容器、
-`bwrap`、`sandbox-exec`),那是 baton 目前還沒有的。
+一樣——見 **[CONTROL.md](CONTROL.zh-TW.md#護欄)** 的護欄說明。檔案系統與網路的隔離需要另一種後端,而 baton 有一個:
+**[ISOLATION.zh-TW.md](ISOLATION.zh-TW.md)** 能讓某個 agent profile 的面板跑在容器裡,選擇性開啟。它關得住做錯事的
+agent,但仍然不是對付惡意 agent 的邊界;而下面這些上限在容器裡外一樣有效——只是由 runtime 自己的旗標而非 cgroup v2
+去執行,這也是為什麼它們在 macOS 上只有面板被隔離時才守得住。
 
 它也**不是花費邊界**,而這件事值得直說,因為「對 agent 能耗用的量設下真正的天花板」聽起來很像連帳單也管了。它沒有。
 **baton 裡沒有任何東西限制一個 agent 用掉多少 token**——這些上限沒有,agent profile 沒有,任務佇列也沒有。

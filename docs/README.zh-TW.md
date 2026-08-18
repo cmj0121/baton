@@ -149,6 +149,10 @@ Baton 會啟動它的背景伺服器,並把你帶到**儀表板**——你的大
 - **資源上限** — 限制一個面板能用多少 CPU、記憶體、行程數,而且管的是它**整棵行程樹**,讓失控的建置沒辦法把整台
   機器一起拖下水。全隊底線與 per-agent 覆寫都寫在設定檔裡,也能在 `C-t P` 裡編;`C-t R` 會把新上限套用到正在跑
   的隊伍。Linux 上以 cgroup v2 強制,而主機若無法強制,面板會直說。見 **[docs/LIMITS.md](LIMITS.zh-TW.md)**。
+- **容器隔離** — 以 agent profile 為單位選擇性開啟:`isolate: docker` 讓該 profile 的面板跑在容器裡,並把你的
+  worktree 掛進去,這樣做錯事的 agent 被關住的是一個工作區。Image 由你指定(Baton 不提供);`mount`、`network`、
+  `env-allow` 與 `user` 決定還有什麼能過去,而你環境裡的東西除非點名否則一律不過去。資源上限一樣有效,由 runtime
+  執行。預設關閉,而且不是對付惡意 agent 的邊界。見 **[docs/ISOLATION.md](ISOLATION.zh-TW.md)**。
 - **重啟策略** — 預設關閉;設定 `panel.restart: on-failure`,行程異常結束的面板就會自己回來,帶指數退避,並且在
   達到上限時大聲停下而不是無聲迴圈。正常結束、你關掉的、你送過 signal 的,都不會被動到。可以逐 agent profile
   覆寫。
@@ -202,6 +206,7 @@ socket 接上——指令往上、事件往下——所以你卸離再重新接�
 - **[docs/TUI.md](TUI.zh-TW.md)** — 座艙外觀檔(`$HOME/.baton/TUI.yaml`):色彩主題與群組分割的版面配置
   (預設與自訂網格)。
 - **[docs/LIMITS.md](LIMITS.zh-TW.md)** — 資源上限:設定寫法、兩層疊加、熱重載,以及它們實際在哪裡被強制。
+- **[docs/ISOLATION.md](ISOLATION.zh-TW.md)** — 容器隔離:per-profile 設定、agent 保留了什麼、上限在容器裡怎麼被強制,以及它不是什麼邊界。
 - **[docs/RESTART.md](RESTART.zh-TW.md)** — 重啟策略:什麼算失敗、什麼不算,退避與上限,以及為什麼沒有 `always`。
 - **[docs/GIT.md](GIT.zh-TW.md)** — git 選單:每個操作、commit 編輯流程、worktree,以及設定。
 - **[docs/LOGGING.md](LOGGING.zh-TW.md)** — 面板記錄:寫進去的是什麼、檔案落在哪裡、session 標記、輪替,

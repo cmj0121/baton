@@ -163,6 +163,11 @@ Todo lo que necesitas mientras pastoreas una flota, a una tecla de distancia:
   la flota y sobrescrituras por agente en la configuración o bajo `C-t P`; `C-t R` los aplica a la flota en marcha. Se
   imponen con cgroup v2 en Linux, y el panel lo dice claramente cuando un anfitrión no puede imponerlos. Consulta
   **[docs/LIMITS.md](LIMITS.md)**.
+- **Aislamiento por contenedor** — opcional, por perfil de agente: `isolate: docker` ejecuta los paneles de ese perfil
+  dentro de un contenedor con tu árbol de trabajo montado, de modo que un agente que se equivoca queda confinado a un
+  espacio de trabajo. Tú nombras la imagen (Baton no incluye ninguna); `mount`, `network`, `env-allow` y `user` deciden
+  qué más cruza, y nada de tu entorno cruza si no lo nombras. Los límites siguen aplicándose, impuestos por el runtime.
+  Desactivado por defecto, y no es una frontera contra un agente hostil. Ver **[docs/ISOLATION.md](ISOLATION.md)**.
 - **Apariencia** — `$HOME/.baton/TUI.yaml` remodela la cabina: un **tema** de color y las **disposiciones** de la división
   de grupo, recargadas en caliente con `C-t R`. Consulta **[docs/TUI.md](TUI.md)**.
 - **Pie de uso** — `U` alterna un pie que muestra el uso de tokens y el coste del día (`⊙ 1.2M tok · ≈$12.34 API`). Por
@@ -218,6 +223,8 @@ tus propios comandos y define configuración, todo a través de un único objeto
   disposiciones de la división de grupo (preajustes y cuadrículas propias).
 - **[docs/LIMITS.md](LIMITS.md)** — límites de recursos: la configuración, las dos capas, la recarga en caliente y dónde
   se imponen realmente.
+- **[docs/ISOLATION.md](ISOLATION.md)** — aislamiento por contenedor: la configuración por perfil, qué conserva el
+  agente, cómo se imponen los límites dentro de un contenedor y de qué no es frontera.
 - **[docs/RESTART.md](RESTART.md)** — la política de reinicio: qué cuenta como fallo y qué no, el backoff y el límite,
   y por qué no existe `always`.
 - **[docs/GIT.md](GIT.md)** — el menú de git: cada operación, el flujo del editor de commits, los worktrees y la

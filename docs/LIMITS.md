@@ -141,8 +141,10 @@ It is a **resource** boundary: an agent cannot take more CPU, memory, or process
 
 It is **not a security boundary**. The agent still runs as your user, in your filesystem, with your network. It can read
 your files and reach the internet exactly as before — see the guardrails note in **[CONTROL.md](CONTROL.md#guardrails)**.
-Filesystem and network confinement need a different backend (a container, `bwrap`, `sandbox-exec`), which baton does not
-have yet.
+Filesystem and network confinement need a different backend. Baton has one: **[ISOLATION.md](ISOLATION.md)** runs an
+agent profile's panels in a container, opt-in. It confines an agent that is wrong; it is still not a boundary against
+one that is hostile, and the caps below apply inside a container exactly as they do outside it — enforced by the
+runtime's own flags rather than by cgroup v2, which is also why they hold on macOS only when a panel is isolated.
 
 It is **not a spend boundary** either, and that is worth saying plainly because "a real ceiling on what an agent can
 consume" reads as if it covered the bill. It does not. **Nothing in baton caps how many tokens an agent uses** — not
