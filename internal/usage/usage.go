@@ -75,8 +75,15 @@ func (s Snapshot) Empty() bool { return s.TotalTokens() == 0 && s.CostUSD == 0 }
 
 // Countdown is how long is left before the window resets, and whether there is a
 // reset to count down to at all. It reports false — never a zero and never a
-// guess — when the source cannot see one, and clamps at zero once the window has
-// run out rather than counting into the negative.
+// guess — when the source cannot see a reset, and equally once the window it
+// named has run out: that window is over, the one after it has not opened yet,
+// and a zero would assert a reset happening right now that nothing backs.
+//
+// Reporting it rather than clamping is what keeps the footer honest between
+// polls. The cockpit ticks a held snapshot once a second while the daemon
+// refreshes once every thirty, so a snapshot outlives its own window routinely —
+// and a clamp turned that into a segment resting at 0:00:00 for as long as the
+// snapshot was held, which for a daemon that had stopped answering was forever.
 func (s Snapshot) Countdown(now time.Time) (time.Duration, bool) {
 	if !s.Resets || s.Until.IsZero() {
 		return 0, false
@@ -84,7 +91,7 @@ func (s Snapshot) Countdown(now time.Time) (time.Duration, bool) {
 	if d := s.Until.Sub(now); d > 0 {
 		return d, true
 	}
-	return 0, true
+	return 0, false
 }
 
 // Spent is the fraction of the window already elapsed, 0 to 1, and whether there

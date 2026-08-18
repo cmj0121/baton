@@ -261,16 +261,20 @@ func TestSessionOf(t *testing.T) {
 	}
 }
 
-// TestSnapshotCountdown: a snapshot that knows its reset counts down to it and
-// clamps at zero; one that does not reports no countdown at all rather than a
-// zero a caller could mistake for "resets now".
+// TestSnapshotCountdown: a snapshot that knows its reset counts down to it; one
+// whose window has since run out, and one whose source never saw a reset, both
+// report no countdown at all rather than a zero a caller could mistake for
+// "resets now" — and would then rest on for as long as it held the snapshot.
 func TestSnapshotCountdown(t *testing.T) {
 	s := Snapshot{Since: fixedNow.Add(-time.Hour), Until: fixedNow.Add(2 * time.Hour), Resets: true}
 	if d, ok := s.Countdown(fixedNow); !ok || d != 2*time.Hour {
 		t.Errorf("Countdown = %v/%v, want 2h/true", d, ok)
 	}
-	if d, ok := s.Countdown(fixedNow.Add(5 * time.Hour)); !ok || d != 0 {
-		t.Errorf("an expired window = %v/%v, want 0/true (clamped, not negative)", d, ok)
+	if d, ok := s.Countdown(s.Until); ok || d != 0 {
+		t.Errorf("at the reset itself = %v/%v, want 0/false — zero is not a resting state", d, ok)
+	}
+	if d, ok := s.Countdown(fixedNow.Add(5 * time.Hour)); ok || d != 0 {
+		t.Errorf("a window that has run out = %v/%v, want 0/false", d, ok)
 	}
 
 	unknown := Snapshot{Since: fixedNow, Until: fixedNow.Add(time.Hour)} // Resets false
