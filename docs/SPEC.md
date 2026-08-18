@@ -401,6 +401,8 @@ and the key-map editor — are reached after the prefix in every mode. Everythin
 |                        | `C-t a`                     | the attention inbox — clear what needs a human  |
 |                        | `C-t o`                     | the process tree (daemon → panels → OS)         |
 |                        | `C-t ~`                     | toggle the floating scratch pane                |
+|                        | `C-t l`                     | start / stop logging the panel to a file        |
+|                        | `C-t L`                     | open that log in a temporary panel              |
 |                        | `C-t [`                     | enter scroll mode                               |
 |                        | `C-t k`                     | edit the key map                                |
 |                        | `C-t c`                     | open the plugin command picker                  |

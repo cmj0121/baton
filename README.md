@@ -96,6 +96,7 @@ the current view, and **`C-t k`** to edit the key map.
 | After `C-t` | `d` / `b`         | jump to the dashboard / back one level               |
 |             | `a`               | the attention inbox — clear what needs a human       |
 |             | `[`               | enter scroll mode                                    |
+|             | `l` / `L`         | log the panel to a file / read that log back         |
 |             | `R` / `S`         | reload config / force-restart the server             |
 |             | `q`               | detach (server keeps running)                        |
 | Dashboard   | `hjkl` / arrows   | move the cursor                                      |
@@ -165,6 +166,10 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
   countdown to the reset (`⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31`), or the focused panel's share of that window. It
   reads Claude Code's own transcripts by default (works on a Pro/Max subscription) or the Anthropic Admin API with a key.
   The cost is API-equivalent, not a subscription charge. See **[docs/USAGE.md](docs/USAGE.md)**.
+- **Panel logging** — `C-t l` pipes a panel's output to a file on the machine the fleet runs on, flushing the replay
+  buffer in first so you keep what made you press it; `C-t L` reads it back in a temporary panel that follows the file.
+  Plain text, escape sequences stripped, rolled at `log-max-mb`. Off until you set `panel.log-dir`; a profile can log
+  from spawn. See **[docs/LOGGING.md](docs/LOGGING.md)**.
 - **Persistence & respawn** — Baton remembers its fleet across a restart; panels come back as inert exited slots and
   `r` re-runs them from their retained spec.
 - **Reload** — `C-t R` (or a `SIGHUP` to the daemon) hot-reloads config without restarting the fleet.
@@ -209,6 +214,8 @@ through one `baton` object. See **[docs/PLUGIN.md](docs/PLUGIN.md)**.
 - **[docs/RESTART.md](docs/RESTART.md)** — the restart policy: what is and is not a failure, the backoff and the limit,
   and why there is no `always`.
 - **[docs/GIT.md](docs/GIT.md)** — the git menu: every op, the commit-editor flow, worktrees, and the config.
+- **[docs/LOGGING.md](docs/LOGGING.md)** — panel logging: what is written, where it lands, the session markers, the
+  roll, and what it is not a boundary for.
 - **[docs/USAGE.md](docs/USAGE.md)** — the account usage footer: the local and Admin-API sources, config, and caveats.
 - **[docs/PLUGIN.md](docs/PLUGIN.md)** — the Lua plugin API: the `baton` object, events, commands, and config.
 - **[docs/CONTROL.md](docs/CONTROL.md)** — driving the fleet by agent: the conductor, the `baton ctl` CLI, the

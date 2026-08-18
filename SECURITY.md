@@ -43,6 +43,13 @@ agent accidents, not a sandbox against a hostile program:
 - **Resource limits** ([docs/LIMITS.md](docs/LIMITS.md)) cap cpu, memory and pids
   for a panel's whole process tree via cgroup v2. They keep a runaway build from
   taking the machine; they are not a security boundary, and the docs say so.
+- **Panel logs** ([docs/LOGGING.md](docs/LOGGING.md)) are plain-text transcripts
+  the daemon writes into a directory you named, as you, with mode 0600. They are
+  a record, not an audit trail: anything that can reach your uid — including the
+  agent in the panel being logged — can edit or delete one. A shell panel's log
+  holds everything typed into that shell, which is why nothing is logged until
+  you set `panel.log-dir`, and why auto-logging is per agent profile rather than
+  fleet-wide.
 - **The socket is uid-private.** Any local process running as you can connect —
   that is the intended trust level, not a flaw.
 - **Lua plugins** (`$HOME/.baton/plug-in.lua`) run unsandboxed, with your

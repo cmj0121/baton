@@ -244,6 +244,7 @@ always speak the socket directly).
 | list, spawn, group, rename, pin, move     | close, signal, or send input to **its own** panel              |
 | signal and send input to **other** panels | **dispatch a task to its own** panel                           |
 | dispatch to other panels, enqueue tasks   | **drain the queue** — clearing the backlog is operator-only    |
+| read a panel's title, state and telemetry | **log a panel to a file**, or read a log back — see below      |
 | reorder queued tasks (promote / demote)   |                                                                |
 | **raise its own hand** and stand down     | raise or lower **another panel's** hand                        |
 | close other panels, purge exited          | reload or stop the server                                      |
@@ -260,6 +261,12 @@ agent the server always has an identity for, and refusing it the verb that exist
 build a control plane for them. Restricting it to itself is because a declaration takes its panel out of the scheduler's
 free pool until something withdraws it — a conductor free to raise hands across the fleet is a conductor that can freeze
 the backlog for every other agent, one looping call at a time.
+
+Panel logging (`C-t l` / `C-t L`, [LOGGING.md](LOGGING.md)) is refused outright, in both directions. `panel.log` asks
+the daemon to **write files on its own host, as you**, which is the shape of request the remote actions are already
+fenced away from; and `panel.logview` would hand an agent another panel's transcript to read at leisure, which is the
+surface the inbox's `panel.tail` fence exists to keep shut. Opening either later is deleting one line, and the interface
+room is left for exactly that.
 
 A spawn from a conductor has its **profile name stripped**, so the panels it creates resolve to the fleet-wide
 [resource limits](LIMITS.md) rather than to any profile's own. The name is what a panel's caps resolve through, so an
