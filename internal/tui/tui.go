@@ -1869,7 +1869,7 @@ func (m model) conductorMark() string {
 	if !ok {
 		return ""
 	}
-	info := states[p.State]
+	info := stateInfoFor(p)
 	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
 	name := lipgloss.NewStyle().Foreground(colBrandHi).Render("conductor")
 	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", info.label, keyLabel(m.bindingKey(actConductor))))
@@ -1884,7 +1884,7 @@ func (m model) globalShellMark() string {
 	if !ok {
 		return ""
 	}
-	info := states[p.State]
+	info := stateInfoFor(p)
 	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
 	name := lipgloss.NewStyle().Foreground(colBrandHi).Render("shell")
 	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", info.label, keyLabel(m.bindingKey(actGlobalShell))))
@@ -3225,7 +3225,7 @@ const (
 // title, a kind badge + state, and a sparkline + meta footer. The selected card
 // glows in the brand colour.
 func (m model) renderCard(p panel.Panel, selected bool) string {
-	info := states[p.State]
+	info := stateInfoFor(p)
 
 	border := colFaint
 	titleColor := colInk
@@ -3413,7 +3413,7 @@ func (m model) renderTree(items []dashItem, start, end, visible int) string {
 			glyph = lipgloss.NewStyle().Foreground(info.color).Render("▣")
 			label = fmt.Sprintf("%s (%d)", it.title(), len(it.members))
 		} else {
-			info := states[it.panel.State]
+			info := stateInfoFor(it.panel)
 			glyph = lipgloss.NewStyle().Foreground(info.color).Render(info.led)
 			label = it.title()
 		}
@@ -3441,7 +3441,7 @@ func (m model) renderPreview(items []dashItem, width int) string {
 		return m.renderGroupPreview(it, width)
 	}
 	p := it.panel
-	info := states[p.State]
+	info := stateInfoFor(p)
 
 	title := lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(truncate(p.Title, width))
 	led := lipgloss.NewStyle().Foreground(info.color).Render(info.led)

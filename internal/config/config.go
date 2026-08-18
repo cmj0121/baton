@@ -84,12 +84,20 @@ type Theme struct {
 	Brand   string `yaml:"brand,omitempty"`    // primary accent (banner, active borders, selection)
 	BrandHi string `yaml:"brand-hi,omitempty"` // brighter accent (titles, pins, summary, hits)
 
-	// The five lifecycle-state LEDs, by state name.
+	// The lifecycle-state LEDs, by state name.
 	Spawning  string `yaml:"spawning,omitempty"`
 	Running   string `yaml:"running,omitempty"`
 	Idle      string `yaml:"idle,omitempty"`
 	Attention string `yaml:"attention,omitempty"`
 	Exited    string `yaml:"exited,omitempty"`
+	Done      string `yaml:"done,omitempty"`
+	Stuck     string `yaml:"stuck,omitempty"`
+
+	// Failed is not a lifecycle state — it is how an exited panel with a non-zero
+	// exit code renders. It takes a token of its own anyway, because the whole
+	// point of showing failure rather than making you infer it is that it should
+	// not look like an ordinary exit.
+	Failed string `yaml:"failed,omitempty"`
 }
 
 // Layout is one named group-split arrangement. With no Areas it names a built-in

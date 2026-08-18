@@ -55,6 +55,33 @@ func TestApplyThemeOverrides(t *testing.T) {
 	}
 }
 
+// TestApplyThemeNewTokens checks the three tokens the attention states brought
+// with them. done and stuck are ordinary LEDs; failed is not a lifecycle state
+// at all, so it themes a package var rather than a states entry — and it still
+// has to restore to its built-in when the theme leaves it out.
+func TestApplyThemeNewTokens(t *testing.T) {
+	applyTheme(config.Theme{Done: "21", Stuck: "#ff8800", Failed: "196"})
+	t.Cleanup(func() { applyTheme(config.Theme{}) })
+
+	if got := states[panel.Done].color; got != lipgloss.Color("21") {
+		t.Errorf("done LED = %v, want 21", got)
+	}
+	if got := states[panel.Stuck].color; got != lipgloss.Color("#ff8800") {
+		t.Errorf("stuck LED = %v, want #ff8800", got)
+	}
+	if colFailed != lipgloss.Color("196") {
+		t.Errorf("colFailed = %v, want 196", colFailed)
+	}
+	if got := stateInfoFor(panel.Panel{State: panel.Exited, ExitCode: 1}).color; got != lipgloss.Color("196") {
+		t.Errorf("the failed rendering should follow the token, got %v", got)
+	}
+
+	applyTheme(config.Theme{})
+	if colFailed != defColFailed {
+		t.Errorf("an empty theme should restore colFailed, got %v want %v", colFailed, defColFailed)
+	}
+}
+
 // TestApplyThemeKeepsGlyphAndLabel: theming a state recolours its LED without
 // disturbing its glyph or label.
 func TestApplyThemeKeepsGlyphAndLabel(t *testing.T) {

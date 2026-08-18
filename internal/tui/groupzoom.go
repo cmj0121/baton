@@ -1497,7 +1497,7 @@ func (m model) renderGroupTile(cg childGroup, focused bool, emuCols, emuRows, ma
 	var roster []rollupRow
 	for _, p := range cg.members {
 		if p.Group == cg.path {
-			info := states[p.State]
+			info := stateInfoFor(p)
 			led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
 			roster = append(roster, rollupRow{led: led, name: p.Title})
 		}
@@ -1517,7 +1517,7 @@ func (m model) renderGroupTile(cg childGroup, focused bool, emuCols, emuRows, ma
 func (m model) renderSummaryTile(collapsed []panel.Panel, focused bool, emuCols, emuRows, marginRight int) string {
 	roster := make([]rollupRow, 0, len(collapsed))
 	for _, p := range collapsed {
-		info := states[p.State]
+		info := stateInfoFor(p)
 		led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
 		roster = append(roster, rollupRow{led: led, name: p.Title})
 	}
@@ -1543,7 +1543,7 @@ func tileGrid(tiles []string, cols int) string {
 // The focused tile glows in the brand colour, mirroring the dashboard's selected
 // card.
 func (m model) renderTile(p panel.Panel, focused bool, emuCols, emuRows, marginRight int) string {
-	info := states[p.State]
+	info := stateInfoFor(p)
 	border := colFaint
 	titleColor := colInk
 	if focused {

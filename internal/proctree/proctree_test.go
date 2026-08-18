@@ -262,3 +262,32 @@ func TestJSONCarriesStats(t *testing.T) {
 		t.Fatalf("daemon without a stat should carry zero cpu/rss: %+v", got)
 	}
 }
+
+// TestPanelNodeCarriesExitCode checks the exit status rides along on a panel
+// node. `failed` is not a state, so the code is the only thing that lets the
+// overlay tell a clean exit from a failed one.
+func TestPanelNodeCarriesExitCode(t *testing.T) {
+	root := Build(1, []proto.Panel{
+		{ID: "p1", Title: "claude", State: "exited", ExitCode: 3},
+		{ID: "p2", Title: "bash", State: "exited"},
+	}, nil, nil, nil)
+
+	got := map[string]int{}
+	var walk func(*Node)
+	walk = func(n *Node) {
+		if n.Panel != nil {
+			got[n.Panel.ID] = n.Panel.ExitCode
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+
+	if got["p1"] != 3 {
+		t.Errorf("a failed panel should carry its code, got %d", got["p1"])
+	}
+	if got["p2"] != 0 {
+		t.Errorf("a clean exit carries no code, got %d", got["p2"])
+	}
+}

@@ -16,16 +16,49 @@ type stateInfo struct {
 }
 
 // states maps each lifecycle state to its presentation.
+//
+// done and stuck are drawn with hollow glyphs and do not animate: nothing is
+// happening in either, and a breathing card would say otherwise. done takes the
+// brand blue because it is an invitation to review rather than an alarm, and
+// stuck takes orange — one step short of attention's red, since it is a suspicion
+// rather than a statement.
 var states = map[panel.State]stateInfo{
 	panel.Spawning:  {"◌", "spawning", lipgloss.Color("45")},   // cyan
 	panel.Running:   {"●", "running", lipgloss.Color("42")},    // green
 	panel.Idle:      {"●", "idle", lipgloss.Color("220")},      // amber
 	panel.Attention: {"◆", "attention", lipgloss.Color("203")}, // red
 	panel.Exited:    {"○", "exited", lipgloss.Color("244")},    // gray
+	panel.Done:      {"◇", "done", lipgloss.Color("39")},       // blue
+	panel.Stuck:     {"◈", "stuck", lipgloss.Color("208")},     // orange
 }
 
-// stateOrder is the display order for the summary strip's chips.
-var stateOrder = []panel.State{panel.Attention, panel.Running, panel.Idle, panel.Spawning, panel.Exited}
+// colFailed is the colour of an exited panel that exited badly. It is a package
+// var rather than a states entry because failed is not a lifecycle state, and a
+// var rather than a const because the theme (TUI.yaml) can override it; see
+// applyTheme in theme.go.
+var colFailed = colRed
+
+// stateInfoFor is a panel's presentation, with the one override the states map
+// cannot express: an exited panel that exited non-zero renders as `failed`.
+//
+// failed is deliberately not a lifecycle state — the daemon reports the exit
+// code and the cockpit draws the conclusion — so the override lives here, in the
+// view, rather than in panel.State. Every per-panel render site goes through
+// this; the sites that render a state with no panel behind it (a group's rolled
+// up state, a per-state chip) still read the states map directly, because there
+// is no exit code to consult.
+func stateInfoFor(p panel.Panel) stateInfo {
+	if p.State == panel.Exited && p.ExitCode != 0 {
+		return stateInfo{"✕", "failed", colFailed}
+	}
+	return states[p.State]
+}
+
+// stateOrder is the display order for the summary strip's chips: loudest first,
+// so what wants a human is read before what does not.
+var stateOrder = []panel.State{
+	panel.Attention, panel.Stuck, panel.Running, panel.Done, panel.Idle, panel.Spawning, panel.Exited,
+}
 
 // stateCounts tallies panels by lifecycle state, the shared input to the fleet
 // summary strip and a group's per-state chips.

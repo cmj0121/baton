@@ -196,8 +196,15 @@ func (m model) selectedItem() (dashItem, bool) {
 
 // stateRank orders lifecycle states by how loudly they call for attention, so a
 // group can roll up to the most urgent state among its members.
+//
+// done and stuck slot ABOVE running: both want a human and running does not, and
+// a card that reads "running" while one of its members has been wedged for ten
+// minutes is exactly the burial this ranking exists to prevent. Every relative
+// order that existed before is preserved.
 var stateRank = map[panel.State]int{
-	panel.Attention: 5,
+	panel.Attention: 7,
+	panel.Stuck:     6,
+	panel.Done:      5,
 	panel.Running:   4,
 	panel.Spawning:  3,
 	panel.Idle:      2,
@@ -853,7 +860,7 @@ func (m model) renderGroupPreview(it dashItem, width int) string {
 	roster := make([]string, 0, len(it.members)+1)
 	roster = append(roster, mutedStyle.Render(spaced("PANELS")))
 	for _, p := range it.members {
-		info := states[p.State]
+		info := stateInfoFor(p)
 		led := lipgloss.NewStyle().Foreground(info.color).Render(info.led)
 		name := lipgloss.NewStyle().Foreground(colInk).Render(truncate(p.Title, width-4))
 		roster = append(roster, led+" "+name)

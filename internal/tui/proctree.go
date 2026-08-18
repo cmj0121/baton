@@ -88,10 +88,12 @@ func (m model) renderProcTree() []string {
 
 // procPanelLabel renders a panel node for the overlay: its lifecycle as a single
 // coloured LED — no "/running" word, the colour is what splits running (green) from
-// idle (amber) — then the panel title and its pid/comm. Title and comm are
+// idle (amber) — then the panel title and its pid/comm. It goes through
+// stateInfoFor rather than the states map so a panel that exited non-zero reads as
+// failed here too, instead of as an ordinary grey exit. Title and comm are
 // untrusted, so they are sanitised before styling.
 func procPanelLabel(n *proctree.Node, ink lipgloss.Style) string {
-	info := states[panel.ParseState(n.Panel.State)]
+	info := stateInfoFor(panel.Panel{State: panel.ParseState(n.Panel.State), ExitCode: n.Panel.ExitCode})
 	s := lipgloss.NewStyle().Foreground(info.color).Render(info.led) + " " + ink.Render(sanitizeText(n.Panel.Name))
 	if n.Pid > 0 {
 		s += ink.Render(fmt.Sprintf(" pid=%d", n.Pid))
