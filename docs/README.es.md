@@ -104,6 +104,7 @@ teclas.
 | Dashboard   | `hjkl` / flechas  | mover el cursor                                            |
 |             | `enter`           | abrir / hacer zoom en la selección                         |
 |             | `p` / `A` / `c`   | nuevo panel de shell / agente / elegir comando             |
+|             | `.`               | nuevo panel de shell en el directorio del panel enfocado   |
 |             | `C`               | abrir el conductor (un agente que maneja la flota)         |
 |             | `H`               | abrir la global shell (una shell del anfitrión en `$HOME`) |
 |             | `w` / `x`         | cerrar la selección / purgar los terminados                |

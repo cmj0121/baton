@@ -105,6 +105,7 @@ touches.
 | Tableau de bord | `hjkl` / flèches  | déplacer le curseur                                             |
 |                 | `enter`           | ouvrir / zoomer la sélection                                    |
 |                 | `p` / `A` / `c`   | nouveau panneau shell / agent / choix de commande               |
+|                 | `.`               | nouveau panneau shell dans le répertoire du panneau focalisé    |
 |                 | `C`               | ouvrir le conductor (un agent qui pilote la flotte)             |
 |                 | `H`               | ouvrir le global shell (un shell hôte dans `$HOME`)             |
 |                 | `w` / `x`         | fermer la sélection / purger les panneaux terminés              |

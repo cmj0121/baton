@@ -102,6 +102,7 @@ Baton は 3 つの画面で操作し、キー 1 つで行き来します:
 | ダッシュボード | `hjkl` / 矢印キー | カーソルを動かす                                          |
 |                | `enter`           | 選択中のものを開く / ズームする                           |
 |                | `p` / `A` / `c`   | 新しい shell / agent / コマンド選択 panel                 |
+|                | `.`               | フォーカス中の panel のディレクトリに新しい shell panel   |
 |                | `C`               | conductor を開く(fleet を動かす agent)                    |
 |                | `H`               | global shell を開く(`$HOME` のホスト shell)               |
 |                | `w` / `x`         | 選択中を閉じる / 終了済みを一掃                           |

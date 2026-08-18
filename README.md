@@ -100,6 +100,7 @@ the current view, and **`C-t k`** to edit the key map.
 | Dashboard   | `hjkl` / arrows   | move the cursor                                      |
 |             | `enter`           | open / zoom the selection                            |
 |             | `p` / `A` / `c`   | new shell / agent / pick-command panel               |
+|             | `.`               | new shell panel in the focused panel's directory     |
 |             | `C`               | open the conductor (an agent that drives the fleet)  |
 |             | `H`               | open the global shell (a host shell in `$HOME`)      |
 |             | `w` / `x`         | close the selection / purge exited                   |
@@ -152,7 +153,10 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
   host cannot enforce them. See **[docs/LIMITS.md](docs/LIMITS.md)**.
 - **Restart policy** — off by default; set `panel.restart: on-failure` and a panel whose process dies abnormally comes
   back, with an exponential backoff and a limit that settles it loudly rather than looping. A clean exit, a panel you
-  closed, and one you signalled are all left alone. Overridable per agent profile. See
+  closed, and one you signalled are all left alone. Overridable per agent profile.
+- **Remembered directory** — a panel's live working directory is tracked from the shell's own OSC 7 report, or the
+  process table when it makes none. A re-run lands where you were, `.` opens a shell in the focused panel's directory,
+  the path identifies the card, and the git menus follow an agent into a worktree. See
   **[docs/RESTART.md](docs/RESTART.md)**.
 - **Appearance** — `$HOME/.baton/TUI.yaml` reshapes the cockpit: a colour **theme** and the group-split **layouts**,
   hot-reloaded with `C-t R`. See **[docs/TUI.md](docs/TUI.md)**.

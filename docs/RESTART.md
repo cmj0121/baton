@@ -1,4 +1,4 @@
-# Panel restart policy
+# Panel restart policy and remembered directory
 
 **English** · [繁體中文](RESTART.zh-TW.md)
 
@@ -109,6 +109,85 @@ WRN restart policy ignored; panels will not be restarted
 The whole block is hot-reloadable — `C-t R`, or a `SIGHUP` to the daemon — like
 the resource limits beside it. A policy change applies to the next exit; it does
 not disturb a running panel.
+
+## Remembering where a panel was
+
+Two halves of one promise: a panel whose process dies comes back, and it comes
+back **where you left it**.
+
+```yaml
+panel:
+  track-cwd: auto # auto (default) | osc7 | proc | off
+  restore-cwd: shells # shells (default) | all | off
+```
+
+### Two ways to know
+
+| Mechanism                                                       | Accuracy         | Cost                   | Limit                                                                                    |
+| --------------------------------------------------------------- | ---------------- | ---------------------- | ---------------------------------------------------------------------------------------- |
+| **OSC 7** — the shell reports its own directory                 | exact, immediate | **none**               | needs a cooperating shell: zsh and most Linux distributions send it, macOS bash does not |
+| **Process table** — `/proc/<pid>/cwd`, `proc_pidinfo` on darwin | exact            | one syscall per answer | asked only at moments that matter, never on a tick                                       |
+
+`auto` prefers the report and falls back to the process table. A shell that
+reports its own directory is never asked again, so the common case costs nothing
+at all.
+
+The process-table half is read when a panel **settles at a prompt**, and again
+when something is about to use the path. Settling is the right moment: the
+directory is stable, it is where you are about to do something, and the
+transition happens a handful of times per panel rather than once per tick.
+Sampling fifty panels every second to keep a string fresh that nobody is looking
+at is the cost this project avoids elsewhere.
+
+The two mechanisms disagree about one thing worth knowing: the process table
+answers with **symlinks resolved**, so a shell in `/tmp` on macOS reports
+`/private/tmp`, while the shell's own report says what you typed.
+
+### A report from another host is ignored
+
+OSC 7 carries a hostname, and inside an ssh session the shell that speaks is the
+**remote** one — it reports a remote host and a remote path. Baton discards those:
+taking a remote path for a local directory would put a re-run in a same-named
+local directory, and landing somewhere else in silence is the outcome worth
+avoiding most.
+
+The consequence is worth stating plainly, because it limits the flagship case: a
+dropped ssh **reconnects**, but it reconnects to the remote shell's own idea of
+where it is. Baton cannot put a remote shell back in a remote directory without
+typing into your session, which it will not do.
+
+### What the directory buys
+
+1. **Respawn in place** — the re-run lands where you were, not where the panel
+   started. This is the half that only exists because both parts are here.
+2. **Open a panel here** — **`.`** spawns a shell in the focused panel's current
+   directory, tmux's `-c "#{pane_current_path}"` idiom. A panel whose directory is
+   not known opens in the default workdir and says so.
+3. **Identity at scale** — fifty panels called `shell #1`…`#50` are
+   indistinguishable; the path on each card is what tells them apart. It is
+   shortened from the front (`…/mylab/baton`), because every worktree under one
+   repo shares a prefix and differs at the end.
+4. **Git operations follow you** — the diff and git menus target where the agent
+   is _now_, so they follow it into a worktree instead of staying pinned to the
+   directory it was launched in.
+
+The path is shown on the card and reaches the daemon's log. That is the same
+trust level as everything else Baton holds, but it is worth saying.
+
+### Why agents are excluded by default
+
+`restore-cwd: shells` restores shells and leaves agents where they were launched.
+A shell is wherever you last left it and going back there is the whole point; an
+agent's task was set relative to the directory it was **started** in, and one that
+wandered into `/tmp` before dying should not come back in `/tmp`. Set
+`restore-cwd: all` if your agents disagree.
+
+A directory that has since been removed — a worktree that was cleaned up — falls
+back to the spawn directory **and says so**, on the panel and in the log:
+
+```text
+[last directory is gone (/repo-worktrees/api); starting where the panel was created]
+```
 
 ## What this is not
 

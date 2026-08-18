@@ -102,6 +102,7 @@ Tastenbelegung zu bearbeiten.
 | Dashboard   | `hjkl` / Pfeile   | den Cursor bewegen                                                |
 |             | `enter`           | die Auswahl öffnen / hineinzoomen                                 |
 |             | `p` / `A` / `c`   | neues shell- / agent- / Befehlsauswahl-Panel                      |
+|             | `.`               | neues Shell-Panel im Verzeichnis des fokussierten Panels          |
 |             | `C`               | den Conductor öffnen (ein Agent, der die Flotte steuert)          |
 |             | `H`               | die Global Shell öffnen (eine Host-Shell in `$HOME`)              |
 |             | `w` / `x`         | die Auswahl schließen / Beendete entfernen                        |

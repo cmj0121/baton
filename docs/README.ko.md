@@ -105,6 +105,7 @@ Baton은 세 가지 화면으로 조종하며, 키 하나로 그 사이를 오�
 | Dashboard   | `hjkl` / arrows   | 커서 이동                                      |
 |             | `enter`           | 선택 항목 열기 / 확대                          |
 |             | `p` / `A` / `c`   | 새 shell / agent / 명령 선택 패널              |
+|             | `.`               | 포커스된 패널의 디렉터리에 새 shell 패널       |
 |             | `C`               | conductor 열기(함대를 몰아주는 agent)          |
 |             | `H`               | global shell 열기(`$HOME`의 호스트 shell)      |
 |             | `w` / `x`         | 선택 항목 닫기 / 종료된 것 정리                |
