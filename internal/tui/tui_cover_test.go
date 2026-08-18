@@ -45,6 +45,16 @@ func TestViewRendersEveryMode(t *testing.T) {
 		{"keymap-setting-off", func(m *model) { m.mode = modeKeyMap; m.confirmClose = false; m.cursor = len(bindings) + 1 }},
 		{"panel-config", func(m *model) { m.mode = modePanelConfig; m.shellPath = "/bin/zsh" }},
 		{"panel-config-default", func(m *model) { m.mode = modePanelConfig }},
+		{"agent-picker", func(m *model) {
+			m.mode = modeAgentPick
+			m.agentList = []proto.AgentBackend{{Name: "claude", Command: "claude"}, {Name: "aider", Command: "aider"}}
+			m.agentCursor = 1
+		}},
+		{"agent-picker-default", func(m *model) {
+			m.mode = modeAgentPick
+			m.agentPurpose = agentForDefault
+			m.agentList = []proto.AgentBackend{{Name: "claude", Command: "claude"}}
+		}},
 		{"signal-picker", func(m *model) {
 			m.mode = modeSignal
 			m.signalTargets = []string{"1"}
@@ -377,9 +387,9 @@ func TestPanelConfigEditsReplayBuffer(t *testing.T) {
 	if m.mode != modePanelConfig {
 		t.Fatalf("C-t P should open panel config, mode=%v", m.mode)
 	}
-	m = press(m, "down")
+	m = press(m, "down", "down") // past the default-agent row
 	if m.cursor != panelRowReplayKB {
-		t.Fatalf("down should land on the replay row, cursor=%d", m.cursor)
+		t.Fatalf("two downs should land on the replay row, cursor=%d", m.cursor)
 	}
 	m = press(m, "e")
 	if m.input != inputReplayKB {

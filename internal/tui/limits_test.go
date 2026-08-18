@@ -149,7 +149,7 @@ func TestPanelConfigViewScrollsToEveryRow(t *testing.T) {
 	m := newLimitsModel(t)
 	m.height = 16 // leaves a three-line window, so a wrong anchor clips the selection
 
-	labels := []string{"default shell", "replay buffer"}
+	labels := []string{"default shell", "default agent", "replay buffer"}
 	for _, f := range limitFields {
 		labels = append(labels, f.label)
 	}

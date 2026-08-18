@@ -138,6 +138,11 @@ una.
 
 Todo lo que necesitas mientras pastoreas una flota, a una tecla de distancia:
 
+- **Backends de agente** — baton conoce un catálogo de CLIs de agente (`claude`, `codex`, `gemini`, `aider`,
+  `opencode`) y detecta cuáles tiene realmente la máquina donde corre la flota. `A` lista los que puedes ejecutar y crea
+  el que elijas; `C-t P` fija el valor por defecto de la flota desde esa misma lista; `C-t R` vuelve a detectar tras una
+  instalación. Añade los tuyos — o cambia el comando, los argumentos, los límites o el contenedor de un preajuste — bajo
+  `panel.agents`. Nada de esto añade una tecla nueva.
 - **Señales** — `s` envía cualquier señal a la selección, al mosaico enfocado o a todo el grupo; el selector lista las
   más habituales y con `o` escribes cualquier nombre o número.
 - **Buscar, encontrar, copiar** — `f` filtra la flota por título o grupo; `/` hace grep en la salida de todos los paneles

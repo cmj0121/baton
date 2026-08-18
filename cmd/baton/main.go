@@ -374,6 +374,11 @@ func runServerOn(ln net.Listener, sock string) error {
 			srv.SetClientConfig(data)
 		}
 		srv.SetPluginCommands(res.Commands)
+		// Re-detect the agent backends on every config load, so installing an agent
+		// CLI and pressing C-t R is the whole re-detect story — no new key, no new
+		// command, and the same action that already means "re-read what you were
+		// configured with, the fleet keeps running".
+		srv.SetAgents(detectAgents(res.Config))
 		if broadcast {
 			srv.PushConfig()
 		}

@@ -45,11 +45,30 @@ the conductor it drives nothing (no scoped role, no managed workspace). Both per
 re-run with `r`. Distinct from the floating **scratch** pane (`C-t ~`), which is a transient popup that dies on detach.
 
 **Agent profiles.** An agent panel is spawned from a named **profile** — a command and its arguments — run in a **working
-directory** you choose, the directory the agent operates on. **Claude** is the built-in profile (`claude`); more are
-defined under `panel.agents` in the config, with `panel.default-agent` naming the one the new-agent action spawns. The
+directory** you choose, the directory the agent operates on. baton knows a small catalogue of agent CLIs by name
+(`claude`, `codex`, `gemini`, `aider`, `opencode`); more are defined under `panel.agents` in the config, with
+`panel.default-agent` naming the one the new-agent action spawns. The
 client resolves the profile and sends `panel.create` with the command, args, and workdir; the server starts the process
 there, and the panel's title reads `<command> · <workdir>` (e.g. `claude · baton`) so its task and place are visible at
 a glance.
+
+**Detected backends.** On every config load the daemon checks which of the catalogue's commands the machine the _fleet_
+runs on actually has — presence on `PATH`, nothing more. The scan runs on the server because that is the machine panels
+are spawned from: a cockpit attached over a remote socket would otherwise answer with the binaries on its own laptop,
+which is worse than answering nothing. A preset carries a name and a command and nothing else — arguments, caps,
+patience, and isolation live in a `panel.agents` profile, which overrides the preset of the same name outright, and a
+profile that isolates is never tested against the host's `PATH` because its command runs inside an image.
+
+Detection is never written back to the config: what a machine happens to have installed is a fact about the machine, not
+a statement of intent, and the only line the cockpit writes is `panel.default-agent`. **`C-t R`** (or a `SIGHUP`)
+re-detects along with everything else it reloads — installing an agent CLI and reloading is the whole re-detect story,
+and there is no key for it because reload already means "re-read what you were configured with, the fleet keeps
+running".
+
+What that buys, in the cockpit: the new-agent action lists the backends that were found whenever there is more than one
+to choose from — with the cursor on the default, so `enter` is always the usual answer — and goes straight to the
+working-directory prompt when there is only one. The panel-config page (`C-t P`) sets the fleet default from the same
+list, and says so in the row when the configured default is not on the machine at all.
 
 ### Lifecycle
 
@@ -426,7 +445,7 @@ and the key-map editor — are reached after the prefix in every mode. Everythin
 |                        | `C-t [`                     | enter scroll mode                               |
 |                        | `C-t k`                     | edit the key map                                |
 |                        | `C-t c`                     | open the plugin command picker                  |
-|                        | `C-t P`                     | panel config (shell, replay, resource limits)   |
+|                        | `C-t P`                     | panel config (shell, agent, replay, limits)     |
 |                        | `C-t R`                     | reload config (backend + cockpit)               |
 |                        | `C-t S`                     | force-restart the server (kills the fleet)      |
 |                        | `C-t D`                     | diff the selected agent panel                   |

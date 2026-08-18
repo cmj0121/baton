@@ -116,6 +116,7 @@ const (
 	modePanelConfig
 	modeSignal      // the send-signal picker (s / C-t s)
 	modeCommand     // the plugin command picker (C-t c)
+	modeAgentPick   // the agent-backend picker: reached from the new-agent action and the panel-config page, never from a key of its own
 	modeGit         // the git menu (C-t g in a zoom)
 	modeDiff        // the master-detail diff popup (the diff action)
 	modeGitOut      // the scrollable text popup for a captured git op (log/status/…)
@@ -229,10 +230,21 @@ type model struct {
 	pluginCommands []proto.PluginCommand // commands a Lua plugin registered, pushed by the daemon (config.get); shown in the command picker
 	commandFrom    mode                  // the view the command picker was opened from, restored on esc
 	commandCursor  int                   // highlighted row in the command picker
-	pluginFooter   string                // a plugin-set persistent footer segment (baton.footer), shown in every view's footer
-	usageText      string                // the account usage/cost footer segment (internal/usage), pushed by the daemon
-	usageInfo      *proto.UsageInfo      // the same usage as structured data, so the segment can be re-rendered per mode and the countdown ticked on the cockpit's own clock
-	usageMode      usageMode             // which usage view the footer shows (cycled with U, persisted)
+
+	// The agent backends the daemon detected on the machine the panels are spawned
+	// from, and the picker that offers them. pendingAgent is the backend the
+	// in-flight new-agent spawn chose; it is held rather than passed because the
+	// choice and the workdir are two overlays, and the spawn happens on the second.
+	backends     []proto.AgentBackend // detected agent backends, pushed by the daemon on config
+	agentList    []proto.AgentBackend // the picker's rows, frozen when it opened so a refresh cannot move them under the cursor
+	agentFrom    mode                 // the view the agent picker was opened from, restored on esc
+	agentPurpose agentPurpose         // what the picker will do with the choice: spawn with it, or make it the default
+	agentCursor  int                  // highlighted row in the agent picker
+	pendingAgent string               // the backend the workdir prompt will spawn ("" = the fleet default)
+	pluginFooter string               // a plugin-set persistent footer segment (baton.footer), shown in every view's footer
+	usageText    string               // the account usage/cost footer segment (internal/usage), pushed by the daemon
+	usageInfo    *proto.UsageInfo     // the same usage as structured data, so the segment can be re-rendered per mode and the countdown ticked on the cockpit's own clock
+	usageMode    usageMode            // which usage view the footer shows (cycled with U, persisted)
 
 	// The key-press readout (toggled with K, persisted). keycastKey is the key
 	// as it is shown — "G", or "C-t d" once the leader is completed — and
@@ -1133,6 +1145,11 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		}
 		m.pluginCommands = sm.Commands
 		m.pluginFooter = sm.Footer // current footer value, so a fresh attach shows it immediately
+		// The agent backends the daemon detected on the fleet's machine. They ride
+		// the config push rather than the config blob because they are not config:
+		// the cockpit writes that file back, and what a machine has installed is not
+		// its to write. A reload re-detects, so this is also the re-detect result.
+		m.backends = sm.Agents
 	case "footer":
 		m.pluginFooter = sm.Footer
 	case "usage":
@@ -1189,6 +1206,11 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// The plugin command picker owns the keyboard until a command runs or esc.
 	if m.mode == modeCommand {
 		return m.handleCommandKey(key)
+	}
+
+	// The agent picker owns the keyboard until a backend is chosen or esc.
+	if m.mode == modeAgentPick {
+		return m.handleAgentKey(key)
 	}
 
 	// The git menu owns the keyboard until an op fires, a confirm answers, or esc.
@@ -1467,6 +1489,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // stay part of this one flat sequence so the cursor still counts rows, not lines.
 const (
 	panelRowShell      = iota // the default shell new panels run
+	panelRowAgent             // the agent backend the new-agent action spawns
 	panelRowReplayKB          // the per-panel replay buffer (KiB)
 	panelRowCPUs              // resource limits: CPU cores
 	panelRowMemory            // resource limits: hard memory cap
@@ -1525,6 +1548,12 @@ func limitFieldFor(row int) (limitField, bool) {
 // editPanelRow opens the editor for the selected panel-config row.
 func (m model) editPanelRow() (tea.Model, tea.Cmd) {
 	switch {
+	case m.cursor == panelRowAgent:
+		// The one row that is a choice from a known set rather than a typed value, so
+		// it opens the picker instead of a text overlay — and the picker only ever
+		// offers backends this machine actually has, which a free-text field could
+		// not promise.
+		return m.openAgentPicker(modePanelConfig, agentForDefault), nil
 	case m.cursor == panelRowReplayKB:
 		return m.editReplayKB(), nil
 	case m.cursor >= firstLimitRow:
@@ -1929,30 +1958,14 @@ func (m model) cwdSource() (panel.Panel, bool) {
 	return it.panel, true
 }
 
-// resolveAgent picks the agent profile the new-agent action spawns: the
-// configured default (falling back to "claude"), looked up in the user's
-// profiles and then the built-ins. ok is false when the named profile is unknown.
-func (m model) resolveAgent() (config.AgentProfile, string, bool) {
-	name := m.defaultAgent
-	if name == "" {
-		name = defaultAgentName
-	}
-	if prof, ok := m.agents[name]; ok {
-		return prof, name, true
-	}
-	if prof, ok := builtinAgent(name); ok {
-		return prof, name, true
-	}
-	return config.AgentProfile{}, name, false
-}
-
 // spawnAgent asks the server to create an agent panel: the resolved profile's
 // command and args, run in dir — the directory the agent operates on. An empty
 // dir falls back to the user's home, so an agent always lands somewhere sensible.
 func (m model) spawnAgent(dir string) model {
 	prof, name, ok := m.resolveAgent()
+	m.pendingAgent = "" // spent: the next A starts from the fleet default again
 	if !ok {
-		m.status = fmt.Sprintf("no agent profile %q configured", name)
+		m.status = m.agentUnavailable(name)
 		return m
 	}
 	dir = expandDir(dir)
@@ -2179,9 +2192,18 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		m.inputBuf = m.shellPath
 		m.status = "new panel · type the command, enter to spawn"
 	case actNewAgent:
+		// More than one backend on the machine and the choice is real, so make it
+		// before asking where: the picker opens with the cursor on the default, and
+		// enter carries it straight to the same workdir prompt. One backend (the
+		// fleet most people run) skips the picker entirely — a list of one is a
+		// keystroke, not a choice.
+		m.pendingAgent = ""
+		if len(m.availableAgents()) > 1 {
+			return m.openAgentPicker(m.mode, agentForSpawn), nil
+		}
 		_, name, ok := m.resolveAgent()
 		if !ok {
-			m.status = fmt.Sprintf("no agent profile %q configured", name)
+			m.status = m.agentUnavailable(name)
 			return m, nil
 		}
 		m.input = inputAgentDir
@@ -3228,6 +3250,8 @@ func (m model) render() string {
 		body = m.signalPickerView()
 	case m.mode == modeCommand:
 		body = m.commandPickerView()
+	case m.mode == modeAgentPick:
+		body = m.agentPickerView()
 	case m.mode == modeGit:
 		body = m.gitPickerView()
 	case m.mode == modeDiff:
@@ -3995,6 +4019,7 @@ func (m model) panelConfigView() string {
 	}
 
 	row(panelRowShell, "default shell", shellLabel(m.shellPath))
+	row(panelRowAgent, "default agent", m.defaultAgentLabel())
 	row(panelRowReplayKB, "replay buffer", replayLabel(m.replayKB))
 	body = append(body, "", sectionStyle.Render(spaced("RESOURCE LIMITS")), "")
 	for i, f := range limitFields {
@@ -4006,6 +4031,7 @@ func (m model) panelConfigView() string {
 		title: "PANEL CONFIG",
 		body:  body,
 		footer: []string{"",
+			mutedStyle.Render("default agent is what " + keyLabel(m.bindingKey(actNewAgent)) + " spawns · detected on the fleet's machine"),
 			mutedStyle.Render("replay buffer seeds scrollback · change applies on server restart"),
 			mutedStyle.Render("limits cap a panel's whole process tree · " + m.enforceLabel()),
 			"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(hints))), hints},

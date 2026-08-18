@@ -1,0 +1,128 @@
+// Package agents is baton's catalogue of agent backends: the CLI names baton
+// knows how to spawn, and which of them the machine the FLEET runs on actually
+// has.
+//
+// It is a neutral package rather than part of the config file format, for the
+// same reason internal/attn and internal/limits are: the YAML layer reads the
+// user's profiles into it and the daemon reads a detected set out, and neither
+// should have to depend on the other to speak about the same names.
+//
+// The catalogue is deliberately thin — a name and the binary behind it, nothing
+// else. No default arguments, no per-backend attention thresholds, no
+// "recommended flags": those are behavioural assumptions about someone else's
+// CLI, and they rot the release after they are written. docs/ISOLATION.md makes
+// the same argument for shipping no container image. baton names the thing; the
+// user configures it.
+package agents
+
+import (
+	"os/exec"
+	"sort"
+)
+
+// Default is the backend assumed when nothing is configured — the one baton has
+// always spawned, kept as the default so an existing fleet behaves the way it
+// did before there was anything to choose.
+const Default = "claude"
+
+// Backend is one way to launch an agent: the profile name a panel is spawned
+// under and the command behind it.
+type Backend struct {
+	Name     string   // the profile name — what the user selects and what the card carries
+	Command  string   // the binary to run
+	Args     []string // arguments passed on every spawn; empty for every preset
+	Isolated bool     // the command runs inside a container image, so the host's PATH cannot answer for it
+}
+
+// presets is the built-in catalogue, in the order a picker shows it. Every name
+// here is a promise that selecting it spawns something, so the list grows by
+// evidence that a CLI is worth the promise rather than by enthusiasm.
+//
+// A name maps to the command it is conventionally installed as, and to nothing
+// else. Where a backend wants arguments, a working directory, longer patience
+// before it reads as stuck, or a container to run in, the user writes a
+// panel.agents profile — which overrides the preset of the same name entirely.
+var presets = []Backend{
+	{Name: "claude", Command: "claude"},
+	{Name: "codex", Command: "codex"},
+	{Name: "gemini", Command: "gemini"},
+	{Name: "aider", Command: "aider"},
+	{Name: "opencode", Command: "opencode"},
+}
+
+// lookPath decides whether a command exists on this machine. It is a variable so
+// a test can answer for a machine it does not have.
+var lookPath = exec.LookPath
+
+// Presets returns the built-in catalogue. The copy is defensive: the caller
+// merges the user's profiles into what it gets back, and a shared slice would
+// let one fleet's config edit the next one's defaults.
+func Presets() []Backend {
+	out := make([]Backend, len(presets))
+	copy(out, presets)
+	return out
+}
+
+// Merge layers the user's own profiles over the presets: a profile whose name
+// matches a preset replaces it in place — command, arguments and all — and one
+// with a new name is appended. The presets keep their order because it is the
+// order a picker reads in; the added names are sorted so the tail of the list
+// does not reshuffle itself between reloads on map iteration order.
+func Merge(user []Backend) []Backend {
+	out := Presets()
+	at := make(map[string]int, len(out))
+	for i, b := range out {
+		at[b.Name] = i
+	}
+	extra := make([]Backend, 0, len(user))
+	for _, b := range user {
+		if b.Name == "" || b.Command == "" {
+			continue // a profile with nothing to run is not a backend, it is a typo
+		}
+		if i, ok := at[b.Name]; ok {
+			out[i] = b
+			continue
+		}
+		extra = append(extra, b)
+	}
+	sort.Slice(extra, func(i, j int) bool { return extra[i].Name < extra[j].Name })
+	return append(out, extra...)
+}
+
+// Detect returns the backends this machine can actually run, in the order given.
+//
+// Presence on PATH is the whole test. There is no --version probe: it is a fork
+// per backend, not every agent CLI has the flag, and one that hangs would hang
+// the thing that decides whether you can spawn at all. What a detected backend
+// promises is that the binary is there — not that it is authenticated, current,
+// or willing.
+//
+// An isolated profile is kept without asking. Its command runs inside a
+// container image, so the host's PATH has no opinion worth having: absent there
+// means nothing about the image, and dropping the profile would hide a backend
+// that works.
+func Detect(cands []Backend) []Backend {
+	out := make([]Backend, 0, len(cands))
+	for _, b := range cands {
+		if b.Isolated {
+			out = append(out, b)
+			continue
+		}
+		if _, err := lookPath(b.Command); err != nil {
+			continue
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
+// Find returns the named backend from a list. It exists so the callers that ask
+// "is the default still there" all ask it the same way.
+func Find(list []Backend, name string) (Backend, bool) {
+	for _, b := range list {
+		if b.Name == name {
+			return b, true
+		}
+	}
+	return Backend{}, false
+}

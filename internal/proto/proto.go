@@ -292,6 +292,16 @@ type UsageInfo struct {
 	Panels map[string]PanelUsage `json:"panels,omitempty"`
 }
 
+// AgentBackend is one agent CLI a frontend may spawn: the profile name a panel
+// is created under, and the command behind it. It carries no policy — limits,
+// restart, attention and isolation stay on the server's own profile and are
+// applied there, so a frontend never has to be trusted with them.
+type AgentBackend struct {
+	Name    string   `json:"name"`
+	Command string   `json:"command"`
+	Args    []string `json:"args,omitempty"`
+}
+
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
 	Type       string      `json:"type"`                  // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "scratch" | "diff" | "gitout" | "search" | "notice" | "config" | "footer" | "usage" | "tasks" | "tail" (the pulled trailing output of one panel: ID names it, Data carries the bytes) | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline)
@@ -320,6 +330,12 @@ type ServerMsg struct {
 	// for the command picker.
 	Config   json.RawMessage `json:"config,omitempty"`
 	Commands []PluginCommand `json:"commands,omitempty"`
+
+	// The agent backends the FLEET's machine can actually run, set on "config"
+	// alongside it. They are detected rather than configured — a property of the
+	// host, not a statement of intent — so they ride as their own field instead of
+	// being folded into Config, which is the file the cockpit writes back.
+	Agents []AgentBackend `json:"agents,omitempty"`
 
 	// Host resource sample on "stats", measured on the server so the footer
 	// reflects the machine where the panels actually run.

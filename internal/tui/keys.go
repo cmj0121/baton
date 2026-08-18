@@ -256,19 +256,6 @@ type prefs struct {
 	notifyCoalesce    time.Duration                  // how long edges are gathered into one notification; default defaultNotifyCoalesce
 }
 
-// defaultAgentName is the built-in agent profile, used when none is configured —
-// Claude is the first agent Baton ships with.
-const defaultAgentName = "claude"
-
-// builtinAgent returns the profile for a name the user has not configured. Only
-// the built-in "claude" exists for now.
-func builtinAgent(name string) (config.AgentProfile, bool) {
-	if name == "" || name == defaultAgentName {
-		return config.AgentProfile{Command: "claude"}, true
-	}
-	return config.AgentProfile{}, false
-}
-
 // loadPrefs reads the config file, returning defaults for anything missing or on
 // any read error (so the cockpit always comes up). Defaults: prefix "ctrl+t",
 // confirm-on-close on, system shell. It is the cockpit's bootstrap; the daemon then
