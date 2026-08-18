@@ -3987,7 +3987,11 @@ func (m model) panelConfigView() string {
 			labelStyle = inkStyle
 			selLine = len(body)
 		}
-		body = append(body, fmt.Sprintf("%s%-16s%s", caret, labelStyle.Render(label), valueStyle.Render(value)))
+		// Pad the label BEFORE styling it. Rendering wraps the text in escape
+		// sequences, and %-16s counts those, so padding the rendered string is a
+		// no-op that leaves every value butted straight against its label
+		// ("default shellsystem default").
+		body = append(body, caret+labelStyle.Render(fmt.Sprintf("%-16s", label))+valueStyle.Render(value))
 	}
 
 	row(panelRowShell, "default shell", shellLabel(m.shellPath))
