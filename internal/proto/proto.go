@@ -11,6 +11,22 @@ import (
 )
 
 // ProtocolVersion is negotiated on connect. Bump it on breaking wire changes.
+//
+// It stays "baton/1" through the attention work, and the reasoning is worth
+// keeping here because the temptation to bump recurs. Every change that landed
+// is additive in the two directions that matter: new optional fields (an old
+// peer's encoding/json ignores unknown keys, and omitempty elides absent ones,
+// so both ends read what they know and zero for the rest) and new actions (an
+// old daemon answers a new client's panel.attention with its existing `unknown
+// action` error, which the cockpit already surfaces). The one non-additive
+// change — the "done" and "stuck" state strings — is handled where it belongs,
+// in panel.ParseState, which maps anything it does not know to idle so an older
+// cockpit under-claims rather than lies.
+//
+// Bump to "baton/2" when a field's MEANING changes or a required field is added,
+// not when fields are appended: a version bump forces every frontend to be
+// rebuilt in lockstep, which is the opposite of what a negotiated version is for
+// when the change already degrades correctly on its own.
 const ProtocolVersion = "baton/1"
 
 // IPC timing for the persistent, legitimately-idle Unix-socket connection. The
@@ -52,7 +68,7 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.diff | panel.git | panel.scratch | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run
+	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | panel.tail | panel.diff | panel.git | panel.scratch | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run
 	Kind      string   `json:"kind,omitempty"`      // panel kind for "panel.create" (default "shell")
 	ID        string   `json:"id,omitempty"`        // target panel for close/attach/input/resize/diff, or the panel to rename
 	Path      string   `json:"path,omitempty"`      // init command (binary path) for "panel.create"; empty = default shell
@@ -70,10 +86,22 @@ type Command struct {
 	Name      string   `json:"name,omitempty"`   // new name for "panel.rename" (a panel title or a group name)
 	Index     int      `json:"index,omitempty"`  // destination index among the remaining panels for "panel.move"
 	Signal    string   `json:"signal,omitempty"` // signal name to deliver for "panel.signal", e.g. "SIGINT"
-	Count     int      `json:"count,omitempty"`  // absolute visible count for "group.show": how many members stream as live tiles
+	Count     int      `json:"count,omitempty"`  // absolute visible count for "group.show"; also how many trailing bytes "panel.tail" returns (0 = the Monitor's own attention-sniff window)
 	Git       string   `json:"git,omitempty"`    // git op for "panel.git", e.g. "log", "commit", "worktree-add"; Name carries a branch, Dir a worktree path
 	Layout    string   `json:"layout,omitempty"` // layout name for "group.layout": the named split arrangement the group opens with
 	Query     string   `json:"query,omitempty"`  // the search term for "fleet.search": a case-insensitive regexp matched against every panel's retained output
+
+	// Reason is why an agent says it needs a human, carried by "panel.attention".
+	// It is required there rather than optional: a declaration outranks both the
+	// quiet timer and the tail heuristic precisely because it can say what it
+	// wants, and one that cannot is worth no more than the heuristic it displaces.
+	Reason string `json:"reason,omitempty"`
+
+	// Until is how long an acknowledgement holds, as an RFC 3339 instant, for
+	// "panel.ack". Empty is the ordinary dismissal — it holds until the panel next
+	// produces output, i.e. until the panel itself does something — while a value
+	// is the snooze, which additionally expires on the clock.
+	Until string `json:"until,omitempty"`
 
 	// Role and Self are declared on "hello" by a control client (the conductor
 	// agent driving the fleet over the socket). Role "conductor" puts the
@@ -111,7 +139,7 @@ type Panel struct {
 	ID          string `json:"id"`
 	Kind        string `json:"kind"`                   // "shell" | "agent"
 	Title       string `json:"title"`                  // human label shown on the dashboard
-	State       string `json:"state,omitempty"`        // lifecycle: spawning|running|idle|attention|exited
+	State       string `json:"state,omitempty"`        // lifecycle: spawning|running|idle|attention|done|stuck|exited
 	Group       string `json:"group,omitempty"`        // work item the panel belongs to, if any
 	Task        string `json:"task,omitempty"`         // the brief the panel was last dispatched, if any
 	Activity    string `json:"activity,omitempty"`     // short status line the Monitor keeps live
@@ -122,6 +150,40 @@ type Panel struct {
 	GlobalShell bool   `json:"global_shell,omitempty"` // the singleton global shell (plain host shell in $HOME), so a frontend can badge it
 	Cwd         string `json:"cwd,omitempty"`          // the directory the panel's process is in now (not the one it was launched in); empty when unknown
 	Pid         int    `json:"pid,omitempty"`          // OS pid of the panel's process-group leader; 0 once the process has exited. Roots the panel's OS descendant subtree (baton ctl tree).
+
+	// ExitCode is the panel process's exit status. It is meaningful ONLY when
+	// State is "exited"; a zero value on a live panel means "not applicable",
+	// never "succeeded". A non-zero code on an exited panel is what the cockpit
+	// renders as `failed` — `failed` is deliberately not a state (see
+	// docs/SPEC.md), so the daemon reports the fact and the frontend draws the
+	// conclusion.
+	ExitCode int `json:"exit_code,omitempty"`
+
+	// Reason is why the panel says it needs a human, as the AGENT stated it via
+	// panel.attention. Empty when no declaration stands — a heuristic or a timer
+	// raises the state without a reason, and the inbox shows the tail instead.
+	Reason string `json:"reason,omitempty"`
+
+	// Since is when the panel entered its current state, as an RFC 3339 instant.
+	// It is joined in when a snapshot is built (like Pid), never carried on the
+	// in-memory fleet. The inbox sorts on it — oldest first — because a rendered
+	// Activity string cannot be ordered and a client's own clock cannot be trusted
+	// across the --remote ssh hop.
+	Since string `json:"since,omitempty"`
+
+	// Sig is a short hash of what this panel currently looks like: its state and
+	// the shape of its last output line, with digits collapsed so "[3/12]
+	// building" and "[7/12] building" hash alike. The group summary tile folds the
+	// members whose Sig matches the majority. It is 8 hex characters rather than
+	// the text itself because shipping 50 tails on every snapshot is exactly what
+	// the pull-on-demand tail (panel.tail) exists to avoid.
+	Sig string `json:"sig,omitempty"`
+
+	// Acked marks a panel a human has already dealt with from the inbox —
+	// dismissed, snoozed, or replied to. It is fleet state, not per-cockpit state,
+	// so a second cockpit does not re-offer work the first one just cleared. It
+	// falls away when the panel next produces output.
+	Acked bool `json:"acked,omitempty"`
 }
 
 // Task is the wire view of a backlog task: a prompt assigned (or waiting to be
@@ -214,7 +276,7 @@ type UsageInfo struct {
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type       string      `json:"type"`                  // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "scratch" | "diff" | "gitout" | "search" | "notice" | "config" | "footer" | "usage" | "tasks" | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline)
+	Type       string      `json:"type"`                  // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "scratch" | "diff" | "gitout" | "search" | "notice" | "config" | "footer" | "usage" | "tasks" | "tail" (the pulled trailing output of one panel: ID names it, Data carries the bytes) | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline)
 	Version    string      `json:"version,omitempty"`     // protocol version, set on "welcome"
 	ServerVer  string      `json:"server_ver,omitempty"`  // the server's build version, set on "welcome"
 	Enforce    string      `json:"enforce,omitempty"`     // the resource-limit backend in force on the host the panels run on ("cgroup", "none"), set on "welcome" and "config" so a frontend offering to edit limits can say whether they bite
@@ -227,8 +289,8 @@ type ServerMsg struct {
 	Panels     []Panel     `json:"panels,omitempty"`      // full snapshot on "panels"; live state/spark refresh on "telemetry"
 	Groups     []GroupView `json:"groups,omitempty"`      // per-group view settings on the "panels" snapshot, alongside Panels
 	Tasks      []Task      `json:"tasks,omitempty"`       // the backlog snapshot on "tasks" (reply to task.list)
-	ID         string      `json:"id,omitempty"`          // panel id on "output"; the new transient panel id on "ephemeral" (a git op); the diffed agent panel id on "diff"
-	Data       []byte      `json:"data,omitempty"`        // pty output bytes on "output"
+	ID         string      `json:"id,omitempty"`          // panel id on "output" and on "tail"; the new transient panel id on "ephemeral" (a git op); the diffed agent panel id on "diff"
+	Data       []byte      `json:"data,omitempty"`        // pty output bytes on "output"; the pulled trailing output on "tail"
 	Files      []DiffFile  `json:"files,omitempty"`       // per-file staged/unstaged diffs on "diff"; ID carries the target panel
 	Hits       []SearchHit `json:"hits,omitempty"`        // matching lines on "search" (reply to fleet.search), grouped by panel on the frontend
 	Text       string      `json:"text,omitempty"`        // a non-interactive git op's captured output on "gitout"; ID carries the target panel
