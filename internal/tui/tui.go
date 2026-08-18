@@ -404,6 +404,12 @@ type model struct {
 	foldOpen   map[string]bool
 	foldKeepID string
 
+	// lens is which parents the dashboard tree is built from: the work items a
+	// person built, or a projection over the fleet (directory, profile, state). It
+	// is view state and never persisted — a cockpit that came back showing the state
+	// lens would look like a fleet whose work items had vanished.
+	lens lens
+
 	// grab is the row currently being carried through the tree, or nil. Held by
 	// identity rather than row number: the list reflows under a grab — a snapshot
 	// lands, a level folds — and an index would then be carrying something else.
@@ -2394,6 +2400,11 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 			m.status = "toggled, but save failed: " + err.Error()
 		}
 		return m, nil
+	case actLens:
+		if m.mode != modeDashboard {
+			return m, nil
+		}
+		return m.cycleLens(1), nil
 	case actEditMap:
 		return m.openEditMap(m.mode), nil
 	case actScroll:
@@ -2420,19 +2431,32 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 
-	case actMark:
-		if it, ok := m.selectedItem(); ok {
-			m.toggleMark(it)
-			m.status = m.markStatus()
+	case actMark, actGroup, actAdd, actUngroup, actRename:
+		// The verbs that change the fleet's SHAPE are refused under a lens. A lens
+		// bucket is not a work item — there is no meaning to "move this panel into
+		// the directory /w/api" or "rename the state attention" — and inventing one
+		// would be inventing what the person meant. The refusal names the lens and
+		// the key back, because a binding that silently did nothing would read as
+		// broken rather than as scoped.
+		if why := m.lensRefusal(); why != "" {
+			m.status = why
+			return m, nil
 		}
-	case actGroup:
-		return m.startGroup(), nil
-	case actAdd:
-		return m.addMarkedToGroup(), nil
-	case actUngroup:
-		return m.ungroupSelected(), nil
-	case actRename:
-		return m.startRename(), nil
+		switch a {
+		case actMark:
+			if it, ok := m.selectedItem(); ok {
+				m.toggleMark(it)
+				m.status = m.markStatus()
+			}
+		case actGroup:
+			return m.startGroup(), nil
+		case actAdd:
+			return m.addMarkedToGroup(), nil
+		case actUngroup:
+			return m.ungroupSelected(), nil
+		case actRename:
+			return m.startRename(), nil
+		}
 	case actFavourite:
 		return m.toggleFavourite(), nil
 	case actCommands:
@@ -3284,6 +3308,13 @@ func (m model) dashboardView() string {
 	if m.filter != "" {
 		heading += "  " + seg("⌕ "+truncate(m.filter, 20), colDark, colCyan) +
 			mutedStyle.Render(fmt.Sprintf("  %d match(es)", len(items)))
+	}
+	// A lens is stated on the heading, always. The tree looks the same under one as
+	// under the fleet's own work items, and a person who cannot tell which they are
+	// looking at will eventually reach for a verb that is refused, or worse, trust a
+	// shape that is not the one they built.
+	if !m.lens.real() {
+		heading += "  " + seg("group by: "+m.lens.String(), colDark, colBrandHi)
 	}
 	summary := m.summaryStrip(shown)
 	body := m.treeBody(items)

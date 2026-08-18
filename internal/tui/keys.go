@@ -41,6 +41,7 @@ const (
 	keyUsage       = "U" // toggle the account usage/cost footer segment (shift+u)
 	keyKeycast     = "K" // toggle the key-press readout in the footer (shift+k; the sibling of U)
 	keyPreview     = "v" // toggle the dashboard's detail pane beside the tree
+	keyLens        = "z" // cycle the dashboard's group-by lens: work item, directory, profile, state
 	keyHelp        = "?" // view the key list for the current view
 	keyEditMap     = "k" // edit the key map (prefix only: C-t k)
 	keyPanelConfig = "P" // shift+p
@@ -115,6 +116,7 @@ const (
 	actUsageToggle
 	actKeycastToggle
 	actPreviewToggle
+	actLens
 	actPanelConfig
 	actRestart
 	actReload
@@ -203,6 +205,7 @@ var bindings = []binding{
 	{"usage-footer", keyUsage, "cycle the usage footer: off, window, focused panel", actUsageToggle, "View"},
 	{"keycast", keyKeycast, "toggle the key-press readout in the footer", actKeycastToggle, "View"},
 	{"preview", keyPreview, "toggle the detail pane beside the dashboard tree", actPreviewToggle, "View"},
+	{"group-by", keyLens, "cycle the group-by lens: work item, directory, profile, state", actLens, "View"},
 	{"key-map", keyEditMap, "edit the key map (prefix)", actEditMap, "View"},
 	{"panel-config", keyPanelConfig, "configure panel defaults (prefix)", actPanelConfig, "View"},
 	{"scroll", keyScroll, "scroll mode — line / page (prefix)", actScroll, "View"},

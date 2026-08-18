@@ -171,6 +171,12 @@ type Panel struct {
 	// nothing — no scoped role, no managed workspace. At most one exists at a time.
 	GlobalShell bool
 
+	// Profile is the agent profile this panel was spawned from, as the server
+	// records it. Empty for a shell, and for an agent spawned without one. It is
+	// how a frontend can group or filter a fleet by what KIND of agent is running,
+	// which at fifty panels is a question the title alone answers badly.
+	Profile string
+
 	// Cwd is the directory the panel's process is in now, as opposed to the one it
 	// was launched in — learned from the shell's own report or the process table
 	// (see internal/cwd). Empty when it is not known, which every reader treats as
@@ -224,6 +230,7 @@ func FromProto(p proto.Panel) Panel {
 		Favourite:   p.Favourite,
 		Conductor:   p.Conductor,
 		GlobalShell: p.GlobalShell,
+		Profile:     p.Profile,
 		Cwd:         p.Cwd,
 		Pid:         p.Pid,
 		ExitCode:    p.ExitCode,
@@ -253,6 +260,7 @@ func (p Panel) ToProto() proto.Panel {
 		Favourite:   p.Favourite,
 		Conductor:   p.Conductor,
 		GlobalShell: p.GlobalShell,
+		Profile:     p.Profile,
 		Cwd:         p.Cwd,
 		Pid:         p.Pid,
 		ExitCode:    p.ExitCode,

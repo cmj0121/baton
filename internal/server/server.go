@@ -4148,6 +4148,11 @@ func (s *Server) setGroupFavourite(group string, fav bool) error {
 func (s *Server) wirePanel(p panel.Panel, pids map[string]int) proto.Panel {
 	out := p.ToProto()
 	out.Pid = pids[p.ID]
+	// The profile joins the snapshot here rather than living on the panel record,
+	// for the reason the pid does: it belongs to the spawn spec, and a frontend
+	// that wants to group a fleet by what KIND of agent is running has no other
+	// way to ask. Caller holds s.mu.
+	out.Profile = s.specs[p.ID].Profile
 	since := s.mon.enteredAt(p.ID)
 	if since.IsZero() {
 		since = s.exitedAt[p.ID]

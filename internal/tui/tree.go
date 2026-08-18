@@ -101,7 +101,7 @@ func buildTree(fleet []panel.Panel) *groupNode {
 // level. It is the single projection the cursor, every verb and both renderers
 // read, so none of them can disagree about what row N is.
 func (m model) dashTree() []dashItem {
-	root := buildTree(m.fleet)
+	root := buildTree(m.lensFleet())
 	need := m.needByGroup()
 	return m.flatten(root, 0, need, nil)
 }

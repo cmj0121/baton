@@ -55,6 +55,13 @@ func (m model) toggleGrab() model {
 // that answered "these twelve" to a drop would be exactly the surprise it is not
 // allowed to be. Expand it and carry a real row instead.
 func (m model) startGrab() model {
+	// Carrying a row is a reorganising gesture, so it is scoped to the real tree
+	// for the same reason the group verbs are: a lens bucket is not somewhere a
+	// panel can be moved into.
+	if why := m.lensRefusal(); why != "" {
+		m.status = why
+		return m
+	}
 	it, ok := m.selectedItem()
 	if !ok {
 		m.status = "nothing to move"

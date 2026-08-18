@@ -757,7 +757,7 @@ func TestHelpContextAndZoomFooter(t *testing.T) {
 func TestHelpGroupsByCategory(t *testing.T) {
 	m := baseModel()
 	m.fleet = groupedFleet()
-	m.height = 60 // tall enough that the whole key list renders, so this tests grouping, not viewport fit
+	m.height = 70 // tall enough that the whole key list renders, so this tests grouping, not viewport fit
 
 	cases := []struct {
 		from mode
