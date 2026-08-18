@@ -478,6 +478,21 @@ func TestInboxViewRows(t *testing.T) {
 			t.Fatalf("width %d: the header should survive, got %q", w, out)
 		}
 	}
+	// The composer's "no echo" hint has to survive every width the cockpit will
+	// render at, not just a wide one. The pop-up clips per line, so a hint that
+	// does not fit loses its tail — and the tail is the half that says how to
+	// watch the reply land, which is the only actionable thing on the line.
+	m.inboxComposing, m.inboxReply = true, "yes"
+	for _, w := range []int{40, 120} {
+		m.width = w
+		out := m.inboxView()
+		if !strings.Contains(out, "no echo") {
+			t.Errorf("width %d: the composer should say plainly that no echo comes back", w)
+		}
+		if !strings.Contains(out, "enter zooms") {
+			t.Errorf("width %d: the hint must not be cut off before it says how to watch it land", w)
+		}
+	}
 	m.width = 120
 	if !strings.Contains(m.View(), spaced("INBOX")) {
 		t.Error("modeInbox should render through the cockpit's own View")
@@ -641,5 +656,189 @@ func TestCompactAgeReadsLikeTheDaemons(t *testing.T) {
 		if got := compactAge(tc.d); got != tc.want {
 			t.Errorf("compactAge(%v) = %q, want %q", tc.d, got, tc.want)
 		}
+	}
+}
+
+// --- clearing a row -----------------------------------------------------------
+
+// clientInbox is an open inbox wired to a recording server, so a case can assert
+// exactly what travelled over the socket.
+func clientInbox(t *testing.T, panels ...proto.Panel) (model, <-chan proto.Command) {
+	t.Helper()
+	c, cmds := recordingServer(t)
+	m := inboxModel(panels...)
+	m.client = c
+	out, _ := m.openInbox()
+	return out.(model), cmds
+}
+
+// TestInboxReplyAnswersAndAdvances is the issue's actual ask, in one test.
+// Handling an item today costs navigate, enter, read, type, C-t d — a full screen
+// swap that loses the fleet. Here it costs i, the answer, enter: the bytes reach
+// the panel, the row is acknowledged in the same breath, and the CURSOR DOES NOT
+// MOVE — so the next item is already under it.
+func TestInboxReplyAnswersAndAdvances(t *testing.T) {
+	m, cmds := clientInbox(t,
+		wire("1", "attention", 2*time.Minute),
+		wire("2", "attention", time.Minute),
+	)
+	if got := rowIDs(m); !eqIDs(got, "1", "2") {
+		t.Fatalf("setup order = %v", got)
+	}
+
+	m = press(m, "i")
+	if !m.inboxComposing {
+		t.Fatal("i should open the composer")
+	}
+	m = press(m, "y", "e", "s")
+	m = press(m, "enter")
+
+	in := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "panel.input" })
+	if in.ID != "1" || string(in.Data) != "yes\n" {
+		t.Errorf("panel.input = %q to %q, want \"yes\\n\" to \"1\"", in.Data, in.ID)
+	}
+	ack := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "panel.ack" })
+	if ack.ID != "1" || ack.Until != "" {
+		t.Errorf("the reply IS the acknowledgement: got %+v", ack)
+	}
+
+	if m.inboxComposing {
+		t.Error("the composer should close on send")
+	}
+	if got := rowIDs(m); !eqIDs(got, "2") {
+		t.Fatalf("the answered row should leave the queue, got %v", got)
+	}
+	if m.inboxCursor != 0 || m.inboxRows[0].id != "2" {
+		t.Errorf("the cursor should stay at index 0 with the next item under it, got %d", m.inboxCursor)
+	}
+	// The server's confirming broadcast has not arrived yet, so the panel still
+	// qualifies. The row must NOT reappear at the bottom of the queue.
+	m.observeWire([]proto.Panel{wire("1", "attention", 2*time.Minute), wire("2", "attention", time.Minute)})
+	if got := rowIDs(m); !eqIDs(got, "2") {
+		t.Fatalf("an optimistically cleared row must not come back, got %v", got)
+	}
+	// …and once the ack lands, the hold is released.
+	acked := wire("1", "attention", 2*time.Minute)
+	acked.Acked = true
+	m.observeWire([]proto.Panel{acked, wire("2", "attention", time.Minute)})
+	if m.inboxCleared["1"] {
+		t.Error("a confirmed clear should stop being held down")
+	}
+}
+
+// TestInboxClearRowLeavesAnOlderModelIntact. The receiver is a VALUE, so shifting
+// the rows in place would write through the backing array that an earlier copy of
+// the model still points at. bubbletea passes the model along linearly today,
+// which makes it harmless today — and makes it exactly the kind of trap that is
+// expensive to find on the day something holds a copy.
+func TestInboxClearRowLeavesAnOlderModelIntact(t *testing.T) {
+	m, _ := clientInbox(t,
+		wire("1", "attention", 3*time.Minute),
+		wire("2", "attention", 2*time.Minute),
+		wire("3", "attention", time.Minute))
+	before := rowIDs(m)
+
+	_ = m.clearRow(0, time.Time{}, "") // the newer model is discarded on purpose
+
+	if got := rowIDs(m); !eqIDs(got, before...) {
+		t.Fatalf("clearing must not write through the older model's rows, got %v, want %v", got, before)
+	}
+}
+
+// TestInboxClearRowDropsTheTailFromTheRing. The eviction ring has to be kept in
+// step with the cache it evicts from: a dead id left behind occupies one of the
+// thirty-two slots, can be enqueued a second time if the row comes back, and —
+// worst — evicts the FRESH entry when it reaches the head. The cache would be
+// quietly smaller than it is documented to be.
+func TestInboxClearRowDropsTheTailFromTheRing(t *testing.T) {
+	m, _ := clientInbox(t, wire("1", "attention", 2*time.Minute), wire("2", "attention", time.Minute))
+	m.applyTail("1", []byte("first"))
+	m.applyTail("2", []byte("second"))
+
+	m = m.clearRow(0, time.Time{}, "") // clears row "1"
+
+	for _, id := range m.inboxTailOrder {
+		if id == "1" {
+			t.Fatalf("a cleared row must leave the eviction ring, got %v", m.inboxTailOrder)
+		}
+	}
+	if len(m.inboxTailOrder) != len(m.inboxTails) {
+		t.Fatalf("the ring and the cache must agree: %v vs %d entries", m.inboxTailOrder, len(m.inboxTails))
+	}
+
+	// The same id caching again enqueues once, not twice.
+	m.applyTail("1", []byte("again"))
+	seen := 0
+	for _, id := range m.inboxTailOrder {
+		if id == "1" {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Errorf("a re-cached id should sit in the ring exactly once, got %d in %v", seen, m.inboxTailOrder)
+	}
+}
+
+// TestInboxEmptyReplyIsARealAnswer. Accepting a [y/N] default by pressing enter is
+// the commonest confirmation there is, and refusing it would make it the one case
+// the inbox cannot handle.
+func TestInboxEmptyReplyIsARealAnswer(t *testing.T) {
+	m, cmds := clientInbox(t, wire("1", "attention", time.Minute))
+
+	press(m, "i", "enter")
+
+	in := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "panel.input" })
+	if string(in.Data) != "\n" {
+		t.Errorf("an empty reply should send a bare newline, got %q", in.Data)
+	}
+}
+
+// TestInboxComposerOwnsTheKeyboard. A reply containing the letter x must not
+// dismiss the row it is answering, and one containing r must not re-sort the queue
+// out from under it.
+func TestInboxComposerOwnsTheKeyboard(t *testing.T) {
+	m, _ := clientInbox(t, wire("1", "attention", time.Minute), wire("2", "done", time.Minute))
+
+	m = press(m, "i", "x", "r", "space", "j")
+	if m.inboxReply != "xr j" {
+		t.Errorf("every key should be text while composing, got %q", m.inboxReply)
+	}
+	if len(m.inboxRows) != 2 {
+		t.Fatalf("no row should have been cleared, got %v", rowIDs(m))
+	}
+
+	// backspace and ctrl+u edit the line; esc leaves the row exactly where it was.
+	m = press(m, "backspace")
+	if m.inboxReply != "xr " {
+		t.Errorf("backspace should delete one rune, got %q", m.inboxReply)
+	}
+	m = press(m, "ctrl+u")
+	if m.inboxReply != "" {
+		t.Errorf("ctrl+u should clear the line, got %q", m.inboxReply)
+	}
+	m = press(m, "esc")
+	if m.inboxComposing || m.mode != modeInbox || len(m.inboxRows) != 2 {
+		t.Errorf("esc should cancel the composer and keep the row, got composing=%v mode=%v rows=%v",
+			m.inboxComposing, m.mode, rowIDs(m))
+	}
+}
+
+// TestInboxReplyRefusedOnAnExitedPanel. A write to a dead PTY is a silent no-op
+// server-side, so without this guard the reply would vanish with no feedback at
+// all and the row would clear as if it had landed.
+func TestInboxReplyRefusedOnAnExitedPanel(t *testing.T) {
+	dead := wire("1", "exited", time.Minute)
+	dead.ExitCode = 1
+	m, _ := clientInbox(t, dead)
+
+	m = press(m, "i")
+	if m.inboxComposing {
+		t.Fatal("an exited panel cannot be replied to")
+	}
+	if !strings.Contains(m.status, "cannot reply") {
+		t.Errorf("the refusal should say so, got %q", m.status)
+	}
+	if len(m.inboxRows) != 1 {
+		t.Error("a refused reply must not clear the row")
 	}
 }

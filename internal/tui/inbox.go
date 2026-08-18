@@ -25,9 +25,9 @@ import (
 //
 // It borrows the diff popup's master-detail shape: the queue on the left, on the
 // right the tail that raised the flag (pulled per row with panel.tail, never
-// carried on a snapshot). The verbs that clear a row without leaving the overlay
-// land on top of this; the one verb that does leave, enter, leaves deliberately
-// because sometimes you really do have to look.
+// carried on a snapshot). The verbs it offers act WITHOUT leaving the overlay —
+// i answers where you stand — and the one verb that does leave, enter, leaves
+// deliberately because sometimes you really do have to look.
 //
 // Two rules shape everything below, and both are about trust rather than
 // convenience:
@@ -36,9 +36,9 @@ import (
 //     under your hand is a queue where the thing you press x on is not the thing
 //     you read, so an arriving snapshot may change what a row SAYS but never
 //     where it IS. r is the explicit re-sort.
-//   - Nothing leaves the queue by accident. Opening a panel, or zooming into it,
-//     acknowledges nothing — because a queue you can consume by looking at it is
-//     a queue you stop trusting.
+//   - Nothing leaves the queue by accident. A row is cleared only by a verb that
+//     says so — never by merely opening the panel or zooming into it — because a
+//     queue you can consume by looking at it is a queue you stop trusting.
 
 // inboxListColWidth is the queue column's preferred width; like the diff popup's
 // file column it shrinks on a narrow terminal so the tail pane keeps room.
@@ -190,6 +190,8 @@ func (m model) openInbox() (tea.Model, tea.Cmd) {
 	m.mode = modeInbox
 	m.inboxRows = m.sortedInboxRows()
 	m.inboxCursor = 0
+	m.inboxCleared = nil
+	m.inboxComposing, m.inboxReply = false, ""
 	m.status = m.inboxStatus()
 	m.wantTail()
 	return m, nil
@@ -207,6 +209,7 @@ func (m model) refreshInbox() (tea.Model, tea.Cmd) {
 	}
 	at := m.inboxCursor
 	m.inboxRows = m.sortedInboxRows()
+	m.inboxCleared = nil
 	m.inboxCursor = clampInt(at, 0, len(m.inboxRows)-1)
 	for i, r := range m.inboxRows {
 		if r.id == anchor {
@@ -226,7 +229,9 @@ func (m model) refreshInbox() (tea.Model, tea.Cmd) {
 func (m model) closeInbox() (tea.Model, tea.Cmd) {
 	m.mode = m.inboxFrom
 	m.inboxRows = nil
+	m.inboxCleared = nil
 	m.inboxCursor = 0
+	m.inboxComposing, m.inboxReply = false, ""
 	m.inboxTails, m.inboxTailOrder, m.inboxTailWant = nil, nil, ""
 	if m.mode == modeDashboard {
 		m.status = "dashboard"
@@ -264,6 +269,12 @@ func (m model) inboxStatus() string {
 // died — is marked stale and greyed rather than pulled out from under the hand
 // about to press x on it. The remote view learned this rule the hard way, and so
 // did fleetsearch.
+//
+// A row this cockpit already cleared is NOT re-appended while the server's
+// confirming broadcast is still in flight. The removal is optimistic (§4.5) and
+// the panel keeps qualifying for the few milliseconds until the ack lands, so
+// without inboxCleared the row you just dismissed would reappear at the bottom of
+// the queue — the single most confusing thing a queue can do.
 func (m *model) reconcileInbox() {
 	live := make(map[string]proto.Panel, len(m.inboxWire))
 	for _, p := range m.inboxWire {
@@ -284,11 +295,20 @@ func (m *model) reconcileInbox() {
 		*r = row
 	}
 	for _, p := range m.inboxWire {
-		if held[p.ID] {
+		if held[p.ID] || m.inboxCleared[p.ID] {
 			continue
 		}
 		if _, ok := inboxQualifies(p, m.inboxDone); ok {
 			m.inboxRows = append(m.inboxRows, rowOf(p))
+		}
+	}
+	// A cleared row the server has now confirmed (or that stopped qualifying for
+	// any other reason) no longer needs holding down.
+	for id := range m.inboxCleared {
+		if p, ok := live[id]; !ok {
+			delete(m.inboxCleared, id)
+		} else if _, qualifies := inboxQualifies(p, m.inboxDone); !qualifies {
+			delete(m.inboxCleared, id)
 		}
 	}
 	m.inboxCursor = clampInt(m.inboxCursor, 0, len(m.inboxRows)-1)
@@ -352,11 +372,82 @@ func (m *model) applyTail(id string, data []byte) {
 	m.wantTail()
 }
 
+// --- clearing a row -----------------------------------------------------------
+
+// clearRow is the one path every clearing verb takes — i sends text with it, the
+// deferring verbs will send an until. It sends, removes the row, and leaves the
+// cursor at the same INDEX — because the slice shrank underneath it, that index
+// now holds the next item, which is the whole ergonomic claim of this feature.
+//
+// The removal is local and optimistic; the server's ack broadcast is the
+// confirmation, and reconcileInbox holds the id down until it arrives. This is the
+// pattern cycleGroupLayout already uses: apply locally, let the next snapshot
+// reconcile the guess.
+func (m model) clearRow(idx int, until time.Time, sendText string) model {
+	if idx < 0 || idx >= len(m.inboxRows) {
+		return m
+	}
+	row := m.inboxRows[idx]
+	if sendText != "" {
+		// The submit sequence is "\n", matching the server's own defaultSubmit. An
+		// EMPTY reply still sends a bare newline — accepting a [y/N] default is a
+		// real answer, and refusing it would make the commonest confirmation in the
+		// queue the one case the inbox cannot handle.
+		m.sendf(proto.Command{Action: "panel.input", ID: row.id, Data: []byte(sendText)})
+	}
+	ack := proto.Command{Action: "panel.ack", ID: row.id}
+	if !until.IsZero() {
+		ack.Until = until.Format(time.RFC3339Nano)
+	}
+	m.sendf(ack)
+
+	if m.inboxCleared == nil {
+		m.inboxCleared = map[string]bool{}
+	}
+	m.inboxCleared[row.id] = true
+	// A fresh slice, not an in-place append. The receiver is a value, so an
+	// in-place shift would write through the shared backing array and corrupt the
+	// rows an earlier copy of the model still points at. bubbletea hands the model
+	// along linearly today, which makes that harmless today — and makes it exactly
+	// the kind of trap that is expensive to find the day something holds a copy.
+	rows := make([]inboxRow, 0, len(m.inboxRows)-1)
+	rows = append(rows, m.inboxRows[:idx]...)
+	rows = append(rows, m.inboxRows[idx+1:]...)
+	m.inboxRows = rows
+	m.inboxCursor = clampInt(idx, 0, len(m.inboxRows)-1)
+	// The eviction ring is kept in step with the cache it evicts from. Dropping
+	// the tail without dropping its id leaves a dead entry occupying one of the
+	// thirty-two slots, lets the same id be enqueued twice if the row comes back,
+	// and — worst of the three — makes the stale entry evict the FRESH one when it
+	// reaches the head. The cache would quietly be smaller than it is documented
+	// to be, in a way nothing would ever report.
+	m.inboxTailOrder = withoutID(m.inboxTailOrder, row.id)
+	delete(m.inboxTails, row.id)
+	m.wantTail()
+	return m
+}
+
+// withoutID returns ids with every occurrence of drop removed, in a fresh slice
+// for the same aliasing reason clearRow builds one.
+func withoutID(ids []string, drop string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id != drop {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // --- keys ---------------------------------------------------------------------
 
-// handleInboxKey drives the overlay: the cursor walks the queue, r re-sorts it,
-// enter opens the panel under the cursor, esc puts the view back.
+// handleInboxKey drives the overlay. The composer, when open, owns the keyboard
+// outright: the queue's own verbs are inert while you are typing, so a reply
+// containing the letter x cannot dismiss the row you are answering.
 func (m model) handleInboxKey(key string, k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.inboxComposing {
+		return m.handleInboxCompose(key, k)
+	}
 	switch key {
 	case "esc", "q":
 		return m.closeInbox()
@@ -376,6 +467,8 @@ func (m model) handleInboxKey(key string, k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.refreshInbox()
 	case "enter":
 		return m.zoomInboxRow()
+	case "i":
+		return m.startInboxReply()
 	}
 	return m, nil
 }
@@ -406,6 +499,101 @@ func (m model) zoomInboxRow() (tea.Model, tea.Cmd) {
 		mm, cmd = det.(model), c
 	}
 	return mm.zoomInto(p), cmd
+}
+
+// afterClear closes the overlay once the last row is gone. Holding an empty box
+// open would make the human press esc to be told nothing is left; closing says it
+// and puts them back where they were in one move.
+func (m model) afterClear() (tea.Model, tea.Cmd) {
+	if len(m.inboxRows) > 0 {
+		return m, nil
+	}
+	cleared := m.status
+	out, cmd := m.closeInbox()
+	mm, _ := out.(model)
+	mm.status = cleared + " · inbox: clear"
+	return mm, cmd
+}
+
+// --- the composer -------------------------------------------------------------
+
+// startInboxReply opens the single-line composer on the selected row.
+//
+// It is the inbox's own, not the shared m.input overlay: that one draws full-width
+// over the whole view and would hide the queue it is answering, which is the one
+// thing this feature exists to keep on screen.
+//
+// An exited panel is refused here rather than server-side, and it has to be:
+// ptymgr's write on a dead id is a silent no-op, so without this guard the reply
+// would vanish with no feedback at all and the row would clear as if it had landed.
+func (m model) startInboxReply() (tea.Model, tea.Cmd) {
+	r, ok := m.inboxSelected()
+	if !ok {
+		return m, nil
+	}
+	if r.state == panel.Exited {
+		m.status = "cannot reply to an exited panel"
+		return m, nil
+	}
+	if r.stale {
+		m.status = "that row is stale — r refreshes the queue"
+		return m, nil
+	}
+	m.inboxComposing, m.inboxReply = true, ""
+	m.status = "reply to " + truncate(sanitizeText(r.title), 24)
+	return m, nil
+}
+
+// handleInboxCompose is the composer's keyboard. Deliberately tiny: runes append,
+// backspace deletes one, ctrl+u clears the line, esc/ctrl+c cancel and leave the
+// row exactly where it was, enter sends. No other key is consulted.
+func (m model) handleInboxCompose(key string, k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc", "ctrl+c":
+		m.inboxComposing, m.inboxReply = false, ""
+		m.status = m.inboxStatus()
+		return m, nil
+	case "ctrl+u":
+		m.inboxReply = ""
+		return m, nil
+	case "backspace":
+		if r := []rune(m.inboxReply); len(r) > 0 {
+			m.inboxReply = string(r[:len(r)-1])
+		}
+		return m, nil
+	case "enter":
+		return m.sendInboxReply()
+	case " ", "space":
+		m.inboxReply += " "
+		return m, nil
+	}
+	if k.Type == tea.KeyRunes {
+		m.inboxReply += string(k.Runes)
+	}
+	return m, nil
+}
+
+// sendInboxReply writes the line into the panel's PTY and acknowledges the row in
+// the same breath — the reply IS the acknowledgement.
+//
+// It never attaches, and that is the design's most visible compromise: the human
+// sees what they typed and nothing back. Attaching to reply would stream a whole
+// panel's output into a client that is not rendering it, cost a replay flush and a
+// repaint per row, and turn clearing twenty rows into twenty attach/detach cycles —
+// which is precisely the cost the inbox exists to remove. The honest way to watch a
+// program respond is still one keystroke away: enter zooms. The status line says so
+// rather than leaving it to be discovered.
+func (m model) sendInboxReply() (tea.Model, tea.Cmd) {
+	r, ok := m.inboxSelected()
+	if !ok {
+		m.inboxComposing, m.inboxReply = false, ""
+		return m, nil
+	}
+	text := m.inboxReply
+	m.inboxComposing, m.inboxReply = false, ""
+	m = m.clearRow(m.inboxCursor, time.Time{}, text+"\n")
+	m.status = "replied to " + truncate(sanitizeText(r.title), 20) + " · enter zooms to watch it land"
+	return m.afterClear()
 }
 
 // --- the view -----------------------------------------------------------------
@@ -569,10 +757,27 @@ func fitLegend(width int, pairs ...string) string {
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
-// inboxFooter is the overlay's key hint, packed to the pop-up's width so the last
-// cell — the one that says how to leave — is never the one a clip takes.
+// inboxFooter is the legend, or the composer when one is open. The composer
+// REPLACES the legend rather than sitting beside it, so opening it costs the queue
+// no rows.
+//
+// The "no echo" notice is folded INTO the composer's legend rather than given a
+// prose line of its own, for two reasons that point the same way. A fixed row of
+// screen per item is a real cost in a queue whose whole selling point is speed;
+// and as a sentence it was 80 cells wide, so every terminal under 88 columns cut
+// it at "…enter zooms to wa" — losing precisely the half that tells you how to
+// watch your reply land. It splits onto a second line only when the pop-up is too
+// narrow to fold it, where spending a row beats losing the instruction — the same
+// rule fitLegend applies to the resting legend below.
 func (m model) inboxFooter() string {
-	return fitLegend(m.popupWidth(), "j/k", "move", "enter", "zoom", "r", "re-sort", "esc", "close")
+	if m.inboxComposing {
+		field := lipgloss.NewStyle().Foreground(colInk).Render(m.inboxReply + "▏")
+		head := lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render("reply ▸ ") + field
+		return lipgloss.JoinVertical(lipgloss.Left, head,
+			fitLegend(m.popupWidth(), "enter", "send", "esc", "cancel", "no echo", "enter zooms"))
+	}
+	return fitLegend(m.popupWidth(),
+		"j/k", "move", "i", "reply", "enter", "zoom", "r", "re-sort", "esc", "close")
 }
 
 // compactAge renders a short, single-unit age: seconds under a minute, then

@@ -358,14 +358,19 @@ type model struct {
 	//
 	// inboxRows is the FROZEN order: rows re-sort on open and on r only, so a
 	// snapshot arriving mid-triage can change what a row says but never where it
-	// is. inboxTails caches pulled tails (at most inboxTailCache, oldest insertion
-	// evicted) with inboxTailWant the single request in flight and inboxTailAt
-	// when it went out — the daemon may drop an outbound frame under load, so the
-	// gate has to expire or one lost reply wedges the detail pane for good.
+	// is. inboxCleared holds the ids this cockpit removed optimistically, until
+	// the server's ack broadcast confirms them. inboxTails caches pulled tails
+	// (at most inboxTailCache, oldest insertion evicted) with inboxTailWant the
+	// single request in flight and inboxTailAt when it went out — the daemon may
+	// drop an outbound frame under load, so the gate has to expire or one lost
+	// reply wedges the detail pane for good.
 	inboxWire      []proto.Panel
 	inboxRows      []inboxRow
+	inboxCleared   map[string]bool
 	inboxCursor    int
 	inboxFrom      mode
+	inboxComposing bool
+	inboxReply     string
 	inboxTails     map[string][]byte
 	inboxTailOrder []string
 	inboxTailWant  string
