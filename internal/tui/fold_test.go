@@ -140,9 +140,18 @@ func TestGroupNeedCountFoldsTheSubtree(t *testing.T) {
 	})
 	assertNeedMatchesInbox(t, m)
 
-	items := m.dashItems()
-	if len(items) != 1 || items[0].need != 2 {
-		t.Fatalf("expected one backend item needing 2, got %+v", items)
+	// The tree draws the sub-groups too, so the assertion is about the backend ROW
+	// rather than about the dashboard having exactly one of them: its need must
+	// still fold the whole subtree, because a panel asking for help two levels down
+	// is work inside this item however many rows now stand between them.
+	var backend dashItem
+	for _, it := range m.dashItems() {
+		if it.kind == itemGroup && it.name == "backend" {
+			backend = it
+		}
+	}
+	if backend.kind != itemGroup || backend.need != 2 {
+		t.Fatalf("expected the backend row to need 2, got %+v", backend)
 	}
 }
 
@@ -224,13 +233,13 @@ func TestNeedChipRendersOnCardAndTree(t *testing.T) {
 			api = it
 		}
 	}
-	if card := m.renderGroupCard(api, false); !strings.Contains(card, "◆4") {
+	if card := m.rowOf(api); !strings.Contains(card, "◆4") {
 		t.Errorf("group card is missing the need count:\n%s", card)
 	}
 	if prev := m.renderGroupPreview(api, 40); !strings.Contains(prev, "◆4") {
 		t.Errorf("group preview is missing the need count:\n%s", prev)
 	}
-	if tree := m.renderTree(items, 0, len(items), len(items)); !strings.Contains(tree, "◆4") {
+	if tree := m.renderRows(items, 0, len(items), len(items), testRowWidth); !strings.Contains(tree, "◆4") {
 		t.Errorf("tree row is missing the need count:\n%s", tree)
 	}
 }
@@ -249,7 +258,7 @@ func TestNeedChipSilentWhenNothingWaits(t *testing.T) {
 		{ID: "2", Kind: "agent", Title: "api b", State: "idle", Group: "api"},
 	})
 	items := m.dashItems()
-	if strings.Contains(m.renderGroupCard(items[0], false), "◆") {
+	if strings.Contains(m.rowOf(items[0]), "◆") {
 		t.Error("a calm group card should carry no need chip")
 	}
 }

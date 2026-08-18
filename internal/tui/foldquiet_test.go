@@ -252,7 +252,7 @@ func TestFoldExpandShowsExactlyTheFoldedMembers(t *testing.T) {
 
 	m := wired(ps)
 	m.foldQuiet = 4
-	m.foldExpanded = true
+	m.foldOpen = map[string]bool{"": true}
 
 	want := unfolded.dashItems()
 	_, at, rest := folding(m.dashItems())
@@ -344,17 +344,17 @@ func TestFoldRowTogglesOnEnterRightAndEsc(t *testing.T) {
 	m := foldedModel(t)
 	out, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
 	mm, _ := out.(model)
-	if !mm.foldExpanded {
+	if !mm.foldOpen[""] {
 		t.Fatal("enter should expand the quiet row")
 	}
 	out, _ = mm.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
 	mm, _ = out.(model)
-	if mm.foldExpanded {
+	if mm.foldOpen[""] {
 		t.Fatal("esc should fold the quiet row back up")
 	}
 	out, _ = mm.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	mm, _ = out.(model)
-	if !mm.foldExpanded {
+	if !mm.foldOpen[""] {
 		t.Fatal("l should expand the quiet row")
 	}
 }
@@ -364,10 +364,10 @@ func TestFoldRowTogglesOnEnterRightAndEsc(t *testing.T) {
 func TestFoldEscKeepsTheFilter(t *testing.T) {
 	m := foldedModel(t)
 	m.filter = "quiet"
-	m.foldExpanded = true
+	m.foldOpen = map[string]bool{"": true}
 	out, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
 	mm, _ := out.(model)
-	if mm.foldExpanded {
+	if mm.foldOpen[""] {
 		t.Fatal("esc should fold first")
 	}
 	if mm.filter != "quiet" {
@@ -380,7 +380,7 @@ func TestFoldEscKeepsTheFilter(t *testing.T) {
 // threshold and esc means what it always meant — clear the filter.
 func TestFoldEscFallsThroughWithNoRow(t *testing.T) {
 	m := foldedModel(t)
-	m.foldExpanded = true
+	m.foldOpen = map[string]bool{"": true}
 	m.filter = "busy 0" // one match: no fold row on screen
 	if m.foldRowShowing() {
 		t.Fatal("the filtered dashboard should hold no fold row")
@@ -400,32 +400,32 @@ func TestFoldRowRenders(t *testing.T) {
 	items := m.dashItems()
 	row := items[m.cursor]
 
-	if card := m.renderItemCard(row, true); !strings.Contains(card, "12 quiet") || !strings.Contains(card, "▸") {
+	if card := m.rowOf(row); !strings.Contains(card, "12 quiet") || !strings.Contains(card, "▸") {
 		t.Errorf("fold card does not read as a closed quiet row:\n%s", card)
 	}
-	if tree := m.renderTree(items, 0, len(items), len(items)); !strings.Contains(tree, "12 quiet") {
+	if tree := m.renderRows(items, 0, len(items), len(items), testRowWidth); !strings.Contains(tree, "12 quiet") {
 		t.Errorf("tree is missing the fold row:\n%s", tree)
 	}
 	if prev := m.renderPreview(items, 44); !strings.Contains(prev, "12 quiet") {
 		t.Errorf("preview is missing the fold row:\n%s", prev)
 	}
-	m.foldExpanded = true
-	if card := m.renderItemCard(row, false); !strings.Contains(card, "▾") {
+	m.foldOpen = map[string]bool{"": true}
+	if card := m.rowOf(row); !strings.Contains(card, "▾") {
 		t.Errorf("an expanded fold row should show the open glyph:\n%s", card)
 	}
 	// The whole dashboard still draws, folded and expanded, in both layouts.
 	for _, exp := range []bool{false, true} {
-		m.foldExpanded = exp
+		m.foldOpen = map[string]bool{"": exp}
 		for _, w := range []int{120, 60} {
 			m.width = w
 			if got := m.dashboardView(); got == "" {
-				t.Fatalf("dashboardView is empty with foldExpanded=%v at width %d", exp, w)
+				t.Fatalf("dashboardView is empty with foldOpen=%v at width %d", exp, w)
 			}
 		}
 	}
 }
 
-// rawItems is the projection BEFORE the fold — what foldQuietItems is handed.
+// rawItems is the projection BEFORE the fold — what foldQuietLevel is handed.
 func rawItems(m model) []dashItem {
 	off := m
 	off.foldQuiet = 0
@@ -441,11 +441,11 @@ func TestFoldQuietAt50(t *testing.T) {
 	m.foldQuiet = defaultFoldQuiet
 	raw := rawItems(m)
 
-	if _, at, rest := folding(m.foldQuietItems(raw)); at < 0 || len(rest) != 5 {
+	if _, at, rest := folding(m.foldQuietLevel(raw, "")); at < 0 || len(rest) != 5 {
 		t.Fatalf("45 quiet + 5 busy should leave 5 cards and one row, got %d cards at %d", len(rest), at)
 	}
 	const budget = 4 // measured at 1; the slack is for the slice growing differently elsewhere
-	if got := testing.AllocsPerRun(100, func() { m.foldQuietItems(raw) }); got > budget {
+	if got := testing.AllocsPerRun(100, func() { m.foldQuietLevel(raw, "") }); got > budget {
 		t.Fatalf("folding 50 items took %v allocations, budget %d", got, budget)
 	}
 }
@@ -529,18 +529,31 @@ func TestFoldKeepsTheCursorAcrossASnapshot(t *testing.T) {
 	}
 }
 
-// TestFoldRowIsNotAnIdentity: the row is not a panel and not a group, and it lives
-// only for as long as the fold does, so there is nothing about it worth capturing
-// across a snapshot. Reporting one would hand restoreCursor a key that can never
-// match and pin foldKeepID to a panel nobody selected.
-func TestFoldRowIsNotAnIdentity(t *testing.T) {
+// TestFoldRowIsIdentifiedByItsLevel: a fold row is "the quiet ones here", so the
+// level it sits in is its identity and the cursor keeps its place across a
+// snapshot. It pins no panel — it is not one, so there is nothing the fold could
+// be asked to spare on its behalf.
+//
+// It used to report no identity at all, which was defensible while there was one
+// fold row on the whole dashboard. With a fold per level that answer costs the
+// cursor its place every time a snapshot lands while you are on one.
+func TestFoldRowIsIdentifiedByItsLevel(t *testing.T) {
 	m := foldedModel(t)
-	if _, _, _, ok := m.selectedKey(); ok {
-		t.Fatal("selectedKey should report nothing selectable on the fold row")
+	kind, id, group, ok := m.selectedKey()
+	if !ok || kind != itemFold || group != "" || id != "" {
+		t.Fatalf("a top-level fold row should identify as its level, got kind=%v id=%q group=%q ok=%v", kind, id, group, ok)
 	}
-	m.restoreCursor(m.selectedKey())
+
+	at := m.cursor
+	m.restoreCursor(kind, id, group, ok)
 	if m.foldKeepID != "" {
 		t.Fatalf("the fold row should pin no panel, got %q", m.foldKeepID)
+	}
+	if m.cursor != at {
+		t.Fatalf("the cursor should stay on the fold row, moved %d -> %d", at, m.cursor)
+	}
+	if it, ok := m.selectedItem(); !ok || it.kind != itemFold {
+		t.Fatalf("the fold row should still be selected, got %+v ok=%v", it, ok)
 	}
 }
 
@@ -554,7 +567,7 @@ func TestFoldRowIsNotAnIdentity(t *testing.T) {
 func TestCollapsingNeverStrandsTheCursor(t *testing.T) {
 	m := foldedModel(t)
 	m = m.toggleFold() // expand
-	if !m.foldExpanded {
+	if !m.foldOpen[""] {
 		t.Fatal("expected the row to expand")
 	}
 	m.cursor = -1
@@ -657,14 +670,14 @@ func TestMoveTargetStepsOverAnEmptyUnit(t *testing.T) {
 func TestSelectedFoldRowShowsOneMarker(t *testing.T) {
 	m := foldedModel(t)
 	items := m.dashItems()
-	tree := m.renderTree(items, 0, len(items), len(items))
+	tree := m.renderRows(items, 0, len(items), len(items), testRowWidth)
 	if n := strings.Count(tree, "▸"); n != 1 {
 		t.Fatalf("the selected fold row should carry exactly one ▸, the tree has %d:\n%s", n, tree)
 	}
 	// And the disclosure glyph is the one that survived: expanding flips it.
-	m.foldExpanded = true
+	m.foldOpen = map[string]bool{"": true}
 	items = m.dashItems()
-	if tree := m.renderTree(items, 0, len(items), len(items)); !strings.Contains(tree, "▾") {
+	if tree := m.renderRows(items, 0, len(items), len(items), testRowWidth); !strings.Contains(tree, "▾") {
 		t.Fatalf("an expanded row should show ▾ in the tree:\n%s", tree)
 	}
 }

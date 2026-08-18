@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cmj0121/baton/internal/client"
+	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 )
 
@@ -90,4 +91,81 @@ func waitCmd(t *testing.T, cmds <-chan proto.Command, match func(proto.Command) 
 			return proto.Command{}
 		}
 	}
+}
+
+// cursorOnPanel points the dashboard cursor at a panel row by id, and cursorOnGroup
+// at a group row by path.
+//
+// Tests address rows by IDENTITY rather than by index because the tree's row
+// numbers move: expanding a work item, folding a level's quiet panels, or floating
+// a favourite all shift everything below them. A hard-coded index encodes one
+// particular shape of the projection, and every test that carried one had to be
+// rewritten the first time the shape changed — which is the argument for not
+// carrying one again.
+func (m *model) cursorOnPanel(t *testing.T, id string) {
+	t.Helper()
+	for i, it := range m.dashItems() {
+		if it.kind == itemPanel && it.panel.ID == id {
+			m.cursor = i
+			return
+		}
+	}
+	t.Fatalf("no dashboard row for panel %q", id)
+}
+
+func (m *model) cursorOnGroup(t *testing.T, path string) {
+	t.Helper()
+	for i, it := range m.dashItems() {
+		if it.kind == itemGroup && it.name == path {
+			m.cursor = i
+			return
+		}
+	}
+	t.Fatalf("no dashboard row for group %q", path)
+}
+
+// topLevel is the depth-0 rows of the dashboard, named: a group by its path, a
+// panel by its id, and the quiet fold as "fold". It is what a test asserting the
+// SHAPE of the dashboard should read, so that a change to what a group contains
+// does not rewrite an assertion about what sits at the top.
+func (m model) topLevel() []string {
+	var out []string
+	for _, it := range m.dashItems() {
+		if it.depth != 0 {
+			continue
+		}
+		switch it.kind {
+		case itemGroup:
+			out = append(out, it.name)
+		case itemFold:
+			out = append(out, "fold")
+		default:
+			out = append(out, it.panel.ID)
+		}
+	}
+	return out
+}
+
+// itemForPanel returns the dashboard row for a panel id, addressed by identity
+// rather than by position for the reason cursorOnPanel is.
+func itemForPanel(t *testing.T, m model, id string) dashItem {
+	t.Helper()
+	for _, it := range m.dashItems() {
+		if it.kind == itemPanel && it.panel.ID == id {
+			return it
+		}
+	}
+	t.Fatalf("no dashboard row for panel %q", id)
+	return dashItem{}
+}
+
+// rowAt renders one dashboard row at a width wide enough for every column, which
+// is what a test asserting a row's CONTENT wants: the narrow cases are the
+// business of the width-breakpoint tests, not of every assertion about what a row
+// says.
+const testRowWidth = 160
+
+func (m model) rowOf(it dashItem) string { return m.treeRow(it, false, testRowWidth) }
+func (m model) rowOfPanel(p panel.Panel) string {
+	return m.treeRow(dashItem{kind: itemPanel, panel: p}, false, testRowWidth)
 }

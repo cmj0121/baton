@@ -226,6 +226,15 @@ type Settings struct {
 	// view; cycled live with the usage-footer binding (U).
 	UsageMode string `yaml:"usage-mode,omitempty"`
 
+	// DashboardPreview shows the detail pane beside the dashboard tree.
+	//
+	// Unset defaults to OFF, which is the opposite of what the pane did before it
+	// became optional. The tree now carries the state, the directory and the task
+	// that the pane used to be the only place to see, so the preview earns its
+	// columns while you are watching a fleet and spends them for nothing while you
+	// are reorganising one. Toggled live with the preview binding (v).
+	DashboardPreview *bool `yaml:"dashboard-preview,omitempty"`
+
 	// Keycast shows the key you just pressed, and what it did, in the footer.
 	// Unset defaults to off — it is a teaching and screen-recording aid, not
 	// something an everyday cockpit needs. Toggled live with the keycast

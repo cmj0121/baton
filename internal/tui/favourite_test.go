@@ -29,7 +29,7 @@ func TestFavPanelSendsCmd(t *testing.T) {
 	m := baseModel()
 	m.client = c
 	m.fleet = groupedFleet()
-	m.cursor = 1 // the lone shell, panel id "2"
+	m.cursorOnPanel(t, "2") // the lone shell
 	if it, _ := m.selectedItem(); it.kind != itemPanel || it.panel.ID != "2" {
 		t.Fatalf("setup: cursor should rest on the lone shell 2, got %+v", it)
 	}
@@ -73,7 +73,7 @@ func TestFavGroupSendsCmd(t *testing.T) {
 	m := baseModel()
 	m.client = c
 	m.fleet = groupedFleet()
-	m.cursor = 2 // the db group, third card — it will move to the front once favourited
+	m.cursorOnGroup(t, "db") // it will move to the front once favourited
 	if it, _ := m.selectedItem(); it.kind != itemGroup || it.name != "db" {
 		t.Fatalf("setup: cursor should rest on the db group, got %+v", it)
 	}
@@ -123,19 +123,12 @@ func TestDashItemsSortsFavouritesFirst(t *testing.T) {
 	m.fleet = fleet
 	m.favGroups = map[string]bool{"db": true}
 
-	items := m.dashItems()
-	// Original order is [api(g), shell2(p), db(g), lone5(p)]; the favourites are the
-	// db group and lone panel 5, floated to the front in their original relative order.
+	// Original top level is [api(g), shell2(p), db(g), lone5(p)]; the favourites are
+	// the db group and lone panel 5, floated to the front in their original relative
+	// order. Only the top level is asserted: the float happens per LEVEL, and what a
+	// group contains is a different question from what sits above it.
 	want := []string{"db", "5", "api", "2"}
-	got := make([]string, len(items))
-	for i, it := range items {
-		if it.kind == itemGroup {
-			got[i] = it.name
-		} else {
-			got[i] = it.panel.ID
-		}
-	}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
+	if got := m.topLevel(); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("favourites should float to the front stably: want %v, got %v", want, got)
 	}
 }
@@ -145,21 +138,21 @@ func TestDashItemsSortsFavouritesFirst(t *testing.T) {
 func TestFavouriteCardRendersMarker(t *testing.T) {
 	m := baseModel()
 
-	plain := m.renderCard(panel.Panel{ID: "1", Kind: panel.Agent, Title: "worker", State: panel.Running}, false)
+	plain := m.rowOfPanel(panel.Panel{ID: "1", Kind: panel.Agent, Title: "worker", State: panel.Running})
 	if strings.Contains(plain, "⊙") {
 		t.Fatalf("a non-favourite panel card should not show the ⊙ marker")
 	}
-	starred := m.renderCard(panel.Panel{ID: "1", Kind: panel.Agent, Title: "worker", State: panel.Running, Favourite: true}, false)
+	starred := m.rowOfPanel(panel.Panel{ID: "1", Kind: panel.Agent, Title: "worker", State: panel.Running, Favourite: true})
 	if !strings.Contains(starred, "⊙") {
 		t.Fatalf("a favourited panel card should show the ⊙ marker")
 	}
 
 	gog := dashItem{kind: itemGroup, name: "api", members: groupedFleet()}
-	if strings.Contains(m.renderGroupCard(gog, false), "⊙") {
+	if strings.Contains(m.rowOf(gog), "⊙") {
 		t.Fatalf("a non-favourite group card should not show the ⊙ marker")
 	}
 	m.favGroups = map[string]bool{"api": true}
-	if !strings.Contains(m.renderGroupCard(gog, false), "⊙") {
+	if !strings.Contains(m.rowOf(gog), "⊙") {
 		t.Fatalf("a favourited group card should show the ⊙ marker")
 	}
 }
@@ -169,7 +162,7 @@ func TestFavouriteCardRendersMarker(t *testing.T) {
 // the head — is still exactly the same size as a plain panel card.
 func TestFavouriteGroupCardHeightMatchesPanel(t *testing.T) {
 	m := baseModel()
-	panelCard := m.renderCard(panel.Panel{ID: "9", Kind: panel.Agent, Title: "worker", State: panel.Running, Task: "do the thing"}, false)
+	panelCard := m.rowOfPanel(panel.Panel{ID: "9", Kind: panel.Agent, Title: "worker", State: panel.Running, Task: "do the thing"})
 	wantH, wantW := lipgloss.Height(panelCard), lipgloss.Width(panelCard)
 
 	gog := dashItem{kind: itemGroup, name: "backend", members: []panel.Panel{
@@ -186,14 +179,14 @@ func TestFavouriteGroupCardHeightMatchesPanel(t *testing.T) {
 			} else {
 				m.marked = nil
 			}
-			card := m.renderGroupCard(gog, sel)
+			card := m.treeRow(gog, sel, testRowWidth)
 			if h, w := lipgloss.Height(card), lipgloss.Width(card); h != wantH || w != wantW {
 				t.Fatalf("favourited group-of-group card sel=%v marking=%v is %dx%d, want %dx%d (a panel card)", sel, marking, w, h, wantW, wantH)
 			}
 		}
 	}
 	// A favourited lone-panel card keeps the panel-card size too.
-	fp := m.renderCard(panel.Panel{ID: "9", Kind: panel.Agent, Title: "worker", State: panel.Running, Task: "do the thing", Favourite: true}, false)
+	fp := m.rowOfPanel(panel.Panel{ID: "9", Kind: panel.Agent, Title: "worker", State: panel.Running, Task: "do the thing", Favourite: true})
 	if h, w := lipgloss.Height(fp), lipgloss.Width(fp); h != wantH || w != wantW {
 		t.Fatalf("favourited panel card is %dx%d, want %dx%d", w, h, wantW, wantH)
 	}

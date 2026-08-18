@@ -77,8 +77,11 @@ Lost? **`?`** always shows the keys for wherever you are.
 
 You drive Baton through three views, moving between them with a keystroke:
 
-- **Dashboard** — mission control. A live grid (a tree once it gets crowded) of every panel with its status and a
-  preview. Here you navigate, spawn and close panels, and group them into work items.
+- **Dashboard** — mission control. A live **tree** of every panel: work items as rows, their sub-groups indented under
+  them, their panels under those. `→` opens a work item and steps inside it, `←` shuts it and steps back out. The row
+  carries the state, the working directory, the output sparkline and the dispatched task as the terminal gets wide
+  enough for each; `v` adds a detail pane beside it. Here you navigate, spawn and close panels, and group them into work
+  items.
 - **Group** — a work item's live split: its panels tiled side by side, all streaming at once. The first few stream as
   live tiles; the rest fold into a single **summary tile** you can zoom into. Pin a few to keep them always-on, drive the
   focused one in place with **`i`**, or **`enter`** to drop into it.
@@ -91,35 +94,38 @@ Keys are **modal**: on the dashboard and in a group each action is a single key;
 drive the program, so a Baton action is the leader **`C-t`** then the key. Press **`?`** for the full, rebindable list of
 the current view, and **`C-t k`** to edit the key map.
 
-| Where       | Key               | Does                                                 |
-| ----------- | ----------------- | ---------------------------------------------------- |
-| After `C-t` | `d` / `b`         | jump to the dashboard / back one level               |
-|             | `a`               | the attention inbox — clear what needs a human       |
-|             | `[`               | enter scroll mode                                    |
-|             | `l` / `L`         | log the panel to a file / read that log back         |
-|             | `R` / `S`         | reload config / force-restart the server             |
-|             | `q`               | detach (server keeps running)                        |
-| Dashboard   | `hjkl` / arrows   | move the cursor                                      |
-|             | `enter`           | open / zoom the selection                            |
-|             | `p` / `A` / `c`   | new shell / agent / pick-command panel               |
-|             | `.`               | new shell panel in the focused panel's directory     |
-|             | `C`               | open the conductor (an agent that drives the fleet)  |
-|             | `H`               | open the global shell (a host shell in `$HOME`)      |
-|             | `w` / `x`         | close the selection / purge exited                   |
-|             | `r`               | re-run the exited panel(s) under the focus           |
-|             | `g` / `G` / `u`   | mark / group marked panels / ungroup                 |
-|             | `s` / `f` / `D`   | signal / find / diff the selection                   |
-|             | `/`               | search every panel's output (grep the fleet)         |
-|             | `T` / `Q`         | dispatch a task / manage the task queue              |
-|             | `U`               | cycle the usage footer: off / window / focused panel |
-|             | `K`               | toggle the key-press readout in the footer           |
-| Group       | `tab`             | focus the next panel                                 |
-|             | `+` / `-`         | show more / fewer live tiles                         |
-|             | `L`               | cycle the tile layout                                |
-|             | `p` / `i`         | pin / interact with the focused panel                |
-|             | `enter`           | zoom the focused panel                               |
-| Zoom        | type              | drive the program directly                           |
-|             | `C-t f` / `C-t g` | search the scrollback / git menu (agent)             |
+| Where       | Key               | Does                                                         |
+| ----------- | ----------------- | ------------------------------------------------------------ |
+| After `C-t` | `d` / `b`         | jump to the dashboard / back one level                       |
+|             | `a`               | the attention inbox — clear what needs a human               |
+|             | `[`               | enter scroll mode                                            |
+|             | `l` / `L`         | log the panel to a file / read that log back                 |
+|             | `R` / `S`         | reload config / force-restart the server                     |
+|             | `q`               | detach (server keeps running)                                |
+| Dashboard   | `jk` / `↑↓`       | move the cursor                                              |
+|             | `hl` / `←→`       | collapse / expand a work item — and step out / in            |
+|             | `v` / `z`         | detail pane / cycle group-by: work item, dir, profile, state |
+|             | `space`           | pick a row up — arrows carry it, `enter` drops it            |
+|             | `enter`           | open / zoom the selection                                    |
+|             | `p` / `A` / `c`   | new shell / agent / pick-command panel                       |
+|             | `.`               | new shell panel in the focused panel's directory             |
+|             | `C`               | open the conductor (an agent that drives the fleet)          |
+|             | `H`               | open the global shell (a host shell in `$HOME`)              |
+|             | `w` / `x`         | close the selection / purge exited                           |
+|             | `r`               | re-run the exited panel(s) under the focus                   |
+|             | `g` / `G` / `u`   | mark / group marked panels / ungroup                         |
+|             | `s` / `f` / `D`   | signal / find / diff the selection                           |
+|             | `/`               | search every panel's output (grep the fleet)                 |
+|             | `T` / `Q`         | dispatch a task / manage the task queue                      |
+|             | `U`               | cycle the usage footer: off / window / focused panel         |
+|             | `K`               | toggle the key-press readout in the footer                   |
+| Group       | `tab`             | focus the next panel                                         |
+|             | `+` / `-`         | show more / fewer live tiles                                 |
+|             | `L`               | cycle the tile layout                                        |
+|             | `p` / `i`         | pin / interact with the focused panel                        |
+|             | `enter`           | zoom the focused panel                                       |
+| Zoom        | type              | drive the program directly                                   |
+|             | `C-t f` / `C-t g` | search the scrollback / git menu (agent)                     |
 
 See **[docs/SPEC.md](docs/SPEC.md)** for the complete, per-view key reference and the design behind every view.
 

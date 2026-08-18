@@ -164,16 +164,36 @@ prefix across every descendant) — or by **grouping/adding a whole group into a
 into a target, and it nests as `target/<its name>` (keeping its own sub-structure) rather than flattening.
 Group-wide actions **recurse over the subtree**: dispatching to, closing, or
 signalling `backend` reaches every descendant panel, nested groups included; **dissolving** `backend` promotes its
-subtree one level (its direct panels go lone, its sub-groups become top-level) rather than deleting the work. The
-dashboard shows only the **top level** — a group card folds its whole subtree — and you walk the hierarchy by descending
-in the split.
+subtree one level (its direct panels go lone, its sub-groups become top-level) rather than deleting the work.
 
-On the dashboard a work item collapses into a single card: a member count and a state that **rolls up to its most urgent
-member** (attention beats stuck beats done beats running beats spawning beats idle beats exited), so one card speaks for
-the whole task.
+The dashboard **draws the hierarchy**: a work item is one row, its sub-groups are rows indented under it, and its panels
+are rows under those. `→` opens a work item and, once open, steps inside it; `←` shuts one and, from anything else, jumps
+to the row that contains it. A group row carries a member count, its **immediate sub-group count** (`▣2`), how many
+members want a human (`◆3`), and a state that **rolls up to its most urgent member** (attention beats stuck beats done
+beats running beats spawning beats idle beats exited), so one row speaks for the whole task.
 
-**Favourites.** `*` **favourites** the selected dashboard item — a lone panel or a whole group card — and favourited cards
-sort to the **front** of the dashboard, in both the grid and the tree, each marked with a `⊙`. It is **server-owned state**
+Expansion is a **view state and never a selection one**: a group row owns its whole subtree whether it is open or shut,
+so `w` on `backend` closes the same panels either way. A collapse is remembered for the session only.
+
+**Moving things.** `space` picks the selected row up, the arrows carry it through the tree, `enter` drops it and `esc`
+puts it back. The drop target is the **level** of the row under the cursor, never the row itself — "into this group" and
+"after this group" would otherwise be the same keystroke — so to drop inside a work item you open it and land on one of
+its children. A panel dropped at the top level is **ungrouped**; a work item carried into another **nests** as
+`target/<its name>`, sub-structure and all, which is how a nested work item is made without knowing that a group name is
+a path. Nothing is sent until the drop, and a group carried into its own subtree is refused.
+
+**The group-by lens.** `z` cycles which parents the tree is built from: **work item** (the fleet's own structure),
+**directory**, **profile**, or **state**. A lens is a projection and never a mutation — switching to `group by: state`
+does not move a panel into a group called `attention`, and switching back leaves the fleet exactly as it was. The
+reorganising verbs (`space`, `g`, `G`, `a`, `u`, `e`) are refused under a lens and say so: a bucket is not a work item,
+and there is no meaning to moving a panel "into" a directory. The heading states the lens whenever one is in force.
+
+The directory lens re-bases every path against the fleet's **common prefix** and nests the remainder, so a set of git
+worktrees gathers under the directory that holds them rather than making one bucket per panel; a bucket holding nothing
+but a single panel is promoted away.
+
+**Favourites.** `*` **favourites** the selected dashboard item — a lone panel or a whole work item — and favourited rows
+sort to the **front of their own level**, each marked with a `⊙`. It is **server-owned state**
 (`panel.favourite` / `panel.unfavourite` for a panel, `group.favourite` / `group.unfavourite` for a group), carried on the
 snapshot — so it survives a restart, is shared across clients, and follows a group through a rename or ungroup. It is
 **separate from the split's pin**: favouriting only reorders the dashboard, never which tiles stream live or the single-pin

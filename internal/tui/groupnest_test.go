@@ -45,7 +45,7 @@ func TestAddNestsMarkedGroup(t *testing.T) {
 		{ID: "9", Kind: panel.Agent, State: panel.Running, Group: "backend"}, // the target
 	}
 	m.marked = map[string]bool{"1": true, "2": true}
-	m.cursor = 1 // the backend group card (dashItems: db, backend)
+	m.cursorOnGroup(t, "backend")
 
 	m = m.addMarkedToGroup()
 

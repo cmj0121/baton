@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -59,98 +58,96 @@ type dashItem struct {
 	// answered "these fifty" to `w` would be precisely the destructive surprise
 	// this row is not allowed to be.
 	quiet int
+
+	// The tree coordinates. depth is how far the row is indented and parent is the
+	// group path it sits directly inside ("" at the top level) — which is also a
+	// fold row's identity, since a fold row is "the quiet ones at this level".
+	// last closes the branch glyph (└─ rather than ├─).
+	depth  int
+	parent string
+	last   bool
+
+	// expanded is an itemGroup's open/shut state. It is a VIEW state and never a
+	// selection one: members is the whole subtree either way, so every bulk verb
+	// means the same thing on an open group as on a closed one. Getting that wrong
+	// would be a `w` that closes twelve panels or one depending on a keypress
+	// nobody thinks of as changing what is selected.
+	expanded bool
+
+	// node is the tree node an itemGroup row was built from, so flatten can recurse
+	// into it without rebuilding the tree. Nil on every other kind.
+	node *groupNode
 }
 
-// dashItems projects the flat fleet into the dashboard's cursor model: lone
-// panels in place, and each top-level group collapsed into one item at the position
-// of its first member. With nested groups the dashboard shows only the top level — a
-// group folds its **whole subtree** (every descendant panel) into one card, and the
-// hierarchy is walked by descending in the split. Order is stable and follows the
-// fleet, so the cursor never jumps when a snapshot arrives with the same shape.
-//
-// The need counts ride along, and they deliberately do NOT change the order. The
-// issue is explicit that the dashboard must not re-sort by need: a card moving
-// under the cursor because a panel elsewhere started asking a question is the same
-// disorientation the inbox's frozen ordering exists to avoid, and it is worse here
-// because the dashboard is where you are looking when it happens. The tree says
-// WHERE the work is by annotating the shape, never by rearranging it.
-func (m model) dashItems() []dashItem {
-	items := make([]dashItem, 0, len(m.fleet))
-	groupAt := make(map[string]int) // top-level group name -> index into items
-	need := m.needByGroup()
-	for _, p := range m.fleet {
-		if p.Conductor || p.GlobalShell {
-			continue // the two singletons are marks in the FLEET heading, not cards/groups
-		}
-		if p.Group == "" {
-			items = append(items, dashItem{kind: itemPanel, panel: p})
-			continue
-		}
-		top := panel.GroupTop(p.Group) // fold the subtree under its top-level group
-		if idx, ok := groupAt[top]; ok {
-			items[idx].members = append(items[idx].members, p)
-			continue
-		}
-		groupAt[top] = len(items)
-		items = append(items, dashItem{kind: itemGroup, name: top, members: []panel.Panel{p}, need: need[top]})
+// label is how a row NAMES itself on screen: the last path segment for a nested
+// group, since its ancestors are already drawn above it as the rows it is indented
+// under. name stays the full path everywhere else, because that is the identity
+// and what every server op takes.
+func (it dashItem) label() string {
+	if it.kind == itemGroup {
+		return panel.GroupLeaf(it.name)
 	}
-	items = filterItems(items, m.filter)
-	// Float favourited cards to the front, preserving the fleet order within the
-	// favourited and non-favourited partitions (a stable sort), so both the grid
-	// and the tree view — which project through here — show favourites first.
-	slices.SortStableFunc(items, func(a, b dashItem) int {
-		af, bf := m.itemFavourite(a), m.itemFavourite(b)
-		switch {
-		case af && !bf:
-			return -1
-		case !af && bf:
-			return 1
-		default:
-			return 0
-		}
-	})
-	return m.foldQuietItems(items)
+	return it.title()
 }
 
-// foldQuietItems collapses the panels nothing is happening in into a single
-// expandable row, once there are more of them than settings.fold-quiet.
+// dashItems is the dashboard's cursor model: the fleet flattened into rows.
 //
-// Folded, never dropped. The row expands in place and the panels come back
-// exactly where they were, because a dashboard that silently stops showing you
-// panels is a dashboard you have to keep double-checking against `baton ctl ls`,
-// and then it has cost you more than it saved. It is also why the row is inserted
-// at the position of the FIRST panel it swallowed rather than pushed to the end:
-// the tree's shape is meant to survive the fold, so that the card above the row
-// and the card below it are the same two cards they were a moment ago.
+// It delegates to the tree projection (see tree.go), which is what makes nesting
+// visible — a group row is one work item at one depth, not a whole subtree
+// collapsed under its top-level name. Everything that acts on the selection still
+// resolves through here, so there remains exactly one answer to "what is row N".
 //
-// Cost: two O(n) passes over the items and, when the fold fires, one slice. The
+// The need counts ride along and deliberately do NOT change the order. A card
+// moving under the cursor because a panel elsewhere started asking a question is
+// the disorientation the inbox's frozen ordering exists to avoid, and it is worse
+// here because the dashboard is where you are looking when it happens. The tree
+// says WHERE the work is by annotating the shape, never by rearranging it.
+func (m model) dashItems() []dashItem { return m.dashTree() }
+
+// foldQuietLevel collapses the panels nothing is happening in into a single
+// expandable row, once one LEVEL of the tree holds more of them than
+// settings.fold-quiet. parent is the group path the level sits in ("" at the top),
+// which is the fold row's identity — every level folds its own quiet panels, so a
+// crowded work item tidies itself without the top level having to know.
+//
+// Folded, never dropped. The row expands in place and the panels come back exactly
+// where they were, because a dashboard that silently stops showing you panels is a
+// dashboard you have to keep double-checking against `baton ctl ls`, and then it
+// has cost you more than it saved. It is also why the row is inserted at the
+// position of the FIRST panel it swallowed rather than pushed to the end: the
+// tree's shape is meant to survive the fold, so that the row above it and the row
+// below it are the same two rows they were a moment ago.
+//
+// Cost: two passes over one level's rows and, when the fold fires, one slice. The
 // first pass only counts, because the fold has to know whether it fires before it
-// can decide where to put the row, and counting is cheaper than building a list
-// that a fleet of five would immediately throw away. Nothing is allocated per
-// member on either pass, and below the threshold — the case a small fleet is in
-// permanently — the whole thing is one count and a return of the input.
-func (m model) foldQuietItems(items []dashItem) []dashItem {
+// can decide where to put the row. Below the threshold — the case a small fleet is
+// in permanently — the whole thing is one count and a return of the input.
+func (m model) foldQuietLevel(level []dashItem, parent string) []dashItem {
 	if m.foldQuiet <= 0 {
-		return items // settings.fold-quiet: 0 — the dashboard shows everything it has
+		return level // settings.fold-quiet: 0 — the dashboard shows everything it has
 	}
 	n := 0
-	for i := range items {
-		if m.foldable(items[i]) {
+	for i := range level {
+		if m.foldable(level[i]) {
 			n++
 		}
 	}
 	if n <= m.foldQuiet {
-		return items
+		return level
 	}
-	out := make([]dashItem, 0, len(items)+1)
+	depth := 0
+	if len(level) > 0 {
+		depth = level[0].depth
+	}
+	out := make([]dashItem, 0, len(level)+1)
 	placed := false
-	for _, it := range items {
+	for _, it := range level {
 		fold := m.foldable(it)
 		if fold && !placed {
-			out = append(out, dashItem{kind: itemFold, quiet: n})
+			out = append(out, dashItem{kind: itemFold, quiet: n, depth: depth, parent: parent})
 			placed = true
 		}
-		if !fold || m.foldExpanded {
+		if !fold || m.foldOpen[parent] {
 			out = append(out, it)
 		}
 	}
@@ -198,13 +195,24 @@ func (m model) foldable(it dashItem) bool {
 // past the end of a list that just got twelve items shorter.
 func (m model) toggleFold() model {
 	was, had := m.selectedItem()
-	m.foldExpanded = !m.foldExpanded
-	if m.foldExpanded {
+	// Which level's fold: the one the cursor is in. A fold row toggles itself; any
+	// other row toggles the fold of the level it sits at, so `esc` from a panel
+	// inside a work item folds that work item's quiet panels rather than the top
+	// level's — the level the person is looking at is the one they mean.
+	parent := ""
+	if had {
+		parent = was.parent
+	}
+	if m.foldOpen == nil {
+		m.foldOpen = map[string]bool{}
+	}
+	m.foldOpen[parent] = !m.foldOpen[parent]
+	if m.foldOpen[parent] {
 		m.status = "quiet panels shown · esc folds them again"
 	} else {
 		m.status = "quiet panels folded"
 	}
-	if at := m.foldRowIndex(); at >= 0 {
+	if at := m.foldRowIndexAt(parent); at >= 0 {
 		m.cursor = at
 	}
 	if had && was.kind != itemFold {
@@ -234,8 +242,34 @@ func (m model) foldRowIndex() int {
 	return -1
 }
 
-// foldRowShowing reports whether the quiet row is actually on the dashboard.
+// foldRowIndexAt is where one LEVEL's quiet row sits, or -1 when that level has
+// nothing folded. The tree has a fold row per level, so a toggle has to land the
+// cursor on the row it just operated rather than on whichever one comes first.
+func (m model) foldRowIndexAt(parent string) int {
+	if m.foldQuiet <= 0 {
+		return -1
+	}
+	for i, it := range m.dashItems() {
+		if it.kind == itemFold && it.parent == parent {
+			return i
+		}
+	}
+	return -1
+}
+
+// foldRowShowing reports whether a quiet row is actually on the dashboard.
 func (m model) foldRowShowing() bool { return m.foldRowIndex() >= 0 }
+
+// anyFoldOpen reports whether any level's quiet fold currently stands expanded —
+// what esc consults before deciding it has a fold to collapse.
+func (m model) anyFoldOpen() bool {
+	for _, open := range m.foldOpen {
+		if open {
+			return true
+		}
+	}
+	return false
+}
 
 // foldRowVerbs are the dashboard actions that act on whatever the cursor is
 // resting on. Each of them is refused on a fold row.
@@ -348,41 +382,6 @@ func childGroupsOf(panels []panel.Panel, parent string) []childGroup {
 // card's nested makeup — the same fold the split uses, counted.
 func subGroupCount(members []panel.Panel, top string) int {
 	return len(childGroupsOf(members, top))
-}
-
-// filterItems narrows the dashboard to items matching the filter — a
-// case-insensitive substring on a panel's title, or a group's name or any
-// member's title (so a group surfaces when one of its panels matches). An empty
-// filter returns the list untouched.
-func filterItems(items []dashItem, filter string) []dashItem {
-	if filter == "" {
-		return items
-	}
-	lf := strings.ToLower(filter)
-	out := make([]dashItem, 0, len(items))
-	for _, it := range items {
-		if itemMatches(it, lf) {
-			out = append(out, it)
-		}
-	}
-	return out
-}
-
-// itemMatches reports whether a dashboard item matches the (already
-// lower-cased) filter.
-func itemMatches(it dashItem, lf string) bool {
-	if it.kind == itemPanel {
-		return strings.Contains(strings.ToLower(it.panel.Title), lf)
-	}
-	if strings.Contains(strings.ToLower(it.name), lf) {
-		return true
-	}
-	for _, p := range it.members {
-		if strings.Contains(strings.ToLower(p.Title), lf) {
-			return true
-		}
-	}
-	return false
 }
 
 // title is the label shown for an item on the dashboard.
@@ -701,6 +700,14 @@ func (m model) toggleFavourite() model {
 		return m
 	}
 	if it.kind == itemGroup {
+		// A lens BUCKET is not a group the server has, so favouriting one would send
+		// group.favourite naming something that does not exist — and the flag would
+		// then sit in the server's state for a "group" called `attention` for good.
+		// Favouriting a PANEL is fine under any lens: a panel is a panel.
+		if why := m.lensRefusal(); why != "" {
+			m.status = why
+			return m
+		}
 		fav := !m.favGroups[it.name]
 		if m.favGroups == nil {
 			m.favGroups = map[string]bool{}
@@ -1011,127 +1018,19 @@ func singlePinned(members []panel.Panel, pins map[string]bool) (panel.Panel, boo
 	return only, n == 1
 }
 
-// renderGroupCard draws a work item as one card: a group glyph and name, the
-// member count, and a row of per-state count chips so the group's health reads at
-// a glance. It mirrors renderCard's three-line shape and selection glow.
-func (m model) renderGroupCard(it dashItem, selected bool) string {
-	st := groupState(it.members)
-	info := states[st]
-
-	border := colFaint
-	titleColor := colInk
-	if selected {
-		border = colBrand
-		titleColor = colBrandHi
-	}
-
-	mark := ""
-	if m.selecting() {
-		mark = markCell(m.itemMarked(it))
-	}
-	// A favourite prefixes a ⊙ before the group glyph, exactly as renderCard marks a
-	// favourited panel. The name's width shrinks by the prefix so the head keeps to
-	// one row and the card stays the same size as a panel card.
-	fav := ""
-	if m.itemFavourite(it) {
-		fav = lipgloss.NewStyle().Foreground(colBrandHi).Render("⊙") + " "
-	}
-	glyph := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render("▣")
-	// A nested group notes its immediate sub-group count right-aligned in the head —
-	// the same place the split's sub-group tile shows it — rather than trailing the
-	// kind line, so that line can never spill onto a second row and grow the card one
-	// taller than a panel card. The need count joins it there, ahead of it, in
-	// attention's own red: a card that folds fifty panels into one glyph otherwise
-	// says how big the group is and nothing about how much of it is waiting on you.
-	tally := needChip(it.need)
-	if n := subGroupCount(it.members, it.name); n > 0 {
-		sub := lipgloss.NewStyle().Foreground(colBrand).Render(fmt.Sprintf("▣%d", n))
-		if tally != "" {
-			sub = " " + sub
-		}
-		tally += sub
-	}
-	avail := cardInner - lipgloss.Width(mark) - lipgloss.Width(fav) - 2 - lipgloss.Width(tally) // glyph + its trailing space = 2
-	if tally != "" {
-		avail-- // a gap before the right-aligned counts
-	}
-	name := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(it.title(), max(1, avail)))
-	head := mark + fav + glyph + " " + name
-	if tally != "" {
-		head = padEnds(head, tally, cardInner)
-	}
-	head = clampWidth(head, cardInner)
-
-	badge := groupBadge()
-	// Split the member count by kind, so a card says what kind of work it holds —
-	// "2 agent · 1 shell" — not just how many panels. Clamp it to the inner width so a
-	// long breakdown truncates rather than wrapping and growing the card.
-	kindLine := clampWidth(badge+"  "+kindBreakdown(it.members), cardInner)
-
-	// The footer is the per-state chips, led by a sparkline in the group's rolled-up
-	// colour while it is active — so a working group animates like a panel card. It is
-	// clamped to the inner width for the same no-wrap, fixed-height reason.
-	footer := groupCountChips(it.members)
-	if activeState(st) {
-		spark := lipgloss.NewStyle().Foreground(info.color).Render(groupSpark(it.members, st))
-		footer = spark + "  " + footer
-	}
-	footer = clampWidth(footer, cardInner)
-
-	style := lipgloss.NewStyle().
-		Width(cardWidth-2).
-		Padding(0, 1).
-		MarginRight(cardGap).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(border)
-
-	return style.Render(lipgloss.JoinVertical(lipgloss.Left, head, kindLine, footer))
-}
-
-// foldGlyph is the fold row's disclosure marker: ▸ closed, ▾ open. The same two
-// glyphs the tree pane already uses for a cursor and a rollup, so the row reads as
-// "there is more under here" without a legend.
-func (m model) foldGlyph() string {
-	if m.foldExpanded {
+// foldGlyph is a fold row's disclosure marker: ▸ closed, ▾ open. The same two
+// glyphs a group row uses, so "there is more under here" reads the same wherever
+// it appears without a legend.
+func (m model) foldGlyph(parent string) string {
+	if m.foldOpen[parent] {
 		return "▾"
 	}
 	return "▸"
 }
 
-// renderFoldCard draws the quiet row as a card in the grid, in idle's amber — the
-// colour of the panels it stands for, so the row reads as a summary of them rather
-// than as a control.
-//
-// It keeps renderCard's three-line shape. A card that was one line shorter than its
-// neighbours would break the grid's row heights, and a row that told you what it
-// held without telling you how to open it would send you looking for a legend.
-func (m model) renderFoldCard(it dashItem, selected bool) string {
-	info := states[panel.Idle]
-
-	border, titleColor := colFaint, colInk
-	if selected {
-		border, titleColor = colBrand, colBrandHi
-	}
-
-	glyph := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(m.foldGlyph())
-	name := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(it.title(), max(1, cardInner-2)))
-	head := clampWidth(glyph+" "+name, cardInner)
-	kindLine := clampWidth(mutedStyle.Render("idle · exited cleanly"), cardInner)
-	footer := clampWidth(legend("enter", m.foldVerb()), cardInner)
-
-	style := lipgloss.NewStyle().
-		Width(cardWidth-2).
-		Padding(0, 1).
-		MarginRight(cardGap).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(border)
-
-	return style.Render(lipgloss.JoinVertical(lipgloss.Left, head, kindLine, footer))
-}
-
 // foldVerb is what enter does next on the fold row.
-func (m model) foldVerb() string {
-	if m.foldExpanded {
+func (m model) foldVerb(parent string) string {
+	if m.foldOpen[parent] {
 		return "fold"
 	}
 	return "expand"
@@ -1147,7 +1046,7 @@ func (m model) foldVerb() string {
 // spend its height on.
 func (m model) renderFoldPreview(it dashItem, width int) string {
 	title := lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).
-		Render(truncate(m.foldGlyph()+" "+it.title(), width))
+		Render(truncate(m.foldGlyph(it.parent)+" "+it.title(), width))
 	rule := mutedStyle.Render(strings.Repeat("─", width))
 	body := []string{
 		mutedStyle.Render(fmt.Sprintf("%d panel(s) folded away: idle, or exited cleanly.", it.quiet)),
@@ -1156,7 +1055,7 @@ func (m model) renderFoldPreview(it dashItem, width int) string {
 		mutedStyle.Render("marked panels and the card under the cursor are never"),
 		mutedStyle.Render("folded, so the fold can never hide what you are on."),
 		"",
-		legend("enter", m.foldVerb()),
+		legend("enter", m.foldVerb(it.parent)),
 	}
 	return lipgloss.JoinVertical(lipgloss.Left,
 		title, rule, "", lipgloss.JoinVertical(lipgloss.Left, body...))

@@ -151,6 +151,13 @@ type Panel struct {
 	Cwd         string `json:"cwd,omitempty"`          // the directory the panel's process is in now (not the one it was launched in); empty when unknown
 	Pid         int    `json:"pid,omitempty"`          // OS pid of the panel's process-group leader; 0 once the process has exited. Roots the panel's OS descendant subtree (baton ctl tree).
 
+	// Profile is the agent profile the panel was spawned from, joined in when a
+	// snapshot is built (like Pid). The server has always recorded it — it is what
+	// the caps, the restart policy, the log destination and the isolation all
+	// resolve through — but it never travelled, so a frontend could not group or
+	// filter by it. Empty for a shell, and for an agent spawned without a profile.
+	Profile string `json:"profile,omitempty"`
+
 	// ExitCode is the panel process's exit status. It is meaningful ONLY when
 	// State is "exited"; a zero value on a live panel means "not applicable",
 	// never "succeeded". A non-zero code on an exited panel is what the cockpit

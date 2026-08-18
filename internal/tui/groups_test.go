@@ -49,22 +49,48 @@ func nestedFleet() []panel.Panel {
 	}
 }
 
-// TestDashItemsFoldsSubtreeToTop: a nested group folds its whole subtree into one
-// top-level card, and subGroupCount reports its immediate sub-groups.
-func TestDashItemsFoldsSubtreeToTop(t *testing.T) {
+// TestDashTreeShowsNesting: the dashboard draws the hierarchy rather than
+// flattening it — backend, its two sub-groups and their panels each get a row at
+// their own depth — while a group row still reports its WHOLE subtree as members.
+//
+// That second half is the invariant the whole feature rests on. Expansion is a
+// view state, so `w` on backend closes four panels whether it is open or shut; if
+// members ever tracked what was visible, a keypress nobody thinks of as changing
+// the selection would change what a bulk verb destroys.
+func TestDashTreeShowsNesting(t *testing.T) {
 	m := baseModel()
 	m.fleet = nestedFleet()
-	items := m.dashItems()
 
-	if len(items) != 2 {
-		t.Fatalf("expected 2 top-level items (backend + lone), got %d: %+v", len(items), items)
+	if got, want := m.topLevel(), []string{"backend", "5"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("top level should be the backend group and the lone panel: want %v, got %v", want, got)
 	}
-	backend := items[0]
-	if backend.kind != itemGroup || backend.name != "backend" {
-		t.Fatalf("item 0 should be the top-level backend group, got %+v", backend)
+
+	var backend dashItem
+	depths := map[string]int{}
+	for _, it := range m.dashItems() {
+		switch it.kind {
+		case itemGroup:
+			depths[it.name] = it.depth
+			if it.name == "backend" {
+				backend = it
+			}
+		case itemPanel:
+			depths["#"+it.panel.ID] = it.depth
+		}
 	}
+	for name, want := range map[string]int{
+		"backend": 0, "backend/api": 1, "backend/db": 1, // the sub-groups are visible, indented
+		"#1": 1, // a panel filed directly in backend
+		"#2": 2, // …and one two levels down, in backend/api
+		"#5": 0, // the lone panel stays at the top
+	} {
+		if got, ok := depths[name]; !ok || got != want {
+			t.Errorf("%s should sit at depth %d, got %d (present=%v)", name, want, got, ok)
+		}
+	}
+
 	if len(backend.members) != 4 {
-		t.Fatalf("backend should fold its whole subtree (4 panels), got %d", len(backend.members))
+		t.Fatalf("backend must still carry its whole subtree (4 panels), got %d", len(backend.members))
 	}
 	// ids() covers the subtree, so close/signal/dispatch over the group recurse.
 	if len(backend.ids()) != 4 {
@@ -73,36 +99,51 @@ func TestDashItemsFoldsSubtreeToTop(t *testing.T) {
 	if n := subGroupCount(backend.members, backend.name); n != 2 {
 		t.Fatalf("backend should report 2 immediate sub-groups (api, db), got %d", n)
 	}
-	if items[1].kind != itemPanel || items[1].panel.ID != "5" {
-		t.Fatalf("item 1 should be the lone panel, got %+v", items[1])
+}
+
+// TestDashTreeCollapsedGroupKeepsItsSubtree: shutting a group hides its rows and
+// nothing else — the members, and therefore every bulk verb, are unchanged.
+func TestDashTreeCollapsedGroupKeepsItsSubtree(t *testing.T) {
+	m := baseModel()
+	m.fleet = nestedFleet()
+	m.collapsed = map[string]bool{"backend": true}
+
+	if got, want := m.topLevel(), []string{"backend", "5"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("the top level is unchanged by a collapse: want %v, got %v", want, got)
+	}
+	items := m.dashItems()
+	if len(items) != 2 {
+		t.Fatalf("a collapsed backend should hide its four rows, got %d: %+v", len(items), items)
+	}
+	if items[0].expanded {
+		t.Fatal("backend should read as collapsed")
+	}
+	if len(items[0].members) != 4 || len(items[0].ids()) != 4 {
+		t.Fatalf("a collapsed group still owns its subtree, got %d members", len(items[0].members))
 	}
 }
 
-func TestDashItemsCollapsesGroups(t *testing.T) {
+// TestDashTreeTopLevelOrder: a group takes the slot of its FIRST member, so the
+// top level follows the fleet rather than bunching the groups together.
+func TestDashTreeTopLevelOrder(t *testing.T) {
 	m := baseModel()
 	m.fleet = groupedFleet()
+
+	want := []string{"api", "2", "db", "5"}
+	if got := m.topLevel(); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("top level should follow the fleet: want %v, got %v", want, got)
+	}
 	items := m.dashItems()
-
-	// Expected order: api group (at panel 1), lone shell, db group, lone two.
-	if len(items) != 4 {
-		t.Fatalf("expected 4 items, got %d: %+v", len(items), items)
-	}
 	if items[0].kind != itemGroup || items[0].name != "api" || len(items[0].members) != 3 {
-		t.Fatalf("item 0 should be the 3-member api group, got %+v", items[0])
+		t.Fatalf("row 0 should be the 3-member api group, got %+v", items[0])
 	}
-	if items[1].kind != itemPanel || items[1].panel.ID != "2" {
-		t.Fatalf("item 1 should be lone shell #2, got %+v", items[1])
+	// Every panel now has a row of its own: four grouped members plus two lone
+	// panels, under the three group rows that hold them.
+	if got := m.itemCount(); got != len(items) {
+		t.Fatalf("itemCount must agree with the projection: %d vs %d", got, len(items))
 	}
-	if items[2].kind != itemGroup || items[2].name != "db" {
-		t.Fatalf("item 2 should be the db group, got %+v", items[2])
-	}
-	if items[3].kind != itemPanel || items[3].panel.ID != "5" {
-		t.Fatalf("item 3 should be lone two #5, got %+v", items[3])
-	}
-
-	// itemCount and treeView track the folded count, not the panel count.
-	if got := m.itemCount(); got != 4 {
-		t.Fatalf("itemCount should be 4 items, got %d", got)
+	if got, want := len(items), 8; got != want {
+		t.Fatalf("expected %d rows (2 groups + 6 panels), got %d: %+v", want, got, items)
 	}
 }
 
@@ -142,7 +183,7 @@ func TestToggleMarkGroupMarksAllMembers(t *testing.T) {
 	}
 
 	// A lone panel marks just itself.
-	m.toggleMark(items[1])
+	m.toggleMark(itemForPanel(t, m, "2"))
 	if ids := m.markedIDs(); strings.Join(ids, ",") != "2" {
 		t.Fatalf("marking the lone panel should mark only #2, got %v", ids)
 	}
@@ -222,14 +263,14 @@ func TestMarkAndGroupFlow(t *testing.T) {
 	m := baseModel()
 	m.fleet = groupedFleet()
 
-	// g marks the selected lone panel (#2 at item index 1).
-	m.cursor = 1
+	// g marks the selected lone panel (#2).
+	m.cursorOnPanel(t, "2")
 	m = press(m, keyMark)
 	if !m.marked["2"] {
 		t.Fatal("g should mark the selected panel")
 	}
-	// Mark the other lone panel (#5 at item index 3) too.
-	m.cursor = 3
+	// Mark the other lone panel (#5) too.
+	m.cursorOnPanel(t, "5")
 	m = press(m, keyMark)
 	if !m.marked["5"] {
 		t.Fatal("g should mark the second lone panel")
@@ -256,7 +297,7 @@ func TestMarkAndGroupFlow(t *testing.T) {
 func TestMarkTogglesOff(t *testing.T) {
 	m := baseModel()
 	m.fleet = groupedFleet()
-	m.cursor = 1
+	m.cursorOnPanel(t, "2")
 	m = press(m, keyMark)
 	m = press(m, keyMark) // toggle the same item off
 	if m.selecting() {
@@ -294,8 +335,8 @@ func TestRenamePanelAndGroup(t *testing.T) {
 		t.Fatalf("group rename should commit, got input=%v status=%q", m.input, m.status)
 	}
 
-	// e on a lone panel (item 1 = #2) remembers the panel id instead.
-	m.cursor = 1
+	// e on a lone panel (#2) remembers the panel id instead.
+	m.cursorOnPanel(t, "2")
 	m = press(m, keyRename)
 	if m.renameID != "2" || m.renameGroup != "" {
 		t.Fatalf("e on a panel should rename the panel, got id=%q group=%q", m.renameID, m.renameGroup)
@@ -334,9 +375,9 @@ func TestCommitGroupKeepsSelectionOnConflict(t *testing.T) {
 	m.fleet = groupedFleet() // group "db", panel titled "lone shell"
 
 	// Mark the two lone panels (#2, #5).
-	m.cursor = 1
+	m.cursorOnPanel(t, "2")
 	m = press(m, keyMark)
-	m.cursor = 3
+	m.cursorOnPanel(t, "5")
 	m = press(m, keyMark)
 
 	// A name that collides with a panel title is rejected, keeping the marks.
@@ -389,8 +430,8 @@ func TestCommitRenameKeepsOverlayOnConflict(t *testing.T) {
 func TestCursorFollowsItemAcrossSnapshot(t *testing.T) {
 	m := baseModel()
 	m.mode = modeDashboard
-	m.fleet = groupedFleet() // items: api, #2, db, #5
-	m.cursor = 3             // the lone panel #5
+	m.fleet = groupedFleet() // top level: api, #2, db, #5
+	m.cursorOnPanel(t, "5")
 
 	// A new panel arrives at the head of the fleet, pushing every item down one.
 	nf := append([]panel.Panel{{ID: "9", Kind: panel.Shell, Title: "newcomer", State: panel.Running}}, groupedFleet()...)
@@ -408,21 +449,51 @@ func TestCursorFollowsPanelIntoGroup(t *testing.T) {
 	m := baseModel()
 	m.mode = modeDashboard
 	m.fleet = groupedFleet()
-	m.cursor = 1 // the lone shell #2
+	m.cursorOnPanel(t, "2") // the lone shell
 
-	// #2 is grouped into "api" elsewhere; its lone item disappears.
-	nf := groupedFleet()
-	for i := range nf {
-		if nf[i].ID == "2" {
-			nf[i].Group = "api"
-		}
+	// #2 is grouped into "api" elsewhere.
+	m.applyEvent(snapshot(grouping("2", "api")))
+
+	// The tree keeps the panel's own row — it moved down a level rather than
+	// disappearing into a card — so the cursor stays on the panel itself. Before
+	// the dashboard drew the hierarchy this was the best it could do: land on the
+	// group that had swallowed it.
+	it, ok := m.selectedItem()
+	if !ok || it.kind != itemPanel || it.panel.ID != "2" {
+		t.Fatalf("cursor should stay on #2 inside api, got %+v ok=%v", it, ok)
 	}
-	m.applyEvent(snapshot(nf))
+	if it.parent != "api" || it.depth != 1 {
+		t.Fatalf("#2 should now sit one level down inside api, got parent=%q depth=%d", it.parent, it.depth)
+	}
+}
+
+// TestCursorFollowsPanelIntoCollapsedGroup is the case where the panel really
+// does vanish from the rows: its new home is shut. The cursor lands on the group
+// holding it, which is where that panel now lives on screen.
+func TestCursorFollowsPanelIntoCollapsedGroup(t *testing.T) {
+	m := baseModel()
+	m.mode = modeDashboard
+	m.fleet = groupedFleet()
+	m.collapsed = map[string]bool{"api": true}
+	m.cursorOnPanel(t, "2")
+
+	m.applyEvent(snapshot(grouping("2", "api")))
 
 	it, ok := m.selectedItem()
 	if !ok || it.kind != itemGroup || it.name != "api" {
-		t.Fatalf("cursor should follow #2 into the api group, got %+v ok=%v", it, ok)
+		t.Fatalf("cursor should follow #2 into the collapsed api group, got %+v ok=%v", it, ok)
 	}
+}
+
+// grouping returns groupedFleet with one panel re-filed into a group.
+func grouping(id, group string) []panel.Panel {
+	nf := groupedFleet()
+	for i := range nf {
+		if nf[i].ID == id {
+			nf[i].Group = group
+		}
+	}
+	return nf
 }
 
 // TestSnapshotInKeyMapKeepsRowCursor guards the mode-aware path: a snapshot that
@@ -478,12 +549,12 @@ func TestGroupCardSparklineWhenActive(t *testing.T) {
 
 	const bars = "▂▃▅▇▆▃▁"
 	active := dashItem{kind: itemGroup, name: "api", members: []panel.Panel{{State: panel.Running, Spark: bars}}}
-	if !strings.Contains(m.renderGroupCard(active, false), bars) {
+	if !strings.Contains(m.rowOf(active), bars) {
 		t.Fatal("an active group card should show its member's live sparkline")
 	}
 
 	done := dashItem{kind: itemGroup, name: "db", members: []panel.Panel{{State: panel.Exited, Spark: bars}}}
-	if strings.Contains(m.renderGroupCard(done, false), bars) {
+	if strings.Contains(m.rowOf(done), bars) {
 		t.Fatal("a done group card should not animate")
 	}
 }
@@ -686,7 +757,7 @@ func TestHelpContextAndZoomFooter(t *testing.T) {
 func TestHelpGroupsByCategory(t *testing.T) {
 	m := baseModel()
 	m.fleet = groupedFleet()
-	m.height = 60 // tall enough that the whole key list renders, so this tests grouping, not viewport fit
+	m.height = 70 // tall enough that the whole key list renders, so this tests grouping, not viewport fit
 
 	cases := []struct {
 		from mode
@@ -762,7 +833,7 @@ func TestDetachWithPrefixQ(t *testing.T) {
 // second row — is exactly the same size as a plain panel card, so the grid stays even.
 func TestGroupCardHeightMatchesPanel(t *testing.T) {
 	m := baseModel()
-	panelCard := m.renderCard(panel.Panel{ID: "9", Kind: panel.Agent, Title: "worker", State: panel.Running, Task: "do the thing"}, false)
+	panelCard := m.rowOfPanel(panel.Panel{ID: "9", Kind: panel.Agent, Title: "worker", State: panel.Running, Task: "do the thing"})
 	wantH, wantW := lipgloss.Height(panelCard), lipgloss.Width(panelCard)
 
 	gog := dashItem{kind: itemGroup, name: "backend", members: []panel.Panel{
@@ -778,7 +849,7 @@ func TestGroupCardHeightMatchesPanel(t *testing.T) {
 			} else {
 				m.marked = nil
 			}
-			card := m.renderGroupCard(gog, sel)
+			card := m.treeRow(gog, sel, testRowWidth)
 			if h, w := lipgloss.Height(card), lipgloss.Width(card); h != wantH || w != wantW {
 				t.Fatalf("group-of-group card sel=%v marking=%v is %dx%d, want %dx%d (a panel card)", sel, marking, w, h, wantW, wantH)
 			}

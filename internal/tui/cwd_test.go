@@ -46,12 +46,12 @@ func TestShortPathAbbreviatesHome(t *testing.T) {
 // indistinguishable; the path is what tells them apart.
 func TestPanelCardShowsTheDirectory(t *testing.T) {
 	m := model{width: 200, height: 30}
-	with := m.renderCard(panel.Panel{ID: "p1", Kind: panel.Shell, Title: "shell #1", Cwd: "/srv/api-worktree"}, false)
+	with := m.rowOfPanel(panel.Panel{ID: "p1", Kind: panel.Shell, Title: "shell #1", Cwd: "/srv/api-worktree"})
 	if !strings.Contains(with, "api-work") {
 		t.Errorf("the card should carry the directory:\n%s", with)
 	}
 	// A panel with no known directory renders exactly as it did before.
-	without := m.renderCard(panel.Panel{ID: "p1", Kind: panel.Shell, Title: "shell #1"}, false)
+	without := m.rowOfPanel(panel.Panel{ID: "p1", Kind: panel.Shell, Title: "shell #1"})
 	if strings.Contains(without, "…") {
 		t.Errorf("an unknown directory should add nothing:\n%s", without)
 	}

@@ -307,20 +307,17 @@ func TestDispatchedBriefShowsOnCardAndPreview(t *testing.T) {
 		{ID: "a1", Kind: panel.Agent, Title: "claude #1", State: panel.Running, Activity: "running · 3m", Task: brief},
 	}
 
-	// Card grid (small fleet → grid, not tree).
-	card := model{mode: modeDashboard, fleet: fleet, width: 110, height: 40}.View()
-	if !strings.Contains(card, brief) || !strings.Contains(card, "▸") {
-		t.Fatalf("card should headline the brief with ▸; got:\n%s", card)
+	// The row headlines the brief once the terminal is wide enough for the task
+	// column — for an agent at work the objective says more than "running · 3m".
+	row := model{mode: modeDashboard, fleet: fleet, width: 160, height: 40}.View()
+	if !strings.Contains(row, brief) || !strings.Contains(row, "▸") {
+		t.Fatalf("the row should headline the brief with ▸; got:\n%s", row)
 	}
 
-	// Tree preview (crowd the fleet so the dashboard switches to tree+preview).
-	crowd := append([]panel.Panel(nil), fleet...)
-	for len(crowd) <= treeThreshold {
-		crowd = append(crowd, panel.Panel{ID: "x", Kind: panel.Shell, Title: "shell", State: panel.Idle})
-	}
-	prev := model{mode: modeDashboard, fleet: crowd, width: 120, height: 44}.View()
+	// The preview pane carries it too, as a labelled row, when it is switched on.
+	prev := model{mode: modeDashboard, fleet: fleet, width: 160, height: 44, preview: true}.View()
 	if !strings.Contains(prev, "task") || !strings.Contains(prev, brief) {
-		t.Fatalf("tree preview should carry a task row with the brief; got:\n%s", prev)
+		t.Fatalf("the preview should carry a task row with the brief; got:\n%s", prev)
 	}
 }
 
@@ -402,21 +399,32 @@ func TestScrollWindowKeepsCursorVisible(t *testing.T) {
 	}
 }
 
-func TestTreeViewKicksInForLargeFleet(t *testing.T) {
-	full := model{fleet: sampleFleet(), width: 100, height: 40}
-	if !full.treeView() {
-		t.Fatalf("fleet of %d should use the tree view", len(full.fleet))
-	}
-
-	small := model{fleet: sampleFleet()[:treeThreshold], width: 100, height: 40}
-	if small.treeView() {
-		t.Fatalf("fleet of %d should use the card grid", len(small.fleet))
-	}
-
-	// Too narrow for the preview pane, even a large fleet stays on the grid.
-	narrow := model{fleet: sampleFleet(), width: treeMinWidth - 1, height: 40}
-	if narrow.treeView() {
-		t.Fatalf("a narrow terminal should stay on the card grid")
+// TestDashboardIsAlwaysATree: there is one dashboard layout at every fleet size
+// and every width. The card grid it used to swap to below seven items is gone, so
+// a person never has to learn two sets of cursor semantics for the same view.
+func TestDashboardIsAlwaysATree(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		fleet []panel.Panel
+		width int
+	}{
+		{"a large fleet", sampleFleet(), 100},
+		{"a small fleet", sampleFleet()[:2], 100},
+		{"one panel", sampleFleet()[:1], 100},
+		{"a narrow terminal", sampleFleet(), 40},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := model{mode: modeDashboard, fleet: tc.fleet, width: tc.width, height: 40}
+			if !m.treeView() {
+				t.Fatal("the dashboard is a tree at every size")
+			}
+			if got := m.cols(); got != 1 {
+				t.Fatalf("a tree is one column, got %d", got)
+			}
+			if m.View() == "" {
+				t.Fatal("the dashboard should render")
+			}
+		})
 	}
 }
 
