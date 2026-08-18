@@ -26,17 +26,45 @@ import (
 // plain YAML file the user hand-edits.
 const AdminKeyEnv = "BATON_ANTHROPIC_ADMIN_KEY"
 
-// Snapshot is one account-usage sample for the current day: token totals across
-// every model, the API-equivalent cost in USD, the day boundary the window opened
-// at, and which source produced it.
+// DefaultWindow is the rolling window the local source counts down when the
+// config leaves usage.window unset. It is configurable rather than baked in
+// because plans differ and the vendor can change the figure — tracking that
+// should not need a baton release.
+const DefaultWindow = 5 * time.Hour
+
+// SessionUsage is one session's share of a snapshot: the tokens it spent inside
+// the window and their API-equivalent cost. Only the local source can fill this
+// in — the Admin API reports the organization in aggregate and cannot attribute
+// spend to a single session.
+type SessionUsage struct {
+	Tokens  int64
+	CostUSD float64
+}
+
+// Snapshot is one account-usage sample over a billing window: token totals across
+// every model, the API-equivalent cost in USD, the window the totals cover, and
+// which source produced it.
 type Snapshot struct {
 	Input      int64     // uncached input tokens
 	Output     int64     // output tokens
 	CacheRead  int64     // input tokens read from a prompt cache
 	CacheWrite int64     // input tokens written to a prompt cache (5m + 1h)
 	CostUSD    float64   // API-equivalent cost in US dollars
-	Since      time.Time // start of the window (local midnight)
+	Since      time.Time // start of the window the totals cover
+	Until      time.Time // end of that window; zero when the source cannot know it
 	Source     string    // "local" | "api"
+
+	// Resets marks Until as a real reset to count down to, rather than merely the
+	// far edge of whatever period the source happened to query. Only a source that
+	// can infer the rolling window sets it, and the footer counts down solely when
+	// it is true: a wrong countdown is worse than none, because the whole point of
+	// the number is that a decision gets made on it.
+	Resets bool
+
+	// Sessions is the per-session breakdown of the same totals, keyed by the Claude
+	// Code session id that spent them. Nil when the source cannot attribute spend.
+	// The values sum to the snapshot's own totals.
+	Sessions map[string]SessionUsage
 }
 
 // TotalTokens is every token the snapshot counted, across the four buckets.
@@ -44,6 +72,44 @@ func (s Snapshot) TotalTokens() int64 { return s.Input + s.Output + s.CacheRead 
 
 // Empty reports whether the snapshot carries nothing worth showing.
 func (s Snapshot) Empty() bool { return s.TotalTokens() == 0 && s.CostUSD == 0 }
+
+// Countdown is how long is left before the window resets, and whether there is a
+// reset to count down to at all. It reports false — never a zero and never a
+// guess — when the source cannot see one, and clamps at zero once the window has
+// run out rather than counting into the negative.
+func (s Snapshot) Countdown(now time.Time) (time.Duration, bool) {
+	if !s.Resets || s.Until.IsZero() {
+		return 0, false
+	}
+	if d := s.Until.Sub(now); d > 0 {
+		return d, true
+	}
+	return 0, true
+}
+
+// Spent is the fraction of the window already elapsed, 0 to 1, and whether there
+// is a window to measure against. A caller colouring a segment by pressure leaves
+// it alone when this reports false, rather than painting an invented reading.
+func (s Snapshot) Spent(now time.Time) (float64, bool) {
+	if !s.Resets || s.Since.IsZero() || s.Until.IsZero() {
+		return 0, false
+	}
+	total := s.Until.Sub(s.Since)
+	if total <= 0 {
+		return 0, false
+	}
+	return min(max(now.Sub(s.Since).Seconds()/total.Seconds(), 0), 1), true
+}
+
+// Share is what fraction of the window's tokens one session spent, 0 to 1. A
+// session the snapshot never saw, or a window with no tokens in it yet, is 0.
+func (s Snapshot) Share(session string) float64 {
+	total := s.TotalTokens()
+	if total <= 0 {
+		return 0
+	}
+	return float64(s.Sessions[session].Tokens) / float64(total)
+}
 
 // Provider fetches the current account-usage snapshot from one data source.
 type Provider interface {
@@ -60,12 +126,16 @@ type Provider interface {
 // "auto" (the default) prefers the api source when a key is present and otherwise
 // falls back to local. An "api" request with no key also falls back to local, so
 // the footer always has a working source rather than silently going dark.
-func NewProvider(source string) Provider {
+//
+// window is the rolling window the local source counts down; zero disables the
+// countdown and falls back to a calendar-day total. The api source ignores it —
+// it cannot see a reset (see APIProvider).
+func NewProvider(source string, window time.Duration) Provider {
 	// Only an explicit "local", or "auto"/"api" with no key, uses the local source;
 	// every other case with a key present goes to the api source.
 	key := os.Getenv(AdminKeyEnv)
 	if key == "" || strings.EqualFold(strings.TrimSpace(source), "local") {
-		return NewLocalProvider()
+		return NewLocalProvider(window)
 	}
 	return NewAPIProvider(key)
 }
@@ -95,6 +165,32 @@ func Format(s Snapshot) string {
 		return tok + " tok"
 	}
 	return fmt.Sprintf("%s tok · ≈$%.2f API", tok, s.CostUSD)
+}
+
+// CountdownAuto and CountdownFull are the two usage.countdown-format settings:
+// auto shortens to "2:14:31" while under a day and only widens to "3d 04:12"
+// beyond it, full always spells out days.
+const (
+	CountdownAuto = "auto"
+	CountdownFull = "dd:hh:mm"
+)
+
+// FormatCountdown renders how long is left as a footer-sized string. Under a day
+// (or in auto form) that is "2:14:31"; a longer wait, or the forced dd:hh:mm
+// form, reads "3d 04:12" — minute precision is enough once the answer is measured
+// in days. A negative duration is clamped to zero rather than shown as a
+// countdown running backwards.
+func FormatCountdown(d time.Duration, format string) string {
+	if d < 0 {
+		d = 0
+	}
+	days := int(d / (24 * time.Hour))
+	rest := d % (24 * time.Hour)
+	h, m, sec := int(rest/time.Hour), int(rest/time.Minute)%60, int(rest/time.Second)%60
+	if days > 0 || strings.EqualFold(strings.TrimSpace(format), CountdownFull) {
+		return fmt.Sprintf("%dd %02d:%02d", days, h, m)
+	}
+	return fmt.Sprintf("%d:%02d:%02d", h, m, sec)
 }
 
 // humanTokens abbreviates a token count: 1234567 → "1.2M", 9340 → "9.3K", 512 → "512".

@@ -6,11 +6,14 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/paths"
+	"github.com/cmj0121/baton/internal/usage"
 )
 
 // Config is the on-disk client configuration.
@@ -122,6 +125,63 @@ type UsageConfig struct {
 	// Interval is the refresh cadence in seconds. 0 uses the built-in default (30s
 	// for the local source, 60s for the api source); values below 10 are clamped up.
 	Interval int `yaml:"interval,omitempty"`
+
+	// Window is the rolling billing window to count down to, as a Go duration
+	// ("5h", "168h"). Empty uses the built-in default; "0" switches the countdown
+	// off and reports a calendar day instead. It is configurable because plans
+	// differ and the vendor can change the figure — tracking that should not need
+	// a baton release. Only the local source can honour it; the api source cannot
+	// see a reset at all.
+	Window string `yaml:"window,omitempty"`
+
+	// CountdownFormat is how the remaining time reads: "auto" (the default)
+	// shortens to 2:14:31 under a day and widens to 3d 04:12 beyond it, while
+	// "dd:hh:mm" always spells out days.
+	CountdownFormat string `yaml:"countdown-format,omitempty"`
+
+	// WarnAt and AlarmAt are the fractions of the window spent at which the footer
+	// segment turns amber and then red. The point is to act before the window runs
+	// out, not to watch it hit zero. 0 uses the built-in defaults (0.75 and 0.9);
+	// values outside 0–1, or an alarm below the warning, fall back to them too.
+	WarnAt  float64 `yaml:"warn-at,omitempty"`
+	AlarmAt float64 `yaml:"alarm-at,omitempty"`
+}
+
+// The usage-window defaults, applied when the config leaves a field unset.
+const (
+	DefaultUsageWarnAt  = 0.75
+	DefaultUsageAlarmAt = 0.90
+)
+
+// WindowDuration is the configured rolling window, or usage.DefaultWindow when
+// the field is empty. An explicit "0" (or any non-positive duration) returns 0,
+// which switches the countdown off. An unparseable value also falls back to the
+// default: a typo should not silently disable the number the feature exists for.
+func (u UsageConfig) WindowDuration() time.Duration {
+	s := strings.TrimSpace(u.Window)
+	if s == "" {
+		return usage.DefaultWindow
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return usage.DefaultWindow
+	}
+	if d <= 0 {
+		return 0
+	}
+	return d
+}
+
+// Thresholds are the warn and alarm fractions to colour the footer at, with the
+// defaults filled in. A pair that does not describe rising pressure — either
+// outside 0–1, or an alarm at or below the warning — is rejected wholesale rather
+// than half-honoured, so the segment's colours always mean what they look like.
+func (u UsageConfig) Thresholds() (warn, alarm float64) {
+	warn, alarm = u.WarnAt, u.AlarmAt
+	if warn <= 0 || warn >= 1 || alarm <= 0 || alarm > 1 || alarm <= warn {
+		return DefaultUsageWarnAt, DefaultUsageAlarmAt
+	}
+	return warn, alarm
 }
 
 // Settings are the persisted cockpit toggles. Pointers distinguish "unset"

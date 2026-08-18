@@ -259,7 +259,7 @@ func buildServerOptions(rc reloadable, stateF string) []server.Option {
 // Usage source/interval are construction-time (a restart picks up a change); the
 // show/hide toggle is client-side and live.
 func usageOption(cfg config.Config) server.Option {
-	p := usage.NewProvider(cfg.Usage.Source)
+	p := usage.NewProvider(cfg.Usage.Source, cfg.Usage.WindowDuration())
 	interval := time.Duration(cfg.Usage.Interval) * time.Second
 	if interval <= 0 {
 		interval = usage.DefaultInterval(p)

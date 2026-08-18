@@ -15,6 +15,13 @@ import (
 // organization's Console/API-key usage, so it only carries data for accounts
 // billed through the Console — a personal Pro/Max subscription's usage never
 // appears here. It needs an Admin API key (sk-ant-admin...).
+//
+// It cannot see a reset. Rate limits surface on real API response headers, which
+// baton never receives, and the admin reports carry no limit at all — so this
+// source reports the period it actually queried and leaves Snapshot.Resets false.
+// Nor can it attribute spend to a session: the reports are organization-wide
+// aggregates, so Snapshot.Sessions stays nil and the per-panel view has nothing
+// to show rather than something invented.
 type APIProvider struct {
 	key    string
 	base   string
@@ -51,7 +58,9 @@ func (p *APIProvider) Source() string { return "api" }
 // footer shows usage even when the cost report is unavailable.
 func (p *APIProvider) Fetch(ctx context.Context) (Snapshot, error) {
 	start := startOfDay(p.now())
-	snap := Snapshot{Since: start, Source: "api"}
+	// The period queried, reported as-is: Resets stays false, so the footer shows
+	// the spend without a countdown it would have had to invent.
+	snap := Snapshot{Since: start, Until: start.AddDate(0, 0, 1), Source: "api"}
 	if err := p.fetchUsage(ctx, start, &snap); err != nil {
 		return snap, err
 	}
