@@ -80,7 +80,7 @@ func main() {
 	kctx.FatalIfErrorf(setupLogger(cli.Verbose, logPath))
 
 	// The daemon child re-executes this same binary with daemonEnv set.
-	if isDaemonChild() {
+	if claimDaemonRole() {
 		kctx.FatalIfErrorf(runServer())
 		return
 	}
@@ -96,11 +96,22 @@ func resolveLogPath(flag string) string {
 	return paths.LogFile()
 }
 
-// isDaemonChild reports whether this process is the re-executed daemon child
+// claimDaemonRole reports whether this process is the re-executed daemon child
 // (marked by daemonEnv=1) that runs the server loop rather than attaching a
-// cockpit.
-func isDaemonChild() bool {
-	return os.Getenv(daemonEnv) == "1"
+// cockpit — and takes the marker as it reads it.
+//
+// Clearing it is the point, not tidiness. The daemon's environment is the one
+// every panel it spawns inherits, and everything run inside a panel inherits it
+// in turn. A marker left in place therefore reaches the user's own shell, where
+// the next `baton` reads it, decides it is the daemon child, finds the socket
+// already bound and exits with an error — so a cockpit could not be opened from
+// inside baton at all, which is the most natural place to want a second one.
+func claimDaemonRole() bool {
+	if os.Getenv(daemonEnv) != "1" {
+		return false
+	}
+	_ = os.Unsetenv(daemonEnv)
+	return true
 }
 
 // attach starts the session's server if needed, then runs the cockpit. With
@@ -214,6 +225,21 @@ func runServer() error {
 	if err := paths.EnsureDir(sock); err != nil {
 		return fmt.Errorf("prepare socket dir: %w", err)
 	}
+
+	// One backend per session, decided here rather than by who reaches bind first
+	// (see claimSession). Losing is ordinary — every cockpit starting at once
+	// tries to bring a backend up — so it is not reported as a failure: the
+	// winner's socket is what they all attach to.
+	release, held, err := claimSession(paths.LockFile(sock))
+	if err != nil {
+		return err
+	}
+	if !held {
+		log.Debug().Str("socket", sock).Msg("another daemon owns this session; leaving it to run")
+		return nil
+	}
+	defer release()
+
 	if err := clearStaleSocket(sock); err != nil {
 		return err
 	}

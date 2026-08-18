@@ -41,6 +41,17 @@ func PidFile(socket string) string {
 	return strings.TrimSuffix(socket, ".sock") + ".pid"
 }
 
+// LockFile returns the daemon's session lock that pairs with the given socket.
+// Like PidFile it is derived from the socket path, so the daemon child resolves
+// the same path from BATON_SOCK after it re-sessions itself.
+//
+// It is a lock only — never read, never removed. The PID file cannot serve the
+// purpose because starting a daemon unlinks a stale one, and unlinking the file
+// a lock is held on lets the next process lock a fresh inode and believe it won.
+func LockFile(socket string) string {
+	return strings.TrimSuffix(socket, ".sock") + ".lock"
+}
+
 // StateFile returns the persisted fleet/layout snapshot that pairs with the
 // given socket. Like PidFile it is derived from the socket path, so one
 // daemon-per-session owns one state file and the daemon child resolves the same

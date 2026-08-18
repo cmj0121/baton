@@ -5,6 +5,25 @@ import (
 	"testing"
 )
 
+func TestLockFilePairsWithSocket(t *testing.T) {
+	cases := map[string]string{
+		"/run/baton/baton-42.sock": "/run/baton/baton-42.lock",
+		"/tmp/x.sock":              "/tmp/x.lock",
+		"/tmp/nosuffix":            "/tmp/nosuffix.lock",
+	}
+	for sock, want := range cases {
+		if got := LockFile(sock); got != want {
+			t.Errorf("LockFile(%q) = %q, want %q", sock, got, want)
+		}
+	}
+	// The lock must not collide with the files a daemon start rewrites or removes.
+	for _, sock := range []string{"/tmp/x.sock", "/tmp/nosuffix"} {
+		if LockFile(sock) == PidFile(sock) || LockFile(sock) == StateFile(sock) {
+			t.Errorf("LockFile(%q) collides with a file the daemon rewrites", sock)
+		}
+	}
+}
+
 func TestStateFilePairsWithSocket(t *testing.T) {
 	cases := map[string]string{
 		"/run/baton/baton-42.sock": "/run/baton/baton-42.state.json",
