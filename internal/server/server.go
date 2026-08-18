@@ -1676,15 +1676,20 @@ func (s *Server) createPanel(kind, path string, args []string, dir, profile stri
 
 	// A conductor runs in a server-managed ephemeral workspace, never dir, and
 	// carries the identity env. Build them before the spec so a failure cleans up
-	// the reservation and any half-made workspace.
+	// the reservation and any half-made workspace. Every other agent panel gets
+	// the same identity minus the scoped role: it is told which panel it is, and
+	// is granted nothing by being told (see panelEnv).
 	var env []string
-	if conductor {
+	switch {
+	case conductor:
 		ws, err := s.makeConductorWorkspace(id)
 		if err != nil {
 			s.clearConductorPending()
 			return "", err
 		}
 		dir, env = ws, s.conductorEnv(id)
+	case kind == proto.KindAgent:
+		env = s.panelEnv(id)
 	}
 	// A global shell always opens in $HOME — a stable "home base", never dir or the
 	// configured default. No workspace, no identity env: it drives nothing.
@@ -1700,6 +1705,24 @@ func (s *Server) createPanel(kind, path string, args []string, dir, profile stri
 	var spec ptymgr.Spec
 	switch kind {
 	case proto.KindShell:
+		// A shell panel carries no identity env, and that is a decision rather than
+		// an oversight. The case for giving it one is real enough: a person who
+		// types `echo $BATON_PANEL_ID` would get an answer. It loses on two counts.
+		// A shell is a launcher — every program a person starts in it inherits the
+		// marking, so the id would trail tools that have nothing to do with the
+		// panel, where an agent panel runs the single long-lived process that IS the
+		// panel. And the human already has what the agent lacks: the cockpit shows
+		// the panel, `baton ctl list` names the ids, and `--id` is one flag away;
+		// the reason an agent must be told is precisely that it can see neither.
+		// The socket needs no injecting: the daemon pins BATON_SOCK into its own
+		// environment when it re-execs (daemonEnviron in cmd/baton), and ptymgr
+		// starts every panel from os.Environ(), so a shell panel inherits it and
+		// `baton ctl` there already reaches this server at full cockpit power. Note
+		// that it is the inherited variable doing the work, not paths.Socket()'s
+		// fallback: a panel is Setsid'd into its own session, so recomputing the
+		// session-scoped default inside one yields a socket that does not exist.
+		// The global shell has been held to this exact contract since it landed,
+		// and both shell kinds stay identical here.
 		spec = ptymgr.Spec{Command: path, Dir: dir}
 	case proto.KindAgent:
 		if path == "" {
@@ -1803,16 +1826,61 @@ func (s *Server) clearGlobalShellPending() {
 	s.mu.Unlock()
 }
 
-// conductorEnv is the identity baton injects into the conductor panel's process:
-// the control socket to dial and the scoped role + own panel id the control
-// client declares on hello, so `baton ctl` inside the panel is fenced to the
-// conductor policy and knows which panel not to act on.
-func (s *Server) conductorEnv(id string) []string {
+// panelEnv is the identity baton injects into an agent panel's process: the
+// control socket to dial, and the panel's own id. Together they are the answer to
+// a question an agent could not previously ask — "which panel am I?" — and the
+// whole reason it matters is that a control client which cannot name itself
+// cannot say anything about itself. `baton ctl` reads both on Dial, so the agent
+// inside the panel reaches this server and declares a self without anyone having
+// to tell it. Until this existed only the conductor was told, which meant a
+// fleet of fifty agents had exactly one member able to speak about itself.
+//
+// The role is left empty, and what that means should not be overstated. It means
+// only that an ordinary agent must not be handed the CONDUCTOR's role: that role
+// carries a fence built for the one panel that drives the fleet (no self-close,
+// no self-dispatch, a spawn rate cap, a fleet ceiling) plus the policy stripping
+// that travels with it, none of which describes a worker. An empty role is the
+// plain, unscoped connection, so a worker keeps exactly the reach it already had
+// before this: full cockpit power over the whole fleet, including closing its
+// neighbours. That is the status quo, not a decision — an agent panel could do
+// all of it before an id was ever injected, and injecting one widens nothing.
+//
+// It is also not the end state. A worker-scoped role — open for the verbs an
+// agent needs about ITSELF (attention, resolve, rename) and closed against
+// panel.close, panel.signal, panel.input, panel.dispatch and panel.create on
+// anyone else — is a known follow-up, and the identity injected here is the
+// prerequisite it was waiting on. This unit neither opens that gap nor closes
+// it; it should not be read as having settled the question.
+//
+// A panel that runs baton itself inherits these variables and nothing needs
+// guarding. The cockpit (internal/client) says hello with no role and no self at
+// all, so a nested TUI attaches at full power no matter what it inherited. A
+// nested *server* is covered too: ptymgr appends a spec's env after os.Environ()
+// and os/exec keeps the last occurrence of a duplicate key, so an inner daemon's
+// injection overrides the outer one and each panel is told the id its own server
+// gave it. Only `baton ctl` and `baton mcp` read these at all, and for them
+// inheritance is the right answer — a helper the agent shells out to is still
+// acting on that panel's behalf.
+//
+// None of this is a security boundary, and the comment should not be read as
+// claiming otherwise. The socket is uid-private and both role and self are
+// self-declared, so any local process of your user can dial it and claim to be
+// any panel it likes. Injecting the id makes the honest case work; it does not
+// make the dishonest one impossible. The server's fence (see guardConductor) is
+// documented under exactly the same limit.
+func (s *Server) panelEnv(id string) []string {
 	return []string{
 		paths.EnvSocket + "=" + s.socketPath(),
-		paths.EnvRole + "=" + roleConductor,
 		paths.EnvPanelID + "=" + id,
 	}
+}
+
+// conductorEnv is panelEnv plus the one thing that makes a conductor a conductor:
+// the scoped role its control client declares on hello, which the server fences.
+// The rest of its identity — the socket to dial, and the own panel id it is
+// fenced from acting on — is the same identity every agent panel now carries.
+func (s *Server) conductorEnv(id string) []string {
+	return append(s.panelEnv(id), paths.EnvRole+"="+roleConductor)
 }
 
 // socketPath is the control socket this server listens on, taken from the live
@@ -2848,28 +2916,47 @@ func (s *Server) respawnPanel(id string) error {
 		return fmt.Errorf("panel is still running")
 	}
 	isConductor := s.panels[idx].Conductor
+	isAgent := s.isAgentPanelLocked(id) // still under the lock taken above
 	spec, ok := s.specs[id]
 	s.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("nothing to re-run")
 	}
 
-	// A conductor re-run needs a live workspace and fresh identity env: reuse the
-	// retained workspace if it still exists (the common exit→respawn), make a new
-	// one if it is gone (e.g. after a reboot cleared the runtime dir), and always
-	// refresh the env since the socket path can change across a daemon restart.
-	// Rewrite the workspace wiring either way, so an edited operator brief
+	// Every agent panel has its identity rebuilt on a re-run, and rebuilt rather
+	// than replayed. The id is the panel's own and never changes, so it comes back
+	// as the same self it was; what is not stable is everything around it. The
+	// socket path can move across a daemon restart, and a panel restored from disk
+	// carries no env at all — the snapshot persists command, args, dir and profile,
+	// never the environment. Taking the values from the live server is what makes a
+	// re-run agent know itself as surely as a freshly spawned one, instead of coming
+	// back mute or pointed at a socket that is gone. A conductor needs one thing
+	// more: a live workspace. Reuse the retained one if it still exists (the common
+	// exit→respawn), make a new one if it is gone (e.g. a reboot cleared the runtime
+	// dir), and rewrite its wiring either way, so an edited operator brief
 	// ($HOME/.baton/CONDUCTOR.md) is picked up on every re-run.
-	if isConductor {
-		if spec.Dir == "" || !dirExists(spec.Dir) {
-			ws, err := paths.NewConductorWorkspace()
-			if err != nil {
-				return err
+	//
+	// Assigning Env replaces it rather than merging into it. That is correct only
+	// because an agent spec's Env holds nothing but the identity this server put
+	// there — if a profile ever carries custom environment onto a spawn, this line
+	// would silently swallow it on the first re-run and must merge instead.
+	// A conductor is always an agent, so the second half of the condition never
+	// decides anything today; it is there so a conductor's workspace rebuild does
+	// not quietly depend on that invariant holding in a restored state file.
+	if isAgent || isConductor {
+		if isConductor {
+			if spec.Dir == "" || !dirExists(spec.Dir) {
+				ws, err := paths.NewConductorWorkspace()
+				if err != nil {
+					return err
+				}
+				spec.Dir = ws
 			}
-			spec.Dir = ws
+			writeConductorFiles(spec.Dir, id)
+			spec.Env = s.conductorEnv(id)
+		} else {
+			spec.Env = s.panelEnv(id)
 		}
-		writeConductorFiles(spec.Dir, id)
-		spec.Env = s.conductorEnv(id)
 		s.mu.Lock()
 		s.specs[id] = spec
 		s.mu.Unlock()
@@ -2879,9 +2966,6 @@ func (s *Server) respawnPanel(id string) error {
 	// the promise that only exists because the directory is tracked. A directory
 	// that has since been removed falls back to the spawn directory and says so:
 	// coming back somewhere else in silence is the outcome worth avoiding.
-	s.mu.Lock()
-	isAgent := s.isAgentPanelLocked(id)
-	s.mu.Unlock()
 	launch := spec.Spec
 	dir, notice := s.respawnDir(id, launch, isAgent)
 	launch.Dir = dir

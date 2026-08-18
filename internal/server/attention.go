@@ -132,12 +132,12 @@ func (s *Server) resolveAttention(cc *clientConn, cmd proto.Command) {
 // id: the identity is already on the connection, so an agent can only ever raise
 // its own hand by accident of addressing.
 //
-// AS SHIPPED THAT IS THE CONDUCTOR PANEL AND ONLY THE CONDUCTOR PANEL. The
-// identity env (paths.EnvPanelID) is injected by conductorEnv, so an ordinary
-// worker agent reaches here with an empty self and must name its panel with an
-// explicit --id — which it has no way to discover about itself. Closing that is
-// a change to createPanel's spawn environment, tracked separately; until then
-// this form serves one panel in the fleet rather than all of them.
+// Every agent panel can use it: createPanel injects the identity env
+// (paths.EnvPanelID) into each one, so a worker agent's connection carries a
+// self exactly as the conductor's does. A shell panel deliberately does not get
+// one — a shell is a launcher, and every child it starts would inherit a panel
+// id that is not its own — so `baton ctl attention` from a shell must still name
+// a panel with --id.
 func (s *Server) attentionTarget(cc *clientConn, cmd proto.Command) (string, error) {
 	if cmd.ID != "" {
 		return cmd.ID, nil

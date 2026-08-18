@@ -32,10 +32,13 @@ type Client struct {
 }
 
 // Dial connects to the session's server and identifies this client to it. The
-// socket path comes from BATON_SOCK (else the session default); the role and
-// self panel id come from the environment baton injects into a conductor panel,
-// so a control client run inside the conductor is fenced by the server while the
-// same binary run from a plain shell is the unscoped, full-power cockpit role.
+// socket path comes from BATON_SOCK (else the session default); the self panel id
+// comes from the environment baton injects into every agent panel, so an agent
+// that runs `baton ctl` inside its own panel can speak about itself without ever
+// being told which panel that is. The role comes from the same environment but is
+// injected into the conductor alone, so a control client inside the conductor is
+// fenced by the server, while an ordinary agent panel — and the same binary run
+// from a plain shell — declares the unscoped, full-power cockpit role.
 func Dial() (*Client, error) {
 	return DialSocket(paths.Socket(), os.Getenv(paths.EnvRole), os.Getenv(paths.EnvPanelID))
 }
