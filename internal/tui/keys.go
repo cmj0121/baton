@@ -23,6 +23,7 @@ const (
 	keyPrefix      = "ctrl+t"
 	keyNewPanel    = "p"
 	keyNewForm     = "c" // "choose the command" (n is rename)
+	keyNewHere     = "." // spawn a shell panel in the focused panel's current directory — "." reads as "here"
 	keyNewAgent    = "A" // spawn an agent panel (shift+a)
 	keyConductor   = "C" // find-or-create the singleton conductor agent (shift+c)
 	keyGlobalShell = "H" // find-or-create the singleton global shell (shift+h)
@@ -90,6 +91,7 @@ type action int
 
 const (
 	actNewPanel action = iota
+	actNewHere
 	actNewForm
 	actNewAgent
 	actConductor
@@ -157,6 +159,7 @@ type binding struct {
 // of truth for the in-view key map and the config keys.
 var bindings = []binding{
 	{"new-panel", keyNewPanel, "spawn a new shell panel", actNewPanel, "Panels"},
+	{"new-panel-here", keyNewHere, "spawn a shell panel in the focused panel's directory", actNewHere, "Panels"},
 	{"new-panel-form", keyNewForm, "new panel (choose the command)", actNewForm, "Panels"},
 	{"new-agent", keyNewAgent, "spawn an agent panel in a workdir", actNewAgent, "Panels"},
 	{"conductor", keyConductor, "open the conductor — an agent that drives the fleet", actConductor, "Panels"},

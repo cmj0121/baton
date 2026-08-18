@@ -34,9 +34,11 @@ import (
 
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/config"
+	"github.com/cmj0121/baton/internal/cwd"
 	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/plugin"
+	"github.com/cmj0121/baton/internal/restart"
 	"github.com/cmj0121/baton/internal/server"
 	"github.com/cmj0121/baton/internal/tui"
 	"github.com/cmj0121/baton/internal/usage"
@@ -452,6 +454,8 @@ func reloadableSettings(cfg config.Config) reloadable {
 		Limits:      cfg.Panel.Limits,
 		AgentLimits: agentLimits(cfg.Panel.Agents),
 	}}
+	rc.settings.Restart, rc.settings.AgentRestart = restartPolicies(cfg)
+	rc.settings.TrackCwd, rc.settings.RestoreCwd = cwdPolicy(cfg)
 	if cfg.Settings.AllowNameConflict != nil {
 		rc.settings.AllowNameConflict = *cfg.Settings.AllowNameConflict
 	}
@@ -483,6 +487,53 @@ func agentLimits(profiles map[string]config.AgentProfile) map[string]limits.Limi
 		return nil
 	}
 	return out
+}
+
+// restartPolicies projects the config's restart blocks onto the fleet-wide policy
+// and the per-profile ones layered over it.
+//
+// A malformed policy is reported and dropped rather than guessed at. The failure
+// mode matters: a policy baton half-understood would start processes on the
+// user's behalf on a schedule they did not write, which is worse than a fleet
+// that does not restart at all and says why in the log.
+func restartPolicies(cfg config.Config) (restart.Policy, map[string]restart.Policy) {
+	fleet, err := cfg.Panel.Restart.Policy()
+	if err != nil {
+		log.Warn().Err(err).Msg("restart policy ignored; panels will not be restarted")
+		fleet = restart.Policy{}
+	}
+	var perAgent map[string]restart.Policy
+	for name, prof := range cfg.Panel.Agents {
+		p, err := prof.Restart.Policy()
+		if err != nil {
+			log.Warn().Err(err).Str("agent", name).Msg("agent restart policy ignored; the fleet policy applies")
+			continue
+		}
+		if p.IsZero() {
+			continue
+		}
+		if perAgent == nil {
+			perAgent = make(map[string]restart.Policy, len(cfg.Panel.Agents))
+		}
+		perAgent[name] = p
+	}
+	return fleet, perAgent
+}
+
+// cwdPolicy projects the config's working-directory settings, reporting anything
+// the file got wrong and falling back to the defaults. The forgiving direction is
+// deliberate here, unlike the restart policy: failing to learn a directory costs
+// a convenience, while refusing to start processes is a safety property.
+func cwdPolicy(cfg config.Config) (cwd.Track, cwd.Restore) {
+	track, err := cfg.Panel.CwdTracking()
+	if err != nil {
+		log.Warn().Err(err).Msg("track-cwd ignored; using the default")
+	}
+	restore, err := cfg.Panel.CwdRestore()
+	if err != nil {
+		log.Warn().Err(err).Msg("restore-cwd ignored; using the default")
+	}
+	return track, restore
 }
 
 // runClient attaches a TUI cockpit to this session's server. If the cockpit

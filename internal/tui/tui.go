@@ -1727,6 +1727,65 @@ func (m model) spawnPanel(command string) model {
 	return m
 }
 
+// spawnPanelHere opens a shell beside the panel the cockpit is pointed at, in the
+// directory that panel is in *now* — tmux's `-c "#{pane_current_path}"` idiom, and
+// the everyday reason to track a working directory at all.
+//
+// A panel whose directory is not known falls back to spawning in the default
+// workdir and says so, rather than opening somewhere the user did not mean. That
+// is the honest answer for a shell that reports nothing and whose process has
+// already exited: there is no "here" left to open in.
+func (m model) spawnPanelHere() model {
+	p, ok := m.cwdSource()
+	if !ok {
+		m.status = "no panel selected"
+		return m
+	}
+	if p.Cwd == "" {
+		// Spawn anyway — the user asked for a panel — but keep the reason on the
+		// status line, since where it landed is not where they pointed.
+		out := m.spawnPanel(m.shellPath)
+		out.status = m.tr("panel.here.unknown", "that panel's directory is not known; spawning in the default workdir")
+		return out
+	}
+	if m.client != nil {
+		cmd := proto.Command{Action: "panel.create", Kind: proto.KindShell, Path: m.shellPath, Dir: p.Cwd}
+		if err := m.client.Send(cmd); err != nil {
+			m.status = "send failed: " + err.Error()
+			return m
+		}
+	}
+	m.status = "spawning in " + p.Cwd
+	return m
+}
+
+// cwdSource is the panel whose directory "here" means: the zoomed one, the
+// focused member of a group split, or the selected card on the dashboard. A
+// selected group has no single directory, so its first member answers — the same
+// one its card is drawn from.
+func (m model) cwdSource() (panel.Panel, bool) {
+	if m.mode == modeZoom && m.zoomID != "" {
+		if p, found := m.fleetPanel(m.zoomID); found {
+			return p, true
+		}
+	}
+	if m.mode == modeGroupZoom {
+		if p, found := m.focusedMember(); found {
+			return p, true
+		}
+	}
+	it, has := m.selectedItem()
+	switch {
+	case !has:
+		return panel.Panel{}, false
+	case it.kind == itemGroup && len(it.members) > 0:
+		return it.members[0], true
+	case it.kind == itemGroup:
+		return panel.Panel{}, false
+	}
+	return it.panel, true
+}
+
 // resolveAgent picks the agent profile the new-agent action spawns: the
 // configured default (falling back to "claude"), looked up in the user's
 // profiles and then the built-ins. ok is false when the named profile is unknown.
@@ -1970,6 +2029,8 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		return m.toggleScratch()
 	case actNewPanel:
 		return m.spawnPanel(m.shellPath), nil
+	case actNewHere:
+		return m.spawnPanelHere(), nil
 	case actNewForm:
 		m.input = inputNewPanelCmd
 		m.inputBuf = m.shellPath
@@ -3191,6 +3252,13 @@ func (m model) renderCard(p panel.Panel, selected bool) string {
 	badge := kindBadge(p.Kind)
 	state := lipgloss.NewStyle().Foreground(info.color).Render(info.label)
 	kindLine := badge + "  " + state
+	// The directory rides the state line rather than a line of its own: the card is
+	// three lines by design, and the path is what tells fifty panels called
+	// "shell #1"…"#50" apart. It is shortened rather than truncated, so the tail —
+	// the part that identifies the panel — is what survives a narrow card.
+	if room := cardInner - lipgloss.Width(kindLine) - 2; p.Cwd != "" && room > 6 {
+		kindLine += "  " + mutedStyle.Render(shortPath(p.Cwd, room))
+	}
 
 	spark := lipgloss.NewStyle().Foreground(info.color).Render(p.Spark)
 	// When the panel carries a dispatched brief, the task headlines the footer (▸)
@@ -3210,6 +3278,33 @@ func (m model) renderCard(p panel.Panel, selected bool) string {
 		BorderForeground(border)
 
 	return style.Render(lipgloss.JoinVertical(lipgloss.Left, head, kindLine, footer))
+}
+
+// shortPath renders a working directory small enough for a card: the home
+// directory becomes "~", and a path still too wide keeps its last components
+// behind an ellipsis. The tail is kept rather than the head because the tail is
+// what distinguishes one panel from another — every worktree under one repo
+// shares a prefix and differs at the end.
+func shortPath(dir string, width int) string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if dir == home {
+			return "~"
+		}
+		if strings.HasPrefix(dir, home+string(filepath.Separator)) {
+			dir = "~" + dir[len(home):]
+		}
+	}
+	if lipgloss.Width(dir) <= width {
+		return dir
+	}
+	parts := strings.Split(dir, string(filepath.Separator))
+	for i := len(parts) - 1; i > 0; i-- {
+		cand := "…/" + filepath.Join(parts[i:]...)
+		if lipgloss.Width(cand) <= width {
+			return cand
+		}
+	}
+	return truncate(filepath.Base(dir), width)
 }
 
 // kindBadge tags a panel as an agent or a plain shell.

@@ -23,6 +23,7 @@ import (
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/mem"
 
+	"github.com/cmj0121/baton/internal/cwd"
 	"github.com/cmj0121/baton/internal/gitdiff"
 	"github.com/cmj0121/baton/internal/gitops"
 	"github.com/cmj0121/baton/internal/limits"
@@ -31,6 +32,7 @@ import (
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/ptymgr"
 	"github.com/cmj0121/baton/internal/queue"
+	"github.com/cmj0121/baton/internal/restart"
 	"github.com/cmj0121/baton/internal/sandbox"
 	"github.com/cmj0121/baton/internal/signals"
 	"github.com/cmj0121/baton/internal/state"
@@ -104,6 +106,17 @@ type Settings struct {
 	// profiles' commands: the server resolves policy, the client resolves what to run.
 	Limits      limits.Limits
 	AgentLimits map[string]limits.Limits
+
+	// Restart is the fleet-wide policy for bringing a dead panel back and
+	// AgentRestart the per-profile policies layered over it, keyed by profile
+	// name — the same shape as the resource caps above, and resolved the same way.
+	Restart      restart.Policy
+	AgentRestart map[string]restart.Policy
+
+	// TrackCwd is how a panel's live working directory is learned and RestoreCwd
+	// which panels a re-run puts back in it.
+	TrackCwd   cwd.Track
+	RestoreCwd cwd.Restore
 }
 
 // Server owns all state and every PTY. It is safe for concurrent use.
@@ -186,6 +199,25 @@ type Server struct {
 	// would attribute a window's spend to something that is not running.
 	sessions map[string][]string
 
+	// Restart supervision. restart is the fleet-wide policy and agentRestart the
+	// per-profile ones layered over it (see Settings); restarts holds the live
+	// bookkeeping per panel — failure count, run clock, armed timer. shuttingDown
+	// is set before the daemon kills the fleet, so the kills it does on purpose
+	// are not mistaken for crashes worth undoing. Guarded by mu.
+	restart      restart.Policy
+	agentRestart map[string]restart.Policy
+	restarts     map[string]*restartState
+	shuttingDown bool
+
+	// Working-directory tracking. trackCwd is how a panel's live directory is
+	// learned and restoreCwd which panels are re-run in it; osc7Tail carries the
+	// last few bytes of each panel's output so a report split across two reads is
+	// still read (see cwd.go). Guarded by mu.
+	trackCwd    cwd.Track
+	restoreCwd  cwd.Restore
+	osc7Tail    map[string][]byte
+	reportedCwd map[string]bool
+
 	// pendingDispatch holds a dispatch whose panel was not yet ready to receive it
 	// (still spawning or mid-output): the bytes to write once the panel settles to
 	// idle/attention. Keyed by panel id, guarded by mu; the monitor tick drains it.
@@ -217,6 +249,11 @@ type Server struct {
 	// production; a test swaps it (SetInputWriter) to record dispatched bytes
 	// without a live process. Set once in New, then read without a lock.
 	writeInput func(id string, data []byte)
+
+	// pidOf resolves a panel's process-group leader pid. It is the PTY manager's
+	// own map in production; a test swaps it to stand in for a live process. Set
+	// once in New, then read without a lock — like writeInput above.
+	pidOf func(id string) int
 
 	// Ephemeral diff panels. ephemeral is the set of live "diff:<n>" ids spawned
 	// as PTYs but deliberately kept out of s.panels/s.specs, so persistence
@@ -392,6 +429,11 @@ func New(ln net.Listener, opts ...Option) *Server {
 		mon:             newMonitor(),
 		specs:           make(map[string]spawnSpec),
 		sessions:        make(map[string][]string),
+		restarts:        make(map[string]*restartState),
+		osc7Tail:        make(map[string][]byte),
+		reportedCwd:     make(map[string]bool),
+		trackCwd:        cwd.Auto,
+		restoreCwd:      cwd.Shells,
 		ephemeral:       make(map[string]struct{}),
 		groupShown:      make(map[string]int),
 		groupLayout:     make(map[string]string),
@@ -425,6 +467,9 @@ func New(ln net.Listener, opts ...Option) *Server {
 	if s.writeInput == nil {
 		s.writeInput = s.pty.Write
 	}
+	if s.pidOf == nil {
+		s.pidOf = func(id string) int { return s.pty.Pids()[id] }
+	}
 	s.pty.OnOutput(s.routeOutput)
 	s.pty.OnClose(s.onPanelExit)
 	return s
@@ -454,6 +499,8 @@ func (s *Server) Reload(set Settings) {
 	s.editor = set.Editor
 	s.worktreeDir = set.WorktreeDir
 	s.limits, s.agentLimits = set.Limits, set.AgentLimits
+	s.restart, s.agentRestart = set.Restart, set.AgentRestart
+	s.trackCwd, s.restoreCwd = set.TrackCwd, set.RestoreCwd
 	s.mu.Unlock()
 	s.pty.SetRingCap(set.ReplayBytes)
 	s.probeEnforcement() // a reload may be the first thing to configure a cap
@@ -527,6 +574,12 @@ func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 		s.sand.Release(id) // the cgroup outlived the process it was made for
 		return err
 	}
+	// The run's clock starts here, at the one fork point, so every way a panel can
+	// come up — a fresh spawn, a manual re-run, a supervised restart — feeds the
+	// same "was this run healthy" question.
+	s.mu.Lock()
+	s.noteSpawnLocked(id, time.Now())
+	s.mu.Unlock()
 	return nil
 }
 
@@ -568,6 +621,7 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 	s.mu.Lock()
 	found := false
 	var fields map[string]any
+	var notice string
 	for i := range s.panels {
 		if s.panels[i].ID == id {
 			s.panels[i].State = panel.Exited
@@ -576,15 +630,24 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 			delete(s.pendingDispatch, id) // a held dispatch dies with the process
 			// A task in flight died with its panel — fail it with the exit code.
 			s.advanceTaskLocked(id, task.Failed, fmt.Sprintf("panel exited (code %d)", exitCode))
+			// The restart policy decides whether this is the end of the panel or a
+			// pause in it, and says which on the card.
+			if notice = s.superviseExitLocked(id, exitCode, time.Now()); notice != "" {
+				s.panels[i].Activity = notice
+			}
 			fields = panelFields(s.panels[i])
 			fields["exit_code"] = exitCode
 			found = true
 			break
 		}
 	}
+	line := "\r\n[process exited]\r\n"
+	if notice != "" {
+		line = "\r\n[" + notice + "]\r\n"
+	}
 	for cc := range s.clients {
 		if cc.attached[id] {
-			send(cc, proto.ServerMsg{Type: "output", ID: id, Data: []byte("\r\n[process exited]\r\n")})
+			send(cc, protoOutput(id, line))
 			delete(cc.attached, id)
 		}
 	}
@@ -621,6 +684,14 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 	}
 }
 
+// protoOutput is a server-authored line addressed to a panel's viewers — the
+// "[process exited]" notice and its restart siblings. It is not the panel's own
+// output and never reaches the replay buffer: it tells whoever is watching what
+// just happened to the process behind the screen they are looking at.
+func protoOutput(id, text string) proto.ServerMsg {
+	return proto.ServerMsg{Type: "output", ID: id, Data: []byte(text)}
+}
+
 // routeOutput fans a panel's output out to every client zoomed into it, and feeds
 // the Monitor: output is the signal that wakes a quiet (or just-spawned) panel
 // back to running. The wake is in-memory only — the next monitor tick carries it
@@ -629,6 +700,7 @@ func (s *Server) routeOutput(id string, data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mon.observed(id, len(data))
+	s.noteOutputCwdLocked(id, data)
 	if i := s.indexLocked(id); i >= 0 {
 		switch from := s.panels[i].State; from {
 		case panel.Spawning, panel.Idle, panel.Attention:
@@ -922,6 +994,7 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 
 	changed := false
 	var deliver []readyDispatch // pending dispatches whose panel settled this tick
+	var sampleCwd []cwdSample   // panels that settled and have no directory of their own to report
 	var closeAfter []string     // spawn-on-demand panels to reap now their task is done
 	for i := range s.panels {
 		p := &s.panels[i]
@@ -943,6 +1016,18 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 				s.emit("panel.attention", panelFields(*p))
 			case panel.Idle:
 				s.emit("panel.idle", panelFields(*p))
+			}
+			// A panel that has settled is sitting at a prompt: the moment its
+			// working directory is both stable and about to matter. Collected here
+			// and read after the lock, since it asks the OS.
+			//
+			// The pid comes from the PTY manager, not the panel: Panel.Pid is joined
+			// in only when a snapshot is built for the wire, so the in-memory fleet
+			// carries a zero there.
+			if ns == panel.Idle || ns == panel.Attention {
+				if pid := s.livePid(p.ID); s.wantsCwdSampleLocked(p.ID, pid) {
+					sampleCwd = append(sampleCwd, cwdSample{id: p.ID, pid: pid})
+				}
 			}
 			// The panel just settled. If a dispatch was held for it, deliver it and
 			// move its task to dispatched; otherwise a running task whose agent has
@@ -997,6 +1082,12 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 	// mu, and a panel that just settled is waiting for input, so the write lands.
 	for _, d := range deliver {
 		s.writeInput(d.id, d.data)
+	}
+
+	// Read the settled panels' directories off the lock: the process table is a
+	// syscall away, which is cheap but not something to hold the fleet for.
+	for _, c := range sampleCwd {
+		s.sampleCwdFromProcess(c.id, c.pid)
 	}
 
 	// Reap finished ephemeral workers and provision new ones for the backlog, both
@@ -1786,6 +1877,17 @@ func (s *Server) broadcastFleet() {
 // a child daemonised into its own session, the same caveat panel signals carry.
 // Returns the number of panels killed.
 func (s *Server) Shutdown() int {
+	// Mark the intent before the kills land, so the exits they cause are read as
+	// the daemon going down rather than as a fleet-wide crash to be undone.
+	s.mu.Lock()
+	s.shuttingDown = true
+	for _, st := range s.restarts {
+		if st.timer != nil {
+			st.timer.Stop()
+		}
+	}
+	s.mu.Unlock()
+
 	n := s.pty.KillAll(syscall.SIGKILL)
 	if n > 0 {
 		log.Info().Int("panels", n).Msg("killed live panels on shutdown")
@@ -2248,6 +2350,8 @@ func (s *Server) pruneExitedLocked() (stop, workspaces []string) {
 			s.mon.forget(p.ID)
 			delete(s.specs, p.ID)
 			delete(s.sessions, p.ID)
+			s.forgetRestartLocked(p.ID)
+			s.forgetCwdLocked(p.ID)
 			delete(s.pendingDispatch, p.ID)
 			delete(s.panelTask, p.ID) // the panel is gone; its task history is bounded separately
 			continue
@@ -2624,10 +2728,25 @@ func (s *Server) respawnPanel(id string) error {
 		s.mu.Unlock()
 	}
 
+	// Put the panel back where it was, not merely where it started — the half of
+	// the promise that only exists because the directory is tracked. A directory
+	// that has since been removed falls back to the spawn directory and says so:
+	// coming back somewhere else in silence is the outcome worth avoiding.
+	s.mu.Lock()
+	isAgent := s.isAgentPanelLocked(id)
+	s.mu.Unlock()
+	launch := spec.Spec
+	dir, notice := s.respawnDir(id, launch, isAgent)
+	launch.Dir = dir
+	if notice != "" {
+		log.Warn().Str("panel", id).Str("dir", dir).Msg(notice)
+		s.notifyAttached(id, "\r\n["+notice+"]\r\n")
+	}
+
 	// Re-resolve on every re-run rather than reusing what the first spawn landed
 	// on, so a respawn is also how a deferred cap (a lowered memory ceiling)
 	// finally takes hold.
-	if err := s.startPanel(id, spec.Profile, spec.Spec); err != nil {
+	if err := s.startPanel(id, spec.Profile, launch); err != nil {
 		return err
 	}
 
@@ -2635,11 +2754,15 @@ func (s *Server) respawnPanel(id string) error {
 	if i := s.indexLocked(id); i >= 0 {
 		s.panels[i].State = panel.Spawning
 		s.panels[i].Activity = activityText(panel.Spawning, 0)
+		// The new process starts in the directory just resolved, whatever the old
+		// one had wandered to; the tracker re-learns from there.
+		s.panels[i].Cwd = dir
 		s.mon.spawned(id) // restart the Monitor's clock; first output wakes it to running
 	}
+	delete(s.osc7Tail, id) // the old process's output tail says nothing about the new one
 	s.mu.Unlock()
 
-	log.Info().Str("panel", id).Msg("panel re-run")
+	log.Info().Str("panel", id).Str("dir", dir).Msg("panel re-run")
 	return nil
 }
 
@@ -2714,6 +2837,8 @@ func (s *Server) closePanel(id string) error {
 	s.mon.forget(id)
 	delete(s.specs, id)           // the panel is gone for good; drop its retained spawn spec
 	delete(s.sessions, id)        // …and the session ids its usage was attributed through
+	s.forgetRestartLocked(id)     // …and any restart armed for it: it must not come back
+	s.forgetCwdLocked(id)         // …and the output tail kept to read its directory reports
 	delete(s.pendingDispatch, id) // and any dispatch held for it
 	delete(s.panelTask, id)       // and its task mapping (the task record stays as history)
 	s.emit("panel.close", map[string]any{"id": id, "title": title})
@@ -2748,7 +2873,7 @@ func (s *Server) sendDiff(cc *clientConn, targetID string) error {
 		log.Warn().Str("target", targetID).Str("action", "diff").Err(err).Msg("diff rejected")
 		return err
 	}
-	dir := ptymgr.PanelDir(spec.Dir)
+	dir := s.targetDir(targetID, spec.Spec)
 	if !gitdiff.IsWorkTree(dir) {
 		return fmt.Errorf("not a git repository: %s", dir)
 	}
@@ -2820,7 +2945,7 @@ func (s *Server) captureGit(cc *clientConn, targetID string, op gitops.Op, arg s
 		log.Warn().Str("target", targetID).Str("op", string(op)).Err(err).Msg("git rejected")
 		return err
 	}
-	dir := ptymgr.PanelDir(spec.Dir)
+	dir := s.targetDir(targetID, spec.Spec)
 	res, err := gitops.Capture(op, dir, arg, s.snapEditor())
 	if err != nil {
 		log.Warn().Str("target", targetID).Str("dir", dir).Str("op", string(op)).Err(err).Msg("git rejected")
@@ -2862,9 +2987,9 @@ func (s *Server) openEphemeral(cc *clientConn, targetID, label string, resolve e
 		return err
 	}
 
-	// Resolve the effective workdir exactly as a spawn would (empty → home), then
-	// let the caller resolve the command (and its git-specific gates) against it.
-	dir := ptymgr.PanelDir(spec.Dir)
+	// Resolve the workdir the same way every other target does: where the agent is
+	// now when that is known, else where it was launched.
+	dir := s.targetDir(targetID, spec.Spec)
 	name, args, env, err := resolve(dir)
 	if err != nil {
 		log.Warn().Str("target", targetID).Str("dir", dir).Str("action", label).Err(err).Msg("ephemeral rejected")
@@ -2979,7 +3104,7 @@ func (s *Server) gitWorktreeAdd(targetID, branch string) error {
 	base := s.worktreeDir
 	s.mu.Unlock()
 
-	repo := ptymgr.PanelDir(spec.Dir)
+	repo := s.targetDir(targetID, spec.Spec)
 	if !gitdiff.IsWorkTree(repo) {
 		return fmt.Errorf("not a git repository: %s", repo)
 	}
@@ -3012,7 +3137,7 @@ func (s *Server) gitWorktreeRemove(targetID, path string) error {
 	if err != nil {
 		return err
 	}
-	repo := ptymgr.PanelDir(spec.Dir)
+	repo := s.targetDir(targetID, spec.Spec)
 	if err := gitops.WorktreeRemove(repo, path); err != nil {
 		return err
 	}
@@ -3088,6 +3213,8 @@ func (s *Server) purgeExited() int {
 			s.mon.forget(p.ID)
 			delete(s.specs, p.ID)    // purged for good; drop its retained spawn spec
 			delete(s.sessions, p.ID) // …and the session ids its usage was attributed through
+			s.forgetRestartLocked(p.ID)
+			s.forgetCwdLocked(p.ID)
 			continue
 		}
 		kept = append(kept, p)
@@ -3441,6 +3568,10 @@ func (s *Server) signalPanels(ids []string, name string) error {
 	if len(targets) == 0 {
 		return fmt.Errorf("no live panel matched the given ids")
 	}
+
+	// Record the intent before delivering: an exit this causes must not be read as
+	// a crash the supervisor should undo.
+	s.noteStopRequested(targets)
 
 	for _, id := range targets {
 		s.pty.Signal(id, sig)

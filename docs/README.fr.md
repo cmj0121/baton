@@ -105,6 +105,7 @@ touches.
 | Tableau de bord | `hjkl` / flèches  | déplacer le curseur                                             |
 |                 | `enter`           | ouvrir / zoomer la sélection                                    |
 |                 | `p` / `A` / `c`   | nouveau panneau shell / agent / choix de commande               |
+|                 | `.`               | nouveau panneau shell dans le répertoire du panneau focalisé    |
 |                 | `C`               | ouvrir le conductor (un agent qui pilote la flotte)             |
 |                 | `H`               | ouvrir le global shell (un shell hôte dans `$HOME`)             |
 |                 | `w` / `x`         | fermer la sélection / purger les panneaux terminés              |
@@ -210,6 +211,8 @@ la flotte, ajouter vos propres commandes et définir la config — le tout à tr
   dispositions de la vue divisée des groupes (préréglages et grilles personnalisées).
 - **[docs/LIMITS.md](LIMITS.md)** — les limites de ressources : la config, les deux couches, le rechargement à chaud et où
   elles sont réellement imposées.
+- **[docs/RESTART.md](RESTART.md)** — la politique de redémarrage : ce qui compte comme un échec et ce qui n'en est
+  pas, le backoff et la limite, et pourquoi `always` n'existe pas.
 - **[docs/GIT.md](GIT.md)** — le menu git : chaque opération, le flux de l'éditeur de commit, les worktrees et la config.
 - **[docs/USAGE.md](USAGE.md)** — le pied de page d'usage du compte : les sources locale et Admin-API, la config et les
   réserves.

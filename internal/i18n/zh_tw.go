@@ -85,6 +85,7 @@ var zhTW = map[string]string{
 
 	// --- binding descriptions, keyed by the binding's stable name -------------
 	"bind.new-panel":      "開一個新的 shell 面板",
+	"bind.new-panel-here": "在聚焦面板所在的目錄開一個 shell 面板",
 	"bind.new-panel-form": "新面板（自選要執行的指令）",
 	"bind.new-agent":      "在指定工作目錄開一個 agent 面板",
 	"bind.conductor":      "開啟 conductor — 指揮整群面板的 agent",
@@ -130,4 +131,7 @@ var zhTW = map[string]string{
 	"usage.mode.panel":         "目前面板",
 	"usage.panel.unattributed": "無法歸屬",
 	"usage.panel.of-window":    "／本窗口",
+
+	// The working-directory features.
+	"panel.here.unknown": "那個面板的目錄不明;改在預設工作目錄開啟",
 }

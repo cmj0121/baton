@@ -99,6 +99,7 @@ Baton 會啟動它的背景伺服器,並把你帶到**儀表板**——你的大
 | 儀表板     | `hjkl` / 方向鍵   | 移動游標                                     |
 |            | `enter`           | 開啟 / 放大所選                              |
 |            | `p` / `A` / `c`   | 新增 shell / agent / 挑指令面板              |
+|            | `.`               | 在聚焦面板的目錄開新 shell 面板              |
 |            | `C`               | 開啟 conductor(替你驅動整隊的 agent)         |
 |            | `H`               | 開啟 global shell(開在 `$HOME` 的宿主 shell) |
 |            | `w` / `x`         | 關閉所選 / 清除已結束                        |
@@ -146,6 +147,12 @@ Baton 會啟動它的背景伺服器,並把你帶到**儀表板**——你的大
 - **資源上限** — 限制一個面板能用多少 CPU、記憶體、行程數,而且管的是它**整棵行程樹**,讓失控的建置沒辦法把整台
   機器一起拖下水。全隊底線與 per-agent 覆寫都寫在設定檔裡,也能在 `C-t P` 裡編;`C-t R` 會把新上限套用到正在跑
   的隊伍。Linux 上以 cgroup v2 強制,而主機若無法強制,面板會直說。見 **[docs/LIMITS.md](LIMITS.zh-TW.md)**。
+- **重啟策略** — 預設關閉;設定 `panel.restart: on-failure`,行程異常結束的面板就會自己回來,帶指數退避,並且在
+  達到上限時大聲停下而不是無聲迴圈。正常結束、你關掉的、你送過 signal 的,都不會被動到。可以逐 agent profile
+  覆寫。
+- **記住工作目錄** — 面板目前的工作目錄會從 shell 自己的 OSC 7 回報學來,沒有回報時則問行程表。重跑會落在你剛才
+  所在的地方,`.` 在聚焦面板的目錄開一個 shell,路徑成為卡片的辨識標記,git 選單也會跟著 agent 進到 worktree。
+  見 **[docs/RESTART.md](RESTART.zh-TW.md)**。
 - **外觀** — `$HOME/.baton/TUI.yaml` 重塑座艙:一組色彩**主題**與群組分割的**版面配置**,用 `C-t R` 熱重載。
   見 **[docs/TUI.md](TUI.zh-TW.md)**。
 - **用量頁尾** — `U` 循環切換計費窗口的頁尾讀數:帳號的 token 用量與成本,加上距離重置的倒數
@@ -187,6 +194,7 @@ socket 接上——指令往上、事件往下——所以你卸離再重新接�
 - **[docs/TUI.md](TUI.zh-TW.md)** — 座艙外觀檔(`$HOME/.baton/TUI.yaml`):色彩主題與群組分割的版面配置
   (預設與自訂網格)。
 - **[docs/LIMITS.md](LIMITS.zh-TW.md)** — 資源上限:設定寫法、兩層疊加、熱重載,以及它們實際在哪裡被強制。
+- **[docs/RESTART.md](RESTART.zh-TW.md)** — 重啟策略:什麼算失敗、什麼不算,退避與上限,以及為什麼沒有 `always`。
 - **[docs/GIT.md](GIT.zh-TW.md)** — git 選單:每個操作、commit 編輯流程、worktree,以及設定。
 - **[docs/USAGE.md](USAGE.zh-TW.md)** — 帳號用量頁尾:本機與 Admin-API 兩種來源、設定,以及注意事項。
 - **[docs/PLUGIN.md](PLUGIN.zh-TW.md)** — Lua 外掛 API:`baton` 物件、事件、指令,以及設定。

@@ -102,6 +102,7 @@ Tastenbelegung zu bearbeiten.
 | Dashboard   | `hjkl` / Pfeile   | den Cursor bewegen                                                |
 |             | `enter`           | die Auswahl öffnen / hineinzoomen                                 |
 |             | `p` / `A` / `c`   | neues shell- / agent- / Befehlsauswahl-Panel                      |
+|             | `.`               | neues Shell-Panel im Verzeichnis des fokussierten Panels          |
 |             | `C`               | den Conductor öffnen (ein Agent, der die Flotte steuert)          |
 |             | `H`               | die Global Shell öffnen (eine Host-Shell in `$HOME`)              |
 |             | `w` / `x`         | die Auswahl schließen / Beendete entfernen                        |
@@ -207,6 +208,8 @@ Siehe **[docs/PLUGIN.md](PLUGIN.md)**.
   und die Layouts der Gruppenaufteilung (Presets und eigene Raster).
 - **[docs/LIMITS.md](LIMITS.md)** — Ressourcenlimits: die Konfiguration, die zwei Ebenen, das Hot Reload und wo sie
   tatsächlich durchgesetzt werden.
+- **[docs/RESTART.md](RESTART.md)** — die Neustart-Richtlinie: was als Fehler zählt und was nicht, Backoff und Limit,
+  und warum es kein `always` gibt.
 - **[docs/GIT.md](GIT.md)** — das Git-Menü: jede Operation, der Ablauf im Commit-Editor, Worktrees und die Konfiguration.
 - **[docs/USAGE.md](USAGE.md)** — die Fußzeile zur Kontonutzung: die lokale Quelle und die Admin-API-Quelle, die
   Konfiguration und die Vorbehalte.

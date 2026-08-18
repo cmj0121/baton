@@ -100,6 +100,7 @@ the current view, and **`C-t k`** to edit the key map.
 | Dashboard   | `hjkl` / arrows   | move the cursor                                      |
 |             | `enter`           | open / zoom the selection                            |
 |             | `p` / `A` / `c`   | new shell / agent / pick-command panel               |
+|             | `.`               | new shell panel in the focused panel's directory     |
 |             | `C`               | open the conductor (an agent that drives the fleet)  |
 |             | `H`               | open the global shell (a host shell in `$HOME`)      |
 |             | `w` / `x`         | close the selection / purge exited                   |
@@ -150,6 +151,13 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
   a runaway build cannot take the machine with it. Set a fleet-wide floor and per-agent overrides in the config or under
   `C-t P`; `C-t R` applies them to the running fleet. Enforced with cgroup v2 on Linux, and the panel says plainly when a
   host cannot enforce them. See **[docs/LIMITS.md](docs/LIMITS.md)**.
+- **Restart policy** — off by default; set `panel.restart: on-failure` and a panel whose process dies abnormally comes
+  back, with an exponential backoff and a limit that settles it loudly rather than looping. A clean exit, a panel you
+  closed, and one you signalled are all left alone. Overridable per agent profile.
+- **Remembered directory** — a panel's live working directory is tracked from the shell's own OSC 7 report, or the
+  process table when it makes none. A re-run lands where you were, `.` opens a shell in the focused panel's directory,
+  the path identifies the card, and the git menus follow an agent into a worktree. See
+  **[docs/RESTART.md](docs/RESTART.md)**.
 - **Appearance** — `$HOME/.baton/TUI.yaml` reshapes the cockpit: a colour **theme** and the group-split **layouts**,
   hot-reloaded with `C-t R`. See **[docs/TUI.md](docs/TUI.md)**.
 - **Usage footer** — `U` cycles a footer readout of the billing window: the account's token usage and cost with a
@@ -195,6 +203,8 @@ through one `baton` object. See **[docs/PLUGIN.md](docs/PLUGIN.md)**.
   group-split layouts (presets and custom grids).
 - **[docs/LIMITS.md](docs/LIMITS.md)** — resource limits: the config, the two layers, hot reload, and where they are
   actually enforced.
+- **[docs/RESTART.md](docs/RESTART.md)** — the restart policy: what is and is not a failure, the backoff and the limit,
+  and why there is no `always`.
 - **[docs/GIT.md](docs/GIT.md)** — the git menu: every op, the commit-editor flow, worktrees, and the config.
 - **[docs/USAGE.md](docs/USAGE.md)** — the account usage footer: the local and Admin-API sources, config, and caveats.
 - **[docs/PLUGIN.md](docs/PLUGIN.md)** — the Lua plugin API: the `baton` object, events, commands, and config.

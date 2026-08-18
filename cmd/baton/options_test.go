@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/cmj0121/baton/internal/config"
+	"github.com/cmj0121/baton/internal/restart"
 )
 
 // TestUsageOptionIntervalBranches exercises the interval resolution in
@@ -55,5 +56,49 @@ func TestReloadableSettingsBranches(t *testing.T) {
 	def := reloadableSettings(config.Config{})
 	if def.settings.AllowNameConflict || def.settings.ReplayBytes != 0 || def.queueMax != -1 {
 		t.Errorf("unset config should keep strict defaults, got %+v", def)
+	}
+}
+
+// TestRestartPoliciesProjectsConfig: the fleet policy and the per-profile ones
+// reach the server the way the resource caps do — the fleet's as a floor, a
+// profile's layered over it, and a profile with nothing to say left out.
+func TestRestartPoliciesProjectsConfig(t *testing.T) {
+	cfg := config.Config{Panel: config.PanelDefaults{
+		Restart: config.RestartConfig{Restart: "on-failure", RestartMax: 4},
+		Agents: map[string]config.AgentProfile{
+			"claude": {Command: "claude", Restart: config.RestartConfig{Restart: "never"}},
+			"codex":  {Command: "codex"},
+		},
+	}}
+
+	fleet, perAgent := restartPolicies(cfg)
+	if fleet.Mode != restart.OnFailure || fleet.Max != 4 {
+		t.Fatalf("fleet = %+v", fleet)
+	}
+	if perAgent["claude"].Mode != restart.Never {
+		t.Errorf("claude = %+v, want the never override", perAgent["claude"])
+	}
+	if _, listed := perAgent["codex"]; listed {
+		t.Error("a profile with no policy of its own should not be listed")
+	}
+}
+
+// TestRestartPoliciesDropsAMalformedPolicy: a policy baton half-understood would
+// start processes on a schedule the user did not write. It is dropped and
+// reported instead, leaving a fleet that restarts nothing.
+func TestRestartPoliciesDropsAMalformedPolicy(t *testing.T) {
+	cfg := config.Config{Panel: config.PanelDefaults{
+		Restart: config.RestartConfig{Restart: "always"},
+		Agents: map[string]config.AgentProfile{
+			"claude": {Command: "claude", Restart: config.RestartConfig{RestartBackoff: "soon"}},
+		},
+	}}
+
+	fleet, perAgent := restartPolicies(cfg)
+	if !fleet.IsZero() {
+		t.Errorf("a refused fleet policy should restart nothing, got %+v", fleet)
+	}
+	if _, listed := perAgent["claude"]; listed {
+		t.Error("a malformed profile policy should be dropped, not half-applied")
 	}
 }
