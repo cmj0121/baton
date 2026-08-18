@@ -195,6 +195,30 @@ func runtimeDir() string {
 	return filepath.Join(home(), ".baton")
 }
 
+// Expand resolves a hand-written path from the config file to an absolute one:
+// "~" and "~/…" expand to the home directory, and a relative path resolves
+// against the process's working directory. An empty (or blank) value stays
+// empty, since every caller reads that as "unset" rather than as a directory.
+//
+// It lives here rather than beside each reader because the daemon and the
+// cockpit both read the same file and must land on the same directory: a log
+// written to ~/.baton/logs and one read from ./~/.baton/logs are not a feature.
+func Expand(p string) string {
+	p = strings.TrimSpace(p)
+	switch {
+	case p == "":
+		return ""
+	case p == "~":
+		return home()
+	case strings.HasPrefix(p, "~/"):
+		p = filepath.Join(home(), p[2:])
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
+}
+
 // home resolves the user's home directory. It prefers the OS resolution
 // (os.UserHomeDir, which reads $HOME on Unix) and falls back to a literal $HOME,
 // so a caller never silently anchors baton's files to a relative ".baton" built

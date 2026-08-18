@@ -101,6 +101,7 @@ touches.
 | Après `C-t`     | `d` / `b`         | aller au tableau de bord / revenir d'un niveau                  |
 |                 | `a`               | la boîte d'attention — traiter ce qui réclame un humain         |
 |                 | `[`               | entrer en mode défilement                                       |
+|                 | `l` / `L`         | journaliser le panneau dans un fichier / relire ce journal      |
 |                 | `R` / `S`         | recharger la config / forcer le redémarrage du serveur          |
 |                 | `q`               | se détacher (le serveur continue de tourner)                    |
 | Tableau de bord | `hjkl` / flèches  | déplacer le curseur                                             |
@@ -169,6 +170,11 @@ Tout ce dont vous avez besoin pour mener une flotte, à une frappe de distance :
   (`⊙ 1.2M tok · ≈$12.34 API`). Il lit par défaut les transcripts de Claude Code (fonctionne avec un abonnement Pro/Max) ou
   l'Anthropic Admin API avec une clé. Le coût est un équivalent API, pas un montant facturé sur l'abonnement. Voir
   **[docs/USAGE.md](USAGE.md)**.
+- **Journalisation des panneaux** — `C-t l` dirige la sortie d'un panneau vers un fichier sur la machine où tourne la
+  flotte, en y versant d'abord le tampon de relecture, si bien que ce qui vous a fait appuyer sur la touche est
+  conservé ; `C-t L` le relit dans un panneau temporaire qui suit le fichier. Texte brut, séquences d'échappement
+  retirées, rotation à `log-max-mb`. Désactivé tant que `panel.log-dir` n'est pas défini ; un profil peut journaliser
+  dès son démarrage. Voir **[docs/LOGGING.md](LOGGING.md)**.
 - **Persistance et relance** — Baton se souvient de sa flotte d'un redémarrage à l'autre ; les panneaux reviennent sous
   forme d'emplacements terminés et inertes, et `r` les relance à partir de leur spécification conservée.
 - **Rechargement** — `C-t R` (ou un `SIGHUP` envoyé au démon) recharge la config à chaud sans redémarrer la flotte.
@@ -217,6 +223,8 @@ la flotte, ajouter vos propres commandes et définir la config — le tout à tr
 - **[docs/RESTART.md](RESTART.md)** — la politique de redémarrage : ce qui compte comme un échec et ce qui n'en est
   pas, le backoff et la limite, et pourquoi `always` n'existe pas.
 - **[docs/GIT.md](GIT.md)** — le menu git : chaque opération, le flux de l'éditeur de commit, les worktrees et la config.
+- **[docs/LOGGING.md](LOGGING.md)** — la journalisation des panneaux : ce qui est écrit, où le fichier atterrit, les
+  marqueurs de session, la rotation, et ce dont ce n'est pas une frontière.
 - **[docs/USAGE.md](USAGE.md)** — le pied de page d'usage du compte : les sources locale et Admin-API, la config et les
   réserves.
 - **[docs/PLUGIN.md](PLUGIN.md)** — l'API des plugins Lua : l'objet `baton`, les événements, les commandes et la config.

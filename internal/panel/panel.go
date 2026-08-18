@@ -190,6 +190,14 @@ type Panel struct {
 	// shuttle panels in and out of.
 	ExitCode int
 
+	// Logging marks a panel whose output the daemon is writing to a file, and
+	// LogFile is the file it is writing to — on the machine the FLEET runs on,
+	// which is not the cockpit's machine over --remote. The server owns both and
+	// reports them to every frontend, so a logging panel is badged wherever it is
+	// looked at rather than only in the cockpit that switched it on.
+	Logging bool
+	LogFile string
+
 	// Reason is why the panel says it needs a human, in the AGENT's own words —
 	// set only by an explicit declaration (panel.attention), never by the tail
 	// heuristic or a timer, which raise a state without being able to say why.
@@ -219,6 +227,8 @@ func FromProto(p proto.Panel) Panel {
 		Cwd:         p.Cwd,
 		Pid:         p.Pid,
 		ExitCode:    p.ExitCode,
+		Logging:     p.Logging,
+		LogFile:     p.LogPath,
 		Reason:      p.Reason,
 	}
 }
@@ -246,6 +256,8 @@ func (p Panel) ToProto() proto.Panel {
 		Cwd:         p.Cwd,
 		Pid:         p.Pid,
 		ExitCode:    p.ExitCode,
+		Logging:     p.Logging,
+		LogPath:     p.LogFile,
 		Reason:      p.Reason,
 	}
 }

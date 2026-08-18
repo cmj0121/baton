@@ -98,6 +98,7 @@ Tastenbelegung zu bearbeiten.
 | After `C-t` | `d` / `b`         | zum Dashboard springen / eine Ebene zurück                        |
 |             | `a`               | Attention-Posteingang — erledigen, was einen Menschen braucht     |
 |             | `[`               | in den Scroll-Modus wechseln                                      |
+|             | `l` / `L`         | Panel in eine Datei protokollieren / dieses Protokoll lesen       |
 |             | `R` / `S`         | Konfiguration neu laden / Server-Neustart erzwingen               |
 |             | `q`               | abkoppeln (der Server läuft weiter)                               |
 | Dashboard   | `hjkl` / Pfeile   | den Cursor bewegen                                                |
@@ -166,6 +167,11 @@ Alles, wonach du beim Hüten einer Flotte greifen würdest, nur einen Tastendruc
   (`⊙ 1.2M tok · ≈$12.34 API`). Sie liest standardmäßig die Transcripts von Claude Code (funktioniert mit einem
   Pro/Max-Abo) oder mit einem Key die Anthropic Admin API. Die Kosten sind API-äquivalent, keine Abo-Gebühr.
   Siehe **[docs/USAGE.md](USAGE.md)**.
+- **Panel-Protokollierung** — `C-t l` leitet die Ausgabe eines Panels in eine Datei auf der Maschine, auf der die
+  Flotte läuft, und schreibt zuerst den Replay-Puffer hinein, damit das erhalten bleibt, weswegen du die Taste
+  gedrückt hast; `C-t L` liest es in einem temporären Panel zurück, das der Datei folgt. Klartext,
+  Escape-Sequenzen entfernt, Rotation bei `log-max-mb`. Aus, bis du `panel.log-dir` setzt; ein Profil kann ab dem
+  Start protokollieren. Siehe **[docs/LOGGING.md](LOGGING.md)**.
 - **Persistenz & Respawn** — Baton merkt sich seine Flotte über einen Neustart hinweg; Panels kommen als inaktive,
   beendete Slots zurück, und `r` führt sie aus ihrer aufbewahrten Spezifikation erneut aus.
 - **Neuladen** — `C-t R` (oder ein `SIGHUP` an den Daemon) lädt die Konfiguration heiß neu, ohne die Flotte neu zu starten.
@@ -215,6 +221,8 @@ Siehe **[docs/PLUGIN.md](PLUGIN.md)**.
 - **[docs/RESTART.md](RESTART.md)** — die Neustart-Richtlinie: was als Fehler zählt und was nicht, Backoff und Limit,
   und warum es kein `always` gibt.
 - **[docs/GIT.md](GIT.md)** — das Git-Menü: jede Operation, der Ablauf im Commit-Editor, Worktrees und die Konfiguration.
+- **[docs/LOGGING.md](LOGGING.md)** — die Panel-Protokollierung: was geschrieben wird, wo die Datei landet, die
+  Sitzungsmarker, die Rotation, und wofür sie keine Grenze ist.
 - **[docs/USAGE.md](USAGE.md)** — die Fußzeile zur Kontonutzung: die lokale Quelle und die Admin-API-Quelle, die
   Konfiguration und die Vorbehalte.
 - **[docs/PLUGIN.md](PLUGIN.md)** — die Lua-Plugin-API: das `baton`-Objekt, Events, Befehle und Konfiguration.

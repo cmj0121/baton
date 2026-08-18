@@ -343,6 +343,19 @@ type PanelDefaults struct {
 	// a per-agent limit would later narrow. The zero value caps nothing.
 	Limits limits.Limits `yaml:"limits,omitempty"`
 
+	// LogDir is where a panel's output log lands — on the machine the FLEET runs
+	// on, since the daemon owns the PTY, which is worth knowing now that --remote
+	// exists. An empty value disables logging entirely: a feature that writes
+	// terminals to disk is one a user opts into by naming a directory, not one
+	// that picks a default on their behalf.
+	LogDir string `yaml:"log-dir,omitempty"`
+
+	// LogMaxMB is the size at which a log rolls to "<file>.1" and starts fresh,
+	// keeping the two most recent generations. 0 uses the built-in default. A
+	// runaway build can produce gigabytes in minutes, and docs/LIMITS.md already
+	// argues nothing should be able to take the machine with it — a log included.
+	LogMaxMB int `yaml:"log-max-mb,omitempty"`
+
 	// Restart is the fleet-wide policy for bringing a dead panel back — the floor
 	// a per-agent restart would later override. Unset restarts nothing.
 	Restart RestartConfig `yaml:",inline"`
@@ -486,6 +499,16 @@ type AgentProfile struct {
 	// would rather look at yourself than have quietly re-run.
 	Restart RestartConfig `yaml:",inline"`
 
+	// Log makes this profile log from the moment it spawns. It is per-profile
+	// rather than fleet-wide because "record every agent, never my shells" is the
+	// case that actually comes up — and a global switch would quietly write
+	// everything typed into a shell to disk.
+	Log bool `yaml:"log,omitempty"`
+
+	// LogDir overrides panel.log-dir for this profile, the same way its caps and
+	// its restart policy restate only what they change.
+	LogDir string `yaml:"log-dir,omitempty"`
+
 	// Attention is this profile's quiet ladder, layered the same way. It is the
 	// override that matters most in practice: how long silence means "thinking"
 	// rather than "wedged" is a property of the agent, and no fleet-wide number
@@ -538,6 +561,9 @@ func LoadTUI() (TUIConfig, error) {
 func (c *Config) normalize() {
 	if c.Panel.ReplayKB < 0 {
 		c.Panel.ReplayKB = 0
+	}
+	if c.Panel.LogMaxMB < 0 {
+		c.Panel.LogMaxMB = 0 // every consumer reads 0 as "use the built-in roll size"
 	}
 	c.Panel.Limits = c.Panel.Limits.DropInvalid()
 	for name, prof := range c.Panel.Agents {

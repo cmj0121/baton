@@ -2315,6 +2315,10 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		return m.openProcTree(m.mode), nil
 	case actInbox:
 		return m.openInbox()
+	case actLogToggle:
+		return m.toggleLog()
+	case actLogView:
+		return m.viewLog()
 	case actDashboard:
 		m.mode = modeDashboard
 		m.cursor = 0
@@ -2571,6 +2575,10 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				// one, look at the next" costs a trip through the dashboard, which is
 				// the screen swap this feature exists to remove.
 				return m.openInbox()
+			case actLogToggle: // C-t l → log this panel's output to a file
+				return m.toggleLog()
+			case actLogView: // C-t L → read that log back, following it
+				return m.viewLog()
 			}
 			// back (C-t b) is what leaves a zoom — it returns to the split it came
 			// from, or the dashboard. Any other escape no-ops here.
@@ -3351,9 +3359,13 @@ func (m model) renderCard(p panel.Panel, selected bool) string {
 	if p.Favourite {
 		fav = lipgloss.NewStyle().Foreground(colBrandHi).Render("⊙") + " "
 	}
+	// A panel being written to disk is badged beside the favourite mark, on the
+	// same terms: it costs the title a column and never a line, so a logging card
+	// is the same size as every other one.
+	rec := m.logBadge(p)
 	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
-	title := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(p.Title, max(1, cardInner-4-lipgloss.Width(fav))))
-	head := clampWidth(mark+fav+led+" "+title, cardInner)
+	title := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(truncate(p.Title, max(1, cardInner-4-lipgloss.Width(fav)-lipgloss.Width(rec))))
+	head := clampWidth(mark+fav+rec+led+" "+title, cardInner)
 
 	badge := kindBadge(p.Kind)
 	state := lipgloss.NewStyle().Foreground(info.color).Render(info.label)
@@ -3653,6 +3665,7 @@ func (m model) helpContent() (title string, body []string) {
 			{"Work items", kc(keyLabel(keyPin)), tr("help.group.pin", "pin / unpin the focused panel to a live tile")},
 			{"Work items", kc(keyLabel(keySignal)) + " " + kc(keyLabel(keySignalAll)), tr("help.group.signal", "signal the focused panel · the whole group")},
 			{"Work items", kc(keyLabel(keyRemove)), tr("help.group.remove", "remove the focused panel from the group")},
+			{"Panels", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actLogToggle))) + " " + kc(keyLabel(m.bindingKey(actLogView))), tr("help.common.log", "log this panel's output to a file · read it back")},
 			{"View", kc(keyLabel(m.bindingKey(actHelp))), tr("help.common.keys", "this key list")},
 			{"View", kc(keyLabel(m.bindingKey(actBack))) + " " + kc(dash) + " " + kc("esc"), tr("help.group.back", "back to the dashboard")},
 			{"View", kc(pfx) + " " + kc(keyLabel(keyInteract)), tr("help.group.stop-interact", "stop interacting (while in interact)")},
@@ -3670,6 +3683,7 @@ func (m model) helpContent() (title string, body []string) {
 			{"Navigation", kc(pfx) + " " + kc(keySearch), tr("help.zoom.search", "search the scrollback · n older, N newer")},
 			{"Navigation", kc(pfx) + " " + kc(pfx), tr("help.zoom.literal", "send a literal ") + pfx},
 			{"Panels", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actSignal))), tr("help.zoom.signal", "send a signal to this panel")},
+			{"Panels", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actLogToggle))) + " " + kc(keyLabel(m.bindingKey(actLogView))), tr("help.common.log", "log this panel's output to a file · read it back")},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actBack))), tr("help.zoom.back", "back one level (to the split / dashboard)")},
 			{"View", kc(pfx) + " " + kc(dash), tr("help.zoom.dashboard", "straight to the dashboard")},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actProcTree))), tr("help.common.proc-tree", "process tree · the daemon's OS processes")},
@@ -4158,7 +4172,11 @@ func (m model) statusBar(left, hint string) string {
 	if strings.HasPrefix(m.status, "error") {
 		statusBg = colRed
 	}
-	caps := prefixBadge + m.outageCap() + m.attentionBadge() + m.pluginFooterCap() + m.usageCap() + stats + clock
+	// The logging cap rides here rather than in each view's own left-hand caps, so
+	// "this panel is being written to disk" is stated wherever the panel is
+	// focused — the dashboard selection, a zoom, the focused tile of a split —
+	// without three copies of the same rule.
+	caps := prefixBadge + m.outageCap() + m.attentionBadge() + m.logCap() + m.pluginFooterCap() + m.usageCap() + stats + clock
 	right := caps
 	if budget := m.width - lipgloss.Width(left) - lipgloss.Width(caps) - 4; budget > 0 {
 		right += seg("● "+truncate(m.status, budget), colInk, statusBg) // "● " + cap padding

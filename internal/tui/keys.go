@@ -62,6 +62,8 @@ const (
 	keyScratch   = "~" // C-t ~ → toggle the floating scratch shell (any view)
 	keyProcTree  = "o" // C-t o → the process-tree overlay (daemon → panels → OS descendants)
 	keyInbox     = "a" // C-t a → the attention inbox (the queue of panels wanting a human)
+	keyLogToggle = "l" // C-t l → start / stop writing the selected panel's output to a file
+	keyLogView   = "L" // C-t L → open that log in a temporary panel, following as it grows
 
 	keyRemove    = "x" // in the group split: remove the focused member from the group
 	keyInteract  = "i" // in the group split: drive the focused tile in place, no zoom
@@ -135,6 +137,13 @@ const (
 	actScratch
 	actProcTree
 	actInbox
+
+	// The logging pair. Both are prefix-reached in every view, including the
+	// dashboard, where a bare l already moves the cursor and a bare L cycles a
+	// group's layout — and where a key that writes your terminal to disk is not
+	// one to put a fingertip away from the arrow keys anyway.
+	actLogToggle
+	actLogView
 )
 
 // isEscape reports whether an action is reached after the prefix rather than on a
@@ -142,7 +151,8 @@ const (
 // and the key-map editor work after the prefix in every mode; panel config opens
 // this way from command mode.
 func isEscape(a action) bool {
-	return a == actDashboard || a == actEditMap || a == actPanelConfig || a == actScroll || a == actCommands || a == actScratch || a == actProcTree || a == actInbox
+	return a == actDashboard || a == actEditMap || a == actPanelConfig || a == actScroll || a == actCommands ||
+		a == actScratch || a == actProcTree || a == actInbox || a == actLogToggle || a == actLogView
 }
 
 // binding is one editable command: a stable name (used to persist the key), the
@@ -177,6 +187,8 @@ var bindings = []binding{
 	{"dispatch", keyDispatch, "dispatch a task to the agent panel", actDispatch, "Panels"},
 	{"enqueue", keyEnqueue, "enqueue a task for any free agent (a work item, if selected)", actEnqueue, "Panels"},
 	{"queue", keyQueue, "manage the task queue (list · reorder · cancel · drain)", actQueue, "Panels"},
+	{"log", keyLogToggle, "start / stop logging the panel's output to a file (prefix)", actLogToggle, "Panels"},
+	{"log-view", keyLogView, "open that log in a temporary panel, following it (prefix)", actLogView, "Panels"},
 
 	{"mark", keyMark, "mark a panel for grouping", actMark, "Work items"},
 	{"group", keyGroup, "group the marked panels", actGroup, "Work items"},

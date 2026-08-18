@@ -95,6 +95,7 @@ Baton 會啟動它的背景伺服器,並把你帶到**儀表板**——你的大
 | `C-t` 之後 | `d` / `b`         | 跳到儀表板 / 退回上一層                      |
 |            | `a`               | 注意力收件匣——清掉需要人的那些               |
 |            | `[`               | 進入捲動模式                                 |
+|            | `l` / `L`         | 把面板記錄到檔案 / 讀回該記錄檔              |
 |            | `R` / `S`         | 重載設定 / 強制重啟伺服器                    |
 |            | `q`               | 卸離(伺服器繼續執行)                         |
 | 儀表板     | `hjkl` / 方向鍵   | 移動游標                                     |
@@ -160,6 +161,10 @@ Baton 會啟動它的背景伺服器,並把你帶到**儀表板**——你的大
   (`⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31`),或聚焦面板佔該窗口的比例。它預設讀取
   Claude Code 自己的 transcript(在 Pro/Max 訂閱下即可運作),或用金鑰走 Anthropic Admin API。
   該成本是 API 等值換算,並非訂閱費用。見 **[docs/USAGE.md](USAGE.zh-TW.md)**。
+- **面板記錄** — `C-t l` 把面板輸出導向隊伍所在機器上的檔案,並先把重播緩衝區倒進去,所以讓你按下按鍵的那件事
+  會被留下來;`C-t L` 用一個會跟著檔案跑的臨時面板讀回來。純文字、escape sequence 已拿掉、到 `log-max-mb`
+  就輪替。在你設定 `panel.log-dir` 之前都是關的;profile 可以從 spawn 就開始記錄。見
+  **[docs/LOGGING.md](LOGGING.zh-TW.md)**。
 - **持久化與重生** — Baton 會跨重啟記住它的隊伍;面板以停滯的已結束空位回來,`r` 依保留的規格把它們重跑。
 - **重載** — `C-t R`(或對常駐程式送 `SIGHUP`)在不重啟整隊的情況下熱重載設定。
 - **滑鼠** — 預設關閉,好讓終端機自己的選取仍可用;在按鍵對應裡打開它,即可用滾輪捲動與選取。
@@ -199,6 +204,8 @@ socket 接上——指令往上、事件往下——所以你卸離再重新接�
 - **[docs/LIMITS.md](LIMITS.zh-TW.md)** — 資源上限:設定寫法、兩層疊加、熱重載,以及它們實際在哪裡被強制。
 - **[docs/RESTART.md](RESTART.zh-TW.md)** — 重啟策略:什麼算失敗、什麼不算,退避與上限,以及為什麼沒有 `always`。
 - **[docs/GIT.md](GIT.zh-TW.md)** — git 選單:每個操作、commit 編輯流程、worktree,以及設定。
+- **[docs/LOGGING.md](LOGGING.zh-TW.md)** — 面板記錄:寫進去的是什麼、檔案落在哪裡、session 標記、輪替,
+  以及它不是什麼邊界。
 - **[docs/USAGE.md](USAGE.zh-TW.md)** — 帳號用量頁尾:本機與 Admin-API 兩種來源、設定,以及注意事項。
 - **[docs/PLUGIN.md](PLUGIN.zh-TW.md)** — Lua 外掛 API:`baton` 物件、事件、指令,以及設定。
 - **[docs/CONTROL.md](CONTROL.zh-TW.md)** — 以 agent 驅動整隊:conductor、`baton ctl` CLI、`baton mcp`

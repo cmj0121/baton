@@ -100,6 +100,7 @@ teclas.
 | After `C-t` | `d` / `b`         | ir al tablero / volver un nivel                            |
 |             | `a`               | bandeja de atención — despachar lo que necesita a alguien  |
 |             | `[`               | entrar en modo de desplazamiento                           |
+|             | `l` / `L`         | registrar el panel en un archivo / releer ese registro     |
 |             | `R` / `S`         | recargar la configuración / forzar reinicio del servidor   |
 |             | `q`               | desacoplarse (el servidor sigue en marcha)                 |
 | Dashboard   | `hjkl` / flechas  | mover el cursor                                            |
@@ -168,6 +169,11 @@ Todo lo que necesitas mientras pastoreas una flota, a una tecla de distancia:
   defecto lee las propias transcripciones de Claude Code (funciona con una suscripción Pro/Max) o la Admin API de
   Anthropic con una clave. El coste es el equivalente en API, no un cargo de la suscripción. Consulta
   **[docs/USAGE.md](USAGE.md)**.
+- **Registro de paneles** — `C-t l` envía la salida de un panel a un archivo en la máquina donde corre la flota,
+  volcando primero el búfer de repetición, de modo que se conserva justo aquello que te hizo pulsar la tecla; `C-t L`
+  lo relee en un panel temporal que sigue el archivo. Texto plano, secuencias de escape eliminadas, rotación en
+  `log-max-mb`. Desactivado hasta que definas `panel.log-dir`; un perfil puede registrar desde que arranca. Consulta
+  **[docs/LOGGING.md](LOGGING.md)**.
 - **Persistencia y renacimiento** — Baton recuerda su flota entre reinicios; los paneles vuelven como ranuras inertes ya
   terminadas y `r` los reejecuta a partir de la especificación que se conservó.
 - **Recarga** — `C-t R` (o un `SIGHUP` al demonio) recarga la configuración en caliente sin reiniciar la flota.
@@ -216,6 +222,8 @@ tus propios comandos y define configuración, todo a través de un único objeto
   y por qué no existe `always`.
 - **[docs/GIT.md](GIT.md)** — el menú de git: cada operación, el flujo del editor de commits, los worktrees y la
   configuración.
+- **[docs/LOGGING.md](LOGGING.md)** — el registro de paneles: qué se escribe, dónde aterriza el archivo, los marcadores
+  de sesión, la rotación, y de qué no es una frontera.
 - **[docs/USAGE.md](USAGE.md)** — el pie de uso de la cuenta: las fuentes local y de Admin API, la configuración y las
   advertencias.
 - **[docs/PLUGIN.md](PLUGIN.md)** — la API de plugins en Lua: el objeto `baton`, eventos, comandos y configuración.
