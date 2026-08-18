@@ -94,6 +94,7 @@ the current view, and **`C-t k`** to edit the key map.
 | Where       | Key               | Does                                                 |
 | ----------- | ----------------- | ---------------------------------------------------- |
 | After `C-t` | `d` / `b`         | jump to the dashboard / back one level               |
+|             | `a`               | the attention inbox — clear what needs a human       |
 |             | `[`               | enter scroll mode                                    |
 |             | `R` / `S`         | reload config / force-restart the server             |
 |             | `q`               | detach (server keeps running)                        |
@@ -199,6 +200,8 @@ through one `baton` object. See **[docs/PLUGIN.md](docs/PLUGIN.md)**.
 
 - **[docs/SPEC.md](docs/SPEC.md)** — the full specification: views, the panel lifecycle, work items, signals, diff,
   persistence, the per-view key reference, and the architecture diagram.
+- **[docs/ATTENTION.md](docs/ATTENTION.md)** — attention at scale: the quiet ladder (`done`, `stuck`, failed), the
+  `C-t a` inbox, the dashboard folds, desktop notifications, and every knob they take.
 - **[docs/TUI.md](docs/TUI.md)** — the cockpit appearance file (`$HOME/.baton/TUI.yaml`): the colour theme and the
   group-split layouts (presets and custom grids).
 - **[docs/LIMITS.md](docs/LIMITS.md)** — resource limits: the config, the two layers, hot reload, and where they are

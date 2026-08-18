@@ -38,6 +38,12 @@ func TestCtlMain(t *testing.T) {
 	if code := ctlMain([]string{"list"}); code != 0 {
 		t.Fatalf("ctl list exit = %d, want 0", code)
 	}
+	// `ctl attention` with no --id leans on the panel identity baton injects into
+	// a panel's process. Run from a plain shell there is none, so the daemon
+	// refuses it by name rather than silently addressing nothing.
+	if code := ctlMain([]string{"attention", "--why", "approve the plan?"}); code == 0 {
+		t.Fatal("an unaddressed declaration should exit non-zero")
+	}
 }
 
 // TestCtlRuns exercises every ctl subcommand handler against a live server.
@@ -65,6 +71,8 @@ func TestCtlRuns(t *testing.T) {
 		ctlUnpin{IDs: []string{id}},
 		ctlSend{ID: id, Text: "hi"},
 		ctlSend{ID: id, Text: "x", NoEnter: true},
+		ctlAttention{ID: id, Why: "which migration do I run first?"},
+		ctlResolve{ID: id},
 		ctlDispatch{ID: id, Prompt: "land the fix"},
 		ctlDispatchGroup{Group: "g", Prompt: "ship it"},
 		ctlQueueAdd{Prompt: "queued work", Group: "g"},

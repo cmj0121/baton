@@ -89,7 +89,7 @@ func TestMCPHandshakeAndTools(t *testing.T) {
 			got[m["name"].(string)] = true
 		}
 	}
-	for _, want := range []string{"baton_list", "baton_spawn", "baton_send", "baton_dispatch", "baton_dispatch_group", "baton_enqueue", "baton_queue", "baton_group", "baton_close"} {
+	for _, want := range []string{"baton_list", "baton_spawn", "baton_send", "baton_dispatch", "baton_dispatch_group", "baton_enqueue", "baton_queue", "baton_group", "baton_close", "baton_attention", "baton_resolve"} {
 		if !got[want] {
 			t.Fatalf("tools/list missing %q, got %v", want, got)
 		}
@@ -155,10 +155,15 @@ func TestMCPAllTools(t *testing.T) {
 		`{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"baton_pin","arguments":{"ids":["1"]}}}`,
 		`{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"baton_unpin","arguments":{"ids":["1"]}}}`,
 		`{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"baton_signal","arguments":{"signal":"SIGCONT","ids":["1"]}}}`,
+		`{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"baton_attention","arguments":{"id":"1","why":"which migration do I run first?"}}}`,
+		`{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"baton_attention","arguments":{"id":"1"}}}`,
+		`{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"baton_attention","arguments":{"id":"999","why":"nobody home"}}}`,
+		`{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"baton_resolve","arguments":{"id":"1"}}}`,
+		`{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"baton_resolve","arguments":{}}}`,
 		`{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"baton_close","arguments":{"ids":["1"]}}}`,
 	)
-	if len(resps) != 18 {
-		t.Fatalf("want 18 responses, got %d", len(resps))
+	if len(resps) != 23 {
+		t.Fatalf("want 23 responses, got %d", len(resps))
 	}
 	for i, r := range resps {
 		if r.Error != nil {
@@ -185,6 +190,25 @@ func TestMCPAllTools(t *testing.T) {
 	}
 	if resps[10].Result["isError"] != true {
 		t.Fatalf("baton_dispatch_group without a group should be a tool error, got %+v", resps[10].Result)
+	}
+	// baton_attention carries the agent's reason back in the result, and refuses a
+	// declaration that has none — the whole of what makes it outrank a guess.
+	if txt := contentText(t, resps[17].Result); !strings.Contains(txt, "raised a hand") {
+		t.Fatalf("baton_attention result = %q", txt)
+	}
+	if resps[18].Result["isError"] != true {
+		t.Fatalf("baton_attention without a why should be a tool error, got %+v", resps[18].Result)
+	}
+	if resps[19].Result["isError"] != true {
+		t.Fatalf("baton_attention on an unknown panel should be a tool error, got %+v", resps[19].Result)
+	}
+	if txt := contentText(t, resps[20].Result); !strings.Contains(txt, "stood down") {
+		t.Fatalf("baton_resolve result = %q", txt)
+	}
+	// Neither verb names a panel by default: they mean "my own", which this test's
+	// connection does not have. The daemon says so rather than addressing nothing.
+	if resps[21].Result["isError"] != true {
+		t.Fatalf("an unaddressed baton_resolve should be a tool error, got %+v", resps[21].Result)
 	}
 }
 

@@ -377,3 +377,117 @@ func TestControlConductorFenced(t *testing.T) {
 		t.Fatalf("conductor self-close should be refused, got %v", err)
 	}
 }
+
+// TestAttentionRoundtrip drives the issue's second gap end to end over a
+// real socket: an agent says it needs a human with a reason, the fleet snapshot
+// shows it saying so, and the agent takes it back again.
+func TestAttentionRoundtrip(t *testing.T) {
+	sock := startServer(t)
+
+	c, err := control.DialSocket(sock, "", "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	id, err := c.SpawnPanel("", nil, "")
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+
+	if err := c.DeclareAttention(id, "which migration do I run first?"); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	p := panelByID(t, c, id)
+	if p.State != "attention" || p.Reason != "which migration do I run first?" {
+		t.Fatalf("a declaration should reach the fleet with its reason, got state=%q reason=%q", p.State, p.Reason)
+	}
+
+	if err := c.ResolveAttention(id); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if p = panelByID(t, c, id); p.State == "attention" || p.Reason != "" {
+		t.Fatalf("a resolve should withdraw both the state and the reason, got state=%q reason=%q", p.State, p.Reason)
+	}
+	// Standing down twice is not an error: an agent should not have to know
+	// whether its hand is still up.
+	if err := c.ResolveAttention(id); err != nil {
+		t.Fatalf("a second resolve should be a no-op, got %v", err)
+	}
+
+	// The two ways to say nothing useful, both refused by the server and both
+	// surfaced through the client.
+	if err := c.DeclareAttention(id, ""); err == nil {
+		t.Fatal("a declaration with no reason should be refused")
+	}
+	if err := c.DeclareAttention("999", "hello?"); err == nil {
+		t.Fatal("a declaration on an unknown panel should be refused")
+	}
+}
+
+// TestAttentionSelf covers the form an agent actually uses:
+// no id at all. The panel id baton injected into the process is declared on
+// hello, so `baton ctl attention --why "…"` inside a panel addresses itself
+// without ever having to learn which panel it is.
+func TestAttentionSelf(t *testing.T) {
+	sock := startServer(t)
+
+	admin, err := control.DialSocket(sock, "", "")
+	if err != nil {
+		t.Fatalf("dial admin: %v", err)
+	}
+	defer func() { _ = admin.Close() }()
+	selfID, err := admin.SpawnPanel("", nil, "")
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+
+	t.Setenv(paths.EnvSocket, sock)
+	t.Setenv(paths.EnvRole, "")
+	t.Setenv(paths.EnvPanelID, selfID)
+	inside, err := control.Dial()
+	if err != nil {
+		t.Fatalf("dial from inside the panel: %v", err)
+	}
+	defer func() { _ = inside.Close() }()
+
+	if err := inside.DeclareAttention("", "the brief is ambiguous"); err != nil {
+		t.Fatalf("id-less declare: %v", err)
+	}
+	if p := panelByID(t, admin, selfID); p.State != "attention" || p.Reason != "the brief is ambiguous" {
+		t.Fatalf("an id-less declaration should target the caller's own panel, got %+v", p)
+	}
+	if err := inside.ResolveAttention(""); err != nil {
+		t.Fatalf("id-less resolve: %v", err)
+	}
+	if p := panelByID(t, admin, selfID); p.State == "attention" {
+		t.Fatalf("an id-less resolve should stand the same panel down, got %+v", p)
+	}
+
+	// A connection that declared no identity and named no panel is told so,
+	// rather than quietly addressing nothing.
+	anon, err := control.DialSocket(sock, "", "")
+	if err != nil {
+		t.Fatalf("dial anon: %v", err)
+	}
+	defer func() { _ = anon.Close() }()
+	if err := anon.DeclareAttention("", "who am I?"); err == nil || !strings.Contains(err.Error(), "no panel id") {
+		t.Fatalf("an unaddressed declaration should say so, got %v", err)
+	}
+}
+
+// panelByID reads one panel out of the current fleet snapshot.
+func panelByID(t *testing.T, c *control.Client, id string) proto.Panel {
+	t.Helper()
+	panels, err := c.List()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, p := range panels {
+		if p.ID == id {
+			return p
+		}
+	}
+	t.Fatalf("panel %q is not in the fleet", id)
+	return proto.Panel{}
+}

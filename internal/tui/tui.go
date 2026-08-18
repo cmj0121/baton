@@ -122,6 +122,7 @@ const (
 	modeQueue       // the task-queue manager popup (Q): list / cancel / drain the backlog
 	modeFleetSearch // the fleet-wide search results popup (/): matching lines grouped by panel
 	modeProcTree    // the process-tree overlay (C-t o): the daemon, its panels, and their OS descendants
+	modeInbox       // the attention inbox (C-t a): the queue of panels wanting a human, cleared in place
 	modeZoom
 	modeGroupZoom
 	modeScreensaver // the hidden Matrix-rain + clock Easter egg (C-t E / idle auto-start)
@@ -338,6 +339,88 @@ type model struct {
 	width, height int
 	quitting      bool
 	restart       bool // user asked to force-restart the daemon on exit
+
+	// The group split's summary fold (settings.fold-similar). True folds the
+	// members that look like the majority and spends the live tiles on the
+	// outliers; false keeps the positional fold. See partitionSimilar.
+	foldSimilar bool
+
+	// The attention inbox (modeInbox, C-t a). See inbox.go.
+	//
+	// inboxWire is the last fleet snapshot AS IT CAME OFF THE WIRE, kept because
+	// the queue needs two fields the domain model deliberately does not carry:
+	// Since (the instant the queue sorts on) and Acked (whether a human has
+	// already dealt with the panel, which is fleet state, not cockpit state).
+	// mergeFleet drops both on the way into m.fleet, and widening panel.Panel to
+	// hold presentation and server bookkeeping is the thing that model exists not
+	// to do — so the inbox reads the wire and the rest of the cockpit reads the
+	// fleet.
+	//
+	// inboxRows is the FROZEN order: rows re-sort on open and on r only, so a
+	// snapshot arriving mid-triage can change what a row says but never where it
+	// is. inboxCleared holds the ids this cockpit removed optimistically, until
+	// the server's ack broadcast confirms them. inboxTails caches pulled tails
+	// (at most inboxTailCache, oldest insertion evicted) with inboxTailWant the
+	// single request in flight and inboxTailAt when it went out — the daemon may
+	// drop an outbound frame under load, so the gate has to expire or one lost
+	// reply wedges the detail pane for good.
+	inboxWire      []proto.Panel
+	inboxRows      []inboxRow
+	inboxCleared   map[string]bool
+	inboxCursor    int
+	inboxFrom      mode
+	inboxComposing bool
+	inboxReply     string
+	inboxTails     map[string][]byte
+	inboxTailOrder []string
+	inboxTailWant  string
+	inboxTailAt    time.Time
+	inboxDone      bool          // settings.inbox-done: does a finished agent join the queue at all
+	inboxSnooze    time.Duration // settings.inbox-snooze: how long `-` defers a row
+
+	// The dashboard's quiet fold (settings.fold-quiet). See foldQuietItems.
+	//
+	// foldQuiet is the threshold: more quiet panels than this and they collapse
+	// into one expandable row; 0 never folds. foldExpanded is that row's state,
+	// and one flag is enough because there is at most one such row.
+	//
+	// foldKeepID is the panel the fold may not swallow: the one the cursor rested
+	// on before the last snapshot refolded the fleet. It has to be an identity
+	// rather than an index, and it has to be captured BEFORE the fleet changes,
+	// because the case worth protecting is precisely the one where a card the
+	// cursor is on goes quiet — where an index no longer names the same thing on
+	// either side of the fold. restoreCursor already receives that identity for
+	// its own reasons; this borrows it rather than capturing it twice.
+	//
+	// It therefore goes STALE while you are anywhere but the dashboard, because
+	// restoreCursor only runs on the dashboard path — a zoom or a split takes the
+	// snapshot's clampCursor branch instead. The cost of that is one resting panel
+	// keeping a card it would otherwise have lost, until the first snapshot after
+	// you come back; the alternative is a second capture in a view where the
+	// dashboard cursor is not being looked at anyway.
+	foldQuiet    int
+	foldExpanded bool
+	foldKeepID   string
+
+	// OSC 9 desktop notifications (settings.notify, settings.notify-coalesce).
+	// See notify.go.
+	//
+	// notifySeen is the wantsHuman edge set, kept apart from attnSeen because the
+	// toast covers more than the pop and the bell do; it is maintained only while
+	// notifications are on.
+	//
+	// The open coalescing window is the other three together: notifyAt is when it
+	// opened (zero when none is open), notifyIDs is which panels are already in it,
+	// and notifyPending is their sanitised titles in arrival order. The ids are what
+	// the dedupe keys on and the titles are only what the sentence says, because two
+	// different panels can share a title and must still count as two. Only the
+	// one-second tick can close the window, since only the tick moves m.now.
+	notifyEnabled  bool
+	notifyCoalesce time.Duration
+	notifySeen     map[string]bool
+	notifyIDs      map[string]bool
+	notifyPending  []string
+	notifyAt       time.Time
 }
 
 // inputPurpose is what an active text-input overlay feeds on submit.
@@ -407,6 +490,21 @@ func (m model) applyPrefs(p prefs) model {
 	m.diffCommand = p.diffCommand
 	m.tuiCfg = p.tui
 	m.lang = p.lang
+	m.foldSimilar = p.foldSimilar
+	m.foldQuiet = p.foldQuiet
+	m.inboxDone = p.inboxDone
+	m.inboxSnooze = p.inboxSnooze
+	m.notifyEnabled = p.notify
+	m.notifyCoalesce = p.notifyCoalesce
+	if !m.notifyEnabled {
+		// A reload that switches notifications off must take an already-open window
+		// with it, or off would still mean one last toast up to a coalesce later.
+		// notifySeen goes too: it stops being maintained while off, so keeping a
+		// stale copy would make whatever is outstanding when someone switches
+		// notifications back on invisible to the first refresh.
+		m.clearNotify()
+		m.notifySeen = nil
+	}
 	applyTheme(p.tui.Theme) // resolve the colour tokens into the package palette
 	return m
 }
@@ -757,10 +855,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.now = time.Time(msg)
 		m.ageStatus()
 		m = m.ageKeycast()
+		// The clock has just moved, which is the only thing that can make an open
+		// notification window expire — so this is the one place the coalescer is
+		// drained. nil when there is nothing to send, which tea.Batch drops.
+		note := m.takeNotify()
 		if cmd := m.maybeAutoSaver(); cmd != nil { // auto-start the saver after saverIdle
-			return m, tea.Batch(cmd, tick())
+			return m, tea.Batch(note, cmd, tick())
 		}
-		return m, tick()
+		return m, tea.Batch(note, tick())
 
 	case saverTickMsg:
 		// Advance the rain, re-arming the fast cadence only while the saver is still
@@ -882,6 +984,7 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 			selKind, selID, selGroup, hadSel = m.selectedKey()
 		}
 		m.fleet = mergeFleet(sm.Panels)
+		m.observeWire(sm.Panels) // the inbox reads Since/Acked, which the fleet model does not carry
 		m.groupShown = shownForGroups(sm.Groups)
 		m.groupLayout = layoutForGroups(sm.Groups)
 		m.favGroups = favForGroups(sm.Groups)
@@ -959,6 +1062,12 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		}
 		m.pendingEphemeralTitle = ""
 		*m = m.openDiffPopup(title, sm.Files)
+	case "tail":
+		// The trailing output of one inbox row, pulled with panel.tail — the same
+		// window the Monitor sniffed when it raised the flag. It rides the control
+		// channel rather than the output stream because it is a request/response
+		// reply, not a subscription: the inbox never attaches.
+		m.applyTail(sm.ID, sm.Data)
 	case "search":
 		// The server scanned every panel for the term and returned the matching lines.
 		// Open the results popup grouped by panel; it owns nothing server-side, so esc
@@ -1027,66 +1136,11 @@ func (m *model) applyTelemetry(sm proto.ServerMsg) {
 			m.fleet[i].State = panel.ParseState(p.State)
 			m.fleet[i].Activity = p.Activity
 			m.fleet[i].Spark = p.Spark
+			m.fleet[i].Sig = p.Sig
 		}
 	}
+	m.observeWire(sm.Panels) // the inbox reads Since/Acked, which the fleet model does not carry
 	m.refreshAttention()
-}
-
-// refreshAttention fires a footer notification on the rising edge of a panel
-// entering the attention state — when the Monitor decides it needs you. It tracks
-// the set of panels currently flagged (attnSeen) so the pop fires once per entry,
-// not every tick a panel sits waiting; a panel that resolves and later needs you
-// again notifies afresh. The persistent count lives in the footer badge; this is
-// the one-shot nudge that names the panel the moment it calls for you. An error
-// status is left in place — it is not noise to bury under a notification.
-func (m *model) refreshAttention() {
-	cur := make(map[string]bool)
-	var fresh []string
-	// Inline singleton skip (not m.visibleFleet()): this fires on every snapshot and
-	// telemetry tick, so it avoids allocating a filtered slice per event.
-	for _, p := range m.fleet {
-		if p.Conductor || p.GlobalShell || p.State != panel.Attention {
-			continue
-		}
-		cur[p.ID] = true
-		if !m.attnSeen[p.ID] {
-			fresh = append(fresh, p.Title)
-		}
-	}
-	m.attnSeen = cur
-	if len(fresh) == 0 {
-		return
-	}
-	if m.bellEnabled {
-		m.bellPending = true // audible nudge on the rising edge, even when an error status hides the text
-	}
-	if strings.HasPrefix(m.status, "error") {
-		return
-	}
-	if len(fresh) == 1 {
-		m.status = "◆ " + fresh[0] + " needs you"
-	} else {
-		m.status = fmt.Sprintf("◆ %d panels need your attention", len(fresh))
-	}
-}
-
-// bell rings the terminal once by writing the BEL control byte to the tty. It is
-// emitted as a command so it rides bubbletea's own output cycle; BEL prints no
-// glyph and moves no cursor, so it never disturbs the alt-screen the cockpit
-// draws. Sent to stderr to stay off the renderer's stdout stream.
-func bell() tea.Msg {
-	_, _ = os.Stderr.WriteString("\a")
-	return nil
-}
-
-// takeBell returns the bell command once when a panel has just entered attention,
-// clearing the pending flag so the nudge sounds a single time per rising edge.
-func (m *model) takeBell() tea.Cmd {
-	if !m.bellPending {
-		return nil
-	}
-	m.bellPending = false
-	return bell
 }
 
 func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1133,6 +1187,12 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// refreshes the OS snapshot.
 	if m.mode == modeProcTree {
 		return m.handleProcTreeKey(key)
+	}
+
+	// The attention inbox owns the keyboard until esc; it walks the queue and
+	// clears rows in place, and its composer owns it outright while open.
+	if m.mode == modeInbox {
+		return m.handleInboxKey(key, k)
 	}
 
 	// A text-input overlay is open: route the keystroke to it.
@@ -1259,6 +1319,15 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.move(-1)
 		return m, nil
 	case "right", "l":
+		// → opens the quiet row where it would otherwise step past it: the row is the
+		// only dashboard item with something INSIDE it, and → is how every tree in
+		// this cockpit descends. It closes it again for symmetry, so the key that
+		// opened it is the key that undoes it.
+		if m.mode == modeDashboard {
+			if it, ok := m.selectedItem(); ok && it.kind == itemFold {
+				return m.toggleFold(), nil
+			}
+		}
 		m.move(1)
 		return m, nil
 	case "shift+up", "shift+left":
@@ -1300,6 +1369,12 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = ""
 			return m, nil
 		}
+		// esc unwinds the dashboard one layer at a time, innermost first: the quiet
+		// row folds back up before an applied filter is cleared, so escaping out of
+		// an expanded fold does not also throw away the search that got you there.
+		if m.mode == modeDashboard && m.foldExpanded && m.foldRowShowing() {
+			return m.toggleFold(), nil
+		}
 		if m.mode == modeDashboard && m.filter != "" { // esc on the dashboard clears an applied filter first
 			m.filter, m.cursor = "", 0
 			m.status = "filter cleared"
@@ -1312,6 +1387,10 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// On the dashboard every command is a single key.
 		if m.mode == modeDashboard {
 			if b, ok := m.lookupCmd(key); ok {
+				if m.refusedOnFoldRow(b.act) {
+					m.status = "expand the quiet group first"
+					return m, nil
+				}
 				return m.runAction(b.act)
 			}
 		}
@@ -1869,7 +1948,7 @@ func (m model) conductorMark() string {
 	if !ok {
 		return ""
 	}
-	info := states[p.State]
+	info := stateInfoFor(p)
 	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
 	name := lipgloss.NewStyle().Foreground(colBrandHi).Render("conductor")
 	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", info.label, keyLabel(m.bindingKey(actConductor))))
@@ -1884,7 +1963,7 @@ func (m model) globalShellMark() string {
 	if !ok {
 		return ""
 	}
-	info := states[p.State]
+	info := stateInfoFor(p)
 	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
 	name := lipgloss.NewStyle().Foreground(colBrandHi).Render("shell")
 	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", info.label, keyLabel(m.bindingKey(actGlobalShell))))
@@ -2234,6 +2313,8 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		return m.openQueue(m.mode), nil
 	case actProcTree:
 		return m.openProcTree(m.mode), nil
+	case actInbox:
+		return m.openInbox()
 	case actDashboard:
 		m.mode = modeDashboard
 		m.cursor = 0
@@ -2360,10 +2441,15 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 	if m.mode == modePanelConfig {
 		return m.editPanelRow()
 	}
-	// Dashboard: zoom into the selected panel, or open the group's split.
+	// Dashboard: zoom into the selected panel, open the group's split, or — on the
+	// quiet row — unfold it. enter means "go into this thing" everywhere else on
+	// the dashboard, and the row's contents are the thing it goes into.
 	if it, ok := m.selectedItem(); ok {
-		if it.kind == itemGroup {
+		switch it.kind {
+		case itemGroup:
 			return m.zoomGroup(it), nil
+		case itemFold:
+			return m.toggleFold(), nil
 		}
 		return m.zoomInto(it.panel), nil
 	}
@@ -2479,6 +2565,12 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.enterScroll(), nil
 			case actScratch: // C-t ~ → float the scratch pane over the zoom
 				return m.toggleScratch()
+			case actInbox: // C-t a → the attention inbox, over the zoom
+				// A zoom is where you land after `enter` on a row, so the way back to
+				// the queue has to be reachable from inside one — otherwise "answer
+				// one, look at the next" costs a trip through the dashboard, which is
+				// the screen swap this feature exists to remove.
+				return m.openInbox()
 			}
 			// back (C-t b) is what leaves a zoom — it returns to the split it came
 			// from, or the dashboard. Any other escape no-ops here.
@@ -2892,7 +2984,11 @@ func (m *model) clampCursor() {
 // nothing is selected.
 func (m model) selectedKey() (kind dashKind, id, group string, ok bool) {
 	it, ok := m.selectedItem()
-	if !ok {
+	// The quiet fold row has no identity to capture: it is not a panel and not a
+	// group, and it exists only for as long as the fold does. Reporting one would
+	// hand restoreCursor a key that can never match, which is exactly what ok=false
+	// already means — and it keeps foldKeepID from pinning a panel nobody selected.
+	if !ok || it.kind == itemFold {
 		return itemPanel, "", "", false
 	}
 	if it.kind == itemGroup {
@@ -2907,6 +3003,11 @@ func (m model) selectedKey() (kind dashKind, id, group string, ok bool) {
 // so the selection follows the panel into its new home. It falls back to a
 // bounds clamp when the item is gone (closed, exited-and-purged).
 func (m *model) restoreCursor(kind dashKind, id, group string, had bool) {
+	// Hand the quiet fold the card the cursor was on BEFORE this snapshot, so a
+	// panel that just went idle under the cursor is not folded away in the same
+	// frame that the cursor is asked to find it again. This is the one place the
+	// pre-change identity exists; everywhere else it has already been overwritten.
+	m.foldKeepID = id
 	if !had {
 		m.clampCursor()
 		return
@@ -3042,6 +3143,8 @@ func (m model) render() string {
 		body = m.fleetSearchView()
 	case m.mode == modeProcTree:
 		body = m.procTreeView()
+	case m.mode == modeInbox:
+		body = m.inboxView()
 	default:
 		body = m.dashboardView()
 	}
@@ -3196,8 +3299,11 @@ func (m model) cardGrid(items []dashItem) string {
 // renderItemCard draws a dashboard item: a group card for a work item, otherwise
 // a panel card.
 func (m model) renderItemCard(it dashItem, selected bool) string {
-	if it.kind == itemGroup {
+	switch it.kind {
+	case itemGroup:
 		return m.renderGroupCard(it, selected)
+	case itemFold:
+		return m.renderFoldCard(it, selected)
 	}
 	return m.renderCard(it.panel, selected)
 }
@@ -3225,7 +3331,7 @@ const (
 // title, a kind badge + state, and a sparkline + meta footer. The selected card
 // glows in the brand colour.
 func (m model) renderCard(p panel.Panel, selected bool) string {
-	info := states[p.State]
+	info := stateInfoFor(p)
 
 	border := colFaint
 	titleColor := colInk
@@ -3402,22 +3508,44 @@ func (m model) renderTree(items []dashItem, start, end, visible int) string {
 			caret = mutedStyle.Render("↓ ")
 		}
 
+		// The cursor caret and the fold row's disclosure marker are the same glyph, so
+		// a selected fold row would read "▸ ▸ 12 quiet". The caret is what goes: the
+		// row is already drawn in inverse video, which says "selected" without
+		// spending a character, whereas the disclosure marker is the only thing on
+		// the row saying which way it will go when you press enter.
+		if it.kind == itemFold && caret == "▸ " {
+			caret = "  "
+		}
+
 		mark := ""
 		if m.selecting() {
 			mark = markCell(m.itemMarked(it))
 		}
 
-		var glyph, label string
-		if it.kind == itemGroup {
+		var glyph, label, need string
+		switch it.kind {
+		case itemFold:
+			glyph = lipgloss.NewStyle().Foreground(states[panel.Idle].color).Render(m.foldGlyph())
+			label = it.title()
+		case itemGroup:
 			info := states[groupState(it.members)]
 			glyph = lipgloss.NewStyle().Foreground(info.color).Render("▣")
 			label = fmt.Sprintf("%s (%d)", it.title(), len(it.members))
-		} else {
-			info := states[it.panel.State]
+			// The tree is the view a 50-panel fleet actually lives in, so this — not
+			// the card grid — is where the need count has to land for the issue's
+			// promise to hold. It trails the row rather than replacing anything, and
+			// the name's budget shrinks by its width so a long group name still
+			// truncates instead of pushing the count off the edge.
+			need = " " + needChip(it.need)
+			if it.need <= 0 {
+				need = ""
+			}
+		default:
+			info := stateInfoFor(it.panel)
 			glyph = lipgloss.NewStyle().Foreground(info.color).Render(info.led)
 			label = it.title()
 		}
-		name := truncate(label, treeListWidth-9-lipgloss.Width(mark))
+		name := truncate(label, treeListWidth-9-lipgloss.Width(mark)-lipgloss.Width(need))
 
 		row := lipgloss.NewStyle().Width(treeListWidth - 4)
 		if selected {
@@ -3425,7 +3553,7 @@ func (m model) renderTree(items []dashItem, start, end, visible int) string {
 		} else {
 			row = row.Foreground(colInk)
 		}
-		rows = append(rows, row.Render(caret+mark+glyph+" "+name))
+		rows = append(rows, row.Render(caret+mark+glyph+" "+name+need))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
@@ -3437,11 +3565,14 @@ func (m model) renderPreview(items []dashItem, width int) string {
 		return mutedStyle.Render("no panel selected")
 	}
 	it := items[m.cursor]
-	if it.kind == itemGroup {
+	switch it.kind {
+	case itemGroup:
 		return m.renderGroupPreview(it, width)
+	case itemFold:
+		return m.renderFoldPreview(it, width)
 	}
 	p := it.panel
-	info := states[p.State]
+	info := stateInfoFor(p)
 
 	title := lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(truncate(p.Title, width))
 	led := lipgloss.NewStyle().Foreground(info.color).Render(info.led)
@@ -3965,30 +4096,6 @@ func (m model) footer() string {
 	}
 	left := seg(mode, colInk, colBlue)
 	return m.statusBar(left, m.helpHint())
-}
-
-// attentionBadge is the footer notification that some panel needs you: a red cap
-// carried by every view's status bar, so a panel asking for input is visible
-// whether you are on the dashboard, in a zoom, or in a group split. It names the
-// panel when exactly one waits, and counts them when several do. Empty when the
-// fleet is calm.
-func (m model) attentionBadge() string {
-	var names []string
-	// Range m.fleet with an inline singleton skip rather than m.visibleFleet(): this
-	// runs in every view's footer on every frame, so it must not allocate a slice.
-	for _, p := range m.fleet {
-		if !p.Conductor && !p.GlobalShell && p.State == panel.Attention {
-			names = append(names, p.Title)
-		}
-	}
-	if len(names) == 0 {
-		return ""
-	}
-	label := fmt.Sprintf("◆ %d need you", len(names))
-	if len(names) == 1 {
-		label = "◆ " + truncate(names[0], 16) + " needs you"
-	}
-	return seg(label, colDark, states[panel.Attention].color)
 }
 
 // statusBar composes a full-width footer for any view: the view's left caps, a

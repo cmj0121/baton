@@ -32,6 +32,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/cmj0121/baton/internal/attn"
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/cwd"
@@ -455,6 +456,7 @@ func reloadableSettings(cfg config.Config) reloadable {
 		AgentLimits: agentLimits(cfg.Panel.Agents),
 	}}
 	rc.settings.Restart, rc.settings.AgentRestart = restartPolicies(cfg)
+	rc.settings.Attention, rc.settings.AgentAttention = attentionPolicies(cfg)
 	rc.settings.TrackCwd, rc.settings.RestoreCwd = cwdPolicy(cfg)
 	if cfg.Settings.AllowNameConflict != nil {
 		rc.settings.AllowNameConflict = *cfg.Settings.AllowNameConflict
@@ -534,6 +536,51 @@ func cwdPolicy(cfg config.Config) (cwd.Track, cwd.Restore) {
 		log.Warn().Err(err).Msg("restore-cwd ignored; using the default")
 	}
 	return track, restore
+}
+
+// attentionPolicies projects the config's quiet ladder onto the fleet-wide
+// policy and the per-profile overrides layered on it — the same shape and the
+// same "report and drop" discipline as restartPolicies above, so a hand-edited
+// file can never silently promote panels into a state the user did not write.
+//
+// The ladder is also checked for order on the MERGED policy, not on each block
+// in isolation, because that is where the mistake actually lives: a profile that
+// only says `done-after: 30m` inherits a 10m stuck-after and inverts the rungs
+// without either block being wrong on its own. An inverted ladder disables stuck
+// for that scope and says which scope it was.
+func attentionPolicies(cfg config.Config) (attn.Policy, map[string]attn.Policy) {
+	fleet, err := cfg.Panel.Attention.Policy()
+	if err != nil {
+		log.Warn().Err(err).Msg("attention thresholds ignored; the built-in defaults apply")
+		fleet = attn.Policy{}
+	}
+	if !fleet.Ordered() {
+		log.Warn().Dur("done_after", fleet.Done()).Dur("stuck_after", fleet.Stuck()).
+			Msg("panel.stuck-after is not above panel.done-after; stuck is disabled fleet-wide")
+		fleet.StuckAfter = attn.Never
+	}
+
+	var perAgent map[string]attn.Policy
+	for name, prof := range cfg.Panel.Agents {
+		p, err := prof.Attention.ProfilePolicy(name)
+		if err != nil {
+			log.Warn().Err(err).Str("agent", name).Msg("agent attention thresholds ignored; the fleet ladder applies")
+			continue
+		}
+		if p.IsZero() {
+			continue
+		}
+		if merged := fleet.Merge(p); !merged.Ordered() {
+			log.Warn().Str("agent", name).Dur("done_after", merged.Done()).Dur("stuck_after", merged.Stuck()).
+				Msg("stuck-after is not above done-after for this profile; stuck is disabled for it")
+			p.StuckAfter = attn.Never
+		}
+		if perAgent == nil {
+			perAgent = make(map[string]attn.Policy, len(cfg.Panel.Agents))
+		}
+		perAgent[name] = p
+	}
+	return fleet, perAgent
 }
 
 // runClient attaches a TUI cockpit to this session's server. If the cockpit

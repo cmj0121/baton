@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ import (
 // channel yields each command (other than the hello/config.get handshake) in send order.
 func recordingServer(t *testing.T) (*client.Client, <-chan proto.Command) {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "rec.sock")
+	sock := filepath.Join(shortTempDir(t), "rec.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -58,6 +59,20 @@ func recordingServer(t *testing.T) (*client.Client, <-chan proto.Command) {
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	return c, cmds
+}
+
+// shortTempDir is a temp root with a SHORT name. macOS caps a unix socket path
+// near 104 bytes and t.TempDir() embeds the test's own name, so a descriptively
+// named test would otherwise fail to bind — a failure that says nothing at all
+// about the behaviour under test.
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "bt")
+	if err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
 }
 
 // waitCmd pulls commands until one satisfies match, or fails on timeout.

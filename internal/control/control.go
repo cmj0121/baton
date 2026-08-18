@@ -32,10 +32,13 @@ type Client struct {
 }
 
 // Dial connects to the session's server and identifies this client to it. The
-// socket path comes from BATON_SOCK (else the session default); the role and
-// self panel id come from the environment baton injects into a conductor panel,
-// so a control client run inside the conductor is fenced by the server while the
-// same binary run from a plain shell is the unscoped, full-power cockpit role.
+// socket path comes from BATON_SOCK (else the session default); the self panel id
+// comes from the environment baton injects into every agent panel, so an agent
+// that runs `baton ctl` inside its own panel can speak about itself without ever
+// being told which panel that is. The role comes from the same environment but is
+// injected into the conductor alone, so a control client inside the conductor is
+// fenced by the server, while an ordinary agent panel — and the same binary run
+// from a plain shell — declares the unscoped, full-power cockpit role.
 func Dial() (*Client, error) {
 	return DialSocket(paths.Socket(), os.Getenv(paths.EnvRole), os.Getenv(paths.EnvPanelID))
 }
@@ -144,6 +147,33 @@ func (c *Client) SendText(id, text string, submit bool) error {
 		data = append(data, '\n')
 	}
 	return c.Do(proto.Command{Action: "panel.input", ID: id, Data: data})
+}
+
+// DeclareAttention raises a standing declaration on panel id: the agent saying,
+// in its own words, that it needs a human before it can go on. It is the top of
+// the server's detection precedence — above the quiet timer, above the tail
+// heuristic — because it is the only signal that came from the panel itself
+// rather than from baton guessing at it from the outside.
+//
+// An empty id means "this connection's own panel", the id declared on hello from
+// the environment baton injects. That is the form an agent uses: it needs no
+// argument and no way to learn its own id.
+//
+// reason is required by the server, and its whole point: a declaration displaces
+// two guesses precisely because it can say why, and the person reading the queue
+// sees that sentence rather than a scraped terminal line.
+func (c *Client) DeclareAttention(id, reason string) error {
+	return c.Do(proto.Command{Action: "panel.attention", ID: id, Reason: reason})
+}
+
+// ResolveAttention withdraws the declaration standing on panel id — the agent
+// saying the need has passed — and hands the panel's state back to the lifecycle
+// ladder. It is a no-op rather than an error when no declaration stands, so an
+// agent can tidy up after itself without first checking whether its hand is
+// still up. An empty id means this connection's own panel, as with
+// DeclareAttention.
+func (c *Client) ResolveAttention(id string) error {
+	return c.Do(proto.Command{Action: "panel.resolve", ID: id})
 }
 
 // Dispatch assigns prompt to panel id as a task brief: the server records it on

@@ -116,6 +116,7 @@ var zhTW = map[string]string{
 	"bind.scroll":       "捲動模式 — 逐行／逐頁（前綴鍵）",
 	"bind.dashboard":    "跳到儀表板（前綴鍵）",
 	"bind.proc-tree":    "行程樹 — daemon 底下的作業系統行程（前綴鍵）",
+	"bind.inbox":        "待辦匣 — 逐一處理需要人介入的面板（前綴鍵）",
 	"bind.back":         "回上一層：放大→群組→儀表板（放大檢視中按 C-t b）",
 	"bind.commands":     "開啟外掛指令選單（前綴鍵）",
 	"bind.scratch":      "切換浮動的暫存 shell（前綴鍵）",

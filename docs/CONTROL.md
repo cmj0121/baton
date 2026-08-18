@@ -54,25 +54,27 @@ named "report" and pause for me.
 cockpit role; run inside the conductor panel it inherits the conductor identity and is fenced. Each command connects,
 acts, and exits.
 
-| Command                                                            | Does                                                                 |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------- |
-| `baton ctl list`                                                   | print the fleet as JSON (id, title, state, group, …)                 |
-| `baton ctl tree [--json]`                                          | draw the process tree (groups → panels → OS children), with CPU%/RSS |
-| `baton ctl spawn [--agent CMD] [--arg A] [--dir D]`                | spawn a panel (agent if `--agent`, else a shell); prints the new id  |
-| `baton ctl send <id> <text> [--no-enter]`                          | type text into a panel; submits with a newline unless `--no-enter`   |
-| `baton ctl group <name> <id>...`                                   | file panels under a work item (a slash-`path` nests: `backend/api`)  |
-| `baton ctl rename [--id ID \| --group G] <name>`                   | rename a panel or a group (rename a group to a path to re-parent it) |
-| `baton ctl pin <id>...` / `unpin <id>...`                          | pin/unpin panels to live tiles                                       |
-| `baton ctl signal <signal> <id>...`                                | send a signal, e.g. `SIGINT`                                         |
-| `baton ctl close <id>...`                                          | close panels                                                         |
-| `baton ctl dispatch <id> <prompt>`                                 | assign a task brief to a panel and deliver it as a unit              |
-| `baton ctl dispatch-group <group> <prompt>`                        | fan one brief to a work item's whole subtree (nested groups too)     |
-| `baton ctl queue add <prompt> [--group G]`                         | enqueue a task for the scheduler to drain onto a free agent          |
-| `baton ctl queue add <prompt> --command <cmd> [--dir D] [--close]` | spawn-on-demand: provision an agent when none is free                |
-| `baton ctl queue list`                                             | print the backlog as JSON (id, prompt, status, panel, group, …)      |
-| `baton ctl queue cancel <id>`                                      | cancel a queued task by id                                           |
-| `baton ctl queue promote <id>` / `demote <id>`                     | move a queued task to the head / tail of the backlog                 |
-| `baton ctl queue drain`                                            | clear every queued task                                              |
+| Command                                                            | Does                                                                          |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| `baton ctl list`                                                   | print the fleet as JSON (id, title, state, group, …)                          |
+| `baton ctl tree [--json]`                                          | draw the process tree (groups → panels → OS children), with CPU%/RSS          |
+| `baton ctl spawn [--agent CMD] [--arg A] [--dir D]`                | spawn a panel (agent if `--agent`, else a shell); prints the new id           |
+| `baton ctl send <id> <text> [--no-enter]`                          | type text into a panel; submits with a newline unless `--no-enter`            |
+| `baton ctl attention --why <text> [--id ID]`                       | say this panel needs a human, and why — see [Raising a hand](#raising-a-hand) |
+| `baton ctl resolve [--id ID]`                                      | say the reason has passed; the panel leaves the queue                         |
+| `baton ctl group <name> <id>...`                                   | file panels under a work item (a slash-`path` nests: `backend/api`)           |
+| `baton ctl rename [--id ID \| --group G] <name>`                   | rename a panel or a group (rename a group to a path to re-parent it)          |
+| `baton ctl pin <id>...` / `unpin <id>...`                          | pin/unpin panels to live tiles                                                |
+| `baton ctl signal <signal> <id>...`                                | send a signal, e.g. `SIGINT`                                                  |
+| `baton ctl close <id>...`                                          | close panels                                                                  |
+| `baton ctl dispatch <id> <prompt>`                                 | assign a task brief to a panel and deliver it as a unit                       |
+| `baton ctl dispatch-group <group> <prompt>`                        | fan one brief to a work item's whole subtree (nested groups too)              |
+| `baton ctl queue add <prompt> [--group G]`                         | enqueue a task for the scheduler to drain onto a free agent                   |
+| `baton ctl queue add <prompt> --command <cmd> [--dir D] [--close]` | spawn-on-demand: provision an agent when none is free                         |
+| `baton ctl queue list`                                             | print the backlog as JSON (id, prompt, status, panel, group, …)               |
+| `baton ctl queue cancel <id>`                                      | cancel a queued task by id                                                    |
+| `baton ctl queue promote <id>` / `demote <id>`                     | move a queued task to the head / tail of the backlog                          |
+| `baton ctl queue drain`                                            | clear every queued task                                                       |
 
 ```sh
 # Stand up a reviewer next to a worker and hand it the task.
@@ -115,21 +117,79 @@ baton (daemon) pid=41022  baton  0.3%  28.4M
 panel (so it reaches every card and the snapshot) and delivers as a unit — waiting for the agent to be ready rather than
 interleaving with a running command. See [Tasks and the queue](./SPEC.md#tasks-and-the-queue) for the model.
 
+## Raising a hand
+
+Every other verb here is something you do **to** a panel. `attention` and `resolve` are the two an agent says about
+**itself** — the one participant that actually knows when it is blocked.
+
+```sh
+# Inside an agent panel: block on a decision, with the sentence the human will read.
+baton ctl attention --why "two migrations conflict — which one wins?"
+
+# …and once you have your answer, stand down.
+baton ctl resolve
+```
+
+Neither takes an id in the form above, because the connection already knows which panel it is: baton injects
+`BATON_PANEL_ID` into **every agent panel** (see the table below), the control client declares it on `hello`, and the
+daemon addresses that panel — so an agent raises its own hand without ever having to discover its own id, anywhere in the
+fleet. Anywhere else — a **shell** panel, a script, your own terminal — name the panel with `--id`; with neither, the
+daemon answers `no panel id, and this connection declared no self` rather than acting on nothing. A **conductor**
+connection may only ever name itself (see [Guardrails](#guardrails)).
+
+**Why this outranks everything else.** Baton has two ways to notice a panel needs you, and both are guesses from the
+outside: a **timer** that reads silence, and a **heuristic** that reads the last line of output for a question. A
+declaration is the only signal that came from the thing being described, so it wins — see
+[the lifecycle](./SPEC.md#lifecycle) for the states, and [ATTENTION.md](./ATTENTION.md) for the full precedence and the
+queue a raised hand lands in. Concretely:
+
+- **It takes effect immediately**, not on the next monitor tick. The task scheduler's free pool reads the panel's state,
+  so a tick's delay would be a window in which baton hands queued backlog work to an agent that has already said it is
+  waiting on a person.
+- **It survives output.** An agent that prints a spinner while it waits on you keeps its raised hand; a heuristic-raised
+  attention is withdrawn by the next byte. Only `resolve`, or the process ending, takes a declaration back.
+- **`--why` is required.** A declaration displaces two guesses precisely because it can say why, and the person reading
+  the queue sees that sentence instead of a scraped terminal line. A declaration with nothing to say is refused.
+- **It is not persisted.** A declaration is a live process's statement about itself; it dies with the panel and does not
+  come back on restore.
+
+**`resolve` is the half that makes the other half trustworthy.** An agent that can put its hand down is one whose raised
+hand means something. It is a no-op rather than an error when nothing stands, so it is safe to run unconditionally, and
+after it the daemon derives the panel's state again from the ordinary lifecycle rather than guessing at one. It also
+mutes the tail heuristic for that panel until the panel next produces output — otherwise the same unchanged question
+still sitting in the scrollback would raise the flag again a second later, and `resolve` would be a verb that undid
+itself.
+
+**The reason is sanitised on the way in.** The daemon scrubs control characters and escape sequences out of `--why` when
+it accepts the declaration, drops Unicode **format** characters with them (a bidi override such as `U+202E` would
+otherwise render the row backwards in the operator's terminal), folds any whitespace to single spaces, and caps the
+result at **200 runes** — it is a sentence for a person to read, and it rides every fleet snapshot to every client. So
+it is one short, safe line by the time it is stored.
+
+This is deliberately the boundary the scrubbing happens at, because the text is fanned out to the cockpit's queue (drawn
+into a real terminal), to `baton ctl list`, to MCP tool results, and to plugin event handlers — **a frontend rendering
+`reason` is holding text that is already safe and must not escape it a second time.** Panel _output_ is the opposite
+case and is passed through byte-exact: it is a terminal stream, and the emulator is what interprets it.
+
 ## `baton mcp` — the MCP server
 
 `baton mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server on stdio (newline-delimited JSON-RPC
 2.0). It exposes the same verbs as MCP tools, so an MCP-speaking agent drives the fleet through structured tool calls
 instead of shelling out:
 
-`baton_list` · `baton_spawn` · `baton_send` · `baton_dispatch` · `baton_dispatch_group` · `baton_enqueue` ·
-`baton_queue` · `baton_reorder` · `baton_group` · `baton_rename` · `baton_pin` · `baton_unpin` · `baton_signal` ·
-`baton_close`
+`baton_list` · `baton_spawn` · `baton_send` · `baton_attention` · `baton_resolve` · `baton_dispatch` ·
+`baton_dispatch_group` · `baton_enqueue` · `baton_queue` · `baton_reorder` · `baton_group` · `baton_rename` ·
+`baton_pin` · `baton_unpin` · `baton_signal` · `baton_close`
 
 `baton_dispatch` / `baton_dispatch_group` assign a task brief to a panel or a whole work item; `baton_enqueue` adds one
 to the backlog (optionally spawn-on-demand, with a `command` to provision a worker when none is free), `baton_queue`
 reads it back, and `baton_reorder` moves a waiting task to the head or tail. These are the verbs a conductor uses to run
 the flagship **you → conductor → fleet** flow: you hand the conductor a batch of objectives, it enqueues them, and the
 scheduler drains them onto the workers as they come free.
+
+`baton_attention` / `baton_resolve` are the pair an agent uses on **itself** rather than on the fleet: the `why` is
+required and becomes the sentence the human reads, and both default to the caller's own panel when given no `id`. See
+[Raising a hand](#raising-a-hand) for what makes a declaration outrank baton's own guesses.
 
 The conductor's workspace ships a `.mcp.json` pointing at this very binary run as `baton mcp`, so a Claude conductor
 auto-loads the tools — no setup. The MCP subprocess inherits the conductor panel's environment, so it is fenced exactly
@@ -146,18 +206,32 @@ declares its identity on the `hello` handshake:
 | `role` | `"conductor"` to be fenced; empty (the cockpit) for full power.                |
 | `self` | the client's own panel id — the panel the server will refuse to let it act on. |
 
+`panel.attention` carries `reason` (required) and an `id` that may be left empty to mean the connection's own `self`;
+`panel.resolve` carries the same `id`. Both reply with an error or with the `panels` snapshot the change produced, and
+the panel's declared reason comes back on `proto.Panel.reason` — already sanitised, as above.
+
 A dispatch carries two more fields: `prompt` (the brief) and an optional `submit` override (the keys appended to send it,
 default a newline) on `panel.dispatch` / `panel.dispatch-group`; `task.enqueue` / `task.cancel` / `task.promote` /
 `task.demote` / `task.drain` / `task.list` drive the backlog and reply with a `tasks` snapshot. A spawn-on-demand
 `task.enqueue` carries the worker's `path` / `args` / `dir` and an `ephemeral` close-on-done flag.
 
-Baton injects the wiring into the conductor panel's process, which both `baton ctl` and `baton mcp` read automatically:
+Baton injects the wiring into an agent panel's process, which both `baton ctl` and `baton mcp` read automatically:
 
-| Variable         | Is                                                |
-| ---------------- | ------------------------------------------------- |
-| `BATON_SOCK`     | the control socket to dial                        |
-| `BATON_ROLE`     | `conductor` — the scoped role to declare on hello |
-| `BATON_PANEL_ID` | the conductor's own panel id (its `self`)         |
+| Variable         | Is                                                | Injected into                            |
+| ---------------- | ------------------------------------------------- | ---------------------------------------- |
+| `BATON_SOCK`     | the control socket to dial                        | **every agent panel**                    |
+| `BATON_PANEL_ID` | the panel's own id — the `self` it declares       | **every agent panel**                    |
+| `BATON_ROLE`     | `conductor` — the scoped role to declare on hello | **the conductor only** (it is the fence) |
+
+Every agent panel is told which panel it is, because a control client that cannot name itself cannot say anything about
+itself — which is the whole point of `attention` and `resolve`. Being told grants nothing: an empty `BATON_ROLE` is the
+plain, unscoped connection an agent panel has always had, so a worker's reach is exactly what it was before an id was
+ever injected. Only the conductor is handed the role, because only the conductor is fenced by it.
+
+A **shell** panel is deliberately given neither. A shell is a launcher — every program a person runs in it would inherit
+the marking — and the human sitting at one already has what an agent lacks: the cockpit names the panel and `--id` is one
+flag away. `BATON_SOCK` still reaches it, but by inheritance rather than injection: the daemon pins it into its own
+environment and every panel starts from that.
 
 ## Guardrails
 
@@ -171,12 +245,21 @@ always speak the socket directly).
 | signal and send input to **other** panels | **dispatch a task to its own** panel                           |
 | dispatch to other panels, enqueue tasks   | **drain the queue** — clearing the backlog is operator-only    |
 | reorder queued tasks (promote / demote)   |                                                                |
+| **raise its own hand** and stand down     | raise or lower **another panel's** hand                        |
 | close other panels, purge exited          | reload or stop the server                                      |
 |                                           | spawn faster than the rate cap, or past the fleet ceiling (64) |
 |                                           | **name an agent profile** on a spawn — see below               |
 
 So a conductor can fill and dispatch from the backlog but cannot wipe it, and the queue gives it no way around the
 self-fence: a brief it enqueues is drained by the scheduler onto _other_ idle agents, never back onto itself.
+
+The fence stops a conductor acting **destructively** on itself — closing, signalling, feeding input. Saying "I need a
+decision" is the opposite, so `panel.attention` and `panel.resolve` are the one pair fenced the other way round: a
+conductor may raise and lower **its own** hand, and only its own. Allowing it at all is because the conductor is the one
+agent the server always has an identity for, and refusing it the verb that exists for agents would be a strange way to
+build a control plane for them. Restricting it to itself is because a declaration takes its panel out of the scheduler's
+free pool until something withdraws it — a conductor free to raise hands across the fleet is a conductor that can freeze
+the backlog for every other agent, one looping call at a time.
 
 A spawn from a conductor has its **profile name stripped**, so the panels it creates resolve to the fleet-wide
 [resource limits](LIMITS.md) rather than to any profile's own. The name is what a panel's caps resolve through, so an

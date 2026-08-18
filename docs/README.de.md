@@ -96,6 +96,7 @@ Tastenbelegung zu bearbeiten.
 | Where       | Taste             | Wirkung                                                           |
 | ----------- | ----------------- | ----------------------------------------------------------------- |
 | After `C-t` | `d` / `b`         | zum Dashboard springen / eine Ebene zurück                        |
+|             | `a`               | Attention-Posteingang — erledigen, was einen Menschen braucht     |
 |             | `[`               | in den Scroll-Modus wechseln                                      |
 |             | `R` / `S`         | Konfiguration neu laden / Server-Neustart erzwingen               |
 |             | `q`               | abkoppeln (der Server läuft weiter)                               |
@@ -204,6 +205,9 @@ Siehe **[docs/PLUGIN.md](PLUGIN.md)**.
 
 - **[docs/SPEC.md](SPEC.md)** — die vollständige Spezifikation: Ansichten, der Panel-Lebenszyklus, Work Items, Signale,
   Diff, Persistenz, die Tastenreferenz pro Ansicht und das Architekturdiagramm.
+- **[docs/ATTENTION.md](ATTENTION.md)** — Aufmerksamkeit im großen Maßstab: die Stille-Leiter (`done`, `stuck`,
+  failed), der `C-t a`-Posteingang, die beiden Faltungen des Dashboards, Desktop-Benachrichtigungen und alle
+  Stellschrauben dazu.
 - **[docs/TUI.md](TUI.md)** — die Datei für das Erscheinungsbild des Cockpits (`$HOME/.baton/TUI.yaml`): das Farb-Theme
   und die Layouts der Gruppenaufteilung (Presets und eigene Raster).
 - **[docs/LIMITS.md](LIMITS.md)** — Ressourcenlimits: die Konfiguration, die zwei Ebenen, das Hot Reload und wo sie

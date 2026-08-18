@@ -144,6 +144,14 @@ your files and reach the internet exactly as before — see the guardrails note 
 Filesystem and network confinement need a different backend (a container, `bwrap`, `sandbox-exec`), which baton does not
 have yet.
 
+It is **not a spend boundary** either, and that is worth saying plainly because "a real ceiling on what an agent can
+consume" reads as if it covered the bill. It does not. **Nothing in baton caps how many tokens an agent uses** — not
+these caps, not the agent profile, not the task queue. `cpus`, `memory` and `pids` bound the machine's resources; an
+agent held to half a core can burn a month's budget in an afternoon while never touching a single one of them.
+**[USAGE.md](USAGE.md)** measures spend **after the fact** — it reads what has already been billed and shows it in the
+footer, with a countdown to the window's reset — and there is no mechanism anywhere in baton to bound it beforehand. If
+you need a hard spend limit, it has to come from your provider's own controls.
+
 ## Related keys
 
 | Key     | Does                                                             |

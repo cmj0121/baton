@@ -166,6 +166,15 @@ func (c *Client) readLoop() {
 			case c.Usage <- msg:
 			default:
 			}
+		case "tail":
+			// A pulled panel tail (the inbox's detail pane). It is stated here rather
+			// than left to the default below because it is the one message type that
+			// LOOKS like bulk PTY data and is not: it is a low-rate request/response
+			// control message, one in flight at a time, and it belongs on the same
+			// channel as "diff", "search", and "gitout". Putting it on Output would
+			// feed raw bytes to a zoom's emulator, which is exactly the attach the
+			// inbox exists to avoid.
+			c.Events <- msg
 		default:
 			c.Events <- msg
 		}

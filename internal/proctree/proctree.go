@@ -63,6 +63,12 @@ type PanelInfo struct {
 	Name  string `json:"name"`
 	Group string `json:"group,omitempty"`
 	State string `json:"state,omitempty"`
+
+	// ExitCode is the panel process's exit status, meaningful only when State is
+	// "exited". It rides along so a frontend can tell a clean exit from a failed
+	// one without a second lookup into the fleet snapshot — `failed` is not a
+	// state, so the code is the only thing that says which of the two it was.
+	ExitCode int `json:"exit_code,omitempty"`
 }
 
 // Build assembles the process tree from the fleet snapshot and an OS process table
@@ -128,7 +134,7 @@ func panelNode(p proto.Panel, children map[int][]int, comm map[int]string, stats
 		Comm:  comm[p.Pid],
 		CPU:   stats[p.Pid].CPU,
 		RSS:   stats[p.Pid].RSS,
-		Panel: &PanelInfo{ID: p.ID, Name: p.Title, Group: p.Group, State: p.State},
+		Panel: &PanelInfo{ID: p.ID, Name: p.Title, Group: p.Group, State: p.State, ExitCode: p.ExitCode},
 	}
 	if p.Pid > 0 {
 		attachDescendants(n, p.Pid, children, comm, stats, map[int]bool{p.Pid: true})

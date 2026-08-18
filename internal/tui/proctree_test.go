@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/cmj0121/baton/internal/panel"
+	"github.com/cmj0121/baton/internal/proctree"
 )
 
 // procFleet is a small fleet with a group and an ungrouped panel, enough to render
@@ -140,5 +141,21 @@ func TestProcTreeViewRenders(t *testing.T) {
 	out := m.procTreeView()
 	if !strings.Contains(out, spaced("PROCESS TREE")) || !strings.Contains(out, "shell/running") {
 		t.Fatalf("the view should show the header and the tree, got:\n%s", out)
+	}
+}
+
+// TestProcPanelLabelShowsFailed checks the process-tree overlay draws a panel
+// that exited badly as failed rather than as an ordinary grey exit — the same
+// conclusion the dashboard draws from the same exit code.
+func TestProcPanelLabelShowsFailed(t *testing.T) {
+	ink := lipgloss.NewStyle()
+	failed := procPanelLabel(&proctree.Node{Panel: &proctree.PanelInfo{Name: "claude", State: "exited", ExitCode: 1}}, ink)
+	clean := procPanelLabel(&proctree.Node{Panel: &proctree.PanelInfo{Name: "claude", State: "exited"}}, ink)
+
+	if !strings.Contains(failed, stateInfoFor(panel.Panel{State: panel.Exited, ExitCode: 1}).led) {
+		t.Errorf("a failed panel should wear the failed glyph, got %q", failed)
+	}
+	if failed == clean {
+		t.Error("a failed exit should not render identically to a clean one")
 	}
 }

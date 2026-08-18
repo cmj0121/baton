@@ -98,6 +98,7 @@ teclas.
 | Dónde       | Tecla             | Hace                                                       |
 | ----------- | ----------------- | ---------------------------------------------------------- |
 | After `C-t` | `d` / `b`         | ir al tablero / volver un nivel                            |
+|             | `a`               | bandeja de atención — despachar lo que necesita a alguien  |
 |             | `[`               | entrar en modo de desplazamiento                           |
 |             | `R` / `S`         | recargar la configuración / forzar reinicio del servidor   |
 |             | `q`               | desacoplarse (el servidor sigue en marcha)                 |
@@ -205,6 +206,8 @@ tus propios comandos y define configuración, todo a través de un único objeto
 
 - **[docs/SPEC.md](SPEC.md)** — la especificación completa: vistas, el ciclo de vida del panel, work items, señales, diff,
   persistencia, la referencia de teclas por vista y el diagrama de arquitectura.
+- **[docs/ATTENTION.md](ATTENTION.md)** — atención a escala: la escalera del silencio (`done`, `stuck`, failed), la
+  bandeja `C-t a`, los dos plegados del tablero, las notificaciones de escritorio y todos sus ajustes.
 - **[docs/TUI.md](TUI.md)** — el archivo de apariencia de la cabina (`$HOME/.baton/TUI.yaml`): el tema de color y las
   disposiciones de la división de grupo (preajustes y cuadrículas propias).
 - **[docs/LIMITS.md](LIMITS.md)** — límites de recursos: la configuración, las dos capas, la recarga en caliente y dónde

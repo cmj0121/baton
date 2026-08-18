@@ -23,6 +23,7 @@ import (
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/mem"
 
+	"github.com/cmj0121/baton/internal/attn"
 	"github.com/cmj0121/baton/internal/cwd"
 	"github.com/cmj0121/baton/internal/gitdiff"
 	"github.com/cmj0121/baton/internal/gitops"
@@ -112,6 +113,15 @@ type Settings struct {
 	// name — the same shape as the resource caps above, and resolved the same way.
 	Restart      restart.Policy
 	AgentRestart map[string]restart.Policy
+
+	// Attention is the fleet-wide quiet ladder — how long silence means a turn is
+	// over, and how much longer it means something is wrong — and AgentAttention
+	// the per-profile ladders layered over it. Same shape and same resolution as
+	// the caps and the restart policy, which is what makes all three hot-reload on
+	// SIGHUP without touching a single live panel: a panel records its PROFILE
+	// name, and every tick resolves the policy afresh from it.
+	Attention      attn.Policy
+	AgentAttention map[string]attn.Policy
 
 	// TrackCwd is how a panel's live working directory is learned and RestoreCwd
 	// which panels a re-run puts back in it.
@@ -208,6 +218,42 @@ type Server struct {
 	agentRestart map[string]restart.Policy
 	restarts     map[string]*restartState
 	shuttingDown bool
+
+	// The quiet ladder. attention is the fleet-wide policy and agentAttention the
+	// per-profile ones layered over it (see Settings), resolved per tick from the
+	// profile each panel records rather than frozen at spawn — which is what lets
+	// a SIGHUP change the thresholds under a running fleet. Guarded by mu.
+	attention      attn.Policy
+	agentAttention map[string]attn.Policy
+
+	// declared is the top of the detection precedence: what each agent has said
+	// about ITSELF, keyed by panel id, populated lazily and dropped when the panel
+	// exits, closes, or is pruned.
+	//
+	// taskSettled is the other half — the set of panels whose in-flight task went
+	// terminal-done since the last tick. It is an EDGE rather than a state: only
+	// the tick that saw it may promote the panel to done, and a byte of output
+	// clears it, or a panel that woke back to running would be dragged straight
+	// back by work that finished minutes ago. Both guarded by mu.
+	declared    map[string]*declaration
+	taskSettled map[string]bool
+
+	// acked records that a human has dealt with a panel from the inbox:
+	// dismissed it, snoozed it, or replied to it. It is fleet state rather than
+	// per-cockpit state because the queue's promise is "the fleet needs a human",
+	// and a second cockpit re-offering work the first just cleared is exactly the
+	// untrustworthy queue this feature exists to fix. A zero value means "until
+	// the panel speaks again"; a set one is a snooze's expiry, evaluated where it
+	// is read (ackedLocked) rather than by a sweeper. Guarded by mu; see ack.go.
+	acked map[string]time.Time
+
+	// exitedAt is when each dead panel's process ended. It exists because the
+	// Monitor forgets a panel the moment it exits, which takes its state clock
+	// with it — and an exited panel still needs one, since a queue that lists
+	// failures has to sort them oldest-first like everything else. Written once on
+	// exit, read by wirePanel as the fallback, dropped with every other per-panel
+	// map when the panel is closed, pruned, or re-run. Guarded by mu.
+	exitedAt map[string]time.Time
 
 	// Working-directory tracking. trackCwd is how a panel's live directory is
 	// learned and restoreCwd which panels are re-run in it; osc7Tail carries the
@@ -439,6 +485,10 @@ func New(ln net.Listener, opts ...Option) *Server {
 		groupLayout:     make(map[string]string),
 		groupFavourite:  make(map[string]bool),
 		pendingDispatch: make(map[string][]byte),
+		declared:        make(map[string]*declaration),
+		taskSettled:     make(map[string]bool),
+		acked:           make(map[string]time.Time),
+		exitedAt:        make(map[string]time.Time),
 		tasks:           make(map[string]*task.Task),
 		panelTask:       make(map[string]string),
 		spawning:        make(map[string]bool),
@@ -500,6 +550,7 @@ func (s *Server) Reload(set Settings) {
 	s.worktreeDir = set.WorktreeDir
 	s.limits, s.agentLimits = set.Limits, set.AgentLimits
 	s.restart, s.agentRestart = set.Restart, set.AgentRestart
+	s.attention, s.agentAttention = set.Attention, set.AgentAttention
 	s.trackCwd, s.restoreCwd = set.TrackCwd, set.RestoreCwd
 	s.mu.Unlock()
 	s.pty.SetRingCap(set.ReplayBytes)
@@ -525,6 +576,7 @@ func (s *Server) Reload(set Settings) {
 	log.Info().Bool("allow_name_conflict", set.AllowNameConflict).Str("default_dir", set.DefaultDir).
 		Int("replay_bytes", set.ReplayBytes).Str("diff_command", set.DiffCommand).Str("editor", set.Editor).
 		Str("worktree_dir", set.WorktreeDir).Interface("limits", set.Limits.Fields()).Int("agent_limits", len(set.AgentLimits)).
+		Dur("done_after", set.Attention.Done()).Dur("stuck_after", set.Attention.Stuck()).Int("agent_attention", len(set.AgentAttention)).
 		Int("panels_recapped", updated).Strs("respawn_to_apply", deferred).
 		Msg("settings reloaded")
 }
@@ -614,6 +666,15 @@ func (s *Server) effectiveLimitsLocked(profile string) limits.Limits {
 	return s.limits.Merge(s.agentLimits[profile])
 }
 
+// effectiveAttentionLocked layers the named agent profile's quiet ladder over
+// the fleet-wide one, on the same terms as the caps above. It is resolved on
+// every tick rather than cached because that is what makes the thresholds
+// hot-reloadable: a SIGHUP swaps the policy and the very next tick reads it.
+// Caller holds s.mu.
+func (s *Server) effectiveAttentionLocked(profile string) attn.Policy {
+	return s.attention.Merge(s.agentAttention[profile])
+}
+
 // onPanelExit marks a panel exited when its process ends on its own, notifies
 // and detaches any client zoomed into it, and broadcasts the change. It is a
 // no-op for a panel already gone (e.g. an explicit panel.close).
@@ -625,8 +686,14 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 	for i := range s.panels {
 		if s.panels[i].ID == id {
 			s.panels[i].State = panel.Exited
+			s.panels[i].ExitCode = exitCode // the daemon reports it; the cockpit renders a non-zero one as failed
+			s.panels[i].Reason = ""         // a dead process is not asking for anything
 			s.panels[i].Activity = "exited"
+			s.exitedAt[id] = time.Now()   // the Monitor is about to forget it; keep the instant the queue sorts on
 			s.mon.forget(id)              // a dead panel no longer ticks
+			delete(s.declared, id)        // …and its raised hand goes with it
+			delete(s.acked, id)           // …and any acknowledgement of it
+			delete(s.taskSettled, id)     // …as does any pending done edge
 			delete(s.pendingDispatch, id) // a held dispatch dies with the process
 			// A task in flight died with its panel — fail it with the exit code.
 			s.advanceTaskLocked(id, task.Failed, fmt.Sprintf("panel exited (code %d)", exitCode))
@@ -700,12 +767,29 @@ func (s *Server) routeOutput(id string, data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mon.observed(id, len(data))
+	// An acknowledgement stands only until the panel next SPEAKS, and this is that
+	// edge — the literal one, not the quiet→noisy wake below. A panel whose own
+	// declaration stands never takes the wake branch, so clearing the ack there
+	// would leave a dismissed row suppressed for as long as the declaration held.
+	// The length check keeps the steady output path free of a map hash: the map is
+	// empty whenever nobody has triaged anything.
+	if len(s.acked) > 0 {
+		delete(s.acked, id)
+	}
 	s.noteOutputCwdLocked(id, data)
 	if i := s.indexLocked(id); i >= 0 {
-		switch from := s.panels[i].State; from {
-		case panel.Spawning, panel.Idle, panel.Attention:
+		// A byte of output wakes every resting state back to running — but NOT
+		// while the agent's own declaration stands. An agent that prints a spinner
+		// while waiting on you would otherwise lose its raised hand on the next
+		// byte, which defeats the whole point of a declaration outranking the
+		// timers: only panel.resolve, or the process ending, withdraws one.
+		if from := s.panels[i].State; wakesOnOutput(from) && !s.declaredLocked(id) {
 			s.panels[i].State = panel.Running
 			s.mon.entered(id)
+			// A byte of output invalidates any pending "the turn is over" event: the
+			// panel is demonstrably working, so a task that finished a moment ago must
+			// not drag it to done on the next tick.
+			delete(s.taskSettled, id)
 			f := panelFields(s.panels[i])
 			f["from"], f["to"] = from.String(), panel.Running.String()
 			s.emit("panel.state", f)
@@ -1001,9 +1085,11 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 		if p.State == panel.Exited {
 			continue
 		}
-		quiet := s.mon.quiet(p.ID)
-		attention := quiet && p.State == panel.Running && looksLikeAttention(s.pty.Tail(p.ID, attnTailBytes))
-		if ns, ok := nextState(p.State, quiet, attention); ok {
+		// The task event is consumed, not read: the tick that sees a task go
+		// terminal-done is the only one entitled to promote the panel to done.
+		taskDone := s.taskSettled[p.ID]
+		delete(s.taskSettled, p.ID)
+		if ns, ok := nextState(s.signalsLocked(*p, taskDone)); ok {
 			from := p.State
 			p.State = ns
 			s.mon.entered(p.ID)
@@ -1057,6 +1143,11 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 			p.Activity = act
 			changed = true
 		}
+		// A new look is a change worth broadcasting in its own right: the summary
+		// fold reads Sig, so a cockpit holding a stale one folds by stale data.
+		if s.refreshSigLocked(p.ID, p.State) {
+			changed = true
+		}
 	}
 
 	// Drain the queued backlog onto any free idle agents this tick; assignments
@@ -1071,9 +1162,10 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 
 	var out []proto.Panel
 	if changed && len(s.clients) > 0 {
+		pids := s.pty.Pids()
 		out = make([]proto.Panel, len(s.panels))
 		for i, p := range s.panels {
-			out[i] = p.ToProto()
+			out[i] = s.wirePanel(p, pids)
 		}
 	}
 	s.mu.Unlock()
@@ -1275,6 +1367,25 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 		if cc.self != "" && slices.Contains(targetIDs(cmd), cc.self) {
 			return "conductor role: cannot act on its own panel"
 		}
+	case "panel.attention", "panel.resolve":
+		// The one pair that is fenced the other way round. Raising a hand is not
+		// destructive, so a conductor is allowed to do it — but only ABOUT ITSELF. A
+		// declaration takes its panel out of the scheduler's free pool until
+		// something withdraws it, so a conductor free to raise hands across the fleet
+		// is a conductor that can freeze the backlog for every other agent, one
+		// looping call at a time. An empty id already means "my own panel".
+		if cc.self != "" && cmd.ID != "" && cmd.ID != cc.self {
+			return "conductor role: may only raise its own hand"
+		}
+	case "panel.tail", "panel.ack":
+		// The inbox verbs, and the inbox is an operator surface. There is no conductor
+		// queue — an agent triaging the fleet's attention is a design this round
+		// deliberately did not build (DESIGN §12) — and the fence is where that
+		// decision is ENFORCED rather than merely intended. Reading another panel's
+		// trailing output is not destructive, so this is a boundary rather than a
+		// guardrail; opening it later is deleting one line, and interface room is
+		// left for exactly that.
+		return "conductor role: the inbox is an operator surface"
 	case "panel.create":
 		now := time.Now()
 		if !cc.lastSpawn.IsZero() && now.Sub(cc.lastSpawn) < minConductorSpawnGap {
@@ -1529,6 +1640,22 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "task.drain":
 		s.drainQueued()
 		send(cc, s.tasksMsg())
+	case "panel.attention":
+		// An agent raising its own hand, with a reason — the top of the detection
+		// precedence. Reply and re-derive both happen in attention.go.
+		s.declareAttention(cc, cmd)
+	case "panel.resolve":
+		// …and putting it back down, without waiting for its next byte of output to
+		// be downgraded by a timer.
+		s.resolveAttention(cc, cmd)
+	case "panel.tail":
+		// The inbox pulling one row's trailing output, so its detail pane shows the
+		// same bytes the Monitor sniffed. The clamp and the reply live in tail.go.
+		s.sendTail(cc, cmd.ID, cmd.Count)
+	case "panel.ack":
+		// A human dealt with a panel from the inbox — dismissed, snoozed, or
+		// answered it. The record is fleet state; the reasoning is in ack.go.
+		s.ackPanel(cc, cmd)
 	case "panel.resize":
 		s.pty.Resize(cmd.ID, cmd.Rows, cmd.Cols)
 	default:
@@ -1586,15 +1713,20 @@ func (s *Server) createPanel(kind, path string, args []string, dir, profile stri
 
 	// A conductor runs in a server-managed ephemeral workspace, never dir, and
 	// carries the identity env. Build them before the spec so a failure cleans up
-	// the reservation and any half-made workspace.
+	// the reservation and any half-made workspace. Every other agent panel gets
+	// the same identity minus the scoped role: it is told which panel it is, and
+	// is granted nothing by being told (see panelEnv).
 	var env []string
-	if conductor {
+	switch {
+	case conductor:
 		ws, err := s.makeConductorWorkspace(id)
 		if err != nil {
 			s.clearConductorPending()
 			return "", err
 		}
 		dir, env = ws, s.conductorEnv(id)
+	case kind == proto.KindAgent:
+		env = s.panelEnv(id)
 	}
 	// A global shell always opens in $HOME — a stable "home base", never dir or the
 	// configured default. No workspace, no identity env: it drives nothing.
@@ -1610,6 +1742,24 @@ func (s *Server) createPanel(kind, path string, args []string, dir, profile stri
 	var spec ptymgr.Spec
 	switch kind {
 	case proto.KindShell:
+		// A shell panel carries no identity env, and that is a decision rather than
+		// an oversight. The case for giving it one is real enough: a person who
+		// types `echo $BATON_PANEL_ID` would get an answer. It loses on two counts.
+		// A shell is a launcher — every program a person starts in it inherits the
+		// marking, so the id would trail tools that have nothing to do with the
+		// panel, where an agent panel runs the single long-lived process that IS the
+		// panel. And the human already has what the agent lacks: the cockpit shows
+		// the panel, `baton ctl list` names the ids, and `--id` is one flag away;
+		// the reason an agent must be told is precisely that it can see neither.
+		// The socket needs no injecting: the daemon pins BATON_SOCK into its own
+		// environment when it re-execs (daemonEnviron in cmd/baton), and ptymgr
+		// starts every panel from os.Environ(), so a shell panel inherits it and
+		// `baton ctl` there already reaches this server at full cockpit power. Note
+		// that it is the inherited variable doing the work, not paths.Socket()'s
+		// fallback: a panel is Setsid'd into its own session, so recomputing the
+		// session-scoped default inside one yields a socket that does not exist.
+		// The global shell has been held to this exact contract since it landed,
+		// and both shell kinds stay identical here.
 		spec = ptymgr.Spec{Command: path, Dir: dir}
 	case proto.KindAgent:
 		if path == "" {
@@ -1713,16 +1863,61 @@ func (s *Server) clearGlobalShellPending() {
 	s.mu.Unlock()
 }
 
-// conductorEnv is the identity baton injects into the conductor panel's process:
-// the control socket to dial and the scoped role + own panel id the control
-// client declares on hello, so `baton ctl` inside the panel is fenced to the
-// conductor policy and knows which panel not to act on.
-func (s *Server) conductorEnv(id string) []string {
+// panelEnv is the identity baton injects into an agent panel's process: the
+// control socket to dial, and the panel's own id. Together they are the answer to
+// a question an agent could not previously ask — "which panel am I?" — and the
+// whole reason it matters is that a control client which cannot name itself
+// cannot say anything about itself. `baton ctl` reads both on Dial, so the agent
+// inside the panel reaches this server and declares a self without anyone having
+// to tell it. Until this existed only the conductor was told, which meant a
+// fleet of fifty agents had exactly one member able to speak about itself.
+//
+// The role is left empty, and what that means should not be overstated. It means
+// only that an ordinary agent must not be handed the CONDUCTOR's role: that role
+// carries a fence built for the one panel that drives the fleet (no self-close,
+// no self-dispatch, a spawn rate cap, a fleet ceiling) plus the policy stripping
+// that travels with it, none of which describes a worker. An empty role is the
+// plain, unscoped connection, so a worker keeps exactly the reach it already had
+// before this: full cockpit power over the whole fleet, including closing its
+// neighbours. That is the status quo, not a decision — an agent panel could do
+// all of it before an id was ever injected, and injecting one widens nothing.
+//
+// It is also not the end state. A worker-scoped role — open for the verbs an
+// agent needs about ITSELF (attention, resolve, rename) and closed against
+// panel.close, panel.signal, panel.input, panel.dispatch and panel.create on
+// anyone else — is a known follow-up, and the identity injected here is the
+// prerequisite it was waiting on. This unit neither opens that gap nor closes
+// it; it should not be read as having settled the question.
+//
+// A panel that runs baton itself inherits these variables and nothing needs
+// guarding. The cockpit (internal/client) says hello with no role and no self at
+// all, so a nested TUI attaches at full power no matter what it inherited. A
+// nested *server* is covered too: ptymgr appends a spec's env after os.Environ()
+// and os/exec keeps the last occurrence of a duplicate key, so an inner daemon's
+// injection overrides the outer one and each panel is told the id its own server
+// gave it. Only `baton ctl` and `baton mcp` read these at all, and for them
+// inheritance is the right answer — a helper the agent shells out to is still
+// acting on that panel's behalf.
+//
+// None of this is a security boundary, and the comment should not be read as
+// claiming otherwise. The socket is uid-private and both role and self are
+// self-declared, so any local process of your user can dial it and claim to be
+// any panel it likes. Injecting the id makes the honest case work; it does not
+// make the dishonest one impossible. The server's fence (see guardConductor) is
+// documented under exactly the same limit.
+func (s *Server) panelEnv(id string) []string {
 	return []string{
 		paths.EnvSocket + "=" + s.socketPath(),
-		paths.EnvRole + "=" + roleConductor,
 		paths.EnvPanelID + "=" + id,
 	}
+}
+
+// conductorEnv is panelEnv plus the one thing that makes a conductor a conductor:
+// the scoped role its control client declares on hello, which the server fences.
+// The rest of its identity — the socket to dial, and the own panel id it is
+// fenced from acting on — is the same identity every agent panel now carries.
+func (s *Server) conductorEnv(id string) []string {
+	return append(s.panelEnv(id), paths.EnvRole+"="+roleConductor)
 }
 
 // socketPath is the control socket this server listens on, taken from the live
@@ -2274,6 +2469,11 @@ func (s *Server) advanceTaskLocked(panelID string, status task.Status, result st
 	if result != "" {
 		t.Result = result
 	}
+	if status == task.Done {
+		// The server SAW the work finish rather than inferring it from silence, so
+		// the panel's turn is over now. The tick that reads this edge clears it.
+		s.taskSettled[panelID] = true
+	}
 	t.Updated = s.mon.now()
 	s.emit("task.change", taskFields(t))
 	s.markTaskDirtyLocked(t.ID)
@@ -2352,6 +2552,10 @@ func (s *Server) pruneExitedLocked() (stop, workspaces []string) {
 			delete(s.sessions, p.ID)
 			s.forgetRestartLocked(p.ID)
 			s.forgetCwdLocked(p.ID)
+			delete(s.declared, p.ID)
+			delete(s.acked, p.ID)
+			delete(s.taskSettled, p.ID)
+			delete(s.exitedAt, p.ID)
 			delete(s.pendingDispatch, p.ID)
 			delete(s.panelTask, p.ID) // the panel is gone; its task history is bounded separately
 			continue
@@ -2363,10 +2567,59 @@ func (s *Server) pruneExitedLocked() (stop, workspaces []string) {
 }
 
 // dispatchReady reports whether a panel in this state can receive a dispatched
-// prompt now: a settled agent (idle or waiting for input) is ready; one still
-// spawning or actively producing output is not, so the dispatch is held.
+// prompt now: a settled agent is ready; one still spawning or actively producing
+// output is not, so the dispatch is held until it settles.
+//
+// done and stuck are settled by definition — both describe a panel that has
+// stopped producing output — and both MUST be listed here. A held dispatch is
+// only ever released by a transition, and neither state moves again without new
+// output, so leaving them out would strand a prompt sent to a panel that had
+// simply been quiet for a minute.
 func dispatchReady(st panel.State) bool {
-	return st == panel.Idle || st == panel.Attention
+	switch st {
+	case panel.Idle, panel.Attention, panel.Done, panel.Stuck:
+		return true
+	}
+	return false
+}
+
+// freeForWork reports whether an agent in this state may be handed a task off
+// the backlog: quiet, and not asking for anything.
+//
+// done and stuck join idle because all three describe an agent that has stopped
+// producing output — which is the whole of what idle meant before the ladder
+// split it in three. Omitting them would silently shrink the scheduler's pool to
+// nothing on any fleet left alone for a minute. attention is excluded on
+// purpose: a panel waiting on a human is not waiting for more work.
+//
+// Including stuck is a deliberate tension, not an oversight: the dashboard is
+// telling a human "this agent looks wedged" while the scheduler hands it more
+// work. It is resolved in favour of behaviour preservation, because stuck is a
+// SUSPICION drawn from silence alone and the panel it describes was plain idle
+// before this ladder existed — one an operator would have dispatched to without
+// a second thought. A wedged agent that takes a prompt and does nothing with it
+// shows up as a task stuck in `dispatched`, which is visible; an agent wrongly
+// withheld from the queue shows up as nothing at all, which is not. If that ever
+// stops being the right trade, this is the one line to change.
+func freeForWork(st panel.State) bool {
+	switch st {
+	case panel.Idle, panel.Done, panel.Stuck:
+		return true
+	}
+	return false
+}
+
+// wakesOnOutput reports whether a byte of output brings a panel back to running.
+// Every resting state does; running is already there and exited is terminal.
+func wakesOnOutput(st panel.State) bool {
+	return st != panel.Running && st != panel.Exited
+}
+
+// declaredLocked reports whether an agent's own panel.attention declaration
+// currently stands for this panel. Caller holds s.mu.
+func (s *Server) declaredLocked(id string) bool {
+	d := s.declared[id]
+	return d != nil && d.Reason != ""
 }
 
 // enqueueTask adds an unassigned task to the backlog for the scheduler to drain
@@ -2411,7 +2664,7 @@ func (s *Server) queuedBacklogLenLocked() int {
 func (s *Server) freeIdleAgentLocked(group string) (string, bool) {
 	for i := range s.panels {
 		p := &s.panels[i]
-		if p.Kind != panel.Agent || p.Conductor || p.State != panel.Idle {
+		if p.Kind != panel.Agent || p.Conductor || !freeForWork(p.State) {
 			continue
 		}
 		if group != "" && p.Group != group {
@@ -2701,28 +2954,47 @@ func (s *Server) respawnPanel(id string) error {
 		return fmt.Errorf("panel is still running")
 	}
 	isConductor := s.panels[idx].Conductor
+	isAgent := s.isAgentPanelLocked(id) // still under the lock taken above
 	spec, ok := s.specs[id]
 	s.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("nothing to re-run")
 	}
 
-	// A conductor re-run needs a live workspace and fresh identity env: reuse the
-	// retained workspace if it still exists (the common exit→respawn), make a new
-	// one if it is gone (e.g. after a reboot cleared the runtime dir), and always
-	// refresh the env since the socket path can change across a daemon restart.
-	// Rewrite the workspace wiring either way, so an edited operator brief
+	// Every agent panel has its identity rebuilt on a re-run, and rebuilt rather
+	// than replayed. The id is the panel's own and never changes, so it comes back
+	// as the same self it was; what is not stable is everything around it. The
+	// socket path can move across a daemon restart, and a panel restored from disk
+	// carries no env at all — the snapshot persists command, args, dir and profile,
+	// never the environment. Taking the values from the live server is what makes a
+	// re-run agent know itself as surely as a freshly spawned one, instead of coming
+	// back mute or pointed at a socket that is gone. A conductor needs one thing
+	// more: a live workspace. Reuse the retained one if it still exists (the common
+	// exit→respawn), make a new one if it is gone (e.g. a reboot cleared the runtime
+	// dir), and rewrite its wiring either way, so an edited operator brief
 	// ($HOME/.baton/CONDUCTOR.md) is picked up on every re-run.
-	if isConductor {
-		if spec.Dir == "" || !dirExists(spec.Dir) {
-			ws, err := paths.NewConductorWorkspace()
-			if err != nil {
-				return err
+	//
+	// Assigning Env replaces it rather than merging into it. That is correct only
+	// because an agent spec's Env holds nothing but the identity this server put
+	// there — if a profile ever carries custom environment onto a spawn, this line
+	// would silently swallow it on the first re-run and must merge instead.
+	// A conductor is always an agent, so the second half of the condition never
+	// decides anything today; it is there so a conductor's workspace rebuild does
+	// not quietly depend on that invariant holding in a restored state file.
+	if isAgent || isConductor {
+		if isConductor {
+			if spec.Dir == "" || !dirExists(spec.Dir) {
+				ws, err := paths.NewConductorWorkspace()
+				if err != nil {
+					return err
+				}
+				spec.Dir = ws
 			}
-			spec.Dir = ws
+			writeConductorFiles(spec.Dir, id)
+			spec.Env = s.conductorEnv(id)
+		} else {
+			spec.Env = s.panelEnv(id)
 		}
-		writeConductorFiles(spec.Dir, id)
-		spec.Env = s.conductorEnv(id)
 		s.mu.Lock()
 		s.specs[id] = spec
 		s.mu.Unlock()
@@ -2732,9 +3004,6 @@ func (s *Server) respawnPanel(id string) error {
 	// the promise that only exists because the directory is tracked. A directory
 	// that has since been removed falls back to the spawn directory and says so:
 	// coming back somewhere else in silence is the outcome worth avoiding.
-	s.mu.Lock()
-	isAgent := s.isAgentPanelLocked(id)
-	s.mu.Unlock()
 	launch := spec.Spec
 	dir, notice := s.respawnDir(id, launch, isAgent)
 	launch.Dir = dir
@@ -2753,6 +3022,9 @@ func (s *Server) respawnPanel(id string) error {
 	s.mu.Lock()
 	if i := s.indexLocked(id); i >= 0 {
 		s.panels[i].State = panel.Spawning
+		s.panels[i].ExitCode = 0 // the old process's status says nothing about the new one
+		delete(s.exitedAt, id)   // …nor does when it died
+		delete(s.acked, id)      // …nor does a human having dealt with the run that ended
 		s.panels[i].Activity = activityText(panel.Spawning, 0)
 		// The new process starts in the directory just resolved, whatever the old
 		// one had wandered to; the tracker re-learns from there.
@@ -2839,6 +3111,10 @@ func (s *Server) closePanel(id string) error {
 	delete(s.sessions, id)        // …and the session ids its usage was attributed through
 	s.forgetRestartLocked(id)     // …and any restart armed for it: it must not come back
 	s.forgetCwdLocked(id)         // …and the output tail kept to read its directory reports
+	delete(s.declared, id)        // …and whatever it had said about needing a human
+	delete(s.acked, id)           // …and any acknowledgement a human left on it
+	delete(s.taskSettled, id)     // …and any pending done edge
+	delete(s.exitedAt, id)        // …and the instant it died, if it had
 	delete(s.pendingDispatch, id) // and any dispatch held for it
 	delete(s.panelTask, id)       // and its task mapping (the task record stays as history)
 	s.emit("panel.close", map[string]any{"id": id, "title": title})
@@ -3708,6 +3984,36 @@ func (s *Server) setGroupFavourite(group string, fav bool) error {
 	return nil
 }
 
+// wirePanel encodes one panel for the wire and joins in everything the domain
+// model deliberately does not carry: the live group-leader pid and the state
+// clock. Both fleet messages a client sees — the "panels" snapshot and the
+// "telemetry" refresh — are built through here, so the two can never disagree:
+// before this helper existed the snapshot joined the pid and the telemetry frame
+// did not, which is exactly the drift two hand-written builders of the same
+// message accumulate.
+//
+// Since travels as an instant rather than as the rendered Activity string
+// because a queue has to SORT on it: a rendered "3m" cannot be ordered, and a
+// client's own clock cannot be trusted across the --remote ssh hop. It keeps
+// nanoseconds so panels that settled in the same tick still order stably. For a
+// dead panel it falls back to when the process ended, because the Monitor forgets
+// a panel on exit and a queue listing failures still has to order them.
+// Caller holds s.mu.
+func (s *Server) wirePanel(p panel.Panel, pids map[string]int) proto.Panel {
+	out := p.ToProto()
+	out.Pid = pids[p.ID]
+	since := s.mon.enteredAt(p.ID)
+	if since.IsZero() {
+		since = s.exitedAt[p.ID]
+	}
+	if !since.IsZero() {
+		out.Since = since.Format(time.RFC3339Nano)
+	}
+	out.Sig = s.mon.sig(p.ID)
+	out.Acked = s.ackedLocked(p.ID)
+	return out
+}
+
 // panelsMsg builds the full "panels" snapshot broadcast to clients: every panel
 // in wire form plus each group's non-default view settings, sorted by name for a
 // deterministic frame.
@@ -3717,8 +4023,7 @@ func (s *Server) panelsMsg() proto.ServerMsg {
 	out := make([]proto.Panel, len(s.panels))
 	pids := s.pty.Pids() // one lock acquisition, then a map lookup per panel — the ptymgr lock is contended by the output pump
 	for i, p := range s.panels {
-		out[i] = p.ToProto()
-		out[i].Pid = pids[p.ID] // join the live group-leader pid so frontends can walk the OS tree
+		out[i] = s.wirePanel(p, pids)
 	}
 	// Per-group view settings ride the snapshot, sorted by name for determinism.
 	// A group appears when it carries a non-default visible count, a non-default

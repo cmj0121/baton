@@ -20,6 +20,7 @@ import (
 var (
 	defColBrand   = colBrand
 	defColBrandHi = colBrandHi
+	defColFailed  = colFailed
 	defLED        = captureLED()
 )
 
@@ -47,6 +48,12 @@ func applyTheme(t config.Theme) {
 	setLED(panel.Idle, t.Idle)
 	setLED(panel.Attention, t.Attention)
 	setLED(panel.Exited, t.Exited)
+	setLED(panel.Done, t.Done)
+	setLED(panel.Stuck, t.Stuck)
+
+	// failed is not a state, so it has no LED to override — it is the colour
+	// stateInfoFor paints an exited panel that exited badly.
+	colFailed = pick(t.Failed, defColFailed)
 
 	rebuildThemedStyles()
 }

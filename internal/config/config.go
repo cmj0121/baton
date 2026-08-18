@@ -84,12 +84,20 @@ type Theme struct {
 	Brand   string `yaml:"brand,omitempty"`    // primary accent (banner, active borders, selection)
 	BrandHi string `yaml:"brand-hi,omitempty"` // brighter accent (titles, pins, summary, hits)
 
-	// The five lifecycle-state LEDs, by state name.
+	// The lifecycle-state LEDs, by state name.
 	Spawning  string `yaml:"spawning,omitempty"`
 	Running   string `yaml:"running,omitempty"`
 	Idle      string `yaml:"idle,omitempty"`
 	Attention string `yaml:"attention,omitempty"`
 	Exited    string `yaml:"exited,omitempty"`
+	Done      string `yaml:"done,omitempty"`
+	Stuck     string `yaml:"stuck,omitempty"`
+
+	// Failed is not a lifecycle state — it is how an exited panel with a non-zero
+	// exit code renders. It takes a token of its own anyway, because the whole
+	// point of showing failure rather than making you infer it is that it should
+	// not look like an ordinary exit.
+	Failed string `yaml:"failed,omitempty"`
 }
 
 // Layout is one named group-split arrangement. With no Areas it names a built-in
@@ -227,6 +235,78 @@ type Settings struct {
 	// (or a language baton does not ship) follows the environment instead:
 	// $BATON_LANG, then $LC_ALL / $LC_MESSAGES / $LANG, then English.
 	Language string `yaml:"language,omitempty"`
+
+	// FoldQuiet is how many quiet panels the dashboard tolerates before it folds
+	// them into one expandable "▸ N quiet" row: a panel that is merely idle, or
+	// that exited cleanly, and that you have not favourited, pinned or marked.
+	//
+	// It exists because a fleet is mostly fine. At fifty panels the handful that
+	// want something are buried under forty that do not, and scrolling past them
+	// to find the one asking a question is the cost this whole feature set is
+	// aimed at. Folding is by INTEREST rather than by position, and it is a fold
+	// and not a filter — the row expands, so nothing is ever hidden with no way
+	// back to it.
+	//
+	// Unset defaults to 8, which is roughly where a card grid stops fitting on
+	// one screen; 0 switches folding off entirely, which is the right setting for
+	// anyone who wants the dashboard to keep showing every panel it has. Below
+	// the threshold nothing folds at all, so a small fleet looks exactly as it
+	// does today. It is a pointer for the reason every other setting here is: an
+	// explicit 0 has to survive a rewrite of the file, and an omitted int cannot
+	// be told from one somebody meant.
+	FoldQuiet *int `yaml:"fold-quiet,omitempty"`
+
+	// FoldSimilar folds a group's summary tile by what its members LOOK like
+	// rather than by where they sit in the group. At scale the members worth a
+	// live tile are the ones that differ — after a broadcast to fifty shells the
+	// useful answer is "48 identical, 2 differ, here are the 2" — and folding by
+	// position instead picks the live tiles by an accident of spawn order. Unset
+	// defaults to on; set false to keep the positional fold. Either way a group
+	// that fits inside its visible-tile count never folds at all.
+	FoldSimilar *bool `yaml:"fold-similar,omitempty"`
+
+	// InboxDone decides whether a finished agent joins the attention inbox at
+	// all — the queue's "review me" bucket, always sorted below the panels that
+	// are actually asking a question.
+	//
+	// Unset defaults to on, because that bucket is what makes the queue
+	// CLEARABLE: with it off the inbox holds only questions, failures, and
+	// wedges, which is a strictly smaller promise than "here is everything that
+	// wants a human, and here is how you finish with it". Set it false when you
+	// run few enough agents to be watching them anyway, where a finished turn is
+	// something you saw rather than something you need told.
+	InboxDone *bool `yaml:"inbox-done,omitempty"`
+
+	// InboxSnooze is how long the inbox's `-` defers a row, as a Go duration
+	// ("10m", "1h"). It is applied by the COCKPIT — the absolute instant is
+	// computed here and sent to the daemon — so two cockpits with different
+	// values each get what they configured without the daemon holding a
+	// per-client policy. Unset, unparseable, or non-positive falls back to ten
+	// minutes; a snooze that silently did nothing would read as a dropped key.
+	InboxSnooze string `yaml:"inbox-snooze,omitempty"`
+
+	// Notify raises a DESKTOP notification — an OSC 9 escape written straight
+	// to the terminal, the same trick the clipboard uses for OSC 52 — when
+	// panels start needing a human.
+	//
+	// Unset defaults to OFF, unlike the bell. The bell reaches whoever is at
+	// this terminal, and a terminal you are attached to is a place you chose to
+	// be; a desktop toast reaches you wherever you are, and that is not a thing
+	// software may assume it is welcome to do. Turn it on when the fleet is
+	// large enough, or far enough away over --remote, that the bell is nobody's.
+	Notify *bool `yaml:"notify,omitempty"`
+
+	// NotifyCoalesce is how long the cockpit gathers rising edges before
+	// sending one notification for all of them, as a Go duration ("30s", "2m").
+	//
+	// It exists because the failure mode of a fleet-scale notifier is not
+	// missing an alert, it is sending forty — one toast per panel is how a
+	// notification channel gets muted for good. So the first edge does not
+	// fire: it opens the window, and what goes out when the window closes is
+	// "3 agents need you". Unset, unparseable, or negative falls back to thirty
+	// seconds; 0 sends on the next clock tick, which still coalesces whatever
+	// arrived together but gives up almost all the batching.
+	NotifyCoalesce string `yaml:"notify-coalesce,omitempty"`
 }
 
 // PanelDefaults configure how new panels are spawned.
@@ -266,6 +346,11 @@ type PanelDefaults struct {
 	// Restart is the fleet-wide policy for bringing a dead panel back — the floor
 	// a per-agent restart would later override. Unset restarts nothing.
 	Restart RestartConfig `yaml:",inline"`
+
+	// Attention is the fleet-wide quiet ladder — done-on-quiet, done-after,
+	// stuck-after — the floor a per-agent profile would later restate one line of.
+	// Unset runs on the built-in defaults.
+	Attention AttentionConfig `yaml:",inline"`
 
 	// TrackCwd is how a panel's live working directory is learned: "auto" (the
 	// default — the shell's own report when it makes one, the process table
@@ -400,6 +485,12 @@ type AgentProfile struct {
 	// the same way. The common case is one line — `restart: never` on an agent you
 	// would rather look at yourself than have quietly re-run.
 	Restart RestartConfig `yaml:",inline"`
+
+	// Attention is this profile's quiet ladder, layered the same way. It is the
+	// override that matters most in practice: how long silence means "thinking"
+	// rather than "wedged" is a property of the agent, and no fleet-wide number
+	// can be right for both a one-shot `--print` run and an interactive session.
+	Attention AttentionConfig `yaml:",inline"`
 }
 
 // Load reads the config file. A missing file yields an empty Config and no

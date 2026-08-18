@@ -13,10 +13,11 @@ import (
 
 // Environment variables baton reads and injects. EnvSocket points a client at
 // the control socket (and lets the daemon child inherit the parent's choice
-// across its re-session). EnvRole and EnvPanelID are injected into a conductor
-// panel's process so the control client inside it identifies itself to the
-// server: the scoped role it runs under, and its own panel id (the panel it is
-// fenced from acting on).
+// across its re-session, which is also how every panel it spawns finds the
+// socket). EnvPanelID is injected into every agent panel's process, so the
+// control client inside it can name itself to the server without being told
+// which panel it is. EnvRole is injected into the conductor panel alone: it
+// names the scoped role that panel runs under, and the fence that comes with it.
 const (
 	EnvSocket  = "BATON_SOCK"
 	EnvRole    = "BATON_ROLE"

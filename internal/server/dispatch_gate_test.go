@@ -2,6 +2,7 @@ package server
 
 import (
 	"testing"
+	"time"
 
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/ptymgr"
@@ -20,6 +21,9 @@ func gateServer(panels ...panel.Panel) (*Server, *fakeClock, *[]string) {
 		mon:             mo,
 		panels:          panels,
 		pendingDispatch: map[string][]byte{},
+		declared:        map[string]*declaration{},
+		taskSettled:     map[string]bool{},
+		exitedAt:        map[string]time.Time{},
 		tasks:           map[string]*task.Task{},
 		panelTask:       map[string]string{},
 		spawning:        map[string]bool{},

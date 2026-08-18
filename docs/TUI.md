@@ -43,7 +43,14 @@ rather than wedging the cockpit.
 | `running`   | the `running`-state LED                              |
 | `idle`      | the `idle`-state LED                                 |
 | `attention` | the `attention`-state LED                            |
+| `done`      | the `done`-state LED (a quiet agent: review me)      |
+| `stuck`     | the `stuck`-state LED (quiet far past its budget)    |
 | `exited`    | the `exited`-state LED                               |
+| `failed`    | an **exited** panel with a non-zero exit code        |
+
+`failed` is the one token that is not a state LED. Failure is not a lifecycle state — it is an `exited` panel carrying a
+non-zero exit code (see [SPEC.md](./SPEC.md#lifecycle)) — but it takes a token of its own anyway, because the whole point
+of showing failure rather than making you infer it is that it must not look like an ordinary exit.
 
 ## Layouts
 
@@ -177,6 +184,8 @@ These ride alongside the appearance config (full key reference in [SPEC.md](./SP
 | ---------------------- | --------- | ------------------------------------------------------------------------------ |
 | Any view               | `C-t ~`   | toggle the floating scratch pane (a throwaway shell)                           |
 | Any view               | `C-t o`   | process tree — panel state as a coloured LED, CPU as a load-coloured bar + mem |
+| Any view               | `C-t a`   | the attention inbox — see [ATTENTION.md](./ATTENTION.md#the-inbox--c-t-a)      |
+| Dashboard              | `enter`   | on the `▸ N quiet` fold row: expand it (`esc` folds it again)                  |
 | Group split            | `L`       | cycle the tile layout (presets, then your custom layouts)                      |
 |                        | `z`       | resize mode — arrows grow / shrink the focused tile (view-local)               |
 | Scroll mode (`C-t [`)  | `v`       | start a whole-line selection                                                   |

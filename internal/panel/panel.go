@@ -28,13 +28,31 @@ func (k Kind) String() string {
 // State is the Monitor lifecycle state a panel is in (see docs/SPEC.md).
 type State int
 
-// The Monitor lifecycle states, from spawn to exit.
+// The Monitor lifecycle states, from spawn to exit. New members are APPENDED,
+// never inserted: the zero value has to stay Spawning, since that is what a
+// freshly created panel is. The constant itself is never serialised — the wire
+// carries the string String() renders — so the numbers are free to move only in
+// the sense that nothing outside this package may depend on them.
 const (
 	Spawning State = iota
 	Running
 	Idle
 	Attention
 	Exited
+
+	// Done is a quiet AGENT whose turn looks over: it stopped producing output
+	// long enough that the work it was given reads as finished, so the panel is
+	// asking to be reviewed rather than answered. It is deliberately not reachable
+	// for a shell — a shell sitting at its prompt is idle, and calling that "done"
+	// would put every untouched shell in the human's queue.
+	Done
+
+	// Stuck is a panel quiet far past what its agent's work should take. It says
+	// nothing about why — a wedged process, a network wait, and a model thinking
+	// hard are indistinguishable from the byte stream — only that the silence has
+	// outlasted the threshold configured for this agent, which is the point at
+	// which a human is the cheapest way to find out.
+	Stuck
 )
 
 func (s State) String() string {
@@ -49,6 +67,10 @@ func (s State) String() string {
 		return "attention"
 	case Exited:
 		return "exited"
+	case Done:
+		return "done"
+	case Stuck:
+		return "stuck"
 	default:
 		return "unknown"
 	}
@@ -62,19 +84,32 @@ func ParseKind(s string) Kind {
 	return Shell
 }
 
-// ParseState maps a wire state string to a State, defaulting to Running.
+// ParseState maps a wire state string to a State, defaulting to Idle.
+//
+// The default is Idle rather than Running because the mismatch it exists for is
+// an OLDER frontend reading a NEWER daemon, and in that direction a frontend
+// must UNDER-CLAIM rather than lie. Rendering an unknown state as "running"
+// asserts that work is happening and paints a green, breathing card over a panel
+// that may be waiting on a human; rendering it as "idle" asserts only that
+// nothing is known to be happening, which is true of every state baton might add
+// after this one. The cost of guessing low is a card that looks calmer than it
+// is; the cost of guessing high is a queue that silently loses an entry.
 func ParseState(s string) State {
 	switch s {
 	case "spawning":
 		return Spawning
-	case "idle":
-		return Idle
+	case "running":
+		return Running
 	case "attention":
 		return Attention
 	case "exited":
 		return Exited
+	case "done":
+		return Done
+	case "stuck":
+		return Stuck
 	default:
-		return Running
+		return Idle
 	}
 }
 
@@ -104,6 +139,15 @@ type Panel struct {
 
 	Activity string // short status line, e.g. "running · 3m"
 	Spark    string // output-rate sparkline over the recent window, e.g. "▂▃▅▇▆▃▁"
+
+	// Sig is the Monitor's similarity signature: eight hex characters standing for
+	// this panel's state plus the shape of its last output line. It joins Activity
+	// and Spark as telemetry the server computes and every frontend consumes — a
+	// group's summary tile folds the members whose Sig matches the majority, which
+	// is a question a frontend cannot answer for itself because it holds no output
+	// for a panel it never attached to. Empty for a panel the Monitor no longer
+	// tracks, which every reader treats as "unknown", never as "the same".
+	Sig string
 
 	// Pinned marks the panel as promoted to a live tile in its group's split
 	// view. The server owns the flag and reports it to every frontend, so a pin
@@ -137,6 +181,20 @@ type Panel struct {
 	// server, or 0 once the process has exited. It roots the panel's OS descendant
 	// subtree in the process-tree overlay (and `baton ctl tree`).
 	Pid int
+
+	// ExitCode is the status the panel's process ended with, and is meaningful
+	// ONLY once State is Exited — a zero on a live panel means "not applicable",
+	// never "succeeded". There is no `failed` state: the daemon reports the code
+	// and the frontend draws the conclusion, which keeps failure a rendering of a
+	// fact the lifecycle already had rather than a sixth thing the Monitor has to
+	// shuttle panels in and out of.
+	ExitCode int
+
+	// Reason is why the panel says it needs a human, in the AGENT's own words —
+	// set only by an explicit declaration (panel.attention), never by the tail
+	// heuristic or a timer, which raise a state without being able to say why.
+	// Empty whenever no declaration stands.
+	Reason string
 }
 
 // IsAgent reports whether the panel runs an agent CLI rather than a shell.
@@ -153,12 +211,15 @@ func FromProto(p proto.Panel) Panel {
 		Task:        p.Task,
 		Activity:    p.Activity,
 		Spark:       p.Spark,
+		Sig:         p.Sig,
 		Pinned:      p.Pinned,
 		Favourite:   p.Favourite,
 		Conductor:   p.Conductor,
 		GlobalShell: p.GlobalShell,
 		Cwd:         p.Cwd,
 		Pid:         p.Pid,
+		ExitCode:    p.ExitCode,
+		Reason:      p.Reason,
 	}
 }
 
@@ -177,11 +238,14 @@ func (p Panel) ToProto() proto.Panel {
 		Task:        p.Task,
 		Activity:    p.Activity,
 		Spark:       p.Spark,
+		Sig:         p.Sig,
 		Pinned:      p.Pinned,
 		Favourite:   p.Favourite,
 		Conductor:   p.Conductor,
 		GlobalShell: p.GlobalShell,
 		Cwd:         p.Cwd,
 		Pid:         p.Pid,
+		ExitCode:    p.ExitCode,
+		Reason:      p.Reason,
 	}
 }
