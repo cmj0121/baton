@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -55,18 +56,55 @@ func TestResolveLogPath(t *testing.T) {
 	}
 }
 
-func TestIsDaemonChild(t *testing.T) {
+func TestClaimDaemonRole(t *testing.T) {
 	t.Setenv(daemonEnv, "")
-	if isDaemonChild() {
+	if claimDaemonRole() {
 		t.Fatal("empty env should not be a daemon child")
 	}
 	t.Setenv(daemonEnv, "0")
-	if isDaemonChild() {
+	if claimDaemonRole() {
 		t.Fatal("env=0 should not be a daemon child")
 	}
 	t.Setenv(daemonEnv, "1")
-	if !isDaemonChild() {
+	if !claimDaemonRole() {
 		t.Fatal("env=1 should be a daemon child")
+	}
+}
+
+// TestClaimDaemonRoleTakesTheMarker: the marker must not survive being read. The
+// daemon's environment is inherited by every panel it spawns, and by everything
+// run inside one — so a marker left in place would make the next `baton` typed
+// in a panel try to become a second daemon instead of attaching a cockpit.
+func TestClaimDaemonRoleTakesTheMarker(t *testing.T) {
+	t.Setenv(daemonEnv, "1")
+
+	if !claimDaemonRole() {
+		t.Fatal("the daemon child should claim the role")
+	}
+	if v, set := os.LookupEnv(daemonEnv); set {
+		t.Fatalf("the marker outlived the claim as %q; panels would inherit it", v)
+	}
+	if claimDaemonRole() {
+		t.Fatal("the role is claimed once; a second read must not see it")
+	}
+}
+
+// TestDaemonEnvironIsNotInheritedTwice: the marker baton sets on the daemon child
+// is the same one the child clears, so a panel's environment — built from the
+// daemon's — carries the socket but not the role.
+func TestDaemonEnvironIsNotInheritedTwice(t *testing.T) {
+	t.Setenv(daemonEnv, "1")
+	claimDaemonRole()
+
+	env := daemonEnviron(os.Environ(), "/run/baton.sock", "")
+	var markers int
+	for _, kv := range env {
+		if strings.HasPrefix(kv, daemonEnv+"=") {
+			markers++
+		}
+	}
+	if markers != 1 {
+		t.Fatalf("the child env should carry exactly one %s, got %d: %v", daemonEnv, markers, env)
 	}
 }
 
