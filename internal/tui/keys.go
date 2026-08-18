@@ -225,6 +225,7 @@ type prefs struct {
 	diffCommand       string                         // explicit diff command for the agent diff pop-up ("" = git diff.tool then a built-in diff)
 	tui               config.TUIConfig               // cockpit appearance: colour theme and group-split layouts
 	lang              i18n.Lang                      // resolved message language for the cockpit's help surfaces
+	foldSimilar       bool                           // group summary tile folds the lookalikes, not the latecomers; default on
 }
 
 // defaultAgentName is the built-in agent profile, used when none is configured —
@@ -254,7 +255,7 @@ func loadPrefs() prefs {
 // the daemon-pushed config (the "config" event), so the two can never map a field
 // differently.
 func prefsFromConfig(cfg config.Config) prefs {
-	p := prefs{prefix: keyPrefix, binds: append([]binding(nil), bindings...), confirmClose: true, bellEnabled: true, usageMode: usageWindow}
+	p := prefs{prefix: keyPrefix, binds: append([]binding(nil), bindings...), confirmClose: true, bellEnabled: true, usageMode: usageWindow, foldSimilar: true}
 
 	if cfg.Prefix != "" {
 		p.prefix = cfg.Prefix
@@ -297,6 +298,9 @@ func prefsFromConfig(cfg config.Config) prefs {
 	p.diffCommand = cfg.Panel.DiffCommand
 	p.tui = cfg.TUI
 	p.lang = i18n.Detect(cfg.Settings.Language)
+	if cfg.Settings.FoldSimilar != nil {
+		p.foldSimilar = *cfg.Settings.FoldSimilar
+	}
 	return p
 }
 

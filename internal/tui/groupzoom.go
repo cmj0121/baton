@@ -422,13 +422,8 @@ func (m model) handleGroupResizeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // splitMembers partitions the group into the live tiles and the collapsed
 // members (folded into the summary tile), in fleet order, from a single fleet
-// scan. N is the group's visible count (groupShownN):
-//
-//   - len(all) <= N → everything is a tile, nothing collapsed; pins are moot.
-//   - over N with any pins → the pinned panels are the tiles and everyone else
-//     collapses, so you curate a few to watch live and summarise the rest.
-//   - over N with no pins → the first N are tiles and the rest collapse, the
-//     sensible default before any curation.
+// scan. Everything fits while the group is no larger than its visible count N
+// (groupShownN); past that partitionGroup decides which half is which.
 //
 // In the summary sub-view (summaryScope) groupMembers already returns just the
 // collapsed set, so every member shows as a tile (capped at maxGroupTiles) and
@@ -733,26 +728,47 @@ func (m model) subtreeMembers() []panel.Panel {
 }
 
 // partitionGroup splits the parent group's full membership into the live tiles
-// and the collapsed (summarised) set, by the same N/pins rules splitMembers
-// applies — but always against the raw fleetGroup, never the scoped view. It is
-// the seam the summary sub-view reuses: entering the summary scopes the view to
-// the collapsed half this returns, without splitMembers recursing on itself.
+// and the collapsed (summarised) set — always against the raw fleetGroup, never
+// the scoped view. It is the seam the summary sub-view reuses: entering the
+// summary scopes the view to the collapsed half this returns, without
+// splitMembers recursing on itself.
+//
+// A group that fits inside N never folds at all, so a fleet of five is untouched
+// by any of this. Past N, the similarity fold gets first refusal (it is the one
+// that keeps the outliers on screen) and the positional fold is the fallback for
+// every group it declines — see partitionSimilar for exactly when it declines.
 func (m model) partitionGroup() (tiles, collapsed []panel.Panel) {
 	all := m.fleetGroup()
 	n := m.groupShownN()
 	if len(all) <= n {
 		return all, nil
 	}
+	if m.foldSimilar {
+		if tiles, collapsed, ok := partitionSimilar(all, m.groupPinned, n); ok {
+			return tiles, collapsed
+		}
+	}
+	return partitionPositional(all, m.groupPinned, n)
+}
+
+// partitionPositional is the original split, kept as the fallback and as what
+// fold-similar: false asks for:
+//
+//   - over N with any pins → the pinned panels are the tiles and everyone else
+//     collapses, so you curate a few to watch live and summarise the rest.
+//   - over N with no pins → the first N are tiles and the rest collapse, the
+//     sensible default before any curation.
+func partitionPositional(all []panel.Panel, pinned map[string]bool, n int) (tiles, collapsed []panel.Panel) {
 	pins := 0
 	for _, p := range all {
-		if m.groupPinned[p.ID] {
+		if pinned[p.ID] {
 			pins++
 		}
 	}
 	for i, p := range all {
 		switch {
 		case pins > 0:
-			if m.groupPinned[p.ID] {
+			if pinned[p.ID] {
 				tiles = append(tiles, p)
 			} else {
 				collapsed = append(collapsed, p)
@@ -764,6 +780,123 @@ func (m model) partitionGroup() (tiles, collapsed []panel.Panel) {
 		}
 	}
 	return tiles, collapsed
+}
+
+// sigProbe is a test seam: partitionSimilar pings it once for every member
+// signature it examines. It exists because the difference between this split and
+// the pairwise one it replaces is invisible in the two things a test can measure
+// for free — at fifty members both are far too fast to time reliably, and
+// comparing strings allocates nothing, so an allocation budget passes for the
+// quadratic implementation as readily as for this one (QA measured exactly that).
+// Counting the examinations is the only honest guard, and it guards a contract
+// rather than an implementation: every place a signature is looked at goes
+// through examineSig, so a rewrite is linear if and only if the count is. Nil
+// outside tests, where it costs one predictable branch per member.
+var sigProbe func()
+
+// examineSig returns s, having recorded that partitionSimilar looked at it.
+func examineSig(s string) string {
+	if sigProbe != nil {
+		sigProbe()
+	}
+	return s
+}
+
+// partitionSimilar folds the members that look like the MAJORITY and spends the
+// live tiles on the ones that do not. Past a couple of dozen panels, position is
+// an accident of spawn order and says nothing about which member is worth
+// watching; "everyone else is doing this, these two are not" says everything. It
+// is the difference between a summary tile reading "+48 more" and one reading
+// "+48 identical" beside the two tiles that actually differ.
+//
+// Who looks like whom is decided by panel.Sig, which the daemon computes (see
+// internal/server/monitor.go): a hash of state plus the shape of the last output
+// line, with digit runs collapsed so a progress counter is not mistaken for a
+// difference. An empty Sig is "unknown", but it is tallied like any other value —
+// a fleet of exited panels the Monitor has forgotten genuinely does all look
+// alike, and a daemon too old to send the field at all lands every member in one
+// bucket, which the both-sides-non-empty guard below turns into the positional
+// fold.
+//
+// A PIN IS NOT EXCLUSIVE HERE, and that is a deliberate difference from
+// partitionPositional, where any pin means the pins are the ONLY tiles. Under
+// this fold a pinned member is always a tile and takes from the budget first, but
+// the outliers still get the tiles that are left. A pin says "always show me
+// this"; reading it as "show me only this" would suppress exactly the members the
+// fold exists to surface, and would mean one pin in a group of fifty silently
+// switched the feature off. (DESIGN §7.2 point 4 calls the pin rule "unchanged
+// from today"; this is the ruling that overrides it, and Ward has it.)
+//
+// ok is false whenever this fold has nothing to say, and the caller falls back to
+// the positional one. That happens in four ways, and each matters:
+//
+//   - No majority. A group where everything differs must not fold everything
+//     away; the majority bar is a true majority (at least half, and never fewer
+//     than two), so "no two members alike" can never elect a modal signature.
+//   - Everything alike. There is no outlier to promote, so the fold would be
+//     "+N more" wearing a different word.
+//   - Nothing left to fold. All the lookalikes were pinned, so folding them would
+//     override an explicit instruction to watch them.
+//   - Everyone spinning. A fleet of agents each on a different frame of a spinner
+//     has a different last-line shape per member (the glyph is not a digit, so it
+//     is not collapsed), so no majority forms and the split stays positional.
+//     That is the safe outcome rather than the clever one, and it is deliberate:
+//     guessing which glyphs are "the same animation" would fold panels that are
+//     genuinely doing different things.
+//
+// Cost: three linear passes and two maps, so ~50 map writes and one 50-entry
+// tally for a fleet of fifty, per render of the split. Comparing every pair
+// instead would be 1225 examinations for the same answer against this version's
+// ~100 — which is what TestFoldSimilarStaysLinear counts, and the reason it
+// counts rather than times.
+func partitionSimilar(all []panel.Panel, pinned map[string]bool, n int) (tiles, collapsed []panel.Panel, ok bool) {
+	// Pass 1 — tally the looks, and keep the most common one as we go.
+	counts := make(map[string]int, len(all))
+	modal, best := "", 0
+	for _, p := range all {
+		sig := examineSig(p.Sig)
+		c := counts[sig] + 1
+		counts[sig] = c
+		if c > best {
+			modal, best = sig, c
+		}
+	}
+	if best < max(2, (len(all)+1)/2) {
+		return nil, nil, false
+	}
+
+	// Pass 2 — choose the tiles. Pinned members are tiles unconditionally and take
+	// from the budget first; the outliers fill whatever is left of N, and any
+	// outlier past that folds too, because the tile budget bounds the live
+	// emulators the split spins up.
+	keep := make(map[string]bool, n)
+	for _, p := range all {
+		if pinned[p.ID] {
+			keep[p.ID] = true
+		}
+	}
+	for _, p := range all {
+		if len(keep) >= n {
+			break
+		}
+		if examineSig(p.Sig) != modal {
+			keep[p.ID] = true
+		}
+	}
+
+	// Pass 3 — split in fleet order, so both halves read in the order the group
+	// has always been listed in.
+	for _, p := range all {
+		if keep[p.ID] {
+			tiles = append(tiles, p)
+		} else {
+			collapsed = append(collapsed, p)
+		}
+	}
+	if len(tiles) == 0 || len(collapsed) == 0 {
+		return nil, nil, false
+	}
+	return tiles, collapsed, true
 }
 
 // handleGroupZoomKey drives the split: cycle the focused tile, zoom into it, or
@@ -1514,6 +1647,12 @@ func (m model) renderGroupTile(cg childGroup, focused bool, emuCols, emuRows, ma
 // renderSummaryTile draws the rollup of the collapsed members as one tile: a "+N
 // more" head, the per-state chips, a roster of the summarised panels, and a ↵ open
 // hint — so the spillover is legible at a glance and one enter away.
+//
+// The head names what the fold actually did, which is the whole point of folding
+// by similarity: "+48 identical" when every summarised member looks the same
+// (beside the tiles that do not), and otherwise "+12 more" with the count of
+// distinct looks right-aligned, so a positional fold still says how much variety
+// it swept up.
 func (m model) renderSummaryTile(collapsed []panel.Panel, focused bool, emuCols, emuRows, marginRight int) string {
 	roster := make([]rollupRow, 0, len(collapsed))
 	for _, p := range collapsed {
@@ -1521,8 +1660,27 @@ func (m model) renderSummaryTile(collapsed []panel.Panel, focused bool, emuCols,
 		led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
 		roster = append(roster, rollupRow{led: led, name: p.Title})
 	}
-	return m.renderRollupTile("▦", colBrandHi, false, fmt.Sprintf("+%d more", len(collapsed)),
-		"", groupCountChips(collapsed), roster, "↵ open", focused, emuCols, emuRows, marginRight)
+	head, countRight := fmt.Sprintf("+%d more", len(collapsed)), ""
+	switch distinct := distinctSigs(collapsed); {
+	case distinct == 1 && collapsed[0].Sig != "":
+		head = fmt.Sprintf("+%d identical", len(collapsed))
+	case distinct > 1:
+		countRight = mutedStyle.Render(fmt.Sprintf("%d distinct", distinct))
+	}
+	return m.renderRollupTile("▦", colBrandHi, false, head,
+		countRight, groupCountChips(collapsed), roster, "↵ open", focused, emuCols, emuRows, marginRight)
+}
+
+// distinctSigs counts how many different things a set of panels is showing, by
+// the Monitor's similarity signature. Zero for an empty set. A count of one is
+// only meaningful when the signature itself is known: panels the Monitor has
+// forgotten all carry an empty one, and "all equally unknown" is not "identical".
+func distinctSigs(ps []panel.Panel) int {
+	seen := make(map[string]struct{}, len(ps))
+	for _, p := range ps {
+		seen[p.Sig] = struct{}{}
+	}
+	return len(seen)
 }
 
 // tileGrid arranges rendered tiles into rows of at most cols columns.

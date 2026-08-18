@@ -1123,6 +1123,11 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 			p.Activity = act
 			changed = true
 		}
+		// A new look is a change worth broadcasting in its own right: the summary
+		// fold reads Sig, so a cockpit holding a stale one folds by stale data.
+		if s.refreshSigLocked(p.ID, p.State) {
+			changed = true
+		}
 	}
 
 	// Drain the queued backlog onto any free idle agents this tick; assignments
@@ -3880,6 +3885,7 @@ func (s *Server) wirePanel(p panel.Panel, pids map[string]int) proto.Panel {
 	if !since.IsZero() {
 		out.Since = since.Format(time.RFC3339Nano)
 	}
+	out.Sig = s.mon.sig(p.ID)
 	return out
 }
 

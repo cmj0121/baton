@@ -140,6 +140,15 @@ type Panel struct {
 	Activity string // short status line, e.g. "running · 3m"
 	Spark    string // output-rate sparkline over the recent window, e.g. "▂▃▅▇▆▃▁"
 
+	// Sig is the Monitor's similarity signature: eight hex characters standing for
+	// this panel's state plus the shape of its last output line. It joins Activity
+	// and Spark as telemetry the server computes and every frontend consumes — a
+	// group's summary tile folds the members whose Sig matches the majority, which
+	// is a question a frontend cannot answer for itself because it holds no output
+	// for a panel it never attached to. Empty for a panel the Monitor no longer
+	// tracks, which every reader treats as "unknown", never as "the same".
+	Sig string
+
 	// Pinned marks the panel as promoted to a live tile in its group's split
 	// view. The server owns the flag and reports it to every frontend, so a pin
 	// survives a frontend restart and is shared across clients.
@@ -202,6 +211,7 @@ func FromProto(p proto.Panel) Panel {
 		Task:        p.Task,
 		Activity:    p.Activity,
 		Spark:       p.Spark,
+		Sig:         p.Sig,
 		Pinned:      p.Pinned,
 		Favourite:   p.Favourite,
 		Conductor:   p.Conductor,
@@ -228,6 +238,7 @@ func (p Panel) ToProto() proto.Panel {
 		Task:        p.Task,
 		Activity:    p.Activity,
 		Spark:       p.Spark,
+		Sig:         p.Sig,
 		Pinned:      p.Pinned,
 		Favourite:   p.Favourite,
 		Conductor:   p.Conductor,

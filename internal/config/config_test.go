@@ -145,3 +145,35 @@ func TestLoadMissingSettingIsNil(t *testing.T) {
 		t.Fatal("an unset confirm-close should load as nil so the default applies")
 	}
 }
+
+// TestFoldSimilarSetting checks the group summary's fold switch reaches the file
+// under the name the docs give it, and that leaving it out stays nil — a tri-state
+// the cockpit reads as "on", so the default can change without a rewritten config
+// masking it.
+func TestFoldSimilarSetting(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	off := false
+	if err := (Config{Settings: Settings{FoldSimilar: &off}}).Save(); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	raw, err := os.ReadFile(paths.ConfigFile())
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(raw), "fold-similar: false") {
+		t.Fatalf("the setting should be written as fold-similar, got:\n%s", raw)
+	}
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got.Settings.FoldSimilar == nil || *got.Settings.FoldSimilar {
+		t.Fatalf("fold-similar should round-trip as false, got %+v", got.Settings.FoldSimilar)
+	}
+	if err := (Config{}).Save(); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if got, _ := Load(); got.Settings.FoldSimilar != nil {
+		t.Fatal("an unset fold-similar should load as nil so the default applies")
+	}
+}

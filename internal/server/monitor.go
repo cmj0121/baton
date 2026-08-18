@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"hash/fnv"
 	"regexp"
 	"strings"
 	"time"
@@ -39,6 +40,14 @@ type panelMon struct {
 	stateSince time.Time
 	bucket     int
 	spark      [sparkWidth]int
+
+	// The similarity signature (see the bottom of this file) and the two inputs
+	// it was computed from. Caching it here is what keeps the fold affordable: it
+	// is recomputed only when the panel has spoken since the last one or has
+	// changed state, so a quiet fleet reads no tails at all.
+	sig      string
+	sigState panel.State
+	sigDirty bool
 }
 
 // declaration is what an agent has explicitly said about ITSELF, and it sits at
@@ -89,12 +98,13 @@ func (mo *monitor) spawned(id string) {
 // forget drops a panel's bookkeeping when it exits or is closed.
 func (mo *monitor) forget(id string) { delete(mo.panels, id) }
 
-// observed records n bytes of output: it resets the quiet timer and adds to the
-// current sparkline bucket.
+// observed records n bytes of output: it resets the quiet timer, adds to the
+// current sparkline bucket, and marks the similarity signature stale.
 func (mo *monitor) observed(id string, n int) {
 	if pm := mo.panels[id]; pm != nil {
 		pm.lastOutput = mo.now()
 		pm.bucket += n
+		pm.sigDirty = true // it has something new to look like; the next tick re-hashes it
 	}
 }
 
@@ -391,4 +401,117 @@ func compactDur(d time.Duration) string {
 	default:
 		return fmt.Sprintf("%dh", int(d.Hours()))
 	}
+}
+
+// --- the similarity signature -------------------------------------------------
+//
+// At fifty panels the interesting members are the ones that do NOT look like
+// everyone else, so a group's summary tile folds the lookalikes and spends its
+// live tiles on the outliers. Deciding who looks alike needs each panel's last
+// line, and a cockpit holds no output for a panel it never attached to — so the
+// daemon answers the only question the fold actually asks (same, or different?)
+// with eight hex characters per panel per snapshot, rather than shipping fifty
+// tails through a frame that exists to stay small.
+
+// sigTailBytes is how much trailing output the signature reads. A quarter of
+// attnTailBytes, because the signature keeps only the LAST non-blank line: a
+// kilobyte would be 900 bytes copied in order to be thrown away, fifty times a
+// second.
+const sigTailBytes = 256
+
+// oscSeq matches an OSC sequence — ESC ] … BEL, or ESC ] … ST — stripped before
+// the signature reads a line. This is not cosmetic: an interactive shell writes an
+// OSC 0/2 title before virtually every prompt, and those titles routinely carry a
+// per-panel value (the cwd, the last command). Left in, every member's shape would
+// differ, no majority would ever form, and the whole group would fall silently
+// back to the positional fold — a failure that looks exactly like the feature
+// being off. It is deliberately separate from ansiSeq, which the attention sniff
+// also reads and which this must not change the meaning of.
+var oscSeq = regexp.MustCompile(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
+
+// digitRun matches a run of decimal digits. Collapsing every run to a single "#"
+// is what makes "48 identical" true after a broadcast — "[3/12] building" and
+// "[7/12] building" are the same thing happening, and two shells whose prompts
+// differ only in a clock are not two different things.
+var digitRun = regexp.MustCompile(`[0-9]+`)
+
+// panelSig is what a panel looks like right now, as eight hex characters: its
+// lifecycle state joined to the shape of its last output line. The state is in
+// the hash because two panels showing the same prompt are still different events
+// when one of them is stuck and the other is running.
+//
+// FNV-1a rather than a cryptographic hash: nothing here is a secret or an
+// identity, the only operation ever performed on the value is equality against
+// another panel's, and a collision costs one tile folded that need not have been.
+func panelSig(st panel.State, tail []byte) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(st.String()))
+	_, _ = h.Write([]byte{0}) // separator, so a state name can never bleed into the line
+	_, _ = h.Write([]byte(lineShape(tail)))
+	return fmt.Sprintf("%08x", h.Sum32())
+}
+
+// lineShape reduces trailing output to the SHAPE of its last non-blank line: CSI
+// and OSC stripped, trailing whitespace trimmed, digit runs collapsed. Empty when
+// the panel has printed nothing but blanks.
+//
+// Carriage returns split lines alongside newlines because a progress bar redraws
+// in place: the tail of a downloading shell is one physical line holding every
+// frame it ever drew, and only the last frame describes it now.
+func lineShape(tail []byte) string {
+	// OSC first: its payload is free text that can itself contain a "[", which a
+	// CSI pass run first would happily chew a hole through.
+	s := ansiSeq.ReplaceAllString(oscSeq.ReplaceAllString(string(tail), ""), "")
+	for {
+		i := strings.LastIndexAny(s, "\r\n")
+		if seg := strings.TrimRight(s[i+1:], " \t"); seg != "" {
+			return digitRun.ReplaceAllString(seg, "#")
+		}
+		if i < 0 {
+			return ""
+		}
+		s = s[:i]
+	}
+}
+
+// sig is a panel's last computed signature, or empty for one the Monitor does not
+// track — an exited panel, whose bookkeeping is forgotten the moment it dies.
+func (mo *monitor) sig(id string) string {
+	pm := mo.panels[id]
+	if pm == nil {
+		return ""
+	}
+	return pm.sig
+}
+
+// refreshSigLocked recomputes one panel's signature, but only when it can have
+// changed: the panel produced bytes since the last one (sigDirty, set by
+// observed), or its state moved, or it has never had one. It reports whether the
+// value moved, so the tick can broadcast a panel whose ONLY change this second was
+// what it looks like — rare (new bytes usually move the sparkline too) but real,
+// and a fold working off a signature the cockpit was never sent is a bug nobody
+// would find by looking.
+//
+// Caller holds s.mu.
+//
+// The recompute guard is the whole cost story, and it is why this scales. The two
+// tail reads on this path are complementary rather than additive, which is the
+// part worth knowing: the attention sniff reads a kilobyte only when a panel is
+// QUIET (see wantsTail), and this reads 256 bytes only when it has just SPOKEN.
+// So a resting fleet of fifty pays the sniff and nothing here; a fully busy fifty
+// pays fifty 256-byte reads and fifty FNV passes a second — about 13 KiB of
+// memcpy, comfortably sub-millisecond — and pays no sniff at all. Neither fleet
+// pays both.
+func (s *Server) refreshSigLocked(id string, st panel.State) bool {
+	pm := s.mon.panels[id]
+	if pm == nil {
+		return false
+	}
+	if pm.sig != "" && !pm.sigDirty && pm.sigState == st {
+		return false
+	}
+	pm.sigDirty, pm.sigState = false, st
+	was := pm.sig
+	pm.sig = panelSig(st, s.pty.Tail(id, sigTailBytes))
+	return pm.sig != was
 }

@@ -235,6 +235,15 @@ type Settings struct {
 	// (or a language baton does not ship) follows the environment instead:
 	// $BATON_LANG, then $LC_ALL / $LC_MESSAGES / $LANG, then English.
 	Language string `yaml:"language,omitempty"`
+
+	// FoldSimilar folds a group's summary tile by what its members LOOK like
+	// rather than by where they sit in the group. At scale the members worth a
+	// live tile are the ones that differ — after a broadcast to fifty shells the
+	// useful answer is "48 identical, 2 differ, here are the 2" — and folding by
+	// position instead picks the live tiles by an accident of spawn order. Unset
+	// defaults to on; set false to keep the positional fold. Either way a group
+	// that fits inside its visible-tile count never folds at all.
+	FoldSimilar *bool `yaml:"fold-similar,omitempty"`
 }
 
 // PanelDefaults configure how new panels are spawned.

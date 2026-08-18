@@ -338,6 +338,11 @@ type model struct {
 	width, height int
 	quitting      bool
 	restart       bool // user asked to force-restart the daemon on exit
+
+	// The group split's summary fold (settings.fold-similar). True folds the
+	// members that look like the majority and spends the live tiles on the
+	// outliers; false keeps the positional fold. See partitionSimilar.
+	foldSimilar bool
 }
 
 // inputPurpose is what an active text-input overlay feeds on submit.
@@ -407,6 +412,7 @@ func (m model) applyPrefs(p prefs) model {
 	m.diffCommand = p.diffCommand
 	m.tuiCfg = p.tui
 	m.lang = p.lang
+	m.foldSimilar = p.foldSimilar
 	applyTheme(p.tui.Theme) // resolve the colour tokens into the package palette
 	return m
 }
@@ -1027,6 +1033,7 @@ func (m *model) applyTelemetry(sm proto.ServerMsg) {
 			m.fleet[i].State = panel.ParseState(p.State)
 			m.fleet[i].Activity = p.Activity
 			m.fleet[i].Spark = p.Spark
+			m.fleet[i].Sig = p.Sig
 		}
 	}
 	m.refreshAttention()
