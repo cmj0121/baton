@@ -264,6 +264,29 @@ type Settings struct {
 	// per-client policy. Unset, unparseable, or non-positive falls back to ten
 	// minutes; a snooze that silently did nothing would read as a dropped key.
 	InboxSnooze string `yaml:"inbox-snooze,omitempty"`
+
+	// Notify raises a DESKTOP notification — an OSC 9 escape written straight
+	// to the terminal, the same trick the clipboard uses for OSC 52 — when
+	// panels start needing a human.
+	//
+	// Unset defaults to OFF, unlike the bell. The bell reaches whoever is at
+	// this terminal, and a terminal you are attached to is a place you chose to
+	// be; a desktop toast reaches you wherever you are, and that is not a thing
+	// software may assume it is welcome to do. Turn it on when the fleet is
+	// large enough, or far enough away over --remote, that the bell is nobody's.
+	Notify *bool `yaml:"notify,omitempty"`
+
+	// NotifyCoalesce is how long the cockpit gathers rising edges before
+	// sending one notification for all of them, as a Go duration ("30s", "2m").
+	//
+	// It exists because the failure mode of a fleet-scale notifier is not
+	// missing an alert, it is sending forty — one toast per panel is how a
+	// notification channel gets muted for good. So the first edge does not
+	// fire: it opens the window, and what goes out when the window closes is
+	// "3 agents need you". Unset, unparseable, or negative falls back to thirty
+	// seconds; 0 sends on the next clock tick, which still coalesces whatever
+	// arrived together but gives up almost all the batching.
+	NotifyCoalesce string `yaml:"notify-coalesce,omitempty"`
 }
 
 // PanelDefaults configure how new panels are spawned.

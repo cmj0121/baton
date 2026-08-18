@@ -232,6 +232,8 @@ type prefs struct {
 	foldSimilar       bool                           // group summary tile folds the lookalikes, not the latecomers; default on
 	inboxDone         bool                           // a finished agent joins the attention inbox as a "review me" row; default on
 	inboxSnooze       time.Duration                  // how long the inbox's `-` defers a row; default defaultInboxSnooze
+	notify            bool                           // send OSC 9 desktop notifications when panels need a human; default OFF
+	notifyCoalesce    time.Duration                  // how long edges are gathered into one notification; default defaultNotifyCoalesce
 }
 
 // defaultAgentName is the built-in agent profile, used when none is configured —
@@ -312,6 +314,13 @@ func prefsFromConfig(cfg config.Config) prefs {
 		p.inboxDone = *cfg.Settings.InboxDone
 	}
 	p.inboxSnooze = parseSnooze(cfg.Settings.InboxSnooze)
+	// No default to layer here: settings.notify is off until it is asked for, the
+	// way mouse, keycast and remote are — a desktop toast goes somewhere baton was
+	// not invited, so it waits to be invited.
+	if cfg.Settings.Notify != nil {
+		p.notify = *cfg.Settings.Notify
+	}
+	p.notifyCoalesce = parseCoalesce(cfg.Settings.NotifyCoalesce)
 	return p
 }
 

@@ -377,6 +377,26 @@ type model struct {
 	inboxTailAt    time.Time
 	inboxDone      bool          // settings.inbox-done: does a finished agent join the queue at all
 	inboxSnooze    time.Duration // settings.inbox-snooze: how long `-` defers a row
+
+	// OSC 9 desktop notifications (settings.notify, settings.notify-coalesce).
+	// See notify.go.
+	//
+	// notifySeen is the wantsHuman edge set, kept apart from attnSeen because the
+	// toast covers more than the pop and the bell do; it is maintained only while
+	// notifications are on.
+	//
+	// The open coalescing window is the other three together: notifyAt is when it
+	// opened (zero when none is open), notifyIDs is which panels are already in it,
+	// and notifyPending is their sanitised titles in arrival order. The ids are what
+	// the dedupe keys on and the titles are only what the sentence says, because two
+	// different panels can share a title and must still count as two. Only the
+	// one-second tick can close the window, since only the tick moves m.now.
+	notifyEnabled  bool
+	notifyCoalesce time.Duration
+	notifySeen     map[string]bool
+	notifyIDs      map[string]bool
+	notifyPending  []string
+	notifyAt       time.Time
 }
 
 // inputPurpose is what an active text-input overlay feeds on submit.
@@ -447,6 +467,17 @@ func (m model) applyPrefs(p prefs) model {
 	m.tuiCfg = p.tui
 	m.lang = p.lang
 	m.foldSimilar = p.foldSimilar
+	m.notifyEnabled = p.notify
+	m.notifyCoalesce = p.notifyCoalesce
+	if !m.notifyEnabled {
+		// A reload that switches notifications off must take an already-open window
+		// with it, or off would still mean one last toast up to a coalesce later.
+		// notifySeen goes too: it stops being maintained while off, so keeping a
+		// stale copy would make whatever is outstanding when someone switches
+		// notifications back on invisible to the first refresh.
+		m.clearNotify()
+		m.notifySeen = nil
+	}
 	applyTheme(p.tui.Theme) // resolve the colour tokens into the package palette
 	return m
 }
@@ -797,10 +828,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.now = time.Time(msg)
 		m.ageStatus()
 		m = m.ageKeycast()
+		// The clock has just moved, which is the only thing that can make an open
+		// notification window expire — so this is the one place the coalescer is
+		// drained. nil when there is nothing to send, which tea.Batch drops.
+		note := m.takeNotify()
 		if cmd := m.maybeAutoSaver(); cmd != nil { // auto-start the saver after saverIdle
-			return m, tea.Batch(cmd, tick())
+			return m, tea.Batch(note, cmd, tick())
 		}
-		return m, tick()
+		return m, tea.Batch(note, tick())
 
 	case saverTickMsg:
 		// Advance the rain, re-arming the fast cadence only while the saver is still
