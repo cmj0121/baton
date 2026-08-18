@@ -68,7 +68,7 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | panel.tail | panel.diff | panel.git | panel.scratch | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run
+	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | panel.tail | panel.diff | panel.git | panel.log | panel.logview | panel.scratch | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run
 	Kind      string   `json:"kind,omitempty"`      // panel kind for "panel.create" (default "shell")
 	ID        string   `json:"id,omitempty"`        // target panel for close/attach/input/resize/diff, or the panel to rename
 	Path      string   `json:"path,omitempty"`      // init command (binary path) for "panel.create"; empty = default shell
@@ -178,6 +178,17 @@ type Panel struct {
 	// the text itself because shipping 50 tails on every snapshot is exactly what
 	// the pull-on-demand tail (panel.tail) exists to avoid.
 	Sig string `json:"sig,omitempty"`
+
+	// Logging marks a panel whose output the daemon is writing to a file, so a
+	// frontend can badge it. A feature that silently writes your terminal to disk
+	// has to be visible while it does it — which is why this rides the ordinary
+	// fleet snapshot rather than being something a cockpit has to ask about.
+	Logging bool `json:"logging,omitempty"`
+
+	// LogPath is the file that log is being written to, on the machine the FLEET
+	// runs on — not the one the cockpit runs on, which is a distinction --remote
+	// makes real. Empty whenever Logging is false.
+	LogPath string `json:"log_path,omitempty"`
 
 	// Acked marks a panel a human has already dealt with from the inbox —
 	// dismissed, snoozed, or replied to. It is fleet state, not per-cockpit state,

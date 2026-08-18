@@ -29,6 +29,7 @@ import (
 	"github.com/cmj0121/baton/internal/gitops"
 	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/panel"
+	"github.com/cmj0121/baton/internal/panellog"
 	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/ptymgr"
@@ -127,6 +128,17 @@ type Settings struct {
 	// which panels a re-run puts back in it.
 	TrackCwd   cwd.Track
 	RestoreCwd cwd.Restore
+
+	// Output logging. LogDir is where a panel's transcript lands and AgentLogDir
+	// the per-profile destinations layered over it — the same shape as the caps and
+	// the restart policy, resolved the same way, so all three hot-reload together.
+	// An empty LogDir with no override disables logging for that panel entirely.
+	// AgentLog lists the profiles that log from the moment they spawn, and
+	// LogMaxBytes is the size a log rolls at (0 = the built-in default).
+	LogDir      string
+	AgentLogDir map[string]string
+	AgentLog    map[string]bool
+	LogMaxBytes int64
 }
 
 // Server owns all state and every PTY. It is safe for concurrent use.
@@ -218,6 +230,23 @@ type Server struct {
 	agentRestart map[string]restart.Policy
 	restarts     map[string]*restartState
 	shuttingDown bool
+
+	// Output logging. logDir/agentLogDir resolve where a panel's transcript lands,
+	// agentLog names the profiles that log from spawn, and logMaxBytes is the roll
+	// size (see Settings). logs holds the open sink per panel id — a panel that
+	// exits keeps its sink so a re-run appends rather than truncating. All guarded
+	// by mu.
+	//
+	// logMu is a SECOND lock, and only for the enable/disable pair: opening a log
+	// snapshots the replay ring, creates a file and flushes a buffer into it, which
+	// is disk work that must not be done under the lock the output path contends.
+	// It is never held while taking mu for anything but a short read or write.
+	logDir      string
+	agentLogDir map[string]string
+	agentLog    map[string]bool
+	logMaxBytes int64
+	logs        map[string]*panellog.Sink
+	logMu       sync.Mutex
 
 	// The quiet ladder. attention is the fleet-wide policy and agentAttention the
 	// per-profile ones layered over it (see Settings), resolved per tick from the
@@ -402,6 +431,16 @@ func WithLimits(limits limits.Limits, agents map[string]limits.Limits) Option {
 	return func(s *Server) { s.limits, s.agentLimits = limits, agents }
 }
 
+// WithLogging configures panel output logging: the fleet-wide destination, the
+// per-profile destinations layered over it, the profiles that log from spawn, and
+// the size a log rolls at. An empty dir with no per-profile override leaves
+// logging off, which is the default.
+func WithLogging(dir string, agentDirs map[string]string, agentLog map[string]bool, maxBytes int64) Option {
+	return func(s *Server) {
+		s.logDir, s.agentLogDir, s.agentLog, s.logMaxBytes = dir, agentDirs, agentLog, maxBytes
+	}
+}
+
 // WithVersion sets the server's build version, reported to a frontend in the
 // welcome so it can show the backend version and flag a mismatch.
 func WithVersion(v string) Option {
@@ -481,6 +520,7 @@ func New(ln net.Listener, opts ...Option) *Server {
 		trackCwd:        cwd.Auto,
 		restoreCwd:      cwd.Shells,
 		ephemeral:       make(map[string]struct{}),
+		logs:            make(map[string]*panellog.Sink),
 		groupShown:      make(map[string]int),
 		groupLayout:     make(map[string]string),
 		groupFavourite:  make(map[string]bool),
@@ -552,6 +592,11 @@ func (s *Server) Reload(set Settings) {
 	s.restart, s.agentRestart = set.Restart, set.AgentRestart
 	s.attention, s.agentAttention = set.Attention, set.AgentAttention
 	s.trackCwd, s.restoreCwd = set.TrackCwd, set.RestoreCwd
+	// The logging policy swaps whole, like the caps: a panel records its PROFILE,
+	// so every resolution from here on reads the new destination. Files ALREADY
+	// open keep the path they were opened with — a log that moved mid-run would
+	// leave half a transcript in each of two places.
+	s.logDir, s.agentLogDir, s.agentLog, s.logMaxBytes = set.LogDir, set.AgentLogDir, set.AgentLog, set.LogMaxBytes
 	s.mu.Unlock()
 	s.pty.SetRingCap(set.ReplayBytes)
 	s.probeEnforcement() // a reload may be the first thing to configure a cap
@@ -739,13 +784,17 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 
 	for _, sid := range stop {
 		s.pty.Stop(sid)
-		s.sand.Release(sid) // the panel is gone for good; drop its cgroup with it
+		s.sand.Release(sid)               // the panel is gone for good; drop its cgroup with it
+		s.stopLogging(sid, logMarkClosed) // …and its transcript is finished rather than abandoned
 	}
 	for _, ws := range workspaces {
 		_ = os.RemoveAll(ws)
 	}
 
 	if found {
+		// Flush and close the file the process was writing to, keeping the sink so a
+		// re-run appends under a new session marker instead of truncating it.
+		s.suspendLog(id, exitCode)
 		log.Info().Str("panel", id).Int("exit_code", exitCode).Msg("panel process exited")
 		s.broadcast(s.panelsMsg())
 	}
@@ -759,11 +808,27 @@ func protoOutput(id, text string) proto.ServerMsg {
 	return proto.ServerMsg{Type: "output", ID: id, Data: []byte(text)}
 }
 
-// routeOutput fans a panel's output out to every client zoomed into it, and feeds
-// the Monitor: output is the signal that wakes a quiet (or just-spawned) panel
-// back to running. The wake is in-memory only — the next monitor tick carries it
-// to clients — so the hot output path never triggers a broadcast of its own.
+// routeOutput is the daemon's whole output path: it fans a panel's bytes out to
+// every client zoomed into it, feeds the Monitor, and appends them to the panel's
+// log when one is open.
+//
+// The two halves are split because only the first needs the server lock. Waking a
+// quiet panel and demuxing to clients is bookkeeping; writing the log is disk I/O,
+// and the whole fleet's fan-out must never queue behind one panel's disk.
 func (s *Server) routeOutput(id string, data []byte) {
+	s.fanOutput(id, data)
+	// The log is written with s.mu RELEASED. It is a file write on the hot output
+	// path, and the whole fleet's fan-out must never queue behind one panel's disk;
+	// per-panel ordering is preserved because this runs on that panel's own pump.
+	s.writeLog(id, data)
+}
+
+// fanOutput is routeOutput's locked half: the Monitor bookkeeping and the fan-out
+// to attached clients. Output is the signal that wakes a quiet (or just-spawned)
+// panel back to running; the wake is in-memory only — the next monitor tick
+// carries it to clients — so the hot output path never triggers a broadcast of
+// its own.
+func (s *Server) fanOutput(id string, data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mon.observed(id, len(data))
@@ -1377,6 +1442,15 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 		if cc.self != "" && cmd.ID != "" && cmd.ID != cc.self {
 			return "conductor role: may only raise its own hand"
 		}
+	case "panel.log", "panel.logview":
+		// Logging is an operator surface for the same reason the inbox is, and with an
+		// edge the inbox does not have: panel.log asks the DAEMON to write files, on
+		// the daemon's host, as the user. The remote actions are already fenced away
+		// from a conductor, and this is the same shape of question. Reading a log back
+		// is fenced with it rather than separately — a viewer the agent can open is a
+		// transcript of another panel it can read at leisure, which is the surface the
+		// panel.tail fence exists to keep shut.
+		return "conductor role: panel logging is an operator surface"
 	case "panel.tail", "panel.ack":
 		// The inbox verbs, and the inbox is an operator surface. There is no conductor
 		// queue — an agent triaging the fleet's attention is a design this round
@@ -1516,6 +1590,22 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		// (broadcasts); worktree-remove confirms with a notice. Any failure surfaces as
 		// an error, like panel.diff.
 		if err := s.runGit(cc, cmd); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+	case "panel.log":
+		// Start or stop writing the panel's output to a file on the machine the fleet
+		// runs on. It broadcasts on its own (the card badges), so there is nothing to
+		// broadcast here; the reply is a notice naming the file.
+		if err := s.toggleLog(cc, cmd.ID); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+	case "panel.logview":
+		// Open the panel's log in a transient, auto-zoomed panel that FOLLOWS the file
+		// — the same ephemeral mechanism the git menu uses, so it is reaped on exit and
+		// on the way back to the dashboard, and never becomes a card in the fleet.
+		if err := s.openLogView(cc, cmd.ID); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
@@ -1816,6 +1906,11 @@ func (s *Server) createPanel(kind, path string, args []string, dir, profile stri
 	s.mu.Unlock()
 
 	log.Info().Str("panel", p.Title).Str("profile", profile).Interface("limits", caps).Msg("panel created")
+	// A profile configured to log does so from the moment it spawns. It is done
+	// here rather than in startPanel because startPanel is also the fork point for
+	// the transient panels — a diff pop-up, the scratch shell, a log viewer — and
+	// those are not the fleet, so they are not the transcript either.
+	s.autoLog(id, profile)
 	return id, nil
 }
 
@@ -2087,6 +2182,9 @@ func (s *Server) Shutdown() int {
 	if n > 0 {
 		log.Info().Int("panels", n).Msg("killed live panels on shutdown")
 	}
+	// Every open transcript is flushed and closed with a marker saying why, so a
+	// log never simply stops mid-line with nothing to say what happened.
+	s.closeAllLogs(logMarkShutdown)
 	return n
 }
 
@@ -3034,6 +3132,7 @@ func (s *Server) respawnPanel(id string) error {
 	delete(s.osc7Tail, id) // the old process's output tail says nothing about the new one
 	s.mu.Unlock()
 
+	s.resumeLog(id) // a logged panel comes back into the same file, under a new session marker
 	log.Info().Str("panel", id).Str("dir", dir).Msg("panel re-run")
 	return nil
 }
@@ -3120,8 +3219,9 @@ func (s *Server) closePanel(id string) error {
 	s.emit("panel.close", map[string]any{"id": id, "title": title})
 	s.mu.Unlock()
 
-	s.pty.Stop(id)     // no-op for a panel with no live process
-	s.sand.Release(id) // the panel is gone for good; drop its cgroup with it
+	s.pty.Stop(id)                   // no-op for a panel with no live process
+	s.sand.Release(id)               // the panel is gone for good; drop its cgroup with it
+	s.stopLogging(id, logMarkClosed) // …and its transcript is finished rather than abandoned
 	if workspace != "" {
 		_ = os.RemoveAll(workspace)
 	}
@@ -3500,7 +3600,8 @@ func (s *Server) purgeExited() int {
 
 	for _, id := range gone {
 		s.pty.Stop(id)
-		s.sand.Release(id) // purged for good; drop its cgroup with it
+		s.sand.Release(id)               // purged for good; drop its cgroup with it
+		s.stopLogging(id, logMarkClosed) // …and its transcript is finished rather than abandoned
 	}
 	for _, ws := range workspaces {
 		_ = os.RemoveAll(ws)
@@ -4011,6 +4112,9 @@ func (s *Server) wirePanel(p panel.Panel, pids map[string]int) proto.Panel {
 	}
 	out.Sig = s.mon.sig(p.ID)
 	out.Acked = s.ackedLocked(p.ID)
+	if sink := s.logs[p.ID]; sink != nil {
+		out.Logging, out.LogPath = true, sink.Path()
+	}
 	return out
 }
 

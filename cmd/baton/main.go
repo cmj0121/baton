@@ -37,6 +37,7 @@ import (
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/cwd"
 	"github.com/cmj0121/baton/internal/limits"
+	"github.com/cmj0121/baton/internal/panellog"
 	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/plugin"
 	"github.com/cmj0121/baton/internal/restart"
@@ -273,6 +274,7 @@ func buildServerOptions(rc reloadable, stateF string) []server.Option {
 		server.WithEditor(rc.settings.Editor),
 		server.WithWorktreeDir(rc.settings.WorktreeDir),
 		server.WithLimits(rc.settings.Limits, rc.settings.AgentLimits),
+		server.WithLogging(rc.settings.LogDir, rc.settings.AgentLogDir, rc.settings.AgentLog, rc.settings.LogMaxBytes),
 		server.WithStateFile(stateF),
 		server.WithQueue(rc.queueMax, rc.queueConcurrency),
 	}
@@ -455,6 +457,8 @@ func reloadableSettings(cfg config.Config) reloadable {
 		Limits:      cfg.Panel.Limits,
 		AgentLimits: agentLimits(cfg.Panel.Agents),
 	}}
+	rc.settings.LogDir, rc.settings.AgentLogDir, rc.settings.AgentLog = logPolicy(cfg)
+	rc.settings.LogMaxBytes = panellog.MaxBytes(cfg.Panel.LogMaxMB)
 	rc.settings.Restart, rc.settings.AgentRestart = restartPolicies(cfg)
 	rc.settings.Attention, rc.settings.AgentAttention = attentionPolicies(cfg)
 	rc.settings.TrackCwd, rc.settings.RestoreCwd = cwdPolicy(cfg)
@@ -472,6 +476,35 @@ func reloadableSettings(cfg config.Config) reloadable {
 	}
 	rc.queueConcurrency = cfg.Queue.Concurrency
 	return rc
+}
+
+// logPolicy projects the config's logging keys onto the destination the daemon
+// resolves per panel: the fleet-wide directory, the per-profile directories
+// layered over it, and the profiles that log from the moment they spawn.
+//
+// The paths are expanded HERE, once, because both halves of the pair are
+// hand-written ("~/.baton/logs") and the daemon must never resolve a relative one
+// against whatever directory it happens to have been launched from. A profile
+// that asks to be logged but names no directory of its own is left out of the
+// override table entirely, so it inherits the fleet-wide one rather than being
+// stored empty — the same rule agentLimits keeps.
+func logPolicy(cfg config.Config) (dir string, agentDirs map[string]string, agentLog map[string]bool) {
+	dir = paths.Expand(cfg.Panel.LogDir)
+	for name, prof := range cfg.Panel.Agents {
+		if d := paths.Expand(prof.LogDir); d != "" {
+			if agentDirs == nil {
+				agentDirs = make(map[string]string, len(cfg.Panel.Agents))
+			}
+			agentDirs[name] = d
+		}
+		if prof.Log {
+			if agentLog == nil {
+				agentLog = make(map[string]bool, len(cfg.Panel.Agents))
+			}
+			agentLog[name] = true
+		}
+	}
+	return dir, agentDirs, agentLog
 }
 
 // agentLimits projects the configured agent profiles onto the caps-only table the
