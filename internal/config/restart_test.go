@@ -7,6 +7,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/cmj0121/baton/internal/cwd"
 	"github.com/cmj0121/baton/internal/restart"
 )
 
@@ -118,5 +119,44 @@ func TestParseOptionalDuration(t *testing.T) {
 	}
 	if d, err := parseOptionalDuration(" 90s "); err != nil || d != 90*time.Second {
 		t.Errorf("parseOptionalDuration(90s) = %v/%v", d, err)
+	}
+}
+
+// TestCwdSettings: the two working-directory keys parse, and a value the file got
+// wrong falls back to the default rather than to "off" — failing to learn a
+// directory costs a convenience, not safety.
+func TestCwdSettings(t *testing.T) {
+	var c Config
+	src := `
+panel:
+  track-cwd: proc
+  restore-cwd: all
+`
+	if err := yaml.Unmarshal([]byte(src), &c); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.Panel.CwdTracking(); err != nil || got != cwd.Proc {
+		t.Errorf("track-cwd = %q/%v, want proc", got, err)
+	}
+	if got, err := c.Panel.CwdRestore(); err != nil || got != cwd.All {
+		t.Errorf("restore-cwd = %q/%v, want all", got, err)
+	}
+
+	// Unset keeps the defaults, silently.
+	var empty PanelDefaults
+	if got, err := empty.CwdTracking(); err != nil || got != cwd.Auto {
+		t.Errorf("unset track-cwd = %q/%v, want auto", got, err)
+	}
+	if got, err := empty.CwdRestore(); err != nil || got != cwd.Shells {
+		t.Errorf("unset restore-cwd = %q/%v, want shells", got, err)
+	}
+
+	// A wrong value is reported and falls back.
+	bad := PanelDefaults{TrackCwd: "sometimes", RestoreCwd: "true"}
+	if got, err := bad.CwdTracking(); err == nil || got != cwd.Auto {
+		t.Errorf("bad track-cwd = %q/%v, want auto and an error", got, err)
+	}
+	if got, err := bad.CwdRestore(); err == nil || got != cwd.Shells {
+		t.Errorf("bad restore-cwd = %q/%v, want shells and an error", got, err)
 	}
 }

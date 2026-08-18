@@ -12,6 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/cmj0121/baton/internal/cwd"
 	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/restart"
@@ -266,6 +267,20 @@ type PanelDefaults struct {
 	// a per-agent restart would later override. Unset restarts nothing.
 	Restart RestartConfig `yaml:",inline"`
 
+	// TrackCwd is how a panel's live working directory is learned: "auto" (the
+	// default — the shell's own report when it makes one, the process table
+	// otherwise), "osc7", "proc", or "off" to not track it at all.
+	TrackCwd string `yaml:"track-cwd,omitempty"`
+
+	// RestoreCwd is which panels a re-run puts back where they were rather than
+	// where they started: "shells" (the default), "all", or "off".
+	//
+	// Agents are excluded by default because it is not obviously right for them. A
+	// shell is wherever you last left it and going back there is the whole point;
+	// an agent's task was set relative to the directory it was launched in, and one
+	// that wandered into /tmp before dying should not come back in /tmp.
+	RestoreCwd string `yaml:"restore-cwd,omitempty"`
+
 	// Agents are the named agent profiles, e.g. {"claude": {command: "claude"}}.
 	// A built-in "claude" profile is always available unless overridden here.
 	Agents map[string]AgentProfile `yaml:"agents,omitempty"`
@@ -322,6 +337,34 @@ func (r RestartConfig) Policy() (restart.Policy, error) {
 		p.Healthy = d
 	}
 	return p, err
+}
+
+// CwdTracking is the parsed track-cwd setting, and an error naming a value the
+// file got wrong. A bad value falls back to the default rather than to "off":
+// failing to learn a directory costs a convenience, not safety, so the forgiving
+// direction is also the useful one.
+func (p PanelDefaults) CwdTracking() (cwd.Track, error) {
+	if strings.TrimSpace(p.TrackCwd) == "" {
+		return cwd.Auto, nil
+	}
+	t, ok := cwd.ParseTrack(p.TrackCwd)
+	if !ok {
+		return cwd.Auto, fmt.Errorf("panel.track-cwd %q is not one of auto, osc7, proc, off", p.TrackCwd)
+	}
+	return t, nil
+}
+
+// CwdRestore is the parsed restore-cwd setting, and an error naming a value the
+// file got wrong. A bad value falls back to the default, shells-only.
+func (p PanelDefaults) CwdRestore() (cwd.Restore, error) {
+	if strings.TrimSpace(p.RestoreCwd) == "" {
+		return cwd.Shells, nil
+	}
+	r, ok := cwd.ParseRestore(p.RestoreCwd)
+	if !ok {
+		return cwd.Shells, fmt.Errorf("panel.restore-cwd %q is not one of shells, all, off", p.RestoreCwd)
+	}
+	return r, nil
 }
 
 // parseOptionalDuration reads a duration field that may be empty, which means

@@ -323,3 +323,32 @@ func DaemonPid() int {
 	}
 	return pid
 }
+
+// Cwd is the working directory of a process, read from the OS process table —
+// /proc/<pid>/cwd on Linux, proc_pidinfo on darwin, both behind gopsutil.
+//
+// It is the fallback for a shell that does not report its directory itself (OSC
+// 7): exact, but one syscall per answer, so it is sampled when something is about
+// to use the path rather than on every monitor tick. Keeping fifty panels' paths
+// fresh for a string nobody is looking at is the cost this project avoids
+// elsewhere.
+//
+// The path comes back with symlinks resolved, which is the kernel's answer rather
+// than the one the user typed: a shell in /tmp on darwin reports /private/tmp.
+func Cwd(pid int) (string, error) {
+	if pid <= 0 {
+		return "", fmt.Errorf("no process to ask (pid %d)", pid)
+	}
+	p, err := process.NewProcess(int32(pid))
+	if err != nil {
+		return "", fmt.Errorf("process %d: %w", pid, err)
+	}
+	dir, err := p.Cwd()
+	if err != nil {
+		return "", fmt.Errorf("cwd of %d: %w", pid, err)
+	}
+	if dir == "" {
+		return "", fmt.Errorf("process %d reported no working directory", pid)
+	}
+	return dir, nil
+}
