@@ -127,6 +127,12 @@ type Panel struct {
 	// nothing — no scoped role, no managed workspace. At most one exists at a time.
 	GlobalShell bool
 
+	// Cwd is the directory the panel's process is in now, as opposed to the one it
+	// was launched in — learned from the shell's own report or the process table
+	// (see internal/cwd). Empty when it is not known, which every reader treats as
+	// "fall back to where it started" rather than as a directory.
+	Cwd string
+
 	// Pid is the OS pid of the panel's process-group leader, reported by the
 	// server, or 0 once the process has exited. It roots the panel's OS descendant
 	// subtree in the process-tree overlay (and `baton ctl tree`).
@@ -151,6 +157,7 @@ func FromProto(p proto.Panel) Panel {
 		Favourite:   p.Favourite,
 		Conductor:   p.Conductor,
 		GlobalShell: p.GlobalShell,
+		Cwd:         p.Cwd,
 		Pid:         p.Pid,
 	}
 }
@@ -174,6 +181,7 @@ func (p Panel) ToProto() proto.Panel {
 		Favourite:   p.Favourite,
 		Conductor:   p.Conductor,
 		GlobalShell: p.GlobalShell,
+		Cwd:         p.Cwd,
 		Pid:         p.Pid,
 	}
 }

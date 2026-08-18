@@ -34,6 +34,7 @@ import (
 
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/config"
+	"github.com/cmj0121/baton/internal/cwd"
 	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/plugin"
@@ -454,6 +455,7 @@ func reloadableSettings(cfg config.Config) reloadable {
 		AgentLimits: agentLimits(cfg.Panel.Agents),
 	}}
 	rc.settings.Restart, rc.settings.AgentRestart = restartPolicies(cfg)
+	rc.settings.TrackCwd, rc.settings.RestoreCwd = cwdPolicy(cfg)
 	if cfg.Settings.AllowNameConflict != nil {
 		rc.settings.AllowNameConflict = *cfg.Settings.AllowNameConflict
 	}
@@ -516,6 +518,22 @@ func restartPolicies(cfg config.Config) (restart.Policy, map[string]restart.Poli
 		perAgent[name] = p
 	}
 	return fleet, perAgent
+}
+
+// cwdPolicy projects the config's working-directory settings, reporting anything
+// the file got wrong and falling back to the defaults. The forgiving direction is
+// deliberate here, unlike the restart policy: failing to learn a directory costs
+// a convenience, while refusing to start processes is a safety property.
+func cwdPolicy(cfg config.Config) (cwd.Track, cwd.Restore) {
+	track, err := cfg.Panel.CwdTracking()
+	if err != nil {
+		log.Warn().Err(err).Msg("track-cwd ignored; using the default")
+	}
+	restore, err := cfg.Panel.CwdRestore()
+	if err != nil {
+		log.Warn().Err(err).Msg("restore-cwd ignored; using the default")
+	}
+	return track, restore
 }
 
 // runClient attaches a TUI cockpit to this session's server. If the cockpit

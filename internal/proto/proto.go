@@ -120,6 +120,7 @@ type Panel struct {
 	Favourite   bool   `json:"favourite,omitempty"`    // a dashboard favourite: sorts the card to the front
 	Conductor   bool   `json:"conductor,omitempty"`    // the singleton control agent (server-managed workspace), so a frontend can badge it
 	GlobalShell bool   `json:"global_shell,omitempty"` // the singleton global shell (plain host shell in $HOME), so a frontend can badge it
+	Cwd         string `json:"cwd,omitempty"`          // the directory the panel's process is in now (not the one it was launched in); empty when unknown
 	Pid         int    `json:"pid,omitempty"`          // OS pid of the panel's process-group leader; 0 once the process has exited. Roots the panel's OS descendant subtree (baton ctl tree).
 }
 
