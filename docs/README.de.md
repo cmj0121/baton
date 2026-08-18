@@ -77,8 +77,11 @@ Verirrt? **`?`** zeigt dir immer die Tasten für die Stelle, an der du gerade bi
 
 Du steuerst Baton über drei Ansichten und wechselst mit einem Tastendruck zwischen ihnen:
 
-- **Dashboard** — die Einsatzzentrale. Ein Live-Raster (ein Baum, sobald es voll wird) aller Panels mit Status und
-  Vorschau. Hier navigierst du, startest und schließt Panels und gruppierst sie zu Work Items.
+- **Dashboard** — die Einsatzzentrale. Ein Live-**Baum** aller Panels: ein Work Item pro Zeile, seine Untergruppen
+  darunter eingerückt, seine Panels darunter. `→` öffnet ein Work Item und steigt hinein, `←` schließt es und geht eine
+  Ebene zurück. Die Zeile trägt Status, Arbeitsverzeichnis, Ausgabe-Sparkline und die zugewiesene Aufgabe, sobald das
+  Terminal breit genug ist; `v` blendet daneben eine Detailspalte ein. Hier navigierst du, startest und schließt Panels
+  und gruppierst sie zu Work Items.
 - **Gruppe (Group)** — die Live-Aufteilung eines Work Items: seine Panels nebeneinander gekachelt, alle gleichzeitig
   streamend. Die ersten paar streamen als Live-Kacheln; der Rest klappt in eine einzelne **Zusammenfassungs-Kachel**
   zusammen, in die du hineinzoomen kannst. Pinne ein paar an, damit sie immer laufen, steuere die fokussierte an Ort und
@@ -101,7 +104,9 @@ Tastenbelegung zu bearbeiten.
 |             | `l` / `L`         | Panel in eine Datei protokollieren / dieses Protokoll lesen       |
 |             | `R` / `S`         | Konfiguration neu laden / Server-Neustart erzwingen               |
 |             | `q`               | abkoppeln (der Server läuft weiter)                               |
-| Dashboard   | `hjkl` / Pfeile   | den Cursor bewegen                                                |
+| Dashboard   | `jk` / `↑↓`       | den Cursor bewegen                                                |
+|             | `hl` / `←→`       | Work Item ein-/ausklappen — heraus- / hineingehen                 |
+|             | `v`               | Detailspalte neben dem Baum umschalten                            |
 |             | `enter`           | die Auswahl öffnen / hineinzoomen                                 |
 |             | `p` / `A` / `c`   | neues shell- / agent- / Befehlsauswahl-Panel                      |
 |             | `.`               | neues Shell-Panel im Verzeichnis des fokussierten Panels          |

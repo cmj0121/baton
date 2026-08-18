@@ -77,8 +77,11 @@ Lost? **`?`** always shows the keys for wherever you are.
 
 You drive Baton through three views, moving between them with a keystroke:
 
-- **Dashboard** — mission control. A live grid (a tree once it gets crowded) of every panel with its status and a
-  preview. Here you navigate, spawn and close panels, and group them into work items.
+- **Dashboard** — mission control. A live **tree** of every panel: work items as rows, their sub-groups indented under
+  them, their panels under those. `→` opens a work item and steps inside it, `←` shuts it and steps back out. The row
+  carries the state, the working directory, the output sparkline and the dispatched task as the terminal gets wide
+  enough for each; `v` adds a detail pane beside it. Here you navigate, spawn and close panels, and group them into work
+  items.
 - **Group** — a work item's live split: its panels tiled side by side, all streaming at once. The first few stream as
   live tiles; the rest fold into a single **summary tile** you can zoom into. Pin a few to keep them always-on, drive the
   focused one in place with **`i`**, or **`enter`** to drop into it.
@@ -99,7 +102,9 @@ the current view, and **`C-t k`** to edit the key map.
 |             | `l` / `L`         | log the panel to a file / read that log back         |
 |             | `R` / `S`         | reload config / force-restart the server             |
 |             | `q`               | detach (server keeps running)                        |
-| Dashboard   | `hjkl` / arrows   | move the cursor                                      |
+| Dashboard   | `jk` / `↑↓`       | move the cursor                                      |
+|             | `hl` / `←→`       | collapse / expand a work item — and step out / in    |
+|             | `v`               | toggle the detail pane beside the tree               |
 |             | `enter`           | open / zoom the selection                            |
 |             | `p` / `A` / `c`   | new shell / agent / pick-command panel               |
 |             | `.`               | new shell panel in the focused panel's directory     |
