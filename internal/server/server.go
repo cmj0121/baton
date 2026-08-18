@@ -154,13 +154,20 @@ type Server struct {
 	pluginCmds   []proto.PluginCommand
 	footerText   string // a plugin-set persistent footer segment (baton.footer); carried on config + pushed live
 
-	// Account usage footer. usageProvider polls the current account's daily
-	// token/cost usage (internal/usage); a nil provider disables the segment.
-	// usageInterval is the poll cadence; usageText is the last formatted value,
-	// held so a freshly attaching client is seeded on hello. Guarded by mu.
+	// Account usage footer. usageProvider polls the current account's token/cost
+	// usage over the billing window (internal/usage); a nil provider disables the
+	// segment. usageInterval is the poll cadence; usageText and usageInfo are the
+	// last rendered segment and its structured form, held so a freshly attaching
+	// client is seeded on hello. usageWarn/usageAlarm/usageFormat are the
+	// presentation settings the frontends need to render the countdown on their
+	// own clock. Guarded by mu.
 	usageProvider usage.Provider
 	usageInterval time.Duration
 	usageText     string
+	usageInfo     *proto.UsageInfo
+	usageWarn     float64
+	usageAlarm    float64
+	usageFormat   string
 
 	mu      sync.Mutex
 	seq     int
@@ -168,6 +175,16 @@ type Server struct {
 	clients map[*clientConn]struct{}
 	mon     *monitor             // lifecycle + telemetry bookkeeping, guarded by mu
 	specs   map[string]spawnSpec // immutable spawn spec per panel id, for persistence + respawn (guarded by mu)
+
+	// sessions maps a panel id to the Claude Code session ids it has run under,
+	// oldest first — a list rather than one id because re-using an id is a hard
+	// error, so every spawn and respawn mints a fresh one and the panel's spend is
+	// the sum over all of them. Guarded by mu.
+	//
+	// It is deliberately not persisted: a restored panel comes back as an exited
+	// slot with no live process, so carrying its old ids across a daemon restart
+	// would attribute a window's spend to something that is not running.
+	sessions map[string][]string
 
 	// pendingDispatch holds a dispatch whose panel was not yet ready to receive it
 	// (still spawning or mid-output): the bytes to write once the panel settles to
@@ -340,13 +357,28 @@ func WithQueue(max, concurrency int) Option {
 	}
 }
 
-// WithUsage wires the account usage/cost footer: p polls the current usage and
-// interval is the poll cadence. A nil provider (or non-positive interval) leaves
-// the segment off, so usage is opt-in and costs nothing when unconfigured.
-func WithUsage(p usage.Provider, interval time.Duration) Option {
+// UsageDisplay is how the frontends should present the window: the fractions of
+// it spent at which the footer segment turns amber and then red, and the form the
+// countdown reads in. These live on the daemon because that is where the usage.*
+// config is read, and they ride the usage message because the countdown ticks on
+// the frontend's clock, not the poll interval.
+type UsageDisplay struct {
+	WarnAt          float64
+	AlarmAt         float64
+	CountdownFormat string
+}
+
+// WithUsage wires the account usage/cost footer: p polls the current usage,
+// interval is the poll cadence, and display carries the presentation settings on
+// to the frontends. A nil provider (or non-positive interval) leaves the segment
+// off, so usage is opt-in and costs nothing when unconfigured.
+func WithUsage(p usage.Provider, interval time.Duration, display UsageDisplay) Option {
 	return func(s *Server) {
 		s.usageProvider = p
 		s.usageInterval = interval
+		s.usageWarn = display.WarnAt
+		s.usageAlarm = display.AlarmAt
+		s.usageFormat = display.CountdownFormat
 	}
 }
 
@@ -359,6 +391,7 @@ func New(ln net.Listener, opts ...Option) *Server {
 		clients:         make(map[*clientConn]struct{}),
 		mon:             newMonitor(),
 		specs:           make(map[string]spawnSpec),
+		sessions:        make(map[string][]string),
 		ephemeral:       make(map[string]struct{}),
 		groupShown:      make(map[string]int),
 		groupLayout:     make(map[string]string),
@@ -467,6 +500,16 @@ func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 	s.mu.Lock()
 	caps := s.effectiveLimitsLocked(profile)
 	s.mu.Unlock()
+
+	// Hand an agent panel a session of its own, on the launched copy only — the
+	// spec the caller retains for respawn must stay free of the id, because
+	// re-using one fails the next launch outright (see session.go).
+	spec, session := withSessionID(spec)
+	if session != "" {
+		s.mu.Lock()
+		s.sessions[id] = append(s.sessions[id], session)
+		s.mu.Unlock()
+	}
 
 	h, err := s.sand.Prepare(id, caps)
 	if err != nil {
@@ -760,21 +803,95 @@ func (s *Server) refreshUsage() {
 		log.Warn().Err(err).Msg("usage fetch partial; showing what returned")
 	}
 	s.mu.Lock()
-	changed := s.usageText != text
-	s.usageText = text
+	info := s.usageInfoLocked(snap)
+	changed := s.usageText != text || !sameUsageInfo(s.usageInfo, info)
+	s.usageText, s.usageInfo = text, info
 	s.mu.Unlock()
 	if changed {
-		s.broadcast(proto.ServerMsg{Type: "usage", Usage: text})
+		s.broadcast(proto.ServerMsg{Type: "usage", Usage: text, UsageInfo: info})
 	}
+}
+
+// usageInfoLocked turns a snapshot into the wire form, resolving the per-session
+// breakdown into a per-panel one. Frontends address panels, not Claude Code
+// sessions — and the mapping is the server's to know, since it is the server that
+// handed each panel its session. Callers must hold mu.
+//
+// A panel is listed only when at least one of its sessions was seen in the window,
+// so an absent entry reads as "nothing attributed", never as a zero the user might
+// take for "this panel is free".
+func (s *Server) usageInfoLocked(snap usage.Snapshot) *proto.UsageInfo {
+	if snap.Empty() {
+		return nil
+	}
+	info := &proto.UsageInfo{
+		Tokens:          snap.TotalTokens(),
+		CostUSD:         snap.CostUSD,
+		Source:          snap.Source,
+		Resets:          snap.Resets,
+		WarnAt:          s.usageWarn,
+		AlarmAt:         s.usageAlarm,
+		CountdownFormat: s.usageFormat,
+	}
+	if !snap.Since.IsZero() {
+		info.Since = snap.Since.Format(time.RFC3339)
+	}
+	if !snap.Until.IsZero() {
+		info.Until = snap.Until.Format(time.RFC3339)
+	}
+	for id, sessions := range s.sessions {
+		var pu proto.PanelUsage
+		var seen bool
+		for _, sid := range sessions {
+			su, ok := snap.Sessions[sid]
+			if !ok {
+				continue
+			}
+			pu.Tokens += su.Tokens
+			pu.CostUSD += su.CostUSD
+			seen = true
+		}
+		if !seen {
+			continue
+		}
+		if info.Panels == nil {
+			info.Panels = make(map[string]proto.PanelUsage, len(s.sessions))
+		}
+		info.Panels[id] = pu
+	}
+	return info
+}
+
+// sameUsageInfo reports whether two usage payloads carry the same numbers, so an
+// unchanged poll does not wake every attached frontend. The window bounds are
+// compared too: the totals can sit still across a poll while the window rolls
+// forward underneath them, and the countdown has to follow that.
+func sameUsageInfo(a, b *proto.UsageInfo) bool {
+	switch {
+	case a == nil && b == nil:
+		return true
+	case a == nil || b == nil:
+		return false
+	}
+	if a.Tokens != b.Tokens || a.CostUSD != b.CostUSD || a.Since != b.Since || a.Until != b.Until ||
+		a.Resets != b.Resets || len(a.Panels) != len(b.Panels) {
+		return false
+	}
+	for id, pa := range a.Panels {
+		if pb, ok := b.Panels[id]; !ok || pa != pb {
+			return false
+		}
+	}
+	return true
 }
 
 // usageMsg is the held usage segment as a wire message, used to seed a freshly
 // attaching client on hello (before its first poll tick).
 func (s *Server) usageMsg() proto.ServerMsg {
 	s.mu.Lock()
-	text := s.usageText
+	text, info := s.usageText, s.usageInfo
 	s.mu.Unlock()
-	return proto.ServerMsg{Type: "usage", Usage: text}
+	return proto.ServerMsg{Type: "usage", Usage: text, UsageInfo: info}
 }
 
 // monitorLoop is the Monitor's heartbeat: on each tick it advances every panel's
@@ -2130,6 +2247,7 @@ func (s *Server) pruneExitedLocked() (stop, workspaces []string) {
 			}
 			s.mon.forget(p.ID)
 			delete(s.specs, p.ID)
+			delete(s.sessions, p.ID)
 			delete(s.pendingDispatch, p.ID)
 			delete(s.panelTask, p.ID) // the panel is gone; its task history is bounded separately
 			continue
@@ -2595,6 +2713,7 @@ func (s *Server) closePanel(id string) error {
 	s.panels = slices.Delete(s.panels, idx, idx+1)
 	s.mon.forget(id)
 	delete(s.specs, id)           // the panel is gone for good; drop its retained spawn spec
+	delete(s.sessions, id)        // …and the session ids its usage was attributed through
 	delete(s.pendingDispatch, id) // and any dispatch held for it
 	delete(s.panelTask, id)       // and its task mapping (the task record stays as history)
 	s.emit("panel.close", map[string]any{"id": id, "title": title})
@@ -2967,7 +3086,8 @@ func (s *Server) purgeExited() int {
 				}
 			}
 			s.mon.forget(p.ID)
-			delete(s.specs, p.ID) // purged for good; drop its retained spawn spec
+			delete(s.specs, p.ID)    // purged for good; drop its retained spawn spec
+			delete(s.sessions, p.ID) // …and the session ids its usage was attributed through
 			continue
 		}
 		kept = append(kept, p)

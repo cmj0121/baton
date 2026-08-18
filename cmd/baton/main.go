@@ -267,7 +267,12 @@ func usageOption(cfg config.Config) server.Option {
 	if interval < 10*time.Second {
 		interval = 10 * time.Second
 	}
-	return server.WithUsage(p, interval)
+	warn, alarm := cfg.Usage.Thresholds()
+	return server.WithUsage(p, interval, server.UsageDisplay{
+		WarnAt:          warn,
+		AlarmAt:         alarm,
+		CountdownFormat: cfg.Usage.CountdownFormat,
+	})
 }
 
 // runServerOn runs the long-lived server loop on an already-bound listener for
