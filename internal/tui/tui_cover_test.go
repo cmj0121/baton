@@ -483,8 +483,10 @@ func TestHelpScrollsOnSmallScreen(t *testing.T) {
 		t.Fatal("the top of the help list should be visible at offset 0")
 	}
 
-	// Scroll to the bottom: a late row appears and a top row scrolls off.
-	for i := 0; i < 50; i++ {
+	// Scroll to the bottom: a late row appears and a top row scrolls off. The
+	// count only has to exceed the list's length — scrollHelp clamps — so it is
+	// deliberately generous rather than pinned to today's number of bindings.
+	for i := 0; i < 500; i++ {
 		m.scrollHelp(1)
 	}
 	bottom := m.helpView()

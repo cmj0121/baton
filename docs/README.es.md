@@ -190,6 +190,11 @@ Todo lo que necesitas mientras pastoreas una flota, a una tecla de distancia:
   lo relee en un panel temporal que sigue el archivo. Texto plano, secuencias de escape eliminadas, rotación en
   `log-max-mb`. Desactivado hasta que definas `panel.log-dir`; un perfil puede registrar desde que arranca. Consulta
   **[docs/LOGGING.md](LOGGING.md)**.
+- **Acceso remoto** — `baton --remote` conecta el mismo puesto de mando a una flota que corre en **otra máquina**, a
+  través del ssh que ya usas para llegar a ella: sin puerto a la escucha, sin TLS y sin ningún intercambio de claves
+  propio de baton. Desactivado por defecto; `settings.remote` o `C-t @` lo activa y acuña una passkey de 8 caracteres
+  que nunca se escribe en disco. `C-t @` también lista cada conexión viva con su origen, su rol y su duración — `k`
+  expulsa una, `n` renueva la passkey, `x` apaga el acceso remoto. Consulta **[docs/REMOTE.md](REMOTE.md)**.
 - **Persistencia y renacimiento** — Baton recuerda su flota entre reinicios; los paneles vuelven como ranuras inertes ya
   terminadas y `r` los reejecuta a partir de la especificación que se conservó.
 - **Recarga** — `C-t R` (o un `SIGHUP` al demonio) recarga la configuración en caliente sin reiniciar la flota.
@@ -242,6 +247,8 @@ tus propios comandos y define configuración, todo a través de un único objeto
   configuración.
 - **[docs/LOGGING.md](LOGGING.md)** — el registro de paneles: qué se escribe, dónde aterriza el archivo, los marcadores
   de sesión, la rotación, y de qué no es una frontera.
+- **[docs/REMOTE.md](REMOTE.md)** — el acceso remoto por SSH: el puente `--stdio`, qué es y qué no es la passkey,
+  la lista de conexiones de `C-t @`, y los fallos que informa.
 - **[docs/USAGE.md](USAGE.md)** — el pie de uso de la cuenta: las fuentes local y de Admin API, la configuración y las
   advertencias.
 - **[docs/PLUGIN.md](PLUGIN.md)** — la API de plugins en Lua: el objeto `baton`, eventos, comandos y configuración.

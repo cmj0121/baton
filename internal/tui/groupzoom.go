@@ -937,6 +937,8 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.openInbox()
 			case actProcTree: // C-t o → the process-tree overlay
 				return m.openProcTree(modeGroupZoom), nil
+			case actRemote: // C-t @ → the remote overlay
+				return m.openRemote(modeGroupZoom)
 			case actCommands: // C-t c → the plugin command picker
 				return m.openCommandPicker(modeGroupZoom), nil
 			case actLogToggle: // C-t l → log the focused member's output to a file
@@ -1106,6 +1108,8 @@ func (m model) handleGroupInteractKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.openInbox()
 			case actProcTree: // C-t o → the process-tree overlay
 				return m.openProcTree(modeGroupZoom), nil
+			case actRemote: // C-t @ → the remote overlay
+				return m.openRemote(modeGroupZoom)
 			case actCommands: // C-t c → the plugin command picker
 				return m.openCommandPicker(modeGroupZoom), nil
 			case actLogToggle: // C-t l → log the focused member's output to a file

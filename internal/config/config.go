@@ -201,6 +201,22 @@ func (u UsageConfig) Thresholds() (warn, alarm float64) {
 type Settings struct {
 	ConfirmClose *bool `yaml:"confirm-close,omitempty"` // ask y/n before closing a panel
 
+	// Remote turns on remote access: a cockpit on another machine may attach over
+	// `ssh <this host> baton --stdio`, once it carries the passkey the fleet was
+	// enabled with. Unset defaults to OFF — the key behind it opens the machine,
+	// and that is not a default anyone should inherit by upgrading.
+	//
+	// It is read as a TRANSITION rather than as a value, so a reload never undoes
+	// a `C-t @` taken since the file was last read. See docs/REMOTE.md.
+	Remote *bool `yaml:"remote,omitempty"`
+
+	// RemoteCommand is what `baton --remote` asks ssh to run on the FAR side,
+	// defaulting to "baton --stdio". It exists because `ssh host cmd` runs a
+	// non-interactive login shell, whose PATH often misses the directory baton was
+	// installed into — set it to an absolute path ("/home/me/go/bin/baton --stdio")
+	// when the default cannot be found over there.
+	RemoteCommand string `yaml:"remote-command,omitempty"`
+
 	// AllowNameConflict lets two work items share a name. Unset or false keeps
 	// the default policy: panel titles and group names must be unique.
 	AllowNameConflict *bool `yaml:"allow-name-conflict,omitempty"`

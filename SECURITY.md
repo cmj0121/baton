@@ -51,6 +51,15 @@ agent accidents, not a sandbox against a hostile program:
   that can reach that socket can reach the host. Read "container" as "workspace
   boundary", never as "sandbox". An isolated panel is also not given `BATON_SOCK`,
   so it cannot drive the fleet.
+- **The remote passkey** ([docs/REMOTE.md](docs/REMOTE.md)) gates a cockpit attached from another machine. Read it
+  as a switch with a revocation handle, not as authentication. The transport is `ssh(1)` — baton opens no port, ships
+  no TLS and invents no key exchange — so the far side of the pipe already runs as your uid, and that uid could run
+  `baton` on that machine anyway. What the passkey proves is that you **deliberately** enabled remote for this window;
+  what it buys you is that rotating it (`C-t @`, then `n`) locks out every new attach. It is generated on enable, held
+  in memory, and never written to disk. Failed attempts are rate-limited and logged. Changing it, and switching remote
+  off, are refused over a remote attach — that is the one asymmetry, and it exists so a live remote connection cannot
+  turn its window into a permanent one.
+
 - **Panel logs** ([docs/LOGGING.md](docs/LOGGING.md)) are plain-text transcripts
   the daemon writes into a directory you named, as you, with mode 0600. They are
   a record, not an audit trail: anything that can reach your uid — including the

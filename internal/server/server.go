@@ -36,6 +36,7 @@ import (
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/ptymgr"
 	"github.com/cmj0121/baton/internal/queue"
+	"github.com/cmj0121/baton/internal/remote"
 	"github.com/cmj0121/baton/internal/restart"
 	"github.com/cmj0121/baton/internal/signals"
 	"github.com/cmj0121/baton/internal/state"
@@ -81,6 +82,23 @@ type clientConn struct {
 	role      string
 	self      string
 	lastSpawn time.Time
+
+	// id, source and since are this connection's row in the remote overlay: a
+	// stable id remote.kick names it by, the label it called itself on hello
+	// ("" for a local cockpit), and when it attached. id and since are set once
+	// in handle(); source is set once in the hello handler, on the same
+	// command-loop goroutine that reads them, so they need no lock beyond the
+	// s.mu already held while the client set is walked.
+	id     string
+	source string
+	since  time.Time
+
+	// greeted is set once this connection's hello has been handled. Until then it
+	// has no row worth listing — its role and source are still unknown — so the
+	// remote overlay leaves it out rather than showing a nameless placeholder.
+	// Written and read under Server.mu, unlike role/self, which the command loop
+	// also reads on its own goroutine.
+	greeted bool
 }
 
 // spawnSpec is what a panel was launched from: the exact process spec ptymgr
@@ -97,6 +115,12 @@ type spawnSpec struct {
 // one value so the reload path does not grow another positional parameter every
 // time a knob lands.
 type Settings struct {
+	// Remote is `settings.remote`: whether the fleet accepts a cockpit attached
+	// over the ssh bridge. Off by default. It is acted on as a TRANSITION rather
+	// than as a value (see applyRemoteSetting), so a reload never undoes a `C-t @`
+	// taken since the file was last read.
+	Remote bool
+
 	AllowNameConflict bool   // when false, panel titles and group names stay unique
 	DefaultDir        string // workdir for a panel that asks for none; empty → the user's home
 	ReplayBytes       int    // per-panel replay buffer; 0 keeps the ptymgr default
@@ -226,6 +250,19 @@ type Server struct {
 	usageWarn     float64
 	usageAlarm    float64
 	usageFormat   string
+
+	// Remote access (remote.go). remoteOn and remoteKey are the live switch and
+	// the in-memory 8-character passkey — never persisted, so a restart always
+	// means a new one. remoteCfg is the last value the CONFIG asked for, kept so
+	// a reload acts on a change to the file rather than undoing a `C-t @` that
+	// was made since. remoteLim rate-limits failed attaches. connSeq mints the
+	// per-connection ids the overlay lists and remote.kick names. Guarded by mu,
+	// bar remoteLim, which locks internally.
+	remoteOn  bool
+	remoteKey string
+	remoteCfg bool
+	remoteLim *remote.Limiter
+	connSeq   int
 
 	mu      sync.Mutex
 	seq     int
@@ -623,6 +660,7 @@ func (s *Server) Reload(set Settings) {
 	// leave half a transcript in each of two places.
 	s.logDir, s.agentLogDir, s.agentLog, s.logMaxBytes = set.LogDir, set.AgentLogDir, set.AgentLog, set.LogMaxBytes
 	s.mu.Unlock()
+	s.applyRemoteSetting(set.Remote) // acts only on a change to `settings.remote` in the file
 	s.pty.SetRingCap(set.ReplayBytes)
 	s.probeEnforcement() // a reload may be the first thing to configure a cap
 
@@ -1357,7 +1395,9 @@ func (s *Server) handle(conn net.Conn) {
 		out:       make(chan proto.ServerMsg, proto.EventBufferSize),
 		attached:  make(map[string]bool),
 		ephemeral: make(map[string]bool),
+		since:     time.Now(),
 	}
+	cc.id = s.nextConnID()
 	s.addClient(cc)
 
 	// hbDone signals the heartbeat goroutine has fully stopped. Teardown joins it
@@ -1395,6 +1435,16 @@ func (s *Server) handle(conn net.Conn) {
 			if err := enc.Encode(msg); err != nil {
 				broken = true
 				closeConn() // unblock the reader's Decode so handle() returns
+				continue
+			}
+			// A "goodbye" is the server dropping this connection on purpose — a
+			// refused remote attach, a kick, remote being switched off. The teardown
+			// rides the message rather than racing it: only once the reason is on the
+			// wire is the socket broken, so the far cockpit can always say why it
+			// went rather than just finding the pipe gone.
+			if msg.Type == "goodbye" {
+				broken = true
+				closeConn()
 			}
 		}
 	}()
@@ -1466,6 +1516,12 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 	switch cmd.Action {
 	case "server.reload":
 		return "conductor role: reloading the server is not permitted"
+	case "remote.status", "remote.enable", "remote.disable", "remote.rotate", "remote.kick":
+		// Remote access is an operator surface, and the sharpest one there is: the
+		// verbs behind it open the machine to another host, mint the code that lets
+		// a cockpit in, and drop the operator's own attachment. An agent driving the
+		// fleet has no business reading the passkey, let alone rotating it.
+		return "conductor role: remote access is an operator surface"
 	case "task.drain":
 		return "conductor role: draining the backlog is an operator action"
 	case "panel.close", "panel.signal", "panel.input", "panel.dispatch":
@@ -1539,13 +1595,38 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	}
 	switch cmd.Action {
 	case "hello":
-		cc.role, cc.self = cmd.Role, cmd.Self
+		// A cockpit that reached this daemon over the ssh bridge declares
+		// roleRemote and carries the passkey. Refuse it here, before it can send a
+		// single other command, and tell it why on the way out.
+		if cmd.Role == roleRemote {
+			if reason := s.admitRemote(cmd, cmd.Source); reason != "" {
+				send(cc, goodbye(reason))
+				return
+			}
+		}
+		// Written under mu because the remote overlay's list reads them from ANOTHER
+		// goroutine (the pushing one). Every other read is on this command loop, so
+		// the lock is held for exactly as long as the assignment.
+		s.mu.Lock()
+		cc.role, cc.self, cc.source, cc.greeted = cmd.Role, cmd.Self, cmd.Source, true
+		s.mu.Unlock()
 		send(cc, proto.ServerMsg{Type: "welcome", Version: proto.ProtocolVersion, ServerVer: s.version,
 			Enforce: string(s.cg.Mode()), EnforceWhy: s.cg.Reason()})
 		send(cc, s.panelsMsg())
 		send(cc, statsMsg()) // seed the footer immediately, before the first tick
 		if s.usageProvider != nil {
 			send(cc, s.usageMsg()) // seed the account usage segment from the held value
+		}
+		// The connection list gained a row, and this connection has not seen one at
+		// all yet — push to everyone so an open overlay on either side is current.
+		s.pushRemote()
+	case "remote.status":
+		send(cc, proto.ServerMsg{Type: "remote", Remote: s.remoteInfoFor(cc)})
+	case "remote.enable", "remote.rotate", "remote.disable":
+		s.onRemoteControl(cc, cmd.Action)
+	case "remote.kick":
+		if !s.kickConn(cmd.Conn, connSource(cc)) {
+			send(cc, proto.ServerMsg{Type: "error", Error: "no such connection: " + cmd.Conn})
 		}
 	case "panel.list":
 		send(cc, s.panelsMsg())
@@ -4239,6 +4320,7 @@ func (s *Server) removeClient(cc *clientConn) {
 	n := len(s.clients)
 	s.mu.Unlock()
 	log.Info().Int("clients", n).Msg("client detached")
+	s.pushRemote() // the connection list lost a row; refresh any open overlay
 }
 
 // broadcast fans a message out to every attached client.

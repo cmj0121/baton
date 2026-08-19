@@ -186,6 +186,11 @@ Baton은 세 가지 화면으로 조종하며, 키 하나로 그 사이를 오�
   넣으므로 키를 누르게 만든 바로 그 내용이 남습니다. `C-t L` 은 파일을 계속 따라가는 임시 패널로 그것을 다시
   엽니다. 평문, 이스케이프 시퀀스 제거, `log-max-mb` 에서 롤오버. `panel.log-dir` 을 설정하기 전까지는 꺼져
   있고, 프로필 단위로 spawn 시점부터 기록하게 할 수 있습니다. **[docs/LOGGING.md](LOGGING.md)** 를 보세요.
+- **원격 접속** — `baton --remote` 는 **다른 머신**에 있는 함대에 같은 조종석을 붙입니다. 통로는 그 머신에 들어갈
+  때 이미 쓰고 있는 ssh 이며, 대기 포트도 TLS 도 baton 자체의 키 교환도 없습니다. 기본은 꺼짐이고,
+  `settings.remote` 또는 `C-t @` 이 켜면서 디스크에는 결코 쓰이지 않는 8자 passkey 를 발급합니다. `C-t @` 은 살아
+  있는 모든 연결을 출처·역할·접속 시간과 함께 보여줍니다. `k` 는 끊고, `n` 은 passkey 를 바꾸고, `x` 는 원격을
+  내립니다. **[docs/REMOTE.md](REMOTE.md)** 를 보세요.
 - **영속성과 재생성** — Baton은 재시작 너머로 자신의 함대를 기억합니다. 패널은 멈춰 있는 종료 상태의 빈 자리로
   돌아오고, `r` 이 보관된 명세대로 그것들을 다시 실행합니다.
 - **다시 읽기** — `C-t R`(또는 데몬에 `SIGHUP`)은 함대를 재시작하지 않고 설정을 핫 리로드합니다.
@@ -235,6 +240,8 @@ Lua 파일 하나(`$HOME/.baton/plug-in.lua`)면 Baton을 당신의 워크플로
 - **[docs/GIT.md](GIT.md)** — git 메뉴: 모든 동작, commit 편집 흐름, worktree, 그리고 설정.
 - **[docs/LOGGING.md](LOGGING.md)** — 패널 로깅: 무엇이 쓰이는지, 어디에 놓이는지, 세션 표시, 롤오버,
   그리고 무엇의 경계가 _아닌지_.
+- **[docs/REMOTE.md](REMOTE.md)** — SSH 를 통한 원격 접속: `--stdio` 브리지, passkey 가 무엇이고 무엇이 아닌지,
+  `C-t @` 의 연결 목록, 그리고 그것이 알려 주는 실패들.
 - **[docs/USAGE.md](USAGE.md)** — 계정 사용량 푸터: 로컬과 Admin-API 두 가지 소스, 설정, 그리고 유의 사항.
 - **[docs/PLUGIN.md](PLUGIN.md)** — Lua 플러그인 API: `baton` 객체, 이벤트, 명령, 그리고 설정.
 - **[docs/CONTROL.md](CONTROL.md)** — agent로 함대 몰기: conductor, `baton ctl` CLI, `baton mcp` 도구, 그리고

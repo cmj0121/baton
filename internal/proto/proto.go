@@ -68,7 +68,7 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | panel.tail | panel.diff | panel.git | panel.log | panel.logview | panel.scratch | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run
+	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | panel.tail | panel.diff | panel.git | panel.log | panel.logview | panel.scratch | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run | remote.status | remote.enable | remote.disable | remote.rotate | remote.kick
 	Kind      string   `json:"kind,omitempty"`      // panel kind for "panel.create" (default "shell")
 	ID        string   `json:"id,omitempty"`        // target panel for close/attach/input/resize/diff, or the panel to rename
 	Path      string   `json:"path,omitempty"`      // init command (binary path) for "panel.create"; empty = default shell
@@ -113,6 +113,25 @@ type Command struct {
 	// accidents, not a security boundary.
 	Role string `json:"role,omitempty"`
 	Self string `json:"self,omitempty"`
+
+	// Passkey and Source are declared on "hello" by a REMOTE cockpit — one that
+	// reached this daemon through `ssh <host> baton --stdio` rather than through
+	// the session's own socket. Passkey is the 8-character code the fleet owner
+	// enabled remote with; without the current one the attach is refused, and the
+	// attempt is rate-limited and logged. Source is the label the connection
+	// shows up as in the remote overlay, e.g. "cmj@laptop.lan".
+	//
+	// Both are self-declared, exactly as Role and Self are. That is not an
+	// oversight: the far side of the ssh pipe already runs as the fleet owner's
+	// uid, so the passkey is a deliberate-enable proof and a revocation handle,
+	// never a boundary against someone who can already ssh in as that user.
+	Passkey string `json:"passkey,omitempty"`
+	Source  string `json:"source,omitempty"`
+
+	// Conn is the connection the "remote.kick" acts on, as listed in the remote
+	// overlay. It is its own field rather than ID because a connection is not a
+	// panel and must never be resolvable as one.
+	Conn string `json:"conn,omitempty"`
 
 	// Conductor marks a "panel.create" as the singleton control agent. The server
 	// enforces at most one, gives it a server-managed ephemeral workspace, and
@@ -302,9 +321,35 @@ type AgentBackend struct {
 	Args    []string `json:"args,omitempty"`
 }
 
+// RemoteConn is one live attachment in the remote overlay's list: where it came
+// from, what role it declared, and when it attached. Source is what the far end
+// called itself on "hello" ("local" for a cockpit on the daemon's own socket),
+// so it is a label to recognise a connection by, not an identity to trust.
+type RemoteConn struct {
+	ID     string `json:"id"`               // stable per-connection id; what "remote.kick" names
+	Source string `json:"source"`           // "local", or the remote cockpit's self-declared label
+	Role   string `json:"role"`             // "cockpit" | "conductor" | "remote"
+	Since  string `json:"since"`            // RFC 3339 instant the connection attached
+	Self   bool   `json:"self,omitempty"`   // this is the connection that asked — the overlay marks it
+	Remote bool   `json:"remote,omitempty"` // reached the daemon over the ssh bridge
+}
+
+// RemoteInfo is the reply to "remote.status" and the push that follows every
+// change: whether remote is enabled, the passkey, and the live connections.
+//
+// Passkey is filled in ONLY for a local connection. A remote cockpit may list
+// and kick, but the code that lets a new one in is the fleet owner's to read on
+// the machine the fleet runs on.
+type RemoteInfo struct {
+	Enabled bool         `json:"enabled"`
+	Passkey string       `json:"passkey,omitempty"` // the current code; local connections only
+	Local   bool         `json:"local,omitempty"`   // the asking connection may rotate the passkey and disable remote
+	Conns   []RemoteConn `json:"conns,omitempty"`
+}
+
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type       string      `json:"type"`                  // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "scratch" | "diff" | "gitout" | "search" | "notice" | "config" | "footer" | "usage" | "tasks" | "tail" (the pulled trailing output of one panel: ID names it, Data carries the bytes) | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline)
+	Type       string      `json:"type"`                  // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "scratch" | "diff" | "gitout" | "search" | "notice" | "config" | "footer" | "usage" | "tasks" | "tail" (the pulled trailing output of one panel: ID names it, Data carries the bytes) | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline) | "remote" (the remote-access status and connection list) | "goodbye" (the server is dropping this connection on purpose; Error says why)
 	Version    string      `json:"version,omitempty"`     // protocol version, set on "welcome"
 	ServerVer  string      `json:"server_ver,omitempty"`  // the server's build version, set on "welcome"
 	Enforce    string      `json:"enforce,omitempty"`     // the resource-limit backend in force on the host the panels run on ("cgroup", "none"), set on "welcome" and "config" so a frontend offering to edit limits can say whether they bite
@@ -336,6 +381,11 @@ type ServerMsg struct {
 	// host, not a statement of intent — so they ride as their own field instead of
 	// being folded into Config, which is the file the cockpit writes back.
 	Agents []AgentBackend `json:"agents,omitempty"`
+
+	// Remote is the remote-access status and connection list, set on "remote"
+	// (the reply to remote.status and the push after every change). It is nil on
+	// every other message type.
+	Remote *RemoteInfo `json:"remote,omitempty"`
 
 	// Host resource sample on "stats", measured on the server so the footer
 	// reflects the machine where the panels actually run.

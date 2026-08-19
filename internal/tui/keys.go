@@ -64,6 +64,7 @@ const (
 	keyScratch   = "~" // C-t ~ → toggle the floating scratch shell (any view)
 	keyProcTree  = "o" // C-t o → the process-tree overlay (daemon → panels → OS descendants)
 	keyInbox     = "a" // C-t a → the attention inbox (the queue of panels wanting a human)
+	keyRemote    = "@" // C-t @ → the remote overlay: "user@host" is what its connection list is made of
 	keyLogToggle = "l" // C-t l → start / stop writing the selected panel's output to a file
 	keyLogView   = "L" // C-t L → open that log in a temporary panel, following as it grows
 
@@ -142,6 +143,18 @@ const (
 	actProcTree
 	actInbox
 
+	// Remote access. It is an escape — prefix-reached in every view — because the
+	// key behind it opens the machine to another host, which is not a key to put
+	// a fingertip from the arrow keys.
+	//
+	// It is bound to "@" rather than to a letter because an escape SHADOWS a
+	// command under the prefix (C-t c shadows the new-panel form, C-t a shadows
+	// add), and every letter that reads as "remote" is already taken — `r` is
+	// respawn, and costing a zoom its respawn to spell a mnemonic is a bad trade.
+	// "@" is bound to nothing, and it says what the overlay is: a list of
+	// user@host.
+	actRemote
+
 	// The logging pair. Both are prefix-reached in every view, including the
 	// dashboard, where a bare l already moves the cursor and a bare L cycles a
 	// group's layout — and where a key that writes your terminal to disk is not
@@ -156,7 +169,7 @@ const (
 // this way from command mode.
 func isEscape(a action) bool {
 	return a == actDashboard || a == actEditMap || a == actPanelConfig || a == actScroll || a == actCommands ||
-		a == actScratch || a == actProcTree || a == actInbox || a == actLogToggle || a == actLogView
+		a == actScratch || a == actProcTree || a == actInbox || a == actRemote || a == actLogToggle || a == actLogView
 }
 
 // binding is one editable command: a stable name (used to persist the key), the
@@ -212,6 +225,7 @@ var bindings = []binding{
 	{"dashboard", keyDashboard, "jump to the dashboard (prefix)", actDashboard, "View"},
 	{"proc-tree", keyProcTree, "process tree — the daemon's OS processes (prefix)", actProcTree, "View"},
 	{"inbox", keyInbox, "the attention inbox — clear what needs a human (prefix)", actInbox, "View"},
+	{"remote", keyRemote, "remote access — the passkey and the live connections (prefix)", actRemote, "View"},
 	{"back", keyBack, "back one level: zoom→group→dashboard (C-t b in a zoom)", actBack, "View"},
 	{"commands", keyCommands, "open the plugin command picker (prefix)", actCommands, "View"},
 	{"scratch", keyScratch, "toggle a floating scratch shell (prefix)", actScratch, "View"},

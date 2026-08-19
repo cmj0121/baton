@@ -189,6 +189,11 @@ Alles, wonach du beim Hüten einer Flotte greifen würdest, nur einen Tastendruc
   gedrückt hast; `C-t L` liest es in einem temporären Panel zurück, das der Datei folgt. Klartext,
   Escape-Sequenzen entfernt, Rotation bei `log-max-mb`. Aus, bis du `panel.log-dir` setzt; ein Profil kann ab dem
   Start protokollieren. Siehe **[docs/LOGGING.md](LOGGING.md)**.
+- **Fernzugriff** — `baton --remote` hängt dasselbe Cockpit an eine Flotte auf **einer anderen Maschine**, über das
+  ssh, mit dem du sie ohnehin erreichst: kein lauschender Port, kein TLS, kein eigener Schlüsseltausch von baton.
+  Standardmäßig aus; `settings.remote` oder `C-t @` schaltet ihn ein und erzeugt eine 8 Zeichen lange Passkey, die nie
+  auf Platte geschrieben wird. `C-t @` listet außerdem jede offene Verbindung mit Herkunft, Rolle und Dauer — `k` wirft
+  eine hinaus, `n` erneuert die Passkey, `x` schaltet den Fernzugriff ab. Siehe **[docs/REMOTE.md](REMOTE.md)**.
 - **Persistenz & Respawn** — Baton merkt sich seine Flotte über einen Neustart hinweg; Panels kommen als inaktive,
   beendete Slots zurück, und `r` führt sie aus ihrer aufbewahrten Spezifikation erneut aus.
 - **Neuladen** — `C-t R` (oder ein `SIGHUP` an den Daemon) lädt die Konfiguration heiß neu, ohne die Flotte neu zu starten.
@@ -242,6 +247,8 @@ Siehe **[docs/PLUGIN.md](PLUGIN.md)**.
 - **[docs/GIT.md](GIT.md)** — das Git-Menü: jede Operation, der Ablauf im Commit-Editor, Worktrees und die Konfiguration.
 - **[docs/LOGGING.md](LOGGING.md)** — die Panel-Protokollierung: was geschrieben wird, wo die Datei landet, die
   Sitzungsmarker, die Rotation, und wofür sie keine Grenze ist.
+- **[docs/REMOTE.md](REMOTE.md)** — der Fernzugriff über SSH: die `--stdio`-Brücke, was die Passkey ist und was
+  nicht, die Verbindungsliste von `C-t @`, und die Fehler, die er meldet.
 - **[docs/USAGE.md](USAGE.md)** — die Fußzeile zur Kontonutzung: die lokale Quelle und die Admin-API-Quelle, die
   Konfiguration und die Vorbehalte.
 - **[docs/PLUGIN.md](PLUGIN.md)** — die Lua-Plugin-API: das `baton`-Objekt, Events, Befehle und Konfiguration.
