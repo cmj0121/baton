@@ -4,6 +4,17 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v1.2.0](https://github.com/cmj0121/baton/releases/tag/v1.2.0) — anywhere, any size
+
+2026-08-19
+
+- **Remote access over SSH** — `baton --remote user@host` attaches the cockpit to a fleet on another machine, gated by a
+  passkey with a failed-attempt limiter; `C-t @` shows the address and who is connected.
+- **The dashboard draws two layouts** — a grid of cards for a small fleet, the full-width tree above it, and `V` to
+  switch by hand.
+- **`space` opens and shuts a work item** at any depth; grab-and-move is `m` now, and rebindable like everything else.
+- **The heading counts the fleet**, not the rows on screen, and the quiet fold can no longer flip the layout under you.
+
 ## [v1.1.0](https://github.com/cmj0121/baton/releases/tag/v1.1.0) — know where to look
 
 2026-08-19
