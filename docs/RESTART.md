@@ -160,7 +160,7 @@ typing into your session, which it will not do.
 
 1. **Respawn in place** — the re-run lands where you were, not where the panel
    started. This is the half that only exists because both parts are here.
-2. **Open a panel here** — **`.`** spawns a shell in the focused panel's current
+2. **Open a panel here** — **`n .`** spawns a shell in the focused panel's current
    directory, tmux's `-c "#{pane_current_path}"` idiom. A panel whose directory is
    not known opens in the default workdir and says so.
 3. **Identity at scale** — fifty panels called `shell #1`…`#50` are

@@ -153,7 +153,7 @@ system (`shell`, `agent`, `signal`, `server`, `git`): a translated key is a key 
 ## Keycast
 
 The cockpit is modal — quick once you know it, opaque while you are learning it, and invisible on a screen recording,
-where a viewer sees results without the keys that caused them. **`K`** turns on a readout beside `? keys` that names the
+where a viewer sees results without the keys that caused them. **`v k`** turns on a readout beside `? keys` that names the
 key you just pressed and what it did:
 
 ```text
@@ -168,12 +168,12 @@ It reads **only baton's own keys**. In a zoom, an interact tile, the scratch pan
 to the program you are driving, and those are never shown — the leader is the one exception, because it is baton's key
 wherever it is pressed. This is a teaching and recording aid, not a keylogger.
 
-Off by default. `K` toggles it live and persists the choice:
+Off by default. `v k` toggles it live and persists the choice:
 
 ```yaml
 # $HOME/.baton/config
 settings:
-  keycast: true # show the key-press readout (also toggled live with K)
+  keycast: true # show the key-press readout (also toggled live with v k)
 ```
 
 ## Related cockpit keys

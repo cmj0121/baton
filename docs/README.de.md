@@ -18,8 +18,8 @@ Du hältst den Taktstock. Die Agents spielen. Du dirigierst. 🎼
 
 ![Baton-Cockpit-Demo — Panels auf einem Dashboard, Hineinzoomen, um eines zu steuern, Gruppieren zu einem Work Item, Conductor und Global Shell geöffnet](assets/baton-demo.png)
 
-_Panels starten, in eines hineinzoomen, um es zu steuern, zwei zu einem Work Item gruppieren, den Conductor mit `C` und
-die Global Shell mit `H` aufrufen — und `?` ist immer da für die Tasten._
+_Panels starten, in eines hineinzoomen, um es zu steuern, zwei zu einem Work Item gruppieren, den Conductor mit `n C` und
+die Global Shell mit `n h` aufrufen — und `?` ist immer da für die Tasten._
 
 _Der Clip wurde aus [`baton-demo.tape`](assets/baton-demo.tape) erzeugt — die Schritte zur Neuaufnahme stehen im Kopf
 der Tape-Datei. Das Agent-CLI des Conductors ist ein Platzhalter ([`demo-agent.sh`](assets/demo-agent.sh)), damit der
@@ -82,7 +82,7 @@ Du steuerst Baton über drei Ansichten und wechselst mit einem Tastendruck zwisc
   darunter eingerückt, seine Panels darunter. `space` zeigt oder verbirgt in jeder Tiefe, was unter einer Zeile verschachtelt
   ist, `→` öffnet ein Work Item und steigt hinein, `←` schließt es und geht eine Ebene zurück — und aus der obersten Ebene
   heraus zurück zu den Karten. Die Zeile trägt Status, Arbeitsverzeichnis, Ausgabe-Sparkline und die zugewiesene Aufgabe,
-  sobald das Terminal breit genug ist; `v` blendet daneben eine Detailspalte ein. Hier navigierst du, startest und schließt
+  sobald das Terminal breit genug ist; `v p` blendet daneben eine Detailspalte ein. Hier navigierst du, startest und schließt
   Panels und gruppierst sie zu Work Items.
 - **Gruppe (Group)** — die Live-Aufteilung eines Work Items: seine Panels nebeneinander gekachelt, alle gleichzeitig
   streamend. Die ersten paar streamen als Live-Kacheln; der Rest klappt in eine einzelne **Zusammenfassungs-Kachel**
@@ -97,43 +97,46 @@ Die Tasten sind **modal**: auf dem Dashboard und in einer Gruppe ist jede Aktion
 Interagieren steuern deine Tastendrücke das Programm, eine Baton-Aktion ist also der Leader **`C-t`** und dann die
 Taste. Drücke **`?`** für die vollständige, neu belegbare Liste der aktuellen Ansicht und **`C-t k`**, um die
 Tastenbelegung zu bearbeiten.
+Vier Tasten sind _Landings_: Sie tun allein nichts und öffnen eine Familie — `n` startet, `v` zeichnet, `g` gruppiert,
+`x` ist der Doppeltipp, der sich selbst bestätigt — und die Statuszeile nennt, was jede als Nächstes annimmt.
 
-| Where       | Taste             | Wirkung                                                            |
-| ----------- | ----------------- | ------------------------------------------------------------------ |
-| After `C-t` | `d` / `b`         | zum Dashboard springen / eine Ebene zurück                         |
-|             | `a`               | Attention-Posteingang — erledigen, was einen Menschen braucht      |
-|             | `[`               | in den Scroll-Modus wechseln                                       |
-|             | `l` / `L`         | Panel in eine Datei protokollieren / dieses Protokoll lesen        |
-|             | `R` / `S`         | Konfiguration neu laden / Server-Neustart erzwingen                |
-|             | `q`               | abkoppeln (der Server läuft weiter)                                |
-| Dashboard   | `jk` / `↑↓`       | den Cursor bewegen                                                 |
-|             | `hl` / `←→`       | eine Karte weiter · im Baum: Work Item ein-/ausklappen             |
-|             | `space`           | zeigen / verbergen, was unter der Zeile verschachtelt ist          |
-|             | `v` / `z`         | Detailspalte / Gruppierung: Work Item, Verzeichnis, Profil, Status |
-|             | `V`               | das Dashboard-Layout: Karten oder Baum                             |
-|             | `m`               | eine Zeile aufnehmen — Pfeile tragen sie, `enter` legt sie ab      |
-|             | `enter`           | die Auswahl öffnen / hineinzoomen                                  |
-|             | `p` / `A` / `c`   | neues shell- / agent- / Befehlsauswahl-Panel                       |
-|             | `.`               | neues Shell-Panel im Verzeichnis des fokussierten Panels           |
-|             | `C`               | den Conductor öffnen (ein Agent, der die Flotte steuert)           |
-|             | `H`               | die Global Shell öffnen (eine Host-Shell in `$HOME`)               |
-|             | `w` / `x`         | die Auswahl schließen / Beendete entfernen                         |
-|             | `r`               | die beendeten Panels unter dem Fokus erneut ausführen              |
-|             | `g` / `G` / `u`   | markieren / markierte Panels gruppieren / Gruppierung aufheben     |
-|             | `s` / `f` / `D`   | der Auswahl ein Signal senden / sie finden / diffen                |
-|             | `/`               | die Ausgabe jedes Panels durchsuchen (die Flotte greppen)          |
-|             | `T` / `Q`         | eine Task vergeben / die Task-Warteschlange verwalten              |
-|             | `U`               | Nutzungs-Fußzeile durchschalten: aus / Abrechnungsfenster / Panel  |
-|             | `K`               | die Tastenanzeige in der Fußzeile umschalten                       |
-| Group       | `tab`             | das nächste Panel fokussieren                                      |
-|             | `+` / `-`         | mehr / weniger Live-Kacheln zeigen                                 |
-|             | `L`               | das Kachel-Layout durchschalten                                    |
-|             | `p` / `i`         | das fokussierte Panel anpinnen / damit interagieren                |
-|             | `enter`           | das fokussierte Panel zoomen                                       |
-| Zoom        | tippen            | das Programm direkt steuern                                        |
-|             | `C-t f` / `C-t g` | den Scrollback durchsuchen / Git-Menü (agent)                      |
+| Where       | Taste                 | Wirkung                                                            |
+| ----------- | --------------------- | ------------------------------------------------------------------ |
+| After `C-t` | `d` / `b`             | zum Dashboard springen / eine Ebene zurück                         |
+|             | `a`                   | Attention-Posteingang — erledigen, was einen Menschen braucht      |
+|             | `[`                   | in den Scroll-Modus wechseln                                       |
+|             | `l` / `L`             | Panel in eine Datei protokollieren / dieses Protokoll lesen        |
+|             | `R` / `S`             | Konfiguration neu laden / Server-Neustart erzwingen                |
+|             | `q`                   | abkoppeln (der Server läuft weiter)                                |
+| Dashboard   | `jk` / `↑↓`           | den Cursor bewegen                                                 |
+|             | `hl` / `←→`           | eine Karte weiter · im Baum: Work Item ein-/ausklappen             |
+|             | `space`               | zeigen / verbergen, was unter der Zeile verschachtelt ist          |
+|             | `v p` / `v g`         | Detailspalte / Gruppierung: Work Item, Verzeichnis, Profil, Status |
+|             | `v l`                 | das Dashboard-Layout: Karten oder Baum                             |
+|             | `m`                   | eine Zeile aufnehmen — Pfeile tragen sie, `enter` legt sie ab      |
+|             | `enter`               | die Auswahl öffnen / hineinzoomen                                  |
+|             | `p` / `A` / `n c`     | neues shell- / agent- / Befehlsauswahl-Panel                       |
+|             | `n .`                 | neues Shell-Panel im Verzeichnis des fokussierten Panels           |
+|             | `n C`                 | den Conductor öffnen (ein Agent, der die Flotte steuert)           |
+|             | `n h`                 | die Global Shell öffnen (eine Host-Shell in `$HOME`)               |
+|             | `w` / `x x`           | die Auswahl schließen / Beendete entfernen                         |
+|             | `r`                   | die beendeten Panels unter dem Fokus erneut ausführen              |
+|             | `g g` / `g c` / `g u` | markieren / markierte Panels gruppieren / Gruppierung aufheben     |
+|             | `s` / `f` / `D`       | der Auswahl ein Signal senden / sie finden / diffen                |
+|             | `/`                   | die Ausgabe jedes Panels durchsuchen (die Flotte greppen)          |
+|             | `T` / `Q`             | eine Task vergeben / die Task-Warteschlange verwalten              |
+|             | `v u`                 | Nutzungs-Fußzeile durchschalten: aus / Abrechnungsfenster / Panel  |
+|             | `v k`                 | die Tastenanzeige in der Fußzeile umschalten                       |
+| Group       | `tab`                 | das nächste Panel fokussieren                                      |
+|             | `+` / `-`             | mehr / weniger Live-Kacheln zeigen                                 |
+|             | `L`                   | das Kachel-Layout durchschalten                                    |
+|             | `p` / `i`             | das fokussierte Panel anpinnen / damit interagieren                |
+|             | `enter`               | das fokussierte Panel zoomen                                       |
+| Zoom        | tippen                | das Programm direkt steuern                                        |
+|             | `C-t f` / `C-t G`     | den Scrollback durchsuchen / Git-Menü (agent)                      |
 
-Die vollständige Tastenreferenz pro Ansicht und die Gestaltung hinter jeder Ansicht stehen in **[docs/SPEC.md](SPEC.md)**.
+Die vollständige Tastenreferenz steht in **[docs/KEYS.md](KEYS.md)**, die Gestaltung hinter jeder Ansicht in
+**[docs/SPEC.md](SPEC.md)**.
 
 ## Funktionen
 
@@ -152,13 +155,13 @@ Alles, wonach du beim Hüten einer Flotte greifen würdest, nur einen Tastendruc
   funktioniert also auch über SSH ohne Hilfsprogramm.
 - **Diff** — `D` (oder `C-t D` im Zoom) blendet den Work-Tree-Diff des Agent-Panels ein — gestaged und ungestaged auf
   einmal, unversionierte Dateien inklusive — in einem Master-Detail-Overlay.
-- **Git** — `C-t g` öffnet ein Git-Menü für den gezoomten Agent: diff, log, status, stage, commit, push, branch und
+- **Git** — `C-t G` öffnet ein Git-Menü für den gezoomten Agent: diff, log, status, stage, commit, push, branch und
   worktrees. Siehe **[docs/GIT.md](GIT.md)**.
-- **Conductor & Steuerung** — `C` öffnet einen Conductor: einen Agent, der die Flotte für dich steuert. Er startet,
+- **Conductor & Steuerung** — `n C` öffnet einen Conductor: einen Agent, der die Flotte für dich steuert. Er startet,
   gruppiert, signalisiert und promptet die anderen Panels über den Socket — via `baton ctl` oder die `baton mcp`-Tools —
   eingezäunt, damit er seinen eigenen Host nicht zerlegen kann. Sein Ziel setzt du in `$HOME/.baton/CONDUCTOR.md`.
   Siehe **[docs/CONTROL.md](CONTROL.md)**.
-- **Global shell** — `H` öffnet die Global Shell: eine einzelne, schlichte Host-Shell, die der Server in `$HOME` hält,
+- **Global shell** — `n h` öffnet die Global Shell: eine einzelne, schlichte Host-Shell, die der Server in `$HOME` hält,
   immer einen Tastendruck entfernt. Wie der Conductor ist sie eine Markierung in der FLEET-Überschrift statt einer Karte,
   und der Server hält genau eine — sie überlebt einen Neustart als toter Slot, den du mit `r` erneut ausführst. Anders
   als der Conductor steuert sie nichts: keine eingegrenzte Rolle, kein verwalteter Workspace. (Zu unterscheiden von der
@@ -184,7 +187,7 @@ Alles, wonach du beim Hüten einer Flotte greifen würdest, nur einen Tastendruc
   Agenten. Siehe **[docs/ISOLATION.md](ISOLATION.md)**.
 - **Erscheinungsbild** — `$HOME/.baton/TUI.yaml` formt das Cockpit um: ein Farb-**Theme** und die **Layouts** der
   Gruppenaufteilung, per `C-t R` heiß neu geladen. Siehe **[docs/TUI.md](TUI.md)**.
-- **Nutzungs-Fußzeile** — `U` schaltet eine Fußzeile mit dem Tokenverbrauch und den Kosten des Tages um
+- **Nutzungs-Fußzeile** — `v u` schaltet eine Fußzeile mit dem Tokenverbrauch und den Kosten des Tages um
   (`⊙ 1.2M tok · ≈$12.34 API`). Sie liest standardmäßig die Transcripts von Claude Code (funktioniert mit einem
   Pro/Max-Abo) oder mit einem Key die Anthropic Admin API. Die Kosten sind API-äquivalent, keine Abo-Gebühr.
   Siehe **[docs/USAGE.md](USAGE.md)**.
@@ -196,8 +199,8 @@ Alles, wonach du beim Hüten einer Flotte greifen würdest, nur einen Tastendruc
 - **Fernzugriff** — `baton --remote` hängt dasselbe Cockpit an eine Flotte auf **einer anderen Maschine**, über das
   ssh, mit dem du sie ohnehin erreichst: kein lauschender Port, kein TLS, kein eigener Schlüsseltausch von baton.
   Standardmäßig aus; `settings.remote` oder `C-t @` schaltet ihn ein und erzeugt eine 8 Zeichen lange Passkey, die nie
-  auf Platte geschrieben wird. `C-t @` listet außerdem jede offene Verbindung mit Herkunft, Rolle und Dauer — `k` wirft
-  eine hinaus, `n` erneuert die Passkey, `x` schaltet den Fernzugriff ab. Siehe **[docs/REMOTE.md](REMOTE.md)**.
+  auf Platte geschrieben wird. `C-t @` listet außerdem jede offene Verbindung mit Herkunft, Rolle und Dauer — `x` wirft
+  eine hinaus, `n` erneuert die Passkey, `E` schaltet den Fernzugriff ab. Siehe **[docs/REMOTE.md](REMOTE.md)**.
 - **Persistenz & Respawn** — Baton merkt sich seine Flotte über einen Neustart hinweg; Panels kommen als inaktive,
   beendete Slots zurück, und `r` führt sie aus ihrer aufbewahrten Spezifikation erneut aus.
 - **Neuladen** — `C-t R` (oder ein `SIGHUP` an den Daemon) lädt die Konfiguration heiß neu, ohne die Flotte neu zu starten.

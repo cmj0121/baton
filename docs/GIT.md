@@ -3,7 +3,7 @@
 **English** · [繁體中文](GIT.zh-TW.md)
 
 > Do common git work without leaving the agent you are watching. The **git menu**
-> is a keyed pop-up, opened with the leader **`C-t g`** while zoomed into an agent
+> is a keyed pop-up, opened with the leader **`C-t G`** while zoomed into an agent
 > panel, that runs git against that agent's working directory.
 
 It is **zoom-only** by design — you act on the one agent you are looking at — and
@@ -13,7 +13,7 @@ into a **scrollable pop-up** over the cockpit, the text sibling of the diff pop-
 
 ## The menu
 
-`C-t g` in a zoom opens the menu for the zoomed agent. Pick an op by its keycap, or
+`C-t G` in a zoom opens the menu for the zoomed agent. Pick an op by its keycap, or
 `↑↓` (`j`/`k`) and `enter`; `esc` cancels. `push` and `remove` ask `y/n` first.
 
 | Key | Op          | Runs                                              | Result                           |

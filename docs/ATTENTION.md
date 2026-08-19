@@ -226,7 +226,7 @@ so the card above it and the card below it are the same two cards they were a mo
 Four things are never folded, and all four are you having already said this one matters: a **favourite**, a **pin**, a
 **marked** panel, and the card **under the cursor**. The last would be a bug rather than a preference.
 
-The row owns no verbs beyond opening and closing itself — `w`, `s`, `g`, `r` and `*` are refused with the way forward on
+The row owns no verbs beyond opening and closing itself — `w`, `s`, `g g`, `r` and `*` are refused with the way forward on
 the status line, and it answers no panel ids at all, so a bulk verb that forgot to ask acts on nothing rather than on
 every quiet panel at once. And the fold deliberately has no say in which layout the dashboard draws: the cards-or-tree
 count is of what the top level HOLDS, so the 45 panels behind a fold row count as 45 whether it is open, shut, or not

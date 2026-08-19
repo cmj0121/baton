@@ -19,7 +19,7 @@ Vous tenez la baguette. Les agents jouent. Vous dirigez. 🎼
 ![Démo du cockpit Baton — des panneaux sur un tableau de bord, zoom pour en piloter un, regroupement en élément de travail, ouverture du conductor et du global shell](assets/baton-demo.png)
 
 _Ouvrez des panneaux, zoomez sur l'un d'eux pour le piloter, regroupez-en deux en un élément de travail, appelez le
-conductor avec `C` et le global shell avec `H` — et `?` est toujours là pour les touches._
+conductor avec `n C` et le global shell avec `n h` — et `?` est toujours là pour les touches._
 
 _Clip généré à partir de [`baton-demo.tape`](assets/baton-demo.tape) — les étapes de régénération sont dans l'en-tête du
 fichier tape. Le CLI d'agent du conductor est une doublure ([`demo-agent.sh`](assets/demo-agent.sh)) afin que le clip
@@ -84,7 +84,7 @@ Vous pilotez Baton à travers trois vues, en passant de l'une à l'autre d'une s
   panneaux : un élément de travail par ligne, ses sous-groupes indentés en dessous, ses panneaux en dessous encore. `space`
   affiche ou masque ce qui est imbriqué sous une ligne, à n'importe quelle profondeur ; `→` ouvre un élément de travail puis y
   entre, `←` le referme et remonte d'un cran — et hors du premier niveau, revient aux cartes. La ligne porte l'état, le
-  répertoire de travail, la sparkline de sortie et la tâche confiée à mesure que le terminal s'élargit ; `v` ouvre un volet de
+  répertoire de travail, la sparkline de sortie et la tâche confiée à mesure que le terminal s'élargit ; `v p` ouvre un volet de
   détail à côté. C'est ici que vous naviguez, ouvrez et fermez des panneaux, et les regroupez en éléments de travail.
 - **Groupe (Group)** — la vue divisée en direct d'un élément de travail : ses panneaux côte à côte, tous diffusés en même
   temps. Les premiers défilent en tuiles vivantes ; les autres se replient dans une unique **tuile de résumé** sur laquelle
@@ -99,43 +99,46 @@ Les touches sont **modales** : sur le tableau de bord et dans un groupe, chaque 
 interaction, vos frappes pilotent le programme, donc une action Baton devient le préfixe **`C-t`** suivi de la touche.
 Appuyez sur **`?`** pour la liste complète et reconfigurable de la vue courante, et sur **`C-t k`** pour éditer la table de
 touches.
+Quatre touches sont des _landings_ : elles n'agissent pas seules et ouvrent une famille — `n` lance, `v` dessine,
+`g` groupe, `x` est le double appui qui se confirme lui-même — et la barre d'état annonce ce que chacune accepte ensuite.
 
-| Où              | Touche            | Action                                                                 |
-| --------------- | ----------------- | ---------------------------------------------------------------------- |
-| Après `C-t`     | `d` / `b`         | aller au tableau de bord / revenir d'un niveau                         |
-|                 | `a`               | la boîte d'attention — traiter ce qui réclame un humain                |
-|                 | `[`               | entrer en mode défilement                                              |
-|                 | `l` / `L`         | journaliser le panneau dans un fichier / relire ce journal             |
-|                 | `R` / `S`         | recharger la config / forcer le redémarrage du serveur                 |
-|                 | `q`               | se détacher (le serveur continue de tourner)                           |
-| Tableau de bord | `jk` / `↑↓`       | déplacer le curseur                                                    |
-|                 | `hl` / `←→`       | changer de carte · dans l'arbre : replier / déplier un élément         |
-|                 | `space`           | afficher / masquer ce qui est imbriqué sous la ligne                   |
-|                 | `v` / `z`         | volet de détail / cycle du groupement : élément, dossier, profil, état |
-|                 | `V`               | la mise en page du tableau : cartes ou arbre                           |
-|                 | `m`               | saisir une ligne — les flèches la portent, `enter` la dépose           |
-|                 | `enter`           | ouvrir / zoomer la sélection                                           |
-|                 | `p` / `A` / `c`   | nouveau panneau shell / agent / choix de commande                      |
-|                 | `.`               | nouveau panneau shell dans le répertoire du panneau focalisé           |
-|                 | `C`               | ouvrir le conductor (un agent qui pilote la flotte)                    |
-|                 | `H`               | ouvrir le global shell (un shell hôte dans `$HOME`)                    |
-|                 | `w` / `x`         | fermer la sélection / purger les panneaux terminés                     |
-|                 | `r`               | relancer le ou les panneaux terminés sous le focus                     |
-|                 | `g` / `G` / `u`   | marquer / grouper les panneaux marqués / dégrouper                     |
-|                 | `s` / `f` / `D`   | envoyer un signal / rechercher / diff sur la sélection                 |
-|                 | `/`               | chercher dans la sortie de chaque panneau (grep de la flotte)          |
-|                 | `T` / `Q`         | assigner une tâche / gérer la file de tâches                           |
-|                 | `U`               | faire défiler le pied de page d'usage : off / fenêtre / panneau        |
-|                 | `K`               | afficher/masquer le rappel des touches dans le pied de page            |
-| Groupe          | `tab`             | passer au panneau suivant                                              |
-|                 | `+` / `-`         | afficher plus / moins de tuiles vivantes                               |
-|                 | `L`               | faire défiler la disposition des tuiles                                |
-|                 | `p` / `i`         | épingler / interagir avec le panneau focalisé                          |
-|                 | `enter`           | zoomer le panneau focalisé                                             |
-| Zoom            | taper             | piloter le programme directement                                       |
-|                 | `C-t f` / `C-t g` | chercher dans l'historique / menu git (agent)                          |
+| Où              | Touche                | Action                                                                 |
+| --------------- | --------------------- | ---------------------------------------------------------------------- |
+| Après `C-t`     | `d` / `b`             | aller au tableau de bord / revenir d'un niveau                         |
+|                 | `a`                   | la boîte d'attention — traiter ce qui réclame un humain                |
+|                 | `[`                   | entrer en mode défilement                                              |
+|                 | `l` / `L`             | journaliser le panneau dans un fichier / relire ce journal             |
+|                 | `R` / `S`             | recharger la config / forcer le redémarrage du serveur                 |
+|                 | `q`                   | se détacher (le serveur continue de tourner)                           |
+| Tableau de bord | `jk` / `↑↓`           | déplacer le curseur                                                    |
+|                 | `hl` / `←→`           | changer de carte · dans l'arbre : replier / déplier un élément         |
+|                 | `space`               | afficher / masquer ce qui est imbriqué sous la ligne                   |
+|                 | `v p` / `v g`         | volet de détail / cycle du groupement : élément, dossier, profil, état |
+|                 | `v l`                 | la mise en page du tableau : cartes ou arbre                           |
+|                 | `m`                   | saisir une ligne — les flèches la portent, `enter` la dépose           |
+|                 | `enter`               | ouvrir / zoomer la sélection                                           |
+|                 | `p` / `A` / `n c`     | nouveau panneau shell / agent / choix de commande                      |
+|                 | `n .`                 | nouveau panneau shell dans le répertoire du panneau focalisé           |
+|                 | `n C`                 | ouvrir le conductor (un agent qui pilote la flotte)                    |
+|                 | `n h`                 | ouvrir le global shell (un shell hôte dans `$HOME`)                    |
+|                 | `w` / `x x`           | fermer la sélection / purger les panneaux terminés                     |
+|                 | `r`                   | relancer le ou les panneaux terminés sous le focus                     |
+|                 | `g g` / `g c` / `g u` | marquer / grouper les panneaux marqués / dégrouper                     |
+|                 | `s` / `f` / `D`       | envoyer un signal / rechercher / diff sur la sélection                 |
+|                 | `/`                   | chercher dans la sortie de chaque panneau (grep de la flotte)          |
+|                 | `T` / `Q`             | assigner une tâche / gérer la file de tâches                           |
+|                 | `v u`                 | faire défiler le pied de page d'usage : off / fenêtre / panneau        |
+|                 | `v k`                 | afficher/masquer le rappel des touches dans le pied de page            |
+| Groupe          | `tab`                 | passer au panneau suivant                                              |
+|                 | `+` / `-`             | afficher plus / moins de tuiles vivantes                               |
+|                 | `L`                   | faire défiler la disposition des tuiles                                |
+|                 | `p` / `i`             | épingler / interagir avec le panneau focalisé                          |
+|                 | `enter`               | zoomer le panneau focalisé                                             |
+| Zoom            | taper                 | piloter le programme directement                                       |
+|                 | `C-t f` / `C-t G`     | chercher dans l'historique / menu git (agent)                          |
 
-Voir **[docs/SPEC.md](SPEC.md)** pour la référence complète des touches vue par vue et la conception derrière chaque vue.
+Voir **[docs/KEYS.md](KEYS.md)** pour la référence complète des touches, et **[docs/SPEC.md](SPEC.md)** pour la
+conception derrière chaque vue.
 
 ## Fonctionnalités
 
@@ -154,13 +157,13 @@ Tout ce dont vous avez besoin pour mener une flotte, à une frappe de distance :
   sélectionne et copie via OSC52, donc ça marche par SSH sans binaire auxiliaire.
 - **Diff** — `D` (ou `C-t D` en zoom) fait apparaître le diff de l'arbre de travail du panneau agent — indexé et non indexé
   d'un seul coup, fichiers non suivis compris — dans une superposition maître-détail.
-- **Git** — `C-t g` ouvre un menu git sur l'agent zoomé : diff, log, status, indexation, commit, push, branches et
+- **Git** — `C-t G` ouvre un menu git sur l'agent zoomé : diff, log, status, indexation, commit, push, branches et
   worktrees. Voir **[docs/GIT.md](GIT.md)**.
-- **Conductor et contrôle** — `C` ouvre un conductor : un agent qui pilote la flotte à votre place. Il ouvre des panneaux,
+- **Conductor et contrôle** — `n C` ouvre un conductor : un agent qui pilote la flotte à votre place. Il ouvre des panneaux,
   les regroupe, envoie des signaux et des prompts aux autres panneaux via la socket — à travers `baton ctl` ou les outils
   `baton mcp` — avec des garde-fous pour qu'il ne puisse pas saccager son propre hôte. Définissez son objectif dans
   `$HOME/.baton/CONDUCTOR.md`. Voir **[docs/CONTROL.md](CONTROL.md)**.
-- **Global shell** — `H` ouvre le global shell : un unique shell hôte simple que le serveur maintient dans `$HOME`,
+- **Global shell** — `n h` ouvre le global shell : un unique shell hôte simple que le serveur maintient dans `$HOME`,
   toujours à une frappe de distance. Comme le conductor, c'est une marque dans l'en-tête FLEET plutôt qu'une carte, et le
   serveur n'en garde qu'un — il survit à un redémarrage sous la forme d'un emplacement terminé que vous relancez avec `r`.
   Contrairement au conductor, il ne pilote rien : pas de rôle restreint, pas d'espace de travail géré. (À distinguer du
@@ -186,7 +189,7 @@ Tout ce dont vous avez besoin pour mener une flotte, à une frappe de distance :
   **[docs/ISOLATION.md](ISOLATION.md)**.
 - **Apparence** — `$HOME/.baton/TUI.yaml` remodèle le cockpit : un **thème** de couleurs et les **dispositions** de la vue
   divisée des groupes, rechargés à chaud avec `C-t R`. Voir **[docs/TUI.md](TUI.md)**.
-- **Pied de page d'usage** — `U` affiche ou masque un pied de page indiquant la consommation de tokens et le coût du jour
+- **Pied de page d'usage** — `v u` affiche ou masque un pied de page indiquant la consommation de tokens et le coût du jour
   (`⊙ 1.2M tok · ≈$12.34 API`). Il lit par défaut les transcripts de Claude Code (fonctionne avec un abonnement Pro/Max) ou
   l'Anthropic Admin API avec une clé. Le coût est un équivalent API, pas un montant facturé sur l'abonnement. Voir
   **[docs/USAGE.md](USAGE.md)**.
@@ -198,8 +201,8 @@ Tout ce dont vous avez besoin pour mener une flotte, à une frappe de distance :
 - **Accès distant** — `baton --remote` rattache le même cockpit à une flotte qui tourne sur **une autre machine**, via
   le ssh que vous utilisez déjà pour l'atteindre : aucun port en écoute, pas de TLS, aucun échange de clés propre à
   baton. Désactivé par défaut ; `settings.remote` ou `C-t @` l'active et génère une passkey de 8 caractères qui n'est
-  jamais écrite sur disque. `C-t @` liste aussi chaque connexion vivante avec sa source, son rôle et sa durée — `k` en
-  éjecte une, `n` renouvelle la passkey, `x` coupe l'accès distant. Voir **[docs/REMOTE.md](REMOTE.md)**.
+  jamais écrite sur disque. `C-t @` liste aussi chaque connexion vivante avec sa source, son rôle et sa durée — `x` en
+  éjecte une, `n` renouvelle la passkey, `E` coupe l'accès distant. Voir **[docs/REMOTE.md](REMOTE.md)**.
 - **Persistance et relance** — Baton se souvient de sa flotte d'un redémarrage à l'autre ; les panneaux reviennent sous
   forme d'emplacements terminés et inertes, et `r` les relance à partir de leur spécification conservée.
 - **Rechargement** — `C-t R` (ou un `SIGHUP` envoyé au démon) recharge la config à chaud sans redémarrer la flotte.
