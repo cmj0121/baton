@@ -143,6 +143,7 @@ type model struct {
 	// fires if the run lapses where it stands, which only happens when a
 	// binding is also the start of a longer one. pendingGen stamps the expiry
 	// tick so a stale one cannot clear its successor's run. See keypending.go.
+	pendingDrain  bool // the queue manager's X is waiting on a y/n
 	pending       []string
 	pendingHit    binding
 	pendingHasHit bool

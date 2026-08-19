@@ -16,14 +16,15 @@ import (
 // popup owns no state of its own beyond the cursor — so the reply (a fresh "tasks"
 // snapshot) is what redraws the list.
 
-// queueManageKeys: cancel the task under the cursor, drain the whole backlog,
-// reorder a queued task to the head/tail of the backlog.
+// The manager's own keys. They are the overlay set every other overlay uses —
+// x removes the row under the cursor, X clears the lot — rather than a private
+// alphabet: this popup used to spend d on cancel (d is diff elsewhere), D on
+// drain (D is diff elsewhere too) and K/J on reordering (K was the keycast
+// toggle, and reordering is shift+arrows on the dashboard and in the split).
 const (
-	keyQueueCancel  = "d" // cancel the highlighted queued task
-	keyQueueDrain   = "D" // drain every queued task (shift+d)
-	keyQueueEdit    = "e" // edit the highlighted task (planned follow-up)
-	keyQueuePromote = "K" // bump the highlighted queued task to the head of the backlog (shift+k)
-	keyQueueDemote  = "J" // drop the highlighted queued task to the tail of the backlog (shift+j)
+	keyQueueCancel = "x" // cancel the highlighted queued task
+	keyQueueDrain  = "X" // drain every queued task, after a y/n
+	keyQueueEdit   = "e" // edit the highlighted task (planned follow-up)
 )
 
 // openQueue opens the manager over the current view, remembering from so esc
@@ -40,35 +41,61 @@ func (m model) openQueue(from mode) model {
 	return m
 }
 
-// handleQueueKey drives the manager: ↑↓ move the cursor, d cancels the queued task
-// under it, D drains the whole backlog, e is reserved for an editor pass, and esc
-// closes. A cancel of an in-flight task is refused by the server and surfaced on
-// the status line — the popup stays open on the unchanged list. Any other key is
-// ignored so a stray press never mutates the queue.
+// handleQueueKey drives the manager: j/k and the arrows move the cursor, g/G jump
+// to the ends, x cancels the queued task under it, X drains the whole backlog
+// after a y/n, shift+arrows reorder it, e is reserved for an editor pass, and
+// q/esc close. A cancel of an in-flight task is refused by the server and
+// surfaced on the status line — the popup stays open on the unchanged list. Any
+// other key is ignored so a stray press never mutates the queue.
 func (m model) handleQueueKey(key string) (tea.Model, tea.Cmd) {
+	// Draining is waiting on a y/n. It throws away work nobody can get back, so
+	// it asks first, like closing a panel does.
+	if m.pendingDrain {
+		m.pendingDrain = false
+		if key == "y" || key == "enter" {
+			return m.drainQueue(), nil
+		}
+		m.status = "drain cancelled"
+		return m, nil
+	}
+
 	switch key {
-	case "esc":
+	case "esc", "q":
 		m.mode = m.queueFrom
 		m.status = "queue closed"
 		return m, nil
-	case "up":
+	case "up", "k":
 		if len(m.tasks) > 0 {
 			m.queueCursor = wrapIndex(m.queueCursor, -1, len(m.tasks))
 		}
 		return m, nil
-	case "down":
+	case "down", "j":
 		if len(m.tasks) > 0 {
 			m.queueCursor = wrapIndex(m.queueCursor, 1, len(m.tasks))
 		}
 		return m, nil
+	case "g", "home":
+		m.queueCursor = 0
+		return m, nil
+	case "G", "end":
+		if len(m.tasks) > 0 {
+			m.queueCursor = len(m.tasks) - 1
+		}
+		return m, nil
+	case "shift+up", "shift+left":
+		return m.reprioritizeQueued(true), nil
+	case "shift+down", "shift+right":
+		return m.reprioritizeQueued(false), nil
 	case keyQueueCancel:
 		return m.cancelQueued(), nil
 	case keyQueueDrain:
-		return m.drainQueue(), nil
-	case keyQueuePromote:
-		return m.reprioritizeQueued(true), nil
-	case keyQueueDemote:
-		return m.reprioritizeQueued(false), nil
+		if len(m.tasks) == 0 {
+			m.status = "queue: already empty"
+			return m, nil
+		}
+		m.pendingDrain = true
+		m.status = "drain the whole backlog? this cancels every queued task · (y/n)"
+		return m, nil
 	case keyQueueEdit:
 		// Editing a brief means handing it to $EDITOR, which in baton runs as a
 		// server-owned PTY panel (like a git commit), not a frontend shell-out — a
@@ -199,6 +226,6 @@ func (m model) queueView() string {
 
 	rows = append(rows, "",
 		mutedStyle.Render("K/J reorder · d cancels a queued task · in-flight tasks finish on their panel"),
-		"", legend("↑↓", "move", "K/J", "reorder", "d", "cancel", "D", "drain all", "esc", "close"))
+		"", legend("jk", "move", "S-↑↓", "reorder", keyQueueCancel, "cancel", keyQueueDrain, "drain all", "esc", "close"))
 	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }

@@ -129,7 +129,7 @@ func TestRemoteKeysAreRefusedOverARemoteAttach(t *testing.T) {
 	info.Local, info.Passkey = false, ""
 	m := remoteModel(info)
 
-	for _, key := range []string{"n", "x", "e"} {
+	for _, key := range []string{"n", "E", "e"} {
 		next, _ := m.handleRemoteKey(key)
 		got := next.(model).status
 		if !strings.Contains(got, "own machine") {
@@ -140,7 +140,7 @@ func TestRemoteKeysAreRefusedOverARemoteAttach(t *testing.T) {
 
 func TestRemoteControlKeysNeedRemoteOn(t *testing.T) {
 	m := remoteModel(&proto.RemoteInfo{Local: true})
-	for _, key := range []string{"n", "x"} {
+	for _, key := range []string{"n", "E"} {
 		next, _ := m.handleRemoteKey(key)
 		if got := next.(model).status; !strings.Contains(got, "not enabled") {
 			t.Fatalf("%q with remote off said %q", key, got)
@@ -162,17 +162,17 @@ func TestRemoteControlKeysNeedRemoteOn(t *testing.T) {
 func TestRemoteKickAndRotateAndDisableSetTheStatus(t *testing.T) {
 	m := remoteModel(enabledStatus())
 
-	next, _ := m.handleRemoteKey("k")
+	next, _ := m.handleRemoteKey("x")
 	if got := next.(model).status; !strings.Contains(got, "kicking local") {
-		t.Fatalf("k said %q", got)
+		t.Fatalf("x said %q", got)
 	}
 	next, _ = m.handleRemoteKey("n")
 	if got := next.(model).status; !strings.Contains(got, "rotating") {
 		t.Fatalf("n said %q", got)
 	}
-	next, _ = m.handleRemoteKey("x")
+	next, _ = m.handleRemoteKey("E")
 	if got := next.(model).status; !strings.Contains(got, "disabling") {
-		t.Fatalf("x said %q", got)
+		t.Fatalf("E said %q", got)
 	}
 	next, _ = m.handleRemoteKey("r")
 	if got := next.(model).status; !strings.Contains(got, "refreshed") {
@@ -288,5 +288,28 @@ func TestGoodbyeTellsTheCockpitWhyItWent(t *testing.T) {
 	}
 	if !strings.Contains(m.status, "kicked from local") {
 		t.Fatalf("status = %q, want the reason", m.status)
+	}
+}
+
+// TestRemoteUsesTheOverlayKeys checks the overlay moves on j/k again. It spent
+// k on the kick, which cost this one screen the movement keys every other
+// overlay has and put a verb that hangs up on somebody next to the up arrow.
+func TestRemoteUsesTheOverlayKeys(t *testing.T) {
+	m := remoteModel(enabledStatus())
+	if m.remoteConnCount() < 2 {
+		t.Skip("needs at least two connections to move between")
+	}
+
+	next, _ := m.handleRemoteKey("j")
+	if got := next.(model).remoteSel; got != 1 {
+		t.Errorf("j should move down, sel = %d", got)
+	}
+	next, _ = next.(model).handleRemoteKey("k")
+	if got := next.(model).remoteSel; got != 0 {
+		t.Errorf("k should move back up, sel = %d", got)
+	}
+	next, _ = next.(model).handleRemoteKey("G")
+	if got := next.(model).remoteSel; got != m.remoteConnCount()-1 {
+		t.Errorf("G should jump to the last connection, sel = %d", got)
 	}
 }

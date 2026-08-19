@@ -152,7 +152,7 @@ the work-item verbs — is refused in a zoom with the way forward on the status 
 |                 | ·      | ·       | `enter`             | open or apply the row                            |
 |                 | ·      | ·       | `r`                 | refresh                                          |
 |                 | ·      | ·       | `x`                 | remove the row under the cursor                  |
-|                 | ·      | `x`     | `x`                 | clear every row                                  |
+|                 | ·      | ·       | `X`                 | clear every row, after a `y`/`n`                 |
 |                 | ·      | ·       | `q` / `esc`         | close                                            |
 | **Inbox**       | ·      | ·       | `i`                 | step into the panel that wants you               |
 |                 | ·      | ·       | `-`                 | snooze the row                                   |
