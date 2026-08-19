@@ -1240,6 +1240,12 @@ func (m *model) applyTelemetry(sm proto.ServerMsg) {
 
 func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := k.String()
+	// The space bar answers to two names depending on the terminal and the
+	// bubbletea version. One of them reaches the bindings, so a key map that binds
+	// space cannot half-work — and no handler has to remember to check for both.
+	if key == "space" {
+		key = keyExpand
+	}
 
 	// The send-signal picker owns the keyboard until a signal is chosen or esc.
 	if m.mode == modeSignal {
@@ -2541,6 +2547,8 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		}
 	case actGrab:
 		return m.toggleGrab(), nil
+	case actExpand:
+		return m.toggleExpand(), nil
 	case actFavourite:
 		return m.toggleFavourite(), nil
 	case actCommands:

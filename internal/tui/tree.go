@@ -256,6 +256,41 @@ func (m model) expandSelected() model {
 	return m
 }
 
+// toggleExpand is what space does: show what is nested under the row, or hide it
+// again.
+//
+// It is the same state ← and → walk, reached by the key every other tree in every
+// other program uses for it — and unlike them it does not move the cursor, which
+// is what makes it the key for LOOKING. Each level keeps its own state, so a
+// sub-group inside an open work item toggles on its own and the nesting goes as
+// deep as the fleet does.
+//
+// The fold row toggles too. It is the other row on the dashboard with something
+// inside it, and a key that means "show me what is under here" that stopped at
+// the quiet row would be a key with an exception to remember.
+//
+// A panel is a leaf and says so, rather than silently doing nothing: the whole
+// point of a disclosure key is that you can press it to find out.
+func (m model) toggleExpand() model {
+	it, ok := m.selectedItem()
+	if !ok {
+		return m
+	}
+	switch it.kind {
+	case itemFold:
+		return m.toggleFold()
+	case itemGroup:
+		if m.gridDash() {
+			// On the cards there is nothing drawn to hide, and what is asked for is
+			// the inside of the work item — which is expandSelected's business.
+			return m.expandSelected()
+		}
+		return m.setCollapsed(it, it.expanded)
+	}
+	m.status = "nothing nested here — " + keyLabel(m.bindingKey(actExpand)) + " opens a work item"
+	return m
+}
+
 // collapseSelected is what ← does: shut what the cursor is on, or step out of it.
 //
 // An open work item shuts. Anything else — a panel, a shut group, a fold row —
