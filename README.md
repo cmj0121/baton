@@ -78,7 +78,7 @@ Lost? **`?`** always shows the keys for wherever you are.
 You drive Baton through three views, moving between them with a keystroke:
 
 - **Dashboard** — mission control. A small fleet is a grid of **cards**, one per panel and one per work item; from six
-  top-level rows up it becomes a live **tree** of every panel: work items as rows, their sub-groups indented under them,
+  things at the top level up it becomes a live **tree** of every panel: work items as rows, their sub-groups indented under them,
   their panels under those. `space` shows or hides what is nested under a row at any depth, `→` opens a work item and
   steps inside it, `←` shuts it and steps back out — and out of the top level, back to the cards. The tree row carries
   the state, the working directory, the output sparkline and the dispatched task as the terminal gets wide enough for

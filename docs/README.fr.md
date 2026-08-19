@@ -80,7 +80,7 @@ Perdu ? **`?`** affiche toujours les touches de l'endroit où vous vous trouvez.
 Vous pilotez Baton à travers trois vues, en passant de l'une à l'autre d'une seule frappe :
 
 - **Tableau de bord (Dashboard)** — le centre de contrôle. Une petite flotte est une grille de **cartes**, une par panneau et
-  une par élément de travail ; à partir de six lignes de premier niveau, elle devient un **arbre** en direct de tous les
+  une par élément de travail ; à partir de six choses au premier niveau, elle devient un **arbre** en direct de tous les
   panneaux : un élément de travail par ligne, ses sous-groupes indentés en dessous, ses panneaux en dessous encore. `space`
   affiche ou masque ce qui est imbriqué sous une ligne, à n'importe quelle profondeur ; `→` ouvre un élément de travail puis y
   entre, `←` le referme et remonte d'un cran — et hors du premier niveau, revient aux cartes. La ligne porte l'état, le
