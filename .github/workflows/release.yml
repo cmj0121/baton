@@ -26,12 +26,21 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # goreleaser's own `.TagBody` is read through a cleaner that strips every
+      # apostrophe, so the note has to reach it as a plain file instead. It
+      # lands outside the checkout because goreleaser refuses to release from a
+      # tree with untracked files in it.
+      - name: Lift the release note out of the tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: git tag -l --format='%(contents:body)' "${TAG}" > "${RUNNER_TEMP}/release-header.md"
+
       - name: Release
         uses: goreleaser/goreleaser-action@v7
         with:
           # pinned to the v2 line that still ships the `brews` formula publisher.
           version: "~> v2.17"
-          args: release --clean
+          args: release --clean --release-header=${{ runner.temp }}/release-header.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # a PAT with `contents: write` on cmj0121/homebrew-tap — the workflow's

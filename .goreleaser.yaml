@@ -99,9 +99,13 @@ release:
   # the annotated tag's message *is* the release note, so lift it straight out
   # of the tag: the subject (minus the `baton ` prefix) becomes the title, the
   # body becomes the note, and the changelog lands underneath.
+  #
+  # the body is *not* set here: goreleaser reads `.TagBody` through a cleaner
+  # that strips every apostrophe from it, so `panel's` reached the release page
+  # as `panels`. The workflow writes the body to a file and passes it as
+  # `--release-header`, which is taken verbatim. `.TagSubject` is unaffected and
+  # still names the release.
   name_template: '{{ trimprefix .TagSubject "baton " }}'
-  header: |
-    {{ .TagBody }}
   # goreleaser owns the release body from here on, so a re-run rewrites it
   # cleanly instead of stacking a second changelog onto the first.
   mode: replace
