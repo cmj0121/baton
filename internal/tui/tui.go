@@ -2484,6 +2484,11 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 	case actPreviewToggle:
 		m.preview = !m.preview
 		m.status = "preview: " + onOff(m.preview)
+		// The pane lives beside the TREE. Saying "preview: on" while the cards are
+		// drawn would be a toggle that reports a change nothing on screen made.
+		if m.preview && m.gridDash() {
+			m.status += " · it shows beside the tree, not the cards"
+		}
 		if err := m.saveConfig(); err != nil {
 			m.status = "toggled, but save failed: " + err.Error()
 		}

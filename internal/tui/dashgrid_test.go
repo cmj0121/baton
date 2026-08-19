@@ -203,3 +203,19 @@ func TestTheHeadingCountsTheFleetsGroups(t *testing.T) {
 		}
 	}
 }
+
+// TestPreviewToggleSaysWhereThePaneIs: the detail pane lives beside the tree, so
+// switching it on while the cards are drawn says so rather than reporting a change
+// nothing on screen made.
+func TestPreviewToggleSaysWhereThePaneIs(t *testing.T) {
+	m := baseModel()
+	m.mode, m.fleet = modeDashboard, loosePanels(3)
+	if !m.gridDash() {
+		t.Fatal("three panels are cards")
+	}
+
+	next, _ := m.runAction(actPreviewToggle)
+	if got := next.(model).status; !strings.Contains(got, "tree") {
+		t.Fatalf("the toggle should say where the pane shows, got %q", got)
+	}
+}
