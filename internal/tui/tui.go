@@ -446,6 +446,20 @@ type model struct {
 	// them for nothing while you are reorganising one.
 	preview bool
 
+	// showTree keeps the tree on a fleet small enough for the cards.
+	//
+	// It is the way back into the tree's own vocabulary — expand, collapse, and
+	// carrying a row INTO a work item — for a fleet the card grid would otherwise
+	// draw whole. Without it, the layout that greets a person building their first
+	// three work items is the one layout that cannot show nesting, which is the
+	// worst possible place to hide it.
+	//
+	// Nobody sets it directly: opening a work item from the cards turns it on,
+	// because "show me what is inside this" can only be answered by the tree, and
+	// ← out of a shut top-level row turns it off again. A view state, session-lived
+	// like every other one here.
+	showTree bool
+
 	// collapsed records the group rows a person has explicitly SHUT, keyed by group
 	// path. Groups are expanded by default — a tree that opened closed would show
 	// fewer panels than the card grid it replaced — so this is the exception list
@@ -836,6 +850,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		// A width change can swap the dashboard's layout, and the card grid addresses
+		// only the top of the tree — so a cursor that was deep in a nested work item
+		// has to come back into range with it.
+		m.clampCursor()
 		if m.mode == modeZoom && m.emu != nil {
 			m.emu.Resize(m.width, m.zoomRows())
 			m.sendf(proto.Command{Action: "panel.resize", ID: m.zoomID, Rows: m.zoomRows(), Cols: m.width})
@@ -1222,6 +1240,12 @@ func (m *model) applyTelemetry(sm proto.ServerMsg) {
 
 func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := k.String()
+	// The space bar answers to two names depending on the terminal and the
+	// bubbletea version. One of them reaches the bindings, so a key map that binds
+	// space cannot half-work — and no handler has to remember to check for both.
+	if key == "space" {
+		key = keyExpand
+	}
 
 	// The send-signal picker owns the keyboard until a signal is chosen or esc.
 	if m.mode == modeSignal {
@@ -1394,19 +1418,15 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.scrollHelp(-1)
 			return m, nil
 		}
-		m.move(-m.cols())
+		m.move(-m.step(key))
 		return m, nil
 	case "down", "j":
 		if m.mode == modeHelp {
 			m.scrollHelp(1)
 			return m, nil
 		}
-		m.move(m.cols())
+		m.move(m.step(key))
 		return m, nil
-	case " ", "space":
-		if m.mode == modeDashboard {
-			return m.toggleGrab(), nil
-		}
 	case "left", "h":
 		// ← and → walk the dashboard tree: out and in. They used to move the cursor
 		// one card left or right, which only ever meant anything in the multi-column
@@ -2464,6 +2484,11 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 	case actPreviewToggle:
 		m.preview = !m.preview
 		m.status = "preview: " + onOff(m.preview)
+		// The pane lives beside the TREE. Saying "preview: on" while the cards are
+		// drawn would be a toggle that reports a change nothing on screen made.
+		if m.preview && m.gridDash() {
+			m.status += " · it shows beside the tree, not the cards"
+		}
 		if err := m.saveConfig(); err != nil {
 			m.status = "toggled, but save failed: " + err.Error()
 		}
@@ -2525,6 +2550,10 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		case actRename:
 			return m.startRename(), nil
 		}
+	case actGrab:
+		return m.toggleGrab(), nil
+	case actExpand:
+		return m.toggleExpand(), nil
 	case actFavourite:
 		return m.toggleFavourite(), nil
 	case actCommands:
@@ -3221,7 +3250,26 @@ func (m *model) pruneMarks() {
 // single-column list now that the dashboard is a tree, so up and down step one
 // row — the multi-column card grid was the only thing that ever made this
 // anything else, and it is gone.
-func (m model) cols() int { return 1 }
+func (m model) cols() int {
+	if !m.gridDash() {
+		return 1
+	}
+	return gridCols(m.width)
+}
+
+// step is how far one cursor key travels: a whole row for the arrows, one item
+// for j/k.
+//
+// They are the same key in every single-column view, where a row IS one item, and
+// they part company only on the card grid — where the arrows walk the grid the way
+// it looks and j/k walk it in reading order. Without that, the last card of a
+// short final row would be a card you could see and not reach.
+func (m model) step(key string) int {
+	if key == "j" || key == "k" {
+		return 1
+	}
+	return m.cols()
+}
 
 // --- rendering ---
 
@@ -3372,7 +3420,7 @@ func (m model) dashboardView() string {
 	items := m.dashItems() // built once and threaded through the render below
 	shown := m.visibleFleet()
 	heading := sectionStyle.Render(spaced("FLEET")) +
-		mutedStyle.Render(fmt.Sprintf("   %d panel(s)  ", len(shown))) + fleetBreakdown(shown, items)
+		mutedStyle.Render(fmt.Sprintf("   %d panel(s)  ", len(shown))) + fleetBreakdown(shown)
 	if mark := m.conductorMark(); mark != "" {
 		heading += mutedStyle.Render("   ·   ") + mark
 	}
@@ -3392,6 +3440,9 @@ func (m model) dashboardView() string {
 	}
 	summary := m.summaryStrip(shown)
 	body := m.treeBody(items)
+	if m.gridDash() {
+		body = m.cardGrid(items)
+	}
 	if m.filter != "" && len(items) == 0 {
 		body = noticeBox(mutedStyle.Render("no panels match ") +
 			lipgloss.NewStyle().Foreground(colBrandHi).Render("\""+truncate(m.filter, 24)+"\"") +
@@ -3400,10 +3451,10 @@ func (m model) dashboardView() string {
 	return lipgloss.JoinVertical(lipgloss.Center, heading, "", summary, "", body)
 }
 
-// treeView reports whether the cursor is walking a single-column list. The
-// dashboard is always one now — the card grid it used to swap to below seven items
-// is gone — so this is true for the dashboard and for every single-column overlay.
-func (m model) treeView() bool { return m.mode == modeDashboard }
+// treeView reports whether the dashboard is drawing the tree rather than the card
+// grid. It is the counterpart of gridDash, and both read the same gate, so the
+// renderer and the cursor cannot disagree about which layout is on screen.
+func (m model) treeView() bool { return m.mode == modeDashboard && !m.gridDash() }
 
 // summaryStrip is a row of chips counting panels in each state. It takes the
 // already-filtered dashboard fleet so the conductor is excluded without re-scanning.

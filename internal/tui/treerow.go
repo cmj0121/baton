@@ -11,17 +11,19 @@ import (
 
 // This file draws one dashboard row.
 //
-// It replaced a card grid, and the replacement had to be an upgrade rather than a
-// trade. A card was 32 columns wide and three lines tall and carried about eighty
+// It took over from a card grid, and the takeover had to be an upgrade rather than
+// a trade. A card was 32 columns wide and three lines tall and carried about eighty
 // characters — the LED, the title, the kind, the state, the working directory, the
 // output sparkline and either the activity line or the dispatched task. A 30-column
 // sidebar row carried an LED and a truncated name, so swapping one for the other at
-// that width would have been a plain loss for the small fleets that saw the grid.
+// that width would have been a plain loss.
 //
 // So the tree takes the WHOLE width and spends it on columns, which a card grid
-// could not: at 200 columns the old split used 95 and left 105 empty. One row now
-// beats one card on information and costs a third of the height, which is the
-// arithmetic that makes fifty panels legible at all.
+// could not: at 200 columns the old split used 95 and left 105 empty. One row beats
+// one card on information and costs a third of the height, which is the arithmetic
+// that makes fifty panels legible at all — and it is arithmetic about FIFTY. At
+// four the columns have nothing to line up against, which is why the cards still
+// draw a small fleet (see dashgrid.go).
 //
 // Columns appear as the terminal earns them, in order of how much they tell you
 // about a panel you cannot see: what state it is in, then where it is working,
@@ -149,18 +151,7 @@ func (m model) rowLead(it dashItem) string {
 			b.WriteString("├─ ")
 		}
 	}
-	if m.selecting() {
-		b.WriteString(markCell(m.itemMarked(it)))
-	}
-	if m.itemFavourite(it) {
-		b.WriteString(lipgloss.NewStyle().Foreground(colBrandHi).Render("⊙"))
-	}
-	// A carried row is marked where it still SITS. Nothing is sent until the drop,
-	// so drawing it under the cursor would be drawing a move that has not happened
-	// — and the row you are about to displace is exactly the one you need to see.
-	if m.grabbedRow(it) {
-		b.WriteString(lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render("⇅"))
-	}
+	b.WriteString(m.rowMarks(it))
 
 	switch it.kind {
 	case itemFold:
@@ -180,6 +171,32 @@ func (m model) rowLead(it dashItem) string {
 		b.WriteString(lipgloss.NewStyle().Foreground(info.color).Render(info.led))
 	}
 	b.WriteString(" ")
+	return b.String()
+}
+
+// rowMarks is what a row says about itself before its glyph: the selection mark
+// while marking, the favourite ⊙, and the ⇅ of a row being carried.
+//
+// The tree row and the card grid both draw it from here, and that is the point.
+// The ⇅ was added while the dashboard had no cards at all, so a card assembled
+// from its own idea of what a row shows would have silently lacked it — and the
+// next decoration would have gone the same way, on whichever layout was not being
+// looked at that week.
+//
+// A carried row is marked where it still SITS. Nothing is sent until the drop, so
+// drawing it under the cursor would be drawing a move that has not happened — and
+// the row you are about to displace is exactly the one you need to see.
+func (m model) rowMarks(it dashItem) string {
+	var b strings.Builder
+	if m.selecting() {
+		b.WriteString(markCell(m.itemMarked(it)))
+	}
+	if m.itemFavourite(it) {
+		b.WriteString(lipgloss.NewStyle().Foreground(colBrandHi).Render("⊙"))
+	}
+	if m.grabbedRow(it) {
+		b.WriteString(lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render("⇅"))
+	}
 	return b.String()
 }
 

@@ -79,11 +79,13 @@ Baton arranca su servidor en segundo plano y te deja en el **tablero**, tu base 
 
 Manejas Baton a través de tres vistas, y te mueves entre ellas con una tecla:
 
-- **Tablero (Dashboard)** — control de misión. Un **árbol** en vivo con todos los paneles: un work item por fila, sus
-  subgrupos indentados debajo y sus paneles debajo de esos. `→` abre un work item y entra en él, `←` lo cierra y sube un
-  nivel. La fila lleva el estado, el directorio de trabajo, la sparkline de salida y la tarea asignada a medida que la
-  terminal se ensancha; `v` abre un panel de detalle al lado. Aquí navegas, abres y cierras paneles, y los agrupas en
-  work items.
+- **Tablero (Dashboard)** — control de misión. Una flota pequeña es una rejilla de **tarjetas**, una por panel y una por work
+  item; a partir de seis filas de primer nivel se convierte en un **árbol** en vivo con todos los paneles: un work item por
+  fila, sus subgrupos indentados debajo y sus paneles debajo de esos. `space` muestra u oculta lo que hay anidado bajo una
+  fila, a cualquier profundidad; `→` abre un work item y entra en él, `←` lo cierra y sube un nivel — y desde el primer nivel,
+  de vuelta a las tarjetas. La fila lleva el estado, el directorio de trabajo, la sparkline de salida y la tarea asignada a
+  medida que la terminal se ensancha; `v` abre un panel de detalle al lado. Aquí navegas, abres y cierras paneles, y los
+  agrupas en work items.
 - **Grupo (Group)** — la división en vivo de un work item: sus paneles en mosaico, uno al lado del otro, todos
   transmitiendo a la vez. Los primeros se transmiten como mosaicos en vivo; el resto se pliega en un único **mosaico de
   resumen** al que puedes hacer zoom. Fija unos cuantos para tenerlos siempre activos, maneja el que tiene el foco allí
@@ -108,8 +110,9 @@ teclas.
 |             | `q`               | desacoplarse (el servidor sigue en marcha)                            |
 | Dashboard   | `jk` / `↑↓`       | mover el cursor                                                       |
 |             | `hl` / `←→`       | plegar / desplegar un work item — salir / entrar                      |
+|             | `space`           | mostrar / ocultar lo que hay anidado bajo la fila                     |
 |             | `v` / `z`         | panel de detalle / agrupar por: work item, directorio, perfil, estado |
-|             | `space`           | coger una fila — las flechas la llevan, `enter` la suelta             |
+|             | `m`               | coger una fila — las flechas la llevan, `enter` la suelta             |
 |             | `enter`           | abrir / hacer zoom en la selección                                    |
 |             | `p` / `A` / `c`   | nuevo panel de shell / agente / elegir comando                        |
 |             | `.`               | nuevo panel de shell en el directorio del panel enfocado              |

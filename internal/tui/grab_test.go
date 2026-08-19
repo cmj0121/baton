@@ -25,6 +25,7 @@ func grabModel(t *testing.T) (model, <-chan proto.Command) {
 	m.mode = modeDashboard
 	m.client = c
 	m.fleet = grabFleet()
+	m.showTree = true // carrying a row INTO a work item is a tree gesture
 	return m, cmds
 }
 
@@ -194,9 +195,9 @@ func TestGrabKeysDriveIt(t *testing.T) {
 	m, cmds := grabModel(t)
 	m.cursorOnPanel(t, "4")
 
-	m = press(m, " ")
+	m = press(m, "m")
 	if !m.grabbing() {
-		t.Fatal("space should pick the row up")
+		t.Fatal("m should pick the row up")
 	}
 	m.cursorOnPanel(t, "1")
 	m = press(m, "enter")
@@ -209,7 +210,7 @@ func TestGrabKeysDriveIt(t *testing.T) {
 
 	// esc cancels rather than folding or clearing a filter.
 	m.cursorOnPanel(t, "4")
-	m = press(m, " ")
+	m = press(m, "m")
 	m = press(m, "esc")
 	if m.grabbing() {
 		t.Fatal("esc should cancel the grab")

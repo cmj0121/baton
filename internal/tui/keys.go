@@ -57,6 +57,8 @@ const (
 	keyUngroup   = "u" // dissolve the selected work item
 	keyRename    = "e" // edit the name of the selected panel or group
 	keyFavourite = "*" // favourite / unfavourite the selected panel or group (sorts it to the front)
+	keyGrab      = "m" // move: pick the selected row up, carry it through the tree, drop it
+	keyExpand    = " " // space: show or hide what is nested under the selected row
 
 	// Prefix-reached escapes, bound to the leader in every mode.
 	keyDashboard = "d" // C-t d → the dashboard
@@ -83,6 +85,8 @@ const (
 // otherwise the key as typed.
 func keyLabel(key string) string {
 	switch {
+	case key == " ":
+		return "space" // the key map and every legend name it, they do not print it
 	case strings.HasPrefix(key, "ctrl+"):
 		return "C-" + strings.TrimPrefix(key, "ctrl+")
 	case strings.HasPrefix(key, "alt+"):
@@ -129,6 +133,8 @@ const (
 	actUngroup
 	actRename
 	actFavourite
+	actGrab
+	actExpand
 
 	// Back pops one view level. It is a command (bare key in command mode, prefix
 	// in a zoom), not an escape, so the prefix handler leaves it to lookupCmd.
@@ -213,6 +219,8 @@ var bindings = []binding{
 	{"ungroup", keyUngroup, "ungroup the selected work item", actUngroup, "Work items"},
 	{"rename", keyRename, "rename the panel or group", actRename, "Work items"},
 	{"favourite", keyFavourite, "favourite the panel or group (sorts it to the front)", actFavourite, "Work items"},
+	{"move", keyGrab, "pick a row up — arrows carry it, enter drops it", actGrab, "Work items"},
+	{"expand", keyExpand, "show or hide what is nested under the row", actExpand, "Work items"},
 
 	{"help", keyHelp, "view the keys for this view", actHelp, "View"},
 	{"usage-footer", keyUsage, "cycle the usage footer: off, window, focused panel", actUsageToggle, "View"},

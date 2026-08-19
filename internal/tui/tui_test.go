@@ -309,13 +309,13 @@ func TestDispatchedBriefShowsOnCardAndPreview(t *testing.T) {
 
 	// The row headlines the brief once the terminal is wide enough for the task
 	// column — for an agent at work the objective says more than "running · 3m".
-	row := model{mode: modeDashboard, fleet: fleet, width: 160, height: 40}.View()
+	row := model{mode: modeDashboard, fleet: fleet, width: 160, height: 40, showTree: true}.View()
 	if !strings.Contains(row, brief) || !strings.Contains(row, "▸") {
 		t.Fatalf("the row should headline the brief with ▸; got:\n%s", row)
 	}
 
 	// The preview pane carries it too, as a labelled row, when it is switched on.
-	prev := model{mode: modeDashboard, fleet: fleet, width: 160, height: 44, preview: true}.View()
+	prev := model{mode: modeDashboard, fleet: fleet, width: 160, height: 44, preview: true, showTree: true}.View()
 	if !strings.Contains(prev, "task") || !strings.Contains(prev, brief) {
 		t.Fatalf("the preview should carry a task row with the brief; got:\n%s", prev)
 	}
@@ -399,24 +399,23 @@ func TestScrollWindowKeepsCursorVisible(t *testing.T) {
 	}
 }
 
-// TestDashboardIsAlwaysATree: there is one dashboard layout at every fleet size
-// and every width. The card grid it used to swap to below seven items is gone, so
-// a person never has to learn two sets of cursor semantics for the same view.
-func TestDashboardIsAlwaysATree(t *testing.T) {
+// TestBigFleetIsAlwaysATree: above the card threshold there is one dashboard
+// layout at every width. The cards come back for a SMALL fleet (see
+// TestDashboardPicksCardsOrTree) and nowhere else, so nobody learns two sets of
+// cursor semantics for a fleet big enough to need them.
+func TestBigFleetIsAlwaysATree(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
-		fleet []panel.Panel
 		width int
 	}{
-		{"a large fleet", sampleFleet(), 100},
-		{"a small fleet", sampleFleet()[:2], 100},
-		{"one panel", sampleFleet()[:1], 100},
-		{"a narrow terminal", sampleFleet(), 40},
+		{"a wide terminal", 200},
+		{"a normal terminal", 100},
+		{"a narrow terminal", 40},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m := model{mode: modeDashboard, fleet: tc.fleet, width: tc.width, height: 40}
+			m := model{mode: modeDashboard, fleet: sampleFleet(), width: tc.width, height: 40}
 			if !m.treeView() {
-				t.Fatal("the dashboard is a tree at every size")
+				t.Fatal("a fleet this size is a tree at every width")
 			}
 			if got := m.cols(); got != 1 {
 				t.Fatalf("a tree is one column, got %d", got)

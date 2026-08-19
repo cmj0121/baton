@@ -60,6 +60,7 @@ func nestedFleet() []panel.Panel {
 func TestDashTreeShowsNesting(t *testing.T) {
 	m := baseModel()
 	m.fleet = nestedFleet()
+	m.showTree = true // this fleet is card-sized; the nesting is what is asserted
 
 	if got, want := m.topLevel(), []string{"backend", "5"}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("top level should be the backend group and the lone panel: want %v, got %v", want, got)
@@ -128,6 +129,7 @@ func TestDashTreeCollapsedGroupKeepsItsSubtree(t *testing.T) {
 func TestDashTreeTopLevelOrder(t *testing.T) {
 	m := baseModel()
 	m.fleet = groupedFleet()
+	m.showTree = true // four top-level rows would otherwise be four cards
 
 	want := []string{"api", "2", "db", "5"}
 	if got := m.topLevel(); strings.Join(got, ",") != strings.Join(want, ",") {
@@ -449,6 +451,7 @@ func TestCursorFollowsPanelIntoGroup(t *testing.T) {
 	m := baseModel()
 	m.mode = modeDashboard
 	m.fleet = groupedFleet()
+	m.showTree = true       // the cursor is followed through the TREE's rows
 	m.cursorOnPanel(t, "2") // the lone shell
 
 	// #2 is grouped into "api" elsewhere.
@@ -530,14 +533,14 @@ func TestKindBreakdown(t *testing.T) {
 func TestFleetBreakdownCountsGroups(t *testing.T) {
 	m := baseModel()
 	m.fleet = groupedFleet() // groups api + db, agents and shells mixed
-	got := fleetBreakdown(m.fleet, m.dashItems())
+	got := fleetBreakdown(m.fleet)
 	if !strings.Contains(got, "2 group") {
 		t.Fatalf("fleetBreakdown should count the 2 groups, got %q", got)
 	}
 	if !strings.Contains(got, "agent") || !strings.Contains(got, "shell") {
 		t.Fatalf("fleetBreakdown should split the kinds, got %q", got)
 	}
-	if got := fleetBreakdown(nil, nil); got != "" {
+	if got := fleetBreakdown(nil); got != "" {
 		t.Fatalf("an empty fleet should yield an empty breakdown, got %q", got)
 	}
 }

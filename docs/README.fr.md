@@ -79,11 +79,13 @@ Perdu ? **`?`** affiche toujours les touches de l'endroit où vous vous trouvez.
 
 Vous pilotez Baton à travers trois vues, en passant de l'une à l'autre d'une seule frappe :
 
-- **Tableau de bord (Dashboard)** — le centre de contrôle. Un **arbre** en direct de tous les panneaux : un élément de
-  travail par ligne, ses sous-groupes indentés en dessous, ses panneaux en dessous encore. `→` ouvre un élément de travail
-  puis y entre, `←` le referme et remonte d'un cran. La ligne porte l'état, le répertoire de travail, la sparkline de
-  sortie et la tâche confiée à mesure que le terminal s'élargit ; `v` ouvre un volet de détail à côté. C'est ici que vous
-  naviguez, ouvrez et fermez des panneaux, et les regroupez en éléments de travail.
+- **Tableau de bord (Dashboard)** — le centre de contrôle. Une petite flotte est une grille de **cartes**, une par panneau et
+  une par élément de travail ; à partir de six lignes de premier niveau, elle devient un **arbre** en direct de tous les
+  panneaux : un élément de travail par ligne, ses sous-groupes indentés en dessous, ses panneaux en dessous encore. `space`
+  affiche ou masque ce qui est imbriqué sous une ligne, à n'importe quelle profondeur ; `→` ouvre un élément de travail puis y
+  entre, `←` le referme et remonte d'un cran — et hors du premier niveau, revient aux cartes. La ligne porte l'état, le
+  répertoire de travail, la sparkline de sortie et la tâche confiée à mesure que le terminal s'élargit ; `v` ouvre un volet de
+  détail à côté. C'est ici que vous naviguez, ouvrez et fermez des panneaux, et les regroupez en éléments de travail.
 - **Groupe (Group)** — la vue divisée en direct d'un élément de travail : ses panneaux côte à côte, tous diffusés en même
   temps. Les premiers défilent en tuiles vivantes ; les autres se replient dans une unique **tuile de résumé** sur laquelle
   vous pouvez zoomer. Épinglez-en quelques-uns pour les garder toujours actifs, pilotez sur place celui qui a le focus avec
@@ -108,8 +110,9 @@ touches.
 |                 | `q`               | se détacher (le serveur continue de tourner)                           |
 | Tableau de bord | `jk` / `↑↓`       | déplacer le curseur                                                    |
 |                 | `hl` / `←→`       | replier / déplier un élément de travail — sortir / entrer              |
+|                 | `space`           | afficher / masquer ce qui est imbriqué sous la ligne                   |
 |                 | `v` / `z`         | volet de détail / cycle du groupement : élément, dossier, profil, état |
-|                 | `space`           | saisir une ligne — les flèches la portent, `enter` la dépose           |
+|                 | `m`               | saisir une ligne — les flèches la portent, `enter` la dépose           |
 |                 | `enter`           | ouvrir / zoomer la sélection                                           |
 |                 | `p` / `A` / `c`   | nouveau panneau shell / agent / choix de commande                      |
 |                 | `.`               | nouveau panneau shell dans le répertoire du panneau focalisé           |

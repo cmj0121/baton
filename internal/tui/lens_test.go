@@ -22,6 +22,7 @@ func lensModel() model {
 	m := baseModel()
 	m.mode = modeDashboard
 	m.fleet = lensFleetFixture()
+	m.showTree = true // the fixture is card-sized until a lens rebuckets it
 	return m
 }
 
@@ -153,7 +154,7 @@ func TestLensRefusesReorganising(t *testing.T) {
 	m.lens = lensState
 	m.cursorOnPanel(t, "1")
 
-	for _, key := range []string{keyMark, keyGroup, keyAdd, keyUngroup, keyRename, " "} {
+	for _, key := range []string{keyMark, keyGroup, keyAdd, keyUngroup, keyRename, keyGrab} {
 		m = press(m, key)
 		if !strings.Contains(m.status, "is a view, not a work item") {
 			t.Errorf("%q should be refused under a lens, got status %q", key, m.status)
