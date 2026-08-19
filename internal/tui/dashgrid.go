@@ -71,6 +71,22 @@ func (m model) gridMode(rows []dashItem) bool {
 // which layout the cursor is walking.
 func (m model) gridDash() bool { return m.mode == modeDashboard && m.gridMode(m.dashTree()) }
 
+// treeIsChosen reports whether the tree is on screen only because someone asked
+// for it — a fleet the cards would otherwise draw.
+//
+// The heading says so when it is, for the reason the lens chip says which lens is
+// in force: the alternative is a person looking at a tree, on a fleet they know is
+// small, with no way to tell whether they turned it on or the dashboard decided
+// something. The receiver is a value, so clearing the flag here asks "what would
+// this be without it" without touching the model.
+func (m model) treeIsChosen(rows []dashItem) bool {
+	if !m.showTree {
+		return false
+	}
+	m.showTree = false
+	return m.gridMode(rows)
+}
+
 // countTopLevel counts what the top of the tree HOLDS: one for each panel and each
 // work item, and — for the quiet fold — the panels it stands for rather than the
 // one row it draws.

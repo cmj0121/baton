@@ -286,3 +286,25 @@ func TestOpeningTheFoldKeepsTheLayout(t *testing.T) {
 		t.Fatalf("the open fold draws its row plus four panels, got %d", got)
 	}
 }
+
+// TestTheHeadingSaysTheTreeWasChosen: a tree on a fleet the cards would have drawn
+// is somebody's choice, and it survives every trip through a zoom — so the heading
+// says which of you decided it, the way it names a lens.
+func TestTheHeadingSaysTheTreeWasChosen(t *testing.T) {
+	m := baseModel()
+	m.mode, m.fleet = modeDashboard, loosePanels(3)
+	if got := stripANSI(m.View()); strings.Contains(got, "← for cards") {
+		t.Fatal("the cards do not need to explain themselves")
+	}
+
+	m.showTree = true
+	if got := stripANSI(m.View()); !strings.Contains(got, "← for cards") {
+		t.Fatalf("a chosen tree should say so:\n%s", got)
+	}
+
+	// On a fleet that would be a tree anyway there is nothing to explain.
+	m.fleet = loosePanels(8)
+	if got := stripANSI(m.View()); strings.Contains(got, "← for cards") {
+		t.Fatal("a tree the fleet earned is not a choice to announce")
+	}
+}
