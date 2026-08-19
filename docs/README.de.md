@@ -77,11 +77,13 @@ Verirrt? **`?`** zeigt dir immer die Tasten für die Stelle, an der du gerade bi
 
 Du steuerst Baton über drei Ansichten und wechselst mit einem Tastendruck zwischen ihnen:
 
-- **Dashboard** — die Einsatzzentrale. Ein Live-**Baum** aller Panels: ein Work Item pro Zeile, seine Untergruppen
-  darunter eingerückt, seine Panels darunter. `→` öffnet ein Work Item und steigt hinein, `←` schließt es und geht eine
-  Ebene zurück. Die Zeile trägt Status, Arbeitsverzeichnis, Ausgabe-Sparkline und die zugewiesene Aufgabe, sobald das
-  Terminal breit genug ist; `v` blendet daneben eine Detailspalte ein. Hier navigierst du, startest und schließt Panels
-  und gruppierst sie zu Work Items.
+- **Dashboard** — die Einsatzzentrale. Eine kleine Flotte ist ein Raster aus **Karten**, je eine pro Panel und pro Work Item;
+  ab sechs Zeilen auf oberster Ebene wird daraus ein Live-**Baum** aller Panels: ein Work Item pro Zeile, seine Untergruppen
+  darunter eingerückt, seine Panels darunter. `space` zeigt oder verbirgt in jeder Tiefe, was unter einer Zeile verschachtelt
+  ist, `→` öffnet ein Work Item und steigt hinein, `←` schließt es und geht eine Ebene zurück — und aus der obersten Ebene
+  heraus zurück zu den Karten. Die Zeile trägt Status, Arbeitsverzeichnis, Ausgabe-Sparkline und die zugewiesene Aufgabe,
+  sobald das Terminal breit genug ist; `v` blendet daneben eine Detailspalte ein. Hier navigierst du, startest und schließt
+  Panels und gruppierst sie zu Work Items.
 - **Gruppe (Group)** — die Live-Aufteilung eines Work Items: seine Panels nebeneinander gekachelt, alle gleichzeitig
   streamend. Die ersten paar streamen als Live-Kacheln; der Rest klappt in eine einzelne **Zusammenfassungs-Kachel**
   zusammen, in die du hineinzoomen kannst. Pinne ein paar an, damit sie immer laufen, steuere die fokussierte an Ort und
@@ -106,8 +108,9 @@ Tastenbelegung zu bearbeiten.
 |             | `q`               | abkoppeln (der Server läuft weiter)                                |
 | Dashboard   | `jk` / `↑↓`       | den Cursor bewegen                                                 |
 |             | `hl` / `←→`       | Work Item ein-/ausklappen — heraus- / hineingehen                  |
+|             | `space`           | zeigen / verbergen, was unter der Zeile verschachtelt ist          |
 |             | `v` / `z`         | Detailspalte / Gruppierung: Work Item, Verzeichnis, Profil, Status |
-|             | `space`           | eine Zeile aufnehmen — Pfeile tragen sie, `enter` legt sie ab      |
+|             | `m`               | eine Zeile aufnehmen — Pfeile tragen sie, `enter` legt sie ab      |
 |             | `enter`           | die Auswahl öffnen / hineinzoomen                                  |
 |             | `p` / `A` / `c`   | neues shell- / agent- / Befehlsauswahl-Panel                       |
 |             | `.`               | neues Shell-Panel im Verzeichnis des fokussierten Panels           |

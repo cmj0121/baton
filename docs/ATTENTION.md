@@ -228,9 +228,9 @@ Four things are never folded, and all four are you having already said this one 
 
 The row owns no verbs beyond opening and closing itself — `w`, `s`, `g`, `r` and `*` are refused with the way forward on
 the status line, and it answers no panel ids at all, so a bulk verb that forgot to ask acts on nothing rather than on
-every quiet panel at once. One thing to see once: expanding the row changes the item count, and the dashboard picks grid
-or tree off that count, so opening a fold of 45 quiet panels flips the layout. That is a key you pressed, not the shape
-changing under you.
+every quiet panel at once. One thing to see once: a fold row at the TOP level counts as one row, and the dashboard picks
+cards or tree off that count — so opening a fold of 45 quiet panels on a small fleet flips the layout. That is a key you
+pressed, not the shape changing under you.
 
 ## The summary tile folds the lookalikes, not the latecomers
 
@@ -386,6 +386,7 @@ panel:
 |             | `-` / `x`     | snooze / dismiss the row                                                                   |
 |             | `enter` / `r` | zoom the panel (clears nothing) / re-sort the queue                                        |
 | Dashboard   | `enter`       | on the `▸ N quiet` row: expand it (`esc` folds it again)                                   |
+|             | `space`       | the same fold, from the disclosure key every other row answers to                          |
 | Group split | `p`           | pin a member — under the similarity fold a pin adds a tile rather than hiding the outliers |
 
 ## What this is not

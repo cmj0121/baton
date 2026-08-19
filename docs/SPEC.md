@@ -186,15 +186,24 @@ signalling `backend` reaches every descendant panel, nested groups included; **d
 subtree one level (its direct panels go lone, its sub-groups become top-level) rather than deleting the work.
 
 The dashboard **draws the hierarchy**: a work item is one row, its sub-groups are rows indented under it, and its panels
-are rows under those. `→` opens a work item and, once open, steps inside it; `←` shuts one and, from anything else, jumps
-to the row that contains it. A group row carries a member count, its **immediate sub-group count** (`▣2`), how many
+are rows under those. `space` shows or hides what is nested under the row it is on, at any depth, without moving the
+cursor; `→` opens a work item and, once open, steps inside it; `←` shuts one and, from anything else, jumps to the row
+that contains it. A group row carries a member count, its **immediate sub-group count** (`▣2`), how many
 members want a human (`◆3`), and a state that **rolls up to its most urgent member** (attention beats stuck beats done
 beats running beats spawning beats idle beats exited), so one row speaks for the whole task.
 
 Expansion is a **view state and never a selection one**: a group row owns its whole subtree whether it is open or shut,
 so `w` on `backend` closes the same panels either way. A collapse is remembered for the session only.
 
-**Moving things.** `space` picks the selected row up, the arrows carry it through the tree, `enter` drops it and `esc`
+**Two layouts, one set of keys.** Below **six top-level rows** — a work item counts once, however deep it goes — the
+dashboard draws a **grid of cards**: one per lone panel, one per work item, one for the quiet fold. At six and above it
+is the tree. The count is taken at the top level so that opening a row can never flip the layout out from under the
+keystroke that opened it, and a filter or a lens forces the tree whatever the count says, since both exist to show which
+rows matched. The cards draw a work item whole, so `space` or `→` on one shows the tree; `←` out of the top level puts
+the cards back. The cursor keys mean the same thing in both: `←`/`→` open and shut, `↑`/`↓` step a grid row, `j`/`k`
+step one item.
+
+**Moving things.** `m` picks the selected row up, the arrows carry it through the tree, `enter` drops it and `esc`
 puts it back. The drop target is the **level** of the row under the cursor, never the row itself — "into this group" and
 "after this group" would otherwise be the same keystroke — so to drop inside a work item you open it and land on one of
 its children. A panel dropped at the top level is **ungrouped**; a work item carried into another **nests** as
@@ -204,7 +213,7 @@ a path. Nothing is sent until the drop, and a group carried into its own subtree
 **The group-by lens.** `z` cycles which parents the tree is built from: **work item** (the fleet's own structure),
 **directory**, **profile**, or **state**. A lens is a projection and never a mutation — switching to `group by: state`
 does not move a panel into a group called `attention`, and switching back leaves the fleet exactly as it was. The
-reorganising verbs (`space`, `g`, `G`, `a`, `u`, `e`) are refused under a lens and say so: a bucket is not a work item,
+reorganising verbs (`m`, `g`, `G`, `a`, `u`, `e`) are refused under a lens and say so: a bucket is not a work item,
 and there is no meaning to moving a panel "into" a directory. The heading states the lens whenever one is in force.
 
 The directory lens re-bases every path against the fleet's **common prefix** and nests the remainder, so a set of git
@@ -460,6 +469,8 @@ and the key-map editor — are reached after the prefix in every mode. Everythin
 |                        | `C-t Q`                     | manage the task queue                           |
 |                        | `C-t q`                     | detach (server keeps running)                   |
 | Dashboard              | `hjkl` / arrows             | move the cursor                                 |
+|                        | `space`                     | show / hide what is nested under the row        |
+|                        | `m`                         | pick a row up — arrows carry it, `enter` drops  |
 |                        | `enter`                     | open / zoom the selection                       |
 |                        | `p`                         | new shell panel                                 |
 |                        | `A`                         | new agent panel                                 |
