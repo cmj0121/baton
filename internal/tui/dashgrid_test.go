@@ -179,3 +179,27 @@ func TestOpeningAWorkItemFromTheCardsShowsTheTree(t *testing.T) {
 		t.Fatalf("walking out should keep the cursor on the work item, got %+v", it)
 	}
 }
+
+// TestTheHeadingCountsTheFleetsGroups: the FLEET line summarises the fleet, not
+// the rows on screen. The cards draw a work item whole and a collapsed row hides
+// its sub-groups, so counting rows made the dashboard's own heading disagree with
+// its own tree depending on the layout and on what was open.
+func TestTheHeadingCountsTheFleetsGroups(t *testing.T) {
+	fleet := []panel.Panel{
+		{ID: "1", Kind: panel.Agent, Title: "a", State: panel.Running, Group: "backend"},
+		{ID: "2", Kind: panel.Agent, Title: "b", State: panel.Running, Group: "backend/api"},
+	}
+	if got := groupCount(fleet); got != 2 {
+		t.Fatalf("backend and backend/api are 2 work items, got %d", got)
+	}
+
+	m := model{mode: modeDashboard, fleet: fleet, width: 120, height: 40}
+	grid := stripANSI(m.View())
+	m.showTree = true
+	tree := stripANSI(m.View())
+	for name, view := range map[string]string{"cards": grid, "tree": tree} {
+		if !strings.Contains(view, "2 group") {
+			t.Fatalf("the %s heading should count both work items:\n%s", name, view)
+		}
+	}
+}

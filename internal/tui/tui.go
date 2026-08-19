@@ -3415,7 +3415,7 @@ func (m model) dashboardView() string {
 	items := m.dashItems() // built once and threaded through the render below
 	shown := m.visibleFleet()
 	heading := sectionStyle.Render(spaced("FLEET")) +
-		mutedStyle.Render(fmt.Sprintf("   %d panel(s)  ", len(shown))) + fleetBreakdown(shown, items)
+		mutedStyle.Render(fmt.Sprintf("   %d panel(s)  ", len(shown))) + fleetBreakdown(shown)
 	if mark := m.conductorMark(); mark != "" {
 		heading += mutedStyle.Render("   ·   ") + mark
 	}

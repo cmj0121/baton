@@ -533,14 +533,14 @@ func TestKindBreakdown(t *testing.T) {
 func TestFleetBreakdownCountsGroups(t *testing.T) {
 	m := baseModel()
 	m.fleet = groupedFleet() // groups api + db, agents and shells mixed
-	got := fleetBreakdown(m.fleet, m.dashItems())
+	got := fleetBreakdown(m.fleet)
 	if !strings.Contains(got, "2 group") {
 		t.Fatalf("fleetBreakdown should count the 2 groups, got %q", got)
 	}
 	if !strings.Contains(got, "agent") || !strings.Contains(got, "shell") {
 		t.Fatalf("fleetBreakdown should split the kinds, got %q", got)
 	}
-	if got := fleetBreakdown(nil, nil); got != "" {
+	if got := fleetBreakdown(nil); got != "" {
 		t.Fatalf("an empty fleet should yield an empty breakdown, got %q", got)
 	}
 }

@@ -1143,21 +1143,38 @@ func kindBreakdown(panels []panel.Panel) string {
 // items are work-item groups, so "5 agent · 3 shell · 2 group" reads the makeup at
 // a glance. Empty for an empty fleet; the group count is dropped when there are
 // none.
-func fleetBreakdown(fleet []panel.Panel, items []dashItem) string {
+func fleetBreakdown(fleet []panel.Panel) string {
 	if len(fleet) == 0 {
 		return ""
 	}
 	parts := []string{kindBreakdown(fleet)}
-	groups := 0
-	for _, it := range items {
-		if it.kind == itemGroup {
-			groups++
-		}
-	}
+	groups := groupCount(fleet)
 	if groups > 0 {
 		parts = append(parts, lipgloss.NewStyle().Foreground(colBrand).Render(fmt.Sprintf("%d group", groups)))
 	}
 	return strings.Join(parts, mutedStyle.Render(" · "))
+}
+
+// groupCount is how many work items the fleet holds, nested ones included.
+//
+// It counts the FLEET rather than the group rows on screen. The two used to be the
+// same thing and are not any more: the cards draw a work item whole, so a nested
+// group has no row there — and a heading that said "1 group" of a fleet holding two
+// would be the dashboard's own summary disagreeing with its own tree. Collapsing a
+// row changed the number for the same reason, which nobody wanted either.
+func groupCount(fleet []panel.Panel) int {
+	seen := map[string]bool{}
+	for _, p := range fleet {
+		at := ""
+		for _, seg := range strings.Split(p.Group, panel.GroupSep) {
+			if seg == "" {
+				continue // "" (ungrouped) and a malformed path both mint nothing
+			}
+			at = panel.GroupJoin(at, seg)
+			seen[at] = true
+		}
+	}
+	return len(seen)
 }
 
 // groupCountChips renders a compact per-state tally for a group's members, e.g.
