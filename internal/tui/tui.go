@@ -124,6 +124,7 @@ const (
 	modeFleetSearch // the fleet-wide search results popup (/): matching lines grouped by panel
 	modeProcTree    // the process-tree overlay (C-t o): the daemon, its panels, and their OS descendants
 	modeInbox       // the attention inbox (C-t a): the queue of panels wanting a human, cleared in place
+	modeRemote      // the remote overlay (C-t r): remote access, its passkey, and every live connection
 	modeZoom
 	modeGroupZoom
 	modeScreensaver // the hidden Matrix-rain + clock Easter egg (C-t E / idle auto-start)
@@ -292,6 +293,14 @@ type model struct {
 	gitOutScroll int
 	gitOutFailed bool
 	gitOutFrom   mode
+
+	// The remote overlay (modeRemote): remoteInfo is the last status the server
+	// pushed (nil until the first one lands), remoteSel the row under the cursor,
+	// remoteFrom the view to restore on close. The list is pushed rather than
+	// polled, so the overlay never has to refresh itself to stay true.
+	remoteInfo *proto.RemoteInfo
+	remoteSel  int
+	remoteFrom mode
 
 	// The process-tree overlay (modeProcTree): procLines is the tree rendered to
 	// lines (sampled from the OS at open/refresh, not every frame); procScroll is
@@ -748,6 +757,7 @@ type statsEventMsg proto.ServerMsg
 type telemetryEventMsg proto.ServerMsg
 type configEventMsg proto.ServerMsg
 type footerEventMsg proto.ServerMsg
+type remoteEventMsg proto.ServerMsg
 type usageEventMsg proto.ServerMsg
 type connClosedMsg struct{}
 type tickMsg time.Time
@@ -787,6 +797,10 @@ func waitConfig(ch chan proto.ServerMsg) tea.Cmd {
 	return waitMsg(ch, func(m proto.ServerMsg) tea.Msg { return configEventMsg(m) })
 }
 
+func waitRemote(ch chan proto.ServerMsg) tea.Cmd {
+	return waitMsg(ch, func(m proto.ServerMsg) tea.Msg { return remoteEventMsg(m) })
+}
+
 func waitFooter(ch chan proto.ServerMsg) tea.Cmd {
 	return waitMsg(ch, func(m proto.ServerMsg) tea.Msg { return footerEventMsg(m) })
 }
@@ -801,7 +815,7 @@ func tick() tea.Cmd {
 }
 
 func (m model) Init() tea.Cmd {
-	cmds := []tea.Cmd{waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), waitTelemetry(m.client.Telemetry), waitConfig(m.client.Config), waitFooter(m.client.Footer), waitUsage(m.client.Usage), tick()}
+	cmds := []tea.Cmd{waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), waitTelemetry(m.client.Telemetry), waitConfig(m.client.Config), waitFooter(m.client.Footer), waitUsage(m.client.Usage), waitRemote(m.client.Remote), tick()}
 	if m.mouseEnabled {
 		cmds = append(cmds, tea.EnableMouseCellMotion) // honour the persisted mouse toggle on attach
 	}
@@ -878,6 +892,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case configEventMsg:
 		m.applyEvent(proto.ServerMsg(msg))
 		return m, waitConfig(m.client.Config)
+
+	case remoteEventMsg:
+		m.applyRemote(proto.ServerMsg(msg).Remote)
+		return m, waitRemote(m.client.Remote)
 
 	case footerEventMsg:
 		m.applyEvent(proto.ServerMsg(msg))
@@ -1020,6 +1038,13 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		} else {
 			m.status = "attached · " + m.endpoint
 		}
+	case "goodbye":
+		// The server is dropping this cockpit on purpose and said why — a kick, or
+		// remote being switched off under a remote attach. Say so on the way out;
+		// the channels close a moment later and the runner prints it again once the
+		// screen is back.
+		m.backendDown = true
+		m.status = "disconnected: " + sanitizeText(sm.Error)
 	case "panels":
 		// Capture what the cursor and the split focus rest on before the fleet
 		// changes under them, so both can be restored to the same item by identity
@@ -1244,6 +1269,12 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// refreshes the OS snapshot.
 	if m.mode == modeProcTree {
 		return m.handleProcTreeKey(key)
+	}
+
+	// The remote overlay owns the keyboard until esc; it selects, kicks, and — on
+	// a local cockpit — rotates the passkey and throws the switch.
+	if m.mode == modeRemote {
+		return m.handleRemoteKey(key)
 	}
 
 	// The attention inbox owns the keyboard until esc; it walks the queue and
@@ -2399,6 +2430,8 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		return m.openQueue(m.mode), nil
 	case actProcTree:
 		return m.openProcTree(m.mode), nil
+	case actRemote:
+		return m.openRemote(m.mode)
 	case actInbox:
 		return m.openInbox()
 	case actLogToggle:
@@ -2686,6 +2719,8 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				// one, look at the next" costs a trip through the dashboard, which is
 				// the screen swap this feature exists to remove.
 				return m.openInbox()
+			case actRemote: // C-t r → the remote overlay, over the zoom
+				return m.openRemote(modeZoom)
 			case actLogToggle: // C-t l → log this panel's output to a file
 				return m.toggleLog()
 			case actLogView: // C-t L → read that log back, following it
@@ -3264,6 +3299,8 @@ func (m model) render() string {
 		body = m.fleetSearchView()
 	case m.mode == modeProcTree:
 		body = m.procTreeView()
+	case m.mode == modeRemote:
+		body = m.remoteView()
 	case m.mode == modeInbox:
 		body = m.inboxView()
 	default:
@@ -3691,6 +3728,7 @@ func (m model) helpContent() (title string, body []string) {
 			{"View", kc(pfx) + " " + kc(keyLabel(keyInteract)), tr("help.group.stop-interact", "stop interacting (while in interact)")},
 			{"View", kc(pfx) + " " + kc(dash), tr("help.group.dashboard", "dashboard (works in every view)")},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actProcTree))), tr("help.common.proc-tree", "process tree · the daemon's OS processes")},
+			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actRemote))), tr("help.common.remote", "remote access · the passkey and the live connections")},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), tr("help.common.edit-map", "edit the key map")},
 			{"Session", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actReload))), tr("help.common.reload", "reload config (backend + cockpit)")},
 			{"Session", kc(pfx) + " " + kc(detach), tr("help.common.detach", "detach (server keeps running)")},
@@ -3707,6 +3745,7 @@ func (m model) helpContent() (title string, body []string) {
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actBack))), tr("help.zoom.back", "back one level (to the split / dashboard)")},
 			{"View", kc(pfx) + " " + kc(dash), tr("help.zoom.dashboard", "straight to the dashboard")},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actProcTree))), tr("help.common.proc-tree", "process tree · the daemon's OS processes")},
+			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actRemote))), tr("help.common.remote", "remote access · the passkey and the live connections")},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actHelp))), tr("help.common.keys", "this key list")},
 			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), tr("help.common.edit-map", "edit the key map")},
 			{"Session", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actReload))), tr("help.common.reload", "reload config (backend + cockpit)")},

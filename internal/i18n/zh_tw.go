@@ -28,6 +28,7 @@ var zhTW = map[string]string{
 	// Rows shared by more than one view's key list.
 	"help.common.keys":      "這份按鍵清單",
 	"help.common.proc-tree": "行程樹 · daemon 底下的作業系統行程",
+	"help.common.remote":    "遠端連線 · passkey 與目前的連線清單",
 	"help.common.edit-map":  "編輯按鍵對應",
 	"help.common.log":       "把這個面板的輸出寫入檔案 · 讀回來看",
 	"help.common.reload":    "重新載入設定（後端＋操作介面）",
@@ -121,6 +122,7 @@ var zhTW = map[string]string{
 	"bind.scroll":       "捲動模式 — 逐行／逐頁（前綴鍵）",
 	"bind.dashboard":    "跳到儀表板（前綴鍵）",
 	"bind.proc-tree":    "行程樹 — daemon 底下的作業系統行程（前綴鍵）",
+	"bind.remote":       "遠端連線 — passkey 與目前的連線清單（前綴鍵）",
 	"bind.inbox":        "待辦匣 — 逐一處理需要人介入的面板（前綴鍵）",
 	"bind.back":         "回上一層：放大→群組→儀表板（放大檢視中按 C-t b）",
 	"bind.commands":     "開啟外掛指令選單（前綴鍵）",
