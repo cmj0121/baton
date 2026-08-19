@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -33,6 +34,40 @@ func Socket() string {
 		return v
 	}
 	return filepath.Join(runtimeDir(), fmt.Sprintf("baton-%d.sock", sessionID()))
+}
+
+// Sockets lists every baton control socket in the runtime directory, newest
+// first. It exists for the remote bridge (`baton --stdio`), which is run by
+// sshd in a session of its OWN — so Socket() would resolve to a path no fleet
+// has ever bound, and a remote cockpit would attach to a daemon it just started
+// rather than to the fleet the person actually has running on that machine.
+//
+// Newest first because that is the fleet most likely meant: the sockets are
+// per login session, and the one bound most recently is the session still in
+// use. The caller filters the list for one that answers.
+func Sockets() []string {
+	matches, err := filepath.Glob(filepath.Join(runtimeDir(), "baton-*.sock"))
+	if err != nil || len(matches) == 0 {
+		return nil
+	}
+	type entry struct {
+		path string
+		mod  int64
+	}
+	entries := make([]entry, 0, len(matches))
+	for _, m := range matches {
+		fi, err := os.Stat(m)
+		if err != nil {
+			continue
+		}
+		entries = append(entries, entry{m, fi.ModTime().UnixNano()})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].mod > entries[j].mod })
+	out := make([]string, len(entries))
+	for i, e := range entries {
+		out[i] = e.path
+	}
+	return out
 }
 
 // PidFile returns the daemon PID file that pairs with the given socket. It is

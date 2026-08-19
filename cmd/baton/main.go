@@ -59,6 +59,8 @@ type CLI struct {
 	Plugin  string           `short:"p" name:"plugin" placeholder:"FILE" help:"Load the Lua plugin from FILE (default: $HOME/.baton/plug-in.lua)."`
 	Verbose int              `short:"v" type:"counter" help:"Increase log verbosity (-v debug, -vv trace)."`
 	Force   bool             `short:"f" name:"force" help:"Force-stop any running server for this session and start a fresh one before attaching."`
+	Remote  bool             `name:"remote" help:"Attach to a fleet on another machine over SSH: opens a form for the address and the passkey."`
+	Stdio   bool             `name:"stdio" hidden:"" help:"Bridge stdin/stdout to this machine's fleet. Run by --remote over ssh, not by a human."`
 	Version kong.VersionFlag `short:"V" help:"Print the version and quit."`
 }
 
@@ -87,6 +89,20 @@ func main() {
 	// The daemon child re-executes this same binary with daemonEnv set.
 	if claimDaemonRole() {
 		kctx.FatalIfErrorf(runServer())
+		return
+	}
+	// The far side of a remote attach. It is checked before anything that could
+	// write to stdout, because from here on stdout IS the wire.
+	if cli.Stdio {
+		kctx.FatalIfErrorf(runStdio(cli.Verbose, logPath, cli.Plugin))
+		return
+	}
+	if cli.Remote {
+		cfg, err := config.Load()
+		if err != nil {
+			log.Warn().Err(err).Msg("config load failed; dialling with the defaults")
+		}
+		kctx.FatalIfErrorf(attachRemote(cfg))
 		return
 	}
 	kctx.FatalIfErrorf(attach(cli.Verbose, logPath, cli.Plugin, cli.Force))
@@ -471,6 +487,9 @@ func reloadableSettings(cfg config.Config) reloadable {
 	rc.settings.TrackCwd, rc.settings.RestoreCwd = cwdPolicy(cfg)
 	if cfg.Settings.AllowNameConflict != nil {
 		rc.settings.AllowNameConflict = *cfg.Settings.AllowNameConflict
+	}
+	if cfg.Settings.Remote != nil {
+		rc.settings.Remote = *cfg.Settings.Remote
 	}
 	if cfg.Panel.ReplayKB > 0 {
 		rc.settings.ReplayBytes = cfg.Panel.ReplayKB * 1024
