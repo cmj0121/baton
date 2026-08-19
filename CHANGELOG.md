@@ -4,6 +4,22 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v1.2.1](https://github.com/cmj0121/baton/releases/tag/v1.2.1) — press it to find it
+
+2026-08-19
+
+- **Four landing keys** — `n` spawns, `v` draws the cockpit, `g` takes the work items, and `x x` purges the dead. Eleven
+  letters come back, and the footer names what the run can still take while it waits, so a family is discovered by
+  pressing it.
+- **A binding is a run of keys** — `e` in the key map collects the run and `enter` binds it; the `C-t` leader now lapses
+  after `settings.key-timeout` (1.2s, `0` restores the old forever) instead of waiting all session.
+- **The key list is tabbed by purpose** — Navigation, Panels, Work items, View, Session — with every family shown under
+  its landing, and ←/→ or tab to walk them.
+- **The overlays share one alphabet** — j/k and the arrows move, g/G jump to the ends, x removes the row, X clears the
+  lot, r refreshes, q or esc closes. Draining the queue asks first.
+- **The language is the terminal's business** again, and a zoom reaches every escape it always documented.
+- **`docs/KEYS.md` is new** and is the single source of truth for keys, in English and 繁體中文.
+
 ## [v1.2.0](https://github.com/cmj0121/baton/releases/tag/v1.2.0) — anywhere, any size
 
 2026-08-19
