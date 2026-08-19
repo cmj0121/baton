@@ -143,7 +143,8 @@ type model struct {
 	// fires if the run lapses where it stands, which only happens when a
 	// binding is also the start of a longer one. pendingGen stamps the expiry
 	// tick so a stale one cannot clear its successor's run. See keypending.go.
-	pendingDrain  bool // the queue manager's X is waiting on a y/n
+	editBuf       []string // the keys collected so far while rebinding, committed by enter
+	pendingDrain  bool     // the queue manager's X is waiting on a y/n
 	pending       []string
 	pendingHit    binding
 	pendingHasHit bool
@@ -1338,24 +1339,37 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Capturing a rebind: the next key press (other than esc) becomes the new
 	// chord for the binding — or the leader key — under edit.
 	if m.editing {
-		m.editing = false
 		if key == "esc" {
+			m.editing, m.editBuf = false, nil
 			m.status = "rebind cancelled"
 			return m, nil
 		}
+		// The leader is one key by definition — it is what the sequences hang off
+		// — so it commits on the first press rather than collecting a run.
 		if m.editIdx == editPrefix {
+			m.editing = false
 			old := m.effPrefix()
 			m.prefixKey = key
 			m.status = fmt.Sprintf("prefix: %s → %s", keyLabel(old), keyLabel(key))
-		} else {
-			m.ensureBinds()
-			old := m.binds[m.editIdx].key
-			m.binds[m.editIdx].key = key
-			m.status = fmt.Sprintf("rebound %q: %s → %s", m.binds[m.editIdx].desc, old, key)
+			if err := m.saveConfig(); err != nil {
+				m.status = "rebound, but save failed: " + err.Error()
+			}
+			return m, nil
 		}
-		if err := m.saveConfig(); err != nil {
-			m.status = "rebound, but save failed: " + err.Error()
+		// A binding is a SEQUENCE, so the keys are collected and enter commits
+		// them. One key then enter is a press more than it used to be, and it is
+		// the only way to spell a two-key binding without guessing when the run
+		// ended — a rule that guessed would make "g" un-bindable the moment
+		// anything started with it.
+		if key == "enter" {
+			if len(m.editBuf) == 0 {
+				m.status = "press the keys for this binding first  ·  esc cancels"
+				return m, nil
+			}
+			return m.commitRebind()
 		}
+		m.editBuf = append(m.editBuf, tok(key))
+		m.status = "… " + strings.Join(labelTokens(m.editBuf), " ") + "  ·  enter binds  ·  esc cancels"
 		return m, nil
 	}
 
@@ -1430,7 +1444,9 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case rowBinding:
 				m.editing = true
 				m.editIdx = idx
-				m.status = "press the new key for " + fmt.Sprintf("%q", m.keymap()[idx].desc) + "  ·  esc cancels"
+				m.editBuf = nil
+				m.status = "press the keys for " + fmt.Sprintf("%q", m.keymap()[idx].desc) +
+					"  ·  enter binds  ·  esc cancels"
 			}
 			return m, nil
 		case modePanelConfig:
@@ -2256,6 +2272,38 @@ func (m *model) scrollHelp(delta int) {
 // remembering that view so esc restores it — a zoom that went looking for the
 // default shell should come back to the panel it was reading, not to the
 // dashboard.
+// commitRebind writes the collected run onto the binding under the cursor and
+// saves. It reports an ambiguity it just created rather than refusing it: a
+// config that wants vim's d-versus-dd relationship is entitled to it, but the
+// cost — that the shorter binding now waits out the timeout before firing — is
+// not something to discover by feel a week later.
+func (m model) commitRebind() (tea.Model, tea.Cmd) {
+	m.ensureBinds()
+	b := &m.binds[m.editIdx]
+	old, next := b.key, strings.Join(m.editBuf, " ")
+	b.key = next
+	m.editing, m.editBuf = false, nil
+	m.status = fmt.Sprintf("rebound %q: %s → %s", b.desc, seqLabel(old), seqLabel(next))
+
+	half := cmdBinding
+	if isEscape(b.act) {
+		half = func(x binding) bool { return isEscape(x.act) }
+	}
+	for _, pair := range ambiguous(m.keymap(), half) {
+		if pair[0].name != b.name && pair[1].name != b.name {
+			continue
+		}
+		m.status = fmt.Sprintf("%q (%s) starts %q (%s) — %s waits %s before firing",
+			pair[0].name, seqLabel(pair[0].key), pair[1].name, seqLabel(pair[1].key),
+			seqLabel(pair[0].key), m.effKeyTimeout())
+		break
+	}
+	if err := m.saveConfig(); err != nil {
+		m.status = "rebound, but save failed: " + err.Error()
+	}
+	return m, nil
+}
+
 func (m model) openPanelConfig(from mode) model {
 	m.helpFrom = from
 	m.mode = modePanelConfig
@@ -3958,10 +4006,16 @@ func (m model) keyMapView() string {
 		esc := isEscape(b.act)
 		var keys string
 		switch {
-		case m.editing && m.editIdx == i && esc:
-			keys = keycapHotStyle.Render(prefLbl) + " " + keycapHotStyle.Render("…type a key")
 		case m.editing && m.editIdx == i:
-			keys = keycapHotStyle.Render("…type a key")
+			typed := "…type a key"
+			if len(m.editBuf) > 0 {
+				typed = strings.Join(labelTokens(m.editBuf), " ") + " …"
+			}
+			if esc {
+				keys = keycapHotStyle.Render(prefLbl) + " " + keycapHotStyle.Render(typed)
+			} else {
+				keys = keycapHotStyle.Render(typed)
+			}
 		case esc:
 			keys = keycaps(prefLbl, b.key, selected)
 		default:

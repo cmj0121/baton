@@ -168,8 +168,10 @@ are what the view _is_, and a movable `enter` would leave a view with no way in.
 
 ## Rebinding
 
-`C-t k` edits the key map live and writes it to `$HOME/.baton/config`. Only what you change from the default is stored,
-so a later change to a default reaches you instead of being masked by a stale copy:
+`C-t k` edits the key map live and writes it to `$HOME/.baton/config`. `e` on a row starts collecting keys, **`enter`
+binds the run** and `esc` abandons it — a binding may be more than one key, and nothing else can say where the run
+ended. Only what you change from the default is stored, so a later change to a default reaches you instead of being
+masked by a stale copy:
 
 ```yaml
 # $HOME/.baton/config
@@ -187,10 +189,10 @@ written as bubbletea names it: `ctrl+t`, `shift+left`, `alt+x`. Keys are matched
 against its key, so rebinding one never disturbs the rest — and a default that moves in a later release moves under
 your custom key too.
 
-Bind a sequence whose start is already a binding of its own and the cockpit says so:
+Bind a sequence whose start is already a binding of its own and the cockpit says so as it saves:
 
 ```text
-key map: "add" (a) starts "add-all" (a a) — a will wait 1.2s before firing
+"add" (a) starts "add-all" (a a) — a waits 1.2s before firing
 ```
 
 That is a warning, not a refusal. The delay is `settings.key-timeout`, and it is the only way to meet it.

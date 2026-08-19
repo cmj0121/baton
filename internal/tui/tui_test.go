@@ -193,10 +193,15 @@ func TestRebindKeyByTyping(t *testing.T) {
 		t.Fatalf("expected to be capturing binding 0, got editing=%v idx=%d", m.editing, m.editIdx)
 	}
 
-	// Typing x rebinds spawn to x.
+	// Typing x collects it; enter is what binds, since a binding may be a run of
+	// more than one key and nothing else can say where the run ended.
 	m = press(m, "x")
+	if !m.editing {
+		t.Fatal("capture should stay open until enter binds the run")
+	}
+	m = press(m, "enter")
 	if m.editing {
-		t.Fatal("capture should end after a key is typed")
+		t.Fatal("enter should end the capture")
 	}
 	if got := m.binds[0].key; got != "x" {
 		t.Fatalf("expected spawn rebound to x, got %q", got)
@@ -217,7 +222,7 @@ func TestRebindPersistsToConfig(t *testing.T) {
 	// Rebind spawn from p to x, which writes the config file as a side effect.
 	m := model{mode: modeKeyMap, fleet: sampleFleet(), binds: append([]binding(nil), bindings...)}
 	m.cursor = 1 // the spawn binding (row 0 is the prefix)
-	press(m, "e", "x")
+	press(m, "e", "x", "enter")
 
 	// A fresh load (as New would do) sees the override applied to spawn and the
 	// other bindings left at their defaults.

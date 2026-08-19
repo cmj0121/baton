@@ -246,7 +246,7 @@ func TestRunActionsWithoutClient(t *testing.T) {
 
 	// editing a binding from a nil-binds model exercises copy-on-write.
 	cow := model{mode: modeKeyMap, fleet: sampleFleet(), prefixKey: "ctrl+t", cursor: 1}
-	cow = press(cow, "e", "z")
+	cow = press(cow, "e", "z", "enter")
 	if cow.binds == nil || cow.binds[0].key != "z" {
 		t.Fatal("ensureBinds copy-on-write failed")
 	}

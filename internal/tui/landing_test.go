@@ -146,3 +146,102 @@ func TestSequencesRenderAsSeparateCaps(t *testing.T) {
 		}
 	}
 }
+
+// A key the landing pass freed answers with its new home for one release. A key
+// that did something yesterday and does nothing at all today reads as a broken
+// cockpit, not as a rebind.
+func TestFreedKeysPointAtTheirNewHome(t *testing.T) {
+	cases := map[string]string{
+		"C": seqLabel(keyConductor),
+		"a": seqLabel(keyAdd),
+		"U": seqLabel(keyUsage),
+		"V": seqLabel(keyDashLayout),
+		"z": seqLabel(keyLens),
+	}
+	for old, want := range cases {
+		m := press(model{fleet: sampleFleet(), mode: modeDashboard}, old)
+		if !strings.Contains(m.status, want) {
+			t.Errorf("%q should point at %q, got %q", old, want, m.status)
+		}
+	}
+
+	// Restart is an escape now, so its hint has to carry the leader — otherwise
+	// it names a key that still does nothing.
+	m := press(model{fleet: sampleFleet(), mode: modeDashboard}, keyRestart)
+	if !strings.Contains(m.status, "C-t "+seqLabel(keyRestart)) {
+		t.Errorf("the restart hint should name the leader, got %q", m.status)
+	}
+}
+
+// The hint must never fire for a key that actually works, so a user who binds
+// something onto a freed letter is not told it moved.
+func TestRebindingAFreedKeySilencesItsHint(t *testing.T) {
+	m := model{fleet: sampleFleet(), mode: modeDashboard}
+	m = rebind(m, "preview", "z")
+
+	m = press(m, "z")
+	if !m.preview {
+		t.Fatal("a rebound freed key should run its binding")
+	}
+	if strings.Contains(m.status, "moved") {
+		t.Errorf("a key that works must not claim to have moved, got %q", m.status)
+	}
+}
+
+// The editor collects a run, not a key, so a two-key binding can be typed in
+// the cockpit rather than only in the config file.
+func TestKeyMapBindsARun(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := model{mode: modeKeyMap, fleet: sampleFleet(), binds: append([]binding(nil), bindings...), cursor: 1}
+
+	m = press(m, "e", "n", "z")
+	if !m.editing {
+		t.Fatal("the capture should stay open while a run is being typed")
+	}
+	if !strings.Contains(m.status, "n z") {
+		t.Errorf("the status should echo the run so far, got %q", m.status)
+	}
+	m = press(m, "enter")
+	if m.editing {
+		t.Fatal("enter should end the capture")
+	}
+	if got := m.binds[0].key; got != "n z" {
+		t.Fatalf("expected the run bound, got %q", got)
+	}
+	if m = press(m, "n", "z"); m.input != inputNewPanelCmd && m.status == "" {
+		t.Error("the run should reach its action once bound")
+	}
+}
+
+// Binding a run whose start is already a binding is allowed — vim's d and dd
+// relate that way — but it costs the shorter one the timeout, and that is not
+// something to discover by feel a week later.
+func TestKeyMapWarnsOnAnAmbiguousRebind(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := model{mode: modeKeyMap, fleet: sampleFleet(), binds: append([]binding(nil), bindings...), cursor: 1}
+
+	// new-panel is p; bind close to "p x" so p becomes the start of a longer run.
+	for i, b := range m.binds {
+		if b.name == "close" {
+			m.cursor = i + 1
+		}
+	}
+	m = press(m, "e", "p", "x", "enter")
+	if !strings.Contains(m.status, "waits") {
+		t.Errorf("an ambiguous rebind should say what it costs, got %q", m.status)
+	}
+}
+
+// An unambiguous rebind says what it did and nothing more.
+func TestKeyMapQuietOnAPlainRebind(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := model{mode: modeKeyMap, fleet: sampleFleet(), binds: append([]binding(nil), bindings...), cursor: 1}
+
+	m = press(m, "e", "y", "enter")
+	if strings.Contains(m.status, "waits") {
+		t.Errorf("a plain rebind should not warn, got %q", m.status)
+	}
+	if !strings.Contains(m.status, "rebound") {
+		t.Errorf("a rebind should report itself, got %q", m.status)
+	}
+}

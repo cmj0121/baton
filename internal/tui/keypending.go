@@ -137,13 +137,63 @@ func (m model) advanceSeq(key string, want func(binding) bool, run func(model, b
 		return m.armPending(tokens, b, true)
 	}
 
-	// Nothing starts with this run. Say so only when a landing was open: a
-	// stray key on an idle dashboard is not a mistake worth a status line.
+	// Nothing starts with this run.
 	if len(m.pending) > 0 {
+		// A landing was open, so this is a dead end and worth saying: the run is
+		// gone and the user needs to know why nothing happened.
 		m = m.clearPending()
 		m.status = strings.Join(labelTokens(tokens), " ") + " — no binding"
+		return m, nil
 	}
+	if where, ok := m.movedFrom(key); ok {
+		m.status = where
+	}
+	// Otherwise silent. A stray key on an idle dashboard is not a mistake worth
+	// a status line.
 	return m, nil
+}
+
+// movedKeys are the keys the landing pass took away, and the action each one
+// used to run. A key that did something yesterday and does nothing at all today
+// reads as a broken cockpit, so for one release it answers with its new home
+// instead of with silence.
+//
+// It is keyed on the OLD key and resolved through the CURRENT key map, so the
+// hint names where the action actually lives — including after a rebind — and a
+// user who binds something onto a freed key never sees it, because the matcher
+// resolves that key before this is reached.
+var movedKeys = map[string]action{
+	"c": actNewForm,
+	".": actNewHere,
+	"C": actConductor,
+	"H": actGlobalShell,
+	"G": actGroup,
+	"a": actAdd,
+	"u": actUngroup,
+	"U": actUsageToggle,
+	"K": actKeycastToggle,
+	"V": actDashLayout,
+	"z": actLens,
+	"S": actRestart,
+}
+
+// movedFrom is the "it lives here now" line for a key the landing pass freed.
+func (m model) movedFrom(key string) (string, bool) {
+	act, ok := movedKeys[key]
+	if !ok {
+		return "", false
+	}
+	for _, b := range m.keymap() {
+		if b.act != act {
+			continue
+		}
+		where := seqLabel(b.key)
+		if isEscape(b.act) {
+			where = keyLabel(m.effPrefix()) + " " + where
+		}
+		return m.bindDesc(b) + " moved → " + where, true
+	}
+	return "", false
 }
 
 // labelTokens renders a run for display, each token through keyLabel.

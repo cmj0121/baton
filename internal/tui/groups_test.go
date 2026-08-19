@@ -620,7 +620,7 @@ func TestKeyMapRebindsGroupKey(t *testing.T) {
 	if !m.editing {
 		t.Fatal("e should start capturing a new key")
 	}
-	m = press(m, "z")
+	m = press(m, "z", "enter")
 	if m.binds[gi].key != "z" {
 		t.Fatalf("group should rebind to z, got %q", m.binds[gi].key)
 	}
