@@ -201,9 +201,10 @@ cards**: one per lone panel, one per work item, one for the quiet fold. At six a
 what the top level HOLDS, so neither opening a row nor a fold firing can flip the layout out from under a keystroke that
 meant nothing of the sort, and a filter or a lens forces the tree whatever the count says, since both exist to show which
 rows matched. **`V` is the only key that switches the two**, both ways; the cards draw a work item whole, so `space`,
-`→` and `←` say so on a card rather than changing the layout under a key that means something else. The cursor keys mean
-the same thing in both: `←`/`→` open and shut, `↑`/`↓` step a grid row, `j`/`k` step one item. When the tree is showing
-on a fleet the cards would have drawn, the heading says so and names the key back.
+`space` says so on a card rather than changing the layout under a key that means something else. `↑`/`↓` and `j`/`k`
+step a whole grid row (one row in the tree, where a row is the grid row); `←`/`→` and `h`/`l` open and shut a work item
+in the tree and move one card on the grid, where there is no tree to walk and a horizontal key that did nothing would be
+worse. When the tree is showing on a fleet the cards would have drawn, the heading says so and names the key back.
 
 **Moving things.** `m` picks the selected row up, the arrows carry it through the tree, `enter` drops it and `esc`
 puts it back. The drop target is the **level** of the row under the cursor, never the row itself — "into this group" and

@@ -98,20 +98,86 @@ func TestGridAddressesTheTopLevelOnly(t *testing.T) {
 	}
 }
 
-// TestGridCursorReachesEveryCard: j/k walk the cards in reading order and the
-// arrows walk whole rows, so the last card of a short final row is reachable.
+// TestTheArrowsMoveOnTheCardsAndWalkInTheTree is the pair's whole contract.
+//
+// On the cards there is no tree to walk — a work item is drawn whole — and a
+// horizontal key that does nothing at all is worse than one that means the obvious
+// thing in each layout. So they move a card there, and go back to opening and
+// shutting rows the moment the tree is what is drawn.
+func TestTheArrowsMoveOnTheCardsAndWalkInTheTree(t *testing.T) {
+	fleet := []panel.Panel{
+		{ID: "1", Kind: panel.Shell, Title: "one", State: panel.Running},
+		{ID: "2", Kind: panel.Shell, Title: "two", State: panel.Running},
+		{ID: "3", Kind: panel.Agent, Title: "api a", State: panel.Running, Group: "backend"},
+		{ID: "4", Kind: panel.Agent, Title: "api b", State: panel.Running, Group: "backend"},
+	}
+	m := baseModel()
+	m.mode, m.fleet, m.width = modeDashboard, fleet, 120
+	if !m.gridDash() {
+		t.Fatal("three top-level rows are cards")
+	}
+
+	// The cards: one card per press, in reading order, in both directions.
+	for _, key := range []string{"right", "l"} {
+		m.cursor = 0
+		m = press(m, key)
+		if m.cursor != 1 {
+			t.Fatalf("%s on the cards should move one card, landed on %d", key, m.cursor)
+		}
+	}
+	for _, key := range []string{"left", "h"} {
+		m.cursor = 2
+		m = press(m, key)
+		if m.cursor != 1 {
+			t.Fatalf("%s on the cards should move one card back, landed on %d", key, m.cursor)
+		}
+	}
+	// And they never run off either end.
+	m.cursor = 0
+	m = press(m, "left")
+	if m.cursor != 0 {
+		t.Fatalf("← off the front should stay put, landed on %d", m.cursor)
+	}
+
+	// The tree: the same keys open and shut the row again.
+	m = m.toggleLayout()
+	if !m.treeView() {
+		t.Fatalf("V should show the tree: %s", m.status)
+	}
+	m.cursorOnGroup(t, "backend")
+	at := m.cursor
+	m = press(m, "left")
+	if it, _ := m.selectedItem(); it.expanded {
+		t.Fatalf("← in the tree should shut the work item, got %+v", it)
+	}
+	if m.cursor != at {
+		t.Fatalf("← shut the row and also moved the cursor %d -> %d", at, m.cursor)
+	}
+	m = press(m, "right")
+	if it, _ := m.selectedItem(); !it.expanded {
+		t.Fatal("→ in the tree should open it again")
+	}
+}
+
+// TestGridCursorReachesEveryCard: ↑/↓ and j/k step a whole grid row, ←/→ and h/l
+// step one card — so every card is reachable, including the last one on a short
+// final row.
 func TestGridCursorReachesEveryCard(t *testing.T) {
-	m := model{mode: modeDashboard, fleet: loosePanels(5), width: 100, height: 40}
+	m := baseModel()
+	m.mode, m.fleet, m.width = modeDashboard, loosePanels(5), 100
 	if cols := m.cols(); cols != 3 {
 		t.Fatalf("a 100-column terminal fits %d cards a row, want 3", cols)
 	}
-	for i := 0; i < 4; i++ {
-		m.move(m.step("j"))
+
+	m = press(m, "down") // row two
+	if m.cursor != 3 {
+		t.Fatalf("↓ should step a whole row, landed on %d", m.cursor)
 	}
+	m = press(m, "right") // the last card, alone on its row
 	if m.cursor != 4 {
-		t.Fatalf("j four times lands on %d, want the last card (4)", m.cursor)
+		t.Fatalf("→ should reach the last card, landed on %d", m.cursor)
 	}
-	m.move(-m.step("up"))
+	m = press(m, "up")
 	if m.cursor != 1 {
 		t.Fatalf("↑ from the last card lands on %d, want 1 — one grid row up", m.cursor)
 	}
@@ -155,20 +221,19 @@ func TestTheCardsRefuseToOpenAndVIsTheWay(t *testing.T) {
 	}
 	m.cursor = 0 // the backend card
 
-	for _, tc := range []struct {
-		name string
-		do   func(model) model
-	}{
-		{"→", func(m model) model { return m.expandSelected() }},
-		{"←", func(m model) model { return m.collapseSelected() }},
-		{"space", func(m model) model { return m.toggleExpand() }},
-	} {
-		next := tc.do(m)
-		if !next.gridDash() {
-			t.Fatalf("%s changed the layout — only V may", tc.name)
+	// None of the row keys changes the layout, whatever else they do.
+	for _, key := range []string{"right", "left", " ", "h", "l"} {
+		if next := press(m, key); !next.gridDash() {
+			t.Fatalf("%q changed the layout — only V may", key)
 		}
-		if !strings.Contains(next.status, "shows the tree") {
-			t.Fatalf("%s should say why nothing opened, got %q", tc.name, next.status)
+	}
+	// And space, the one key with nothing to do on a card, says why and names the
+	// key that has.
+	for _, at := range []int{0, 1} { // the work item card, and the lone panel card
+		next := m
+		next.cursor = at
+		if next = press(next, " "); !strings.Contains(next.status, "shows the tree") {
+			t.Fatalf("space on card %d should say why nothing opened, got %q", at, next.status)
 		}
 	}
 

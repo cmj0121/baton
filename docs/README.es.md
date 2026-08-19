@@ -109,7 +109,7 @@ teclas.
 |             | `R` / `S`         | recargar la configuración / forzar reinicio del servidor              |
 |             | `q`               | desacoplarse (el servidor sigue en marcha)                            |
 | Dashboard   | `jk` / `↑↓`       | mover el cursor                                                       |
-|             | `hl` / `←→`       | plegar / desplegar un work item — salir / entrar                      |
+|             | `hl` / `←→`       | mover una tarjeta · en el árbol: plegar / desplegar un work item      |
 |             | `space`           | mostrar / ocultar lo que hay anidado bajo la fila                     |
 |             | `v` / `z`         | panel de detalle / agrupar por: work item, directorio, perfil, estado |
 |             | `V`               | el diseño del tablero: tarjetas o árbol                               |

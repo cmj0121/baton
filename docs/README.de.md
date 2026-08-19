@@ -107,7 +107,7 @@ Tastenbelegung zu bearbeiten.
 |             | `R` / `S`         | Konfiguration neu laden / Server-Neustart erzwingen                |
 |             | `q`               | abkoppeln (der Server läuft weiter)                                |
 | Dashboard   | `jk` / `↑↓`       | den Cursor bewegen                                                 |
-|             | `hl` / `←→`       | Work Item ein-/ausklappen — heraus- / hineingehen                  |
+|             | `hl` / `←→`       | eine Karte weiter · im Baum: Work Item ein-/ausklappen             |
 |             | `space`           | zeigen / verbergen, was unter der Zeile verschachtelt ist          |
 |             | `v` / `z`         | Detailspalte / Gruppierung: Work Item, Verzeichnis, Profil, Status |
 |             | `V`               | das Dashboard-Layout: Karten oder Baum                             |

@@ -1418,27 +1418,28 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.scrollHelp(-1)
 			return m, nil
 		}
-		m.move(-m.step(key))
+		m.move(-m.cols())
 		return m, nil
 	case "down", "j":
 		if m.mode == modeHelp {
 			m.scrollHelp(1)
 			return m, nil
 		}
-		m.move(m.step(key))
+		m.move(m.cols())
 		return m, nil
 	case "left", "h":
-		// ← and → walk the dashboard tree: out and in. They used to move the cursor
-		// one card left or right, which only ever meant anything in the multi-column
-		// card grid — and that is gone, so the pair is free for the job every other
-		// tree in every other program already uses it for.
-		if m.mode == modeDashboard {
+		// ← and → walk the dashboard TREE: out and in. On the card grid there is no
+		// tree to walk — a work item is drawn whole — so there they do the only
+		// thing left to do with a horizontal key, which is what the grid always used
+		// them for: move one card. A key that does nothing at all is worse than a
+		// key that means the obvious thing in each layout.
+		if m.mode == modeDashboard && !m.gridDash() {
 			return m.collapseSelected(), nil
 		}
 		m.move(-1)
 		return m, nil
 	case "right", "l":
-		if m.mode == modeDashboard {
+		if m.mode == modeDashboard && !m.gridDash() {
 			return m.expandSelected(), nil
 		}
 		m.move(1)
@@ -3257,20 +3258,6 @@ func (m model) cols() int {
 		return 1
 	}
 	return gridCols(m.width)
-}
-
-// step is how far one cursor key travels: a whole row for the arrows, one item
-// for j/k.
-//
-// They are the same key in every single-column view, where a row IS one item, and
-// they part company only on the card grid — where the arrows walk the grid the way
-// it looks and j/k walk it in reading order. Without that, the last card of a
-// short final row would be a card you could see and not reach.
-func (m model) step(key string) int {
-	if key == "j" || key == "k" {
-		return 1
-	}
-	return m.cols()
 }
 
 // --- rendering ---

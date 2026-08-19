@@ -234,10 +234,6 @@ func (m model) expandSelected() model {
 	if !ok {
 		return m
 	}
-	if it.kind == itemGroup && m.gridDash() {
-		m.status = m.cardsHold()
-		return m
-	}
 	switch {
 	case it.kind == itemFold:
 		return m.toggleFold()
@@ -270,27 +266,35 @@ func (m model) toggleExpand() model {
 	if !ok {
 		return m
 	}
-	switch it.kind {
-	case itemFold:
-		return m.toggleFold()
-	case itemGroup:
-		if m.gridDash() {
-			m.status = m.cardsHold()
-			return m
-		}
+	if it.kind == itemFold {
+		return m.toggleFold() // the quiet row opens in either layout: it is one row, and it holds rows
+	}
+	// Every other row on the cards gets the same answer, panel or work item. The
+	// grid draws no nesting at all, so "there is nothing nested under THIS row" is
+	// the wrong thing to say on it — the truth is that this layout is not showing
+	// nesting, and which key does.
+	if m.gridDash() {
+		m.status = m.cardsHold()
+		return m
+	}
+	if it.kind == itemGroup {
 		return m.setCollapsed(it, it.expanded)
 	}
 	m.status = "nothing nested here — " + keyLabel(m.bindingKey(actExpand)) + " opens a work item"
 	return m
 }
 
-// cardsHold is what every open/shut verb answers on the card grid.
+// cardsHold is what space answers on the card grid.
 //
 // The cards draw a work item WHOLE — that is what makes a small fleet readable at
 // a glance — so there is nothing on screen to open or shut, and the layout that
 // can draw the inside of one is a keystroke away. The key is read from the binding
 // rather than spelled here, so a rebind cannot leave the hint pointing at a key
 // that does nothing.
+//
+// Only space needs it. The arrows never reach here on the cards: with no tree to
+// walk they move the cursor instead, which is the one thing a horizontal key can
+// usefully do in a grid.
 func (m model) cardsHold() string {
 	return "the cards draw a work item whole — " + keyLabel(m.bindingKey(actDashLayout)) + " shows the tree"
 }
@@ -334,13 +338,6 @@ func (m model) toggleLayout() model {
 func (m model) collapseSelected() model {
 	it, ok := m.selectedItem()
 	if !ok {
-		return m
-	}
-	// The guard comes first: a group row reads as expanded on the cards too — the
-	// grid simply does not draw what is under it — so shutting it here would write
-	// a collapse nothing on screen could show.
-	if it.kind == itemGroup && m.gridDash() {
-		m.status = m.cardsHold()
 		return m
 	}
 	if it.kind == itemGroup && it.expanded {
