@@ -213,7 +213,8 @@ type model struct {
 	inputBuf    string           // text typed into the overlay
 	inputHint   string           // path-completion hint shown under the field (tab), cleared on edit
 	helpFrom    mode             // the view the key map (?) was opened from, to restore on esc
-	helpScroll  int              // scroll offset for the read-only help list (it has no cursor)
+	helpScroll  int              // scroll offset within the open help tab (the list has no cursor)
+	helpTab     int              // which purpose tab the key list is showing
 
 	renameID      string // panel id being renamed via inputRename ("" if a group)
 	renameGroup   string // group being renamed via inputRename ("" if a panel)
@@ -1492,6 +1493,10 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.move(m.cols())
 		return m, nil
 	case "left", "h":
+		if m.mode == modeHelp { // the key list is tabbed; the arrows walk the tabs
+			m.cycleHelpTab(-1)
+			return m, nil
+		}
 		// ← and → walk the dashboard TREE: out and in. On the card grid there is no
 		// tree to walk — a work item is drawn whole — so there they do the only
 		// thing left to do with a horizontal key, which is what the grid always used
@@ -1503,6 +1508,10 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.move(-1)
 		return m, nil
 	case "right", "l":
+		if m.mode == modeHelp {
+			m.cycleHelpTab(1)
+			return m, nil
+		}
 		if m.mode == modeDashboard && !m.gridDash() {
 			return m.expandSelected(), nil
 		}
@@ -1534,18 +1543,26 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "tab":
-		// In the key map, tab jumps to the next purpose section; elsewhere it
-		// cycles the selection forward, wrapping like the group split's focus.
-		if m.mode == modeKeyMap {
+		// In the key map and the key list, tab jumps to the next purpose section
+		// — both are long enough that a line at a time is the wrong tool.
+		// Elsewhere it cycles the selection forward, wrapping like the group
+		// split's focus.
+		switch m.mode {
+		case modeKeyMap:
 			m.jumpSection(1)
-		} else {
+		case modeHelp:
+			m.cycleHelpTab(1)
+		default:
 			m.cycle(1)
 		}
 		return m, nil
 	case "shift+tab":
-		if m.mode == modeKeyMap {
+		switch m.mode {
+		case modeKeyMap:
 			m.jumpSection(-1)
-		} else {
+		case modeHelp:
+			m.cycleHelpTab(-1)
+		default:
 			m.cycle(-1)
 		}
 		return m, nil
@@ -2258,7 +2275,7 @@ func shellLabel(path string) string {
 func (m model) openHelp(from mode) model {
 	m.helpFrom = from
 	m.mode = modeHelp
-	m.helpScroll = 0 // open at the top
+	m.helpScroll, m.helpTab = 0, 0 // open at the top of the first tab
 	m.status = "keys"
 	return m
 }
@@ -2267,15 +2284,61 @@ func (m model) openHelp(from mode) model {
 // never scrolls past the bottom. The help view has no cursor, so the arrows drive
 // this offset directly.
 func (m *model) scrollHelp(delta int) {
-	_, body := m.helpContent()
-	off := m.helpScroll + delta
-	if maxOff := len(body) - m.panelVisibleRows(helpReserved); off > maxOff {
-		off = maxOff
+	m.helpScroll += delta
+	m.clampHelp()
+}
+
+// cycleHelpTab moves the key list to the next or previous purpose tab, wrapping
+// at each end, and starts it at the top. Tabs replaced one long scroll: a reader
+// looking for "how do I group these" should not have to scroll past every panel
+// verb to find out, and the bar names the tab either side so the arrows have
+// somewhere legible to go.
+func (m *model) cycleHelpTab(dir int) {
+	_, secs := m.helpSections()
+	if len(secs) < 2 {
+		return
 	}
-	if off < 0 {
-		off = 0
+	m.helpTab = (m.helpTabIdx(secs) + dir + len(secs)) % len(secs)
+	m.helpScroll = 0
+}
+
+// clampHelp keeps the offset inside the open tab, so scrolling past the end
+// lands on the last full page rather than beyond it.
+//
+// It counts the rows the PANEL will show, tab bar included. Counting them
+// without it clamps short of the bottom by exactly the height of the bar, which
+// is how the last rows of a tab became unreachable.
+func (m *model) clampHelp() {
+	_, secs := m.helpSections()
+	var rows []string
+	if len(secs) > 0 {
+		rows = secs[m.helpTabIdx(secs)].rows
 	}
-	m.helpScroll = off
+	if maxOff := len(rows) - m.helpVisibleRows(secs); m.helpScroll > maxOff {
+		m.helpScroll = maxOff
+	}
+	if m.helpScroll < 0 {
+		m.helpScroll = 0
+	}
+}
+
+// helpVisibleRows is how many rows of the open tab fit, which is what the panel
+// reserves for its chrome plus whatever the tab bar takes.
+func (m model) helpVisibleRows(secs []helpSection) int {
+	return m.panelVisibleRows(helpReserved + len(m.helpTabBar(secs, m.width-8)))
+}
+
+// helpBodyRows is the height every tab is drawn to: the tallest tab, or the
+// screen, whichever is smaller. It is a render-time pad only — the scroll clamp
+// counts the rows a tab really has, so padding can never scroll into blanks.
+func (m model) helpBodyRows(secs []helpSection) int {
+	tallest := 0
+	for _, sec := range secs {
+		if n := len(sec.rows); n > tallest {
+			tallest = n
+		}
+	}
+	return min(tallest, m.helpVisibleRows(secs))
 }
 
 // openEditMap shows the editable key map (C-t k), remembering the originating
@@ -3840,12 +3903,27 @@ func metaRow(label, value string, valColor lipgloss.Color) string {
 // helpView is the read-only key list for the current stage — the keys that view
 // responds to — shown when ? (or C-t ? in a zoom) is pressed.
 func (m model) helpView() string {
-	title, body := m.helpContent()
+	title, secs := m.helpSections()
 	pfx := keyLabel(m.effPrefix())
-	legend := mutedStyle.Render("esc  " + m.tr("help.legend.back", "back") +
+	legend := mutedStyle.Render("←→  " + m.tr("help.legend.tab", "tab") +
+		"   ·   ↑↓  " + m.tr("help.legend.scroll.short", "scroll") +
+		"   ·   esc  " + m.tr("help.legend.back", "back") +
 		"   ·   " + pfx + " " + seqLabel(m.bindingKey(actEditMap)) + "  " + m.tr("help.legend.edit", "edit"))
+
+	var body []string
+	if len(secs) > 0 {
+		body = secs[m.helpTabIdx(secs)].rows
+	}
+	// Every tab draws to the same height, so walking them with the arrows does
+	// not make the box breathe in and out under the cursor. The target is the
+	// tallest tab, capped at what the screen can show — a short tab is padded up
+	// to it, a tall one is already scrolling.
+	if pad := m.helpBodyRows(secs) - len(body); pad > 0 {
+		body = append(append([]string(nil), body...), make([]string, pad)...)
+	}
 	return m.renderScrollPanel(scrollPanel{
 		title:    title + " " + m.tr("help.title.keys", "KEYS"),
+		head:     m.helpTabBar(secs, m.width-8),
 		body:     body,
 		footer:   []string{"", legend},
 		reserved: helpReserved,
@@ -3858,7 +3936,7 @@ func (m model) helpView() string {
 // helpContent builds the read-only key list for the view help was opened from:
 // the section title and the category-grouped body rows (with subheaders), ready
 // for windowing. Shared by helpView and the help scroller's clamp.
-func (m model) helpContent() (title string, body []string) {
+func (m model) helpSections() (title string, secs []helpSection) {
 	kc := func(s string) string { return keycapStyle.Render(s) }
 	pfx := keyLabel(m.effPrefix())
 
@@ -3870,6 +3948,10 @@ func (m model) helpContent() (title string, body []string) {
 	tr := m.tr
 
 	var rows []helpRow
+	// The dashboard lists the live key map rather than a hand-written table, so
+	// its bindings travel as bindings: the renderer below groups them by landing,
+	// which a flattened row cannot express.
+	var binds []binding
 	switch m.helpFrom {
 	case modeGroupZoom:
 		title = tr("help.title.group", "GROUP VIEW")
@@ -3925,35 +4007,141 @@ func (m model) helpContent() (title string, body []string) {
 			{"Navigation", kc("enter"), tr("help.dash.open", "open / zoom")},
 			{"Navigation", kc("esc"), tr("help.dash.clear", "clear the selection")},
 		}
-		for _, b := range m.keymap() {
-			keys := keycaps("", b.key, false)
-			if isEscape(b.act) {
-				keys = keycaps(pfx, b.key, false)
-			}
-			rows = append(rows, helpRow{b.cat, keys, m.bindDesc(b)})
-		}
+		binds = m.keymap()
 	}
 
-	// Render category by category in a stable order, so the list always reads the
-	// same way and matches the editable key map's grouping. The subheaders carry
-	// the untranslated category as the row tag and translate only on the way out,
-	// so a translation can never split a section in two.
+	// One tab per purpose, in a stable order that matches the editable key map's
+	// grouping. A tab carries the UNTRANSLATED category and translates only on
+	// the way out, so a translation can never split a tab in two.
 	keyCol := lipgloss.NewStyle().Width(20)
-	subhead := lipgloss.NewStyle().Foreground(colFaint).Bold(true)
 	for _, cat := range []string{"Navigation", "Panels", "Work items", "View", "Session"} {
-		shown := false
+		var body []string
 		for _, r := range rows {
 			if r.cat != cat {
 				continue
 			}
-			if !shown {
-				body = append(body, "", "  "+subhead.Render(m.trCat(cat)))
-				shown = true
-			}
 			body = append(body, keyCol.Render(r.keys)+mutedStyle.Render(r.desc))
 		}
+
+		// The bindings that fire on a key of their own, then one block per
+		// landing. A landing's members are indented under it and show only the
+		// key that completes them, so the family reads as a family rather than
+		// as four rows that happen to start with the same cap.
+		for _, b := range binds {
+			if b.cat != cat || len(b.seq()) > 1 {
+				continue
+			}
+			keys := keycaps("", b.key, false)
+			if isEscape(b.act) {
+				keys = keycaps(pfx, b.key, false)
+			}
+			body = append(body, keyCol.Render(keys)+mutedStyle.Render(m.bindDesc(b)))
+		}
+		for _, land := range landings(binds, cat) {
+			var members []binding
+			for _, b := range binds {
+				if b.cat == cat && len(b.seq()) > 1 && b.seq()[0] == land {
+					members = append(members, b)
+				}
+			}
+			count := m.tr("help.landing", "%d keys under this landing")
+			if len(members) == 1 {
+				count = m.tr("help.landing.one", "%d key under this landing")
+			}
+			body = append(body, "",
+				keyCol.Render(keycaps("", land, false)+" …")+
+					mutedStyle.Render(fmt.Sprintf(count, len(members))))
+			for _, b := range members {
+				rest := strings.Join(b.seq()[1:], " ")
+				body = append(body, keyCol.Render("  "+keycaps("", rest, false))+mutedStyle.Render(m.bindDesc(b)))
+			}
+		}
+		if len(body) > 0 {
+			secs = append(secs, helpSection{cat: cat, rows: body})
+		}
 	}
-	return title, body
+	return title, secs
+}
+
+// helpSection is one purpose tab of the key list: the untranslated category
+// (translated only on the way out, so a translation can never split a tab in
+// two) and the rows it holds.
+type helpSection struct {
+	cat  string
+	rows []string
+}
+
+// helpContent is the open tab's rows, which is what the panel scrolls and what
+// the tests read.
+func (m model) helpContent() (string, []string) {
+	title, secs := m.helpSections()
+	if len(secs) == 0 {
+		return title, nil
+	}
+	return title, secs[m.helpTabIdx(secs)].rows
+}
+
+// helpTabIdx clamps the open tab to what this view actually has, so a view with
+// fewer tabs than the one before it cannot leave the offset out of range.
+func (m model) helpTabIdx(secs []helpSection) int {
+	if m.helpTab < 0 || m.helpTab >= len(secs) {
+		return 0
+	}
+	return m.helpTab
+}
+
+// helpTabBar is the pinned row of purpose tabs, the open one lit. The whole set
+// is shown when it fits, so the previous and next tab are read off the bar
+// itself; when it does not, it narrows to the neighbours either side, which is
+// the part the arrows are about to reach.
+func (m model) helpTabBar(secs []helpSection, width int) []string {
+	if len(secs) < 2 {
+		return nil
+	}
+	cur := m.helpTabIdx(secs)
+	name := func(i int) string { return m.trCat(secs[i].cat) }
+
+	render := func(from, to int, lead, trail bool) string {
+		var parts []string
+		if lead {
+			parts = append(parts, mutedStyle.Render("◂"))
+		}
+		for i := from; i <= to; i++ {
+			if i == cur {
+				parts = append(parts, tabHotStyle.Render(name(i)))
+				continue
+			}
+			parts = append(parts, tabStyle.Render(name(i)))
+		}
+		if trail {
+			parts = append(parts, mutedStyle.Render("▸"))
+		}
+		return " " + strings.Join(parts, mutedStyle.Render("│"))
+	}
+
+	bar := render(0, len(secs)-1, false, false)
+	if width > 0 && lipgloss.Width(bar) > width {
+		lo, hi := max(0, cur-1), min(len(secs)-1, cur+1)
+		bar = render(lo, hi, lo > 0, hi < len(secs)-1)
+	}
+	return []string{bar, ""}
+}
+
+// landings lists the landing keys a category holds, in key-map order. A landing
+// is the first token of any binding that takes more than one key; the escapes
+// have none, since they are single by design.
+func landings(binds []binding, cat string) []string {
+	var out []string
+	for _, b := range binds {
+		s := b.seq()
+		if b.cat != cat || len(s) < 2 || isEscape(b.act) {
+			continue
+		}
+		if !slices.Contains(out, s[0]) {
+			out = append(out, s[0])
+		}
+	}
+	return out
 }
 
 func (m model) keyMapView() string {
@@ -4150,6 +4338,7 @@ func windowFrom(rows []string, off, visible int) (shown []string, clipped bool) 
 // renderScrollPanel so their chrome and scrolling stay identical.
 type scrollPanel struct {
 	title    string   // section header, shown spaced
+	head     []string // pinned lines under the title: a tab bar, a filter echo
 	body     []string // the scrollable rows
 	footer   []string // pinned lines below the body
 	reserved int      // vertical chrome to reserve when sizing the body
@@ -4161,7 +4350,7 @@ type scrollPanel struct {
 // renderScrollPanel windows p.body to the height and wraps it, the title, and the
 // footer in the shared popupBox.
 func (m model) renderScrollPanel(p scrollPanel) string {
-	visible := m.panelVisibleRows(p.reserved)
+	visible := m.panelVisibleRows(p.reserved + len(p.head))
 	body, clipped := windowFrom(p.body, p.anchor, visible)
 	if p.centered {
 		body, clipped = windowAround(p.body, p.anchor, visible)
@@ -4170,8 +4359,9 @@ func (m model) renderScrollPanel(p scrollPanel) string {
 	if clipped {
 		header += p.clipHint
 	}
-	out := make([]string, 0, len(body)+len(p.footer)+2)
+	out := make([]string, 0, len(body)+len(p.head)+len(p.footer)+2)
 	out = append(out, header, "")
+	out = append(out, p.head...)
 	out = append(out, body...)
 	out = append(out, p.footer...)
 	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, out...))

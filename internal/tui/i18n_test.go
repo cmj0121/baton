@@ -27,8 +27,8 @@ func helpModel(lang i18n.Lang, from mode) model {
 // back to its English and shows up here as an identical line.
 func TestHelpIsFullyTranslated(t *testing.T) {
 	for _, from := range []mode{modeDashboard, modeZoom, modeGroupZoom} {
-		enTitle, en := helpModel(i18n.EN, from).helpContent()
-		zhTitle, zh := helpModel(i18n.ZhTW, from).helpContent()
+		enTitle, en := helpRows(helpModel(i18n.EN, from))
+		zhTitle, zh := helpRows(helpModel(i18n.ZhTW, from))
 
 		if len(en) != len(zh) {
 			t.Fatalf("view %v: translating changed the row count, %d → %d", from, len(en), len(zh))
@@ -90,7 +90,8 @@ func TestEnglishIsTheDefault(t *testing.T) {
 	if m.effLang() != i18n.EN {
 		t.Fatalf("an unset language should default to English, got %q", m.effLang())
 	}
-	view := m.helpView()
+	_, rows := helpRows(m)
+	view := m.helpView() + "\n" + strings.Join(rows, "\n")
 	for _, want := range []string{spaced("DASHBOARD KEYS"), "Navigation", "close the selected panel"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("the default help should read in English, missing %q", want)
@@ -207,4 +208,16 @@ func TestLocalisedHelpKeepsOnePopupWidth(t *testing.T) {
 			t.Errorf("view %v: English help is %d wide, want %d", from, got, want)
 		}
 	}
+}
+
+// helpRows is every tab's rows in order — "the whole key list", which is what a
+// test means when it asks whether the list carries something. The panel itself
+// only ever shows one tab.
+func helpRows(m model) (string, []string) {
+	title, secs := m.helpSections()
+	var all []string
+	for _, sec := range secs {
+		all = append(all, sec.rows...)
+	}
+	return title, all
 }
