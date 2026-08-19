@@ -14,10 +14,15 @@ import (
 // auto-zoomed panel via the server's ephemeral path; worktree-add spawns an agent
 // in a fresh tree (a fleet change); worktree-remove confirms and runs server-side.
 
-// keyGitMenu opens the menu after the leader in a zoom (C-t g). It is a fixed zoom
-// affordance rather than a rebindable command, since bare g is the dashboard's
-// mark and the menu only exists in a zoom.
-const keyGitMenu = "g"
+// keyGitMenu opens the menu after the leader in a zoom (C-t G). It is a fixed
+// zoom affordance rather than a rebindable command, since the menu only exists
+// in a zoom.
+//
+// Shifted because C-t g is now the leader plus the g landing, which the
+// work-item family reaches through: an unshifted menu here would make C-t g
+// both a binding and the start of a longer one, and that is the one shape that
+// costs a keystroke its timeout.
+const keyGitMenu = "G"
 
 // gitMenu is the menu's rows, in display order — the keycap, the label, and a
 // one-line gloss. The hotkey runs the row directly; ↑↓ + enter pick it.

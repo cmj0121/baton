@@ -10,7 +10,7 @@ resets**:
 ⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31
 ```
 
-Press **`U`** to cycle the segment through its views. The choice persists.
+Press **`v u`** to cycle the segment through its views. The choice persists.
 
 | View     | Shows                                                               | Answers                  |
 | -------- | ------------------------------------------------------------------- | ------------------------ |
@@ -150,7 +150,7 @@ export BATON_ANTHROPIC_ADMIN_KEY=sk-ant-admin01-…
 ```
 
 Everything under `usage:` is read when the daemon starts; change it and restart
-the server (`C-t S`) to pick it up. The `U` cycle is live.
+the server (`C-t S`) to pick it up. The `v u` cycle is live.
 
 > An older config that set `settings.usage-footer: false` still hides the segment.
 > `usage-mode` supersedes it and wins whenever both are present.

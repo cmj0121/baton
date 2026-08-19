@@ -19,8 +19,8 @@ Tú llevas la batuta. Los agentes tocan. Tú diriges. 🎼
 
 ![Demostración de la cabina de Baton: paneles en el tablero, zoom para manejar uno, agrupar dos en un work item, abrir el conductor y la global shell](assets/baton-demo.png)
 
-_Abre paneles, haz zoom en uno para manejarlo, junta dos en un work item, llama al conductor con `C` y a la global shell
-con `H`; y `?` siempre está ahí para recordarte las teclas._
+_Abre paneles, haz zoom en uno para manejarlo, junta dos en un work item, llama al conductor con `n C` y a la global shell
+con `n h`; y `?` siempre está ahí para recordarte las teclas._
 
 _Vídeo generado a partir de [`baton-demo.tape`](assets/baton-demo.tape); los pasos para regenerarlo están en la cabecera
 del tape. La CLI de agente del conductor es un doble ([`demo-agent.sh`](assets/demo-agent.sh)) para que el vídeo salga
@@ -84,7 +84,7 @@ Manejas Baton a través de tres vistas, y te mueves entre ellas con una tecla:
   fila, sus subgrupos indentados debajo y sus paneles debajo de esos. `space` muestra u oculta lo que hay anidado bajo una
   fila, a cualquier profundidad; `→` abre un work item y entra en él, `←` lo cierra y sube un nivel — y desde el primer nivel,
   de vuelta a las tarjetas. La fila lleva el estado, el directorio de trabajo, la sparkline de salida y la tarea asignada a
-  medida que la terminal se ensancha; `v` abre un panel de detalle al lado. Aquí navegas, abres y cierras paneles, y los
+  medida que la terminal se ensancha; `v p` abre un panel de detalle al lado. Aquí navegas, abres y cierras paneles, y los
   agrupas en work items.
 - **Grupo (Group)** — la división en vivo de un work item: sus paneles en mosaico, uno al lado del otro, todos
   transmitiendo a la vez. Los primeros se transmiten como mosaicos en vivo; el resto se pliega en un único **mosaico de
@@ -99,43 +99,46 @@ Las teclas son **modales**: en el tablero y dentro de un grupo cada acción es u
 interactivo tus pulsaciones manejan el programa, así que una acción de Baton es la tecla líder **`C-t`** seguida de la
 tecla. Pulsa **`?`** para ver la lista completa y reasignable de la vista actual, y **`C-t k`** para editar el mapa de
 teclas.
+Cuatro teclas son _landings_: no hacen nada por sí solas y abren una familia — `n` abre, `v` dibuja, `g` agrupa,
+`x` es el doble toque que se confirma a sí mismo — y la barra de estado dice qué acepta cada una a continuación.
 
-| Dónde       | Tecla             | Hace                                                                  |
-| ----------- | ----------------- | --------------------------------------------------------------------- |
-| After `C-t` | `d` / `b`         | ir al tablero / volver un nivel                                       |
-|             | `a`               | bandeja de atención — despachar lo que necesita a alguien             |
-|             | `[`               | entrar en modo de desplazamiento                                      |
-|             | `l` / `L`         | registrar el panel en un archivo / releer ese registro                |
-|             | `R` / `S`         | recargar la configuración / forzar reinicio del servidor              |
-|             | `q`               | desacoplarse (el servidor sigue en marcha)                            |
-| Dashboard   | `jk` / `↑↓`       | mover el cursor                                                       |
-|             | `hl` / `←→`       | mover una tarjeta · en el árbol: plegar / desplegar un work item      |
-|             | `space`           | mostrar / ocultar lo que hay anidado bajo la fila                     |
-|             | `v` / `z`         | panel de detalle / agrupar por: work item, directorio, perfil, estado |
-|             | `V`               | el diseño del tablero: tarjetas o árbol                               |
-|             | `m`               | coger una fila — las flechas la llevan, `enter` la suelta             |
-|             | `enter`           | abrir / hacer zoom en la selección                                    |
-|             | `p` / `A` / `c`   | nuevo panel de shell / agente / elegir comando                        |
-|             | `.`               | nuevo panel de shell en el directorio del panel enfocado              |
-|             | `C`               | abrir el conductor (un agente que maneja la flota)                    |
-|             | `H`               | abrir la global shell (una shell del anfitrión en `$HOME`)            |
-|             | `w` / `x`         | cerrar la selección / purgar los terminados                           |
-|             | `r`               | reejecutar los paneles terminados bajo el foco                        |
-|             | `g` / `G` / `u`   | marcar / agrupar los marcados / desagrupar                            |
-|             | `s` / `f` / `D`   | enviar señal / buscar / diff de la selección                          |
-|             | `/`               | buscar en la salida de todos los paneles (grep a la flota)            |
-|             | `T` / `Q`         | despachar una tarea / gestionar la cola de tareas                     |
-|             | `U`               | alternar el pie de uso: apagado / ventana / panel enfocado            |
-|             | `K`               | alternar el indicador de teclas en el pie                             |
-| Group       | `tab`             | dar el foco al siguiente panel                                        |
-|             | `+` / `-`         | mostrar más / menos mosaicos en vivo                                  |
-|             | `L`               | rotar la disposición de los mosaicos                                  |
-|             | `p` / `i`         | fijar / interactuar con el panel enfocado                             |
-|             | `enter`           | hacer zoom en el panel enfocado                                       |
-| Zoom        | escribir          | manejar el programa directamente                                      |
-|             | `C-t f` / `C-t g` | buscar en el historial / menú de git (agente)                         |
+| Dónde       | Tecla                 | Hace                                                                  |
+| ----------- | --------------------- | --------------------------------------------------------------------- |
+| After `C-t` | `d` / `b`             | ir al tablero / volver un nivel                                       |
+|             | `a`                   | bandeja de atención — despachar lo que necesita a alguien             |
+|             | `[`                   | entrar en modo de desplazamiento                                      |
+|             | `l` / `L`             | registrar el panel en un archivo / releer ese registro                |
+|             | `R` / `S`             | recargar la configuración / forzar reinicio del servidor              |
+|             | `q`                   | desacoplarse (el servidor sigue en marcha)                            |
+| Dashboard   | `jk` / `↑↓`           | mover el cursor                                                       |
+|             | `hl` / `←→`           | mover una tarjeta · en el árbol: plegar / desplegar un work item      |
+|             | `space`               | mostrar / ocultar lo que hay anidado bajo la fila                     |
+|             | `v p` / `v g`         | panel de detalle / agrupar por: work item, directorio, perfil, estado |
+|             | `v l`                 | el diseño del tablero: tarjetas o árbol                               |
+|             | `m`                   | coger una fila — las flechas la llevan, `enter` la suelta             |
+|             | `enter`               | abrir / hacer zoom en la selección                                    |
+|             | `p` / `A` / `n c`     | nuevo panel de shell / agente / elegir comando                        |
+|             | `n .`                 | nuevo panel de shell en el directorio del panel enfocado              |
+|             | `n C`                 | abrir el conductor (un agente que maneja la flota)                    |
+|             | `n h`                 | abrir la global shell (una shell del anfitrión en `$HOME`)            |
+|             | `w` / `x x`           | cerrar la selección / purgar los terminados                           |
+|             | `r`                   | reejecutar los paneles terminados bajo el foco                        |
+|             | `g g` / `g c` / `g u` | marcar / agrupar los marcados / desagrupar                            |
+|             | `s` / `f` / `D`       | enviar señal / buscar / diff de la selección                          |
+|             | `/`                   | buscar en la salida de todos los paneles (grep a la flota)            |
+|             | `T` / `Q`             | despachar una tarea / gestionar la cola de tareas                     |
+|             | `v u`                 | alternar el pie de uso: apagado / ventana / panel enfocado            |
+|             | `v k`                 | alternar el indicador de teclas en el pie                             |
+| Group       | `tab`                 | dar el foco al siguiente panel                                        |
+|             | `+` / `-`             | mostrar más / menos mosaicos en vivo                                  |
+|             | `L`                   | rotar la disposición de los mosaicos                                  |
+|             | `p` / `i`             | fijar / interactuar con el panel enfocado                             |
+|             | `enter`               | hacer zoom en el panel enfocado                                       |
+| Zoom        | escribir              | manejar el programa directamente                                      |
+|             | `C-t f` / `C-t G`     | buscar en el historial / menú de git (agente)                         |
 
-Consulta **[docs/SPEC.md](SPEC.md)** para la referencia completa de teclas por vista y el diseño que hay detrás de cada
+Consulta **[docs/KEYS.md](KEYS.md)** para la referencia completa de teclas, y **[docs/SPEC.md](SPEC.md)** para el diseño
+que hay detrás de cada
 una.
 
 ## Funcionalidades
@@ -155,13 +158,13 @@ Todo lo que necesitas mientras pastoreas una flota, a una tecla de distancia:
   selecciona y copia por OSC52, así que funciona sobre SSH sin ningún binario auxiliar.
 - **Diff** — `D` (o `C-t D` dentro de un zoom) muestra el diff del árbol de trabajo del panel de agente —lo preparado y
   lo no preparado a la vez, incluidos los archivos sin seguimiento— en una superposición maestro-detalle.
-- **Git** — `C-t g` abre un menú de git sobre el agente ampliado: diff, log, status, preparar, commit, push, ramas y
+- **Git** — `C-t G` abre un menú de git sobre el agente ampliado: diff, log, status, preparar, commit, push, ramas y
   worktrees. Consulta **[docs/GIT.md](GIT.md)**.
-- **Conductor y control** — `C` abre un conductor: un agente que maneja la flota por ti. Abre paneles, los agrupa, les
+- **Conductor y control** — `n C` abre un conductor: un agente que maneja la flota por ti. Abre paneles, los agrupa, les
   envía señales y les da instrucciones a través del socket —mediante `baton ctl` o las herramientas de `baton mcp`—,
   con vallas para que no pueda destrozar su propio anfitrión. Define su objetivo en `$HOME/.baton/CONDUCTOR.md`.
   Consulta **[docs/CONTROL.md](CONTROL.md)**.
-- **Global shell** — `H` abre la global shell: una única shell del anfitrión que el servidor mantiene en `$HOME`, siempre
+- **Global shell** — `n h` abre la global shell: una única shell del anfitrión que el servidor mantiene en `$HOME`, siempre
   a una tecla de distancia. Igual que el conductor, es una marca en el encabezado FLEET en vez de una tarjeta, y el
   servidor solo guarda una: sobrevive a un reinicio como una ranura muerta que reejecutas con `r`. A diferencia del
   conductor, no maneja nada: ni rol acotado ni espacio de trabajo gestionado. (Distinta de la shell **scratch** flotante
@@ -185,7 +188,7 @@ Todo lo que necesitas mientras pastoreas una flota, a una tecla de distancia:
   Desactivado por defecto, y no es una frontera contra un agente hostil. Ver **[docs/ISOLATION.md](ISOLATION.md)**.
 - **Apariencia** — `$HOME/.baton/TUI.yaml` remodela la cabina: un **tema** de color y las **disposiciones** de la división
   de grupo, recargadas en caliente con `C-t R`. Consulta **[docs/TUI.md](TUI.md)**.
-- **Pie de uso** — `U` alterna un pie que muestra el uso de tokens y el coste del día (`⊙ 1.2M tok · ≈$12.34 API`). Por
+- **Pie de uso** — `v u` alterna un pie que muestra el uso de tokens y el coste del día (`⊙ 1.2M tok · ≈$12.34 API`). Por
   defecto lee las propias transcripciones de Claude Code (funciona con una suscripción Pro/Max) o la Admin API de
   Anthropic con una clave. El coste es el equivalente en API, no un cargo de la suscripción. Consulta
   **[docs/USAGE.md](USAGE.md)**.
@@ -197,8 +200,8 @@ Todo lo que necesitas mientras pastoreas una flota, a una tecla de distancia:
 - **Acceso remoto** — `baton --remote` conecta el mismo puesto de mando a una flota que corre en **otra máquina**, a
   través del ssh que ya usas para llegar a ella: sin puerto a la escucha, sin TLS y sin ningún intercambio de claves
   propio de baton. Desactivado por defecto; `settings.remote` o `C-t @` lo activa y acuña una passkey de 8 caracteres
-  que nunca se escribe en disco. `C-t @` también lista cada conexión viva con su origen, su rol y su duración — `k`
-  expulsa una, `n` renueva la passkey, `x` apaga el acceso remoto. Consulta **[docs/REMOTE.md](REMOTE.md)**.
+  que nunca se escribe en disco. `C-t @` también lista cada conexión viva con su origen, su rol y su duración — `x`
+  expulsa una, `n` renueva la passkey, `E` apaga el acceso remoto. Consulta **[docs/REMOTE.md](REMOTE.md)**.
 - **Persistencia y renacimiento** — Baton recuerda su flota entre reinicios; los paneles vuelven como ranuras inertes ya
   terminadas y `r` los reejecuta a partir de la especificación que se conservó.
 - **Recarga** — `C-t R` (o un `SIGHUP` al demonio) recarga la configuración en caliente sin reiniciar la flota.

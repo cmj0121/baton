@@ -21,9 +21,9 @@ func keycastModel() model {
 }
 
 func TestKeycastNamesTheAction(t *testing.T) {
-	m := keycastModel().noteKey("G")
-	if m.keycastKey != "G" || m.keycastAct != "group" {
-		t.Fatalf("expected G/group, got %q/%q", m.keycastKey, m.keycastAct)
+	m := keycastModel().noteKey("p")
+	if m.keycastKey != "p" || m.keycastAct != "new panel" {
+		t.Fatalf("expected p/new panel, got %q/%q", m.keycastKey, m.keycastAct)
 	}
 	if m.keycastAt.IsZero() {
 		t.Fatal("the press should be stamped so it can age out")
@@ -115,15 +115,15 @@ func TestKeycastAgesOut(t *testing.T) {
 }
 
 func TestKeycastSegmentCarriesKeyAndAction(t *testing.T) {
-	seg := keycastModel().noteKey("G").keycastSeg()
-	if !strings.Contains(seg, "G") || !strings.Contains(seg, "group") {
+	seg := keycastModel().noteKey("p").keycastSeg()
+	if !strings.Contains(seg, "p") || !strings.Contains(seg, "new panel") {
 		t.Fatalf("expected the key and its action in the segment, got %q", seg)
 	}
 }
 
 func TestKeycastRidesInTheFooter(t *testing.T) {
-	m := keycastModel().noteKey("G")
-	if bar := m.statusBar(seg("DASHBOARD", colInk, colBlue), m.helpHint()); !strings.Contains(bar, "group") {
+	m := keycastModel().noteKey("p")
+	if bar := m.statusBar(seg("DASHBOARD", colInk, colBlue), m.helpHint()); !strings.Contains(bar, "new panel") {
 		t.Fatalf("expected the readout in the status bar, got %q", bar)
 	}
 

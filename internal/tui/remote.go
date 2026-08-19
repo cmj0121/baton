@@ -21,10 +21,11 @@ import (
 // "@" because the list is made of user@host — and because a letter would have
 // shadowed a command that was already using it.
 //
-// The asymmetry in the legend is the feature's one real rule: `k` kicks from
-// either side of the pipe, while `n` and `x` — the passkey and the switch — are
-// refused over a remote attach and are the fleet owner's to press on the fleet's
-// own machine. The server enforces it; the overlay only stops offering it.
+// The asymmetry in the legend is the feature's one real rule: `x` kicks from
+// either side of the pipe, while `e`/`E` and `n` — the switch and the passkey —
+// are refused over a remote attach and are the fleet owner's to press on the
+// fleet's own machine. The server enforces it; the overlay only stops offering
+// it.
 
 // openRemote enters modeRemote and asks the server for the current status. The
 // list arrives as a "remote" message and every later change is pushed, so the
@@ -48,17 +49,26 @@ func (m model) closeRemote() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleRemoteKey drives the overlay. Movement is on the arrows alone: `k` is
-// the kick, which the issue this was built from names, and a key cannot be both.
+// handleRemoteKey drives the overlay, on the keys every other overlay uses:
+// j/k and the arrows move, g/G jump to the ends, x removes the row under the
+// cursor — here that is kicking a connection — and r refreshes.
+//
+// Kicking used to be `k`, which cost this one overlay its movement keys and made
+// the up arrow's neighbour a verb that hangs up on somebody. Disabling remote is
+// the shifted sibling of enabling it, `e` and `E`, so the pair reads as a pair.
 func (m model) handleRemoteKey(key string) (tea.Model, tea.Cmd) {
 	info := m.remoteInfo
 	switch key {
 	case "esc", "q":
 		return m.closeRemote()
-	case "up":
+	case "up", "k":
 		m.remoteSel = max(0, m.remoteSel-1)
-	case "down":
+	case "down", "j":
 		m.remoteSel = min(m.remoteConnCount()-1, m.remoteSel+1)
+	case "g", "home":
+		m.remoteSel = 0
+	case "G", "end":
+		m.remoteSel = max(0, m.remoteConnCount()-1)
 	case "r":
 		m.sendf(proto.Command{Action: "remote.status"})
 		m.status = "remote access · refreshed"
@@ -82,13 +92,13 @@ func (m model) handleRemoteKey(key string) (tea.Model, tea.Cmd) {
 		}
 		m.sendf(proto.Command{Action: "remote.rotate"})
 		m.status = "rotating the passkey · live connections stay"
-	case "x":
+	case "E":
 		if !m.remoteMayControl() {
 			return m, nil
 		}
 		m.sendf(proto.Command{Action: "remote.disable"})
 		m.status = "disabling remote access…"
-	case "k":
+	case "x":
 		conn, ok := m.remoteSelected()
 		if !ok {
 			return m, nil
@@ -237,13 +247,13 @@ func (m model) remoteLegend() string {
 	case info == nil:
 		return legend("esc", "close")
 	case !info.Enabled && info.Local:
-		return legend("e", "enable remote", "↑↓", "select", "k", "kick", "esc", "close")
+		return legend("e", "enable remote", "jk", "select", "x", "kick", "esc", "close")
 	case !info.Local:
-		return legend("↑↓", "select", "k", "kick", "r", "refresh", "esc", "close")
+		return legend("jk", "select", "x", "kick", "r", "refresh", "esc", "close")
 	case !info.Enabled:
-		return legend("↑↓", "select", "k", "kick", "esc", "close")
+		return legend("jk", "select", "x", "kick", "esc", "close")
 	default:
-		return legend("↑↓", "select", "k", "kick", "n", "new passkey", "x", "disable", "esc", "close")
+		return legend("jk", "select", "x", "kick", "n", "new passkey", "E", "disable", "esc", "close")
 	}
 }
 

@@ -322,6 +322,22 @@ type Settings struct {
 	// large enough, or far enough away over --remote, that the bell is nobody's.
 	Notify *bool `yaml:"notify,omitempty"`
 
+	// KeyTimeout is how long a LANDING key — one that opens a family rather
+	// than acting on its own, like the g of "g c" — waits for the key after
+	// it, as a Go duration ("1.2s", "800ms"). The leader waits on it too.
+	//
+	// It exists because a landing left hanging used to wait forever: the next
+	// key you pressed, minutes later and meaning something else entirely, was
+	// swallowed to complete a sequence you had forgotten starting. Expiry
+	// makes the wait visible and bounded — the status bar names what the
+	// landing can still take while it waits, and clears when it lapses.
+	//
+	// Unset falls back to 1.2s, and a value outside 200ms–10s falls back too:
+	// below that a landing is unreachable by a human, above it the cockpit
+	// looks wedged. 0 is the one value taken literally, and means never expire
+	// — the behaviour baton had before this setting existed.
+	KeyTimeout string `yaml:"key-timeout,omitempty"`
+
 	// NotifyCoalesce is how long the cockpit gathers rising edges before
 	// sending one notification for all of them, as a Go duration ("30s", "2m").
 	//

@@ -394,7 +394,7 @@ func TestTheHeadingSaysTheTreeWasChosen(t *testing.T) {
 	}
 
 	m.showTree = true
-	if got := stripANSI(m.View()); !strings.Contains(got, "V for cards") {
+	if got := stripANSI(m.View()); !strings.Contains(got, seqLabel(keyDashLayout)+" for cards") {
 		t.Fatalf("a chosen tree should name the key back:\n%s", got)
 	}
 
@@ -412,11 +412,11 @@ func TestLayoutKeyIsBoundAndRebindable(t *testing.T) {
 	m := baseModel()
 	m.mode, m.fleet = modeDashboard, loosePanels(3)
 
-	m = press(m, "V")
+	m = press(m, "v", "l")
 	if !m.treeView() {
 		t.Fatalf("V should show the tree: %s", m.status)
 	}
-	m = press(m, "V")
+	m = press(m, "v", "l")
 	if !m.gridDash() {
 		t.Fatalf("V should take the cards back: %s", m.status)
 	}
@@ -429,7 +429,7 @@ func TestLayoutKeyIsBoundAndRebindable(t *testing.T) {
 	if got := m.cardsHold(); !strings.Contains(got, "Z shows the tree") {
 		t.Fatalf("the refusal should follow the rebind, got %q", got)
 	}
-	m = press(m, "V")
+	m = press(m, "v", "l")
 	if !m.gridDash() {
 		t.Fatal("V should do nothing once the action has been rebound")
 	}

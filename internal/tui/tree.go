@@ -280,7 +280,7 @@ func (m model) toggleExpand() model {
 	if it.kind == itemGroup {
 		return m.setCollapsed(it, it.expanded)
 	}
-	m.status = "nothing nested here — " + keyLabel(m.bindingKey(actExpand)) + " opens a work item"
+	m.status = "nothing nested here — " + seqLabel(m.bindingKey(actExpand)) + " opens a work item"
 	return m
 }
 
@@ -296,7 +296,7 @@ func (m model) toggleExpand() model {
 // walk they move the cursor instead, which is the one thing a horizontal key can
 // usefully do in a grid.
 func (m model) cardsHold() string {
-	return "the cards draw a work item whole — " + keyLabel(m.bindingKey(actDashLayout)) + " shows the tree"
+	return "the cards draw a work item whole — " + seqLabel(m.bindingKey(actDashLayout)) + " shows the tree"
 }
 
 // toggleLayout is what V does: ask for the tree on a fleet the cards would draw,
@@ -322,7 +322,7 @@ func (m model) toggleLayout() model {
 		// Nothing to give back: this fleet is past the cards on its own.
 		m.status = "the fleet is past the cards — the tree draws it either way"
 	case m.showTree:
-		m.status = "tree · " + keyLabel(m.bindingKey(actDashLayout)) + " for the cards"
+		m.status = "tree · " + seqLabel(m.bindingKey(actDashLayout)) + " for the cards"
 	default:
 		m.status = "cards"
 	}

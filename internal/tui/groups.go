@@ -532,14 +532,14 @@ func (m model) markStatus() string {
 	if n == 0 {
 		return "selection cleared"
 	}
-	return fmt.Sprintf("%d panel(s) selected · %s to group", n, keyLabel(m.bindingKey(actGroup)))
+	return fmt.Sprintf("%d panel(s) selected · %s to group", n, seqLabel(m.bindingKey(actGroup)))
 }
 
 // startGroup opens the name overlay for the marked panels, or nudges the user to
 // select some first.
 func (m model) startGroup() model {
 	if len(m.markedIDs()) == 0 {
-		m.status = fmt.Sprintf("press %s to select panels, then %s to group", keyLabel(m.bindingKey(actMark)), keyLabel(m.bindingKey(actGroup)))
+		m.status = fmt.Sprintf("press %s to select panels, then %s to group", seqLabel(m.bindingKey(actMark)), seqLabel(m.bindingKey(actGroup)))
 		return m
 	}
 	m.input = inputGroupName

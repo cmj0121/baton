@@ -39,8 +39,8 @@ Both are ordinary PTYs and share the lifecycle below; they differ only in what p
 Monitor flags them for your attention.
 
 Two shell/agent panels are **singletons** the server holds at most one of, each surfaced as a mark in the FLEET heading
-rather than a card. The **conductor** (`C`) is a control agent that drives the fleet (see [CONTROL.md](./CONTROL.md)). The
-**global shell** (`H`) is a plain host shell the server opens in `$HOME` — a home base always one keystroke away; unlike
+rather than a card. The **conductor** (`n C`) is a control agent that drives the fleet (see [CONTROL.md](./CONTROL.md)). The
+**global shell** (`n h`) is a plain host shell the server opens in `$HOME` — a home base always one keystroke away; unlike
 the conductor it drives nothing (no scoped role, no managed workspace). Both persist across a restart as a dead slot you
 re-run with `r`. Distinct from the floating **scratch** pane (`C-t ~`), which is a transient popup that dies on detach.
 
@@ -200,7 +200,7 @@ and the quiet fold counts the panels behind it rather than the one row it draws 
 cards**: one per lone panel, one per work item, one for the quiet fold. At six and above it is the tree. The count is of
 what the top level HOLDS, so neither opening a row nor a fold firing can flip the layout out from under a keystroke that
 meant nothing of the sort, and a filter or a lens forces the tree whatever the count says, since both exist to show which
-rows matched. **`V` is the only key that switches the two**, both ways; the cards draw a work item whole, so `space`,
+rows matched. **`v l` is the only key that switches the two**, both ways; the cards draw a work item whole, so `space`,
 `space` says so on a card rather than changing the layout under a key that means something else. `↑`/`↓` and `j`/`k`
 step a whole grid row (one row in the tree, where a row is the grid row); `←`/`→` and `h`/`l` open and shut a work item
 in the tree and move one card on the grid, where there is no tree to walk and a horizontal key that did nothing would be
@@ -213,10 +213,10 @@ its children. A panel dropped at the top level is **ungrouped**; a work item car
 `target/<its name>`, sub-structure and all, which is how a nested work item is made without knowing that a group name is
 a path. Nothing is sent until the drop, and a group carried into its own subtree is refused.
 
-**The group-by lens.** `z` cycles which parents the tree is built from: **work item** (the fleet's own structure),
+**The group-by lens.** `v g` cycles which parents the tree is built from: **work item** (the fleet's own structure),
 **directory**, **profile**, or **state**. A lens is a projection and never a mutation — switching to `group by: state`
 does not move a panel into a group called `attention`, and switching back leaves the fleet exactly as it was. The
-reorganising verbs (`m`, `g`, `G`, `a`, `u`, `e`) are refused under a lens and say so: a bucket is not a work item,
+reorganising verbs (`m`, `g g`, `g c`, `g a`, `g u`, `e`) are refused under a lens and say so: a bucket is not a work item,
 and there is no meaning to moving a panel "into" a directory. The heading states the lens whenever one is in force.
 
 The directory lens re-bases every path against the fleet's **common prefix** and nests the remainder, so a set of git
@@ -239,7 +239,7 @@ layout / resize a tile (view-local, see [TUI.md](./TUI.md#resize)). `enter` **de
 panel's own single zoom; on a sub-group tile it re-scopes the split into that sub-group (its header shows the path as a
 breadcrumb, `backend › api`).
 `esc` / `b` pop **back one level** — a sub-group to its parent, the summary sub-view to its group, the top-level group to
-the dashboard — while `d` jumps straight out to the dashboard from any depth.
+the dashboard — while `C-t d` jumps straight out to the dashboard from any depth.
 From a zoomed member, **back** (`C-t b`) pops back to the split it was launched from. You enter a group with `enter` on
 its card and walk out with back.
 
@@ -300,7 +300,7 @@ and copy. Its lifecycle is tied to that zoom: the normal exit keys close it. `C-
 nothing lingers once you step out. A connection holds at most a small number of open diff pop-ups at once (currently 8);
 past that the diff key reports `too many open diffs (max 8) — close one first`.
 
-**Git menu.** `C-t g` in a zoom opens the **git menu** for the zoomed agent — a keyed pop-up (the signal picker's shape)
+**Git menu.** `C-t G` in a zoom opens the **git menu** for the zoomed agent — a keyed pop-up (the signal picker's shape)
 of git operations run against that agent's workdir. It is **zoom-only** (you act on the one agent you are looking at) and
 agent-only. The **non-interactive output** ops (log, status, stage, push, branch, worktree-list) are run one-shot by
 `gitops.Capture` and replied as a `gitout` message the cockpit shows in a **scrollable text pop-up** (`modeGitOut`) — the
@@ -383,9 +383,9 @@ never surprises you. `queue.max` caps the unassigned backlog; `queue.concurrency
 at once.
 
 **Managing the backlog.** `Q` (`C-t Q` in a zoom) opens the queue manager — one row per task with its status, id, group,
-and brief (a spawn-on-demand task is badged ⚡, a finished one shows its reason). `K` / `J` promote / demote the
-highlighted **queued** task to the head / tail of the backlog, `d` cancels it (a task already in flight on a panel is
-left to finish; cancel it by closing or signalling its panel), and `D` drains the whole unassigned backlog. The popup
+and brief (a spawn-on-demand task is badged ⚡, a finished one shows its reason). `shift+↑` / `shift+↓` promote / demote
+the highlighted **queued** task to the head / tail of the backlog, `x` cancels it (a task already in flight on a panel is
+left to finish; cancel it by closing or signalling its panel), and `x x` drains the whole unassigned backlog. The popup
 owns no state of its own: every mutation is a server action, and the fresh snapshot it replies with — the live backlog in
 run order, finished history below — is what redraws the list.
 
@@ -435,7 +435,7 @@ config:
 **Remote access.** `settings.remote` (off by default) lets a cockpit on another machine attach over
 `ssh <this host> baton --stdio`, once it carries the 8-character passkey the fleet was enabled with. `C-t @` is the
 overlay: the switch, the passkey, and every live connection with its source, role and duration — `k` kicks one from
-either side of the pipe, while `n` (rotate) and `x` (disable) are local only. The passkey is never written to disk and
+either side of the pipe, while `n` (rotate) and `E` (disable) are local only. The passkey is never written to disk and
 is a revocation handle, not an authentication boundary. Full reference: **[REMOTE.md](REMOTE.md)**.
 
 **Resource limits.** `panel.limits` caps what a panel may use — CPU, memory, processes — and holds its whole process tree
@@ -447,63 +447,53 @@ which is an agent — never carries a policy it could have widened. Full referen
 ## Keys
 
 Keys are modal. On the **dashboard** and in a **group** each action fires on a single key; in a **zoom** or **interact**
-the keys reach the live program, so a baton action is the leader **`C-t`** then the key. Two escapes — the dashboard jump
-and the key-map editor — are reached after the prefix in every mode. Everything here is rebindable in the key map
-(`C-t k`); press `?` for the live list of the current view.
+the keys reach the live program, so a baton action is the leader **`C-t`** then the same key. A few actions — the
+**escapes** — are reached after the prefix in every mode, either because their bare key belongs to navigation or because
+they are too consequential to sit beside the arrow keys.
+
+Four keys are **landings**: they do nothing alone and open a family. `n` spawns, `v` draws, `g` groups, and `x` is the
+double tap that confirms itself. Press one and the status bar names what it takes next; leave it hanging and it expires
+after `settings.key-timeout` (default `1.2s`).
 
 | Where                  | Key                         | Does                                            |
 | ---------------------- | --------------------------- | ----------------------------------------------- |
 | Anywhere (after `C-t`) | `C-t d`                     | go to the dashboard                             |
-|                        | `C-t b`                     | back one level (zoom → group → dashboard)       |
 |                        | `C-t a`                     | the attention inbox — clear what needs a human  |
 |                        | `C-t o`                     | the process tree (daemon → panels → OS)         |
 |                        | `C-t @`                     | remote access — the passkey and the connections |
 |                        | `C-t ~`                     | toggle the floating scratch pane                |
-|                        | `C-t l`                     | start / stop logging the panel to a file        |
-|                        | `C-t L`                     | open that log in a temporary panel              |
-|                        | `C-t [`                     | enter scroll mode                               |
-|                        | `C-t k`                     | edit the key map                                |
 |                        | `C-t c`                     | open the plugin command picker                  |
+|                        | `C-t k`                     | edit the key map                                |
 |                        | `C-t P`                     | panel config (shell, agent, replay, limits)     |
-|                        | `C-t R`                     | reload config (backend + cockpit)               |
+|                        | `C-t [`                     | enter scroll mode                               |
+|                        | `C-t l` / `C-t L`           | log the panel to a file / open that log         |
+|                        | `C-t G`                     | git menu (zoomed agent panel)                   |
 |                        | `C-t S`                     | force-restart the server (kills the fleet)      |
-|                        | `C-t D`                     | diff the selected agent panel                   |
-|                        | `C-t T`                     | dispatch a task to the zoomed agent             |
-|                        | `C-t Q`                     | manage the task queue                           |
-|                        | `C-t q`                     | detach (server keeps running)                   |
-| Dashboard              | `hjkl` / arrows             | move the cursor                                 |
+| Dashboard              | `hjkl` / arrows             | move the cursor; on the tree, fold and unfold   |
 |                        | `space`                     | show / hide what is nested under the row        |
-|                        | `V`                         | the dashboard's layout: cards or tree           |
-|                        | `m`                         | pick a row up — arrows carry it, `enter` drops  |
 |                        | `enter`                     | open / zoom the selection                       |
-|                        | `p`                         | new shell panel                                 |
-|                        | `A`                         | new agent panel                                 |
-|                        | `C`                         | open the conductor (find-or-create)             |
-|                        | `H`                         | open the global shell (find-or-create)          |
-|                        | `c`                         | new panel (pick the command)                    |
-|                        | `w`                         | close the selection                             |
-|                        | `r`                         | re-run exited panel(s) in the selection         |
-|                        | `x`                         | purge exited panels                             |
-|                        | `s`                         | send a signal to the selection                  |
-|                        | `f`                         | find — filter panels by title / group           |
-|                        | `/`                         | fleet search — grep every panel's output        |
+|                        | `m`                         | pick a row up — arrows carry it, `enter` drops  |
 |                        | `S-←` / `S-→`               | reorder the selected item                       |
-|                        | `g`                         | mark / unmark a panel                           |
-|                        | `G`                         | group the marked panels                         |
-|                        | `a`                         | add marked panels to the selected group         |
-|                        | `u`                         | ungroup the selected work item                  |
-|                        | `e`                         | rename the panel or group                       |
-|                        | `*`                         | favourite the panel / group (sorts to front)    |
-|                        | `D`                         | diff the selected agent panel                   |
-|                        | `T`                         | dispatch a task to the agent / work item        |
-|                        | `Q`                         | manage the task queue (list · cancel · drain)   |
+|                        | `p` / `A`                   | new shell panel / new agent panel               |
+|                        | `n c` / `n .`               | new panel (pick the command) / new shell here   |
+|                        | `n C` / `n h`               | the conductor / the global shell                |
+|                        | `w` / `r`                   | close the selection / re-run its exited panels  |
+|                        | `x x`                       | purge every exited panel                        |
+|                        | `s`                         | send a signal to the selection                  |
+|                        | `f` / `/`                   | find panels / fleet search across every panel   |
+|                        | `g g`                       | mark / unmark a panel                           |
+|                        | `g c` / `g a` / `g u`       | create a work item / add to it / dissolve it    |
+|                        | `e` / `*`                   | rename / favourite the panel or work item       |
+|                        | `D` / `T` / `t` / `Q`       | diff / dispatch / enqueue / the task queue      |
+|                        | `v u` / `v k` / `v p`       | usage footer / keycast / the detail pane        |
+|                        | `v l` / `v g`               | cards-or-tree / cycle the group-by lens         |
+|                        | `R` / `q`                   | reload config / detach                          |
 | Group view             | `tab`                       | focus the next panel                            |
 |                        | `+` / `-`                   | show more / fewer live tiles                    |
 |                        | `L`                         | cycle the tile layout (see [TUI.md](./TUI.md))  |
 |                        | `z`                         | resize mode — arrows grow / shrink the tile     |
 |                        | `p`                         | pin / unpin the focused panel                   |
-|                        | `s`                         | send a signal to the focused panel              |
-|                        | `S`                         | send a signal to every panel in the group       |
+|                        | `s` / `S`                   | signal the focused panel / every member         |
 |                        | `i`                         | interact (type into the focused tile)           |
 |                        | `x`                         | remove the focused panel from the group         |
 |                        | `S-←` / `S-→`               | reorder the focused panel                       |
@@ -511,12 +501,9 @@ and the key-map editor — are reached after the prefix in every mode. Everythin
 |                        | `b` / `esc`                 | back one level (sub-group → parent → dashboard) |
 |                        | `enter`                     | zoom a panel, or descend into a sub-group       |
 | Zoom / interact        | type                        | drive the program directly                      |
+|                        | `C-t` + any dashboard key   | run that command against the zoomed panel       |
 |                        | `C-t b`                     | back to the group / dashboard                   |
-|                        | `C-t g`                     | git menu (agent panel)                          |
 |                        | `C-t C-t`                   | send a literal `C-t`                            |
-|                        | `C-t s`                     | send a signal to this panel                     |
-|                        | `C-t f`                     | search the scrollback                           |
-|                        | `C-t /`                     | fleet search — grep every panel                 |
 | Scroll mode (`C-t [`)  | `↑` / `↓` (`k`/`j`)         | scroll a line                                   |
 |                        | `b` / `Spc` (`PgUp`/`PgDn`) | scroll a page                                   |
 |                        | `g` / `G`                   | jump to top / bottom                            |
@@ -525,6 +512,10 @@ and the key-map editor — are reached after the prefix in every mode. Everythin
 |                        | `n` / `N`                   | next / previous search match                    |
 |                        | `esc` / `q`                 | exit scroll mode                                |
 |                        | `C-t d` / `C-t b` / …       | leave for dashboard / back (leader stays live)  |
+
+Everything above is rebindable in the key map (`C-t k`), where a binding is a **space-separated sequence** of keys;
+press `?` for the live list of the current view. The complete reference — every overlay, the timeout, the config
+schema, and what moved since v1.2 — is in **[KEYS.md](./KEYS.md)**.
 
 ## Architecture
 

@@ -91,11 +91,11 @@ your shell history and out of `ps` for every other process on the client machine
 
 | Key     | Does                                                                   |
 | ------- | ---------------------------------------------------------------------- |
-| `↑` `↓` | move the cursor (`k` is the kick, so it cannot also be "up")           |
+| `↑` `↓` | move the cursor (`j` / `k` too)                                        |
 | `e`     | enable remote — only when it is off                                    |
-| `k`     | kick the selected connection; the far cockpit is told why              |
+| `x`     | kick the selected connection; the far cockpit is told why              |
 | `n`     | rotate the passkey — live connections stay, new ones need the new code |
-| `x`     | disable remote and drop every remote connection                        |
+| `E`     | disable remote and drop every remote connection                        |
 | `r`     | re-ask the fleet for the list                                          |
 | `esc`   | close                                                                  |
 
@@ -107,10 +107,10 @@ exactly as the role is. It is never an identity the server is asked to trust.
 
 ### One asymmetry, on purpose
 
-`k` works from **either** side. Kicking is how you deal with a connection you did not expect, and needing to walk to
+`x` works from **either** side. Kicking is how you deal with a connection you did not expect, and needing to walk to
 another machine first would make it useless.
 
-`e`, `n` and `x` are **local only** — the server refuses them over a remote attach, and the overlay stops offering
+`e`, `E` and `n` are **local only** — the server refuses them over a remote attach, and the overlay stops offering
 them. Anyone holding a live remote attach has already proved they had the current code; letting them mint the next one
 would turn one window into a permanent one. For the same reason a remote cockpit is never told the passkey at all: it
 sees `enabled`, and where to go and read the code.

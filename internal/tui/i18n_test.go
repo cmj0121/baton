@@ -1,7 +1,8 @@
 package tui
 
 import (
-	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -9,7 +10,6 @@ import (
 
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/i18n"
-	"github.com/cmj0121/baton/internal/proto"
 )
 
 // helpModel is a cockpit sized to render a whole key list, in the given language
@@ -121,28 +121,38 @@ func TestLanguageDetectedFromConfig(t *testing.T) {
 	}
 }
 
-// TestLanguageSurvivesTheDaemonPush walks the reload path end to end: the daemon
-// re-reads the config, marshals it, and pushes it to every open cockpit, which
-// projects it back onto its prefs. This is what makes an edited settings.language
-// a reload rather than a restart, and the JSON hop in the middle is the link that
-// would break silently — the yaml tags do not travel with it.
-func TestLanguageSurvivesTheDaemonPush(t *testing.T) {
+// TestEditedLanguageAppliesOnReload is the promise the language setting makes:
+// edit settings.language, press C-t R, and the help surfaces redraw in it — a
+// reload rather than a restart.
+//
+// It used to be checked through the daemon's config push, and that is no longer
+// how it travels. The daemon holds its config from startup until a reload of its
+// own, so a long-lived one kept pinning the language of every cockpit that
+// attached; and over --remote it is not merely stale but wrong, since that
+// daemon is on another machine whose locale says nothing about this terminal.
+// The reload re-reads the cockpit's OWN config instead, which is both the file
+// the user just edited and the right machine to be asking.
+func TestEditedLanguageAppliesOnReload(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	t.Setenv("BATON_LANG", "")
-	t.Setenv("LC_ALL", "en_US.UTF-8")
+	t.Setenv("LC_ALL", "en_US.UTF-8") // the environment says English...
 	t.Setenv("LC_MESSAGES", "")
 	t.Setenv("LANG", "")
 
-	var cfg config.Config
-	cfg.Settings.Language = "zh-TW"
-	data, err := json.Marshal(cfg) // exactly what the daemon's applyConfig sends
-	if err != nil {
-		t.Fatalf("marshalling the effective config: %v", err)
+	if err := os.MkdirAll(filepath.Join(home, ".baton"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// ...and the file the user just edited says otherwise, which wins.
+	if err := os.WriteFile(filepath.Join(home, ".baton", "config"),
+		[]byte("settings:\n    language: zh-TW\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
 	}
 
 	m := model{binds: append([]binding(nil), bindings...)}
-	m.applyEvent(proto.ServerMsg{Type: "config", Config: data})
-	if m.lang != i18n.ZhTW {
-		t.Fatalf("a pushed config should carry the language, got %q", m.lang)
+	next, _ := m.runAction(actReload)
+	if got := next.(model).lang; got != i18n.ZhTW {
+		t.Fatalf("an edited settings.language should apply on reload, got %q", got)
 	}
 }
 

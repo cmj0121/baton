@@ -20,7 +20,7 @@ func TestCondSpawn(t *testing.T) {
 	m.client = c
 	m.fleet = sampleFleet() // no conductor
 
-	m = press(m, "C")
+	m = press(m, "n", "C")
 	got := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "panel.create" })
 	if !got.Conductor {
 		t.Fatalf("C should spawn a conductor panel, got %+v", got)
@@ -54,7 +54,7 @@ func TestCondRespawn(t *testing.T) {
 	m.client = c
 	m.fleet = []panel.Panel{{ID: "c1", Kind: panel.Agent, Conductor: true, State: panel.Exited, Title: "conductor · c1"}}
 
-	m = press(m, "C")
+	m = press(m, "n", "C")
 	got := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "panel.respawn" })
 	if got.ID != "c1" {
 		t.Fatalf("C on an exited conductor should respawn it, got %q", got.ID)
@@ -72,7 +72,7 @@ func TestCondRunningZooms(t *testing.T) {
 	m.client = c
 	m.fleet = runningConductor()
 
-	m = press(m, "C")
+	m = press(m, "n", "C")
 	if m.mode != modeZoom || m.zoomID != "c1" {
 		t.Fatalf("C on a running conductor should zoom it, got mode=%v id=%q", m.mode, m.zoomID)
 	}

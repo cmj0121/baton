@@ -18,8 +18,8 @@ You hold the baton. The agents play. You conduct. 🎼
 
 ![Baton cockpit demo — panels on a dashboard, zoom to drive one, group into a work item, open the conductor and the global shell](docs/assets/baton-demo.png)
 
-_Spawn panels, zoom into one to drive it, group two into a work item, call the conductor with `C` and the global shell with
-`H` — and `?` is always there for the keys._
+_Spawn panels, zoom into one to drive it, group two into a work item, call the conductor with `n C` and the global shell with
+`n h` — and `?` is always there for the keys._
 
 _Clip generated from [`baton-demo.tape`](docs/assets/baton-demo.tape) — regeneration steps are in the tape header. The
 conductor's agent CLI is a stand-in ([`demo-agent.sh`](docs/assets/demo-agent.sh)) so the clip records the same on any
@@ -80,10 +80,10 @@ You drive Baton through three views, moving between them with a keystroke:
 - **Dashboard** — mission control. A small fleet is a grid of **cards**, one per panel and one per work item; from six
   things at the top level up it becomes a live **tree** of every panel: work items as rows, their sub-groups indented under them,
   their panels under those. `space` shows or hides what is nested under a row at any depth, `→` opens a work item and
-  steps inside it, `←` shuts it and steps back out — on the cards that pair moves between them instead. `V` switches the
+  steps inside it, `←` shuts it and steps back out — on the cards that pair moves between them instead. `v l` switches the
   two layouts by hand. The tree row carries
   the state, the working directory, the output sparkline and the dispatched task as the terminal gets wide enough for
-  each; `v` adds a detail pane beside it. Here you navigate, spawn and close panels, and group them into work items.
+  each; `v p` adds a detail pane beside it. Here you navigate, spawn and close panels, and group them into work items.
 - **Group** — a work item's live split: its panels tiled side by side, all streaming at once. The first few stream as
   live tiles; the rest fold into a single **summary tile** you can zoom into. Pin a few to keep them always-on, drive the
   focused one in place with **`i`**, or **`enter`** to drop into it.
@@ -94,7 +94,9 @@ You drive Baton through three views, moving between them with a keystroke:
 
 Keys are **modal**: on the dashboard and in a group each action is a single key; in a zoom or interact your keystrokes
 drive the program, so a Baton action is the leader **`C-t`** then the key. Press **`?`** for the full, rebindable list of
-the current view, and **`C-t k`** to edit the key map.
+the current view, and **`C-t k`** to edit the key map. Four keys are **landings** that open a family rather than acting
+alone — `n` spawns, `v` draws, `g` groups, `x` is the double tap that confirms itself — and the status bar names what
+each can take next.
 
 | Where       | Key               | Does                                                         |
 | ----------- | ----------------- | ------------------------------------------------------------ |
@@ -107,31 +109,33 @@ the current view, and **`C-t k`** to edit the key map.
 | Dashboard   | `jk` / `↑↓`       | move the cursor                                              |
 |             | `hl` / `←→`       | move a card · in the tree: collapse / expand a work item     |
 |             | `space`           | show / hide what is nested under the row                     |
-|             | `v` / `z`         | detail pane / cycle group-by: work item, dir, profile, state |
-|             | `V`               | the dashboard layout: cards or tree                          |
+|             | `v p` / `v g`     | detail pane / cycle group-by: work item, dir, profile, state |
+|             | `v l`             | the dashboard layout: cards or tree                          |
 |             | `m`               | pick a row up — arrows carry it, `enter` drops it            |
 |             | `enter`           | open / zoom the selection                                    |
-|             | `p` / `A` / `c`   | new shell / agent / pick-command panel                       |
-|             | `.`               | new shell panel in the focused panel's directory             |
-|             | `C`               | open the conductor (an agent that drives the fleet)          |
-|             | `H`               | open the global shell (a host shell in `$HOME`)              |
-|             | `w` / `x`         | close the selection / purge exited                           |
+|             | `p` / `A` / `n c` | new shell / agent / pick-command panel                       |
+|             | `n .`             | new shell panel in the focused panel's directory             |
+|             | `n C`             | open the conductor (an agent that drives the fleet)          |
+|             | `n h`             | open the global shell (a host shell in `$HOME`)              |
+|             | `w` / `x x`       | close the selection / purge exited                           |
 |             | `r`               | re-run the exited panel(s) under the focus                   |
-|             | `g` / `G` / `u`   | mark / group marked panels / ungroup                         |
+|             | `g g` / `g c`     | mark / group the marked panels                               |
+|             | `g a` / `g u`     | add to the selected work item / ungroup                      |
 |             | `s` / `f` / `D`   | signal / find / diff the selection                           |
 |             | `/`               | search every panel's output (grep the fleet)                 |
 |             | `T` / `Q`         | dispatch a task / manage the task queue                      |
-|             | `U`               | cycle the usage footer: off / window / focused panel         |
-|             | `K`               | toggle the key-press readout in the footer                   |
+|             | `v u`             | cycle the usage footer: off / window / focused panel         |
+|             | `v k`             | toggle the key-press readout in the footer                   |
 | Group       | `tab`             | focus the next panel                                         |
 |             | `+` / `-`         | show more / fewer live tiles                                 |
 |             | `L`               | cycle the tile layout                                        |
 |             | `p` / `i`         | pin / interact with the focused panel                        |
 |             | `enter`           | zoom the focused panel                                       |
 | Zoom        | type              | drive the program directly                                   |
-|             | `C-t f` / `C-t g` | search the scrollback / git menu (agent)                     |
+|             | `C-t f` / `C-t G` | search the scrollback / git menu (agent)                     |
 
-See **[docs/SPEC.md](docs/SPEC.md)** for the complete, per-view key reference and the design behind every view.
+See **[docs/KEYS.md](docs/KEYS.md)** for the complete key reference, and **[docs/SPEC.md](docs/SPEC.md)** for the design
+behind every view.
 
 ## Features
 
@@ -148,12 +152,12 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
   mode (`C-t [`) selects and copies over OSC52, so it works over SSH with no helper binary.
 - **Diff** — `D` (or `C-t D` in a zoom) pops up the agent panel's work-tree diff — staged and unstaged at once,
   untracked included — in a master-detail overlay.
-- **Git** — `C-t g` opens a git menu against the zoomed agent: diff, log, status, stage, commit, push, branch, and
+- **Git** — `C-t G` opens a git menu against the zoomed agent: diff, log, status, stage, commit, push, branch, and
   worktrees. See **[docs/GIT.md](docs/GIT.md)**.
-- **Conductor & control** — `C` opens a conductor: an agent that drives the fleet for you. It spawns, groups, signals,
+- **Conductor & control** — `n C` opens a conductor: an agent that drives the fleet for you. It spawns, groups, signals,
   and prompts the other panels over the socket — through `baton ctl` or the `baton mcp` tools — fenced so it can't wreck
   its own host. Set its goal in `$HOME/.baton/CONDUCTOR.md`. See **[docs/CONTROL.md](docs/CONTROL.md)**.
-- **Global shell** — `H` opens the global shell: a single plain host shell the server holds in `$HOME`, always one
+- **Global shell** — `n h` opens the global shell: a single plain host shell the server holds in `$HOME`, always one
   keystroke away. Like the conductor it is a mark in the FLEET heading rather than a card, and the server keeps just one —
   it survives a restart as a dead slot you re-run with `r`. Unlike the conductor it drives nothing: no scoped role, no
   managed workspace. (Distinct from the floating **scratch** shell `C-t ~`, which is transient and dies on detach.)
@@ -176,12 +180,12 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
   back, with an exponential backoff and a limit that settles it loudly rather than looping. A clean exit, a panel you
   closed, and one you signalled are all left alone. Overridable per agent profile.
 - **Remembered directory** — a panel's live working directory is tracked from the shell's own OSC 7 report, or the
-  process table when it makes none. A re-run lands where you were, `.` opens a shell in the focused panel's directory,
+  process table when it makes none. A re-run lands where you were, `n .` opens a shell in the focused panel's directory,
   the path identifies the card, and the git menus follow an agent into a worktree. See
   **[docs/RESTART.md](docs/RESTART.md)**.
 - **Appearance** — `$HOME/.baton/TUI.yaml` reshapes the cockpit: a colour **theme** and the group-split **layouts**,
   hot-reloaded with `C-t R`. See **[docs/TUI.md](docs/TUI.md)**.
-- **Usage footer** — `U` cycles a footer readout of the billing window: the account's token usage and cost with a
+- **Usage footer** — `v u` cycles a footer readout of the billing window: the account's token usage and cost with a
   countdown to the reset (`⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31`), or the focused panel's share of that window. It
   reads Claude Code's own transcripts by default (works on a Pro/Max subscription) or the Anthropic Admin API with a key.
   The cost is API-equivalent, not a subscription charge. See **[docs/USAGE.md](docs/USAGE.md)**.
@@ -192,7 +196,7 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
 - **Remote access** — `baton --remote` attaches the same cockpit to a fleet on **another machine**, over the ssh you
   already use to reach it: no listening port, no TLS, no key exchange of baton's own. Off by default; `settings.remote`
   or `C-t @` turns it on and mints an 8-character passkey that is never written to disk. `C-t @` also lists every live
-  connection with its source, role and duration — `k` kicks one, `n` rotates the passkey, `x` shuts remote down. See
+  connection with its source, role and duration — `x` kicks one, `n` rotates the passkey, `E` shuts remote down. See
   **[docs/REMOTE.md](docs/REMOTE.md)**.
 - **Persistence & respawn** — Baton remembers its fleet across a restart; panels come back as inert exited slots and
   `r` re-runs them from their retained spec.

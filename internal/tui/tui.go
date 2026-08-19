@@ -135,8 +135,30 @@ type model struct {
 	fleet  []panel.Panel // dummy + live panels shown on the dashboard
 
 	mode   mode
-	prefix bool            // armed by the prefix key, consumes the next key as a binding
-	cursor int             // selection index (dashboard item, or key-map row)
+	prefix bool // armed by the prefix key, consumes the next key as a binding
+	cursor int  // selection index (dashboard item, or key-map row)
+
+	// The run of keys typed towards a binding. pending holds the tokens so far
+	// — empty unless a LANDING key is open — and pendingHit is the binding that
+	// fires if the run lapses where it stands (the zero binding when none
+	// would), which only happens when a binding is also the start of a longer
+	// one. pendingGen stamps the expiry tick so a stale one cannot clear its
+	// successor's run. See keypending.go.
+	editBuf      []string // the keys collected so far while rebinding, committed by enter
+	pendingDrain bool     // the queue manager's X is waiting on a y/n
+	pending      []string
+	pendingHit   binding
+	pendingGen   int
+
+	// langChosen records that the user picked the language from the key map,
+	// which is the only thing that may write settings.language. See saveConfig.
+	langChosen bool
+
+	// keyTimeout is settings.key-timeout: how long a landing waits, carrying
+	// neverKeyTimeout for a configured 0 so a zero-valued model still reads as
+	// "unset" and takes the default.
+	keyTimeout time.Duration
+
 	marked map[string]bool // panel ids tagged for the next group (multi-select)
 	status string
 
@@ -564,6 +586,7 @@ func (m model) applyPrefs(p prefs) model {
 	m.foldQuiet = p.foldQuiet
 	m.inboxDone = p.inboxDone
 	m.inboxSnooze = p.inboxSnooze
+	m.keyTimeout = p.keyTimeout
 	m.notifyEnabled = p.notify
 	m.notifyCoalesce = p.notifyCoalesce
 	if !m.notifyEnabled {
@@ -741,26 +764,22 @@ func (m *model) ensureBinds() {
 	}
 }
 
-// lookupCmd resolves a command key (a single keystroke in command mode, or the
-// key after the prefix in a zoom) to its binding. Escapes are excluded.
+// lookupCmd and lookupEscape resolve a SINGLE key against one half of the key
+// map. They are the one-key case of matchSeq, and they defer to it rather than
+// comparing b.key themselves: a second matcher with its own idea of what a key
+// is would decide, per call site, whether sequences work there.
+//
+// A binding of more than one key does not resolve here, by construction — the
+// callers are the places that answer one key at a time (the escapes, which are
+// single by design, and the split's leader).
 func (m model) lookupCmd(key string) (binding, bool) {
-	for _, b := range m.keymap() {
-		if !isEscape(b.act) && b.key == key {
-			return b, true
-		}
-	}
-	return binding{}, false
+	b, res := matchSeq(m.keymap(), []string{tok(key)}, cmdBinding)
+	return b, res == seqExact || res == seqExactPartial // it ends here either way
 }
 
-// lookupEscape resolves a key pressed after the prefix to a prefix-accessed
-// action (the dashboard/group jumps, the key-map editor, panel config).
 func (m model) lookupEscape(key string) (binding, bool) {
-	for _, b := range m.keymap() {
-		if isEscape(b.act) && b.key == key {
-			return b, true
-		}
-	}
-	return binding{}, false
+	b, res := matchSeq(m.keymap(), []string{tok(key)}, escBinding)
+	return b, res == seqExact || res == seqExactPartial
 }
 
 // --- bubbletea event plumbing ---
@@ -946,6 +965,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(note, cmd, tick())
 		}
 		return m, tea.Batch(note, tick())
+
+	case seqTimeoutMsg:
+		// A landing has waited long enough. Either it ends on a binding, which
+		// now fires, or it was only ever a landing and simply clears.
+		return m.expirePending(msg.gen)
 
 	case saverTickMsg:
 		// Advance the rain, re-arming the fast cadence only while the saver is still
@@ -1183,7 +1207,23 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		if len(sm.Config) > 0 {
 			var cfg config.Config
 			if err := json.Unmarshal(sm.Config, &cfg); err == nil {
+				// The language is the TERMINAL's business, never the fleet's, so it
+				// is the one setting a pushed config does not get to decide.
+				//
+				// The daemon reads the config file once at startup and holds it
+				// until a reload, so a long-lived daemon was pinning the language of
+				// every cockpit that attached to it — editing the file looked like
+				// it did nothing, because the stale copy won on the next push. And
+				// over --remote the daemon is on someone else's machine entirely,
+				// where its locale says nothing about the terminal reading this
+				// screen.
+				//
+				// The cockpit resolved its own at startup from its own file and its
+				// own environment, and C-t R re-resolves it the same way, so keeping
+				// it here loses nothing and stops both problems.
+				lang := m.lang
 				*m = m.applyPrefs(prefsFromConfig(cfg))
+				m.lang = lang
 			}
 		}
 		m.pluginCommands = sm.Commands
@@ -1239,13 +1279,10 @@ func (m *model) applyTelemetry(sm proto.ServerMsg) {
 }
 
 func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
-	key := k.String()
 	// The space bar answers to two names depending on the terminal and the
-	// bubbletea version. One of them reaches the bindings, so a key map that binds
-	// space cannot half-work — and no handler has to remember to check for both.
-	if key == "space" {
-		key = keyExpand
-	}
+	// bubbletea version; tok settles on the one the key map is written in, so a
+	// binding on space cannot half-work and no handler has to check for both.
+	key := tok(k.String())
 
 	// The send-signal picker owns the keyboard until a signal is chosen or esc.
 	if m.mode == modeSignal {
@@ -1315,24 +1352,37 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Capturing a rebind: the next key press (other than esc) becomes the new
 	// chord for the binding — or the leader key — under edit.
 	if m.editing {
-		m.editing = false
 		if key == "esc" {
+			m.editing, m.editBuf = false, nil
 			m.status = "rebind cancelled"
 			return m, nil
 		}
+		// The leader is one key by definition — it is what the sequences hang off
+		// — so it commits on the first press rather than collecting a run.
 		if m.editIdx == editPrefix {
+			m.editing = false
 			old := m.effPrefix()
 			m.prefixKey = key
 			m.status = fmt.Sprintf("prefix: %s → %s", keyLabel(old), keyLabel(key))
-		} else {
-			m.ensureBinds()
-			old := m.binds[m.editIdx].key
-			m.binds[m.editIdx].key = key
-			m.status = fmt.Sprintf("rebound %q: %s → %s", m.binds[m.editIdx].desc, old, key)
+			if err := m.saveConfig(); err != nil {
+				m.status = "rebound, but save failed: " + err.Error()
+			}
+			return m, nil
 		}
-		if err := m.saveConfig(); err != nil {
-			m.status = "rebound, but save failed: " + err.Error()
+		// A binding is a SEQUENCE, so the keys are collected and enter commits
+		// them. One key then enter is a press more than it used to be, and it is
+		// the only way to spell a two-key binding without guessing when the run
+		// ended — a rule that guessed would make "g" un-bindable the moment
+		// anything started with it.
+		if key == "enter" {
+			if len(m.editBuf) == 0 {
+				m.status = "press the keys for this binding first  ·  esc cancels"
+				return m, nil
+			}
+			return m.commitRebind()
 		}
+		m.editBuf = append(m.editBuf, tok(key))
+		m.status = "… " + strings.Join(labelTokens(m.editBuf), " ") + "  ·  enter binds  ·  esc cancels"
 		return m, nil
 	}
 
@@ -1364,12 +1414,24 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	pkey := m.effPrefix()
 
+	// A landing key is open, so this key completes the run rather than doing
+	// whatever it means on its own: the k of "v k" belongs to the sequence, not
+	// to the cursor. This has to come before the navigation switch below for
+	// exactly that reason.
+	if len(m.pending) > 0 {
+		if m.mode == modeDashboard {
+			return m.advanceSeq(key, cmdBinding, runCmdBinding)
+		}
+		m = m.clearPending() // the view changed under an open run; it does not follow
+	}
+
 	// In command mode the prefix is only for the universal escapes (C-t d / C-t
 	// g); every other action is a single key.
 	if m.prefix {
 		m.prefix = false
+		m = m.clearPending() // the leader is spoken for; its expiry tick is now stale
 		if b, ok := m.lookupEscape(key); ok {
-			return m.runAction(b.act)
+			return m.runEscape(b)
 		}
 		if key == keyScreensaver { // C-t E → the hidden screensaver (kept out of the key map)
 			return m.enterScreensaver(), saverTick()
@@ -1395,7 +1457,9 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case rowBinding:
 				m.editing = true
 				m.editIdx = idx
-				m.status = "press the new key for " + fmt.Sprintf("%q", m.keymap()[idx].desc) + "  ·  esc cancels"
+				m.editBuf = nil
+				m.status = "press the keys for " + fmt.Sprintf("%q", m.keymap()[idx].desc) +
+					"  ·  enter binds  ·  esc cancels"
 			}
 			return m, nil
 		case modePanelConfig:
@@ -1406,7 +1470,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key {
 	case pkey:
 		m.prefix = true
-		return m, nil
+		return m.leaderTick()
 	case keyCtrlC, keyCtrlE:
 		// Emergency-quit keys are captured here: command mode exits only through
 		// the detach binding, so nudge the user toward it instead of quitting.
@@ -1502,7 +1566,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// The help and the key map restore whichever view opened them (the split
 		// and zoom keep their live state); other overlays fall back to the dashboard.
-		if m.mode == modeHelp || m.mode == modeKeyMap {
+		if m.mode == modeHelp || m.mode == modeKeyMap || m.mode == modePanelConfig {
 			m.mode = m.helpFrom
 			m.status = ""
 			return m, nil
@@ -1522,15 +1586,10 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.runAction(actDashboard)
 		}
 	default:
-		// On the dashboard every command is a single key.
+		// On the dashboard a command is a key, or the run of keys a landing
+		// opens; the matcher answers for both.
 		if m.mode == modeDashboard {
-			if b, ok := m.lookupCmd(key); ok {
-				if m.refusedOnFoldRow(b.act) {
-					m.status = "expand the quiet group first"
-					return m, nil
-				}
-				return m.runAction(b.act)
-			}
+			return m.advanceSeq(key, cmdBinding, runCmdBinding)
 		}
 	}
 	return m, nil
@@ -2080,7 +2139,7 @@ func (m model) conductorMark() string {
 	info := stateInfoFor(p)
 	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
 	name := lipgloss.NewStyle().Foreground(colBrandHi).Render("conductor")
-	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", info.label, keyLabel(m.bindingKey(actConductor))))
+	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", info.label, seqLabel(m.bindingKey(actConductor))))
 }
 
 // globalShellMark is the FLEET-heading badge for the singleton global shell — the
@@ -2095,7 +2154,7 @@ func (m model) globalShellMark() string {
 	info := stateInfoFor(p)
 	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
 	name := lipgloss.NewStyle().Foreground(colBrandHi).Render("shell")
-	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", info.label, keyLabel(m.bindingKey(actGlobalShell))))
+	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", info.label, seqLabel(m.bindingKey(actGlobalShell))))
 }
 
 // spawnConductor asks the server to create the conductor: the resolved agent
@@ -2221,6 +2280,50 @@ func (m *model) scrollHelp(delta int) {
 
 // openEditMap shows the editable key map (C-t k), remembering the originating
 // view so esc restores it.
+// openPanelConfig opens the panel defaults over whatever view asked for it,
+// remembering that view so esc restores it — a zoom that went looking for the
+// default shell should come back to the panel it was reading, not to the
+// dashboard.
+// commitRebind writes the collected run onto the binding under the cursor and
+// saves. It reports an ambiguity it just created rather than refusing it: a
+// config that wants vim's d-versus-dd relationship is entitled to it, but the
+// cost — that the shorter binding now waits out the timeout before firing — is
+// not something to discover by feel a week later.
+func (m model) commitRebind() (tea.Model, tea.Cmd) {
+	m.ensureBinds()
+	b := &m.binds[m.editIdx]
+	old, next := b.key, strings.Join(m.editBuf, " ")
+	b.key = next
+	m.editing, m.editBuf = false, nil
+	m.status = fmt.Sprintf("rebound %q: %s → %s", b.desc, seqLabel(old), seqLabel(next))
+
+	half := cmdBinding
+	if isEscape(b.act) {
+		half = func(x binding) bool { return isEscape(x.act) }
+	}
+	for _, pair := range ambiguous(m.keymap(), half) {
+		if pair[0].name != b.name && pair[1].name != b.name {
+			continue
+		}
+		m.status = fmt.Sprintf("%q (%s) starts %q (%s) — %s waits %s before firing",
+			pair[0].name, seqLabel(pair[0].key), pair[1].name, seqLabel(pair[1].key),
+			seqLabel(pair[0].key), m.effKeyTimeout())
+		break
+	}
+	if err := m.saveConfig(); err != nil {
+		m.status = "rebound, but save failed: " + err.Error()
+	}
+	return m, nil
+}
+
+func (m model) openPanelConfig(from mode) model {
+	m.helpFrom = from
+	m.mode = modePanelConfig
+	m.cursor = 0
+	m.status = "panel config"
+	return m
+}
+
 func (m model) openEditMap(from mode) model {
 	m.helpFrom = from
 	m.mode = modeKeyMap
@@ -2504,9 +2607,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 	case actScroll:
 		return m.enterScroll(), nil
 	case actPanelConfig:
-		m.mode = modePanelConfig
-		m.cursor = 0
-		m.status = "panel config"
+		m = m.openPanelConfig(m.mode)
 	case actRestart:
 		// A force-restart stops the daemon and starts a fresh one, ending every
 		// panel it owns — so confirm before pulling the rug.
@@ -2606,6 +2707,7 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 				cmd = mouseCmd(m.mouseEnabled) // flip the terminal's mouse reporting now
 			case settingLanguage:
 				m.lang = i18n.Next(m.effLang()) // a cycle, not a toggle: enter advances it
+				m.langChosen = true             // now it is a choice, and worth persisting
 				m.status = "language: " + string(m.lang)
 			default:
 				m.confirmClose = !m.confirmClose
@@ -2724,117 +2826,43 @@ func (m *model) requestDiff(p panel.Panel) {
 }
 
 // handleZoomKey forwards keystrokes to the zoomed panel, treating the prefix as
-// a leader: prefix+dashboard detaches, prefix+prefix sends a literal prefix.
+// a leader: every bare key drives the program, and a baton action is the leader
+// then whatever that action is bound to — the same sequence the dashboard uses,
+// landings included, so C-t v u works here exactly as v u works there.
 func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
-	key := k.String()
-	if m.zoomArmed {
+	key := tok(k.String())
+
+	// The leader is down, or a landing it opened is still waiting for its next
+	// key. Both belong to baton rather than to the program.
+	if m.zoomArmed || len(m.pending) > 0 {
+		armed := m.zoomArmed
 		m.zoomArmed = false
-		if key == m.effPrefix() {
-			if m.emu != nil {
-				feedKey(m.emu, k) // prefix+prefix sends a literal prefix
-			}
-			return m, nil
-		}
-		if b, ok := m.lookupEscape(key); ok {
-			switch b.act {
-			case actDashboard: // C-t d → dashboard, always
-				return m.zoomDetach()
-			case actEditMap: // C-t k → edit the key map
-				return m.openEditMap(modeZoom), nil
-			case actScroll: // C-t [ → scroll mode, reached on every terminal
-				return m.enterScroll(), nil
-			case actScratch: // C-t ~ → float the scratch pane over the zoom
-				return m.toggleScratch()
-			case actInbox: // C-t a → the attention inbox, over the zoom
-				// A zoom is where you land after `enter` on a row, so the way back to
-				// the queue has to be reachable from inside one — otherwise "answer
-				// one, look at the next" costs a trip through the dashboard, which is
-				// the screen swap this feature exists to remove.
-				return m.openInbox()
-			case actRemote: // C-t @ → the remote overlay, over the zoom
-				return m.openRemote(modeZoom)
-			case actLogToggle: // C-t l → log this panel's output to a file
-				return m.toggleLog()
-			case actLogView: // C-t L → read that log back, following it
-				return m.viewLog()
-			}
-			// back (C-t b) is what leaves a zoom — it returns to the split it came
-			// from, or the dashboard. Any other escape no-ops here.
-			return m, nil
-		}
-		if key == keyScreensaver { // C-t E → the hidden screensaver, over the zoom
-			return m.enterScreensaver(), saverTick()
-		}
-		if key == m.bindingKey(actDetach) { // C-t q detaches from a zoom too
-			// A transient diff panel is reaped on the way out, even when detaching the
-			// whole cockpit — it is never persisted, so it must not outlive its zoom.
-			if m.zoomEphemeral {
-				m.sendf(proto.Command{Action: "panel.close", ID: m.zoomID})
-				m.zoomEphemeral = false
-			}
-			return m.runAction(actDetach)
-		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actHelp { // C-t ? → the key list
-			return m.openHelp(modeZoom), nil
-		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actReload { // C-t R → reload config
-			return m.runAction(actReload)
-		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actSignal { // C-t s → signal this panel
-			if m.zoomExited {
-				m.status = "panel has exited — nothing to signal"
+		if armed {
+			m = m.clearPending() // the leader is spoken for; its expiry tick is now stale
+			if key == m.effPrefix() {
+				if m.emu != nil {
+					feedKey(m.emu, k) // prefix+prefix sends a literal prefix
+				}
 				return m, nil
 			}
-			return m.openSignalPicker(modeZoom, []string{m.zoomID}, m.zoomTitle), nil
-		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actSearch { // C-t f → search the scrollback
-			return m.openSearch(), nil
-		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actFleetSearch { // C-t / → search every panel
-			return m.openFleetSearch(), nil
-		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actDiff { // C-t D → diff of the zoomed agent panel
-			if m.zoomEphemeral { // already a diff zoom — no diff-of-a-diff
-				m.status = "diff: already showing a diff"
-				return m, nil
+			// The escapes and the two fixed zoom affordances resolve on the first
+			// key after the leader; they are never the start of a longer run.
+			if b, ok := m.lookupEscape(key); ok {
+				return m.runEscape(b)
 			}
-			p, ok := m.fleetPanel(m.zoomID)
-			if !ok || !p.IsAgent() {
-				m.status = "diff: select an agent panel"
-				return m, nil
+			if key == keyScreensaver { // C-t E → the hidden screensaver, over the zoom
+				return m.enterScreensaver(), saverTick()
 			}
-			m.requestDiff(p)
-			return m, nil
-		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actDispatch { // C-t T → dispatch a task to the zoomed agent
-			p, ok := m.fleetPanel(m.zoomID)
-			if !ok || !p.IsAgent() {
-				m.status = "dispatch: select an agent panel"
-				return m, nil
+			if key == keyGitMenu { // C-t G → the git menu, on the zoomed agent panel
+				return m.openGitPicker()
 			}
-			return m.startDispatch(p), nil
 		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actEnqueue { // C-t t → enqueue a task for the zoomed agent's pool
-			p, ok := m.fleetPanel(m.zoomID)
-			if !ok {
-				return m, nil
-			}
-			return m.startEnqueue(p.Group), nil
-		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actQueue { // C-t Q → the task-queue manager
-			return m.openQueue(modeZoom), nil
-		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actBack { // C-t b → back one level
-			return m.runAction(actBack)
-		}
-		if key == keyGitMenu { // C-t g → the git menu, on the zoomed agent panel
-			return m.openGitPicker()
-		}
-		return m, nil
+		return m.advanceSeq(key, cmdBinding, runZoomBinding)
 	}
+
 	if key == m.effPrefix() {
 		m.zoomArmed = true
-		return m, nil
+		return m.leaderTick()
 	}
 	// Every bare key drives the program — including PgUp/PgDn, which a full-screen
 	// reader (vim, a BBS like ptt.cc) redraws for itself. baton's own scrollback is
@@ -2843,6 +2871,92 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.emu != nil {
 		feedKey(m.emu, k)
 	}
+	return m, nil
+}
+
+// runEscape runs an escape from whatever view is holding the keyboard.
+//
+// Every escape either opens something over the current view or leaves it, and
+// runAction already parameterises all twelve by m.mode — openProcTree(m.mode),
+// openEditMap(m.mode), and so on. So the only thing a view has to say for itself
+// is how it leaves for the dashboard, which a zoom and a split each have to tear
+// down before they can.
+//
+// It replaced three hand-written switches over the same cases, in this file and
+// twice in groupzoom.go. Their own comment named the failure mode — "an escape
+// added elsewhere silently does nothing here until it is listed" — and this
+// change had to repair that drift six times before deleting them.
+func (m model) runEscape(b binding) (tea.Model, tea.Cmd) {
+	if b.act == actDashboard {
+		switch m.mode {
+		case modeZoom:
+			return m.zoomDetach()
+		case modeGroupZoom:
+			return m.exitGroupZoom()
+		}
+	}
+	return m.runAction(b.act)
+}
+
+// runZoomBinding runs a command resolved from inside a zoom. The zoom's target
+// is the panel filling the screen, not a dashboard row, so each case names what
+// it acts on; a command that only makes sense against a selection says so rather
+// than acting on a cursor nobody can see.
+func runZoomBinding(m model, b binding) (tea.Model, tea.Cmd) {
+	switch b.act {
+	case actDetach:
+		// A transient diff panel is reaped on the way out, even when detaching the
+		// whole cockpit — it is never persisted, so it must not outlive its zoom.
+		if m.zoomEphemeral {
+			m.sendf(proto.Command{Action: "panel.close", ID: m.zoomID})
+			m.zoomEphemeral = false
+		}
+		return m.runAction(actDetach)
+	case actHelp:
+		return m.openHelp(modeZoom), nil
+	case actReload, actBack, actUsageToggle, actKeycastToggle:
+		// View and session verbs that read nothing from the dashboard cursor.
+		return m.runAction(b.act)
+	case actSignal:
+		if m.zoomExited {
+			m.status = "panel has exited — nothing to signal"
+			return m, nil
+		}
+		return m.openSignalPicker(modeZoom, []string{m.zoomID}, m.zoomTitle), nil
+	case actSearch:
+		return m.openSearch(), nil
+	case actFleetSearch:
+		return m.openFleetSearch(), nil
+	case actDiff:
+		if m.zoomEphemeral { // already a diff zoom — no diff-of-a-diff
+			m.status = "diff: already showing a diff"
+			return m, nil
+		}
+		p, ok := m.fleetPanel(m.zoomID)
+		if !ok || !p.IsAgent() {
+			m.status = "diff: select an agent panel"
+			return m, nil
+		}
+		m.requestDiff(p)
+		return m, nil
+	case actDispatch:
+		p, ok := m.fleetPanel(m.zoomID)
+		if !ok || !p.IsAgent() {
+			m.status = "dispatch: select an agent panel"
+			return m, nil
+		}
+		return m.startDispatch(p), nil
+	case actEnqueue:
+		p, ok := m.fleetPanel(m.zoomID)
+		if !ok {
+			return m, nil
+		}
+		return m.startEnqueue(p.Group), nil
+	case actQueue:
+		return m.openQueue(modeZoom), nil
+	}
+	m.status = m.bindDesc(b) + ": not available in a zoom — " +
+		seqLabel(m.bindingKey(actDashboard)) + " for the dashboard"
 	return m, nil
 }
 
@@ -2923,7 +3037,7 @@ func (m model) handleScrollKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if k.String() == m.effPrefix() {
 		m.scrollArmed = true
-		return m, nil
+		return m.leaderTick()
 	}
 	page := max(1, rows-1)
 	switch k.String() {
@@ -3059,21 +3173,27 @@ func (m model) zoomDetach() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// bindingKey returns the bare key bound to an action, or "" if none.
-func (m model) bindingKey(a action) string {
+// bindingFor returns the binding for an action, or false if none is bound.
+func (m model) bindingFor(a action) (binding, bool) {
 	for _, b := range m.keymap() {
 		if b.act == a {
-			return b.key
+			return b, true
 		}
 	}
-	return ""
+	return binding{}, false
+}
+
+// bindingKey returns the key sequence bound to an action, or "" if none.
+func (m model) bindingKey(a action) string {
+	b, _ := m.bindingFor(a)
+	return b.key
 }
 
 // exitHint is the message shown when a captured emergency-quit key (Ctrl-C /
 // Ctrl-E) is pressed in command mode, where leaving is only via the detach
 // binding — never an accidental Ctrl-C.
 func (m model) exitHint() string {
-	return "exit is disabled here — press " + keyLabel(m.bindingKey(actDetach)) + " to detach"
+	return "exit is disabled here — press " + seqLabel(m.bindingKey(actDetach)) + " to detach"
 }
 
 // closeSelected asks the server to close the highlighted item and drops its
@@ -3431,7 +3551,7 @@ func (m model) dashboardView() string {
 	// is a choice someone made, and the dashboard should say so rather than leave
 	// them wondering which of them decided it.
 	if m.treeIsChosen(m.dashTree()) {
-		heading += "  " + seg("tree  "+keyLabel(m.bindingKey(actDashLayout))+" for cards", colDark, colBrand)
+		heading += "  " + seg("tree  "+seqLabel(m.bindingKey(actDashLayout))+" for cards", colDark, colBrand)
 	}
 	summary := m.summaryStrip(shown)
 	body := m.treeBody(items)
@@ -3468,9 +3588,9 @@ func (m model) summaryStrip(fleet []panel.Panel) string {
 	if len(chips) == 0 {
 		return noticeBox(mutedStyle.Render("no panels yet  ·  ") +
 			legend(
-				keyLabel(m.bindingKey(actNewPanel)), "shell",
-				keyLabel(m.bindingKey(actNewAgent)), "agent",
-				keyLabel(m.bindingKey(actConductor)), "conductor",
+				seqLabel(m.bindingKey(actNewPanel)), "shell",
+				seqLabel(m.bindingKey(actNewAgent)), "agent",
+				seqLabel(m.bindingKey(actConductor)), "conductor",
 			))
 	}
 	return strings.Join(chips, mutedStyle.Render("   ·   "))
@@ -3723,7 +3843,7 @@ func (m model) helpView() string {
 	title, body := m.helpContent()
 	pfx := keyLabel(m.effPrefix())
 	legend := mutedStyle.Render("esc  " + m.tr("help.legend.back", "back") +
-		"   ·   " + pfx + " " + keyLabel(m.bindingKey(actEditMap)) + "  " + m.tr("help.legend.edit", "edit"))
+		"   ·   " + pfx + " " + seqLabel(m.bindingKey(actEditMap)) + "  " + m.tr("help.legend.edit", "edit"))
 	return m.renderScrollPanel(scrollPanel{
 		title:    title + " " + m.tr("help.title.keys", "KEYS"),
 		body:     body,
@@ -3741,8 +3861,6 @@ func (m model) helpView() string {
 func (m model) helpContent() (title string, body []string) {
 	kc := func(s string) string { return keycapStyle.Render(s) }
 	pfx := keyLabel(m.effPrefix())
-	dash := keyLabel(m.bindingKey(actDashboard))
-	detach := keyLabel(m.bindingKey(actDetach))
 
 	// helpRow is one key line tagged with the purpose section it sorts under, so
 	// every stage's list groups by category just like the editable key map. desc
@@ -3757,45 +3875,47 @@ func (m model) helpContent() (title string, body []string) {
 		title = tr("help.title.group", "GROUP VIEW")
 		rows = []helpRow{
 			{"Navigation", kc("tab") + " " + kc("S-tab"), tr("help.group.focus", "focus the next / previous panel")},
-			{"Navigation", kc(keyLabel(keyInteract)), tr("help.group.interact", "interact: type into the focused panel in place")},
+			{"Navigation", keycaps("", keyInteract, false), tr("help.group.interact", "interact: type into the focused panel in place")},
 			{"Navigation", kc("enter"), tr("help.group.zoom", "zoom the focused panel")},
 			{"Navigation", kc("+") + " " + kc("-"), tr("help.group.tiles", "show more / fewer live tiles")},
-			{"Navigation", kc(keyLabel(keyLayout)), tr("help.group.layout", "cycle the tile layout")},
-			{"Navigation", kc(keyLabel(keyResize)), tr("help.group.resize", "resize mode · arrows grow/shrink the focused tile")},
+			{"Navigation", keycaps("", keyLayout, false), tr("help.group.layout", "cycle the tile layout")},
+			{"Navigation", keycaps("", keyResize, false), tr("help.group.resize", "resize mode · arrows grow/shrink the focused tile")},
 			{"Navigation", kc("S-←→"), tr("help.group.reorder", "reorder the focused panel")},
-			{"Navigation", kc(pfx) + " " + kc(keyScroll), tr("help.group.scroll", "scroll mode · the focused panel (↑↓ line, b/Spc page)")},
-			{"Navigation", kc(pfx) + " " + kc(keySearch), tr("help.group.search", "search the focused panel · n older, N newer")},
-			{"Work items", kc(keyLabel(keyPin)), tr("help.group.pin", "pin / unpin the focused panel to a live tile")},
-			{"Work items", kc(keyLabel(keySignal)) + " " + kc(keyLabel(keySignalAll)), tr("help.group.signal", "signal the focused panel · the whole group")},
-			{"Work items", kc(keyLabel(keyRemove)), tr("help.group.remove", "remove the focused panel from the group")},
-			{"Panels", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actLogToggle))) + " " + kc(keyLabel(m.bindingKey(actLogView))), tr("help.common.log", "log this panel's output to a file · read it back")},
-			{"View", kc(keyLabel(m.bindingKey(actHelp))), tr("help.common.keys", "this key list")},
-			{"View", kc(keyLabel(m.bindingKey(actBack))) + " " + kc(dash) + " " + kc("esc"), tr("help.group.back", "back to the dashboard")},
-			{"View", kc(pfx) + " " + kc(keyLabel(keyInteract)), tr("help.group.stop-interact", "stop interacting (while in interact)")},
-			{"View", kc(pfx) + " " + kc(dash), tr("help.group.dashboard", "dashboard (works in every view)")},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actProcTree))), tr("help.common.proc-tree", "process tree · the daemon's OS processes")},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actRemote))), tr("help.common.remote", "remote access · the passkey and the live connections")},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), tr("help.common.edit-map", "edit the key map")},
-			{"Session", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actReload))), tr("help.common.reload", "reload config (backend + cockpit)")},
-			{"Session", kc(pfx) + " " + kc(detach), tr("help.common.detach", "detach (server keeps running)")},
+			{"Navigation", keycaps(pfx, keyScroll, false), tr("help.group.scroll", "scroll mode · the focused panel (↑↓ line, b/Spc page)")},
+			{"Navigation", keycaps(pfx, keySearch, false), tr("help.group.search", "search the focused panel · n older, N newer")},
+			{"Work items", keycaps("", keyPin, false), tr("help.group.pin", "pin / unpin the focused panel to a live tile")},
+			{"Work items", keycaps("", keySignal, false) + " " + keycaps("", keySignalAll, false), tr("help.group.signal", "signal the focused panel · the whole group")},
+			{"Work items", keycaps("", keyRemove, false), tr("help.group.remove", "remove the focused panel from the group")},
+			{"Panels", keycaps(pfx, m.bindingKey(actLogToggle), false) + " " + keycaps("", m.bindingKey(actLogView), false), tr("help.common.log", "log this panel's output to a file · read it back")},
+			{"View", keycaps("", m.bindingKey(actHelp), false), tr("help.common.keys", "this key list")},
+			{"View", keycaps("", m.bindingKey(actBack), false) + " " + kc("esc"), tr("help.group.back", "back one level")},
+			{"View", kc(pfx) + " " + keycaps("", keyInteract, false), tr("help.group.stop-interact", "stop interacting (while in interact)")},
+			{"View", kc(pfx) + " " + keycaps("", m.bindingKey(actDashboard), false), tr("help.group.dashboard", "dashboard (works in every view)")},
+			{"View", keycaps(pfx, m.bindingKey(actProcTree), false), tr("help.common.proc-tree", "process tree · the daemon's OS processes")},
+			{"View", keycaps(pfx, m.bindingKey(actRemote), false), tr("help.common.remote", "remote access · the passkey and the live connections")},
+			{"View", keycaps(pfx, m.bindingKey(actEditMap), false), tr("help.common.edit-map", "edit the key map")},
+			{"Session", keycaps(pfx, m.bindingKey(actReload), false), tr("help.common.reload", "reload config (backend + cockpit)")},
+			{"Session", kc(pfx) + " " + keycaps("", m.bindingKey(actDetach), false), tr("help.common.detach", "detach (server keeps running)")},
 		}
 	case modeZoom:
 		title = tr("help.title.zoom", "ZOOM")
 		rows = []helpRow{
 			{"Navigation", kc("type"), tr("help.zoom.type", "drive the program directly (PgUp/PgDn included)")},
-			{"Navigation", kc(pfx) + " " + kc(keyScroll), tr("help.zoom.scroll", "scroll mode · ↑↓ line, b/Spc page, esc exits")},
-			{"Navigation", kc(pfx) + " " + kc(keySearch), tr("help.zoom.search", "search the scrollback · n older, N newer")},
+			{"Navigation", keycaps(pfx, keyScroll, false), tr("help.zoom.scroll", "scroll mode · ↑↓ line, b/Spc page, esc exits")},
+			{"Navigation", keycaps(pfx, keySearch, false), tr("help.zoom.search", "search the scrollback · n older, N newer")},
 			{"Navigation", kc(pfx) + " " + kc(pfx), tr("help.zoom.literal", "send a literal ") + pfx},
-			{"Panels", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actSignal))), tr("help.zoom.signal", "send a signal to this panel")},
-			{"Panels", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actLogToggle))) + " " + kc(keyLabel(m.bindingKey(actLogView))), tr("help.common.log", "log this panel's output to a file · read it back")},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actBack))), tr("help.zoom.back", "back one level (to the split / dashboard)")},
-			{"View", kc(pfx) + " " + kc(dash), tr("help.zoom.dashboard", "straight to the dashboard")},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actProcTree))), tr("help.common.proc-tree", "process tree · the daemon's OS processes")},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actRemote))), tr("help.common.remote", "remote access · the passkey and the live connections")},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actHelp))), tr("help.common.keys", "this key list")},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), tr("help.common.edit-map", "edit the key map")},
-			{"Session", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actReload))), tr("help.common.reload", "reload config (backend + cockpit)")},
-			{"Session", kc(pfx) + " " + kc(detach), tr("help.common.detach", "detach (server keeps running)")},
+			{"Navigation", kc(pfx) + " " + kc("…"), tr("help.zoom.commands", "any dashboard key, with the leader in front of it")},
+			{"Panels", keycaps(pfx, m.bindingKey(actSignal), false), tr("help.zoom.signal", "send a signal to this panel")},
+			{"Panels", keycaps(pfx, keyGitMenu, false), tr("help.zoom.git", "git menu · diff, log, commit, push, worktree (agent panel)")},
+			{"Panels", keycaps(pfx, m.bindingKey(actLogToggle), false) + " " + keycaps("", m.bindingKey(actLogView), false), tr("help.common.log", "log this panel's output to a file · read it back")},
+			{"View", keycaps(pfx, m.bindingKey(actBack), false), tr("help.zoom.back", "back one level (to the split / dashboard)")},
+			{"View", kc(pfx) + " " + keycaps("", m.bindingKey(actDashboard), false), tr("help.zoom.dashboard", "straight to the dashboard")},
+			{"View", keycaps(pfx, m.bindingKey(actProcTree), false), tr("help.common.proc-tree", "process tree · the daemon's OS processes")},
+			{"View", keycaps(pfx, m.bindingKey(actRemote), false), tr("help.common.remote", "remote access · the passkey and the live connections")},
+			{"View", keycaps(pfx, m.bindingKey(actHelp), false), tr("help.common.keys", "this key list")},
+			{"View", keycaps(pfx, m.bindingKey(actEditMap), false), tr("help.common.edit-map", "edit the key map")},
+			{"Session", keycaps(pfx, m.bindingKey(actReload), false), tr("help.common.reload", "reload config (backend + cockpit)")},
+			{"Session", kc(pfx) + " " + keycaps("", m.bindingKey(actDetach), false), tr("help.common.detach", "detach (server keeps running)")},
 		}
 	default: // dashboard — single keys for commands, C-t for the escapes
 		title = tr("help.title.dashboard", "DASHBOARD")
@@ -3806,9 +3926,9 @@ func (m model) helpContent() (title string, body []string) {
 			{"Navigation", kc("esc"), tr("help.dash.clear", "clear the selection")},
 		}
 		for _, b := range m.keymap() {
-			keys := kc(keyLabel(b.key))
+			keys := keycaps("", b.key, false)
 			if isEscape(b.act) {
-				keys = kc(pfx) + " " + kc(keyLabel(b.key))
+				keys = keycaps(pfx, b.key, false)
 			}
 			rows = append(rows, helpRow{b.cat, keys, m.bindDesc(b)})
 		}
@@ -3854,6 +3974,30 @@ func (m model) keyMapView() string {
 	binds := m.keymap()
 	prefLbl := keyLabel(m.effPrefix())
 
+	// Every description starts in the same column. Without this the panel reads
+	// as a ragged edge the moment its bindings differ in length — which, since
+	// the landing keys, is most of them — and a translated cockpit makes it
+	// worse, because a description that begins on a wide glyph gives the eye a
+	// hard left edge to notice the raggedness against.
+	//
+	// Each cell is rendered ONCE here and reused below. Measuring by rendering
+	// and discarding cost a full keycap render of all 45 bindings on every
+	// frame, and this panel redraws whenever the fleet produces output, not
+	// only when a key is pressed.
+	cells := make([]string, len(binds))
+	keyCol := lipgloss.Width(keycapStyle.Render(prefLbl))
+	for i, b := range binds {
+		pfx := ""
+		if isEscape(b.act) {
+			pfx = prefLbl
+		}
+		cells[i] = keycaps(pfx, b.key, false)
+		if w := lipgloss.Width(cells[i]); w > keyCol {
+			keyCol = w
+		}
+	}
+	pad := lipgloss.NewStyle().Width(keyCol)
+
 	// Build the scrollable body — the selectable rows and their section
 	// subheaders — tracking the rendered line the cursor rests on so the window
 	// can keep it in view on a short screen.
@@ -3870,14 +4014,14 @@ func (m model) keyMapView() string {
 	if m.editing && m.editIdx == editPrefix {
 		prefKeys = keycapHotStyle.Render("…type a key")
 	}
-	body = append(body, fmt.Sprintf("%s%s   %s", caret(prefSel), prefKeys, desc(prefSel, m.tr("keymap.prefix", "prefix · leader key"))))
+	body = append(body, fmt.Sprintf("%s%s   %s", caret(prefSel), pad.Render(prefKeys), desc(prefSel, m.tr("keymap.prefix", "prefix · leader key"))))
 	if prefSel {
 		selLine = len(body) - 1
 	}
 
-	// Rows 1..N: the bindings, under a sub-header per purpose group. Prefixed
-	// commands show as a [C-t][key] chord; the bare group verbs show as a single
-	// keycap.
+	// Rows 1..N: the bindings, under a sub-header per purpose group. Each key of
+	// a binding gets its own cap — [g][c] — and the whole cell is padded to
+	// keyCol so the descriptions line up whatever the keys spell.
 	subhead := lipgloss.NewStyle().Foreground(colFaint).Bold(true)
 	prevCat := ""
 	for i, b := range binds {
@@ -3890,20 +4034,28 @@ func (m model) keyMapView() string {
 		esc := isEscape(b.act)
 		var keys string
 		switch {
-		case m.editing && m.editIdx == i && esc:
-			keys = keycapHotStyle.Render(prefLbl) + " " + keycapHotStyle.Render("…type a key")
 		case m.editing && m.editIdx == i:
-			keys = keycapHotStyle.Render("…type a key")
-		case esc:
-			keys = chord(prefLbl, b.key, selected)
-		default:
-			cap := keycapStyle
-			if selected {
-				cap = keycapHotStyle
+			typed := "…type a key"
+			if len(m.editBuf) > 0 {
+				typed = strings.Join(labelTokens(m.editBuf), " ") + " …"
 			}
-			keys = cap.Render(keyLabel(b.key))
+			if esc {
+				keys = keycapHotStyle.Render(prefLbl) + " " + keycapHotStyle.Render(typed)
+			} else {
+				keys = keycapHotStyle.Render(typed)
+			}
+		case selected:
+			// Only the cursor's row needs the hot look, so it is the one cell
+			// worth rendering a second time.
+			hotPfx := ""
+			if esc {
+				hotPfx = prefLbl
+			}
+			keys = keycaps(hotPfx, b.key, true)
+		default:
+			keys = cells[i]
 		}
-		body = append(body, fmt.Sprintf("%s%s   %s", caret(selected), keys, desc(selected, m.bindDesc(b))))
+		body = append(body, fmt.Sprintf("%s%s   %s", caret(selected), pad.Render(keys), desc(selected, m.bindDesc(b))))
 		if selected {
 			selLine = len(body) - 1
 		}
@@ -4116,7 +4268,7 @@ func (m model) panelConfigView() string {
 		title: "PANEL CONFIG",
 		body:  body,
 		footer: []string{"",
-			mutedStyle.Render("default agent is what " + keyLabel(m.bindingKey(actNewAgent)) + " spawns · detected on the fleet's machine"),
+			mutedStyle.Render("default agent is what " + seqLabel(m.bindingKey(actNewAgent)) + " spawns · detected on the fleet's machine"),
 			mutedStyle.Render("replay buffer seeds scrollback · change applies on server restart"),
 			mutedStyle.Render("limits cap a panel's whole process tree · " + m.enforceLabel()),
 			"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(hints))), hints},
@@ -4280,9 +4432,12 @@ func (m model) versionLine() string {
 }
 
 func (m model) statusBar(left, hint string) string {
-	prefixBadge := ""
-	if m.prefix {
-		prefixBadge = seg("PREFIX", colDark, colBrandHi)
+	// The run so far — "C-t …", "g …", "C-t v …" — in place of the older PREFIX
+	// chip, which said only that the leader was down and said it on the
+	// dashboard alone. The keys it can still take ride in the hint region below.
+	prefixBadge := m.pendingCap()
+	if h := m.pendingHint(cmdBinding); h != "" {
+		hint = h
 	}
 	clock := seg("⏱ "+m.now.Format("15:04:05"), colDark, colCyan)
 	stats := m.statsStrip()
@@ -4319,7 +4474,7 @@ func (m model) statusBar(left, hint string) string {
 // helpHint is the footer's standing invitation to the key list: "? keys" in a
 // command-mode view, "C-t ? keys" in a zoom where the prefix is needed.
 func (m model) helpHint() string {
-	k := keyLabel(m.bindingKey(actHelp))
+	k := seqLabel(m.bindingKey(actHelp))
 	if m.mode == modeZoom {
 		k = keyLabel(m.effPrefix()) + " " + k
 	}

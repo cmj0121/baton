@@ -208,7 +208,7 @@ baton.command{
 }
 ```
 
-A registered command becomes a first-class verb: surfaced in the cockpit's command picker (the `c` key) and bindable to a
+A registered command becomes a first-class verb: surfaced in the cockpit's command picker (`C-t c`) and bindable to a
 key. This is how a plugin grows baton's vocabulary rather than just scripting it once at load.
 
 ### Configure — `baton.config`

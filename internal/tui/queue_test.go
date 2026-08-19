@@ -89,17 +89,17 @@ func TestQueueCancel(t *testing.T) {
 // id being moved. (The actual reordering rides the server's "tasks" reply.)
 func TestQueueReorder(t *testing.T) {
 	m := model{width: 120, height: 40, mode: modeQueue, queueFrom: modeDashboard, tasks: sampleTasks()}
-	m = press(m, keyQueuePromote) // K — promote t3 (top row)
+	m = press(m, "shift+up") // promote t3 (top row) — the dashboard's reorder gesture
 	if !strings.Contains(m.status, "t3") || !strings.Contains(m.status, "promoting") {
 		t.Fatalf("promote should name the highlighted task, got %q", m.status)
 	}
-	m = press(m, keyQueueDemote) // J — demote t3
+	m = press(m, "shift+down") // demote t3
 	if !strings.Contains(m.status, "t3") || !strings.Contains(m.status, "demoting") {
 		t.Fatalf("demote should name the highlighted task, got %q", m.status)
 	}
 
 	empty := model{width: 120, height: 40, mode: modeQueue, queueFrom: modeDashboard}
-	empty = press(empty, keyQueuePromote)
+	empty = press(empty, "shift+up")
 	if !strings.Contains(empty.status, "nothing to reorder") {
 		t.Fatalf("reorder on an empty backlog should say so, got %q", empty.status)
 	}
@@ -108,9 +108,17 @@ func TestQueueReorder(t *testing.T) {
 // TestQueueDrain drains the whole backlog, and is a no-op when already empty.
 func TestQueueDrain(t *testing.T) {
 	m := model{width: 120, height: 40, mode: modeQueue, queueFrom: modeDashboard, tasks: sampleTasks()}
-	m = press(m, keyQueueDrain) // D
+	// Draining throws away work nobody can get back, so X asks first.
+	m = press(m, keyQueueDrain)
+	if !m.pendingDrain || !strings.Contains(m.status, "(y/n)") {
+		t.Fatalf("drain should ask before emptying the backlog, got %q", m.status)
+	}
+	if m = press(m, "n"); m.pendingDrain || !strings.Contains(m.status, "cancelled") {
+		t.Fatalf("n should abandon the drain, got %q", m.status)
+	}
+	m = press(m, keyQueueDrain, "y")
 	if !strings.Contains(m.status, "draining") {
-		t.Fatalf("drain should report draining, got %q", m.status)
+		t.Fatalf("drain should report draining once confirmed, got %q", m.status)
 	}
 
 	empty := model{width: 120, height: 40, mode: modeQueue, queueFrom: modeDashboard}
@@ -137,7 +145,7 @@ func TestQueueEditDeferred(t *testing.T) {
 // key is swallowed, never leaking to the dashboard.
 func TestQueueEscCloses(t *testing.T) {
 	m := model{width: 120, height: 40, mode: modeQueue, queueFrom: modeDashboard, tasks: sampleTasks()}
-	m = press(m, "x") // not a queue key — ignored, popup stays open
+	m = press(m, "!") // not a queue key — ignored, popup stays open
 	if m.mode != modeQueue {
 		t.Fatalf("a stray key should keep the popup open, got %v", m.mode)
 	}
@@ -191,5 +199,28 @@ func TestQueueStatusColor(t *testing.T) {
 		if queueStatusColor(st) == "" {
 			t.Fatalf("status %q should map to a colour", st)
 		}
+	}
+}
+
+// TestQueueUsesTheOverlayKeys checks the manager moves and jumps like every
+// other overlay. It used to answer only the arrows, so the muscle memory that
+// works in the inbox, the process tree and the diff stopped at this popup.
+func TestQueueUsesTheOverlayKeys(t *testing.T) {
+	m := model{width: 120, height: 40, mode: modeQueue, queueFrom: modeDashboard, tasks: sampleTasks()}
+
+	if got := press(m, "j").queueCursor; got != 1 {
+		t.Errorf("j should move down, cursor = %d", got)
+	}
+	if got := press(m, "j", "k").queueCursor; got != 0 {
+		t.Errorf("k should move back up, cursor = %d", got)
+	}
+	if got := press(m, "G").queueCursor; got != len(m.tasks)-1 {
+		t.Errorf("G should jump to the last row, cursor = %d", got)
+	}
+	if got := press(m, "G", "g").queueCursor; got != 0 {
+		t.Errorf("g should jump to the first row, cursor = %d", got)
+	}
+	if got := press(m, "q"); got.mode != modeDashboard {
+		t.Errorf("q should close the popup like every other overlay, got %v", got.mode)
 	}
 }
