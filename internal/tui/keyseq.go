@@ -1,6 +1,9 @@
 package tui
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // A binding's key is a SEQUENCE: one or more tokens separated by spaces, so
 // "p" is one key and "g c" is two pressed in order. The first token of a
@@ -44,11 +47,7 @@ func (b binding) seq() []string { return strings.Fields(normSeq(b.key)) }
 // seqLabel renders a sequence for a legend: each token through keyLabel, joined
 // by spaces — "ctrl+t" becomes "C-t", "space" stays "space", "g c" stays "g c".
 func seqLabel(key string) string {
-	toks := strings.Fields(normSeq(key))
-	for i, t := range toks {
-		toks[i] = keyLabel(t)
-	}
-	return strings.Join(toks, " ")
+	return strings.Join(labelTokens(strings.Fields(normSeq(key))), " ")
 }
 
 // seqMatch is what a run of typed tokens amounts to against the key map.
@@ -117,24 +116,16 @@ func matchSeq(binds []binding, tokens []string, want func(binding) bool) (bindin
 // of everything, which is what lets a hint with nothing typed list every first
 // token; matchSeq guards the empty case itself rather than relying on this.
 func hasSeqPrefix(s, p []string) bool {
-	if len(p) > len(s) {
-		return false
-	}
-	for i := range p {
-		if s[i] != p[i] {
-			return false
-		}
-	}
-	return true
+	return len(p) <= len(s) && slices.Equal(s[:len(p)], p)
 }
 
-// contin is one key a landing can take next, for the status bar's hint. name is
-// the binding it completes, or "" when the token is itself another landing —
-// which the hint renders as an ellipsis rather than pretending it is an action.
+// contin is one key a landing can take next, for the status bar's hint. b is the
+// binding it completes, or the zero binding when the token is itself another
+// landing — which the hint renders as an ellipsis rather than pretending it is
+// an action.
 type contin struct {
-	key  string
-	name string
-	desc string
+	key string
+	b   binding
 }
 
 // seqNext lists what the tokens typed so far can take next, in key-map order so
@@ -155,10 +146,10 @@ func seqNext(binds []binding, tokens []string, want func(binding) bool) []contin
 		next := s[len(tokens)]
 		c := contin{key: next}
 		if len(s) == len(tokens)+1 { // this key completes b
-			c.name, c.desc = b.name, b.desc
+			c.b = b
 		}
 		if i, ok := seen[next]; ok {
-			if out[i].name == "" { // a landing already recorded, now completed by b
+			if out[i].b.name == "" { // a landing already recorded, now completed by b
 				out[i] = c
 			}
 			continue
@@ -167,14 +158,6 @@ func seqNext(binds []binding, tokens []string, want func(binding) bool) []contin
 		out = append(out, c)
 	}
 	return out
-}
-
-// isLanding reports whether a key opens a family rather than acting on its own:
-// no binding ends on it, and at least one continues past it. The key map editor
-// uses it to refuse handing a landing to a binding of its own.
-func isLanding(binds []binding, token string, want func(binding) bool) bool {
-	_, m := matchSeq(binds, []string{token}, want)
-	return m == seqPartial
 }
 
 // ambiguous lists the bindings whose sequence is the strict start of another's,

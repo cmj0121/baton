@@ -33,8 +33,8 @@ func TestParseKeyTimeout(t *testing.T) {
 		{"", defaultKeyTimeout},
 		{"800ms", 800 * time.Millisecond},
 		{"1.2s", 1200 * time.Millisecond},
-		{"0", 0},                    // asked for explicitly: never expire
-		{"0s", 0},                   // the same thing, spelled with a unit
+		{"0", neverKeyTimeout},      // asked for explicitly: never expire
+		{"0s", neverKeyTimeout},     // the same thing, spelled with a unit
 		{"1ms", defaultKeyTimeout},  // below the floor
 		{"1h", defaultKeyTimeout},   // above the ceiling
 		{"soon", defaultKeyTimeout}, // unparseable

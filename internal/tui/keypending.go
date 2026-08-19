@@ -5,7 +5,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // The run of keys typed so far towards a binding, and the clock that bounds it.
@@ -29,12 +28,19 @@ const (
 	// means "never expire".
 	minKeyTimeout = 200 * time.Millisecond
 	maxKeyTimeout = 10 * time.Second
+
+	// neverKeyTimeout is what a configured 0 becomes on the model. The config
+	// spells "never expire" as 0, but a model built by a test is zero-valued and
+	// means "unset", so the two need different values; seqTick already declines
+	// to schedule anything non-positive.
+	neverKeyTimeout = -1
 )
 
 // parseKeyTimeout reads settings.key-timeout. Unset or unparseable falls back to
 // the default, as does anything outside the sane range; a literal 0 is kept, and
 // means a run waits indefinitely.
 func parseKeyTimeout(s string) time.Duration {
+	s = strings.TrimSpace(s)
 	if s == "" {
 		return defaultKeyTimeout
 	}
@@ -43,7 +49,7 @@ func parseKeyTimeout(s string) time.Duration {
 	case err != nil:
 		return defaultKeyTimeout
 	case d == 0:
-		return 0 // asked for explicitly: never expire
+		return neverKeyTimeout // asked for explicitly: never expire
 	case d < minKeyTimeout || d > maxKeyTimeout:
 		return defaultKeyTimeout
 	}
@@ -65,11 +71,33 @@ func seqTick(gen int, d time.Duration) tea.Cmd {
 }
 
 // armPending starts (or extends) a pending run: it records the tokens, notes the
-// binding that would fire if the run lapsed here, and returns the tick that will
-// end it.
-func (m model) armPending(tokens []string, hit binding, hasHit bool) (model, tea.Cmd) {
-	m.pending = tokens
-	m.pendingHit, m.pendingHasHit = hit, hasHit
+// binding that would fire if the run lapsed here (the zero binding when none
+// would), and returns the tick that will end it.
+func (m model) armPending(tokens []string, hit binding) (model, tea.Cmd) {
+	m.pending, m.pendingHit = tokens, hit
+	m.pendingGen++
+	return m, seqTick(m.pendingGen, m.effKeyTimeout())
+}
+
+// leaderArmed reports whether any view is holding the leader down. The five
+// flags are one concept wearing five names — each view arms its own — so every
+// question about "is the leader down" has to ask all of them.
+func (m model) leaderArmed() bool {
+	return m.prefix || m.zoomArmed || m.groupArmed || m.scratchArmed || m.scrollArmed
+}
+
+// disarmLeader drops the leader wherever it is held.
+func (m model) disarmLeader() model {
+	m.prefix, m.zoomArmed, m.groupArmed = false, false, false
+	m.scratchArmed, m.scrollArmed = false, false
+	return m
+}
+
+// leaderTick schedules the expiry of a leader that was just armed. Every view
+// that arms one calls it, so a hanging leader lapses wherever it was pressed
+// rather than only on the dashboard — which matters most in a zoom, where a
+// leader stuck down routes the program's next keystroke to baton instead.
+func (m model) leaderTick() (tea.Model, tea.Cmd) {
 	m.pendingGen++
 	return m, seqTick(m.pendingGen, m.effKeyTimeout())
 }
@@ -78,15 +106,16 @@ func (m model) armPending(tokens []string, hit binding, hasHit bool) (model, tea
 // that hand the keyboard to a program, use it so a half-typed run never survives
 // into a place where its keys mean something else.
 func (m model) clearPending() model {
-	m.pending, m.pendingHit, m.pendingHasHit = nil, binding{}, false
+	m.pending, m.pendingHit = nil, binding{}
 	m.pendingGen++ // any tick already in flight is now stale
 	return m
 }
 
-// effKeyTimeout is the configured landing timeout, defaulted for a zero-valued
-// model (the tests build those directly).
+// effKeyTimeout is the configured landing timeout. A zero-valued model — the
+// shape a test builds directly — takes the default; a configured "never" is
+// carried as neverKeyTimeout so the two cannot be confused.
 func (m model) effKeyTimeout() time.Duration {
-	if m.keyTimeout == 0 && !m.keyTimeoutSet {
+	if m.keyTimeout == 0 {
 		return defaultKeyTimeout
 	}
 	return m.keyTimeout
@@ -99,13 +128,13 @@ func (m model) expirePending(gen int) (tea.Model, tea.Cmd) {
 	if gen != m.pendingGen {
 		return m, nil // a tick from a run that has already been resolved
 	}
-	if len(m.pending) == 0 && !m.prefix {
+	if len(m.pending) == 0 && !m.leaderArmed() {
 		return m, nil
 	}
-	hit, has := m.pendingHit, m.pendingHasHit
-	m.prefix = false // a leader left hanging lapses too, rather than eating the next key
+	hit := m.pendingHit
+	m = m.disarmLeader() // a leader left hanging lapses too, rather than eating the next key
 	m = m.clearPending()
-	if has {
+	if hit.name != "" {
 		return m.runAction(hit.act)
 	}
 	return m, nil
@@ -132,9 +161,9 @@ func (m model) advanceSeq(key string, want func(binding) bool, run func(model, b
 		m = m.clearPending()
 		return run(m, b)
 	case seqPartial:
-		return m.armPending(tokens, binding{}, false)
+		return m.armPending(tokens, binding{})
 	case seqExactPartial:
-		return m.armPending(tokens, b, true)
+		return m.armPending(tokens, b)
 	}
 
 	// Nothing starts with this run.
@@ -183,17 +212,15 @@ func (m model) movedFrom(key string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	for _, b := range m.keymap() {
-		if b.act != act {
-			continue
-		}
-		where := seqLabel(b.key)
-		if isEscape(b.act) {
-			where = keyLabel(m.effPrefix()) + " " + where
-		}
-		return m.bindDesc(b) + " moved → " + where, true
+	b, ok := m.bindingFor(act)
+	if !ok {
+		return "", false
 	}
-	return "", false
+	where := seqLabel(b.key)
+	if isEscape(b.act) {
+		where = keyLabel(m.effPrefix()) + " " + where
+	}
+	return m.bindDesc(b) + " moved → " + where, true
 }
 
 // labelTokens renders a run for display, each token through keyLabel.
@@ -222,7 +249,7 @@ func (m model) pendingCap() string {
 // in any view, followed by whatever has been typed after it.
 func (m model) pendingTokens() []string {
 	var out []string
-	if m.prefix || m.zoomArmed || m.groupArmed || m.scratchArmed || m.scrollArmed {
+	if m.leaderArmed() {
 		out = append(out, m.effPrefix())
 	}
 	return append(out, m.pending...)
@@ -246,21 +273,23 @@ func (m model) pendingHint(want func(binding) bool) string {
 	parts := make([]string, 0, len(next))
 	for _, c := range next {
 		label := "…"
-		if c.name != "" {
-			label = m.tr("bind."+c.name, c.desc)
+		if c.b.name != "" {
+			label = m.bindDesc(c.b)
 		}
-		parts = append(parts, lipgloss.NewStyle().Foreground(colBrandHi).Render(keyLabel(c.key))+" "+label)
+		parts = append(parts, m.barStrong().Render(keyLabel(c.key))+m.bar().Render(" "+label))
 	}
 	return strings.Join(parts, " · ")
 }
 
 // --- which half of the key map is in play -------------------------------------
 
-// cmdBinding selects the commands: bare in a command-mode view, prefix-reached
-// in a zoom. Every matcher call names the half of the key map in play, so a run
-// can never resolve to a binding the current mode would not have fired. (The
-// escapes get their own selector when the zoom and the split are wired.)
+// cmdBinding and escBinding select the two halves of the key map: the commands,
+// which are bare in a command-mode view and prefix-reached in a zoom, and the
+// escapes, which are prefix-reached everywhere. Every matcher call names the
+// half in play, so a run can never resolve to a binding the current mode would
+// not have fired.
 func cmdBinding(b binding) bool { return !isEscape(b.act) }
+func escBinding(b binding) bool { return isEscape(b.act) }
 
 // runCmdBinding runs a resolved command. The fold row's refusal lives here
 // rather than in the matcher: it is about what the cursor is sitting on, not

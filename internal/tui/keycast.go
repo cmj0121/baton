@@ -49,12 +49,19 @@ func (m model) noteKey(key string) model {
 	key = tok(key)
 	switch {
 	case armed:
-		m.keycastKey = keyLabel(pfx) + " " + keyLabel(key)
-		m.keycastAct = ""
+		// The first key after the leader: an escape, a whole command, or the
+		// landing that opens one — which shows as an ellipsis, the same as it
+		// does without the leader, rather than as a key that did nothing.
+		m.keycastKey, m.keycastAct = keyLabel(pfx)+" "+keyLabel(key), ""
 		if b, ok := m.lookupEscape(key); ok {
 			m.keycastAct = actionLabel(b)
-		} else if b, ok := m.lookupCmd(key); ok {
+			break
+		}
+		switch b, res := matchSeq(m.keymap(), []string{key}, cmdBinding); res {
+		case seqExact, seqExactPartial:
 			m.keycastAct = actionLabel(b)
+		case seqPartial:
+			m.keycastAct = "…"
 		}
 	case key == pfx:
 		m.keycastKey, m.keycastAct = keyLabel(key), "…" // the leader, waiting for its second half

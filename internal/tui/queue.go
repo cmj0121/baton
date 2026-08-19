@@ -37,7 +37,7 @@ func (m model) openQueue(from mode) model {
 	m.queueCursor = 0
 	m.mode = modeQueue
 	m.sendf(proto.Command{Action: "task.list"})
-	m.status = "task queue · ↑↓ move · K/J reorder · d cancel · D drain · esc closes"
+	m.status = "task queue · jk move · S-↑↓ reorder · " + keyQueueCancel + " cancel · " + keyQueueDrain + " drain · esc closes"
 	return m
 }
 
@@ -225,7 +225,7 @@ func (m model) queueView() string {
 	}
 
 	rows = append(rows, "",
-		mutedStyle.Render("K/J reorder · d cancels a queued task · in-flight tasks finish on their panel"),
+		mutedStyle.Render("in-flight tasks finish on their panel"),
 		"", legend("jk", "move", "S-↑↓", "reorder", keyQueueCancel, "cancel", keyQueueDrain, "drain all", "esc", "close"))
 	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }

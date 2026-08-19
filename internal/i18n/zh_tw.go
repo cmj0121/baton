@@ -45,6 +45,8 @@ var zhTW = map[string]string{
 	"help.zoom.scroll":    "捲動模式 · ↑↓ 逐行，b/空白 逐頁，esc 離開",
 	"help.zoom.search":    "搜尋捲動歷史 · n 往舊，N 往新",
 	"help.zoom.literal":   "送出一個實際的 ",
+	"help.zoom.commands":  "任何儀表板按鍵,前面加上領導鍵即可",
+	"help.zoom.git":       "git 選單 · diff、log、commit、push、worktree(agent 面板)",
 	"help.zoom.signal":    "送 signal 給這個面板",
 	"help.zoom.back":      "回上一層（群組分割／儀表板）",
 	"help.zoom.dashboard": "直接回儀表板",
@@ -62,7 +64,7 @@ var zhTW = map[string]string{
 	"help.group.pin":           "釘選／取消釘選聚焦的面板到即時圖磚",
 	"help.group.signal":        "送 signal 給聚焦的面板 · 整個群組",
 	"help.group.remove":        "把聚焦的面板移出群組",
-	"help.group.back":          "回到儀表板",
+	"help.group.back":          "回上一層",
 	"help.group.stop-interact": "結束互動（互動模式中）",
 	"help.group.dashboard":     "儀表板（任何畫面都適用）",
 
@@ -131,7 +133,7 @@ var zhTW = map[string]string{
 	"bind.commands":     "開啟外掛指令選單（前綴鍵）",
 	"bind.scratch":      "切換浮動的暫存 shell（前綴鍵）",
 
-	"bind.restart": "強制重啟 server",
+	"bind.restart": "強制重啟 server（前綴鍵）",
 	"bind.reload":  "重新載入設定（後端＋操作介面）",
 	"bind.detach":  "離開（server 繼續執行）",
 

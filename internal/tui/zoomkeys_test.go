@@ -111,3 +111,42 @@ func TestZoomLiteralPrefixSurvives(t *testing.T) {
 		t.Errorf("C-t C-t should be consumed as a literal, armed = %v pending = %v", m.zoomArmed, m.pending)
 	}
 }
+
+// A leader left hanging inside a zoom lapses. It used to schedule the expiry and
+// then ignore it, which left zoomArmed true for good — and a stuck leader in a
+// zoom routes the program's next keystroke to baton, so a stray q typed at vim
+// would detach the cockpit.
+func TestZoomHangingLeaderExpires(t *testing.T) {
+	m, _ := zoomedAgent(t)
+
+	m = zoomPress(m, "ctrl+t")
+	if !m.zoomArmed {
+		t.Fatal("ctrl+t should arm the leader in a zoom")
+	}
+	m = expire(m)
+	if m.zoomArmed {
+		t.Fatal("a hanging zoom leader should lapse")
+	}
+
+	// And the next key belongs to the program again, not to baton.
+	m = zoomPress(m, m.bindingKey(actDetach))
+	if m.quitting {
+		t.Error("after the leader lapsed, a bare detach key must reach the program")
+	}
+}
+
+// The same, in the split, where the leader also used to hang forever.
+func TestSplitHangingLeaderExpires(t *testing.T) {
+	m := baseModel()
+	m.fleet = groupedFleet()
+	m = m.zoomGroup(m.dashItems()[0])
+
+	next, _ := m.handleGroupZoomKey(key("ctrl+t"))
+	m = next.(model)
+	if !m.groupArmed {
+		t.Fatal("ctrl+t should arm the leader in the split")
+	}
+	if m = expire(m); m.groupArmed {
+		t.Error("a hanging split leader should lapse")
+	}
+}

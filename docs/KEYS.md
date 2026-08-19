@@ -12,10 +12,13 @@ whether it sits under a **landing key**.
 
 ### Modal
 
-On the **dashboard** and in a **group split** the keys are baton's own, so an action fires on its bare key. In a **zoom**
-or an **interact** tile the keys belong to the program you are driving, so a baton action is the leader `C-t` followed by
-that same key. Nothing else changes — the key you learn on the dashboard is the key you press in a zoom, with `C-t` in
-front of it.
+On the **dashboard** the keys are baton's own, so an action fires on its bare key. In a **zoom** or an **interact**
+tile the keys belong to the program you are driving, so a baton action is the leader `C-t` followed by that same key.
+Nothing else changes — the key you learn on the dashboard is the key you press in a zoom, with `C-t` in front of it.
+
+A **group split** is in between. Its own keys are bare (`tab`, `L`, `z`, `p`, `i`, `x`, `s`, `S`), and so are the few
+commands it shares with the dashboard, but the landing families below are **not reachable there yet** — press `C-t d`
+for the dashboard, or `?` for the list that split actually has.
 
 ```text
 dashboard      p              spawn a shell panel
@@ -72,8 +75,9 @@ warns you when you do.
 ## Every key
 
 **Leader** — `C-t` means the leader is needed in every view; `(C-t)` means only a zoom needs it; `·` means never.
-**Landing** — the key you press first, if the action sits under one. A `(C-t)` row whose action needs a dashboard row —
-the work-item verbs — is refused in a zoom with the way forward on the status line.
+**Landing** — the key you press first, if the action sits under one. Landings work on the dashboard and, with the
+leader, in a zoom; the group split has its own keys and does not reach them. A `(C-t)` row whose action needs a
+dashboard row — the work-item verbs — is refused in a zoom with the way forward on the status line.
 
 | Purpose         | Leader | Landing | Key                 | Does                                             |
 | --------------- | ------ | ------- | ------------------- | ------------------------------------------------ |

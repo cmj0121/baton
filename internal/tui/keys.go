@@ -12,14 +12,19 @@ import (
 	"github.com/cmj0121/baton/internal/limits"
 )
 
-// Keybindings are modal. In the command-mode views (dashboard, group split) an
-// action fires on its bare key. In a zoom the keys reach the live program, so an
-// action fires on the prefix then that same key. The escapes are bound to the
-// prefix in every mode, including the dashboard.
+// Keybindings are modal. On the dashboard an action fires on its bare key. In a
+// zoom the keys reach the live program, so an action fires on the prefix then
+// that same key. The escapes are bound to the prefix in every mode, including
+// the dashboard.
 //
 //	dashboard:  p new · w close · g g mark · g c group · ? keys  (bare)
 //	zoom:       C-t p new · C-t w close · C-t g c group          (prefix + the same)
 //	any mode:   C-t d dashboard · C-t [ scroll                   (escapes)
+//
+// The group split is the exception: it answers a hand-written set of its own
+// keys (see groupzoom.go) and does not consult the matcher, so the landings
+// below do not reach it. Routing it through the matcher is the follow-up that
+// would make "command-mode view" mean one thing everywhere.
 //
 // A key is a SEQUENCE (see keyseq.go). Four of them are LANDINGS — keys that do
 // nothing on their own and open a family — which is what keeps the everyday

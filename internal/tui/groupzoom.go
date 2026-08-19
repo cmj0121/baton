@@ -915,41 +915,14 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// The split is command-mode, so the prefix is only needed for the universal
 	// escapes — C-t d leaves for the dashboard; bare b (back) does the same.
 	//
-	// These switches ENUMERATE the escapes rather than deferring to runAction, and
-	// the cost of that is that an escape added elsewhere silently does nothing here
-	// until it is listed. isEscape is what makes a key prefix-reachable; it is not
-	// what makes it work in a view that owns its own keyboard. Anything added to
-	// isEscape and meant to work "from any view" belongs in this switch and in the
-	// interact one below it.
+	// The escapes defer to runEscape rather than being listed here. They used to
+	// be enumerated by hand, in this handler and in the interact one below it, and
+	// the cost was what it sounds like: an escape added elsewhere did nothing in
+	// the split until someone remembered to list it here too.
 	if m.groupArmed {
 		m.groupArmed = false
 		if b, ok := m.lookupEscape(key); ok {
-			switch b.act {
-			case actDashboard:
-				return m.exitGroupZoom()
-			case actEditMap:
-				return m.openEditMap(modeGroupZoom), nil
-			case actScroll: // C-t [ → scroll the focused tile's history
-				return m.enterScroll(), nil
-			case actScratch: // C-t ~ → float the scratch pane over the split
-				return m.toggleScratch()
-			case actInbox: // C-t a → the attention inbox, over the split
-				return m.openInbox()
-			case actProcTree: // C-t o → the process-tree overlay
-				return m.openProcTree(modeGroupZoom), nil
-			case actRemote: // C-t @ → the remote overlay
-				return m.openRemote(modeGroupZoom)
-			case actCommands: // C-t c → the plugin command picker
-				return m.openCommandPicker(modeGroupZoom), nil
-			case actPanelConfig: // C-t P → panel defaults, over the split
-				return m.openPanelConfig(modeGroupZoom), nil
-			case actRestart: // C-t S → force-restart, after its own confirmation
-				return m.runAction(actRestart)
-			case actLogToggle: // C-t l → log the focused member's output to a file
-				return m.toggleLog()
-			case actLogView: // C-t L → read that log back, following it
-				return m.viewLog()
-			}
+			return m.runEscape(b)
 		}
 		if key == keyScreensaver { // C-t E → the hidden screensaver, over the split
 			return m.enterScreensaver(), saverTick()
@@ -967,7 +940,7 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if key == m.effPrefix() {
 		m.groupArmed = true
-		return m, nil
+		return m.leaderTick()
 	}
 	// esc goes back one level (summary → group, sub-group → parent, top → out);
 	// C-t d is what jumps straight out to the dashboard from any depth, as it
@@ -1098,33 +1071,7 @@ func (m model) handleGroupInteractKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.exitInteract(), nil
 		}
 		if b, ok := m.lookupEscape(key); ok {
-			switch b.act {
-			case actDashboard:
-				return m.exitGroupZoom()
-			case actEditMap:
-				return m.openEditMap(modeGroupZoom), nil
-			case actScroll: // C-t [ → scroll the focused tile's history
-				return m.enterScroll(), nil
-			case actScratch: // C-t ~ → float the scratch pane over the split
-				return m.toggleScratch()
-			case actInbox: // C-t a → the attention inbox, over the split
-				return m.openInbox()
-			case actProcTree: // C-t o → the process-tree overlay
-				return m.openProcTree(modeGroupZoom), nil
-			case actRemote: // C-t @ → the remote overlay
-				return m.openRemote(modeGroupZoom)
-			case actCommands: // C-t c → the plugin command picker
-				return m.openCommandPicker(modeGroupZoom), nil
-			case actPanelConfig: // C-t P → panel defaults, over the split
-				return m.openPanelConfig(modeGroupZoom), nil
-			case actRestart: // C-t S → force-restart, after its own confirmation
-				return m.runAction(actRestart)
-			case actLogToggle: // C-t l → log the focused member's output to a file
-				return m.toggleLog()
-			case actLogView: // C-t L → read that log back, following it
-				return m.viewLog()
-			}
-			return m, nil
+			return m.runEscape(b)
 		}
 		if key == m.bindingKey(actDetach) { // C-t q detaches from interact too
 			return m.runAction(actDetach)
@@ -1133,7 +1080,7 @@ func (m model) handleGroupInteractKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if key == m.effPrefix() {
 		m.groupArmed = true
-		return m, nil
+		return m.leaderTick()
 	}
 	m.scrollOff = 0 // driving the program returns the tile to its live bottom
 	m.feedFocused(k)

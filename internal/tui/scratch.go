@@ -108,7 +108,7 @@ func (m model) handleScratchKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if key == m.effPrefix() {
 		m.scratchArmed = true
-		return m, nil
+		return m.leaderTick()
 	}
 	m.feedScratch(k)
 	return m, nil

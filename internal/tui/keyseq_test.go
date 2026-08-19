@@ -129,7 +129,7 @@ func TestSeqNext(t *testing.T) {
 		if got[i].key != w {
 			t.Errorf("seqNext([g])[%d].key = %q, want %q", i, got[i].key, w)
 		}
-		if got[i].name == "" {
+		if got[i].b.name == "" {
 			t.Errorf("seqNext([g])[%d] should name the binding it completes", i)
 		}
 	}
@@ -155,23 +155,23 @@ func TestSeqNextNestedLanding(t *testing.T) {
 	for _, c := range got {
 		byKey[c.key] = c
 	}
-	if byKey["x"].name != "" {
-		t.Errorf("a landing continuation should carry no binding name, got %q", byKey["x"].name)
+	if byKey["x"].b.name != "" {
+		t.Errorf("a landing continuation should carry no binding name, got %q", byKey["x"].b.name)
 	}
-	if byKey["u"].name != "flat" {
-		t.Errorf("a completing continuation should name its binding, got %q", byKey["u"].name)
+	if byKey["u"].b.name != "flat" {
+		t.Errorf("a completing continuation should name its binding, got %q", byKey["u"].b.name)
 	}
 }
 
-func TestIsLanding(t *testing.T) {
+func TestALandingResolvesAsPartial(t *testing.T) {
 	binds := bindsOf("mark=g g", "new=p")
-	if !isLanding(binds, "g", nil) {
-		t.Errorf("g opens a family and should read as a landing")
+	if _, m := matchSeq(binds, []string{"g"}, nil); m != seqPartial {
+		t.Errorf("g opens a family and should resolve as a landing")
 	}
-	if isLanding(binds, "p", nil) {
+	if _, m := matchSeq(binds, []string{"p"}, nil); m != seqExact {
 		t.Errorf("p is a binding of its own and is not a landing")
 	}
-	if isLanding(binds, "z", nil) {
+	if _, m := matchSeq(binds, []string{"z"}, nil); m != seqNone {
 		t.Errorf("an unbound key is not a landing")
 	}
 }
