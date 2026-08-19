@@ -282,6 +282,7 @@ type prefs struct {
 	foldSimilar       bool                           // group summary tile folds the lookalikes, not the latecomers; default on
 	inboxDone         bool                           // a finished agent joins the attention inbox as a "review me" row; default on
 	inboxSnooze       time.Duration                  // how long the inbox's `-` defers a row; default defaultInboxSnooze
+	keyTimeout        time.Duration                  // settings.key-timeout: how long a landing key waits for the key after it; 0 = never
 	notify            bool                           // send OSC 9 desktop notifications when panels need a human; default OFF
 	notifyCoalesce    time.Duration                  // how long edges are gathered into one notification; default defaultNotifyCoalesce
 }
@@ -301,13 +302,14 @@ func loadPrefs() prefs {
 // differently.
 func prefsFromConfig(cfg config.Config) prefs {
 	p := prefs{prefix: keyPrefix, binds: append([]binding(nil), bindings...), confirmClose: true, bellEnabled: true, usageMode: usageWindow,
-		foldQuiet: defaultFoldQuiet, foldSimilar: true, inboxDone: true, inboxSnooze: defaultInboxSnooze}
+		foldQuiet: defaultFoldQuiet, foldSimilar: true, inboxDone: true, inboxSnooze: defaultInboxSnooze,
+		keyTimeout: parseKeyTimeout(cfg.Settings.KeyTimeout)}
 
 	if cfg.Prefix != "" {
 		p.prefix = cfg.Prefix
 	}
 	for i := range p.binds {
-		if k := cfg.Keys[p.binds[i].name]; k != "" {
+		if k := normSeq(cfg.Keys[p.binds[i].name]); k != "" {
 			p.binds[i].key = k
 		}
 	}

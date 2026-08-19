@@ -135,8 +135,25 @@ type model struct {
 	fleet  []panel.Panel // dummy + live panels shown on the dashboard
 
 	mode   mode
-	prefix bool            // armed by the prefix key, consumes the next key as a binding
-	cursor int             // selection index (dashboard item, or key-map row)
+	prefix bool // armed by the prefix key, consumes the next key as a binding
+	cursor int  // selection index (dashboard item, or key-map row)
+
+	// The run of keys typed towards a binding. pending holds the tokens so far
+	// — empty unless a LANDING key is open — and pendingHit is the binding that
+	// fires if the run lapses where it stands, which only happens when a
+	// binding is also the start of a longer one. pendingGen stamps the expiry
+	// tick so a stale one cannot clear its successor's run. See keypending.go.
+	pending       []string
+	pendingHit    binding
+	pendingHasHit bool
+	pendingGen    int
+
+	// keyTimeout is settings.key-timeout: how long a landing waits. 0 means
+	// never expire, so keyTimeoutSet distinguishes "configured as 0" from a
+	// zero-valued model, which takes the default.
+	keyTimeout    time.Duration
+	keyTimeoutSet bool
+
 	marked map[string]bool // panel ids tagged for the next group (multi-select)
 	status string
 
@@ -564,6 +581,7 @@ func (m model) applyPrefs(p prefs) model {
 	m.foldQuiet = p.foldQuiet
 	m.inboxDone = p.inboxDone
 	m.inboxSnooze = p.inboxSnooze
+	m.keyTimeout, m.keyTimeoutSet = p.keyTimeout, true
 	m.notifyEnabled = p.notify
 	m.notifyCoalesce = p.notifyCoalesce
 	if !m.notifyEnabled {
@@ -946,6 +964,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(note, cmd, tick())
 		}
 		return m, tea.Batch(note, tick())
+
+	case seqTimeoutMsg:
+		// A landing has waited long enough. Either it ends on a binding, which
+		// now fires, or it was only ever a landing and simply clears.
+		return m.expirePending(msg.gen)
 
 	case saverTickMsg:
 		// Advance the rain, re-arming the fast cadence only while the saver is still
@@ -1364,10 +1387,22 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	pkey := m.effPrefix()
 
+	// A landing key is open, so this key completes the run rather than doing
+	// whatever it means on its own: the k of "v k" belongs to the sequence, not
+	// to the cursor. This has to come before the navigation switch below for
+	// exactly that reason.
+	if len(m.pending) > 0 {
+		if m.mode == modeDashboard {
+			return m.advanceSeq(key, cmdBinding, runCmdBinding)
+		}
+		m = m.clearPending() // the view changed under an open run; it does not follow
+	}
+
 	// In command mode the prefix is only for the universal escapes (C-t d / C-t
 	// g); every other action is a single key.
 	if m.prefix {
 		m.prefix = false
+		m.pendingGen++ // the leader is spoken for; its expiry tick is now stale
 		if b, ok := m.lookupEscape(key); ok {
 			return m.runAction(b.act)
 		}
@@ -1406,7 +1441,8 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key {
 	case pkey:
 		m.prefix = true
-		return m, nil
+		m.pendingGen++
+		return m, seqTick(m.pendingGen, m.effKeyTimeout())
 	case keyCtrlC, keyCtrlE:
 		// Emergency-quit keys are captured here: command mode exits only through
 		// the detach binding, so nudge the user toward it instead of quitting.
@@ -1522,15 +1558,10 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.runAction(actDashboard)
 		}
 	default:
-		// On the dashboard every command is a single key.
+		// On the dashboard a command is a key, or the run of keys a landing
+		// opens; the matcher answers for both.
 		if m.mode == modeDashboard {
-			if b, ok := m.lookupCmd(key); ok {
-				if m.refusedOnFoldRow(b.act) {
-					m.status = "expand the quiet group first"
-					return m, nil
-				}
-				return m.runAction(b.act)
-			}
+			return m.advanceSeq(key, cmdBinding, runCmdBinding)
 		}
 	}
 	return m, nil
@@ -4280,9 +4311,12 @@ func (m model) versionLine() string {
 }
 
 func (m model) statusBar(left, hint string) string {
-	prefixBadge := ""
-	if m.prefix {
-		prefixBadge = seg("PREFIX", colDark, colBrandHi)
+	// The run so far — "C-t …", "g …", "C-t v …" — in place of the older PREFIX
+	// chip, which said only that the leader was down and said it on the
+	// dashboard alone. The keys it can still take ride in the hint region below.
+	prefixBadge := m.pendingCap()
+	if h := m.pendingHint(cmdBinding); h != "" {
+		hint = h
 	}
 	clock := seg("⏱ "+m.now.Format("15:04:05"), colDark, colCyan)
 	stats := m.statsStrip()
