@@ -26,10 +26,10 @@ func openGitMenu(t *testing.T, m model) model {
 	t.Helper()
 	nm, _ := m.handleZoomKey(key("ctrl+t"))
 	m = nm.(model)
-	nm, _ = m.handleZoomKey(key("g"))
+	nm, _ = m.handleZoomKey(key(keyGitMenu))
 	m = nm.(model)
 	if m.mode != modeGit {
-		t.Fatalf("C-t g should open the git menu, got mode=%v", m.mode)
+		t.Fatalf("C-t %s should open the git menu, got mode=%v", keyGitMenu, m.mode)
 	}
 	return m
 }
@@ -73,7 +73,7 @@ func TestGitMenuGatedOnShell(t *testing.T) {
 
 	nm, _ := m.handleZoomKey(key("ctrl+t"))
 	m = nm.(model)
-	nm, _ = m.handleZoomKey(key("g"))
+	nm, _ = m.handleZoomKey(key(keyGitMenu))
 	m = nm.(model)
 	if m.mode == modeGit {
 		t.Fatal("the git menu must not open on a shell zoom")

@@ -211,8 +211,8 @@ func TestRunActionsWithoutClient(t *testing.T) {
 	if m.mode != modeHelp {
 		t.Fatal("? should open the key list")
 	}
-	if m := press(base(), "S", "y"); !m.restart {
-		t.Fatal("S then y should request a restart")
+	if m := press(base(), "ctrl+t", keyRestart, "y"); !m.restart {
+		t.Fatal("C-t S then y should request a restart")
 	}
 	if m := press(base(), "q"); !m.quitting {
 		t.Fatal("q should quit")
@@ -301,9 +301,9 @@ func TestNewPanelFormPrefills(t *testing.T) {
 		binds: append([]binding(nil), bindings...), shellPath: "/bin/zsh"}
 
 	// prefix+n opens the new-panel popup prefilled with the default shell.
-	m = press(m, "c")
+	m = press(m, keyNewForm)
 	if m.input != inputNewPanelCmd {
-		t.Fatalf("prefix+n should open the new-panel input, got %v", m.input)
+		t.Fatalf("%s should open the new-panel input, got %v", keyNewForm, m.input)
 	}
 	if m.inputBuf != "/bin/zsh" {
 		t.Fatalf("popup should prefill the default shell, got %q", m.inputBuf)

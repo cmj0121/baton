@@ -13,58 +13,70 @@ import (
 )
 
 // Keybindings are modal. In the command-mode views (dashboard, group split) an
-// action fires on a single key. In a zoom the keys reach the live program, so an
-// action fires on the prefix then the key. Two escapes — dashboard and group
-// view — are bound to the prefix and work in every mode.
+// action fires on its bare key. In a zoom the keys reach the live program, so an
+// action fires on the prefix then that same key. The escapes are bound to the
+// prefix in every mode, including the dashboard.
 //
-//	dashboard:  p new · w close · g mark · G group · ? key map · …  (single keys)
-//	zoom:       C-t p new · C-t w close · …                          (prefix + key)
-//	any mode:   C-t d dashboard · C-t [ scroll                      (escapes)
+//	dashboard:  p new · w close · g g mark · g c group · ? keys  (bare)
+//	zoom:       C-t p new · C-t w close · C-t g c group          (prefix + the same)
+//	any mode:   C-t d dashboard · C-t [ scroll                   (escapes)
+//
+// A key is a SEQUENCE (see keyseq.go). Four of them are LANDINGS — keys that do
+// nothing on their own and open a family — which is what keeps the everyday
+// verbs on one key while the long tail stays reachable and discoverable:
+//
+//	n  new     n c form · n . here · n C conductor · n h global shell
+//	v  view    v u usage · v k keycast · v p preview · v l layout · v g lens
+//	g  group   g g mark · g c create · g a add · g u ungroup
+//	x  purge   x x — the second tap is the confirmation
+//
+// No landing is also a binding of its own, so a sequence fires on its last key
+// and the timeout never delays a keystroke. keyseq_test.go asserts it.
 const (
 	keyPrefix      = "ctrl+t"
 	keyNewPanel    = "p"
-	keyNewForm     = "c" // "choose the command" (n is rename)
-	keyNewHere     = "." // spawn a shell panel in the focused panel's current directory — "." reads as "here"
-	keyNewAgent    = "A" // spawn an agent panel (shift+a)
-	keyConductor   = "C" // find-or-create the singleton conductor agent (shift+c)
-	keyGlobalShell = "H" // find-or-create the singleton global shell (shift+h)
+	keyNewForm     = "n c" // new panel, choosing the command
+	keyNewHere     = "n ." // spawn a shell panel in the focused panel's current directory — "." reads as "here"
+	keyNewAgent    = "A"   // spawn an agent panel (shift+a) — one of the two spawns that keep a bare key
+	keyConductor   = "n C" // find-or-create the singleton conductor agent
+	keyGlobalShell = "n h" // find-or-create the singleton global shell
 	keyClose       = "w"
-	keyRespawn     = "r" // re-run the exited panel(s) under the focus — a lone dead slot, or every exited member of the focused group
-	keyPurge       = "x"
-	keySignal      = "s" // open the send-signal picker for the selection / panel / group
-	keySearch      = "f" // find: filter panels on the dashboard, search the scrollback in a zoom (C-t f)
-	keyFleetSearch = "/" // grep every panel's output for a term (dashboard; C-t / in a zoom)
-	keyDiff        = "D" // show the work-tree diff of the focused agent panel (shift+d; C-t D in a zoom)
-	keyDispatch    = "T" // dispatch a task to the focused agent panel (shift+t; C-t T in a zoom)
-	keyEnqueue     = "t" // enqueue a task for the scheduler to drain onto a free agent (bare t, the everyday sibling of T; C-t t in a zoom)
-	keyQueue       = "Q" // open the task-queue manager popup (shift+q; C-t Q in a zoom)
-	keyUsage       = "U" // toggle the account usage/cost footer segment (shift+u)
-	keyKeycast     = "K" // toggle the key-press readout in the footer (shift+k; the sibling of U)
-	keyPreview     = "v" // toggle the dashboard's detail pane beside the tree
-	keyLens        = "z" // cycle the dashboard's group-by lens: work item, directory, profile, state
-	keyHelp        = "?" // view the key list for the current view
-	keyEditMap     = "k" // edit the key map (prefix only: C-t k)
-	keyPanelConfig = "P" // shift+p
-	keyScroll      = "[" // enter scroll mode (prefix only: C-t [), tmux-style
-	keyRestart     = "S" // shift+s
-	keyReload      = "R" // shift+r — reload config (backend + cockpit), fleet kept
+	keyRespawn     = "r"   // re-run the exited panel(s) under the focus — a lone dead slot, or every exited member of the focused group
+	keyPurge       = "x x" // purge every exited panel — a double tap, because the second one is the confirmation
+	keySignal      = "s"   // open the send-signal picker for the selection / panel / group
+	keySearch      = "f"   // find: filter panels on the dashboard, search the scrollback in a zoom (C-t f)
+	keyFleetSearch = "/"   // grep every panel's output for a term (dashboard; C-t / in a zoom)
+	keyDiff        = "D"   // show the work-tree diff of the focused agent panel (shift+d; C-t D in a zoom)
+	keyDispatch    = "T"   // dispatch a task to the focused agent panel (shift+t; C-t T in a zoom)
+	keyEnqueue     = "t"   // enqueue a task for the scheduler to drain onto a free agent (bare t, the everyday sibling of T; C-t t in a zoom)
+	keyQueue       = "Q"   // open the task-queue manager popup (shift+q; C-t Q in a zoom)
+	keyUsage       = "v u" // cycle the account usage/cost footer segment
+	keyKeycast     = "v k" // toggle the key-press readout in the footer
+	keyPreview     = "v p" // toggle the dashboard's detail pane beside the tree
+	keyLens        = "v g" // cycle the dashboard's group-by lens: work item, directory, profile, state — bare z is the split's resize and nothing else
+	keyHelp        = "?"   // view the key list for the current view
+	keyEditMap     = "k"   // edit the key map (prefix only: C-t k)
+	keyPanelConfig = "P"   // shift+p
+	keyScroll      = "["   // enter scroll mode (prefix only: C-t [), tmux-style
+	keyRestart     = "S"   // C-t S only: bare S signals a whole group in the split, and this ends the fleet
+	keyReload      = "R"   // shift+r — reload config (backend + cockpit), fleet kept
 	keyDetach      = "q"
 	keyBack        = "b" // back one level: zoom→group→dashboard (bare in command mode, C-t b in a zoom)
 
-	keyMark      = "g" // mark / unmark the selected item
-	keyGroup     = "G" // group the marked panels (shift+g)
-	keyAdd       = "a" // add the marked panels to the selected group
-	keyUngroup   = "u" // dissolve the selected work item
-	keyRename    = "e" // edit the name of the selected panel or group
-	keyFavourite = "*" // favourite / unfavourite the selected panel or group (sorts it to the front)
-	keyGrab      = "m" // move: pick the selected row up, carry it through the tree, drop it
-	keyExpand    = " " // space: show or hide what is nested under the selected row
+	keyMark      = "g g"   // mark / unmark the selected item — the cheapest key in its family, the same finger twice
+	keyGroup     = "g c"   // create a work item from the marked panels
+	keyAdd       = "g a"   // add the marked panels to the selected group
+	keyUngroup   = "g u"   // dissolve the selected work item
+	keyRename    = "e"     // edit the name of the selected panel or group
+	keyFavourite = "*"     // favourite / unfavourite the selected panel or group (sorts it to the front)
+	keyGrab      = "m"     // move: pick the selected row up, carry it through the tree, drop it
+	keyExpand    = "space" // show or hide what is nested under the selected row
 
-	// keyDashLayout is the dashboard's cards-or-tree switch. V rather than a free
-	// letter because it sits beside v, the detail pane: both answer "how is this
-	// drawn", and neither touches the fleet. (The group split's own L cycles tile
-	// layouts and is a different view's key.)
-	keyDashLayout = "V"
+	// keyDashLayout is the dashboard's cards-or-tree switch. It sits under the v
+	// landing beside the detail pane and the lens: all three answer "how is this
+	// drawn", and none of them touches the fleet. (The group split's own L cycles
+	// tile layouts and is a different view's key.)
+	keyDashLayout = "v l"
 
 	// Prefix-reached escapes, bound to the leader in every mode.
 	keyDashboard = "d" // C-t d → the dashboard
@@ -160,12 +172,10 @@ const (
 	// key behind it opens the machine to another host, which is not a key to put
 	// a fingertip from the arrow keys.
 	//
-	// It is bound to "@" rather than to a letter because an escape SHADOWS a
-	// command under the prefix (C-t c shadows the new-panel form, C-t a shadows
-	// add), and every letter that reads as "remote" is already taken — `r` is
-	// respawn, and costing a zoom its respawn to spell a mnemonic is a bad trade.
-	// "@" is bound to nothing, and it says what the overlay is: a list of
-	// user@host.
+	// It is bound to "@" rather than to a letter because every letter that reads
+	// as "remote" is taken — `r` is respawn, and costing a zoom its respawn to
+	// spell a mnemonic is a bad trade. "@" is bound to nothing, and it says what
+	// the overlay is: a list of user@host.
 	actRemote
 
 	// The logging pair. Both are prefix-reached in every view, including the
@@ -180,9 +190,13 @@ const (
 // bare key — lookupCmd skips these, lookupEscape resolves them. The dashboard jump
 // and the key-map editor work after the prefix in every mode; panel config opens
 // this way from command mode.
+// actRestart is an escape rather than a command: bare S signals every member of
+// a work item in the split, and a key that ends the whole fleet must not be one
+// keystroke away from that in another view.
 func isEscape(a action) bool {
 	return a == actDashboard || a == actEditMap || a == actPanelConfig || a == actScroll || a == actCommands ||
-		a == actScratch || a == actProcTree || a == actInbox || a == actRemote || a == actLogToggle || a == actLogView
+		a == actScratch || a == actProcTree || a == actInbox || a == actRemote || a == actLogToggle ||
+		a == actLogView || a == actRestart
 }
 
 // binding is one editable command: a stable name (used to persist the key), the
@@ -246,7 +260,7 @@ var bindings = []binding{
 	{"commands", keyCommands, "open the plugin command picker (prefix)", actCommands, "View"},
 	{"scratch", keyScratch, "toggle a floating scratch shell (prefix)", actScratch, "View"},
 
-	{"restart", keyRestart, "force-restart the server", actRestart, "Session"},
+	{"restart", keyRestart, "force-restart the server (prefix)", actRestart, "Session"},
 	{"reload", keyReload, "reload config (backend + cockpit)", actReload, "Session"},
 	{"detach", keyDetach, "detach (server keeps running)", actDetach, "Session"},
 }
@@ -441,13 +455,21 @@ var (
 			Bold(true)
 )
 
-// chord renders a prefixed binding as two keycaps, e.g. [C-t][p], using prefix
-// as the leader label. When hot the caps glow in the brand colour (used for the
-// selected key-map row).
-func chord(prefix, key string, hot bool) string {
+// keycaps renders a binding as ONE KEYCAP PER KEY — [g][c], or [C-t][d] when a
+// leader is named — because a sequence set in a single cap reads as one
+// impossible key rather than as the run you actually press. When hot the caps
+// glow in the brand colour (used for the selected key-map row).
+func keycaps(prefix, key string, hot bool) string {
 	cap := keycapStyle
 	if hot {
 		cap = keycapHotStyle
 	}
-	return cap.Render(prefix) + " " + cap.Render(key)
+	var parts []string
+	if prefix != "" {
+		parts = append(parts, cap.Render(prefix))
+	}
+	for _, t := range strings.Fields(normSeq(key)) {
+		parts = append(parts, cap.Render(keyLabel(t)))
+	}
+	return strings.Join(parts, " ")
 }

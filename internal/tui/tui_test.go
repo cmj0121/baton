@@ -29,11 +29,16 @@ func key(s string) tea.KeyMsg {
 	}
 }
 
-// press feeds a sequence of keys through handleKey and returns the final model.
+// press feeds keys through handleKey and returns the final model. An argument
+// may be a whole binding rather than one key — "g c", or the keyGroup constant
+// — which is pressed a token at a time, so a case can name the binding it means
+// instead of spelling out the run and going stale on the next rebind.
 func press(m model, keys ...string) model {
 	for _, k := range keys {
-		next, _ := m.handleKey(key(k))
-		m = next.(model)
+		for _, t := range strings.Fields(normSeq(k)) {
+			next, _ := m.handleKey(key(t))
+			m = next.(model)
+		}
 	}
 	return m
 }
@@ -327,10 +332,11 @@ func TestRestartBindingFlagsRestart(t *testing.T) {
 		t.Fatal("a fresh model should not request a restart")
 	}
 
-	// S arms a confirmation — it does not restart or quit yet.
-	m = press(m, "S")
+	// C-t S arms a confirmation — it does not restart or quit yet. It is an
+	// escape, so the leader is needed even on the dashboard.
+	m = press(m, "ctrl+t", keyRestart)
 	if !m.pendingRestart {
-		t.Fatal("S should arm the restart confirmation")
+		t.Fatal("C-t S should arm the restart confirmation")
 	}
 	if m.restart || m.quitting {
 		t.Fatal("a restart must not fire before the user confirms")
@@ -346,9 +352,9 @@ func TestRestartBindingFlagsRestart(t *testing.T) {
 // TestRestartConfirmationCancels checks any non-yes key aborts the restart.
 func TestRestartConfirmationCancels(t *testing.T) {
 	m := model{mode: modeDashboard, fleet: sampleFleet()}
-	m = press(m, "S")
+	m = press(m, "ctrl+t", keyRestart)
 	if !m.pendingRestart {
-		t.Fatal("S should arm the restart confirmation")
+		t.Fatal("C-t S should arm the restart confirmation")
 	}
 	m = press(m, "n")
 	if m.pendingRestart || m.restart || m.quitting {

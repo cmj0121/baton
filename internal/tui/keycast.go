@@ -46,6 +46,7 @@ func (m model) noteKey(key string) model {
 		return m
 	}
 
+	key = tok(key)
 	switch {
 	case armed:
 		m.keycastKey = keyLabel(pfx) + " " + keyLabel(key)
@@ -58,11 +59,20 @@ func (m model) noteKey(key string) model {
 	case key == pfx:
 		m.keycastKey, m.keycastAct = keyLabel(key), "…" // the leader, waiting for its second half
 	default:
-		m.keycastKey, m.keycastAct = keyLabel(key), ""
-		if b, ok := m.lookupCmd(key); ok {
+		// The whole run, not just this key: a landing shows as "g …" and its
+		// completion as "g c  group", which is the readout a viewer needs to
+		// make sense of a two-key action on a recording.
+		run := append(append([]string(nil), m.pending...), key)
+		m.keycastKey, m.keycastAct = strings.Join(labelTokens(run), " "), ""
+		switch b, res := matchSeq(m.keymap(), run, cmdBinding); res {
+		case seqExact, seqExactPartial:
 			m.keycastAct = actionLabel(b)
-		} else if nav, ok := navLabels[key]; ok {
-			m.keycastAct = nav
+		case seqPartial:
+			m.keycastAct = "…"
+		default:
+			if nav, ok := navLabels[key]; ok {
+				m.keycastAct = nav
+			}
 		}
 	}
 	m.keycastAt = m.now

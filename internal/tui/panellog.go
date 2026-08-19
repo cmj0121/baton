@@ -74,7 +74,7 @@ func (m model) viewLog() (tea.Model, tea.Cmd) {
 // logChord renders the logging toggle as the chord a user actually presses, so
 // the "not being logged" message names the key rather than describing it.
 func (m model) logChord() string {
-	return keyLabel(m.effPrefix()) + " " + keyLabel(m.bindingKey(actLogToggle))
+	return keyLabel(m.effPrefix()) + " " + seqLabel(m.bindingKey(actLogToggle))
 }
 
 // logBadge is the card marker for a panel whose output is being written to disk:

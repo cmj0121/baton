@@ -628,15 +628,15 @@ func TestKeyMapRebindsGroupKey(t *testing.T) {
 	// The rebound bare key now triggers grouping on the dashboard.
 	m.mode = modeDashboard
 	m.cursor = 1
-	m = press(m, "g") // mark a panel (mark key unchanged)
-	m = press(m, "z") // the rebound group key
+	m = press(m, keyMark) // mark a panel (the mark binding is untouched)
+	m = press(m, "z")     // the rebound group key
 	if m.input != inputGroupName {
 		t.Fatalf("the rebound group key should open the group overlay, got %v", m.input)
 	}
 
 	// The old default key no longer groups.
-	if _, ok := m.lookupCmd("G"); ok {
-		t.Fatal("the old group key G should no longer be bound")
+	if _, ok := m.lookupCmd(keyGroup); ok {
+		t.Fatalf("the old group key %q should no longer be bound", keyGroup)
 	}
 }
 

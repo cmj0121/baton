@@ -965,11 +965,10 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.groupArmed = true
 		return m, nil
 	}
-	// The dashboard key (d) jumps straight out of the split, skipping any levels;
-	// esc goes back just one level (summary → group, sub-group → parent, top → out).
-	if key == m.bindingKey(actDashboard) {
-		return m.exitGroupZoom()
-	}
+	// esc goes back one level (summary → group, sub-group → parent, top → out);
+	// C-t d is what jumps straight out to the dashboard from any depth, as it
+	// does from every other view. The split used to answer a bare d as well, and
+	// an escape that is bare in exactly one view is a rule nobody can hold.
 	if key == "esc" {
 		return m.popGroupLevel()
 	}

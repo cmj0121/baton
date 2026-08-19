@@ -762,6 +762,7 @@ func (m *model) ensureBinds() {
 // lookupCmd resolves a command key (a single keystroke in command mode, or the
 // key after the prefix in a zoom) to its binding. Escapes are excluded.
 func (m model) lookupCmd(key string) (binding, bool) {
+	key = tok(key)
 	for _, b := range m.keymap() {
 		if !isEscape(b.act) && b.key == key {
 			return b, true
@@ -773,6 +774,7 @@ func (m model) lookupCmd(key string) (binding, bool) {
 // lookupEscape resolves a key pressed after the prefix to a prefix-accessed
 // action (the dashboard/group jumps, the key-map editor, panel config).
 func (m model) lookupEscape(key string) (binding, bool) {
+	key = tok(key)
 	for _, b := range m.keymap() {
 		if isEscape(b.act) && b.key == key {
 			return b, true
@@ -1262,13 +1264,10 @@ func (m *model) applyTelemetry(sm proto.ServerMsg) {
 }
 
 func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
-	key := k.String()
 	// The space bar answers to two names depending on the terminal and the
-	// bubbletea version. One of them reaches the bindings, so a key map that binds
-	// space cannot half-work — and no handler has to remember to check for both.
-	if key == "space" {
-		key = keyExpand
-	}
+	// bubbletea version; tok settles on the one the key map is written in, so a
+	// binding on space cannot half-work and no handler has to check for both.
+	key := tok(k.String())
 
 	// The send-signal picker owns the keyboard until a signal is chosen or esc.
 	if m.mode == modeSignal {
@@ -2111,7 +2110,7 @@ func (m model) conductorMark() string {
 	info := stateInfoFor(p)
 	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
 	name := lipgloss.NewStyle().Foreground(colBrandHi).Render("conductor")
-	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", info.label, keyLabel(m.bindingKey(actConductor))))
+	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", info.label, seqLabel(m.bindingKey(actConductor))))
 }
 
 // globalShellMark is the FLEET-heading badge for the singleton global shell — the
@@ -2126,7 +2125,7 @@ func (m model) globalShellMark() string {
 	info := stateInfoFor(p)
 	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
 	name := lipgloss.NewStyle().Foreground(colBrandHi).Render("shell")
-	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", info.label, keyLabel(m.bindingKey(actGlobalShell))))
+	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", info.label, seqLabel(m.bindingKey(actGlobalShell))))
 }
 
 // spawnConductor asks the server to create the conductor: the resolved agent
@@ -3104,7 +3103,7 @@ func (m model) bindingKey(a action) string {
 // Ctrl-E) is pressed in command mode, where leaving is only via the detach
 // binding — never an accidental Ctrl-C.
 func (m model) exitHint() string {
-	return "exit is disabled here — press " + keyLabel(m.bindingKey(actDetach)) + " to detach"
+	return "exit is disabled here — press " + seqLabel(m.bindingKey(actDetach)) + " to detach"
 }
 
 // closeSelected asks the server to close the highlighted item and drops its
@@ -3462,7 +3461,7 @@ func (m model) dashboardView() string {
 	// is a choice someone made, and the dashboard should say so rather than leave
 	// them wondering which of them decided it.
 	if m.treeIsChosen(m.dashTree()) {
-		heading += "  " + seg("tree  "+keyLabel(m.bindingKey(actDashLayout))+" for cards", colDark, colBrand)
+		heading += "  " + seg("tree  "+seqLabel(m.bindingKey(actDashLayout))+" for cards", colDark, colBrand)
 	}
 	summary := m.summaryStrip(shown)
 	body := m.treeBody(items)
@@ -3499,9 +3498,9 @@ func (m model) summaryStrip(fleet []panel.Panel) string {
 	if len(chips) == 0 {
 		return noticeBox(mutedStyle.Render("no panels yet  ·  ") +
 			legend(
-				keyLabel(m.bindingKey(actNewPanel)), "shell",
-				keyLabel(m.bindingKey(actNewAgent)), "agent",
-				keyLabel(m.bindingKey(actConductor)), "conductor",
+				seqLabel(m.bindingKey(actNewPanel)), "shell",
+				seqLabel(m.bindingKey(actNewAgent)), "agent",
+				seqLabel(m.bindingKey(actConductor)), "conductor",
 			))
 	}
 	return strings.Join(chips, mutedStyle.Render("   ·   "))
@@ -3754,7 +3753,7 @@ func (m model) helpView() string {
 	title, body := m.helpContent()
 	pfx := keyLabel(m.effPrefix())
 	legend := mutedStyle.Render("esc  " + m.tr("help.legend.back", "back") +
-		"   ·   " + pfx + " " + keyLabel(m.bindingKey(actEditMap)) + "  " + m.tr("help.legend.edit", "edit"))
+		"   ·   " + pfx + " " + seqLabel(m.bindingKey(actEditMap)) + "  " + m.tr("help.legend.edit", "edit"))
 	return m.renderScrollPanel(scrollPanel{
 		title:    title + " " + m.tr("help.title.keys", "KEYS"),
 		body:     body,
@@ -3772,8 +3771,8 @@ func (m model) helpView() string {
 func (m model) helpContent() (title string, body []string) {
 	kc := func(s string) string { return keycapStyle.Render(s) }
 	pfx := keyLabel(m.effPrefix())
-	dash := keyLabel(m.bindingKey(actDashboard))
-	detach := keyLabel(m.bindingKey(actDetach))
+	dash := seqLabel(m.bindingKey(actDashboard))
+	detach := seqLabel(m.bindingKey(actDetach))
 
 	// helpRow is one key line tagged with the purpose section it sorts under, so
 	// every stage's list groups by category just like the editable key map. desc
@@ -3799,15 +3798,15 @@ func (m model) helpContent() (title string, body []string) {
 			{"Work items", kc(keyLabel(keyPin)), tr("help.group.pin", "pin / unpin the focused panel to a live tile")},
 			{"Work items", kc(keyLabel(keySignal)) + " " + kc(keyLabel(keySignalAll)), tr("help.group.signal", "signal the focused panel · the whole group")},
 			{"Work items", kc(keyLabel(keyRemove)), tr("help.group.remove", "remove the focused panel from the group")},
-			{"Panels", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actLogToggle))) + " " + kc(keyLabel(m.bindingKey(actLogView))), tr("help.common.log", "log this panel's output to a file · read it back")},
-			{"View", kc(keyLabel(m.bindingKey(actHelp))), tr("help.common.keys", "this key list")},
-			{"View", kc(keyLabel(m.bindingKey(actBack))) + " " + kc(dash) + " " + kc("esc"), tr("help.group.back", "back to the dashboard")},
+			{"Panels", kc(pfx) + " " + kc(seqLabel(m.bindingKey(actLogToggle))) + " " + kc(seqLabel(m.bindingKey(actLogView))), tr("help.common.log", "log this panel's output to a file · read it back")},
+			{"View", kc(seqLabel(m.bindingKey(actHelp))), tr("help.common.keys", "this key list")},
+			{"View", kc(seqLabel(m.bindingKey(actBack))) + " " + kc(dash) + " " + kc("esc"), tr("help.group.back", "back to the dashboard")},
 			{"View", kc(pfx) + " " + kc(keyLabel(keyInteract)), tr("help.group.stop-interact", "stop interacting (while in interact)")},
 			{"View", kc(pfx) + " " + kc(dash), tr("help.group.dashboard", "dashboard (works in every view)")},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actProcTree))), tr("help.common.proc-tree", "process tree · the daemon's OS processes")},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actRemote))), tr("help.common.remote", "remote access · the passkey and the live connections")},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), tr("help.common.edit-map", "edit the key map")},
-			{"Session", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actReload))), tr("help.common.reload", "reload config (backend + cockpit)")},
+			{"View", kc(pfx) + " " + kc(seqLabel(m.bindingKey(actProcTree))), tr("help.common.proc-tree", "process tree · the daemon's OS processes")},
+			{"View", kc(pfx) + " " + kc(seqLabel(m.bindingKey(actRemote))), tr("help.common.remote", "remote access · the passkey and the live connections")},
+			{"View", kc(pfx) + " " + kc(seqLabel(m.bindingKey(actEditMap))), tr("help.common.edit-map", "edit the key map")},
+			{"Session", kc(pfx) + " " + kc(seqLabel(m.bindingKey(actReload))), tr("help.common.reload", "reload config (backend + cockpit)")},
 			{"Session", kc(pfx) + " " + kc(detach), tr("help.common.detach", "detach (server keeps running)")},
 		}
 	case modeZoom:
@@ -3817,15 +3816,15 @@ func (m model) helpContent() (title string, body []string) {
 			{"Navigation", kc(pfx) + " " + kc(keyScroll), tr("help.zoom.scroll", "scroll mode · ↑↓ line, b/Spc page, esc exits")},
 			{"Navigation", kc(pfx) + " " + kc(keySearch), tr("help.zoom.search", "search the scrollback · n older, N newer")},
 			{"Navigation", kc(pfx) + " " + kc(pfx), tr("help.zoom.literal", "send a literal ") + pfx},
-			{"Panels", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actSignal))), tr("help.zoom.signal", "send a signal to this panel")},
-			{"Panels", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actLogToggle))) + " " + kc(keyLabel(m.bindingKey(actLogView))), tr("help.common.log", "log this panel's output to a file · read it back")},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actBack))), tr("help.zoom.back", "back one level (to the split / dashboard)")},
+			{"Panels", kc(pfx) + " " + kc(seqLabel(m.bindingKey(actSignal))), tr("help.zoom.signal", "send a signal to this panel")},
+			{"Panels", kc(pfx) + " " + kc(seqLabel(m.bindingKey(actLogToggle))) + " " + kc(seqLabel(m.bindingKey(actLogView))), tr("help.common.log", "log this panel's output to a file · read it back")},
+			{"View", kc(pfx) + " " + kc(seqLabel(m.bindingKey(actBack))), tr("help.zoom.back", "back one level (to the split / dashboard)")},
 			{"View", kc(pfx) + " " + kc(dash), tr("help.zoom.dashboard", "straight to the dashboard")},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actProcTree))), tr("help.common.proc-tree", "process tree · the daemon's OS processes")},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actRemote))), tr("help.common.remote", "remote access · the passkey and the live connections")},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actHelp))), tr("help.common.keys", "this key list")},
-			{"View", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actEditMap))), tr("help.common.edit-map", "edit the key map")},
-			{"Session", kc(pfx) + " " + kc(keyLabel(m.bindingKey(actReload))), tr("help.common.reload", "reload config (backend + cockpit)")},
+			{"View", kc(pfx) + " " + kc(seqLabel(m.bindingKey(actProcTree))), tr("help.common.proc-tree", "process tree · the daemon's OS processes")},
+			{"View", kc(pfx) + " " + kc(seqLabel(m.bindingKey(actRemote))), tr("help.common.remote", "remote access · the passkey and the live connections")},
+			{"View", kc(pfx) + " " + kc(seqLabel(m.bindingKey(actHelp))), tr("help.common.keys", "this key list")},
+			{"View", kc(pfx) + " " + kc(seqLabel(m.bindingKey(actEditMap))), tr("help.common.edit-map", "edit the key map")},
+			{"Session", kc(pfx) + " " + kc(seqLabel(m.bindingKey(actReload))), tr("help.common.reload", "reload config (backend + cockpit)")},
 			{"Session", kc(pfx) + " " + kc(detach), tr("help.common.detach", "detach (server keeps running)")},
 		}
 	default: // dashboard — single keys for commands, C-t for the escapes
@@ -3837,9 +3836,9 @@ func (m model) helpContent() (title string, body []string) {
 			{"Navigation", kc("esc"), tr("help.dash.clear", "clear the selection")},
 		}
 		for _, b := range m.keymap() {
-			keys := kc(keyLabel(b.key))
+			keys := keycaps("", b.key, false)
 			if isEscape(b.act) {
-				keys = kc(pfx) + " " + kc(keyLabel(b.key))
+				keys = keycaps(pfx, b.key, false)
 			}
 			rows = append(rows, helpRow{b.cat, keys, m.bindDesc(b)})
 		}
@@ -3926,13 +3925,9 @@ func (m model) keyMapView() string {
 		case m.editing && m.editIdx == i:
 			keys = keycapHotStyle.Render("…type a key")
 		case esc:
-			keys = chord(prefLbl, b.key, selected)
+			keys = keycaps(prefLbl, b.key, selected)
 		default:
-			cap := keycapStyle
-			if selected {
-				cap = keycapHotStyle
-			}
-			keys = cap.Render(keyLabel(b.key))
+			keys = keycaps("", b.key, selected)
 		}
 		body = append(body, fmt.Sprintf("%s%s   %s", caret(selected), keys, desc(selected, m.bindDesc(b))))
 		if selected {
@@ -4147,7 +4142,7 @@ func (m model) panelConfigView() string {
 		title: "PANEL CONFIG",
 		body:  body,
 		footer: []string{"",
-			mutedStyle.Render("default agent is what " + keyLabel(m.bindingKey(actNewAgent)) + " spawns · detected on the fleet's machine"),
+			mutedStyle.Render("default agent is what " + seqLabel(m.bindingKey(actNewAgent)) + " spawns · detected on the fleet's machine"),
 			mutedStyle.Render("replay buffer seeds scrollback · change applies on server restart"),
 			mutedStyle.Render("limits cap a panel's whole process tree · " + m.enforceLabel()),
 			"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(hints))), hints},
@@ -4353,7 +4348,7 @@ func (m model) statusBar(left, hint string) string {
 // helpHint is the footer's standing invitation to the key list: "? keys" in a
 // command-mode view, "C-t ? keys" in a zoom where the prefix is needed.
 func (m model) helpHint() string {
-	k := keyLabel(m.bindingKey(actHelp))
+	k := seqLabel(m.bindingKey(actHelp))
 	if m.mode == modeZoom {
 		k = keyLabel(m.effPrefix()) + " " + k
 	}

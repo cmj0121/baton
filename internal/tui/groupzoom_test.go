@@ -244,10 +244,10 @@ func TestGroupZoomEnterAndBack(t *testing.T) {
 	// menu on the zoomed agent. esc closes it back to the zoom.
 	nm, _ = m.handleZoomKey(key("ctrl+t")) // arm the prefix
 	m = nm.(model)
-	nm, _ = m.handleZoomKey(key("g"))
+	nm, _ = m.handleZoomKey(key(keyGitMenu))
 	m = nm.(model)
 	if m.mode != modeGit {
-		t.Fatalf("prefix+g should open the git menu, got mode=%v", m.mode)
+		t.Fatalf("prefix+%s should open the git menu, got mode=%v", keyGitMenu, m.mode)
 	}
 	nm, _ = m.handleGitKey("esc")
 	m = nm.(model)
@@ -313,7 +313,7 @@ func TestBackPopsOneLevel(t *testing.T) {
 
 func TestGroupZoomExit(t *testing.T) {
 	// The bare dashboard key (d) and esc both leave the split for the dashboard.
-	for _, k := range []string{"d", "esc"} {
+	for _, k := range []string{"esc"} {
 		t.Run(k, func(t *testing.T) {
 			m := baseModel()
 			m.fleet = groupedFleet()

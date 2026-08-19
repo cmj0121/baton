@@ -20,7 +20,7 @@ func TestGlobalShellSpawn(t *testing.T) {
 	m.client = c
 	m.fleet = sampleFleet() // no global shell
 
-	m = press(m, "H")
+	m = press(m, "n", "h")
 	got := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "panel.create" })
 	if !got.GlobalShell {
 		t.Fatalf("H should spawn a global shell, got %+v", got)
@@ -57,7 +57,7 @@ func TestGlobalShellRespawn(t *testing.T) {
 	m.client = c
 	m.fleet = []panel.Panel{{ID: "g1", Kind: panel.Shell, GlobalShell: true, State: panel.Exited, Title: "shell · g1"}}
 
-	m = press(m, "H")
+	m = press(m, "n", "h")
 	got := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "panel.respawn" })
 	if got.ID != "g1" {
 		t.Fatalf("H on an exited global shell should respawn it, got %q", got.ID)
@@ -75,7 +75,7 @@ func TestGlobalShellRunningZooms(t *testing.T) {
 	m.client = c
 	m.fleet = runningGlobalShell()
 
-	m = press(m, "H")
+	m = press(m, "n", "h")
 	if m.mode != modeZoom || m.zoomID != "g1" {
 		t.Fatalf("H on a running global shell should zoom it, got mode=%v id=%q", m.mode, m.zoomID)
 	}

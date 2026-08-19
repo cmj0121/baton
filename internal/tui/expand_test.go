@@ -144,9 +144,9 @@ func TestSpaceOnACardSaysTheCardsHoldItWhole(t *testing.T) {
 	m.cursor = 0
 	m = press(m, " ")
 	if !m.gridDash() {
-		t.Fatal("space must not change the layout — that is V's job")
+		t.Fatal("space must not change the layout — that is the layout binding's job")
 	}
-	if !strings.Contains(m.status, "V shows the tree") {
+	if !strings.Contains(m.status, seqLabel(keyDashLayout)+" shows the tree") {
 		t.Fatalf("space should name the layout key, got %q", m.status)
 	}
 }

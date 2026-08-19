@@ -57,7 +57,7 @@ func (m model) showScratch() model {
 	m.resizeScratch()
 	m.status = fmt.Sprintf("scratch · %s %s hides · %s %s closes",
 		keyLabel(m.effPrefix()), keyLabel(keyScratch),
-		keyLabel(m.effPrefix()), keyLabel(m.bindingKey(actClose)))
+		keyLabel(m.effPrefix()), seqLabel(m.bindingKey(actClose)))
 	return m
 }
 
