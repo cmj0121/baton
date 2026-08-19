@@ -3438,6 +3438,12 @@ func (m model) dashboardView() string {
 	if !m.lens.real() {
 		heading += "  " + seg("group by: "+m.lens.String(), colDark, colBrandHi)
 	}
+	// Same argument as the lens chip: a tree on a fleet the cards would have drawn
+	// is a choice someone made, and the dashboard should say so rather than leave
+	// them wondering which of them decided it.
+	if m.treeIsChosen(m.dashTree()) {
+		heading += "  " + seg("tree  ← for cards", colDark, colBrand)
+	}
 	summary := m.summaryStrip(shown)
 	body := m.treeBody(items)
 	if m.gridDash() {

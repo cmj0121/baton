@@ -80,7 +80,7 @@ Baton arranca su servidor en segundo plano y te deja en el **tablero**, tu base 
 Manejas Baton a través de tres vistas, y te mueves entre ellas con una tecla:
 
 - **Tablero (Dashboard)** — control de misión. Una flota pequeña es una rejilla de **tarjetas**, una por panel y una por work
-  item; a partir de seis filas de primer nivel se convierte en un **árbol** en vivo con todos los paneles: un work item por
+  item; a partir de seis cosas de primer nivel se convierte en un **árbol** en vivo con todos los paneles: un work item por
   fila, sus subgrupos indentados debajo y sus paneles debajo de esos. `space` muestra u oculta lo que hay anidado bajo una
   fila, a cualquier profundidad; `→` abre un work item y entra en él, `←` lo cierra y sube un nivel — y desde el primer nivel,
   de vuelta a las tarjetas. La fila lleva el estado, el directorio de trabajo, la sparkline de salida y la tarea asignada a

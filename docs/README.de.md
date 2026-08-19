@@ -78,7 +78,7 @@ Verirrt? **`?`** zeigt dir immer die Tasten für die Stelle, an der du gerade bi
 Du steuerst Baton über drei Ansichten und wechselst mit einem Tastendruck zwischen ihnen:
 
 - **Dashboard** — die Einsatzzentrale. Eine kleine Flotte ist ein Raster aus **Karten**, je eine pro Panel und pro Work Item;
-  ab sechs Zeilen auf oberster Ebene wird daraus ein Live-**Baum** aller Panels: ein Work Item pro Zeile, seine Untergruppen
+  ab sechs Dingen auf oberster Ebene wird daraus ein Live-**Baum** aller Panels: ein Work Item pro Zeile, seine Untergruppen
   darunter eingerückt, seine Panels darunter. `space` zeigt oder verbirgt in jeder Tiefe, was unter einer Zeile verschachtelt
   ist, `→` öffnet ein Work Item und steigt hinein, `←` schließt es und geht eine Ebene zurück — und aus der obersten Ebene
   heraus zurück zu den Karten. Die Zeile trägt Status, Arbeitsverzeichnis, Ausgabe-Sparkline und die zugewiesene Aufgabe,

@@ -228,9 +228,10 @@ Four things are never folded, and all four are you having already said this one 
 
 The row owns no verbs beyond opening and closing itself — `w`, `s`, `g`, `r` and `*` are refused with the way forward on
 the status line, and it answers no panel ids at all, so a bulk verb that forgot to ask acts on nothing rather than on
-every quiet panel at once. One thing to see once: a fold row at the TOP level counts as one row, and the dashboard picks
-cards or tree off that count — so opening a fold of 45 quiet panels on a small fleet flips the layout. That is a key you
-pressed, not the shape changing under you.
+every quiet panel at once. And the fold deliberately has no say in which layout the dashboard draws: the cards-or-tree
+count is of what the top level HOLDS, so the 45 panels behind a fold row count as 45 whether it is open, shut, or not
+firing at all. Otherwise zooming a panel — which stops it being foldable — would swap the whole dashboard on the way
+back.
 
 ## The summary tile folds the lookalikes, not the latecomers
 

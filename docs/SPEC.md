@@ -195,10 +195,11 @@ beats running beats spawning beats idle beats exited), so one row speaks for the
 Expansion is a **view state and never a selection one**: a group row owns its whole subtree whether it is open or shut,
 so `w` on `backend` closes the same panels either way. A collapse is remembered for the session only.
 
-**Two layouts, one set of keys.** Below **six top-level rows** — a work item counts once, however deep it goes — the
-dashboard draws a **grid of cards**: one per lone panel, one per work item, one for the quiet fold. At six and above it
-is the tree. The count is taken at the top level so that opening a row can never flip the layout out from under the
-keystroke that opened it, and a filter or a lens forces the tree whatever the count says, since both exist to show which
+**Two layouts, one set of keys.** Below **six things at the top level** — a work item counts once however deep it goes,
+and the quiet fold counts the panels behind it rather than the one row it draws — the dashboard draws a **grid of
+cards**: one per lone panel, one per work item, one for the quiet fold. At six and above it is the tree. The count is of
+what the top level HOLDS, so neither opening a row nor a fold firing can flip the layout out from under a keystroke that
+meant nothing of the sort, and a filter or a lens forces the tree whatever the count says, since both exist to show which
 rows matched. The cards draw a work item whole, so `space` or `→` on one shows the tree; `←` out of the top level puts
 the cards back. The cursor keys mean the same thing in both: `←`/`→` open and shut, `↑`/`↓` step a grid row, `j`/`k`
 step one item.
