@@ -2328,6 +2328,19 @@ func (m model) helpVisibleRows(secs []helpSection) int {
 	return m.panelVisibleRows(helpReserved + len(m.helpTabBar(secs, m.width-8)))
 }
 
+// helpBodyRows is the height every tab is drawn to: the tallest tab, or the
+// screen, whichever is smaller. It is a render-time pad only — the scroll clamp
+// counts the rows a tab really has, so padding can never scroll into blanks.
+func (m model) helpBodyRows(secs []helpSection) int {
+	tallest := 0
+	for _, sec := range secs {
+		if n := len(sec.rows); n > tallest {
+			tallest = n
+		}
+	}
+	return min(tallest, m.helpVisibleRows(secs))
+}
+
 // openEditMap shows the editable key map (C-t k), remembering the originating
 // view so esc restores it.
 // openPanelConfig opens the panel defaults over whatever view asked for it,
@@ -3900,6 +3913,13 @@ func (m model) helpView() string {
 	var body []string
 	if len(secs) > 0 {
 		body = secs[m.helpTabIdx(secs)].rows
+	}
+	// Every tab draws to the same height, so walking them with the arrows does
+	// not make the box breathe in and out under the cursor. The target is the
+	// tallest tab, capped at what the screen can show — a short tab is padded up
+	// to it, a tall one is already scrolling.
+	if pad := m.helpBodyRows(secs) - len(body); pad > 0 {
+		body = append(append([]string(nil), body...), make([]string, pad)...)
 	}
 	return m.renderScrollPanel(scrollPanel{
 		title:    title + " " + m.tr("help.title.keys", "KEYS"),

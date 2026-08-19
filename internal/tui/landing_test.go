@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/i18n"
 	"github.com/cmj0121/baton/internal/proto"
@@ -501,5 +503,46 @@ func TestHelpTabBarNamesTheTabs(t *testing.T) {
 	narrow := stripANSI(strings.Join(m.helpTabBar(secs, 20), " "))
 	if !strings.Contains(narrow, "▸") {
 		t.Errorf("a clipped bar should point at the tabs it dropped, got %q", narrow)
+	}
+}
+
+// Walking the tabs must not make the box breathe in and out under the cursor:
+// Navigation holds four rows and Panels twenty-odd, and a panel that resized on
+// every arrow press would move the rows the reader is trying to read.
+func TestHelpTabsShareOneHeight(t *testing.T) {
+	for _, height := range []int{40, 24, 14} {
+		m := model{mode: modeHelp, helpFrom: modeDashboard, width: 90, height: height,
+			binds: append([]binding(nil), bindings...), prefixKey: keyPrefix}
+		_, secs := m.helpSections()
+
+		want := 0
+		for tab := range secs {
+			m.helpTab = tab
+			got := lipgloss.Height(m.helpView())
+			if want == 0 {
+				want = got
+				continue
+			}
+			if got != want {
+				t.Errorf("height %d: tab %q drew %d rows, the others %d", height, secs[tab].cat, got, want)
+			}
+		}
+		if want > height-1 {
+			t.Errorf("height %d: the box drew %d rows and must fit the screen", height, want)
+		}
+	}
+}
+
+// The pad is render-only: scrolling still stops at the last real row rather than
+// running on into blanks.
+func TestHelpPadDoesNotScroll(t *testing.T) {
+	m := model{mode: modeHelp, helpFrom: modeDashboard, width: 90, height: 40,
+		binds: append([]binding(nil), bindings...), prefixKey: keyPrefix, helpTab: 4} // Session: the shortest
+
+	for i := 0; i < 50; i++ {
+		m.scrollHelp(1)
+	}
+	if m.helpScroll != 0 {
+		t.Errorf("a tab that fits should not scroll at all, got offset %d", m.helpScroll)
 	}
 }
