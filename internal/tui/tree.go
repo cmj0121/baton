@@ -234,6 +234,16 @@ func (m model) expandSelected() model {
 	if !ok {
 		return m
 	}
+	// On the cards, opening a work item means showing the tree. The grid draws a
+	// work item WHOLE — that is what makes it readable at four panels — so the only
+	// honest answer to "open this" is the layout that can draw what is inside.
+	if it.kind == itemGroup && m.gridDash() {
+		m.showTree = true
+		delete(m.collapsed, it.name)
+		m.status = "showing the tree · ← shuts it again"
+		m.cursorToItem(it)
+		return m
+	}
 	switch {
 	case it.kind == itemFold:
 		return m.toggleFold()
@@ -259,6 +269,19 @@ func (m model) collapseSelected() model {
 	}
 	if it.kind == itemGroup && it.expanded {
 		return m.setCollapsed(it, true)
+	}
+	// Out of the top level is out of the tree. ← already means "back" at every
+	// depth, so on a small fleet it keeps meaning it one step further — the tree a
+	// person opened from the cards is shut by walking out of it, not by hunting for
+	// the key that put them there.
+	if m.showTree && it.depth == 0 {
+		m.showTree = false
+		m.cursorToItem(it) // the rows below it are gone; land back on it by identity
+		m.clampCursor()
+		if m.gridDash() {
+			m.status = "back to the cards"
+		}
+		return m
 	}
 	m.cursorToParent(it)
 	return m

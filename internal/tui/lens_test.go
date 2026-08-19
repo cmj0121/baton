@@ -22,6 +22,7 @@ func lensModel() model {
 	m := baseModel()
 	m.mode = modeDashboard
 	m.fleet = lensFleetFixture()
+	m.showTree = true // the fixture is card-sized until a lens rebuckets it
 	return m
 }
 

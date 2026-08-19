@@ -25,6 +25,7 @@ func grabModel(t *testing.T) (model, <-chan proto.Command) {
 	m.mode = modeDashboard
 	m.client = c
 	m.fleet = grabFleet()
+	m.showTree = true // carrying a row INTO a work item is a tree gesture
 	return m, cmds
 }
 

@@ -102,7 +102,18 @@ func (it dashItem) label() string {
 // the disorientation the inbox's frozen ordering exists to avoid, and it is worse
 // here because the dashboard is where you are looking when it happens. The tree
 // says WHERE the work is by annotating the shape, never by rearranging it.
-func (m model) dashItems() []dashItem { return m.dashTree() }
+func (m model) dashItems() []dashItem {
+	rows := m.dashTree()
+	// On the card grid the cursor addresses the top of the tree and nothing else,
+	// because that is all the grid draws. Narrowing the list HERE rather than in the
+	// renderer is what keeps the cursor honest: every verb resolves through
+	// dashItems, so a row the grid cannot show is also a row the cursor cannot land
+	// on, and there remains exactly one answer to "what is row N".
+	if m.gridMode(rows) {
+		return topLevelRows(rows)
+	}
+	return rows
+}
 
 // foldQuietLevel collapses the panels nothing is happening in into a single
 // expandable row, once one LEVEL of the tree holds more of them than

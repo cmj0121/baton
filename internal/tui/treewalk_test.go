@@ -20,6 +20,7 @@ func walkModel() model {
 	m := baseModel()
 	m.mode = modeDashboard
 	m.fleet = walkFleet()
+	m.showTree = true // a three-panel fleet is card-sized; these tests walk the tree
 	return m
 }
 
@@ -80,6 +81,10 @@ func TestLeftShutsThenStepsOut(t *testing.T) {
 // TestLeftAtTheTopStaysPut: a top-level row has no parent to step out to.
 func TestLeftAtTheTopStaysPut(t *testing.T) {
 	m := walkModel()
+	// A fleet big enough that the tree is the layout on its own. On a card-sized
+	// one, ← at the top walks out of the tree instead — TestLeftWalksOutOfTheTree.
+	m.showTree = false
+	m.fleet = append(m.fleet, loosePanels(6)...)
 	m.cursorOnPanel(t, "3")
 	at := m.cursor
 

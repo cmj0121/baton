@@ -225,6 +225,7 @@ func TestPreviewIsOffByDefault(t *testing.T) {
 	}
 	m.mode, m.width, m.height = modeDashboard, 200, 40
 	m.fleet = []panel.Panel{{ID: "1", Title: "solo", State: panel.Running, Cwd: "/work"}}
+	m.showTree = true // one panel is a card; the pane this asserts about is the tree's
 
 	// With the pane hidden the tree spends the whole width: a row reaches the task
 	// column, which it could not if 48 columns were going to a pane beside it.

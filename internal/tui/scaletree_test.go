@@ -41,6 +41,9 @@ func TestTreeStaysLegibleAtScale(t *testing.T) {
 	m := baseModel()
 	m.mode, m.width, m.height, m.foldQuiet = modeDashboard, 150, 60, 8
 	m.fleet = fleet
+	// This fleet folds to a handful of TOP-LEVEL rows, which the dashboard would
+	// draw as cards. What is asserted here is that the tree scales, so ask for it.
+	m.showTree = true
 
 	items := m.dashItems()
 	if len(fleet) != 27 {

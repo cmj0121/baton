@@ -60,6 +60,7 @@ func nestedFleet() []panel.Panel {
 func TestDashTreeShowsNesting(t *testing.T) {
 	m := baseModel()
 	m.fleet = nestedFleet()
+	m.showTree = true // this fleet is card-sized; the nesting is what is asserted
 
 	if got, want := m.topLevel(), []string{"backend", "5"}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("top level should be the backend group and the lone panel: want %v, got %v", want, got)
@@ -128,6 +129,7 @@ func TestDashTreeCollapsedGroupKeepsItsSubtree(t *testing.T) {
 func TestDashTreeTopLevelOrder(t *testing.T) {
 	m := baseModel()
 	m.fleet = groupedFleet()
+	m.showTree = true // four top-level rows would otherwise be four cards
 
 	want := []string{"api", "2", "db", "5"}
 	if got := m.topLevel(); strings.Join(got, ",") != strings.Join(want, ",") {
@@ -449,6 +451,7 @@ func TestCursorFollowsPanelIntoGroup(t *testing.T) {
 	m := baseModel()
 	m.mode = modeDashboard
 	m.fleet = groupedFleet()
+	m.showTree = true       // the cursor is followed through the TREE's rows
 	m.cursorOnPanel(t, "2") // the lone shell
 
 	// #2 is grouped into "api" elsewhere.

@@ -29,6 +29,11 @@ func rowNames(items []dashItem) []string {
 func treeModel(fleet []panel.Panel) model {
 	m := baseModel()
 	m.fleet = fleet
+	// These fleets are deliberately tiny — small enough that the dashboard would
+	// draw them as cards — and every one of them is here to assert something about
+	// the TREE. showTree is the same switch a person gets by opening a work item
+	// from the cards.
+	m.showTree = true
 	return m
 }
 
