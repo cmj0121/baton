@@ -3970,6 +3970,23 @@ func (m model) keyMapView() string {
 	binds := m.keymap()
 	prefLbl := keyLabel(m.effPrefix())
 
+	// Every description starts in the same column. Without this the panel reads
+	// as a ragged edge the moment its bindings differ in length — which, since
+	// the landing keys, is most of them — and a translated cockpit makes it
+	// worse, because a description that begins on a wide glyph gives the eye a
+	// hard left edge to notice the raggedness against.
+	keyCol := lipgloss.Width(keycapStyle.Render(prefLbl))
+	for _, b := range binds {
+		pfx := ""
+		if isEscape(b.act) {
+			pfx = prefLbl
+		}
+		if w := lipgloss.Width(keycaps(pfx, b.key, false)); w > keyCol {
+			keyCol = w
+		}
+	}
+	pad := lipgloss.NewStyle().Width(keyCol)
+
 	// Build the scrollable body — the selectable rows and their section
 	// subheaders — tracking the rendered line the cursor rests on so the window
 	// can keep it in view on a short screen.
@@ -3986,14 +4003,14 @@ func (m model) keyMapView() string {
 	if m.editing && m.editIdx == editPrefix {
 		prefKeys = keycapHotStyle.Render("…type a key")
 	}
-	body = append(body, fmt.Sprintf("%s%s   %s", caret(prefSel), prefKeys, desc(prefSel, m.tr("keymap.prefix", "prefix · leader key"))))
+	body = append(body, fmt.Sprintf("%s%s   %s", caret(prefSel), pad.Render(prefKeys), desc(prefSel, m.tr("keymap.prefix", "prefix · leader key"))))
 	if prefSel {
 		selLine = len(body) - 1
 	}
 
-	// Rows 1..N: the bindings, under a sub-header per purpose group. Prefixed
-	// commands show as a [C-t][key] chord; the bare group verbs show as a single
-	// keycap.
+	// Rows 1..N: the bindings, under a sub-header per purpose group. Each key of
+	// a binding gets its own cap — [g][c] — and the whole cell is padded to
+	// keyCol so the descriptions line up whatever the keys spell.
 	subhead := lipgloss.NewStyle().Foreground(colFaint).Bold(true)
 	prevCat := ""
 	for i, b := range binds {
@@ -4021,7 +4038,7 @@ func (m model) keyMapView() string {
 		default:
 			keys = keycaps("", b.key, selected)
 		}
-		body = append(body, fmt.Sprintf("%s%s   %s", caret(selected), keys, desc(selected, m.bindDesc(b))))
+		body = append(body, fmt.Sprintf("%s%s   %s", caret(selected), pad.Render(keys), desc(selected, m.bindDesc(b))))
 		if selected {
 			selLine = len(body) - 1
 		}

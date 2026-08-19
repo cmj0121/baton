@@ -245,3 +245,42 @@ func TestKeyMapQuietOnAPlainRebind(t *testing.T) {
 		t.Errorf("a rebind should report itself, got %q", m.status)
 	}
 }
+
+// Every description in the key map starts in the same column, whatever its keys
+// spell. The panel used to line up by accident, because every command was one
+// keycap; landings made half the rows two caps wide and the accident ran out.
+// A translated cockpit shows it up worst — a description that begins on a wide
+// glyph gives the eye a hard left edge to notice the raggedness against.
+func TestKeyMapDescriptionsShareAColumn(t *testing.T) {
+	m := model{width: 120, height: 60, fleet: sampleFleet(), prefixKey: keyPrefix,
+		binds: append([]binding(nil), bindings...), mode: modeKeyMap}
+	view := stripANSI(m.View())
+
+	// One row per key width: a single key, a landing run, and a prefixed escape.
+	probes := map[string]string{
+		"new-panel": "spawn a new shell panel",
+		"mark":      "mark a panel for grouping",
+		"log":       "start / stop logging",
+	}
+	col := -1
+	for name, desc := range probes {
+		var line string
+		for _, l := range strings.Split(view, "\n") {
+			if strings.Contains(l, desc) {
+				line = l
+				break
+			}
+		}
+		if line == "" {
+			t.Fatalf("no key-map row for %q", name)
+		}
+		at := strings.Index(line, desc)
+		if col == -1 {
+			col = at
+			continue
+		}
+		if at != col {
+			t.Errorf("%q starts its description at column %d, the others at %d", name, at, col)
+		}
+	}
+}
