@@ -294,7 +294,7 @@ func (s *Server) onRemoteControl(cc *clientConn, action string) {
 }
 
 // applyRemoteSetting acts on the config's `settings.remote` on boot and on every
-// reload — but only when the FILE changed. A cockpit that pressed `C-t r` since
+// reload — but only when the FILE changed. A cockpit that pressed `C-t @` since
 // the last reload has made a decision the daemon should not quietly undo the
 // next time an unrelated key is edited, so the switch follows the transition
 // rather than the value.

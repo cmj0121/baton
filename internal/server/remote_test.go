@@ -382,7 +382,7 @@ func TestDisableRemoteDropsRemoteCockpitsOnly(t *testing.T) {
 
 // TestSettingsRemoteIsAppliedAsATransition: the config switch takes effect on
 // boot and on a change, but a reload that repeats the same value must not undo
-// a C-t r taken since.
+// a C-t @ taken since.
 func TestSettingsRemoteIsAppliedAsATransition(t *testing.T) {
 	srv, _ := remoteServer(t)
 

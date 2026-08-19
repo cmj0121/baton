@@ -207,7 +207,7 @@ type Settings struct {
 	// and that is not a default anyone should inherit by upgrading.
 	//
 	// It is read as a TRANSITION rather than as a value, so a reload never undoes
-	// a `C-t r` taken since the file was last read. See docs/REMOTE.md.
+	// a `C-t @` taken since the file was last read. See docs/REMOTE.md.
 	Remote *bool `yaml:"remote,omitempty"`
 
 	// RemoteCommand is what `baton --remote` asks ssh to run on the FAR side,

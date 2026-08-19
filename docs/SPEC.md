@@ -421,7 +421,7 @@ config:
 `done-after` and `stuck-after` shape the quiet ladder above. Full reference: **[ATTENTION.md](ATTENTION.md#configuration)**.
 
 **Remote access.** `settings.remote` (off by default) lets a cockpit on another machine attach over
-`ssh <this host> baton --stdio`, once it carries the 8-character passkey the fleet was enabled with. `C-t r` is the
+`ssh <this host> baton --stdio`, once it carries the 8-character passkey the fleet was enabled with. `C-t @` is the
 overlay: the switch, the passkey, and every live connection with its source, role and duration — `k` kicks one from
 either side of the pipe, while `n` (rotate) and `x` (disable) are local only. The passkey is never written to disk and
 is a revocation handle, not an authentication boundary. Full reference: **[REMOTE.md](REMOTE.md)**.
@@ -445,7 +445,7 @@ and the key-map editor — are reached after the prefix in every mode. Everythin
 |                        | `C-t b`                     | back one level (zoom → group → dashboard)       |
 |                        | `C-t a`                     | the attention inbox — clear what needs a human  |
 |                        | `C-t o`                     | the process tree (daemon → panels → OS)         |
-|                        | `C-t r`                     | remote access — the passkey and the connections |
+|                        | `C-t @`                     | remote access — the passkey and the connections |
 |                        | `C-t ~`                     | toggle the floating scratch pane                |
 |                        | `C-t l`                     | start / stop logging the panel to a file        |
 |                        | `C-t L`                     | open that log in a temporary panel              |

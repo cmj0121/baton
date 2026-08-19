@@ -124,7 +124,7 @@ const (
 	modeFleetSearch // the fleet-wide search results popup (/): matching lines grouped by panel
 	modeProcTree    // the process-tree overlay (C-t o): the daemon, its panels, and their OS descendants
 	modeInbox       // the attention inbox (C-t a): the queue of panels wanting a human, cleared in place
-	modeRemote      // the remote overlay (C-t r): remote access, its passkey, and every live connection
+	modeRemote      // the remote overlay (C-t @): remote access, its passkey, and every live connection
 	modeZoom
 	modeGroupZoom
 	modeScreensaver // the hidden Matrix-rain + clock Easter egg (C-t E / idle auto-start)
@@ -2719,7 +2719,7 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				// one, look at the next" costs a trip through the dashboard, which is
 				// the screen swap this feature exists to remove.
 				return m.openInbox()
-			case actRemote: // C-t r → the remote overlay, over the zoom
+			case actRemote: // C-t @ → the remote overlay, over the zoom
 				return m.openRemote(modeZoom)
 			case actLogToggle: // C-t l → log this panel's output to a file
 				return m.toggleLog()

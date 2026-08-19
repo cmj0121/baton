@@ -117,7 +117,7 @@ type spawnSpec struct {
 type Settings struct {
 	// Remote is `settings.remote`: whether the fleet accepts a cockpit attached
 	// over the ssh bridge. Off by default. It is acted on as a TRANSITION rather
-	// than as a value (see applyRemoteSetting), so a reload never undoes a `C-t r`
+	// than as a value (see applyRemoteSetting), so a reload never undoes a `C-t @`
 	// taken since the file was last read.
 	Remote bool
 
@@ -254,7 +254,7 @@ type Server struct {
 	// Remote access (remote.go). remoteOn and remoteKey are the live switch and
 	// the in-memory 8-character passkey — never persisted, so a restart always
 	// means a new one. remoteCfg is the last value the CONFIG asked for, kept so
-	// a reload acts on a change to the file rather than undoing a `C-t r` that
+	// a reload acts on a change to the file rather than undoing a `C-t @` that
 	// was made since. remoteLim rate-limits failed attaches. connSeq mints the
 	// per-connection ids the overlay lists and remote.kick names. Guarded by mu,
 	// bar remoteLim, which locks internally.

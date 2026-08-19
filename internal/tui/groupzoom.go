@@ -937,7 +937,7 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.openInbox()
 			case actProcTree: // C-t o → the process-tree overlay
 				return m.openProcTree(modeGroupZoom), nil
-			case actRemote: // C-t r → the remote overlay
+			case actRemote: // C-t @ → the remote overlay
 				return m.openRemote(modeGroupZoom)
 			case actCommands: // C-t c → the plugin command picker
 				return m.openCommandPicker(modeGroupZoom), nil
@@ -1108,7 +1108,7 @@ func (m model) handleGroupInteractKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.openInbox()
 			case actProcTree: // C-t o → the process-tree overlay
 				return m.openProcTree(modeGroupZoom), nil
-			case actRemote: // C-t r → the remote overlay
+			case actRemote: // C-t @ → the remote overlay
 				return m.openRemote(modeGroupZoom)
 			case actCommands: // C-t c → the plugin command picker
 				return m.openCommandPicker(modeGroupZoom), nil

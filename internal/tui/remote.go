@@ -11,13 +11,15 @@ import (
 	"github.com/cmj0121/baton/internal/proto"
 )
 
-// The remote overlay (modeRemote, C-t r): whether this fleet accepts a cockpit
+// The remote overlay (modeRemote, C-t @): whether this fleet accepts a cockpit
 // from another machine, the passkey that admits one, and every connection that
 // is attached right now — including this one, marked.
 //
 // It is prefix-gated on purpose. The key behind it exposes the machine, and a
 // key that exposes the machine does not belong one fingertip from the arrow
-// keys; the same argument the logging pair is bound this way for.
+// keys; the same argument the logging pair is bound this way for. The key is
+// "@" because the list is made of user@host — and because a letter would have
+// shadowed a command that was already using it.
 //
 // The asymmetry in the legend is the feature's one real rule: `k` kicks from
 // either side of the pipe, while `n` and `x` — the passkey and the switch — are

@@ -64,7 +64,7 @@ const (
 	keyScratch   = "~" // C-t ~ → toggle the floating scratch shell (any view)
 	keyProcTree  = "o" // C-t o → the process-tree overlay (daemon → panels → OS descendants)
 	keyInbox     = "a" // C-t a → the attention inbox (the queue of panels wanting a human)
-	keyRemote    = "r" // C-t r → the remote overlay (remote access, its passkey, and the live connections)
+	keyRemote    = "@" // C-t @ → the remote overlay: "user@host" is what its connection list is made of
 	keyLogToggle = "l" // C-t l → start / stop writing the selected panel's output to a file
 	keyLogView   = "L" // C-t L → open that log in a temporary panel, following as it grows
 
@@ -145,9 +145,14 @@ const (
 
 	// Remote access. It is an escape — prefix-reached in every view — because the
 	// key behind it opens the machine to another host, which is not a key to put
-	// a fingertip from the arrow keys. Under the prefix it shadows respawn, the
-	// way C-t c shadows the new-panel form and C-t a shadows add: respawn stays a
-	// bare r in command mode, where re-running a dead panel actually belongs.
+	// a fingertip from the arrow keys.
+	//
+	// It is bound to "@" rather than to a letter because an escape SHADOWS a
+	// command under the prefix (C-t c shadows the new-panel form, C-t a shadows
+	// add), and every letter that reads as "remote" is already taken — `r` is
+	// respawn, and costing a zoom its respawn to spell a mnemonic is a bad trade.
+	// "@" is bound to nothing, and it says what the overlay is: a list of
+	// user@host.
 	actRemote
 
 	// The logging pair. Both are prefix-reached in every view, including the

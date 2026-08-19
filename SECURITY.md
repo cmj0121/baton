@@ -55,7 +55,7 @@ agent accidents, not a sandbox against a hostile program:
   as a switch with a revocation handle, not as authentication. The transport is `ssh(1)` — baton opens no port, ships
   no TLS and invents no key exchange — so the far side of the pipe already runs as your uid, and that uid could run
   `baton` on that machine anyway. What the passkey proves is that you **deliberately** enabled remote for this window;
-  what it buys you is that rotating it (`C-t r`, then `n`) locks out every new attach. It is generated on enable, held
+  what it buys you is that rotating it (`C-t @`, then `n`) locks out every new attach. It is generated on enable, held
   in memory, and never written to disk. Failed attempts are rate-limited and logged. Changing it, and switching remote
   off, are refused over a remote attach — that is the one asymmetry, and it exists so a live remote connection cannot
   turn its window into a permanent one.

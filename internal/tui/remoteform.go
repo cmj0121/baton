@@ -123,7 +123,7 @@ func (m remoteFormModel) submit() (tea.Model, tea.Cmd) {
 		m.focus, m.problem = 0, "an address is needed — host, user@host, or host:port"
 		return m, nil
 	case strings.TrimSpace(m.passkey) == "":
-		m.focus, m.problem = 1, "the fleet's passkey is needed — read it from its C-t r overlay"
+		m.focus, m.problem = 1, "the fleet's passkey is needed — read it from its C-t @ overlay"
 		return m, nil
 	}
 	m.done = true
@@ -148,7 +148,7 @@ func (m remoteFormModel) View() string {
 		"",
 		m.field("ADDRESS", m.address, "host · user@host · host:port", 0, width),
 		"",
-		m.field("PASSKEY", m.passkey, "the 8 characters the fleet's C-t r shows", 1, width),
+		m.field("PASSKEY", m.passkey, "the 8 characters the fleet's C-t @ shows", 1, width),
 	}
 	if m.problem != "" {
 		rows = append(rows, "", lipgloss.NewStyle().Foreground(colFailed).Render(sanitizeText(m.problem)))

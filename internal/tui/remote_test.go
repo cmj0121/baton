@@ -259,17 +259,20 @@ func TestRemoteIsReachedFromThePrefixInEveryView(t *testing.T) {
 	if !ok || b.act != actRemote {
 		t.Fatalf("C-t %s should resolve to the remote overlay, got %+v ok=%v", keyRemote, b, ok)
 	}
-	// It deliberately SHADOWS respawn under the prefix, the way C-t c shadows the
-	// new-panel form: respawn stays a bare r in command mode, which is where
-	// re-running a dead panel belongs.
-	if cmd, ok := m.lookupCmd(keyRemote); !ok || cmd.act != actRespawn {
-		t.Fatalf("bare %s should still be respawn, got %+v ok=%v", keyRemote, cmd, ok)
+	// And it shadows NOTHING: an escape wins over a command under the prefix, so a
+	// key that is also a command would cost that command its prefix form. This is
+	// why the overlay is not on `r` — C-t r stays respawn.
+	if cmd, ok := m.lookupCmd(keyRemote); ok {
+		t.Fatalf("%s is also the command key for %+v; an escape must not shadow one", keyRemote, cmd)
+	}
+	if cmd, ok := m.lookupCmd(keyRespawn); !ok || cmd.act != actRespawn {
+		t.Fatalf("C-t %s must still respawn, got %+v ok=%v", keyRespawn, cmd, ok)
 	}
 	if !isEscape(actRemote) {
 		t.Fatal("actRemote should be an escape")
 	}
 
-	// Through the real dispatch: C-t r opens it from the dashboard.
+	// Through the real dispatch: C-t @ opens it from the dashboard.
 	m.prefix = true
 	next, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(keyRemote)})
 	if got := next.(model).mode; got != modeRemote {

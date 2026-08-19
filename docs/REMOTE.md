@@ -50,8 +50,9 @@ settings:
   remote: true # accept a cockpit attached over the ssh bridge
 ```
 
-…or press **`C-t r`** in the cockpit and then `e`. The key is prefix-gated on purpose: it exposes the machine, and that
-is not a key to put a fingertip from the arrow keys.
+…or press **`C-t @`** in the cockpit and then `e`. The key is prefix-gated on purpose: it exposes the machine, and that
+is not a key to put a fingertip from the arrow keys. `@` rather than a letter, because a key reached after the prefix
+shadows the command on that same key — and because `@` reads as what the overlay lists: `user@host`.
 
 `settings.remote` is read as a **change**, not as a value. If you switch remote off in the cockpit and then reload the
 config for an unrelated edit, it stays off — a reload does not undo a decision you made since.
@@ -75,7 +76,7 @@ against accidents, not a sandbox.
 One thing it does buy outright: taken in the form rather than as a flag, it **never enters argv**, so it stays out of
 your shell history and out of `ps` for every other process on the client machine.
 
-## The remote view — `C-t r`
+## The remote view — `C-t @`
 
 ```text
  REMOTE   enabled · passkey K7m2QxP9
