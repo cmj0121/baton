@@ -186,6 +186,11 @@ fleet の面倒を見るときに手を伸ばしたくなるものは、すべ�
   読み返します。プレーンテキスト、エスケープシーケンスは除去済み、`log-max-mb` でローテーション。
   `panel.log-dir` を設定するまではオフで、プロファイル単位で spawn 時から記録させることもできます。
   **[docs/LOGGING.md](LOGGING.md)** を参照してください。
+- **リモート接続** — `baton --remote` は、**別のマシン**上の fleet に同じ cockpit を接続します。使うのは、あなたが
+  そのマシンに入るのに普段から使っている ssh です。待ち受けポートも TLS も、baton 独自の鍵交換もありません。既定は
+  オフで、`settings.remote` か `C-t r` が有効化し、ディスクには決して書かれない 8 文字の passkey を発行します。
+  `C-t r` は接続中のすべてのセッションを、その出所・ロール・接続時間とともに一覧します。`k` で切断、`n` で passkey
+  の更新、`x` でリモートの停止。**[docs/REMOTE.md](REMOTE.md)** を参照してください。
 - **永続化と復活** — Baton は再起動をまたいで fleet を覚えています。panel は動かない終了済みスロットとして戻り、
   `r` が保持された仕様からそれらを再実行します。
 - **リロード** — `C-t R`(または常駐プロセスへの `SIGHUP`)は、fleet を再起動せずに設定をホットリロードします。
@@ -235,6 +240,8 @@ fleet を動かし、自分のコマンドを足し、設定を書く——す�
 - **[docs/GIT.md](GIT.md)** — git メニュー:各操作、commit エディタの流れ、worktree、そして設定。
 - **[docs/LOGGING.md](LOGGING.md)** — パネルのログ:何が書かれるか、どこに置かれるか、セッションのマーカー、
   ローテーション、そして何の境界ではないのか。
+- **[docs/REMOTE.md](REMOTE.md)** — SSH 越しのリモート接続:`--stdio` ブリッジ、passkey が何であって何でないか、
+  `C-t r` の接続一覧、そして報告される失敗。
 - **[docs/USAGE.md](USAGE.md)** — アカウント使用量フッタ:ローカルと Admin-API の 2 つのソース、設定、注意点。
 - **[docs/PLUGIN.md](PLUGIN.md)** — Lua プラグイン API:`baton` オブジェクト、イベント、コマンド、そして設定。
 - **[docs/CONTROL.md](CONTROL.md)** — agent で fleet を動かす:conductor、`baton ctl` CLI、`baton mcp` の

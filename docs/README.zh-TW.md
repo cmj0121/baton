@@ -177,6 +177,10 @@ Baton 會啟動它的背景伺服器,並把你帶到**儀表板**——你的大
   會被留下來;`C-t L` 用一個會跟著檔案跑的臨時面板讀回來。純文字、escape sequence 已拿掉、到 `log-max-mb`
   就輪替。在你設定 `panel.log-dir` 之前都是關的;profile 可以從 spawn 就開始記錄。見
   **[docs/LOGGING.md](LOGGING.zh-TW.md)**。
+- **遠端連線** — `baton --remote` 把同一個 cockpit 接上**另一台機器**上的隊伍,走的是你本來就在用的 ssh:不開監聽
+  埠、不帶 TLS、也沒有 baton 自己發明的金鑰交換。預設關閉;`settings.remote` 或 `C-t r` 打開它,並產生一組永遠不
+  寫進磁碟的 8 字元 passkey。`C-t r` 同時列出每一條連線的來源、角色與連線時長——`k` 踢人、`n` 換碼、`x` 關閉遠端。
+  見 **[docs/REMOTE.md](REMOTE.zh-TW.md)**。
 - **持久化與重生** — Baton 會跨重啟記住它的隊伍;面板以停滯的已結束空位回來,`r` 依保留的規格把它們重跑。
 - **重載** — `C-t R`(或對常駐程式送 `SIGHUP`)在不重啟整隊的情況下熱重載設定。
 - **滑鼠** — 預設關閉,好讓終端機自己的選取仍可用;在按鍵對應裡打開它,即可用滾輪捲動與選取。
@@ -219,6 +223,8 @@ socket 接上——指令往上、事件往下——所以你卸離再重新接�
 - **[docs/GIT.md](GIT.zh-TW.md)** — git 選單:每個操作、commit 編輯流程、worktree,以及設定。
 - **[docs/LOGGING.md](LOGGING.zh-TW.md)** — 面板記錄:寫進去的是什麼、檔案落在哪裡、session 標記、輪替,
   以及它不是什麼邊界。
+- **[docs/REMOTE.md](REMOTE.zh-TW.md)** — 透過 SSH 遠端連線:`--stdio` 橋接、passkey 是什麼與不是什麼、`C-t r`
+  的連線清單,以及它會回報的失敗。
 - **[docs/USAGE.md](USAGE.zh-TW.md)** — 帳號用量頁尾:本機與 Admin-API 兩種來源、設定,以及注意事項。
 - **[docs/PLUGIN.md](PLUGIN.zh-TW.md)** — Lua 外掛 API:`baton` 物件、事件、指令,以及設定。
 - **[docs/CONTROL.md](CONTROL.zh-TW.md)** — 以 agent 驅動整隊:conductor、`baton ctl` CLI、`baton mcp`

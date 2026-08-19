@@ -185,6 +185,11 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
   buffer in first so you keep what made you press it; `C-t L` reads it back in a temporary panel that follows the file.
   Plain text, escape sequences stripped, rolled at `log-max-mb`. Off until you set `panel.log-dir`; a profile can log
   from spawn. See **[docs/LOGGING.md](docs/LOGGING.md)**.
+- **Remote access** — `baton --remote` attaches the same cockpit to a fleet on **another machine**, over the ssh you
+  already use to reach it: no listening port, no TLS, no key exchange of baton's own. Off by default; `settings.remote`
+  or `C-t r` turns it on and mints an 8-character passkey that is never written to disk. `C-t r` also lists every live
+  connection with its source, role and duration — `k` kicks one, `n` rotates the passkey, `x` shuts remote down. See
+  **[docs/REMOTE.md](docs/REMOTE.md)**.
 - **Persistence & respawn** — Baton remembers its fleet across a restart; panels come back as inert exited slots and
   `r` re-runs them from their retained spec.
 - **Reload** — `C-t R` (or a `SIGHUP` to the daemon) hot-reloads config without restarting the fleet.
@@ -233,6 +238,8 @@ through one `baton` object. See **[docs/PLUGIN.md](docs/PLUGIN.md)**.
 - **[docs/GIT.md](docs/GIT.md)** — the git menu: every op, the commit-editor flow, worktrees, and the config.
 - **[docs/LOGGING.md](docs/LOGGING.md)** — panel logging: what is written, where it lands, the session markers, the
   roll, and what it is not a boundary for.
+- **[docs/REMOTE.md](docs/REMOTE.md)** — remote access over SSH: the `--stdio` bridge, the passkey and what it is and
+  is not, the `C-t r` connection list, and the failures it reports.
 - **[docs/USAGE.md](docs/USAGE.md)** — the account usage footer: the local and Admin-API sources, config, and caveats.
 - **[docs/PLUGIN.md](docs/PLUGIN.md)** — the Lua plugin API: the `baton` object, events, commands, and config.
 - **[docs/CONTROL.md](docs/CONTROL.md)** — driving the fleet by agent: the conductor, the `baton ctl` CLI, the

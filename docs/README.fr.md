@@ -191,6 +191,11 @@ Tout ce dont vous avez besoin pour mener une flotte, à une frappe de distance :
   conservé ; `C-t L` le relit dans un panneau temporaire qui suit le fichier. Texte brut, séquences d'échappement
   retirées, rotation à `log-max-mb`. Désactivé tant que `panel.log-dir` n'est pas défini ; un profil peut journaliser
   dès son démarrage. Voir **[docs/LOGGING.md](LOGGING.md)**.
+- **Accès distant** — `baton --remote` rattache le même cockpit à une flotte qui tourne sur **une autre machine**, via
+  le ssh que vous utilisez déjà pour l'atteindre : aucun port en écoute, pas de TLS, aucun échange de clés propre à
+  baton. Désactivé par défaut ; `settings.remote` ou `C-t r` l'active et génère une passkey de 8 caractères qui n'est
+  jamais écrite sur disque. `C-t r` liste aussi chaque connexion vivante avec sa source, son rôle et sa durée — `k` en
+  éjecte une, `n` renouvelle la passkey, `x` coupe l'accès distant. Voir **[docs/REMOTE.md](REMOTE.md)**.
 - **Persistance et relance** — Baton se souvient de sa flotte d'un redémarrage à l'autre ; les panneaux reviennent sous
   forme d'emplacements terminés et inertes, et `r` les relance à partir de leur spécification conservée.
 - **Rechargement** — `C-t R` (ou un `SIGHUP` envoyé au démon) recharge la config à chaud sans redémarrer la flotte.
@@ -243,6 +248,8 @@ la flotte, ajouter vos propres commandes et définir la config — le tout à tr
 - **[docs/GIT.md](GIT.md)** — le menu git : chaque opération, le flux de l'éditeur de commit, les worktrees et la config.
 - **[docs/LOGGING.md](LOGGING.md)** — la journalisation des panneaux : ce qui est écrit, où le fichier atterrit, les
   marqueurs de session, la rotation, et ce dont ce n'est pas une frontière.
+- **[docs/REMOTE.md](REMOTE.md)** — l'accès distant en SSH : le pont `--stdio`, ce que la passkey est et n'est pas,
+  la liste des connexions de `C-t r`, et les échecs qu'il rapporte.
 - **[docs/USAGE.md](USAGE.md)** — le pied de page d'usage du compte : les sources locale et Admin-API, la config et les
   réserves.
 - **[docs/PLUGIN.md](PLUGIN.md)** — l'API des plugins Lua : l'objet `baton`, les événements, les commandes et la config.
