@@ -1537,7 +1537,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// The help and the key map restore whichever view opened them (the split
 		// and zoom keep their live state); other overlays fall back to the dashboard.
-		if m.mode == modeHelp || m.mode == modeKeyMap {
+		if m.mode == modeHelp || m.mode == modeKeyMap || m.mode == modePanelConfig {
 			m.mode = m.helpFrom
 			m.status = ""
 			return m, nil
@@ -2251,6 +2251,18 @@ func (m *model) scrollHelp(delta int) {
 
 // openEditMap shows the editable key map (C-t k), remembering the originating
 // view so esc restores it.
+// openPanelConfig opens the panel defaults over whatever view asked for it,
+// remembering that view so esc restores it — a zoom that went looking for the
+// default shell should come back to the panel it was reading, not to the
+// dashboard.
+func (m model) openPanelConfig(from mode) model {
+	m.helpFrom = from
+	m.mode = modePanelConfig
+	m.cursor = 0
+	m.status = "panel config"
+	return m
+}
+
 func (m model) openEditMap(from mode) model {
 	m.helpFrom = from
 	m.mode = modeKeyMap
@@ -2534,9 +2546,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 	case actScroll:
 		return m.enterScroll(), nil
 	case actPanelConfig:
-		m.mode = modePanelConfig
-		m.cursor = 0
-		m.status = "panel config"
+		m = m.openPanelConfig(m.mode)
 	case actRestart:
 		// A force-restart stops the daemon and starts a fresh one, ending every
 		// panel it owns — so confirm before pulling the rug.
@@ -2754,117 +2764,44 @@ func (m *model) requestDiff(p panel.Panel) {
 }
 
 // handleZoomKey forwards keystrokes to the zoomed panel, treating the prefix as
-// a leader: prefix+dashboard detaches, prefix+prefix sends a literal prefix.
+// a leader: every bare key drives the program, and a baton action is the leader
+// then whatever that action is bound to — the same sequence the dashboard uses,
+// landings included, so C-t v u works here exactly as v u works there.
 func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
-	key := k.String()
-	if m.zoomArmed {
+	key := tok(k.String())
+
+	// The leader is down, or a landing it opened is still waiting for its next
+	// key. Both belong to baton rather than to the program.
+	if m.zoomArmed || len(m.pending) > 0 {
+		armed := m.zoomArmed
 		m.zoomArmed = false
-		if key == m.effPrefix() {
-			if m.emu != nil {
-				feedKey(m.emu, k) // prefix+prefix sends a literal prefix
-			}
-			return m, nil
-		}
-		if b, ok := m.lookupEscape(key); ok {
-			switch b.act {
-			case actDashboard: // C-t d → dashboard, always
-				return m.zoomDetach()
-			case actEditMap: // C-t k → edit the key map
-				return m.openEditMap(modeZoom), nil
-			case actScroll: // C-t [ → scroll mode, reached on every terminal
-				return m.enterScroll(), nil
-			case actScratch: // C-t ~ → float the scratch pane over the zoom
-				return m.toggleScratch()
-			case actInbox: // C-t a → the attention inbox, over the zoom
-				// A zoom is where you land after `enter` on a row, so the way back to
-				// the queue has to be reachable from inside one — otherwise "answer
-				// one, look at the next" costs a trip through the dashboard, which is
-				// the screen swap this feature exists to remove.
-				return m.openInbox()
-			case actRemote: // C-t @ → the remote overlay, over the zoom
-				return m.openRemote(modeZoom)
-			case actLogToggle: // C-t l → log this panel's output to a file
-				return m.toggleLog()
-			case actLogView: // C-t L → read that log back, following it
-				return m.viewLog()
-			}
-			// back (C-t b) is what leaves a zoom — it returns to the split it came
-			// from, or the dashboard. Any other escape no-ops here.
-			return m, nil
-		}
-		if key == keyScreensaver { // C-t E → the hidden screensaver, over the zoom
-			return m.enterScreensaver(), saverTick()
-		}
-		if key == m.bindingKey(actDetach) { // C-t q detaches from a zoom too
-			// A transient diff panel is reaped on the way out, even when detaching the
-			// whole cockpit — it is never persisted, so it must not outlive its zoom.
-			if m.zoomEphemeral {
-				m.sendf(proto.Command{Action: "panel.close", ID: m.zoomID})
-				m.zoomEphemeral = false
-			}
-			return m.runAction(actDetach)
-		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actHelp { // C-t ? → the key list
-			return m.openHelp(modeZoom), nil
-		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actReload { // C-t R → reload config
-			return m.runAction(actReload)
-		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actSignal { // C-t s → signal this panel
-			if m.zoomExited {
-				m.status = "panel has exited — nothing to signal"
+		if armed {
+			m.pendingGen++ // the leader is spoken for; its expiry tick is now stale
+			if key == m.effPrefix() {
+				if m.emu != nil {
+					feedKey(m.emu, k) // prefix+prefix sends a literal prefix
+				}
 				return m, nil
 			}
-			return m.openSignalPicker(modeZoom, []string{m.zoomID}, m.zoomTitle), nil
-		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actSearch { // C-t f → search the scrollback
-			return m.openSearch(), nil
-		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actFleetSearch { // C-t / → search every panel
-			return m.openFleetSearch(), nil
-		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actDiff { // C-t D → diff of the zoomed agent panel
-			if m.zoomEphemeral { // already a diff zoom — no diff-of-a-diff
-				m.status = "diff: already showing a diff"
-				return m, nil
+			// The escapes and the two fixed zoom affordances resolve on the first
+			// key after the leader; they are never the start of a longer run.
+			if b, ok := m.lookupEscape(key); ok {
+				return m.runZoomEscape(b)
 			}
-			p, ok := m.fleetPanel(m.zoomID)
-			if !ok || !p.IsAgent() {
-				m.status = "diff: select an agent panel"
-				return m, nil
+			if key == keyScreensaver { // C-t E → the hidden screensaver, over the zoom
+				return m.enterScreensaver(), saverTick()
 			}
-			m.requestDiff(p)
-			return m, nil
-		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actDispatch { // C-t T → dispatch a task to the zoomed agent
-			p, ok := m.fleetPanel(m.zoomID)
-			if !ok || !p.IsAgent() {
-				m.status = "dispatch: select an agent panel"
-				return m, nil
+			if key == keyGitMenu { // C-t G → the git menu, on the zoomed agent panel
+				return m.openGitPicker()
 			}
-			return m.startDispatch(p), nil
 		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actEnqueue { // C-t t → enqueue a task for the zoomed agent's pool
-			p, ok := m.fleetPanel(m.zoomID)
-			if !ok {
-				return m, nil
-			}
-			return m.startEnqueue(p.Group), nil
-		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actQueue { // C-t Q → the task-queue manager
-			return m.openQueue(modeZoom), nil
-		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actBack { // C-t b → back one level
-			return m.runAction(actBack)
-		}
-		if key == keyGitMenu { // C-t g → the git menu, on the zoomed agent panel
-			return m.openGitPicker()
-		}
-		return m, nil
+		return m.advanceSeq(key, cmdBinding, runZoomBinding)
 	}
+
 	if key == m.effPrefix() {
 		m.zoomArmed = true
-		return m, nil
+		m.pendingGen++
+		return m, seqTick(m.pendingGen, m.effKeyTimeout())
 	}
 	// Every bare key drives the program — including PgUp/PgDn, which a full-screen
 	// reader (vim, a BBS like ptt.cc) redraws for itself. baton's own scrollback is
@@ -2873,6 +2810,106 @@ func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.emu != nil {
 		feedKey(m.emu, k)
 	}
+	return m, nil
+}
+
+// runZoomEscape runs an escape from inside a zoom. Every escape opens something
+// over the zoom or leaves it; none of them need a dashboard selection, which is
+// why the whole class is available here — C-t o, C-t c and C-t P included, which
+// the docs promised and the older hand-written switch quietly omitted.
+func (m model) runZoomEscape(b binding) (tea.Model, tea.Cmd) {
+	switch b.act {
+	case actDashboard: // C-t d → dashboard, always
+		return m.zoomDetach()
+	case actScroll: // C-t [ → scroll mode, reached on every terminal
+		return m.enterScroll(), nil
+	case actScratch: // C-t ~ → float the scratch pane over the zoom
+		return m.toggleScratch()
+	case actInbox:
+		// A zoom is where you land after `enter` on a row, so the way back to the
+		// queue has to be reachable from inside one — otherwise "answer one, look
+		// at the next" costs a trip through the dashboard, which is the screen
+		// swap this feature exists to remove.
+		return m.openInbox()
+	case actRemote: // C-t @ → the remote overlay, over the zoom
+		return m.openRemote(modeZoom)
+	case actProcTree: // C-t o → the process-tree overlay
+		return m.openProcTree(modeZoom), nil
+	case actLogToggle: // C-t l → log this panel's output to a file
+		return m.toggleLog()
+	case actLogView: // C-t L → read that log back, following it
+		return m.viewLog()
+	case actEditMap: // C-t k → edit the key map
+		return m.openEditMap(modeZoom), nil
+	case actPanelConfig: // C-t P → panel defaults
+		return m.openPanelConfig(modeZoom), nil
+	case actCommands: // C-t c → the plugin command picker
+		return m.openCommandPicker(modeZoom), nil
+	case actRestart: // C-t S → force-restart, after its confirmation
+		return m.runAction(actRestart)
+	}
+	return m, nil
+}
+
+// runZoomBinding runs a command resolved from inside a zoom. The zoom's target
+// is the panel filling the screen, not a dashboard row, so each case names what
+// it acts on; a command that only makes sense against a selection says so rather
+// than acting on a cursor nobody can see.
+func runZoomBinding(m model, b binding) (tea.Model, tea.Cmd) {
+	switch b.act {
+	case actDetach:
+		// A transient diff panel is reaped on the way out, even when detaching the
+		// whole cockpit — it is never persisted, so it must not outlive its zoom.
+		if m.zoomEphemeral {
+			m.sendf(proto.Command{Action: "panel.close", ID: m.zoomID})
+			m.zoomEphemeral = false
+		}
+		return m.runAction(actDetach)
+	case actHelp:
+		return m.openHelp(modeZoom), nil
+	case actReload, actBack, actUsageToggle, actKeycastToggle:
+		// View and session verbs that read nothing from the dashboard cursor.
+		return m.runAction(b.act)
+	case actSignal:
+		if m.zoomExited {
+			m.status = "panel has exited — nothing to signal"
+			return m, nil
+		}
+		return m.openSignalPicker(modeZoom, []string{m.zoomID}, m.zoomTitle), nil
+	case actSearch:
+		return m.openSearch(), nil
+	case actFleetSearch:
+		return m.openFleetSearch(), nil
+	case actDiff:
+		if m.zoomEphemeral { // already a diff zoom — no diff-of-a-diff
+			m.status = "diff: already showing a diff"
+			return m, nil
+		}
+		p, ok := m.fleetPanel(m.zoomID)
+		if !ok || !p.IsAgent() {
+			m.status = "diff: select an agent panel"
+			return m, nil
+		}
+		m.requestDiff(p)
+		return m, nil
+	case actDispatch:
+		p, ok := m.fleetPanel(m.zoomID)
+		if !ok || !p.IsAgent() {
+			m.status = "dispatch: select an agent panel"
+			return m, nil
+		}
+		return m.startDispatch(p), nil
+	case actEnqueue:
+		p, ok := m.fleetPanel(m.zoomID)
+		if !ok {
+			return m, nil
+		}
+		return m.startEnqueue(p.Group), nil
+	case actQueue:
+		return m.openQueue(modeZoom), nil
+	}
+	m.status = m.bindDesc(b) + ": not available in a zoom — " +
+		seqLabel(m.bindingKey(actDashboard)) + " for the dashboard"
 	return m, nil
 }
 

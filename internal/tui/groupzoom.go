@@ -941,6 +941,10 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.openRemote(modeGroupZoom)
 			case actCommands: // C-t c → the plugin command picker
 				return m.openCommandPicker(modeGroupZoom), nil
+			case actPanelConfig: // C-t P → panel defaults, over the split
+				return m.openPanelConfig(modeGroupZoom), nil
+			case actRestart: // C-t S → force-restart, after its own confirmation
+				return m.runAction(actRestart)
 			case actLogToggle: // C-t l → log the focused member's output to a file
 				return m.toggleLog()
 			case actLogView: // C-t L → read that log back, following it
@@ -1111,6 +1115,10 @@ func (m model) handleGroupInteractKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.openRemote(modeGroupZoom)
 			case actCommands: // C-t c → the plugin command picker
 				return m.openCommandPicker(modeGroupZoom), nil
+			case actPanelConfig: // C-t P → panel defaults, over the split
+				return m.openPanelConfig(modeGroupZoom), nil
+			case actRestart: // C-t S → force-restart, after its own confirmation
+				return m.runAction(actRestart)
 			case actLogToggle: // C-t l → log the focused member's output to a file
 				return m.toggleLog()
 			case actLogView: // C-t L → read that log back, following it

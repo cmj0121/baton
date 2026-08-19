@@ -72,7 +72,8 @@ warns you when you do.
 ## Every key
 
 **Leader** — `C-t` means the leader is needed in every view; `(C-t)` means only a zoom needs it; `·` means never.
-**Landing** — the key you press first, if the action sits under one.
+**Landing** — the key you press first, if the action sits under one. A `(C-t)` row whose action needs a dashboard row —
+the work-item verbs — is refused in a zoom with the way forward on the status line.
 
 | Purpose         | Leader | Landing | Key                 | Does                                             |
 | --------------- | ------ | ------- | ------------------- | ------------------------------------------------ |
@@ -224,8 +225,11 @@ The keys they left behind answer for one release: press `U` and the status bar t
 
 Two long-standing gaps closed with this:
 
-- **A zoom now reaches every command.** It used to reach eleven of them, hand-wired one `if` at a time, which is why
-  `C-t o`, `C-t c` and `C-t P` were documented but did nothing there. The zoom's key map is now derived from the same
-  table as the dashboard's, so the two cannot drift again.
+- **A zoom reaches every escape, and resolves commands the same way the dashboard does.** The escapes used to be
+  enumerated by hand in the zoom, which is why `C-t o`, `C-t c` and `C-t P` were documented but did nothing there; they
+  are now looked up from the same table that decides what an escape _is_. Commands go through the same matcher as the
+  dashboard, so a landing works in a zoom (`C-t v u`) exactly as it does outside one. A command whose target is a
+  dashboard row — mark, group, add — has nothing to act on in a zoom and says so instead of acting on a cursor you
+  cannot see.
 - **A hanging leader no longer eats your next keystroke.** `C-t` used to wait forever; now it expires like every other
   landing, and the status bar says it is waiting while it does.
