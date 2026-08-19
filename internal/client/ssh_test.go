@@ -182,3 +182,33 @@ func (nopConn) Write(p []byte) (int, error)      { return len(p), nil }
 func (nopConn) Close() error                     { return nil }
 func (nopConn) SetReadDeadline(time.Time) error  { return nil }
 func (nopConn) SetWriteDeadline(time.Time) error { return nil }
+
+// TestExplainQuotesSSHAfterAWriteFails pins the failure CI found and a quiet
+// laptop did not: when ssh dies at once — a bad host, a refused key, no baton
+// over there — the pipe is already shut by the time the hello is written, so the
+// Write returns EPIPE. "broken pipe" is a true statement about a file descriptor
+// and useless to a person; ssh's own last line is the reason, and it is in the
+// tap either way. Driven directly rather than through DialSSH so it does not
+// depend on which of the two racing paths wins.
+func TestExplainQuotesSSHAfterAWriteFails(t *testing.T) {
+	fakeSSH(t, `
+echo 'sh: 1: baton: command not found' >&2
+exit 127
+`)
+	conn, err := startSSH(addr(t, "laptop.lan"), SSHOptions{})
+	if err != nil {
+		t.Fatalf("startSSH: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	if !conn.reaped(10 * time.Second) {
+		t.Fatal("the fake ssh should have exited on its own")
+	}
+	_, werr := conn.Write([]byte("{\"action\":\"hello\"}\n"))
+	if werr == nil {
+		t.Skip("this platform buffered the write to a closed pipe; the path under test needs the error")
+	}
+	if got := conn.explain(werr); !strings.Contains(got.Error(), "remote-command") {
+		t.Fatalf("explain(%v) = %v, want ssh's own words and the PATH hint", werr, got)
+	}
+}

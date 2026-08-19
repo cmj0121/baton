@@ -121,19 +121,41 @@ func (r *rawConn) nextType(t *testing.T, want string) proto.ServerMsg {
 	return proto.ServerMsg{}
 }
 
+// remoteWith reads until a "remote" status listing want connections, so a push
+// that raced this connection's own attach cannot decide the assertion.
+func (r *rawConn) remoteWith(t *testing.T, want int) *proto.RemoteInfo {
+	t.Helper()
+	for range 32 {
+		msg := r.next(t)
+		if msg.Type == "remote" && msg.Remote != nil && len(msg.Remote.Conns) == want {
+			return msg.Remote
+		}
+	}
+	t.Fatalf("no remote status listing %d connections arrived", want)
+	return nil
+}
+
 // dialRemote attaches a cockpit declaring the remote role, as the ssh bridge
 // does, and reports the refusal the fleet answered with (or "" when admitted).
+//
+// It reads until the ANSWER rather than taking the first message: a status push
+// from another connection attaching or detaching can be queued to this one before
+// its hello has even been read. The client library has the same rule — only a
+// welcome settles its handshake — and a helper that assumed otherwise was a race
+// that showed up on CI and not on a quiet laptop.
 func dialRemote(t *testing.T, sock, passkey, source string) (*rawConn, string) {
 	t.Helper()
 	r := dialRaw(t, sock)
 	r.send(t, proto.Command{Action: "hello", Role: "remote", Passkey: passkey, Source: source})
-	msg := r.next(t)
-	if msg.Type == "goodbye" {
-		return r, msg.Error
+	for range 32 {
+		switch msg := r.next(t); msg.Type {
+		case "goodbye":
+			return r, msg.Error
+		case "welcome":
+			return r, ""
+		}
 	}
-	if msg.Type != "welcome" {
-		t.Fatalf("a remote hello was answered with %q", msg.Type)
-	}
+	t.Fatal("the fleet neither welcomed nor refused the remote hello")
 	return r, ""
 }
 
@@ -264,12 +286,12 @@ func TestRemoteStatusListsConnections(t *testing.T) {
 		t.Fatalf("the list should mark this cockpit and name the remote one: %+v", info.Conns)
 	}
 
-	// The remote cockpit sees the same list, but never the passkey.
+	// The remote cockpit sees the same list, but never the passkey. Read until a
+	// status that has both rows: a push queued before this connection finished
+	// attaching would legitimately show only one, and taking the first message
+	// would make the assertion depend on which goroutine got there first.
 	far.send(t, proto.Command{Action: "remote.status"})
-	farInfo := far.nextType(t, "remote").Remote
-	if farInfo == nil {
-		t.Fatal("the remote reply carried no payload")
-	}
+	farInfo := far.remoteWith(t, 2)
 	if farInfo.Local {
 		t.Fatal("a remote cockpit must not be marked local")
 	}

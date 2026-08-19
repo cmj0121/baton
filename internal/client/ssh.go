@@ -62,10 +62,17 @@ func DialSSH(addr remote.Address, opts SSHOptions) (*Client, error) {
 	c := newClient(conn, addr.String())
 	go c.readLoop()
 
+	// Both failures below go through explain, and the FIRST one is the reason why:
+	// when ssh dies at once — a bad host, a refused key, no baton over there — the
+	// pipe is already shut by the time the hello is written, so this Send fails
+	// with "broken pipe". That is a true statement about a file descriptor and
+	// tells a person nothing. ssh's own last line is what they need, and it is
+	// sitting in the tap either way.
 	hello := proto.Command{Action: "hello", Role: "remote", Passkey: opts.Passkey, Source: opts.Source}
 	if err := c.Send(hello); err != nil {
+		reason := conn.explain(err)
 		_ = conn.Close()
-		return nil, fmt.Errorf("%s: %w", addr.String(), err)
+		return nil, fmt.Errorf("%s: %w", addr.String(), reason)
 	}
 
 	if err := c.Wait(remoteHandshakeTimeout); err != nil {
