@@ -1,8 +1,13 @@
 package tui
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/cmj0121/baton/internal/config"
+	"github.com/cmj0121/baton/internal/i18n"
+	"github.com/cmj0121/baton/internal/proto"
 )
 
 // The shipped key map, driven the way a hand drives it. keypending_test.go
@@ -282,5 +287,109 @@ func TestKeyMapDescriptionsShareAColumn(t *testing.T) {
 		if at != col {
 			t.Errorf("%q starts its description at column %d, the others at %d", name, at, col)
 		}
+	}
+}
+
+// An unrelated save must not stamp the language into the config. Writing it on
+// every save ended environment detection for good: the first bell toggle or
+// rebind froze whatever had resolved at that instant, and since an explicit
+// setting beats $LANG, a zh_TW.UTF-8 machine could end up pinned to English
+// with no way to tell why.
+func TestSaveDoesNotPinTheLanguage(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("BATON_LANG", "")
+	t.Setenv("LC_ALL", "")
+	t.Setenv("LC_MESSAGES", "")
+	t.Setenv("LANG", "zh_TW.UTF-8")
+
+	m := model{fleet: sampleFleet(), binds: append([]binding(nil), bindings...)}
+	if err := m.saveConfig(); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if cfg.Settings.Language != "" {
+		t.Fatalf("an unrelated save wrote language=%q; the environment can never win again", cfg.Settings.Language)
+	}
+	// And the environment still decides, which is the whole point.
+	if got := prefsFromConfig(cfg).lang; got != i18n.ZhTW {
+		t.Errorf("with LANG=zh_TW.UTF-8 and nothing pinned, expected zh-TW, got %q", got)
+	}
+}
+
+// Picking a language from the key map is a choice, and choices are persisted.
+func TestChoosingTheLanguagePersistsIt(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	m := model{fleet: sampleFleet(), binds: append([]binding(nil), bindings...), mode: modeKeyMap}
+	m.cursor = len(m.keymap()) + 1 + settingLanguage
+	m = press(m, "enter")
+
+	if !m.langChosen {
+		t.Fatal("cycling the language row should count as a choice")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if cfg.Settings.Language == "" {
+		t.Fatal("a chosen language should be written to the config")
+	}
+	if cfg.Settings.Language != string(m.effLang()) {
+		t.Errorf("persisted %q, cockpit shows %q", cfg.Settings.Language, m.effLang())
+	}
+}
+
+// A daemon's config must not decide the cockpit's language. The daemon reads
+// its config once at startup and holds it until a reload, so a long-lived one
+// was pinning the language of every cockpit that attached — editing the file
+// looked like it did nothing, because the stale copy won on the next push.
+func TestDaemonConfigDoesNotDecideTheLanguage(t *testing.T) {
+	t.Setenv("BATON_LANG", "")
+	t.Setenv("LC_ALL", "")
+	t.Setenv("LC_MESSAGES", "")
+	t.Setenv("LANG", "zh_TW.UTF-8")
+
+	m := model{fleet: sampleFleet(), lang: i18n.ZhTW}
+
+	// The daemon is still serving the language it read before the file was fixed.
+	stale := config.Config{}
+	stale.Settings.Language = "en"
+	blob, err := json.Marshal(stale)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	m.applyEvent(proto.ServerMsg{Type: "config", Config: blob})
+
+	if m.effLang() != i18n.ZhTW {
+		t.Fatalf("a stale daemon config pinned the cockpit to %q; the terminal's own language should win", m.effLang())
+	}
+}
+
+// The rest of a pushed config still applies — only the language is held back.
+func TestDaemonConfigStillAppliesEverythingElse(t *testing.T) {
+	m := model{fleet: sampleFleet(), lang: i18n.ZhTW}
+
+	pushed := config.Config{}
+	on := true
+	pushed.Settings.Mouse = &on
+	pushed.Panel.Shell = "/bin/fish"
+	blob, err := json.Marshal(pushed)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	m.applyEvent(proto.ServerMsg{Type: "config", Config: blob})
+
+	if !m.mouseEnabled {
+		t.Error("a pushed setting should still apply")
+	}
+	if m.shellPath != "/bin/fish" {
+		t.Errorf("a pushed panel default should still apply, got %q", m.shellPath)
+	}
+	if m.effLang() != i18n.ZhTW {
+		t.Errorf("the language should be untouched, got %q", m.effLang())
 	}
 }

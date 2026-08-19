@@ -429,7 +429,22 @@ func (m model) saveConfig() error {
 	out.Settings.UsageMode = m.usageMode.String()
 	out.Settings.Keycast = &keycast
 	out.Settings.DashboardPreview = &preview
-	out.Settings.Language = string(m.effLang())
+	// The language is written ONLY when the user picked one, never as a side
+	// effect of an unrelated save.
+	//
+	// It used to be written on every save, which quietly ended environment
+	// detection for good: the first time anyone toggled the bell or rebound a
+	// key, whatever the language had resolved to at that instant was stamped
+	// into the file as an explicit setting, and an explicit setting beats
+	// $LANG. A cockpit that came up before its config arrived resolved to
+	// English, so the common outcome was a config that said `language: en` on a
+	// zh_TW.UTF-8 machine, and a `?` screen that never spoke Chinese again.
+	//
+	// Unset, `out` keeps whatever was already on disk, so a user who did choose
+	// a language keeps it and everyone else keeps their environment.
+	if m.langChosen {
+		out.Settings.Language = string(m.effLang())
+	}
 	out.Panel.Shell = m.shellPath
 	out.Panel.Workdir = m.workdir
 	out.Panel.DefaultAgent = m.defaultAgent

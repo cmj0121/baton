@@ -150,6 +150,10 @@ type model struct {
 	pendingHasHit bool
 	pendingGen    int
 
+	// langChosen records that the user picked the language from the key map,
+	// which is the only thing that may write settings.language. See saveConfig.
+	langChosen bool
+
 	// keyTimeout is settings.key-timeout: how long a landing waits. 0 means
 	// never expire, so keyTimeoutSet distinguishes "configured as 0" from a
 	// zero-valued model, which takes the default.
@@ -1210,7 +1214,23 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		if len(sm.Config) > 0 {
 			var cfg config.Config
 			if err := json.Unmarshal(sm.Config, &cfg); err == nil {
+				// The language is the TERMINAL's business, never the fleet's, so it
+				// is the one setting a pushed config does not get to decide.
+				//
+				// The daemon reads the config file once at startup and holds it
+				// until a reload, so a long-lived daemon was pinning the language of
+				// every cockpit that attached to it — editing the file looked like
+				// it did nothing, because the stale copy won on the next push. And
+				// over --remote the daemon is on someone else's machine entirely,
+				// where its locale says nothing about the terminal reading this
+				// screen.
+				//
+				// The cockpit resolved its own at startup from its own file and its
+				// own environment, and C-t R re-resolves it the same way, so keeping
+				// it here loses nothing and stops both problems.
+				lang := m.lang
 				*m = m.applyPrefs(prefsFromConfig(cfg))
+				m.lang = lang
 			}
 		}
 		m.pluginCommands = sm.Commands
@@ -2695,6 +2715,7 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 				cmd = mouseCmd(m.mouseEnabled) // flip the terminal's mouse reporting now
 			case settingLanguage:
 				m.lang = i18n.Next(m.effLang()) // a cycle, not a toggle: enter advances it
+				m.langChosen = true             // now it is a choice, and worth persisting
 				m.status = "language: " + string(m.lang)
 			default:
 				m.confirmClose = !m.confirmClose
