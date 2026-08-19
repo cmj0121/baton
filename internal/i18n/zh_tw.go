@@ -111,6 +111,7 @@ var zhTW = map[string]string{
 	"bind.ungroup":   "解散選取的工作項目",
 	"bind.rename":    "重新命名面板或群組",
 	"bind.favourite": "收藏面板或群組（排到最前面）",
+	"bind.move":      "把一列拿起來 — 方向鍵搬動、enter 放下",
 
 	"bind.help":         "檢視這個畫面的按鍵",
 	"bind.usage-footer": "切換用量狀態列：關閉、計費窗口、目前面板",

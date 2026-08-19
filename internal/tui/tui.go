@@ -1421,10 +1421,6 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.move(m.step(key))
 		return m, nil
-	case " ", "space":
-		if m.mode == modeDashboard {
-			return m.toggleGrab(), nil
-		}
 	case "left", "h":
 		// ← and → walk the dashboard tree: out and in. They used to move the cursor
 		// one card left or right, which only ever meant anything in the multi-column
@@ -2543,6 +2539,8 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		case actRename:
 			return m.startRename(), nil
 		}
+	case actGrab:
+		return m.toggleGrab(), nil
 	case actFavourite:
 		return m.toggleFavourite(), nil
 	case actCommands:

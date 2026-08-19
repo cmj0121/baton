@@ -57,6 +57,7 @@ const (
 	keyUngroup   = "u" // dissolve the selected work item
 	keyRename    = "e" // edit the name of the selected panel or group
 	keyFavourite = "*" // favourite / unfavourite the selected panel or group (sorts it to the front)
+	keyGrab      = "m" // move: pick the selected row up, carry it through the tree, drop it
 
 	// Prefix-reached escapes, bound to the leader in every mode.
 	keyDashboard = "d" // C-t d → the dashboard
@@ -129,6 +130,7 @@ const (
 	actUngroup
 	actRename
 	actFavourite
+	actGrab
 
 	// Back pops one view level. It is a command (bare key in command mode, prefix
 	// in a zoom), not an escape, so the prefix handler leaves it to lookupCmd.
@@ -213,6 +215,7 @@ var bindings = []binding{
 	{"ungroup", keyUngroup, "ungroup the selected work item", actUngroup, "Work items"},
 	{"rename", keyRename, "rename the panel or group", actRename, "Work items"},
 	{"favourite", keyFavourite, "favourite the panel or group (sorts it to the front)", actFavourite, "Work items"},
+	{"move", keyGrab, "pick a row up — arrows carry it, enter drops it", actGrab, "Work items"},
 
 	{"help", keyHelp, "view the keys for this view", actHelp, "View"},
 	{"usage-footer", keyUsage, "cycle the usage footer: off, window, focused panel", actUsageToggle, "View"},
