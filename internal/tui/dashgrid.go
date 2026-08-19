@@ -63,7 +63,7 @@ func (m model) gridMode(rows []dashItem) bool {
 	if m.filter != "" || !m.lens.real() {
 		return false
 	}
-	return countTopLevel(rows) < gridThreshold
+	return m.countTopLevel(rows) < gridThreshold
 }
 
 // gridDash reports whether the dashboard is currently on the card grid. It builds
@@ -71,13 +71,36 @@ func (m model) gridMode(rows []dashItem) bool {
 // which layout the cursor is walking.
 func (m model) gridDash() bool { return m.mode == modeDashboard && m.gridMode(m.dashTree()) }
 
-// countTopLevel counts the rows sitting at the top of the tree.
-func countTopLevel(rows []dashItem) int {
+// countTopLevel counts what the top of the tree HOLDS: one for each panel and each
+// work item, and — for the quiet fold — the panels it stands for rather than the
+// one row it draws.
+//
+// Counting rows was the obvious implementation and it made the layout flicker. The
+// fold fires off a threshold, and what crosses that threshold is not the fleet: a
+// panel stops being foldable while it is busy, and the card under the cursor is
+// never folded at all. So zooming a panel and coming back, or moving the cursor
+// onto a quiet one, could swing nine rows into one and swap the whole dashboard
+// under a keystroke that meant nothing of the sort.
+//
+// Counting the panels behind the fold makes the number identical whether the fold
+// fires, and whether it is open — the fold is a display device, and a display
+// device must not be an input to which display is chosen. A work item still counts
+// once, however deep it goes: that IS one thing at the top level, and one card.
+func (m model) countTopLevel(rows []dashItem) int {
 	n := 0
 	for _, it := range rows {
-		if it.depth == 0 {
-			n++
+		if it.depth != 0 {
+			continue
 		}
+		if it.kind == itemFold {
+			// Closed, the row stands for its panels; open, they are drawn as rows of
+			// their own and counting both would count them twice.
+			if !m.foldOpen[it.parent] {
+				n += it.quiet
+			}
+			continue
+		}
+		n++
 	}
 	return n
 }

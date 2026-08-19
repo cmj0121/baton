@@ -219,3 +219,70 @@ func TestPreviewToggleSaysWhereThePaneIs(t *testing.T) {
 		t.Fatalf("the toggle should say where the pane shows, got %q", got)
 	}
 }
+
+// TestTheFoldCannotFlipTheLayout is the bug this counting rule exists for.
+//
+// The quiet fold fires off a threshold, and what crosses that threshold is not the
+// fleet: a panel stops being foldable while it is busy, and the card under the
+// cursor is never folded. So zooming a panel and coming back — or just moving the
+// cursor onto a quiet one — swung nine rows into one and swapped the dashboard's
+// whole layout under a keystroke that meant nothing of the sort.
+func TestTheFoldCannotFlipTheLayout(t *testing.T) {
+	fleet := make([]panel.Panel, 0, 12)
+	for i := 0; i < 9; i++ {
+		fleet = append(fleet, panel.Panel{ID: string(rune('a' + i)), Title: "quiet", State: panel.Idle})
+	}
+	for i := 0; i < 3; i++ {
+		fleet = append(fleet, panel.Panel{ID: string(rune('r' + i)), Title: "busy", State: panel.Running})
+	}
+
+	m := baseModel()
+	m.mode, m.fleet, m.foldQuiet = modeDashboard, fleet, 8
+
+	// Folded: four rows are drawn, but twelve panels sit at the top level.
+	if got := len(m.dashItems()); got != 4 {
+		t.Fatalf("nine quiet panels should fold to one row beside the three busy ones, got %d", got)
+	}
+	if m.gridDash() {
+		t.Fatal("twelve top-level panels are a tree, however few rows the fold draws")
+	}
+
+	// One of them goes busy — what zooming a panel does — and the fold stops firing.
+	// Nine rows appear where one was, and the layout must not notice.
+	m.fleet[0].State = panel.Running
+	if got := len(m.dashItems()); got != 12 {
+		t.Fatalf("below the threshold every panel has its own row, got %d", got)
+	}
+	if m.gridDash() {
+		t.Fatal("the same twelve panels flipped the layout when the fold stopped firing")
+	}
+
+	// And back again, as it goes idle after the zoom.
+	m.fleet[0].State = panel.Idle
+	if m.gridDash() {
+		t.Fatal("the layout flipped when the fold fired again")
+	}
+}
+
+// TestOpeningTheFoldKeepsTheLayout: the fold row is a display device, and a display
+// device must not be an input to which display is chosen.
+func TestOpeningTheFoldKeepsTheLayout(t *testing.T) {
+	fleet := make([]panel.Panel, 0, 4)
+	for i := 0; i < 4; i++ {
+		fleet = append(fleet, panel.Panel{ID: string(rune('a' + i)), Title: "quiet", State: panel.Idle})
+	}
+	m := baseModel()
+	m.mode, m.fleet, m.foldQuiet = modeDashboard, fleet, 2
+	if !m.gridDash() {
+		t.Fatal("four panels are cards, folded or not")
+	}
+
+	m.cursor = 0
+	m = press(m, " ") // open the fold
+	if !m.gridDash() {
+		t.Fatal("opening the fold must not swap the layout")
+	}
+	if got := len(m.dashItems()); got != 5 {
+		t.Fatalf("the open fold draws its row plus four panels, got %d", got)
+	}
+}
