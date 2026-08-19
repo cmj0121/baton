@@ -110,6 +110,7 @@ Tastenbelegung zu bearbeiten.
 |             | `hl` / `←→`       | Work Item ein-/ausklappen — heraus- / hineingehen                  |
 |             | `space`           | zeigen / verbergen, was unter der Zeile verschachtelt ist          |
 |             | `v` / `z`         | Detailspalte / Gruppierung: Work Item, Verzeichnis, Profil, Status |
+|             | `V`               | das Dashboard-Layout: Karten oder Baum                             |
 |             | `m`               | eine Zeile aufnehmen — Pfeile tragen sie, `enter` legt sie ab      |
 |             | `enter`           | die Auswahl öffnen / hineinzoomen                                  |
 |             | `p` / `A` / `c`   | neues shell- / agent- / Befehlsauswahl-Panel                       |

@@ -2554,6 +2554,8 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		return m.toggleGrab(), nil
 	case actExpand:
 		return m.toggleExpand(), nil
+	case actDashLayout:
+		return m.toggleLayout(), nil
 	case actFavourite:
 		return m.toggleFavourite(), nil
 	case actCommands:
@@ -3442,7 +3444,7 @@ func (m model) dashboardView() string {
 	// is a choice someone made, and the dashboard should say so rather than leave
 	// them wondering which of them decided it.
 	if m.treeIsChosen(m.dashTree()) {
-		heading += "  " + seg("tree  ← for cards", colDark, colBrand)
+		heading += "  " + seg("tree  "+keyLabel(m.bindingKey(actDashLayout))+" for cards", colDark, colBrand)
 	}
 	summary := m.summaryStrip(shown)
 	body := m.treeBody(items)

@@ -112,6 +112,7 @@ teclas.
 |             | `hl` / `←→`       | plegar / desplegar un work item — salir / entrar                      |
 |             | `space`           | mostrar / ocultar lo que hay anidado bajo la fila                     |
 |             | `v` / `z`         | panel de detalle / agrupar por: work item, directorio, perfil, estado |
+|             | `V`               | el diseño del tablero: tarjetas o árbol                               |
 |             | `m`               | coger una fila — las flechas la llevan, `enter` la suelta             |
 |             | `enter`           | abrir / hacer zoom en la selección                                    |
 |             | `p` / `A` / `c`   | nuevo panel de shell / agente / elegir comando                        |

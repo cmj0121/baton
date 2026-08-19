@@ -112,6 +112,7 @@ touches.
 |                 | `hl` / `←→`       | replier / déplier un élément de travail — sortir / entrer              |
 |                 | `space`           | afficher / masquer ce qui est imbriqué sous la ligne                   |
 |                 | `v` / `z`         | volet de détail / cycle du groupement : élément, dossier, profil, état |
+|                 | `V`               | la mise en page du tableau : cartes ou arbre                           |
 |                 | `m`               | saisir une ligne — les flèches la portent, `enter` la dépose           |
 |                 | `enter`           | ouvrir / zoomer la sélection                                           |
 |                 | `p` / `A` / `c`   | nouveau panneau shell / agent / choix de commande                      |
