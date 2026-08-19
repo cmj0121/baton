@@ -23,6 +23,9 @@ var zhTW = map[string]string{
 	"help.title.keys":      "按鍵",
 	"help.legend.back":     "返回",
 	"help.legend.edit":     "編輯",
+	"help.legend.section":  "區段",
+	"help.landing":         "這個中繼鍵底下有 %d 個鍵",
+	"help.landing.one":     "這個中繼鍵底下有 %d 個鍵",
 	"help.legend.scroll":   "↑↓ 捲動",
 
 	// Rows shared by more than one view's key list.

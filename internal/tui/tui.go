@@ -1534,18 +1534,26 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "tab":
-		// In the key map, tab jumps to the next purpose section; elsewhere it
-		// cycles the selection forward, wrapping like the group split's focus.
-		if m.mode == modeKeyMap {
+		// In the key map and the key list, tab jumps to the next purpose section
+		// — both are long enough that a line at a time is the wrong tool.
+		// Elsewhere it cycles the selection forward, wrapping like the group
+		// split's focus.
+		switch m.mode {
+		case modeKeyMap:
 			m.jumpSection(1)
-		} else {
+		case modeHelp:
+			m.jumpHelpSection(1)
+		default:
 			m.cycle(1)
 		}
 		return m, nil
 	case "shift+tab":
-		if m.mode == modeKeyMap {
+		switch m.mode {
+		case modeKeyMap:
 			m.jumpSection(-1)
-		} else {
+		case modeHelp:
+			m.jumpHelpSection(-1)
+		default:
 			m.cycle(-1)
 		}
 		return m, nil
@@ -2267,15 +2275,65 @@ func (m model) openHelp(from mode) model {
 // never scrolls past the bottom. The help view has no cursor, so the arrows drive
 // this offset directly.
 func (m *model) scrollHelp(delta int) {
+	m.helpScroll += delta
+	m.clampHelp()
+}
+
+// helpAnchors are the body lines each section starts on. helpContent emits a
+// blank line then the subheader, so the blank is the anchor: jumping to it puts
+// the heading at the top of the panel with its rows under it.
+func (m model) helpAnchors() []int {
 	_, body := m.helpContent()
-	off := m.helpScroll + delta
-	if maxOff := len(body) - m.panelVisibleRows(helpReserved); off > maxOff {
-		off = maxOff
+	var out []int
+	for i := 0; i+1 < len(body); i++ {
+		if body[i] == "" && strings.HasPrefix(body[i+1], "  ") {
+			out = append(out, i)
+		}
 	}
-	if off < 0 {
-		off = 0
+	return out
+}
+
+// jumpHelpSection moves the help list to the next or previous section. The key
+// list is long enough that scrolling it a line at a time is the wrong tool —
+// tab walks the sections, the same gesture the key map already uses for the same
+// reason.
+func (m *model) jumpHelpSection(dir int) {
+	anchors := m.helpAnchors()
+	if len(anchors) == 0 {
+		return
 	}
-	m.helpScroll = off
+	if dir > 0 {
+		for _, a := range anchors {
+			if a > m.helpScroll {
+				m.helpScroll = a
+				m.clampHelp()
+				return
+			}
+		}
+		m.helpScroll = anchors[0] // wrap to the first section
+	} else {
+		for i := len(anchors) - 1; i >= 0; i-- {
+			if anchors[i] < m.helpScroll {
+				m.helpScroll = anchors[i]
+				m.clampHelp()
+				return
+			}
+		}
+		m.helpScroll = anchors[len(anchors)-1]
+	}
+	m.clampHelp()
+}
+
+// clampHelp keeps the offset inside the body, so a jump near the end lands on
+// the last full page rather than past it.
+func (m *model) clampHelp() {
+	_, body := m.helpContent()
+	if maxOff := len(body) - m.panelVisibleRows(helpReserved); m.helpScroll > maxOff {
+		m.helpScroll = maxOff
+	}
+	if m.helpScroll < 0 {
+		m.helpScroll = 0
+	}
 }
 
 // openEditMap shows the editable key map (C-t k), remembering the originating
@@ -3843,6 +3901,7 @@ func (m model) helpView() string {
 	title, body := m.helpContent()
 	pfx := keyLabel(m.effPrefix())
 	legend := mutedStyle.Render("esc  " + m.tr("help.legend.back", "back") +
+		"   ·   tab  " + m.tr("help.legend.section", "section") +
 		"   ·   " + pfx + " " + seqLabel(m.bindingKey(actEditMap)) + "  " + m.tr("help.legend.edit", "edit"))
 	return m.renderScrollPanel(scrollPanel{
 		title:    title + " " + m.tr("help.title.keys", "KEYS"),
@@ -3870,6 +3929,10 @@ func (m model) helpContent() (title string, body []string) {
 	tr := m.tr
 
 	var rows []helpRow
+	// The dashboard lists the live key map rather than a hand-written table, so
+	// its bindings travel as bindings: the renderer below groups them by landing,
+	// which a flattened row cannot express.
+	var binds []binding
 	switch m.helpFrom {
 	case modeGroupZoom:
 		title = tr("help.title.group", "GROUP VIEW")
@@ -3925,13 +3988,7 @@ func (m model) helpContent() (title string, body []string) {
 			{"Navigation", kc("enter"), tr("help.dash.open", "open / zoom")},
 			{"Navigation", kc("esc"), tr("help.dash.clear", "clear the selection")},
 		}
-		for _, b := range m.keymap() {
-			keys := keycaps("", b.key, false)
-			if isEscape(b.act) {
-				keys = keycaps(pfx, b.key, false)
-			}
-			rows = append(rows, helpRow{b.cat, keys, m.bindDesc(b)})
-		}
+		binds = m.keymap()
 	}
 
 	// Render category by category in a stable order, so the list always reads the
@@ -3942,18 +3999,74 @@ func (m model) helpContent() (title string, body []string) {
 	subhead := lipgloss.NewStyle().Foreground(colFaint).Bold(true)
 	for _, cat := range []string{"Navigation", "Panels", "Work items", "View", "Session"} {
 		shown := false
-		for _, r := range rows {
-			if r.cat != cat {
-				continue
-			}
+		head := func() {
 			if !shown {
 				body = append(body, "", "  "+subhead.Render(m.trCat(cat)))
 				shown = true
 			}
+		}
+		for _, r := range rows {
+			if r.cat != cat {
+				continue
+			}
+			head()
 			body = append(body, keyCol.Render(r.keys)+mutedStyle.Render(r.desc))
+		}
+
+		// The bindings that fire on a key of their own, then one block per
+		// landing. A landing's members are indented under it and show only the
+		// key that completes them, so the family reads as a family rather than
+		// as four rows that happen to start with the same cap.
+		for _, b := range binds {
+			if b.cat != cat || len(b.seq()) > 1 {
+				continue
+			}
+			head()
+			keys := keycaps("", b.key, false)
+			if isEscape(b.act) {
+				keys = keycaps(pfx, b.key, false)
+			}
+			body = append(body, keyCol.Render(keys)+mutedStyle.Render(m.bindDesc(b)))
+		}
+		for _, land := range landings(binds, cat) {
+			head()
+			var members []binding
+			for _, b := range binds {
+				if b.cat == cat && len(b.seq()) > 1 && b.seq()[0] == land {
+					members = append(members, b)
+				}
+			}
+			count := m.tr("help.landing", "%d keys under this landing")
+			if len(members) == 1 {
+				count = m.tr("help.landing.one", "%d key under this landing")
+			}
+			body = append(body,
+				keyCol.Render(keycaps("", land, false)+" …")+
+					mutedStyle.Render(fmt.Sprintf(count, len(members))))
+			for _, b := range members {
+				rest := strings.Join(b.seq()[1:], " ")
+				body = append(body, keyCol.Render("  "+keycaps("", rest, false))+mutedStyle.Render(m.bindDesc(b)))
+			}
 		}
 	}
 	return title, body
+}
+
+// landings lists the landing keys a category holds, in key-map order. A landing
+// is the first token of any binding that takes more than one key; the escapes
+// have none, since they are single by design.
+func landings(binds []binding, cat string) []string {
+	var out []string
+	for _, b := range binds {
+		s := b.seq()
+		if b.cat != cat || len(s) < 2 || isEscape(b.act) {
+			continue
+		}
+		if !slices.Contains(out, s[0]) {
+			out = append(out, s[0])
+		}
+	}
+	return out
 }
 
 func (m model) keyMapView() string {

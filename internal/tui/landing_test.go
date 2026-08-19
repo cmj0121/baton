@@ -393,3 +393,75 @@ func TestDaemonConfigStillAppliesEverythingElse(t *testing.T) {
 		t.Errorf("the language should be untouched, got %q", m.effLang())
 	}
 }
+
+// The dashboard's key list groups a landing's family under the landing, showing
+// each member by the key that completes it. A flat list of rows that happen to
+// start with the same cap does not say "these four live under n" — which is the
+// one thing a reader needs in order to use a landing at all.
+func TestDashboardHelpGroupsLandings(t *testing.T) {
+	m := model{width: 120, height: 400, fleet: sampleFleet(), prefixKey: keyPrefix,
+		binds: append([]binding(nil), bindings...), mode: modeHelp, helpFrom: modeDashboard}
+	_, body := m.helpContent()
+
+	var text []string
+	for _, l := range body {
+		text = append(text, stripANSI(l))
+	}
+	joined := strings.Join(text, "\n")
+
+	// Every landing in the shipped map gets a header naming it.
+	for _, land := range []string{"n", "v", "g", "x"} {
+		if !strings.Contains(joined, land+"  …") {
+			t.Errorf("the key list should head the %q family with its landing", land)
+		}
+	}
+
+	// A member shows the key that completes it, not the whole run: under g, mark
+	// is "g", not "g g".
+	markRow := ""
+	for _, l := range text {
+		if strings.Contains(l, "mark a panel for grouping") {
+			markRow = l
+			break
+		}
+	}
+	if markRow == "" {
+		t.Fatal("no row for mark")
+	}
+	if strings.Contains(markRow, "g   g") {
+		t.Errorf("a family member should show only the key that completes it, got %q", markRow)
+	}
+	if !strings.HasPrefix(markRow, "   g") {
+		t.Errorf("a family member should be indented under its landing, got %q", markRow)
+	}
+}
+
+// The key list is long enough that scrolling it a line at a time is the wrong
+// tool, so tab walks the sections — the gesture the key map already uses.
+func TestHelpTabWalksSections(t *testing.T) {
+	m := model{width: 120, height: 24, fleet: sampleFleet(), prefixKey: keyPrefix,
+		binds: append([]binding(nil), bindings...), mode: modeHelp, helpFrom: modeDashboard}
+
+	anchors := m.helpAnchors()
+	if len(anchors) < 4 {
+		t.Fatalf("the dashboard list should have a section per purpose, got %v", anchors)
+	}
+
+	m = press(m, "tab")
+	if m.helpScroll == 0 {
+		t.Fatal("tab should move off the first section")
+	}
+	first := m.helpScroll
+	m = press(m, "shift+tab")
+	if m.helpScroll >= first {
+		t.Errorf("shift+tab should move back, %d → %d", first, m.helpScroll)
+	}
+
+	// Walking off the end wraps rather than sticking at the bottom.
+	for i := 0; i < len(anchors)+2; i++ {
+		m = press(m, "tab")
+	}
+	if m.helpScroll < 0 {
+		t.Errorf("the offset should stay inside the body, got %d", m.helpScroll)
+	}
+}
