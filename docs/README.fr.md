@@ -109,7 +109,7 @@ touches.
 |                 | `R` / `S`         | recharger la config / forcer le redémarrage du serveur                 |
 |                 | `q`               | se détacher (le serveur continue de tourner)                           |
 | Tableau de bord | `jk` / `↑↓`       | déplacer le curseur                                                    |
-|                 | `hl` / `←→`       | replier / déplier un élément de travail — sortir / entrer              |
+|                 | `hl` / `←→`       | changer de carte · dans l'arbre : replier / déplier un élément         |
 |                 | `space`           | afficher / masquer ce qui est imbriqué sous la ligne                   |
 |                 | `v` / `z`         | volet de détail / cycle du groupement : élément, dossier, profil, état |
 |                 | `V`               | la mise en page du tableau : cartes ou arbre                           |

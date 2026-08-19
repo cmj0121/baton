@@ -80,7 +80,8 @@ You drive Baton through three views, moving between them with a keystroke:
 - **Dashboard** — mission control. A small fleet is a grid of **cards**, one per panel and one per work item; from six
   things at the top level up it becomes a live **tree** of every panel: work items as rows, their sub-groups indented under them,
   their panels under those. `space` shows or hides what is nested under a row at any depth, `→` opens a work item and
-  steps inside it, `←` shuts it and steps back out; `V` switches the two layouts by hand. The tree row carries
+  steps inside it, `←` shuts it and steps back out — on the cards that pair moves between them instead. `V` switches the
+  two layouts by hand. The tree row carries
   the state, the working directory, the output sparkline and the dispatched task as the terminal gets wide enough for
   each; `v` adds a detail pane beside it. Here you navigate, spawn and close panels, and group them into work items.
 - **Group** — a work item's live split: its panels tiled side by side, all streaming at once. The first few stream as
@@ -104,7 +105,7 @@ the current view, and **`C-t k`** to edit the key map.
 |             | `R` / `S`         | reload config / force-restart the server                     |
 |             | `q`               | detach (server keeps running)                                |
 | Dashboard   | `jk` / `↑↓`       | move the cursor                                              |
-|             | `hl` / `←→`       | collapse / expand a work item — and step out / in            |
+|             | `hl` / `←→`       | move a card · in the tree: collapse / expand a work item     |
 |             | `space`           | show / hide what is nested under the row                     |
 |             | `v` / `z`         | detail pane / cycle group-by: work item, dir, profile, state |
 |             | `V`               | the dashboard layout: cards or tree                          |
