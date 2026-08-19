@@ -472,6 +472,9 @@ func TestHelpScrollsOnSmallScreen(t *testing.T) {
 	m := model{mode: modeHelp, helpFrom: modeDashboard, width: 90, height: 14,
 		binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
 
+	// The list is tabbed, so scrolling happens inside a tab. Panels is the long
+	// one, which is the tab that has to clip on a short screen.
+	m.helpTab = 1
 	top := m.helpView()
 	if h := lipgloss.Height(top); h > m.height-1 {
 		t.Fatalf("help box height %d should fit within %d", h, m.height-1)
@@ -479,22 +482,22 @@ func TestHelpScrollsOnSmallScreen(t *testing.T) {
 	if !strings.Contains(top, "↑↓ scroll") {
 		t.Fatal("a clipped help list should show the scroll hint")
 	}
-	if !strings.Contains(top, "move") {
-		t.Fatal("the top of the help list should be visible at offset 0")
+	if !strings.Contains(top, "spawn a new shell panel") {
+		t.Fatal("the top of the open tab should be visible at offset 0")
 	}
 
 	// Scroll to the bottom: a late row appears and a top row scrolls off. The
-	// count only has to exceed the list's length — scrollHelp clamps — so it is
+	// count only has to exceed the tab's length — scrollHelp clamps — so it is
 	// deliberately generous rather than pinned to today's number of bindings.
 	for i := 0; i < 500; i++ {
 		m.scrollHelp(1)
 	}
 	bottom := m.helpView()
-	if !strings.Contains(bottom, "detach (server keeps running)") {
-		t.Fatal("scrolling down should reveal the bottom of the help list")
+	if !strings.Contains(bottom, "purge all exited panels") {
+		t.Fatal("scrolling down should reveal the bottom of the open tab")
 	}
-	if strings.Contains(bottom, "clear the selection") {
-		t.Fatal("the top help rows should scroll off the window")
+	if strings.Contains(bottom, "spawn a new shell panel") {
+		t.Fatal("the top rows of the tab should scroll off the window")
 	}
 
 	// Clamp: scrolling up at the top stays at 0.

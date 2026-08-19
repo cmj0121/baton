@@ -401,7 +401,7 @@ func TestDaemonConfigStillAppliesEverythingElse(t *testing.T) {
 func TestDashboardHelpGroupsLandings(t *testing.T) {
 	m := model{width: 120, height: 400, fleet: sampleFleet(), prefixKey: keyPrefix,
 		binds: append([]binding(nil), bindings...), mode: modeHelp, helpFrom: modeDashboard}
-	_, body := m.helpContent()
+	_, body := helpRows(m)
 
 	var text []string
 	for _, l := range body {
@@ -436,32 +436,70 @@ func TestDashboardHelpGroupsLandings(t *testing.T) {
 	}
 }
 
-// The key list is long enough that scrolling it a line at a time is the wrong
-// tool, so tab walks the sections — the gesture the key map already uses.
-func TestHelpTabWalksSections(t *testing.T) {
-	m := model{width: 120, height: 24, fleet: sampleFleet(), prefixKey: keyPrefix,
+// The key list is tabbed by purpose, and the arrows walk the tabs. One long
+// scroll made "how do I group these" a hunt past every panel verb.
+func TestHelpTabsWalkByPurpose(t *testing.T) {
+	m := model{width: 96, height: 24, fleet: sampleFleet(), prefixKey: keyPrefix,
 		binds: append([]binding(nil), bindings...), mode: modeHelp, helpFrom: modeDashboard}
 
-	anchors := m.helpAnchors()
-	if len(anchors) < 4 {
-		t.Fatalf("the dashboard list should have a section per purpose, got %v", anchors)
+	_, secs := m.helpSections()
+	if len(secs) < 4 {
+		t.Fatalf("the dashboard list should have a tab per purpose, got %d", len(secs))
 	}
 
-	m = press(m, "tab")
-	if m.helpScroll == 0 {
-		t.Fatal("tab should move off the first section")
+	// Each tab shows only its own rows.
+	m.helpTab = 0
+	_, first := m.helpContent()
+	m.helpTab = 1
+	_, second := m.helpContent()
+	if len(first) == 0 || len(second) == 0 {
+		t.Fatal("both tabs should hold rows")
 	}
-	first := m.helpScroll
-	m = press(m, "shift+tab")
-	if m.helpScroll >= first {
-		t.Errorf("shift+tab should move back, %d → %d", first, m.helpScroll)
+	if strings.Join(first, "\n") == strings.Join(second, "\n") {
+		t.Error("two tabs rendered the same rows")
 	}
 
-	// Walking off the end wraps rather than sticking at the bottom.
-	for i := 0; i < len(anchors)+2; i++ {
-		m = press(m, "tab")
+	// The arrows walk them, and wrap at each end.
+	m.helpTab = 0
+	m = press(m, "right")
+	if m.helpTab != 1 {
+		t.Errorf("→ should open the next tab, got %d", m.helpTab)
 	}
-	if m.helpScroll < 0 {
-		t.Errorf("the offset should stay inside the body, got %d", m.helpScroll)
+	m = press(m, "left", "left")
+	if m.helpTab != len(secs)-1 {
+		t.Errorf("← past the first tab should wrap to the last, got %d", m.helpTab)
+	}
+	m = press(m, "right")
+	if m.helpTab != 0 {
+		t.Errorf("→ past the last tab should wrap to the first, got %d", m.helpTab)
+	}
+
+	// Switching tabs starts at the top, so a scrolled tab does not strand the
+	// next one mid-list.
+	m.helpScroll = 5
+	m = press(m, "right")
+	if m.helpScroll != 0 {
+		t.Errorf("a new tab should open at the top, got offset %d", m.helpScroll)
+	}
+}
+
+// The bar names the tab either side, so the arrows have somewhere legible to go.
+func TestHelpTabBarNamesTheTabs(t *testing.T) {
+	m := model{width: 96, height: 24, fleet: sampleFleet(), prefixKey: keyPrefix,
+		binds: append([]binding(nil), bindings...), mode: modeHelp, helpFrom: modeDashboard}
+
+	_, secs := m.helpSections()
+	bar := stripANSI(strings.Join(m.helpTabBar(secs, m.width-8), " "))
+	for _, want := range []string{"Panels", "Work items", "View"} {
+		if !strings.Contains(bar, want) {
+			t.Errorf("the tab bar should name %q, got %q", want, bar)
+		}
+	}
+
+	// Too narrow for every tab: it narrows to the neighbours rather than
+	// spilling, and says there is more either side.
+	narrow := stripANSI(strings.Join(m.helpTabBar(secs, 20), " "))
+	if !strings.Contains(narrow, "▸") {
+		t.Errorf("a clipped bar should point at the tabs it dropped, got %q", narrow)
 	}
 }

@@ -17,16 +17,17 @@ var zhTW = map[string]string{
 	"cat.session":    "工作階段",
 
 	// --- the ? key list ------------------------------------------------------
-	"help.title.dashboard": "儀表板",
-	"help.title.zoom":      "放大檢視",
-	"help.title.group":     "群組檢視",
-	"help.title.keys":      "按鍵",
-	"help.legend.back":     "返回",
-	"help.legend.edit":     "編輯",
-	"help.legend.section":  "區段",
-	"help.landing":         "這個中繼鍵底下有 %d 個鍵",
-	"help.landing.one":     "這個中繼鍵底下有 %d 個鍵",
-	"help.legend.scroll":   "↑↓ 捲動",
+	"help.title.dashboard":     "儀表板",
+	"help.title.zoom":          "放大檢視",
+	"help.title.group":         "群組檢視",
+	"help.title.keys":          "按鍵",
+	"help.legend.back":         "返回",
+	"help.legend.edit":         "編輯",
+	"help.legend.tab":          "分頁",
+	"help.legend.scroll.short": "捲動",
+	"help.landing":             "這個中繼鍵底下有 %d 個鍵",
+	"help.landing.one":         "這個中繼鍵底下有 %d 個鍵",
+	"help.legend.scroll":       "↑↓ 捲動",
 
 	// Rows shared by more than one view's key list.
 	"help.common.keys":      "這份按鍵清單",

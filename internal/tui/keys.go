@@ -464,6 +464,18 @@ func (m model) saveConfig() error {
 // --- keycap rendering ---------------------------------------------------------
 
 var (
+	// The key list's purpose tabs: the open one lit in the brand colour, the
+	// rest quiet enough that the eye finds the open one first.
+	tabStyle = lipgloss.NewStyle().
+			Foreground(colFaint).
+			Padding(0, 1)
+
+	tabHotStyle = lipgloss.NewStyle().
+			Foreground(colDark).
+			Background(colBrand).
+			Bold(true).
+			Padding(0, 1)
+
 	keycapStyle = lipgloss.NewStyle().
 			Foreground(colInk).
 			Background(lipgloss.Color("238")).

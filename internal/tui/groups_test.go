@@ -730,7 +730,8 @@ func TestHelpContextAndZoomFooter(t *testing.T) {
 	if gm.mode != modeHelp || gm.helpFrom != modeGroupZoom {
 		t.Fatalf("? in the split should open context help, got mode=%v from=%v", gm.mode, gm.helpFrom)
 	}
-	if !strings.Contains(gm.helpView(), "remove the focused panel") {
+	_, gr := helpRows(gm)
+	if !strings.Contains(strings.Join(gr, "\n"), "remove the focused panel") {
 		t.Fatal("the split help should list the group-split keys")
 	}
 	back, _ := gm.handleKey(key("esc"))
