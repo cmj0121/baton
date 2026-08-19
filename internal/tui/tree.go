@@ -234,14 +234,8 @@ func (m model) expandSelected() model {
 	if !ok {
 		return m
 	}
-	// On the cards, opening a work item means showing the tree. The grid draws a
-	// work item WHOLE — that is what makes it readable at four panels — so the only
-	// honest answer to "open this" is the layout that can draw what is inside.
 	if it.kind == itemGroup && m.gridDash() {
-		m.showTree = true
-		delete(m.collapsed, it.name)
-		m.status = "showing the tree · ← shuts it again"
-		m.cursorToItem(it)
+		m.status = m.cardsHold()
 		return m
 	}
 	switch {
@@ -281,13 +275,53 @@ func (m model) toggleExpand() model {
 		return m.toggleFold()
 	case itemGroup:
 		if m.gridDash() {
-			// On the cards there is nothing drawn to hide, and what is asked for is
-			// the inside of the work item — which is expandSelected's business.
-			return m.expandSelected()
+			m.status = m.cardsHold()
+			return m
 		}
 		return m.setCollapsed(it, it.expanded)
 	}
 	m.status = "nothing nested here — " + keyLabel(m.bindingKey(actExpand)) + " opens a work item"
+	return m
+}
+
+// cardsHold is what every open/shut verb answers on the card grid.
+//
+// The cards draw a work item WHOLE — that is what makes a small fleet readable at
+// a glance — so there is nothing on screen to open or shut, and the layout that
+// can draw the inside of one is a keystroke away. The key is read from the binding
+// rather than spelled here, so a rebind cannot leave the hint pointing at a key
+// that does nothing.
+func (m model) cardsHold() string {
+	return "the cards draw a work item whole — " + keyLabel(m.bindingKey(actDashLayout)) + " shows the tree"
+}
+
+// toggleLayout is what V does: ask for the tree on a fleet the cards would draw,
+// or take the cards back.
+//
+// It is the ONE key that changes the layout. The arrows walk the tree and nothing
+// else — a person stepping out of the outermost row expects to stay put, not to be
+// handed a different dashboard — and space opens and shuts a row and nothing else.
+// A view this cheap to flip is better as a key you press on purpose than as the
+// far edge of a key you press all day.
+func (m model) toggleLayout() model {
+	if m.mode != modeDashboard {
+		return m
+	}
+	it, had := m.selectedItem()
+	m.showTree = !m.showTree
+	if had {
+		m.cursorToItem(it) // the row list changes size; land back on the same row
+	}
+	m.clampCursor()
+	switch {
+	case !m.gridDash() && !m.showTree:
+		// Nothing to give back: this fleet is past the cards on its own.
+		m.status = "the fleet is past the cards — the tree draws it either way"
+	case m.showTree:
+		m.status = "tree · " + keyLabel(m.bindingKey(actDashLayout)) + " for the cards"
+	default:
+		m.status = "cards"
+	}
 	return m
 }
 
@@ -302,21 +336,15 @@ func (m model) collapseSelected() model {
 	if !ok {
 		return m
 	}
+	// The guard comes first: a group row reads as expanded on the cards too — the
+	// grid simply does not draw what is under it — so shutting it here would write
+	// a collapse nothing on screen could show.
+	if it.kind == itemGroup && m.gridDash() {
+		m.status = m.cardsHold()
+		return m
+	}
 	if it.kind == itemGroup && it.expanded {
 		return m.setCollapsed(it, true)
-	}
-	// Out of the top level is out of the tree. ← already means "back" at every
-	// depth, so on a small fleet it keeps meaning it one step further — the tree a
-	// person opened from the cards is shut by walking out of it, not by hunting for
-	// the key that put them there.
-	if m.showTree && it.depth == 0 {
-		m.showTree = false
-		m.cursorToItem(it) // the rows below it are gone; land back on it by identity
-		m.clampCursor()
-		if m.gridDash() {
-			m.status = "back to the cards"
-		}
-		return m
 	}
 	m.cursorToParent(it)
 	return m

@@ -60,6 +60,12 @@ const (
 	keyGrab      = "m" // move: pick the selected row up, carry it through the tree, drop it
 	keyExpand    = " " // space: show or hide what is nested under the selected row
 
+	// keyDashLayout is the dashboard's cards-or-tree switch. V rather than a free
+	// letter because it sits beside v, the detail pane: both answer "how is this
+	// drawn", and neither touches the fleet. (The group split's own L cycles tile
+	// layouts and is a different view's key.)
+	keyDashLayout = "V"
+
 	// Prefix-reached escapes, bound to the leader in every mode.
 	keyDashboard = "d" // C-t d → the dashboard
 	keyCommands  = "c" // C-t c → the plugin command picker
@@ -135,6 +141,7 @@ const (
 	actFavourite
 	actGrab
 	actExpand
+	actDashLayout
 
 	// Back pops one view level. It is a command (bare key in command mode, prefix
 	// in a zoom), not an escape, so the prefix handler leaves it to lookupCmd.
@@ -226,6 +233,7 @@ var bindings = []binding{
 	{"usage-footer", keyUsage, "cycle the usage footer: off, window, focused panel", actUsageToggle, "View"},
 	{"keycast", keyKeycast, "toggle the key-press readout in the footer", actKeycastToggle, "View"},
 	{"preview", keyPreview, "toggle the detail pane beside the dashboard tree", actPreviewToggle, "View"},
+	{"layout", keyDashLayout, "the dashboard's cards or tree — the tree on a small fleet", actDashLayout, "View"},
 	{"group-by", keyLens, "cycle the group-by lens: work item, directory, profile, state", actLens, "View"},
 	{"key-map", keyEditMap, "edit the key map (prefix)", actEditMap, "View"},
 	{"panel-config", keyPanelConfig, "configure panel defaults (prefix)", actPanelConfig, "View"},

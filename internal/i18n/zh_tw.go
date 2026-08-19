@@ -118,6 +118,7 @@ var zhTW = map[string]string{
 	"bind.usage-footer": "切換用量狀態列：關閉、計費窗口、目前面板",
 	"bind.keycast":      "切換狀態列上的按鍵提示",
 	"bind.preview":      "切換樹狀圖旁的詳細窗格",
+	"bind.layout":       "儀表板的卡片或樹狀 — 小艦隊也能切成樹狀",
 	"bind.group-by":     "切換分組視角:工作項目、目錄、profile、狀態",
 	"bind.key-map":      "編輯按鍵對應（前綴鍵）",
 	"bind.panel-config": "設定面板預設值（前綴鍵）",

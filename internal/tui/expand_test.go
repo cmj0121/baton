@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/cmj0121/baton/internal/panel"
@@ -125,10 +126,11 @@ func TestSpaceIsRebindable(t *testing.T) {
 	}
 }
 
-// TestSpaceOnACardShowsTheTree: the grid draws a work item whole, so the
-// disclosure key means the same thing there as everywhere else — show me what is
-// inside — and the only layout that can answer is the tree.
-func TestSpaceOnACardShowsTheTree(t *testing.T) {
+// TestSpaceOnACardSaysTheCardsHoldItWhole: space means one thing — show or hide
+// what is nested under this row — and on the cards there is nothing drawn to hide.
+// It says so, and names the key that changes the layout, rather than changing the
+// layout itself.
+func TestSpaceOnACardSaysTheCardsHoldItWhole(t *testing.T) {
 	m := baseModel()
 	m.mode = modeDashboard
 	m.fleet = []panel.Panel{
@@ -141,10 +143,10 @@ func TestSpaceOnACardShowsTheTree(t *testing.T) {
 
 	m.cursor = 0
 	m = press(m, " ")
-	if !m.treeView() {
-		t.Fatalf("space on a work item card should show the tree: %s", m.status)
+	if !m.gridDash() {
+		t.Fatal("space must not change the layout — that is V's job")
 	}
-	if it, _ := m.selectedItem(); it.name != "backend" {
-		t.Fatalf("the cursor should stay on the work item, got %+v", it)
+	if !strings.Contains(m.status, "V shows the tree") {
+		t.Fatalf("space should name the layout key, got %q", m.status)
 	}
 }

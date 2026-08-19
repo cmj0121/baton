@@ -137,46 +137,77 @@ func TestCardsCarryTheRowMarks(t *testing.T) {
 	}
 }
 
-// TestOpeningAWorkItemFromTheCardsShowsTheTree: the grid draws a work item whole,
-// so "open this" can only be answered by the layout that draws what is inside —
-// and ← out of the top level puts the cards back. Without the pair, the layout a
-// person meets while building their first work items is the one layout that cannot
-// show nesting.
-func TestOpeningAWorkItemFromTheCardsShowsTheTree(t *testing.T) {
+// TestTheCardsRefuseToOpenAndVIsTheWay: the cards draw a work item whole, so the
+// keys that open and shut a row say so rather than quietly doing nothing — and
+// none of them changes the layout. That is `V`'s job and only `V`'s: a person
+// stepping out of the outermost row expects to stay put, not to be handed a
+// different dashboard.
+func TestTheCardsRefuseToOpenAndVIsTheWay(t *testing.T) {
 	fleet := []panel.Panel{
 		{ID: "1", Kind: panel.Agent, Title: "api · a", State: panel.Running, Group: "backend"},
 		{ID: "2", Kind: panel.Agent, Title: "api · b", State: panel.Running, Group: "backend/api"},
 		{ID: "3", Kind: panel.Shell, Title: "lone", State: panel.Running},
 	}
-	m := model{mode: modeDashboard, fleet: fleet, width: 120, height: 40, binds: append([]binding(nil), bindings...)}
+	m := baseModel()
+	m.mode, m.fleet = modeDashboard, fleet
 	if !m.gridDash() {
 		t.Fatal("two top-level rows are cards")
 	}
-
 	m.cursor = 0 // the backend card
-	m = m.expandSelected()
-	if !m.treeView() {
-		t.Fatalf("→ on a work item card should show the tree: %s", m.status)
+
+	for _, tc := range []struct {
+		name string
+		do   func(model) model
+	}{
+		{"→", func(m model) model { return m.expandSelected() }},
+		{"←", func(m model) model { return m.collapseSelected() }},
+		{"space", func(m model) model { return m.toggleExpand() }},
+	} {
+		next := tc.do(m)
+		if !next.gridDash() {
+			t.Fatalf("%s changed the layout — only V may", tc.name)
+		}
+		if !strings.Contains(next.status, "shows the tree") {
+			t.Fatalf("%s should say why nothing opened, got %q", tc.name, next.status)
+		}
 	}
-	if it, ok := m.selectedItem(); !ok || it.kind != itemGroup || it.name != "backend" {
-		t.Fatalf("the cursor should stay on the work item it opened, got %+v", it)
+
+	// V shows the tree, and V takes the cards back — landing on the same row both
+	// times, because the row list changes size under it.
+	m = m.toggleLayout()
+	if !m.treeView() {
+		t.Fatalf("V should show the tree: %s", m.status)
 	}
 	if len(m.dashItems()) <= 2 {
 		t.Fatal("the tree should now show the rows nested under backend")
 	}
-
-	// ← shuts the work item first (the tree's own meaning), and only then walks out
-	// of the tree itself.
-	m = m.collapseSelected()
-	if !m.treeView() {
-		t.Fatal("the first ← shuts the work item, it does not leave the tree")
+	if it, ok := m.selectedItem(); !ok || it.name != "backend" {
+		t.Fatalf("V should keep the cursor where it was, got %+v", it)
 	}
-	m = m.collapseSelected()
+
+	m = m.toggleLayout()
 	if !m.gridDash() {
-		t.Fatalf("← at the top level should put the cards back: %s", m.status)
+		t.Fatalf("V again should take the cards back: %s", m.status)
 	}
 	if it, ok := m.selectedItem(); !ok || it.name != "backend" {
-		t.Fatalf("walking out should keep the cursor on the work item, got %+v", it)
+		t.Fatalf("coming back should keep the cursor on the work item, got %+v", it)
+	}
+}
+
+// TestVOnALargeFleetSaysItChangedNothing: the flag flips either way, but a fleet
+// past the threshold is a tree whatever it says — so the status does not claim a
+// change nothing on screen made.
+func TestVOnALargeFleetSaysItChangedNothing(t *testing.T) {
+	m := baseModel()
+	m.mode, m.fleet = modeDashboard, loosePanels(8)
+
+	m = m.toggleLayout() // ask for the tree it already has
+	m = m.toggleLayout() // and give it back
+	if m.gridDash() {
+		t.Fatal("eight panels are a tree however the flag sits")
+	}
+	if !strings.Contains(m.status, "past the cards") {
+		t.Fatalf("V should say the fleet is past the cards, got %q", m.status)
 	}
 }
 
@@ -293,18 +324,52 @@ func TestOpeningTheFoldKeepsTheLayout(t *testing.T) {
 func TestTheHeadingSaysTheTreeWasChosen(t *testing.T) {
 	m := baseModel()
 	m.mode, m.fleet = modeDashboard, loosePanels(3)
-	if got := stripANSI(m.View()); strings.Contains(got, "← for cards") {
+	if got := stripANSI(m.View()); strings.Contains(got, "for cards") {
 		t.Fatal("the cards do not need to explain themselves")
 	}
 
 	m.showTree = true
-	if got := stripANSI(m.View()); !strings.Contains(got, "← for cards") {
-		t.Fatalf("a chosen tree should say so:\n%s", got)
+	if got := stripANSI(m.View()); !strings.Contains(got, "V for cards") {
+		t.Fatalf("a chosen tree should name the key back:\n%s", got)
 	}
 
 	// On a fleet that would be a tree anyway there is nothing to explain.
 	m.fleet = loosePanels(8)
-	if got := stripANSI(m.View()); strings.Contains(got, "← for cards") {
+	if got := stripANSI(m.View()); strings.Contains(got, "for cards") {
 		t.Fatal("a tree the fleet earned is not a choice to announce")
+	}
+}
+
+// TestLayoutKeyIsBoundAndRebindable: V goes through the same lookup as every other
+// action, so the key map can move it — and the refusals name whatever key it lands
+// on rather than a hard-coded V.
+func TestLayoutKeyIsBoundAndRebindable(t *testing.T) {
+	m := baseModel()
+	m.mode, m.fleet = modeDashboard, loosePanels(3)
+
+	m = press(m, "V")
+	if !m.treeView() {
+		t.Fatalf("V should show the tree: %s", m.status)
+	}
+	m = press(m, "V")
+	if !m.gridDash() {
+		t.Fatalf("V should take the cards back: %s", m.status)
+	}
+
+	for i := range m.binds {
+		if m.binds[i].act == actDashLayout {
+			m.binds[i].key = "Z"
+		}
+	}
+	if got := m.cardsHold(); !strings.Contains(got, "Z shows the tree") {
+		t.Fatalf("the refusal should follow the rebind, got %q", got)
+	}
+	m = press(m, "V")
+	if !m.gridDash() {
+		t.Fatal("V should do nothing once the action has been rebound")
+	}
+	m = press(m, "Z")
+	if !m.treeView() {
+		t.Fatalf("the rebound key should show the tree: %s", m.status)
 	}
 }
