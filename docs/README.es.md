@@ -17,10 +17,11 @@ en vivo con todos los agentes, agrupados en las tareas a las que pertenecen, y c
 
 Tú llevas la batuta. Los agentes tocan. Tú diriges. 🎼
 
-![Demostración de la cabina de Baton: paneles en el tablero, zoom para manejar uno, agrupar dos en un work item, abrir el conductor y la global shell](assets/baton-demo.png)
+![Demostración de la cabina de Baton: la lista de teclas, paneles abiertos, el conductor a la vista, dos agrupados en un work item y la misma ? pulsada de nuevo en la vista dividida y en el zoom](assets/baton-demo.png)
 
-_Abre paneles, haz zoom en uno para manejarlo, junta dos en un work item, llama al conductor con `n C` y a la global shell
-con `n h`; y `?` siempre está ahí para recordarte las teclas._
+_Pulsa `?` antes que nada: la lista de teclas está repartida en pestañas por propósito, y es la de la vista en la que
+estás. Después abre paneles, llama al conductor con `n C`, marca dos con `g g` y agrúpalos con `g c`; y vuelve a pulsar `?`
+en la vista dividida, y `C-t ?` en el zoom. La misma tecla, tres tablas distintas. `v l` y `v p` cierran sobre el árbol._
 
 _Vídeo generado a partir de [`baton-demo.tape`](assets/baton-demo.tape); los pasos para regenerarlo están en la cabecera
 del tape. La CLI de agente del conductor es un doble ([`demo-agent.sh`](assets/demo-agent.sh)) para que el vídeo salga

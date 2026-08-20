@@ -16,10 +16,12 @@ Live-Dashboard aller Agents, gruppiert nach den Aufgaben, zu denen sie gehören 
 
 Du hältst den Taktstock. Die Agents spielen. Du dirigierst. 🎼
 
-![Baton-Cockpit-Demo — Panels auf einem Dashboard, Hineinzoomen, um eines zu steuern, Gruppieren zu einem Work Item, Conductor und Global Shell geöffnet](assets/baton-demo.png)
+![Baton-Cockpit-Demo — die Tastenliste, gestartete Panels, der geöffnete Conductor, zwei zu einem Work Item gruppiert und dasselbe ? noch einmal im Split und im Zoom](assets/baton-demo.png)
 
-_Panels starten, in eines hineinzoomen, um es zu steuern, zwei zu einem Work Item gruppieren, den Conductor mit `n C` und
-die Global Shell mit `n h` aufrufen — und `?` ist immer da für die Tasten._
+_Zuerst `?` drücken: Die Tastenliste ist nach Zweck in Reiter gegliedert und gehört zu der Ansicht, in der man gerade
+steht. Dann Panels starten, den Conductor mit `n C` rufen, zwei mit `g g` markieren und mit `g c` zu einem Work Item
+gruppieren — und `?` im Split noch einmal drücken, im Zoom `C-t ?`. Dieselbe Taste, drei verschiedene Tabellen. `v l` und
+`v p` schließen auf dem Baum ab._
 
 _Der Clip wurde aus [`baton-demo.tape`](assets/baton-demo.tape) erzeugt — die Schritte zur Neuaufnahme stehen im Kopf
 der Tape-Datei. Das Agent-CLI des Conductors ist ein Platzhalter ([`demo-agent.sh`](assets/demo-agent.sh)), damit der

@@ -17,10 +17,11 @@ Baton과 AI agent의 관계는 tmux와 shell의 관계와 같습니다. Baton은
 
 지휘봉은 당신 손에 있습니다. agent들이 연주하고, 당신이 지휘합니다. 🎼
 
-![Baton 조종석 데모 — 대시보드 위의 패널들, 하나를 확대해 조작하기, 두 개를 하나의 작업 항목으로 묶기, conductor와 global shell 열기](assets/baton-demo.png)
+![Baton 조종석 데모 — 먼저 키 목록, 패널 띄우기, conductor 열기, 둘을 작업 항목으로 묶기, 그리고 분할 화면과 확대 화면에서 같은 ? 키](assets/baton-demo.png)
 
-_패널을 띄우고, 하나를 확대해 조작하고, 둘을 하나의 작업 항목으로 묶고, `n C`로 conductor를, `n h`로 global
-shell을 불러 보세요 — 그리고 `?`는 언제나 그 자리에서 키를 알려줍니다._
+_무엇보다 먼저 `?`를 눌러 보세요. 키 목록은 목적별 탭으로 나뉘어 있고, 지금 서 있는 뷰의 목록이 나옵니다. 이어서 패널을
+띄우고, `n C`로 conductor를 부르고, `g g`로 둘을 표시해 `g c`로 작업 항목으로 묶은 뒤 — 분할 화면에서 `?`를 다시,
+확대 화면에서는 `C-t ?`를 누릅니다. 같은 키, 세 개의 다른 표. 마지막은 `v l`과 `v p`로 트리에서 맺습니다._
 
 _영상은 [`baton-demo.tape`](assets/baton-demo.tape)로 만들었습니다 — 재생성 절차는 해당 tape 파일의 헤더에
 있습니다. 영상 속 conductor의 agent CLI는 대역([`demo-agent.sh`](assets/demo-agent.sh))이라 어느 머신에서도
