@@ -348,6 +348,12 @@ func limitsOption(cfg config.Config) server.Option {
 			return func(*server.Server) {}
 		}
 		return server.WithUsageLimits(usage.NewStatuslineLimits(paths.UsageLimitsFile()), self)
+	case usage.LimitsOAuth:
+		// The oauth source fetches for itself, so it needs no status line injected —
+		// and gets an empty self, which is how a source says exactly that. It is also
+		// the only source that can see the per-model weekly ceilings and the
+		// extra-usage credit balance, which is the whole reason to reach for it.
+		return server.WithUsageLimits(usage.NewOAuthLimits(), "")
 	default:
 		return func(*server.Server) {}
 	}
