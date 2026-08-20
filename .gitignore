@@ -2,3 +2,11 @@
 /bin/
 /coverage.out
 /dist/
+
+# VHS recording intermediates — `vhs docs/assets/*.tape` drops these in the repo
+# root on the way to the committed APNG (see the tape headers).
+/baton-demo.gif
+/baton-demo.mp4
+/baton-screensaver.gif
+/baton-screensaver.mp4
+/palette.png
