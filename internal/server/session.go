@@ -3,10 +3,12 @@ package server
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 
 	"github.com/cmj0121/baton/internal/ptymgr"
+	"github.com/cmj0121/baton/internal/usage"
 )
 
 // Claude Code writes one JSONL transcript per session, named by the session id,
@@ -73,4 +75,76 @@ func withSessionID(spec ptymgr.Spec) (ptymgr.Spec, string) {
 	id := newSessionID()
 	spec.Args = append(append([]string(nil), spec.Args...), sessionIDFlag, id)
 	return spec, id
+}
+
+// settingsFlag loads an extra settings source into Claude Code. It merges with
+// the user's own settings files rather than replacing them and outranks them, so
+// injecting one key leaves every other setting they wrote exactly as it was.
+const settingsFlag = "--settings"
+
+// withStatusLine returns a copy of spec that launches with baton's usage sink as
+// the panel's status line, and whether it injected one.
+//
+// This is how the account's rate limits reach the cockpit. Claude Code hands its
+// whole session state to the status-line command on every render, and that state
+// carries the two subscription windows — a reading no amount of transcript
+// arithmetic can produce, because a quota is the vendor's judgement rather than a
+// sum of tokens. Baton is already launching the process, so it is already in a
+// position to be that command.
+//
+// It is a wrapper, never a replacement. Whatever status line the user configured
+// is resolved here and handed to the sink to run, so the panel renders exactly
+// what it would have without baton in the way. Three cases end in no injection at
+// all, and each of them is a case where injecting would change something that is
+// not baton's to change:
+//
+//   - The panel is not Claude Code. No other agent CLI has this flag, and one
+//     handed an unknown option fails to start.
+//   - The spec already carries --settings. The user has said what settings this
+//     panel runs under, and a second source arguing with the first is worse than
+//     no reading.
+//   - A status line is configured in a form baton cannot reproduce. Running
+//     something else in its place would trade the user's setup for a number.
+//
+// self is the path to baton's own binary; with none, there is nothing to point
+// the status line at.
+func withStatusLine(spec ptymgr.Spec, self string) (ptymgr.Spec, bool) {
+	if strings.TrimSpace(self) == "" || !isClaudeCommand(spec.Command) {
+		return spec, false
+	}
+	for _, a := range spec.Args {
+		if flag, _, _ := strings.Cut(a, "="); flag == settingsFlag {
+			return spec, false
+		}
+	}
+
+	wrapped, configured := usage.StatusLine(ptymgr.PanelDir(spec.Dir))
+	if configured && wrapped == "" {
+		return spec, false
+	}
+
+	// The command is a string Claude Code hands to a shell, so both halves are
+	// quoted: baton's own path may sit under a directory with a space in it, and
+	// the wrapped command is arbitrary shell the user wrote.
+	command := shellQuote(self) + " usage-sink"
+	if wrapped != "" {
+		command += " --wrap " + shellQuote(wrapped)
+	}
+	settings, err := json.Marshal(map[string]any{
+		"statusLine": map[string]string{"type": "command", "command": command},
+	})
+	if err != nil {
+		return spec, false
+	}
+
+	spec.Args = append(append([]string(nil), spec.Args...), settingsFlag, string(settings))
+	return spec, true
+}
+
+// shellQuote wraps s in single quotes so a shell reads it as one literal word,
+// splicing around any single quote it contains. It is the POSIX form rather than
+// anything cleverer because the string is going to whichever shell Claude Code
+// runs a status line under, and this quoting means the same thing in all of them.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

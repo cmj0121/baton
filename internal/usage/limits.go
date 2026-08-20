@@ -2,6 +2,8 @@ package usage
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -234,6 +236,67 @@ func ParseStatusline(b []byte, at time.Time) (Limits, bool) {
 	}
 	return l, true
 }
+
+// The progress-bar glyphs. They are the same pair the cockpit's context bar uses,
+// so a quota bar and a context bar read as the same kind of object rather than as
+// two unrelated widgets that happen to sit near each other.
+const (
+	barFilled = "▓"
+	barEmpty  = "░"
+)
+
+// Bar renders a 0–1 fraction as a fixed-width progress bar.
+//
+// It rounds rather than truncates, with one exception at each end: a non-zero
+// fraction always shows at least one filled cell, and a fraction below 1 always
+// leaves at least one empty one. Both ends matter more than the rounding does —
+// an empty bar for a window that has been touched reads as "nothing spent", and
+// a full bar for a window with room left reads as "you are out", and those are
+// the two readings someone acts on.
+func Bar(fraction float64, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	f := min(max(fraction, 0), 1)
+	filled := int(math.Round(f * float64(width)))
+	if f > 0 && filled == 0 {
+		filled = 1
+	}
+	if f < 1 && filled == width {
+		filled = width - 1
+	}
+	return strings.Repeat(barFilled, filled) + strings.Repeat(barEmpty, width-filled)
+}
+
+// FormatLimits renders a reading as one plain-text line, e.g.
+//
+//	5h ▓▓▓▓▓▓░░░░ 62% 2:14:31 · 7d ▓▓▓░░░░░░░ 34% 3d 04:12
+//
+// It is the form the status-line sink prints when it has no status line of the
+// user's own to defer to, and the shape the cockpit's own segment mirrors in
+// colour. A window with no countdown to offer prints its bar and percentage
+// alone: the reading is still worth showing, only the reset is not known.
+//
+// width is the bar's cell count; countdown is a usage.Countdown* format name.
+func FormatLimits(l Limits, now time.Time, width int, countdown string) string {
+	var parts []string
+	for _, w := range []struct {
+		label string
+		win   *Window
+	}{{"5h", l.FiveHour}, {"7d", l.SevenDay}} {
+		if w.win == nil {
+			continue
+		}
+		s := fmt.Sprintf("%s %s %.0f%%", w.label, Bar(w.win.Fraction(), width), w.win.UsedPercent)
+		if d, ok := w.win.Countdown(now); ok {
+			s += " " + FormatCountdown(d, countdown)
+		}
+		parts = append(parts, s)
+	}
+	return strings.Join(parts, " · ")
+}
+
+// ParseLimitsSource normalises the usage.limits setting.
 
 // ParseLimitsSource normalises the usage.limits setting. An unrecognised value
 // falls back to the statusline source rather than to off: a typo should leave the

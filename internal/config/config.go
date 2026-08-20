@@ -151,6 +151,18 @@ type UsageConfig struct {
 	// "dd:hh:mm" always spells out days.
 	CountdownFormat string `yaml:"countdown-format,omitempty"`
 
+	// Limits selects the source for the account's rate-limit bars: "statusline"
+	// (the default) reads what the status line baton gives its Claude Code panels
+	// reports, "oauth" queries the account usage endpoint directly, and "off"
+	// switches the bars away.
+	//
+	// It is a separate setting from Source because the two answer separate
+	// questions from separate places. Source picks where the token totals come
+	// from — an arithmetic fact baton can compute. Limits picks where the quota
+	// standing comes from — the vendor's own judgement, which no amount of token
+	// arithmetic can produce.
+	Limits string `yaml:"limits,omitempty"`
+
 	// WarnAt and AlarmAt are the fractions of the window spent at which the footer
 	// segment turns amber and then red. The point is to act before the window runs
 	// out, not to watch it hit zero. 0 uses the built-in defaults (0.75 and 0.9);
@@ -164,6 +176,11 @@ const (
 	DefaultUsageWarnAt  = 0.75
 	DefaultUsageAlarmAt = 0.90
 )
+
+// LimitsSource is the normalised usage.limits setting, with the default filled
+// in. See usage.ParseLimitsSource for why an unrecognised value lands on the
+// status-line source rather than on off.
+func (u UsageConfig) LimitsSource() string { return usage.ParseLimitsSource(u.Limits) }
 
 // WindowDuration is the configured window length, or usage.DefaultWindow when
 // the field is empty. An explicit "0" (or any non-positive duration) returns 0,

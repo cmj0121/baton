@@ -309,6 +309,56 @@ type UsageInfo struct {
 	// attribute spend fills it in, and only for panels the daemon launched with a
 	// session of their own — so a missing entry means "not known", never "zero".
 	Panels map[string]PanelUsage `json:"panels,omitempty"`
+
+	// Limits is the account's standing against its subscription quotas, when a
+	// limits source is configured and has a reading. It rides the same message as
+	// the token totals but answers a different question — the totals say who is
+	// burning it, the limits say whether there is anything left to burn — and it
+	// is nil, not zeroed, whenever there is no reading: a quota bar resting at 0%
+	// asserts a full tank.
+	Limits *LimitsInfo `json:"limits,omitempty"`
+}
+
+// LimitsInfo is the account's rate-limit standing on the wire. Every window is a
+// pointer for the same reason it is in usage.Limits: absent is a state the
+// sources genuinely report, and it must not decode as a window at zero.
+//
+// The resets are instants rather than durations, and deliberately so: the daemon
+// polls on its own cadence while the cockpit ticks the countdown once a second,
+// exactly as it already does for the usage window.
+type LimitsInfo struct {
+	FiveHour       *LimitWindow `json:"five_hour,omitempty"`
+	SevenDay       *LimitWindow `json:"seven_day,omitempty"`
+	SevenDayOpus   *LimitWindow `json:"seven_day_opus,omitempty"`
+	SevenDaySonnet *LimitWindow `json:"seven_day_sonnet,omitempty"`
+
+	// Credit is the extra-usage balance; nil when the account has none, or the
+	// source cannot see one.
+	Credit *LimitCredit `json:"credit,omitempty"`
+
+	// Source is "statusline" or "oauth". At is when the reading was taken, as an
+	// RFC 3339 instant — carried because the statusline source is a push and a
+	// reading can sit unchanged for minutes, so its age is a fact the cockpit needs
+	// in order to say whether it is still current.
+	Source string `json:"source,omitempty"`
+	At     string `json:"at,omitempty"`
+}
+
+// LimitWindow is one rate-limit window on the wire: how much of it is spent, as a
+// percentage 0–100, and when it resets.
+type LimitWindow struct {
+	UsedPercent float64 `json:"used_percentage"`
+	ResetsAt    string  `json:"resets_at,omitempty"`
+}
+
+// LimitCredit is the extra-usage balance on the wire. The amounts are pointers
+// because a null monthly limit means uncapped, which is the opposite reading from
+// a limit of zero.
+type LimitCredit struct {
+	Enabled     bool     `json:"enabled"`
+	MonthlyUSD  *float64 `json:"monthly_usd,omitempty"`
+	UsedUSD     *float64 `json:"used_usd,omitempty"`
+	UsedPercent *float64 `json:"used_percentage,omitempty"`
 }
 
 // AgentBackend is one agent CLI a frontend may spawn: the profile name a panel
