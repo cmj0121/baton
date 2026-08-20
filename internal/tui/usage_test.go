@@ -28,11 +28,10 @@ func usageModel(mode usageMode) model {
 		},
 		usageInfo: &proto.UsageInfo{
 			Tokens: 1_200_000, CostUSD: 12.34, Source: "local", Resets: true,
-			Since:           since.Format(time.RFC3339),
-			Until:           since.Add(5 * time.Hour).Format(time.RFC3339),
-			WarnAt:          0.75,
-			AlarmAt:         0.9,
-			CountdownFormat: "auto",
+			Since:   since.Format(time.RFC3339),
+			Until:   since.Add(5 * time.Hour).Format(time.RFC3339),
+			WarnAt:  0.75,
+			AlarmAt: 0.9,
 			Panels: map[string]proto.PanelUsage{
 				"p1": {Tokens: 300_000, CostUSD: 3},
 			},
@@ -40,8 +39,8 @@ func usageModel(mode usageMode) model {
 	}
 }
 
-// TestUsageModeCycle: U walks off → window → panel → off, so one key covers both
-// views without taking a second binding.
+// TestUsageModeCycle: U walks off → window → panel → limits → off, so one key
+// covers every view without taking a binding each.
 func TestUsageModeCycle(t *testing.T) {
 	seen := []usageMode{}
 	m := usageOff
@@ -49,7 +48,7 @@ func TestUsageModeCycle(t *testing.T) {
 		m = m.next()
 		seen = append(seen, m)
 	}
-	want := []usageMode{usageWindow, usagePanel, usageOff}
+	want := []usageMode{usageWindow, usagePanel, usageLimits, usageOff}
 	for i, w := range want {
 		if seen[i] != w {
 			t.Fatalf("cycle = %v, want %v", seen, want)

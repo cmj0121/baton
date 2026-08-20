@@ -105,9 +105,8 @@ func TestUsageInfoLockedAttributesPanels(t *testing.T) {
 			"p2":    {"sess-c"},
 			"quiet": {"sess-never-seen"},
 		},
-		usageWarn:   0.75,
-		usageAlarm:  0.9,
-		usageFormat: "auto",
+		usageWarn:  0.75,
+		usageAlarm: 0.9,
 	}
 	since := time.Date(2026, 7, 8, 6, 0, 0, 0, time.UTC)
 	snap := usage.Snapshot{
@@ -136,7 +135,7 @@ func TestUsageInfoLockedAttributesPanels(t *testing.T) {
 	if !info.Resets || info.Until != since.Add(5*time.Hour).Format(time.RFC3339) {
 		t.Errorf("window = %q resets=%v, want the snapshot's reset", info.Until, info.Resets)
 	}
-	if info.WarnAt != 0.75 || info.AlarmAt != 0.9 || info.CountdownFormat != "auto" {
+	if info.WarnAt != 0.75 || info.AlarmAt != 0.9 {
 		t.Errorf("presentation settings did not ride along: %+v", info)
 	}
 }

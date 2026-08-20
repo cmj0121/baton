@@ -249,7 +249,18 @@ type Server struct {
 	usageInfo     *proto.UsageInfo
 	usageWarn     float64
 	usageAlarm    float64
-	usageFormat   string
+
+	// The account's rate-limit standing (internal/usage). limitsProvider is the
+	// source and limitsInfo the last reading it gave, held so a reading survives a
+	// poll that had nothing new — the statusline source is a push, and an idle
+	// fleet stops reporting without the last quota becoming untrue. limitsSelf is
+	// the path to baton's own binary, which every Claude Code panel is launched
+	// pointing its status line at; empty disables the injection. Guarded by mu,
+	// except limitsSelf and limitsProvider, which are set once before the loops
+	// start.
+	limitsProvider usage.LimitsProvider
+	limitsInfo     *proto.LimitsInfo
+	limitsSelf     string
 
 	// Remote access (remote.go). remoteOn and remoteKey are the live switch and
 	// the in-memory 8-character passkey — never persisted, so a restart always
@@ -540,14 +551,13 @@ func WithQueue(max, concurrency int) Option {
 }
 
 // UsageDisplay is how the frontends should present the window: the fractions of
-// it spent at which the footer segment turns amber and then red, and the form the
-// countdown reads in. These live on the daemon because that is where the usage.*
-// config is read, and they ride the usage message because the countdown ticks on
-// the frontend's clock, not the poll interval.
+// it spent at which the footer segment turns amber and then red. These live on
+// the daemon because that is where the usage.* config is read, and they ride the
+// usage message because the countdown ticks on the frontend's clock, not the poll
+// interval.
 type UsageDisplay struct {
-	WarnAt          float64
-	AlarmAt         float64
-	CountdownFormat string
+	WarnAt  float64
+	AlarmAt float64
 }
 
 // WithUsage wires the account usage/cost footer: p polls the current usage,
@@ -560,7 +570,22 @@ func WithUsage(p usage.Provider, interval time.Duration, display UsageDisplay) O
 		s.usageInterval = interval
 		s.usageWarn = display.WarnAt
 		s.usageAlarm = display.AlarmAt
-		s.usageFormat = display.CountdownFormat
+	}
+}
+
+// WithUsageLimits wires the account's rate-limit bars: p reads the current standing,
+// and self is the path to baton's own binary, which the Claude Code panels the
+// daemon launches are pointed at as their status line (see withStatusLine).
+//
+// The two arguments are separate because the reading and the harvesting are
+// separate concerns. The oauth source fetches on its own and needs no injection,
+// while the statusline source needs nothing but the injection — it only reads a
+// file the panels fill in. Passing an empty self is how a source that harvests
+// for itself says so.
+func WithUsageLimits(p usage.LimitsProvider, self string) Option {
+	return func(s *Server) {
+		s.limitsProvider = p
+		s.limitsSelf = self
 	}
 }
 
@@ -718,6 +743,11 @@ func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 		s.sessions[id] = append(s.sessions[id], session)
 		s.mu.Unlock()
 	}
+
+	// …and a status line that harvests the account's rate limits on the way past.
+	// Same rule as the session id: the launched copy only, never the spec kept for
+	// respawn, so a re-run re-resolves whatever status line the user has by then.
+	spec, _ = withStatusLine(spec, s.limitsSelf)
 
 	if iso.Enabled() {
 		// No cgroup here, and that is deliberate: it would confine the runtime
@@ -1064,10 +1094,13 @@ func statsMsg() proto.ServerMsg {
 // (so hello can serve it) and thereafter fetches only while a client is attached,
 // since the footer is the only consumer. A nil provider disables it entirely.
 func (s *Server) usageLoop(stop <-chan struct{}) {
-	// A nil provider or a non-positive interval disables the segment: guard both so a
-	// hand-wired interval of zero cannot panic time.NewTicker and take the loop's
+	// No source at all, or a non-positive interval, disables the loop: guard both so
+	// a hand-wired interval of zero cannot panic time.NewTicker and take the loop's
 	// goroutine down with it (the doc promises a non-positive interval is a no-op).
-	if s.usageProvider == nil || s.usageInterval <= 0 {
+	// Either source alone is enough to keep it running — the quota bars stand on
+	// their own, and an account can be deep into its window with nothing in the
+	// transcripts baton can see.
+	if (s.usageProvider == nil && s.limitsProvider == nil) || s.usageInterval <= 0 {
 		return
 	}
 	s.refreshUsage() // seed the held value before the first client attaches
@@ -1096,23 +1129,120 @@ func (s *Server) usageLoop(stop <-chan struct{}) {
 func (s *Server) refreshUsage() {
 	ctx, cancel := context.WithTimeout(context.Background(), s.usageInterval)
 	defer cancel()
-	snap, err := s.usageProvider.Fetch(ctx)
-	text := usage.Format(snap)
-	if err != nil {
-		if text == "" {
-			log.Warn().Err(err).Msg("usage fetch failed; keeping the last value")
-			return
-		}
-		log.Warn().Err(err).Msg("usage fetch partial; showing what returned")
+
+	s.refreshLimits(ctx)
+
+	// The token/cost source is optional now that the quota bars can stand alone:
+	// a fleet configured for limits only still runs this loop, and there is no
+	// snapshot to fetch.
+	var snap usage.Snapshot
+	var err error
+	if s.usageProvider != nil {
+		snap, err = s.usageProvider.Fetch(ctx)
 	}
+	text := usage.Format(snap)
+	// A failed scan holds the last totals rather than blanking them. It no longer
+	// returns early, though: the rate limits came from a different source that did
+	// not fail, and a transcript scan going wrong is no reason to take down the one
+	// reading that says whether the next turn will be refused.
+	hold := err != nil && text == ""
+	if err != nil {
+		if hold {
+			log.Warn().Err(err).Msg("usage fetch failed; keeping the last value")
+		} else {
+			log.Warn().Err(err).Msg("usage fetch partial; showing what returned")
+		}
+	}
+
 	s.mu.Lock()
 	info := s.usageInfoLocked(snap)
+	if hold {
+		text, info = s.usageText, attachLimits(s.usageInfo, s.limitsInfo)
+	}
 	changed := s.usageText != text || !sameUsageInfo(s.usageInfo, info)
 	s.usageText, s.usageInfo = text, info
 	s.mu.Unlock()
 	if changed {
 		s.broadcast(proto.ServerMsg{Type: "usage", Usage: text, UsageInfo: info})
 	}
+}
+
+// refreshLimits takes a fresh rate-limit reading and holds it.
+//
+// A source with nothing to report leaves the previous reading in place rather
+// than clearing it. That is not caching around a failure — it is what the
+// statusline source is: a push, written by whichever panel last rendered. A fleet
+// that has gone quiet stops writing, and a quota nobody has restated has not
+// thereby become untrue. The reading carries its own age, and the cockpit decides
+// when that age makes it worth marking.
+func (s *Server) refreshLimits(ctx context.Context) {
+	if s.limitsProvider == nil {
+		return
+	}
+	l, ok := s.limitsProvider.Limits(ctx)
+	if !ok {
+		return
+	}
+	info := limitsInfo(l)
+	s.mu.Lock()
+	s.limitsInfo = info
+	s.mu.Unlock()
+}
+
+// limitsInfo turns a reading into its wire form. Every window stays a pointer all
+// the way through: a window the source did not report must reach the cockpit as
+// absent, not as one sitting at zero.
+func limitsInfo(l usage.Limits) *proto.LimitsInfo {
+	if l.Empty() {
+		return nil
+	}
+	info := &proto.LimitsInfo{
+		FiveHour:       limitWindow(l.FiveHour),
+		SevenDay:       limitWindow(l.SevenDay),
+		SevenDayOpus:   limitWindow(l.SevenDayOpus),
+		SevenDaySonnet: limitWindow(l.SevenDaySonnet),
+		Source:         l.Source,
+	}
+	if !l.At.IsZero() {
+		info.At = l.At.UTC().Format(time.RFC3339)
+	}
+	if l.Credit != nil && l.Credit.Enabled {
+		info.Credit = &proto.LimitCredit{
+			Enabled:     true,
+			MonthlyUSD:  l.Credit.MonthlyUSD,
+			UsedUSD:     l.Credit.UsedUSD,
+			UsedPercent: l.Credit.UsedPercent,
+		}
+	}
+	return info
+}
+
+// limitWindow converts one window, keeping an absent reset absent.
+func limitWindow(w *usage.Window) *proto.LimitWindow {
+	if w == nil {
+		return nil
+	}
+	out := &proto.LimitWindow{UsedPercent: w.UsedPercent}
+	if !w.ResetsAt.IsZero() {
+		out.ResetsAt = w.ResetsAt.UTC().Format(time.RFC3339)
+	}
+	return out
+}
+
+// attachLimits returns info carrying lim, without mutating what the caller held.
+// The two halves of the payload are refreshed by different sources on different
+// terms, so one is routinely swapped onto the other; doing it in place would edit
+// the value a client was already handed.
+func attachLimits(info *proto.UsageInfo, lim *proto.LimitsInfo) *proto.UsageInfo {
+	if info == nil {
+		if lim == nil {
+			return nil
+		}
+		return &proto.UsageInfo{Limits: lim}
+	}
+	out := *info
+	out.Limits = lim
+	return &out
 }
 
 // usageInfoLocked turns a snapshot into the wire form, resolving the per-session
@@ -1125,16 +1255,18 @@ func (s *Server) refreshUsage() {
 // take for "this panel is free".
 func (s *Server) usageInfoLocked(snap usage.Snapshot) *proto.UsageInfo {
 	if snap.Empty() {
-		return nil
+		// No tokens to report is not no payload to send: the quota bars come from a
+		// different source and stand on their own, and an account can be well into
+		// its window with nothing in the transcripts baton can see.
+		return attachLimits(nil, s.limitsInfo)
 	}
 	info := &proto.UsageInfo{
-		Tokens:          snap.TotalTokens(),
-		CostUSD:         snap.CostUSD,
-		Source:          snap.Source,
-		Resets:          snap.Resets,
-		WarnAt:          s.usageWarn,
-		AlarmAt:         s.usageAlarm,
-		CountdownFormat: s.usageFormat,
+		Tokens:  snap.TotalTokens(),
+		CostUSD: snap.CostUSD,
+		Source:  snap.Source,
+		Resets:  snap.Resets,
+		WarnAt:  s.usageWarn,
+		AlarmAt: s.usageAlarm,
 	}
 	if !snap.Since.IsZero() {
 		info.Since = snap.Since.Format(time.RFC3339)
@@ -1162,7 +1294,7 @@ func (s *Server) usageInfoLocked(snap usage.Snapshot) *proto.UsageInfo {
 		}
 		info.Panels[id] = pu
 	}
-	return info
+	return attachLimits(info, s.limitsInfo)
 }
 
 // sameUsageInfo reports whether two usage payloads carry the same numbers, so an
@@ -1185,7 +1317,55 @@ func sameUsageInfo(a, b *proto.UsageInfo) bool {
 			return false
 		}
 	}
-	return true
+	return sameLimits(a.Limits, b.Limits)
+}
+
+// sameLimits reports whether two rate-limit payloads say the same thing. The
+// reading's own timestamp is compared along with the numbers: a restated but
+// unchanged quota is still news, because it is what tells a cockpit the reading
+// has not gone stale.
+func sameLimits(a, b *proto.LimitsInfo) bool {
+	switch {
+	case a == nil && b == nil:
+		return true
+	case a == nil || b == nil:
+		return false
+	}
+	if a.Source != b.Source || a.At != b.At {
+		return false
+	}
+	if !sameLimitWindow(a.FiveHour, b.FiveHour) || !sameLimitWindow(a.SevenDay, b.SevenDay) ||
+		!sameLimitWindow(a.SevenDayOpus, b.SevenDayOpus) || !sameLimitWindow(a.SevenDaySonnet, b.SevenDaySonnet) {
+		return false
+	}
+	return sameLimitCredit(a.Credit, b.Credit)
+}
+
+// sameLimitWindow compares two windows, treating absence as a value of its own —
+// a window that has gone away is a change, not a match.
+func sameLimitWindow(a, b *proto.LimitWindow) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// sameLimitCredit compares two credit balances through their pointers, since a
+// null amount ("uncapped") and a zero one are different readings.
+func sameLimitCredit(a, b *proto.LimitCredit) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Enabled == b.Enabled && sameFloatPtr(a.MonthlyUSD, b.MonthlyUSD) &&
+		sameFloatPtr(a.UsedUSD, b.UsedUSD) && sameFloatPtr(a.UsedPercent, b.UsedPercent)
+}
+
+// sameFloatPtr compares two optional amounts, absence included.
+func sameFloatPtr(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // usageMsg is the held usage segment as a wire message, used to seed a freshly

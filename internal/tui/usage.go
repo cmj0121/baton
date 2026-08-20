@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/cmj0121/baton/internal/i18n"
+	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/usage"
 )
 
@@ -26,10 +27,11 @@ const (
 	usageOff    usageMode = iota // no segment at all
 	usageWindow                  // account-wide spend and the countdown to the reset
 	usagePanel                   // the focused panel's or group's spend, and its share of the window
+	usageLimits                  // the account's quota bars: how much of each window is gone
 )
 
 // usageModes is the cycle order U walks, ending back at off.
-var usageModes = []usageMode{usageOff, usageWindow, usagePanel}
+var usageModes = []usageMode{usageOff, usageWindow, usagePanel, usageLimits}
 
 // String is the mode's stable config name, as persisted in settings.usage-mode.
 func (u usageMode) String() string {
@@ -38,6 +40,8 @@ func (u usageMode) String() string {
 		return "window"
 	case usagePanel:
 		return "panel"
+	case usageLimits:
+		return "limits"
 	default:
 		return "off"
 	}
@@ -51,6 +55,8 @@ func parseUsageMode(s string) usageMode {
 		return usageOff
 	case "panel":
 		return usagePanel
+	case "limits":
+		return usageLimits
 	default:
 		return usageWindow
 	}
@@ -73,6 +79,8 @@ func (u usageMode) label(lang i18n.Lang) string {
 		return i18n.T(lang, "usage.mode.window", "window")
 	case usagePanel:
 		return i18n.T(lang, "usage.mode.panel", "focused panel")
+	case usageLimits:
+		return i18n.T(lang, "usage.mode.limits", "quota")
 	default:
 		return i18n.T(lang, "usage.mode.off", "off")
 	}
@@ -92,7 +100,18 @@ func (m model) usageCap() string {
 	if text == "" {
 		return ""
 	}
-	return seg("⊙ "+truncate(text, 44), colInk, m.usagePressureColor())
+	return seg("⊙ "+truncate(text, m.usageSegmentWidth()), colInk, m.usagePressureColor())
+}
+
+// usageSegmentWidth is how much of the strip the segment may take. The quota view
+// is given more than the others because it carries two bars and two countdowns,
+// and a bar truncated mid-run is not a bar — it is a shorter bar, reading as less
+// spent than there is.
+func (m model) usageSegmentWidth() int {
+	if m.usageMode == usageLimits {
+		return 56
+	}
+	return 44
 }
 
 // usageSegment is the segment's text for the active mode, without the glyph or
@@ -100,10 +119,110 @@ func (m model) usageCap() string {
 // whenever the structured payload is missing, so the spend still shows even if
 // only the old field arrives.
 func (m model) usageSegment() string {
-	if m.usageMode == usagePanel {
+	switch m.usageMode {
+	case usagePanel:
 		return m.usagePanelText()
+	case usageLimits:
+		return m.usageLimitsText()
 	}
 	return joinDot(m.usageText, m.usageCountdown())
+}
+
+// limitsBarWidth is the bar's cell count in the footer. It is wider than a
+// footer bar would otherwise be because the percentage that used to sit beside it
+// is gone: with no number to fall back on, the bar is the whole reading, and eight
+// cells resolve it to about an eighth rather than a sixth.
+const limitsBarWidth = 8
+
+// usageLimitsText is the quota view: how much of each rate-limit window is gone,
+// and how long until it resets.
+//
+// It reads "5h ▓▓▓▓░░░░ 2:14:31 · 7d ▓▓░░░░░░ 3d4h", and it is empty whenever no
+// source has reported — never a pair of bars at zero, which would assert a full
+// tank on an account that may be minutes from a refusal.
+//
+// The percentage the bar was drawn from is not printed beside it. A footer strip
+// is read at a glance or not at all, and a bar with its own number next to it is
+// the same fact twice — one of them in a form that has to be read rather than
+// seen. What goes in the space instead is the countdown, which is the half of the
+// reading no bar can carry.
+//
+// A reading nobody has restated in a while is marked with a leading "~". The
+// statusline source is a push: it arrives when a panel renders and stops
+// arriving when the fleet goes quiet, so an old reading is usually still true and
+// the mark says "nobody has looked recently" rather than "this is wrong".
+func (m model) usageLimitsText() string {
+	lim := m.usageLimits()
+	if lim == nil {
+		return ""
+	}
+	var parts []string
+	for _, w := range []struct {
+		label string
+		win   *proto.LimitWindow
+	}{{"5h", lim.FiveHour}, {"7d", lim.SevenDay}} {
+		if w.win == nil {
+			continue
+		}
+		part := w.label + " " + usage.Bar(limitFraction(w.win), limitsBarWidth)
+		if left, ok := limitCountdown(w.win, m.now); ok {
+			part += " " + usage.FormatCountdown(left)
+		}
+		parts = append(parts, part)
+	}
+	text := strings.Join(parts, " · ")
+	if text != "" && m.usageLimitsStale() {
+		text = "~ " + text
+	}
+	return text
+}
+
+// usageLimits is the rate-limit payload the daemon last sent, or nil when there
+// is none — no source configured, or none that has produced a reading yet.
+func (m model) usageLimits() *proto.LimitsInfo {
+	if m.usageInfo == nil {
+		return nil
+	}
+	return m.usageInfo.Limits
+}
+
+// usageLimitsStale reports whether the held reading is old enough to mark. The
+// age is measured on the cockpit's own clock against the instant the reading was
+// taken, which is why the daemon sends that instant rather than an age: an age
+// would be as old as the last poll by the time it arrived.
+func (m model) usageLimitsStale() bool {
+	lim := m.usageLimits()
+	if lim == nil {
+		return false
+	}
+	at, err := time.Parse(time.RFC3339, lim.At)
+	if err != nil {
+		return true // stamped with something unreadable; never show it as current
+	}
+	return usage.Limits{At: at}.Stale(m.now)
+}
+
+// limitFraction is one window's fill as 0–1.
+func limitFraction(w *proto.LimitWindow) float64 {
+	if w == nil {
+		return 0
+	}
+	return (&usage.Window{UsedPercent: w.UsedPercent}).Fraction()
+}
+
+// limitCountdown is how long is left on one window, on the cockpit's clock. It
+// reports false for a window with no reset, and equally for one whose reset has
+// already passed — the reading no longer describes anything, and a 0:00:00 parked
+// there would outlast every poll that failed to replace it.
+func limitCountdown(w *proto.LimitWindow, now time.Time) (time.Duration, bool) {
+	if w == nil || w.ResetsAt == "" {
+		return 0, false
+	}
+	at, err := time.Parse(time.RFC3339, w.ResetsAt)
+	if err != nil {
+		return 0, false
+	}
+	return (&usage.Window{ResetsAt: at}).Countdown(now)
 }
 
 // usageCountdown is the "⏳ 2:14:31" half of the segment, empty when the source
@@ -129,7 +248,7 @@ func (m model) usageCountdown() string {
 	if !ok {
 		return ""
 	}
-	return "⏳ " + usage.FormatCountdown(left, info.CountdownFormat)
+	return "⏳ " + usage.FormatCountdown(left)
 }
 
 // usagePanelText is the focused work's line: what it has spent inside this window
@@ -202,6 +321,9 @@ func (m model) usageFocus() (title string, ids []string, ok bool) {
 // daemon, where the usage config is read. With no window to measure against the
 // colour does not move at all, rather than painting an invented reading.
 func (m model) usagePressureColor() lipgloss.Color {
+	if m.usageMode == usageLimits {
+		return m.limitsPressureColor()
+	}
 	info := m.usageInfo
 	if info == nil || !info.Resets || info.Since == "" || info.Until == "" {
 		return colBlue
@@ -219,6 +341,38 @@ func (m model) usagePressureColor() lipgloss.Color {
 	case info.AlarmAt > 0 && spent >= info.AlarmAt:
 		return colRed
 	case info.WarnAt > 0 && spent >= info.WarnAt:
+		return colAmber
+	default:
+		return colBlue
+	}
+}
+
+// limitsPressureColor is the quota segment's fill, taken from the fullest window
+// rather than from the clock.
+//
+// That is the whole difference between this view and the window one. There, the
+// pressure is how far into the window the account is, because the spend is a
+// number with no ceiling to compare it against. Here there is a ceiling, and the
+// question is how close to it the account has come — an account at 90% with four
+// hours left is in far more trouble than one at 20% with ten minutes left, and
+// only the fullest window can say so.
+func (m model) limitsPressureColor() lipgloss.Color {
+	lim := m.usageLimits()
+	if lim == nil {
+		return colBlue
+	}
+	var worst float64
+	for _, w := range []*proto.LimitWindow{lim.FiveHour, lim.SevenDay, lim.SevenDayOpus, lim.SevenDaySonnet} {
+		worst = max(worst, limitFraction(w))
+	}
+	warn, alarm := usage.DefaultLimitWarnAt, usage.DefaultLimitAlarmAt
+	if m.usageInfo != nil && m.usageInfo.WarnAt > 0 && m.usageInfo.AlarmAt > m.usageInfo.WarnAt {
+		warn, alarm = m.usageInfo.WarnAt, m.usageInfo.AlarmAt
+	}
+	switch {
+	case worst >= alarm:
+		return colRed
+	case worst >= warn:
 		return colAmber
 	default:
 		return colBlue

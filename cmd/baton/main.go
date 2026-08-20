@@ -74,6 +74,14 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "mcp" {
 		os.Exit(mcpMain())
 	}
+	// `baton usage-sink` is the status line baton hands to the Claude Code panels
+	// it launches, so it runs once per render of every panel in the fleet. It is
+	// dispatched here, ahead of everything the cockpit path sets up — a logger, a
+	// config read, a socket — none of which a command that reads one pipe and
+	// writes one line has any use for.
+	if len(os.Args) > 1 && os.Args[1] == "usage-sink" {
+		os.Exit(usageSinkMain(os.Args[2:]))
+	}
 
 	var cli CLI
 	kctx := kong.Parse(&cli,
@@ -316,11 +324,35 @@ func usageOption(cfg config.Config) server.Option {
 		interval = 10 * time.Second
 	}
 	warn, alarm := cfg.Usage.Thresholds()
-	return server.WithUsage(p, interval, server.UsageDisplay{
-		WarnAt:          warn,
-		AlarmAt:         alarm,
-		CountdownFormat: cfg.Usage.CountdownFormat,
-	})
+	return server.WithUsage(p, interval, server.UsageDisplay{WarnAt: warn, AlarmAt: alarm})
+}
+
+// limitsOption wires the account's rate-limit bars from the config.
+//
+// The status-line source needs baton's own path and nothing else: the reading is
+// harvested by the Claude Code panels themselves, which are launched with `baton
+// usage-sink` as their status line and drop what they see in a file the daemon
+// reads. When os.Executable cannot say where this binary is, the source is left
+// off rather than pointed at a guess — a status line aimed at the wrong path
+// would fail once per render inside the user's panel.
+func limitsOption(cfg config.Config) server.Option {
+	switch cfg.Usage.LimitsSource() {
+	case usage.LimitsStatusline:
+		self, err := os.Executable()
+		if err != nil {
+			log.Warn().Err(err).Msg("cannot locate the baton binary; usage limits are off")
+			return func(*server.Server) {}
+		}
+		return server.WithUsageLimits(usage.NewStatuslineLimits(paths.UsageLimitsFile()), self)
+	case usage.LimitsOAuth:
+		// The oauth source fetches for itself, so it needs no status line injected —
+		// and gets an empty self, which is how a source says exactly that. It is also
+		// the only source that can see the per-model weekly ceilings and the
+		// extra-usage credit balance, which is the whole reason to reach for it.
+		return server.WithUsageLimits(usage.NewOAuthLimits(), "")
+	default:
+		return func(*server.Server) {}
+	}
 }
 
 // runServerOn runs the long-lived server loop on an already-bound listener for
@@ -347,7 +379,7 @@ func runServerOn(ln net.Listener, sock string) error {
 	}
 	rc := reloadableSettings(cfg)
 	stateF := paths.StateFile(sock)
-	srv := server.New(ln, append(buildServerOptions(rc, stateF), usageOption(cfg))...)
+	srv := server.New(ln, append(buildServerOptions(rc, stateF), usageOption(cfg), limitsOption(cfg))...)
 	srv.Restore() // seed the fleet from the last snapshot (all as exited dead slots) before serving
 
 	// The Lua plugin subsystem (docs/PLUGIN.md). Wire the server's event sink and

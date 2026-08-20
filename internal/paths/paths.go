@@ -135,6 +135,24 @@ func ConductorFile() string {
 	return filepath.Join(home(), ".baton", "CONDUCTOR.md")
 }
 
+// UsageLimitsFile is where the status-line sink drops the account's latest
+// rate-limit reading ($HOME/.baton/usage-limits.json), and where the daemon picks
+// it up.
+//
+// It is deliberately not scoped to a socket, unlike the state and queue files.
+// The rate limits belong to the account, not to a fleet: two baton sessions on
+// the same machine are measured against one quota, and a reading either of them
+// harvests is equally true for the other. Scoping it per session would have each
+// fleet blind to what the other had already learned.
+//
+// A file rather than a socket message because the writer is a status line. Claude
+// Code re-runs it on every render — several times a second while an agent works —
+// and a control-socket handshake at that rate would cost more than the reading is
+// worth. A small atomic write costs nothing and survives a daemon restart.
+func UsageLimitsFile() string {
+	return filepath.Join(home(), ".baton", "usage-limits.json")
+}
+
 // PluginFile is the user's Lua plugin ($HOME/.baton/plug-in.lua). BATON_PLUGIN
 // overrides it (and is how the daemon child inherits an explicit --plugin choice
 // across the re-exec, since it re-sessions itself).
