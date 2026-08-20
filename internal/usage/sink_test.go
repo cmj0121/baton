@@ -205,17 +205,17 @@ func TestBarEnds(t *testing.T) {
 
 func TestFormatLimits(t *testing.T) {
 	l := sample(limitsNow, 62.4, 34.1)
-	got := FormatLimits(l, limitsNow, 10, CountdownAuto)
-	want := "5h ▓▓▓▓▓▓░░░░ 62% 2:00:00 · 7d ▓▓▓░░░░░░░ 34% 3d 00:00"
+	got := FormatLimits(l, limitsNow, 10)
+	want := "5h ▓▓▓▓▓▓░░░░ 2:00:00 · 7d ▓▓▓░░░░░░░ 3d0h"
 	if got != want {
 		t.Errorf("FormatLimits =\n%q\nwant\n%q", got, want)
 	}
 	// A window with no reset still reports its fill; only the countdown goes.
 	noReset := Limits{FiveHour: &Window{UsedPercent: 20}, At: limitsNow}
-	if got := FormatLimits(noReset, limitsNow, 5, CountdownAuto); got != "5h ▓░░░░ 20%" {
+	if got := FormatLimits(noReset, limitsNow, 5); got != "5h ▓░░░░" {
 		t.Errorf("FormatLimits without a reset = %q", got)
 	}
-	if got := FormatLimits(Limits{}, limitsNow, 10, CountdownAuto); got != "" {
+	if got := FormatLimits(Limits{}, limitsNow, 10); got != "" {
 		t.Errorf("FormatLimits of an empty reading = %q, want empty", got)
 	}
 }

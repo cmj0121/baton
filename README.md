@@ -188,7 +188,7 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
   hot-reloaded with `C-t R`. See **[docs/TUI.md](docs/TUI.md)**.
 - **Usage and quota** — `v u` cycles a footer readout: the billing window's token usage and cost with a countdown
   (`⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31`), the focused panel's share of it, or your account's **rate-limit bars**
-  (`⊙ 5h ▓▓▓▓░░ 62% 2:14:31 · 7d ▓▓░░░░ 34% 3d 04:12`). `v U` opens the lot — every quota window, the extra-usage
+  (`⊙ 5h ▓▓▓▓▓░░░ 2:14:31 · 7d ▓▓▓░░░░░ 3d4h`). `v U` opens the lot — every quota window, the extra-usage
   credit, and which panels are eating them. The totals come from Claude Code's transcripts (so they can be traced to a
   panel); the quota comes from the panels' own status line, which Baton wraps rather than replaces. See
   **[docs/USAGE.md](docs/USAGE.md)**.

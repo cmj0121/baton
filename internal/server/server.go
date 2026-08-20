@@ -249,7 +249,6 @@ type Server struct {
 	usageInfo     *proto.UsageInfo
 	usageWarn     float64
 	usageAlarm    float64
-	usageFormat   string
 
 	// The account's rate-limit standing (internal/usage). limitsProvider is the
 	// source and limitsInfo the last reading it gave, held so a reading survives a
@@ -552,14 +551,13 @@ func WithQueue(max, concurrency int) Option {
 }
 
 // UsageDisplay is how the frontends should present the window: the fractions of
-// it spent at which the footer segment turns amber and then red, and the form the
-// countdown reads in. These live on the daemon because that is where the usage.*
-// config is read, and they ride the usage message because the countdown ticks on
-// the frontend's clock, not the poll interval.
+// it spent at which the footer segment turns amber and then red. These live on
+// the daemon because that is where the usage.* config is read, and they ride the
+// usage message because the countdown ticks on the frontend's clock, not the poll
+// interval.
 type UsageDisplay struct {
-	WarnAt          float64
-	AlarmAt         float64
-	CountdownFormat string
+	WarnAt  float64
+	AlarmAt float64
 }
 
 // WithUsage wires the account usage/cost footer: p polls the current usage,
@@ -572,7 +570,6 @@ func WithUsage(p usage.Provider, interval time.Duration, display UsageDisplay) O
 		s.usageInterval = interval
 		s.usageWarn = display.WarnAt
 		s.usageAlarm = display.AlarmAt
-		s.usageFormat = display.CountdownFormat
 	}
 }
 
@@ -1264,13 +1261,12 @@ func (s *Server) usageInfoLocked(snap usage.Snapshot) *proto.UsageInfo {
 		return attachLimits(nil, s.limitsInfo)
 	}
 	info := &proto.UsageInfo{
-		Tokens:          snap.TotalTokens(),
-		CostUSD:         snap.CostUSD,
-		Source:          snap.Source,
-		Resets:          snap.Resets,
-		WarnAt:          s.usageWarn,
-		AlarmAt:         s.usageAlarm,
-		CountdownFormat: s.usageFormat,
+		Tokens:  snap.TotalTokens(),
+		CostUSD: snap.CostUSD,
+		Source:  snap.Source,
+		Resets:  snap.Resets,
+		WarnAt:  s.usageWarn,
+		AlarmAt: s.usageAlarm,
 	}
 	if !snap.Since.IsZero() {
 		info.Since = snap.Since.Format(time.RFC3339)

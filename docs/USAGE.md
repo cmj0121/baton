@@ -18,7 +18,7 @@ to burn". A fleet needs both.
 
 ```text
 ⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31
-⊙ 5h ▓▓▓▓░░ 62% 2:14:31 · 7d ▓▓░░░░ 34% 3d 04:12
+⊙ 5h ▓▓▓▓▓░░░ 2:14:31 · 7d ▓▓▓░░░░░ 3d4h
 ```
 
 Press **`v u`** to cycle the footer segment through its views, and **`v U`** to
@@ -42,10 +42,10 @@ extra-usage balance if you have one, and the panels spending them.
 ```text
  A C C O U N T   U S A G E   statusline · 12s ago
 
- Session (5h)     ▓▓▓▓▓▓▓▓▓▓░░░░░░  62%   resets 2:14:31
- Week (all)       ▓▓▓▓▓░░░░░░░░░░░  34%   resets 3d 04:12
- Week (Opus)      ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░  91%   resets 3d 04:12
- Extra credit     ▓▓▓░░░░░░░░░░░░░  18%   $11.70 / $65.00
+ Session (5h)     ▓▓▓▓▓▓▓▓▓▓░░░░░░   resets 2:14:31
+ Week (all)       ▓▓▓▓▓░░░░░░░░░░░   resets 3d4h
+ Week (Opus)      ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░   resets 3d4h
+ Extra credit     ▓▓▓░░░░░░░░░░░░░   $11.70 / $65.00
 
  Burning this window          share      tokens    of 5h
  ▸ zerg / agent-2               67%  800.0K tok      41%
@@ -227,7 +227,6 @@ usage:
   limits: statusline # statusline | oauth | off — where the quota bars come from
   interval: 30 # refresh seconds; 0 = default (30s local / 60s api); clamped to ≥ 10
   window: 5h # window length once use opens one; 0 = no countdown, calendar day
-  countdown-format: auto # auto (2:14:31, widening to 3d 04:12) | dd:hh:mm
   warn-at: 0.75 # fraction of the window spent before the segment turns amber
   alarm-at: 0.9 # …and red
 
@@ -261,10 +260,19 @@ the server (`C-t S`) to pick it up. The `v u` cycle is live.
 - **Cost is API-equivalent, not a bill.** The figure prices your tokens at the
   published per-model rates. On a flat-rate Pro/Max subscription that is a "what
   this would cost on the API" gauge, not what you are charged.
-- **The quota bars are percentages, not token counts.** Anthropic reports how much
-  of each window is _used_ and when it resets — never an absolute allowance. So
-  Baton can tell you that 62% of your 5-hour window is gone; it cannot tell you how
+- **The quota bars are proportions, not token counts.** Anthropic reports how much
+  of each window is _used_ and when it resets — never an absolute allowance. So a
+  bar can show you that most of your 5-hour window is gone; it cannot tell you how
   many tokens that leaves, and neither can anything else.
+- **The bars carry no number beside them.** The fill _is_ the reading, and printing
+  the percentage next to it says the same thing twice — once in a form you see, once
+  in a form you have to read. The space goes to the countdown instead, which is the
+  half a bar cannot draw.
+- **The countdown has two forms and no setting.** Under a day it is a ticking clock
+  (`2:12:23`), because that is a wait you sit through and the seconds moving are the
+  point. A day or more it is `2d8h` — nobody waits out a weekly reset at the
+  terminal, so minutes are noise. There is no `countdown-format` option; a countdown
+  whose shape varies by config has to be parsed before it can be understood.
 - **`warn-at` / `alarm-at` mean two things.** In the `window` view they colour by how
   far into the window the clock has run, because the spend has no ceiling to compare
   against. In the `limits` view they colour by the **fullest window** — there is a

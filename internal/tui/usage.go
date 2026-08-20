@@ -128,17 +128,24 @@ func (m model) usageSegment() string {
 	return joinDot(m.usageText, m.usageCountdown())
 }
 
-// limitsBarWidth is the bar's cell count in the footer. It is short because the
-// segment shares one row with the mode, the fleet counts and the clock; the
-// percentage beside it carries the precision, and the bar carries the glance.
-const limitsBarWidth = 6
+// limitsBarWidth is the bar's cell count in the footer. It is wider than a
+// footer bar would otherwise be because the percentage that used to sit beside it
+// is gone: with no number to fall back on, the bar is the whole reading, and eight
+// cells resolve it to about an eighth rather than a sixth.
+const limitsBarWidth = 8
 
 // usageLimitsText is the quota view: how much of each rate-limit window is gone,
 // and how long until it resets.
 //
-// It reads "5h ▓▓▓▓░░ 62% 2:14:31 · 7d ▓▓░░░░ 34% 3d 04:12", and it is empty
-// whenever no source has reported — never a pair of bars at zero, which would
-// assert a full tank on an account that may be minutes from a refusal.
+// It reads "5h ▓▓▓▓░░░░ 2:14:31 · 7d ▓▓░░░░░░ 3d4h", and it is empty whenever no
+// source has reported — never a pair of bars at zero, which would assert a full
+// tank on an account that may be minutes from a refusal.
+//
+// The percentage the bar was drawn from is not printed beside it. A footer strip
+// is read at a glance or not at all, and a bar with its own number next to it is
+// the same fact twice — one of them in a form that has to be read rather than
+// seen. What goes in the space instead is the countdown, which is the half of the
+// reading no bar can carry.
 //
 // A reading nobody has restated in a while is marked with a leading "~". The
 // statusline source is a push: it arrives when a panel renders and stops
@@ -157,9 +164,9 @@ func (m model) usageLimitsText() string {
 		if w.win == nil {
 			continue
 		}
-		part := fmt.Sprintf("%s %s %.0f%%", w.label, usage.Bar(limitFraction(w.win), limitsBarWidth), w.win.UsedPercent)
+		part := w.label + " " + usage.Bar(limitFraction(w.win), limitsBarWidth)
 		if left, ok := limitCountdown(w.win, m.now); ok {
-			part += " " + usage.FormatCountdown(left, m.usageCountdownFormat())
+			part += " " + usage.FormatCountdown(left)
 		}
 		parts = append(parts, part)
 	}
@@ -193,15 +200,6 @@ func (m model) usageLimitsStale() bool {
 		return true // stamped with something unreadable; never show it as current
 	}
 	return usage.Limits{At: at}.Stale(m.now)
-}
-
-// usageCountdownFormat is the countdown form the daemon's config asked for,
-// defaulting to auto when there is no payload to read it from.
-func (m model) usageCountdownFormat() string {
-	if m.usageInfo == nil {
-		return usage.CountdownAuto
-	}
-	return m.usageInfo.CountdownFormat
 }
 
 // limitFraction is one window's fill as 0–1.
@@ -250,7 +248,7 @@ func (m model) usageCountdown() string {
 	if !ok {
 		return ""
 	}
-	return "⏳ " + usage.FormatCountdown(left, info.CountdownFormat)
+	return "⏳ " + usage.FormatCountdown(left)
 }
 
 // usagePanelText is the focused work's line: what it has spent inside this window

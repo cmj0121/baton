@@ -324,11 +324,7 @@ func usageOption(cfg config.Config) server.Option {
 		interval = 10 * time.Second
 	}
 	warn, alarm := cfg.Usage.Thresholds()
-	return server.WithUsage(p, interval, server.UsageDisplay{
-		WarnAt:          warn,
-		AlarmAt:         alarm,
-		CountdownFormat: cfg.Usage.CountdownFormat,
-	})
+	return server.WithUsage(p, interval, server.UsageDisplay{WarnAt: warn, AlarmAt: alarm})
 }
 
 // limitsOption wires the account's rate-limit bars from the config.

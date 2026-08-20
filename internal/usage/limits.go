@@ -2,7 +2,6 @@ package usage
 
 import (
 	"encoding/json"
-	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -280,15 +279,20 @@ func Bar(fraction float64, width int) string {
 
 // FormatLimits renders a reading as one plain-text line, e.g.
 //
-//	5h ▓▓▓▓▓▓░░░░ 62% 2:14:31 · 7d ▓▓▓░░░░░░░ 34% 3d 04:12
+//	5h ▓▓▓▓▓▓░░░░ 2:14:31 · 7d ▓▓▓░░░░░░░ 3d4h
 //
 // It is the form the status-line sink prints when it has no status line of the
 // user's own to defer to, and the shape the cockpit's own segment mirrors in
-// colour. A window with no countdown to offer prints its bar and percentage
-// alone: the reading is still worth showing, only the reset is not known.
+// colour.
 //
-// width is the bar's cell count; countdown is a usage.Countdown* format name.
-func FormatLimits(l Limits, now time.Time, width int, countdown string) string {
+// The percentage the bar was drawn from is deliberately not printed beside it.
+// The bar already says it, and saying it twice makes a strip that gets read at a
+// glance into one that has to be read twice — while the countdown next to it is
+// the half that cannot be drawn. A window with no countdown to offer prints its
+// bar alone: the fill is still worth showing, only the reset is not known.
+//
+// width is the bar's cell count.
+func FormatLimits(l Limits, now time.Time, width int) string {
 	var parts []string
 	for _, w := range []struct {
 		label string
@@ -297,9 +301,9 @@ func FormatLimits(l Limits, now time.Time, width int, countdown string) string {
 		if w.win == nil {
 			continue
 		}
-		s := fmt.Sprintf("%s %s %.0f%%", w.label, Bar(w.win.Fraction(), width), w.win.UsedPercent)
+		s := w.label + " " + Bar(w.win.Fraction(), width)
 		if d, ok := w.win.Countdown(now); ok {
-			s += " " + FormatCountdown(d, countdown)
+			s += " " + FormatCountdown(d)
 		}
 		parts = append(parts, s)
 	}

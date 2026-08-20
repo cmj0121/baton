@@ -302,9 +302,6 @@ type UsageInfo struct {
 	WarnAt  float64 `json:"warn_at,omitempty"`
 	AlarmAt float64 `json:"alarm_at,omitempty"`
 
-	// CountdownFormat is "auto" or "dd:hh:mm"; see usage.FormatCountdown.
-	CountdownFormat string `json:"countdown_format,omitempty"`
-
 	// Panels is the per-panel breakdown, keyed by panel id. Only a source that can
 	// attribute spend fills it in, and only for panels the daemon launched with a
 	// session of their own — so a missing entry means "not known", never "zero".

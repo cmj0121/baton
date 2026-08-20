@@ -14,7 +14,7 @@ Baton 顯示帳號的兩件不同的事,而這個區別正是重點:
 
 ```text
 ⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31
-⊙ 5h ▓▓▓▓░░ 62% 2:14:31 · 7d ▓▓░░░░ 34% 3d 04:12
+⊙ 5h ▓▓▓▓▓░░░ 2:14:31 · 7d ▓▓▓░░░░░ 3d4h
 ```
 
 按 **`v u`** 在頁尾的幾種檢視之間循環,按 **`v U`** 打開完整畫面;選擇會持久保存。
@@ -37,10 +37,10 @@ Baton 顯示帳號的兩件不同的事,而這個區別正是重點:
 ```text
  A C C O U N T   U S A G E   statusline · 12s ago
 
- Session (5h)     ▓▓▓▓▓▓▓▓▓▓░░░░░░  62%   resets 2:14:31
- Week (all)       ▓▓▓▓▓░░░░░░░░░░░  34%   resets 3d 04:12
- Week (Opus)      ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░  91%   resets 3d 04:12
- Extra credit     ▓▓▓░░░░░░░░░░░░░  18%   $11.70 / $65.00
+ Session (5h)     ▓▓▓▓▓▓▓▓▓▓░░░░░░   resets 2:14:31
+ Week (all)       ▓▓▓▓▓░░░░░░░░░░░   resets 3d4h
+ Week (Opus)      ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░   resets 3d4h
+ Extra credit     ▓▓▓░░░░░░░░░░░░░   $11.70 / $65.00
 
  Burning this window          share      tokens    of 5h
  ▸ zerg / agent-2               67%  800.0K tok      41%
@@ -146,7 +146,6 @@ usage:
   limits: statusline # statusline | oauth | off —— 額度進度條的來源
   interval: 30 # refresh seconds; 0 = default (30s local / 60s api); clamped to ≥ 10
   window: 5h # window length once use opens one; 0 = no countdown, calendar day
-  countdown-format: auto # auto (2:14:31, widening to 3d 04:12) | dd:hh:mm
   warn-at: 0.75 # fraction of the window spent before the segment turns amber
   alarm-at: 0.9 # …and red
 
@@ -178,9 +177,15 @@ export BATON_ANTHROPIC_ADMIN_KEY=sk-ant-admin01-…
 - **成本是 API 等值換算,不是帳單。** 這個數字以官方公布的各模型費率替你的 token
   計價。在固定費率的 Pro/Max 訂閱下,它是一個「這在 API 上會花多少」的量表,而不是
   你實際被收取的金額。
-- **額度進度條是百分比,不是 token 數。** Anthropic 回報的是每個窗口用掉了多少、
-  何時重置——從不給絕對配額。所以 Baton 能告訴你 5 小時窗口用掉了 62%,卻無法告訴你
+- **額度進度條是比例,不是 token 數。** Anthropic 回報的是每個窗口用掉了多少、
+  何時重置——從不給絕對配額。所以進度條能讓你看出 5 小時窗口用掉大半,卻無法告訴你
   那還剩幾個 token,其他工具也一樣做不到。
+- **進度條旁邊不放數字。** 填滿的長度*就是*那個讀數,再印一次百分比等於同一件事說兩遍
+  ——一遍用看的、一遍用讀的。空出來的位置給倒數,那才是進度條畫不出來的那一半。
+- **倒數只有兩種形式,而且沒有設定可調。** 不到一天是走秒的時鐘(`2:12:23`),因為那是
+  你會坐著等完的時間,秒在動正是重點。一天以上是 `2d8h` —— 沒有人會在終端機前面等完
+  一個每週重置,分鐘只是雜訊。沒有 `countdown-format` 選項:形狀會隨設定改變的倒數,
+  得先解讀才能理解。
 - **`warn-at` / `alarm-at` 在兩種檢視裡意思不同。** 在 `window` 檢視裡,它們依時鐘走了多遠
   上色,因為花費沒有天花板可比。在 `limits` 檢視裡,它們依**最滿的那個窗口**上色——那裡有
   天花板,而用到 90%、還剩四小時的帳號,處境遠比用到 20%、只剩十分鐘的帳號危險。

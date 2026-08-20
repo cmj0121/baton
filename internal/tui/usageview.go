@@ -130,8 +130,7 @@ func (m model) usageAgeNote() string {
 	if age < usageJustNow {
 		return i18n.T(m.effLang(), "usage.view.just-now", "just now")
 	}
-	return usage.FormatCountdown(age, usage.CountdownAuto) + " " +
-		i18n.T(m.effLang(), "usage.view.ago", "ago")
+	return usage.FormatCountdown(age) + " " + i18n.T(m.effLang(), "usage.view.ago", "ago")
 }
 
 // usageJustNow is how recent a reading has to be to read as current rather than
@@ -157,8 +156,7 @@ func (m model) usageBars(lim *proto.LimitsInfo) []string {
 		if r.win == nil {
 			continue
 		}
-		rows = append(rows, m.usageBarRow(r.label, limitFraction(r.win), fmt.Sprintf("%.0f%%", r.win.UsedPercent),
-			m.usageResetNote(r.win)))
+		rows = append(rows, m.usageBarRow(r.label, limitFraction(r.win), m.usageResetNote(r.win)))
 	}
 	if row, ok := m.usageCreditRow(lim.Credit); ok {
 		rows = append(rows, row)
@@ -166,13 +164,20 @@ func (m model) usageBars(lim *proto.LimitsInfo) []string {
 	return rows
 }
 
-// usageBarRow lays out one row: label, bar, percentage, and a trailing note. The
-// bar takes its colour from its own fill rather than from the segment's, so a
+// usageBarRow lays out one row: label, bar, and a trailing note.
+//
+// There is no percentage column. Four rows of bars stacked against each other is
+// a shape you compare by looking, and a column of numbers beside them invites
+// reading each one instead — which is slower and says nothing the lengths do not.
+// The note keeps what a bar genuinely cannot draw: when the window resets, or
+// what the credit balance stands at in money.
+//
+// The bar takes its colour from its own fill rather than from the segment's, so a
 // single window against its ceiling shows red even while the others are quiet —
 // which is the whole reason to look at them side by side.
-func (m model) usageBarRow(label string, fraction float64, pct, note string) string {
+func (m model) usageBarRow(label string, fraction float64, note string) string {
 	bar := lipgloss.NewStyle().Foreground(m.usageFillColor(fraction)).Render(usage.Bar(fraction, usageBarWidth))
-	row := fmt.Sprintf("%-16s %s %4s", label, bar, pct)
+	row := fmt.Sprintf("%-16s %s", label, bar)
 	if note != "" {
 		row += "   " + mutedStyle.Render(note)
 	}
@@ -186,8 +191,7 @@ func (m model) usageResetNote(w *proto.LimitWindow) string {
 	if !ok {
 		return ""
 	}
-	return i18n.T(m.effLang(), "usage.view.resets", "resets") + " " +
-		usage.FormatCountdown(left, m.usageCountdownFormat())
+	return i18n.T(m.effLang(), "usage.view.resets", "resets") + " " + usage.FormatCountdown(left)
 }
 
 // usageCreditRow is the extra-usage balance, and whether there is one to show. A
@@ -198,11 +202,7 @@ func (m model) usageCreditRow(c *proto.LimitCredit) (string, bool) {
 		return "", false
 	}
 	cr := &usage.Credit{Enabled: true, MonthlyUSD: c.MonthlyUSD, UsedUSD: c.UsedUSD, UsedPercent: c.UsedPercent}
-	fraction, ok := cr.Fraction()
-	pct := "—"
-	if ok {
-		pct = fmt.Sprintf("%.0f%%", fraction*100)
-	}
+	fraction, _ := cr.Fraction()
 	note := ""
 	switch {
 	case c.UsedUSD != nil && c.MonthlyUSD != nil:
@@ -212,7 +212,7 @@ func (m model) usageCreditRow(c *proto.LimitCredit) (string, bool) {
 		// zero — so the spend is shown with nothing to divide it by.
 		note = fmt.Sprintf("$%.2f / %s", *c.UsedUSD, i18n.T(m.effLang(), "usage.view.uncapped", "uncapped"))
 	}
-	return m.usageBarRow(i18n.T(m.effLang(), "usage.view.credit", "Extra credit"), fraction, pct, note), true
+	return m.usageBarRow(i18n.T(m.effLang(), "usage.view.credit", "Extra credit"), fraction, note), true
 }
 
 // usageFillColor is one bar's colour, by how full it is. It uses the same

@@ -117,7 +117,7 @@ func printOwnLine() {
 	if !ok {
 		return
 	}
-	if s := usage.FormatLimits(l, time.Now(), sinkBarWidth, usage.CountdownAuto); s != "" {
+	if s := usage.FormatLimits(l, time.Now(), sinkBarWidth); s != "" {
 		_, _ = os.Stdout.WriteString(s)
 	}
 }

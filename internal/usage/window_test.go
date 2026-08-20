@@ -416,23 +416,26 @@ func TestSnapshotSpent(t *testing.T) {
 	}
 }
 
-// TestFormatCountdown: auto stays on the clock form under a day and only widens
-// past it; dd:hh:mm always spells out days.
+// TestFormatCountdown: there are two forms and no setting to choose one — a
+// ticking clock under a day, and days-and-hours past it.
 func TestFormatCountdown(t *testing.T) {
 	cases := []struct {
-		d      time.Duration
-		format string
-		want   string
+		d    time.Duration
+		want string
 	}{
-		{2*time.Hour + 14*time.Minute + 31*time.Second, CountdownAuto, "2:14:31"},
-		{45 * time.Second, CountdownAuto, "0:00:45"},
-		{3*24*time.Hour + 4*time.Hour + 12*time.Minute, CountdownAuto, "3d 04:12"},
-		{2*time.Hour + 14*time.Minute + 31*time.Second, CountdownFull, "0d 02:14"},
-		{-time.Hour, CountdownAuto, "0:00:00"},
+		{2*time.Hour + 12*time.Minute + 23*time.Second, "2:12:23"},
+		{45 * time.Second, "0:00:45"},
+		{23*time.Hour + 59*time.Minute + 59*time.Second, "23:59:59"},
+		// A day exactly is the switch-over, not a boundary the clock form stretches to.
+		{24 * time.Hour, "1d0h"},
+		{2*24*time.Hour + 8*time.Hour + 59*time.Minute, "2d8h"},
+		{3*24*time.Hour + 4*time.Hour + 12*time.Minute, "3d4h"},
+		// A countdown never runs backwards.
+		{-time.Hour, "0:00:00"},
 	}
 	for _, c := range cases {
-		if got := FormatCountdown(c.d, c.format); got != c.want {
-			t.Errorf("FormatCountdown(%v, %q) = %q, want %q", c.d, c.format, got, c.want)
+		if got := FormatCountdown(c.d); got != c.want {
+			t.Errorf("FormatCountdown(%v) = %q, want %q", c.d, got, c.want)
 		}
 	}
 }

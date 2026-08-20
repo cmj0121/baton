@@ -37,7 +37,7 @@ func limitsModel(mode usageMode) model {
 func TestUsageLimitsSegment(t *testing.T) {
 	m := limitsModel(usageLimits)
 	got := m.usageLimitsText()
-	want := "5h ▓▓▓▓░░ 62% 2:14:00 · 7d ▓▓░░░░ 34% 3d 02:00"
+	want := "5h ▓▓▓▓▓░░░ 2:14:00 · 7d ▓▓▓░░░░░ 3d2h"
 	if got != want {
 		t.Errorf("segment =\n%q\nwant\n%q", got, want)
 	}
@@ -72,7 +72,7 @@ func TestUsageLimitsSegmentPartial(t *testing.T) {
 	}
 	// A window with no reset keeps its bar and loses only the countdown.
 	m.usageInfo.Limits.FiveHour.ResetsAt = ""
-	if got := m.usageLimitsText(); got != "5h ▓▓▓▓░░ 62%" {
+	if got := m.usageLimitsText(); got != "5h ▓▓▓▓▓░░░" {
 		t.Errorf("segment without a reset = %q", got)
 	}
 }
@@ -127,14 +127,21 @@ func TestUsageViewRenders(t *testing.T) {
 
 	for _, want := range []string{
 		spaced("ACCOUNT USAGE"), "oauth", "just now",
-		"Session (5h)", "62%", "resets 2:14:00",
-		"Week (all)", "34%",
-		"Week (Opus)", "91%",
-		"Extra credit", "18%", "$11.70 / $65.00",
+		"Session (5h)", "resets 2:14:00",
+		"Week (all)", "resets 3d2h",
+		"Week (Opus)",
+		"Extra credit", "$11.70 / $65.00",
 		"Burning this window", "share", "of 5h",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the overlay is missing %q:\n%s", want, out)
+		}
+	}
+	// The bars carry the fill; a percentage beside them would say it twice, in a
+	// form that has to be read rather than seen.
+	for _, unwanted := range []string{"62%", "34%", "91%", "18%"} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("a quota percentage was drawn beside its bar (%s):\n%s", unwanted, out)
 		}
 	}
 	// The per-model ceiling the source did not report gets no row at all.

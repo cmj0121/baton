@@ -28,11 +28,10 @@ func usageModel(mode usageMode) model {
 		},
 		usageInfo: &proto.UsageInfo{
 			Tokens: 1_200_000, CostUSD: 12.34, Source: "local", Resets: true,
-			Since:           since.Format(time.RFC3339),
-			Until:           since.Add(5 * time.Hour).Format(time.RFC3339),
-			WarnAt:          0.75,
-			AlarmAt:         0.9,
-			CountdownFormat: "auto",
+			Since:   since.Format(time.RFC3339),
+			Until:   since.Add(5 * time.Hour).Format(time.RFC3339),
+			WarnAt:  0.75,
+			AlarmAt: 0.9,
 			Panels: map[string]proto.PanelUsage{
 				"p1": {Tokens: 300_000, CostUSD: 3},
 			},

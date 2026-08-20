@@ -146,11 +146,6 @@ type UsageConfig struct {
 	// see a reset at all.
 	Window string `yaml:"window,omitempty"`
 
-	// CountdownFormat is how the remaining time reads: "auto" (the default)
-	// shortens to 2:14:31 under a day and widens to 3d 04:12 beyond it, while
-	// "dd:hh:mm" always spells out days.
-	CountdownFormat string `yaml:"countdown-format,omitempty"`
-
 	// Limits selects the source for the account's rate-limit bars: "statusline"
 	// (the default) reads what the status line baton gives its Claude Code panels
 	// reports, "oauth" queries the account usage endpoint directly, and "off"

@@ -179,30 +179,29 @@ func Format(s Snapshot) string {
 	return fmt.Sprintf("%s tok · ≈$%.2f API", tok, s.CostUSD)
 }
 
-// CountdownAuto and CountdownFull are the two usage.countdown-format settings:
-// auto shortens to "2:14:31" while under a day and only widens to "3d 04:12"
-// beyond it, full always spells out days.
-const (
-	CountdownAuto = "auto"
-	CountdownFull = "dd:hh:mm"
-)
-
-// FormatCountdown renders how long is left as a footer-sized string. Under a day
-// (or in auto form) that is "2:14:31"; a longer wait, or the forced dd:hh:mm
-// form, reads "3d 04:12" — minute precision is enough once the answer is measured
-// in days. A negative duration is clamped to zero rather than shown as a
-// countdown running backwards.
-func FormatCountdown(d time.Duration, format string) string {
+// FormatCountdown renders how long is left, in one of exactly two forms.
+//
+// Under a day it is a clock — "2:12:23" — because that is a wait somebody is
+// sitting through, and the seconds ticking are the point: the number is being
+// watched, and a figure that only moved once a minute would read as frozen.
+//
+// A day or more it is "2d8h". Once the answer is measured in days, minutes are
+// noise — nobody waits out a weekly reset at the terminal — and the short form
+// buys back the width for the bar beside it.
+//
+// There is no third form and no setting to choose one. Two forms cover the two
+// ways the number is actually read, and a countdown whose shape varies by config
+// is a countdown that has to be parsed before it can be understood.
+//
+// A negative duration clamps to zero rather than running backwards.
+func FormatCountdown(d time.Duration) string {
 	if d < 0 {
 		d = 0
 	}
-	days := int(d / (24 * time.Hour))
-	rest := d % (24 * time.Hour)
-	h, m, sec := int(rest/time.Hour), int(rest/time.Minute)%60, int(rest/time.Second)%60
-	if days > 0 || strings.EqualFold(strings.TrimSpace(format), CountdownFull) {
-		return fmt.Sprintf("%dd %02d:%02d", days, h, m)
+	if d >= 24*time.Hour {
+		return fmt.Sprintf("%dd%dh", int(d/(24*time.Hour)), int(d%(24*time.Hour)/time.Hour))
 	}
-	return fmt.Sprintf("%d:%02d:%02d", h, m, sec)
+	return fmt.Sprintf("%d:%02d:%02d", int(d/time.Hour), int(d/time.Minute)%60, int(d/time.Second)%60)
 }
 
 // humanTokens abbreviates a token count: 1234567 → "1.2M", 9340 → "9.3K", 512 → "512".
