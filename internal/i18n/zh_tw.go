@@ -121,7 +121,8 @@ var zhTW = map[string]string{
 	"bind.expand":    "展開或收合這一列底下的巢狀內容",
 
 	"bind.help":         "檢視這個畫面的按鍵",
-	"bind.usage-footer": "切換用量狀態列：關閉、計費窗口、目前面板",
+	"bind.usage-footer": "切換用量狀態列：關閉、計費窗口、目前面板、額度",
+	"bind.usage-view":   "帳號用量 — 完整額度進度條，以及誰在消耗",
 	"bind.keycast":      "切換狀態列上的按鍵提示",
 	"bind.preview":      "切換樹狀圖旁的詳細窗格",
 	"bind.layout":       "儀表板的卡片或樹狀 — 小艦隊也能切成樹狀",
@@ -146,8 +147,25 @@ var zhTW = map[string]string{
 	"usage.mode.off":           "關閉",
 	"usage.mode.window":        "計費窗口",
 	"usage.mode.panel":         "目前面板",
+	"usage.mode.limits":        "額度",
 	"usage.panel.unattributed": "無法歸屬",
 	"usage.panel.of-window":    "／本窗口",
+
+	// The account-usage overlay: the quota bars in full, and who is spending them.
+	"usage.view.no-reading":  "還沒有額度讀數 — Claude Code 面板跑完第一輪後就會回報",
+	"usage.view.ago":         "前",
+	"usage.view.just-now":    "剛剛",
+	"usage.view.session":     "工作階段（5h）",
+	"usage.view.week":        "本週（全部）",
+	"usage.view.week-opus":   "本週（Opus）",
+	"usage.view.week-sonnet": "本週（Sonnet）",
+	"usage.view.credit":      "額外點數",
+	"usage.view.resets":      "重置於",
+	"usage.view.uncapped":    "無上限",
+	"usage.view.burning":     "本窗口的消耗來源",
+	"usage.view.share":       "占比",
+	"usage.view.tokens":      "token",
+	"usage.view.of-5h":       "占 5h",
 
 	// The working-directory features.
 	"panel.here.unknown": "那個面板的目錄不明;改在預設工作目錄開啟",

@@ -156,6 +156,16 @@ const (
 	LimitsOAuth      = "oauth"
 )
 
+// The quota thresholds, used when the config has not set a usable pair. They are
+// the same figures as the window ones and deliberately so: a user who has tuned
+// when the footer turns amber has said something about their own tolerance, and
+// it means the same thing whether the pressure is a clock running out or a
+// ceiling being approached.
+const (
+	DefaultLimitWarnAt  = 0.75
+	DefaultLimitAlarmAt = 0.90
+)
+
 // StaleAfter is how old a reading may get before a cockpit should mark it as no
 // longer current. It is deliberately generous: the statusline source samples
 // whenever a panel renders, which is often while the fleet works and never while

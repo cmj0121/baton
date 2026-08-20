@@ -123,6 +123,7 @@ const (
 	modeQueue       // the task-queue manager popup (Q): list / cancel / drain the backlog
 	modeFleetSearch // the fleet-wide search results popup (/): matching lines grouped by panel
 	modeProcTree    // the process-tree overlay (C-t o): the daemon, its panels, and their OS descendants
+	modeUsage       // the account-usage overlay (v U): the quota bars in full, and who is spending them
 	modeInbox       // the attention inbox (C-t a): the queue of panels wanting a human, cleared in place
 	modeRemote      // the remote overlay (C-t @): remote access, its passkey, and every live connection
 	modeZoom
@@ -331,6 +332,12 @@ type model struct {
 	procLines  []string
 	procScroll int
 	procFrom   mode
+
+	// The account-usage overlay (modeUsage): the view to restore on close. It
+	// caches nothing else — the reading is a handful of numbers already held for
+	// the footer, so the overlay renders straight off them and cannot go stale in
+	// a way the footer has not.
+	usageFrom mode
 
 	zoomID                string                 // panel being zoomed (modeZoom)
 	zoomTitle             string                 // its title, for the zoom footer
@@ -1331,6 +1338,12 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// refreshes the OS snapshot.
 	if m.mode == modeProcTree {
 		return m.handleProcTreeKey(key)
+	}
+
+	// The usage overlay owns the keyboard until esc; it cycles the footer segment
+	// and nothing else.
+	if m.mode == modeUsage {
+		return m.handleUsageKey(key)
 	}
 
 	// The remote overlay owns the keyboard until esc; it selects, kicks, and — on
@@ -2634,12 +2647,9 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 	case actHelp:
 		return m.openHelp(m.mode), nil
 	case actUsageToggle:
-		m.usageMode = m.usageMode.next()
-		m.status = "usage footer: " + m.usageMode.label(m.effLang())
-		if err := m.saveConfig(); err != nil {
-			m.status = "toggled, but save failed: " + err.Error()
-		}
-		return m, nil
+		return m.cycleUsageMode()
+	case actUsageView:
+		return m.openUsage(m.mode), nil
 	case actKeycastToggle:
 		m.keycast = !m.keycast
 		m.keycastKey, m.keycastAct = "", "" // never leave the last key stranded on the bar
@@ -3519,6 +3529,8 @@ func (m model) render() string {
 		body = m.fleetSearchView()
 	case m.mode == modeProcTree:
 		body = m.procTreeView()
+	case m.mode == modeUsage:
+		body = m.usageView()
 	case m.mode == modeRemote:
 		body = m.remoteView()
 	case m.mode == modeInbox:
@@ -4388,6 +4400,19 @@ func (m model) popupWidth() int {
 		return popupCols
 	}
 	return clampInt(m.width-2*popupPadX-2, popupMinCols, popupCols)
+}
+
+// cycleUsageMode advances the footer's usage segment to the next view and
+// persists the choice. It is a method rather than inline in the action so the
+// usage overlay can offer the same cycle: looking straight at what the segment
+// shows is the moment someone is most likely to want to change which view it is.
+func (m model) cycleUsageMode() (tea.Model, tea.Cmd) {
+	m.usageMode = m.usageMode.next()
+	m.status = "usage footer: " + m.usageMode.label(m.effLang())
+	if err := m.saveConfig(); err != nil {
+		m.status = "toggled, but save failed: " + err.Error()
+	}
+	return m, nil
 }
 
 // popupBox wraps a settings/overlay panel in the cockpit's bordered surface at the

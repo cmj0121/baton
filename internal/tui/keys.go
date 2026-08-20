@@ -31,7 +31,7 @@ import (
 // verbs on one key while the long tail stays reachable and discoverable:
 //
 //	n  new     n c form · n . here · n C conductor · n h global shell
-//	v  view    v u usage · v k keycast · v p preview · v l layout · v g lens
+//	v  view    v u usage · v U usage detail · v k keycast · v p preview · v l layout · v g lens
 //	g  group   g g mark · g c create · g a add · g u ungroup
 //	x  purge   x x — the second tap is the confirmation
 //
@@ -56,6 +56,7 @@ const (
 	keyEnqueue     = "t"   // enqueue a task for the scheduler to drain onto a free agent (bare t, the everyday sibling of T; C-t t in a zoom)
 	keyQueue       = "Q"   // open the task-queue manager popup (shift+q; C-t Q in a zoom)
 	keyUsage       = "v u" // cycle the account usage/cost footer segment
+	keyUsageView   = "v U" // open the account-usage overlay: the quota bars in full, and who is spending them
 	keyKeycast     = "v k" // toggle the key-press readout in the footer
 	keyPreview     = "v p" // toggle the dashboard's detail pane beside the tree
 	keyLens        = "v g" // cycle the dashboard's group-by lens: work item, directory, profile, state — bare z is the split's resize and nothing else
@@ -171,6 +172,7 @@ const (
 	actCommands
 	actScratch
 	actProcTree
+	actUsageView
 	actInbox
 
 	// Remote access. It is an escape — prefix-reached in every view — because the
@@ -259,6 +261,7 @@ var bindings = []binding{
 	{"scroll", keyScroll, "scroll mode — line / page (prefix)", actScroll, "View"},
 	{"dashboard", keyDashboard, "jump to the dashboard (prefix)", actDashboard, "View"},
 	{"proc-tree", keyProcTree, "process tree — the daemon's OS processes (prefix)", actProcTree, "View"},
+	{"usage-view", keyUsageView, "account usage — quota bars and who is spending them", actUsageView, "View"},
 	{"inbox", keyInbox, "the attention inbox — clear what needs a human (prefix)", actInbox, "View"},
 	{"remote", keyRemote, "remote access — the passkey and the live connections (prefix)", actRemote, "View"},
 	{"back", keyBack, "back one level: zoom→group→dashboard (C-t b in a zoom)", actBack, "View"},

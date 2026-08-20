@@ -40,8 +40,8 @@ func usageModel(mode usageMode) model {
 	}
 }
 
-// TestUsageModeCycle: U walks off → window → panel → off, so one key covers both
-// views without taking a second binding.
+// TestUsageModeCycle: U walks off → window → panel → limits → off, so one key
+// covers every view without taking a binding each.
 func TestUsageModeCycle(t *testing.T) {
 	seen := []usageMode{}
 	m := usageOff
@@ -49,7 +49,7 @@ func TestUsageModeCycle(t *testing.T) {
 		m = m.next()
 		seen = append(seen, m)
 	}
-	want := []usageMode{usageWindow, usagePanel, usageOff}
+	want := []usageMode{usageWindow, usagePanel, usageLimits, usageOff}
 	for i, w := range want {
 		if seen[i] != w {
 			t.Fatalf("cycle = %v, want %v", seen, want)
