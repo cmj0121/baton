@@ -100,40 +100,41 @@ Tastenbelegung zu bearbeiten.
 Vier Tasten sind _Landings_: Sie tun allein nichts und öffnen eine Familie — `n` startet, `v` zeichnet, `g` gruppiert,
 `x` ist der Doppeltipp, der sich selbst bestätigt — und die Statuszeile nennt, was jede als Nächstes annimmt.
 
-| Where       | Taste                 | Wirkung                                                            |
-| ----------- | --------------------- | ------------------------------------------------------------------ |
-| After `C-t` | `d` / `b`             | zum Dashboard springen / eine Ebene zurück                         |
-|             | `a`                   | Attention-Posteingang — erledigen, was einen Menschen braucht      |
-|             | `[`                   | in den Scroll-Modus wechseln                                       |
-|             | `l` / `L`             | Panel in eine Datei protokollieren / dieses Protokoll lesen        |
-|             | `R` / `S`             | Konfiguration neu laden / Server-Neustart erzwingen                |
-|             | `q`                   | abkoppeln (der Server läuft weiter)                                |
-| Dashboard   | `jk` / `↑↓`           | den Cursor bewegen                                                 |
-|             | `hl` / `←→`           | eine Karte weiter · im Baum: Work Item ein-/ausklappen             |
-|             | `space`               | zeigen / verbergen, was unter der Zeile verschachtelt ist          |
-|             | `v p` / `v g`         | Detailspalte / Gruppierung: Work Item, Verzeichnis, Profil, Status |
-|             | `v l`                 | das Dashboard-Layout: Karten oder Baum                             |
-|             | `m`                   | eine Zeile aufnehmen — Pfeile tragen sie, `enter` legt sie ab      |
-|             | `enter`               | die Auswahl öffnen / hineinzoomen                                  |
-|             | `p` / `A` / `n c`     | neues shell- / agent- / Befehlsauswahl-Panel                       |
-|             | `n .`                 | neues Shell-Panel im Verzeichnis des fokussierten Panels           |
-|             | `n C`                 | den Conductor öffnen (ein Agent, der die Flotte steuert)           |
-|             | `n h`                 | die Global Shell öffnen (eine Host-Shell in `$HOME`)               |
-|             | `w` / `x x`           | die Auswahl schließen / Beendete entfernen                         |
-|             | `r`                   | die beendeten Panels unter dem Fokus erneut ausführen              |
-|             | `g g` / `g c` / `g u` | markieren / markierte Panels gruppieren / Gruppierung aufheben     |
-|             | `s` / `f` / `D`       | der Auswahl ein Signal senden / sie finden / diffen                |
-|             | `/`                   | die Ausgabe jedes Panels durchsuchen (die Flotte greppen)          |
-|             | `T` / `Q`             | eine Task vergeben / die Task-Warteschlange verwalten              |
-|             | `v u`                 | Nutzungs-Fußzeile durchschalten: aus / Abrechnungsfenster / Panel  |
-|             | `v k`                 | die Tastenanzeige in der Fußzeile umschalten                       |
-| Group       | `tab`                 | das nächste Panel fokussieren                                      |
-|             | `+` / `-`             | mehr / weniger Live-Kacheln zeigen                                 |
-|             | `L`                   | das Kachel-Layout durchschalten                                    |
-|             | `p` / `i`             | das fokussierte Panel anpinnen / damit interagieren                |
-|             | `enter`               | das fokussierte Panel zoomen                                       |
-| Zoom        | tippen                | das Programm direkt steuern                                        |
-|             | `C-t f` / `C-t G`     | den Scrollback durchsuchen / Git-Menü (agent)                      |
+| Where       | Taste                 | Wirkung                                                             |
+| ----------- | --------------------- | ------------------------------------------------------------------- |
+| After `C-t` | `d` / `b`             | zum Dashboard springen / eine Ebene zurück                          |
+|             | `a`                   | Attention-Posteingang — erledigen, was einen Menschen braucht       |
+|             | `[`                   | in den Scroll-Modus wechseln                                        |
+|             | `l` / `L`             | Panel in eine Datei protokollieren / dieses Protokoll lesen         |
+|             | `R` / `S`             | Konfiguration neu laden / Server-Neustart erzwingen                 |
+|             | `q`                   | abkoppeln (der Server läuft weiter)                                 |
+| Dashboard   | `jk` / `↑↓`           | den Cursor bewegen                                                  |
+|             | `hl` / `←→`           | eine Karte weiter · im Baum: Work Item ein-/ausklappen              |
+|             | `space`               | zeigen / verbergen, was unter der Zeile verschachtelt ist           |
+|             | `v p` / `v g`         | Detailspalte / Gruppierung: Work Item, Verzeichnis, Profil, Status  |
+|             | `v l`                 | das Dashboard-Layout: Karten oder Baum                              |
+|             | `m`                   | eine Zeile aufnehmen — Pfeile tragen sie, `enter` legt sie ab       |
+|             | `enter`               | die Auswahl öffnen / hineinzoomen                                   |
+|             | `p` / `A` / `n c`     | neues shell- / agent- / Befehlsauswahl-Panel                        |
+|             | `n .`                 | neues Shell-Panel im Verzeichnis des fokussierten Panels            |
+|             | `n C`                 | den Conductor öffnen (ein Agent, der die Flotte steuert)            |
+|             | `n h`                 | die Global Shell öffnen (eine Host-Shell in `$HOME`)                |
+|             | `w` / `x x`           | die Auswahl schließen / Beendete entfernen                          |
+|             | `r`                   | die beendeten Panels unter dem Fokus erneut ausführen               |
+|             | `g g` / `g c` / `g u` | markieren / markierte Panels gruppieren / Gruppierung aufheben      |
+|             | `s` / `f` / `D`       | der Auswahl ein Signal senden / sie finden / diffen                 |
+|             | `/`                   | die Ausgabe jedes Panels durchsuchen (die Flotte greppen)           |
+|             | `T` / `Q`             | eine Task vergeben / die Task-Warteschlange verwalten               |
+|             | `v u`                 | Nutzungs-Fußzeile durchschalten: aus / Fenster / Panel / Kontingent |
+|             | `v U`                 | Kontonutzung — Kontingentbalken und wer sie verbraucht              |
+|             | `v k`                 | die Tastenanzeige in der Fußzeile umschalten                        |
+| Group       | `tab`                 | das nächste Panel fokussieren                                       |
+|             | `+` / `-`             | mehr / weniger Live-Kacheln zeigen                                  |
+|             | `L`                   | das Kachel-Layout durchschalten                                     |
+|             | `p` / `i`             | das fokussierte Panel anpinnen / damit interagieren                 |
+|             | `enter`               | das fokussierte Panel zoomen                                        |
+| Zoom        | tippen                | das Programm direkt steuern                                         |
+|             | `C-t f` / `C-t G`     | den Scrollback durchsuchen / Git-Menü (agent)                       |
 
 Die vollständige Tastenreferenz steht in **[docs/KEYS.md](KEYS.md)**, die Gestaltung hinter jeder Ansicht in
 **[docs/SPEC.md](SPEC.md)**.
@@ -191,6 +192,9 @@ Alles, wonach du beim Hüten einer Flotte greifen würdest, nur einen Tastendruc
   (`⊙ 1.2M tok · ≈$12.34 API`). Sie liest standardmäßig die Transcripts von Claude Code (funktioniert mit einem
   Pro/Max-Abo) oder mit einem Key die Anthropic Admin API. Die Kosten sind API-äquivalent, keine Abo-Gebühr.
   Siehe **[docs/USAGE.md](USAGE.md)**.
+- **Kontingentbalken** — `v u` schaltet auch die Kontingentbalken für das 5-Stunden- und das Wochenfenster durch, und
+  `v U` öffnet das vollständige Kontingent samt der Panels, die es verbrauchen. Das Kontingent stammt aus der
+  Statuszeile der Panels, die Baton umhüllt statt ersetzt. Siehe **[docs/USAGE.md](USAGE.md)**.
 - **Panel-Protokollierung** — `C-t l` leitet die Ausgabe eines Panels in eine Datei auf der Maschine, auf der die
   Flotte läuft, und schreibt zuerst den Replay-Puffer hinein, damit das erhalten bleibt, weswegen du die Taste
   gedrückt hast; `C-t L` liest es in einem temporären Panel zurück, das der Datei folgt. Klartext,

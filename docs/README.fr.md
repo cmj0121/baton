@@ -102,40 +102,41 @@ touches.
 Quatre touches sont des _landings_ : elles n'agissent pas seules et ouvrent une famille — `n` lance, `v` dessine,
 `g` groupe, `x` est le double appui qui se confirme lui-même — et la barre d'état annonce ce que chacune accepte ensuite.
 
-| Où              | Touche                | Action                                                                 |
-| --------------- | --------------------- | ---------------------------------------------------------------------- |
-| Après `C-t`     | `d` / `b`             | aller au tableau de bord / revenir d'un niveau                         |
-|                 | `a`                   | la boîte d'attention — traiter ce qui réclame un humain                |
-|                 | `[`                   | entrer en mode défilement                                              |
-|                 | `l` / `L`             | journaliser le panneau dans un fichier / relire ce journal             |
-|                 | `R` / `S`             | recharger la config / forcer le redémarrage du serveur                 |
-|                 | `q`                   | se détacher (le serveur continue de tourner)                           |
-| Tableau de bord | `jk` / `↑↓`           | déplacer le curseur                                                    |
-|                 | `hl` / `←→`           | changer de carte · dans l'arbre : replier / déplier un élément         |
-|                 | `space`               | afficher / masquer ce qui est imbriqué sous la ligne                   |
-|                 | `v p` / `v g`         | volet de détail / cycle du groupement : élément, dossier, profil, état |
-|                 | `v l`                 | la mise en page du tableau : cartes ou arbre                           |
-|                 | `m`                   | saisir une ligne — les flèches la portent, `enter` la dépose           |
-|                 | `enter`               | ouvrir / zoomer la sélection                                           |
-|                 | `p` / `A` / `n c`     | nouveau panneau shell / agent / choix de commande                      |
-|                 | `n .`                 | nouveau panneau shell dans le répertoire du panneau focalisé           |
-|                 | `n C`                 | ouvrir le conductor (un agent qui pilote la flotte)                    |
-|                 | `n h`                 | ouvrir le global shell (un shell hôte dans `$HOME`)                    |
-|                 | `w` / `x x`           | fermer la sélection / purger les panneaux terminés                     |
-|                 | `r`                   | relancer le ou les panneaux terminés sous le focus                     |
-|                 | `g g` / `g c` / `g u` | marquer / grouper les panneaux marqués / dégrouper                     |
-|                 | `s` / `f` / `D`       | envoyer un signal / rechercher / diff sur la sélection                 |
-|                 | `/`                   | chercher dans la sortie de chaque panneau (grep de la flotte)          |
-|                 | `T` / `Q`             | assigner une tâche / gérer la file de tâches                           |
-|                 | `v u`                 | faire défiler le pied de page d'usage : off / fenêtre / panneau        |
-|                 | `v k`                 | afficher/masquer le rappel des touches dans le pied de page            |
-| Groupe          | `tab`                 | passer au panneau suivant                                              |
-|                 | `+` / `-`             | afficher plus / moins de tuiles vivantes                               |
-|                 | `L`                   | faire défiler la disposition des tuiles                                |
-|                 | `p` / `i`             | épingler / interagir avec le panneau focalisé                          |
-|                 | `enter`               | zoomer le panneau focalisé                                             |
-| Zoom            | taper                 | piloter le programme directement                                       |
-|                 | `C-t f` / `C-t G`     | chercher dans l'historique / menu git (agent)                          |
+| Où              | Touche                | Action                                                                  |
+| --------------- | --------------------- | ----------------------------------------------------------------------- |
+| Après `C-t`     | `d` / `b`             | aller au tableau de bord / revenir d'un niveau                          |
+|                 | `a`                   | la boîte d'attention — traiter ce qui réclame un humain                 |
+|                 | `[`                   | entrer en mode défilement                                               |
+|                 | `l` / `L`             | journaliser le panneau dans un fichier / relire ce journal              |
+|                 | `R` / `S`             | recharger la config / forcer le redémarrage du serveur                  |
+|                 | `q`                   | se détacher (le serveur continue de tourner)                            |
+| Tableau de bord | `jk` / `↑↓`           | déplacer le curseur                                                     |
+|                 | `hl` / `←→`           | changer de carte · dans l'arbre : replier / déplier un élément          |
+|                 | `space`               | afficher / masquer ce qui est imbriqué sous la ligne                    |
+|                 | `v p` / `v g`         | volet de détail / cycle du groupement : élément, dossier, profil, état  |
+|                 | `v l`                 | la mise en page du tableau : cartes ou arbre                            |
+|                 | `m`                   | saisir une ligne — les flèches la portent, `enter` la dépose            |
+|                 | `enter`               | ouvrir / zoomer la sélection                                            |
+|                 | `p` / `A` / `n c`     | nouveau panneau shell / agent / choix de commande                       |
+|                 | `n .`                 | nouveau panneau shell dans le répertoire du panneau focalisé            |
+|                 | `n C`                 | ouvrir le conductor (un agent qui pilote la flotte)                     |
+|                 | `n h`                 | ouvrir le global shell (un shell hôte dans `$HOME`)                     |
+|                 | `w` / `x x`           | fermer la sélection / purger les panneaux terminés                      |
+|                 | `r`                   | relancer le ou les panneaux terminés sous le focus                      |
+|                 | `g g` / `g c` / `g u` | marquer / grouper les panneaux marqués / dégrouper                      |
+|                 | `s` / `f` / `D`       | envoyer un signal / rechercher / diff sur la sélection                  |
+|                 | `/`                   | chercher dans la sortie de chaque panneau (grep de la flotte)           |
+|                 | `T` / `Q`             | assigner une tâche / gérer la file de tâches                            |
+|                 | `v u`                 | faire défiler le pied de page d'usage : off / fenêtre / panneau / quota |
+|                 | `v U`                 | usage du compte — barres de quota, et qui les consomme                  |
+|                 | `v k`                 | afficher/masquer le rappel des touches dans le pied de page             |
+| Groupe          | `tab`                 | passer au panneau suivant                                               |
+|                 | `+` / `-`             | afficher plus / moins de tuiles vivantes                                |
+|                 | `L`                   | faire défiler la disposition des tuiles                                 |
+|                 | `p` / `i`             | épingler / interagir avec le panneau focalisé                           |
+|                 | `enter`               | zoomer le panneau focalisé                                              |
+| Zoom            | taper                 | piloter le programme directement                                        |
+|                 | `C-t f` / `C-t G`     | chercher dans l'historique / menu git (agent)                           |
 
 Voir **[docs/KEYS.md](KEYS.md)** pour la référence complète des touches, et **[docs/SPEC.md](SPEC.md)** pour la
 conception derrière chaque vue.
@@ -193,6 +194,9 @@ Tout ce dont vous avez besoin pour mener une flotte, à une frappe de distance :
   (`⊙ 1.2M tok · ≈$12.34 API`). Il lit par défaut les transcripts de Claude Code (fonctionne avec un abonnement Pro/Max) ou
   l'Anthropic Admin API avec une clé. Le coût est un équivalent API, pas un montant facturé sur l'abonnement. Voir
   **[docs/USAGE.md](USAGE.md)**.
+- **Barres de quota** — `v u` fait aussi défiler les barres de quota (fenêtre de 5 h et hebdomadaire) et `v U` ouvre
+  le quota complet ainsi que les panneaux qui le consomment. Le quota provient de la ligne de statut des panneaux, que
+  Baton enveloppe au lieu de la remplacer. Voir **[docs/USAGE.md](USAGE.md)**.
 - **Journalisation des panneaux** — `C-t l` dirige la sortie d'un panneau vers un fichier sur la machine où tourne la
   flotte, en y versant d'abord le tampon de relecture, si bien que ce qui vous a fait appuyer sur la touche est
   conservé ; `C-t L` le relit dans un panneau temporaire qui suit le fichier. Texte brut, séquences d'échappement

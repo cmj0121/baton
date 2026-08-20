@@ -60,6 +60,18 @@ agent accidents, not a sandbox against a hostile program:
   off, are refused over a remote attach — that is the one asymmetry, and it exists so a live remote connection cannot
   turn its window into a permanent one.
 
+- **The usage `oauth` source reads a credential** ([docs/USAGE.md](docs/USAGE.md)).
+  It is **opt-in** — nothing reads a credential unless you set `usage.limits: oauth`
+  — and the default source reads none at all. When it is on, baton reads Claude
+  Code's OAuth **access** token from `~/.claude/.credentials.json`, or from the login
+  keychain on macOS, which may prompt you: that prompt is the operating system doing
+  the right thing, because baton is asking for somebody's credential and that should
+  be a visible act. The token is read per request, sent only to the one constant host
+  `api.anthropic.com`, never written anywhere, and never placed in a log line or an
+  error string — an error outlives the process and ends up in bug reports. The
+  **refresh** token is never decoded at all, because a reader that cannot load it
+  cannot leak it. What this is not: an authorization boundary. Anything running as
+  your uid can read the same file and run the same keychain lookup.
 - **Panel logs** ([docs/LOGGING.md](docs/LOGGING.md)) are plain-text transcripts
   the daemon writes into a directory you named, as you, with mode 0600. They are
   a record, not an audit trail: anything that can reach your uid — including the

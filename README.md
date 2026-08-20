@@ -124,7 +124,8 @@ each can take next.
 |             | `s` / `f` / `D`   | signal / find / diff the selection                           |
 |             | `/`               | search every panel's output (grep the fleet)                 |
 |             | `T` / `Q`         | dispatch a task / manage the task queue                      |
-|             | `v u`             | cycle the usage footer: off / window / focused panel         |
+|             | `v u`             | cycle the usage footer: off / window / focused panel / quota |
+|             | `v U`             | account usage — quota bars, and who is spending them         |
 |             | `v k`             | toggle the key-press readout in the footer                   |
 | Group       | `tab`             | focus the next panel                                         |
 |             | `+` / `-`         | show more / fewer live tiles                                 |
@@ -185,10 +186,12 @@ Everything you'd reach for while shepherding a fleet, a keystroke away:
   **[docs/RESTART.md](docs/RESTART.md)**.
 - **Appearance** — `$HOME/.baton/TUI.yaml` reshapes the cockpit: a colour **theme** and the group-split **layouts**,
   hot-reloaded with `C-t R`. See **[docs/TUI.md](docs/TUI.md)**.
-- **Usage footer** — `v u` cycles a footer readout of the billing window: the account's token usage and cost with a
-  countdown to the reset (`⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31`), or the focused panel's share of that window. It
-  reads Claude Code's own transcripts by default (works on a Pro/Max subscription) or the Anthropic Admin API with a key.
-  The cost is API-equivalent, not a subscription charge. See **[docs/USAGE.md](docs/USAGE.md)**.
+- **Usage and quota** — `v u` cycles a footer readout: the billing window's token usage and cost with a countdown
+  (`⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31`), the focused panel's share of it, or your account's **rate-limit bars**
+  (`⊙ 5h ▓▓▓▓░░ 62% 2:14:31 · 7d ▓▓░░░░ 34% 3d 04:12`). `v U` opens the lot — every quota window, the extra-usage
+  credit, and which panels are eating them. The totals come from Claude Code's transcripts (so they can be traced to a
+  panel); the quota comes from the panels' own status line, which Baton wraps rather than replaces. See
+  **[docs/USAGE.md](docs/USAGE.md)**.
 - **Panel logging** — `C-t l` pipes a panel's output to a file on the machine the fleet runs on, flushing the replay
   buffer in first so you keep what made you press it; `C-t L` reads it back in a temporary panel that follows the file.
   Plain text, escape sequences stripped, rolled at `log-max-mb`. Off until you set `panel.log-dir`; a profile can log
@@ -248,7 +251,7 @@ through one `baton` object. See **[docs/PLUGIN.md](docs/PLUGIN.md)**.
   roll, and what it is not a boundary for.
 - **[docs/REMOTE.md](docs/REMOTE.md)** — remote access over SSH: the `--stdio` bridge, the passkey and what it is and
   is not, the `C-t @` connection list, and the failures it reports.
-- **[docs/USAGE.md](docs/USAGE.md)** — the account usage footer: the local and Admin-API sources, config, and caveats.
+- **[docs/USAGE.md](docs/USAGE.md)** — the account usage footer and quota bars: every source, the config, and caveats.
 - **[docs/PLUGIN.md](docs/PLUGIN.md)** — the Lua plugin API: the `baton` object, events, commands, and config.
 - **[docs/CONTROL.md](docs/CONTROL.md)** — driving the fleet by agent: the conductor, the `baton ctl` CLI, the
   `baton mcp` tools, and the guardrails.

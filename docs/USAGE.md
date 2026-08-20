@@ -2,33 +2,80 @@
 
 **English** · [繁體中文](USAGE.zh-TW.md)
 
-Baton can show your account's **token usage over the current billing window** as
-a footer segment in every view, together with **how long is left before it
-resets**:
+Baton shows two different things about your account, and the difference is the
+point:
+
+- **What you have spent** — tokens over the current billing window, and their
+  API-equivalent cost. Baton counts these itself, out of Claude Code's
+  transcripts, which is the only way they can be traced back to the panel that
+  spent them.
+- **How much of your quota is gone** — the 5-hour and weekly rate-limit windows,
+  as progress bars with the countdown to each reset. This is the vendor's own
+  reading of the account, and no amount of token arithmetic can produce it.
+
+The first answers "who is burning it". The second answers "is there anything left
+to burn". A fleet needs both.
 
 ```text
 ⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31
+⊙ 5h ▓▓▓▓░░ 62% 2:14:31 · 7d ▓▓░░░░ 34% 3d 04:12
 ```
 
-Press **`v u`** to cycle the segment through its views. The choice persists.
+Press **`v u`** to cycle the footer segment through its views, and **`v U`** to
+open the whole picture. The choice persists.
 
-| View     | Shows                                                               | Answers                  |
-| -------- | ------------------------------------------------------------------- | ------------------------ |
-| `window` | The account's spend, and the countdown to the window's reset        | "Am I going to make it?" |
-| `panel`  | The focused panel's (or group's) spend, and its share of the window | "Who is burning it?"     |
-| `off`    | Nothing                                                             | —                        |
-
-The second view is the one a fleet needs. With a dozen agents running and two
-hours left, the decision is which one to stop — and that takes a **share of the
-window**, not a raw token count.
+| View     | Shows                                                               | Answers                   |
+| -------- | ------------------------------------------------------------------- | ------------------------- |
+| `window` | The account's spend, and the countdown to the window's reset        | "Am I going to make it?"  |
+| `panel`  | The focused panel's (or group's) spend, and its share of the window | "Who is burning it?"      |
+| `limits` | The 5h and weekly quota bars, each with its countdown               | "Is there anything left?" |
+| `off`    | Nothing                                                             | —                         |
 
 The cost is written `≈…$ API` on purpose: it is the **API-equivalent** price of
 the tokens, not a bill. See [What it is — and is not](#what-it-is--and-is-not).
 
+## The quota overlay
+
+`v U` opens the account's standing in full: every window the source reported, the
+extra-usage balance if you have one, and the panels spending them.
+
+```text
+ A C C O U N T   U S A G E   statusline · 12s ago
+
+ Session (5h)     ▓▓▓▓▓▓▓▓▓▓░░░░░░  62%   resets 2:14:31
+ Week (all)       ▓▓▓▓▓░░░░░░░░░░░  34%   resets 3d 04:12
+ Week (Opus)      ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░  91%   resets 3d 04:12
+ Extra credit     ▓▓▓░░░░░░░░░░░░░  18%   $11.70 / $65.00
+
+ Burning this window          share      tokens    of 5h
+ ▸ zerg / agent-2               67%  800.0K tok      41%
+ ▸ baton / conductor            25%  300.0K tok      16%
+```
+
+The last column is what the overlay exists for. A panel's **share of the
+window's tokens** is baton's own reading and says nothing about limits; the
+**5-hour utilisation** is the vendor's and says nothing about panels. Multiplied,
+they say how much of your actual ceiling one panel has eaten — which is what
+"which one do I stop" is really asking.
+
+A window the source did not report gets **no row at all**, and a bar never rests
+at 0% to stand in for one: an empty bar reads as a full tank, on an account that
+might be minutes from a refusal.
+
+The header says how old the reading is. That matters because the default source
+is a **push** (see below): it arrives when a panel renders and stops arriving
+when the fleet goes quiet, so a reading can be perfectly true and half an hour
+old. Past five minutes the footer marks it with a leading `~`.
+
 ## Data sources
 
-There are two sources, because "your usage" means different things depending on
-how you run your agents. Baton picks one with the `usage.source` setting.
+There are two settings, because the two halves come from different places.
+`usage.source` picks where the **token totals** come from; `usage.limits` picks
+where the **quota bars** come from. They are independent — the totals can be
+attributed to a panel and the quota never can, and the quota knows a ceiling the
+totals cannot see.
+
+### Token totals — `usage.source`
 
 | Source  | Reads                                                            | Works for                                                   |
 | ------- | ---------------------------------------------------------------- | ----------------------------------------------------------- |
@@ -48,6 +95,59 @@ The **api** source reports your whole organization's Console/API-key billing fro
 the Admin API. It needs an **Admin API key** (`sk-ant-admin01-…`), which Baton
 reads from the `BATON_ANTHROPIC_ADMIN_KEY` environment variable — never from the
 config file. Data lags real usage by about five minutes.
+
+### Quota bars — `usage.limits`
+
+| Source       | Reads                                                | Gives you                                      |
+| ------------ | ---------------------------------------------------- | ---------------------------------------------- |
+| `statusline` | The status line of the Claude Code panels Baton runs | 5h + weekly windows                            |
+| `oauth`      | The account usage endpoint, directly                 | …plus per-model weekly, and the credit balance |
+| `off`        | Nothing                                              | —                                              |
+
+**`statusline` is the default, and it costs nothing.** Claude Code hands its whole
+session state to whatever command is configured as its status line, and that state
+carries the account's rate-limit windows. Baton is already launching the panels, so
+it launches them with `baton usage-sink` as their status line: no network call, no
+credential, no token spent.
+
+It **wraps** your status line rather than replacing it. Baton resolves whatever you
+configured — `.claude/settings.local.json`, then the project's `.claude/settings.json`,
+then `~/.claude/settings.json` — and runs it with the same input, printing its output
+verbatim. **A panel inside Baton renders exactly what it would outside one.** Three
+cases end in no injection at all, because each would change something that is not
+Baton's to change:
+
+- the panel is not Claude Code (no other agent CLI has the flag);
+- you passed `--settings` yourself in the panel's arguments;
+- your status line is in a form Baton cannot reproduce.
+
+> **If you have no status line configured, Baton's injection adds one** — a row that
+> was not there, showing the quota bars. Claude Code hides some of its footer key
+> hints (`esc to interrupt`, `? for shortcuts`) whenever any status line is set, so
+> this is a visible change. Set `usage.limits: off` if you would rather keep the
+> hints.
+
+The reading only appears **on a Claude.ai subscription (Pro/Max), and only after a
+session's first API response** — that is Claude Code's own contract, not Baton's.
+Until then there is nothing to show, and Baton shows nothing.
+
+**`oauth` is opt-in, and it is the only way to see the extra-usage credit balance
+or the per-model weekly ceilings.** It queries the account usage endpoint directly.
+That buys more, and costs more:
+
+- It reads your Claude Code **OAuth access token** — from `~/.claude/.credentials.json`,
+  or the login keychain on macOS. Baton reads it per request, sends it to one fixed
+  host, never writes it anywhere, and never puts it in a log or an error. The refresh
+  token is never even decoded. See [SECURITY.md](../SECURITY.md).
+- The endpoint is **not a documented API**. It can change or vanish, so every failure
+  degrades to "no reading" rather than to a wrong one.
+- It is **rate-limited hard**. Baton fetches at most once every three minutes — a floor
+  the config cannot lower — and a refusal backs off to as much as half an hour rather
+  than retrying. Asking too often would spend the very quota it exists to report on.
+
+Whichever source is used, a failure **holds the last reading** rather than blanking
+it. A refused endpoint or a quiet fleet has not made the quota untrue; it has only
+stopped Baton hearing about it, which is what the age in the header is for.
 
 ## The window, and the countdown
 
@@ -124,6 +224,7 @@ The main config (`$HOME/.baton/config`):
 ```yaml
 usage:
   source: auto # auto | local | api  (auto: api when an admin key is set, else local)
+  limits: statusline # statusline | oauth | off — where the quota bars come from
   interval: 30 # refresh seconds; 0 = default (30s local / 60s api); clamped to ≥ 10
   window: 5h # window length once use opens one; 0 = no countdown, calendar day
   countdown-format: auto # auto (2:14:31, widening to 3d 04:12) | dd:hh:mm
@@ -131,7 +232,7 @@ usage:
   alarm-at: 0.9 # …and red
 
 settings:
-  usage-mode: window # off | window | panel  (also cycled live with U)
+  usage-mode: window # off | window | panel | limits  (also cycled live with `v u`)
 ```
 
 `window` is configurable rather than baked in because plans differ and the vendor
@@ -160,9 +261,15 @@ the server (`C-t S`) to pick it up. The `v u` cycle is live.
 - **Cost is API-equivalent, not a bill.** The figure prices your tokens at the
   published per-model rates. On a flat-rate Pro/Max subscription that is a "what
   this would cost on the API" gauge, not what you are charged.
-- **It does not show remaining quota.** There is no API for a subscription's
-  remaining allowance, so Baton reports what you have _consumed_ in the window,
-  and how long the window has left — not how many tokens are left in it.
+- **The quota bars are percentages, not token counts.** Anthropic reports how much
+  of each window is _used_ and when it resets — never an absolute allowance. So
+  Baton can tell you that 62% of your 5-hour window is gone; it cannot tell you how
+  many tokens that leaves, and neither can anything else.
+- **`warn-at` / `alarm-at` mean two things.** In the `window` view they colour by how
+  far into the window the clock has run, because the spend has no ceiling to compare
+  against. In the `limits` view they colour by the **fullest window** — there is a
+  ceiling there, and an account at 90% with four hours left is in far more trouble
+  than one at 20% with ten minutes left.
 - **The local source covers Claude Code only.** Other agent CLIs (Copilot, …)
   are not in the transcripts, so they are not counted.
 - **The api source needs an organization.** The Admin API is unavailable for

@@ -127,7 +127,8 @@ Cuatro teclas son _landings_: no hacen nada por sí solas y abren una familia �
 |             | `s` / `f` / `D`       | enviar señal / buscar / diff de la selección                          |
 |             | `/`                   | buscar en la salida de todos los paneles (grep a la flota)            |
 |             | `T` / `Q`             | despachar una tarea / gestionar la cola de tareas                     |
-|             | `v u`                 | alternar el pie de uso: apagado / ventana / panel enfocado            |
+|             | `v u`                 | alternar el pie de uso: apagado / ventana / panel enfocado / cuota    |
+|             | `v U`                 | uso de la cuenta — barras de cuota y quién las consume                |
 |             | `v k`                 | alternar el indicador de teclas en el pie                             |
 | Group       | `tab`                 | dar el foco al siguiente panel                                        |
 |             | `+` / `-`             | mostrar más / menos mosaicos en vivo                                  |
@@ -192,6 +193,9 @@ Todo lo que necesitas mientras pastoreas una flota, a una tecla de distancia:
   defecto lee las propias transcripciones de Claude Code (funciona con una suscripción Pro/Max) o la Admin API de
   Anthropic con una clave. El coste es el equivalente en API, no un cargo de la suscripción. Consulta
   **[docs/USAGE.md](USAGE.md)**.
+- **Barras de cuota** — `v u` también recorre las barras de cuota de la ventana de 5 h y la semanal, y `v U` abre la
+  cuota completa junto con los paneles que la consumen. La cuota procede de la línea de estado de los propios paneles,
+  que Baton envuelve en lugar de reemplazar. Ver **[docs/USAGE.md](USAGE.md)**.
 - **Registro de paneles** — `C-t l` envía la salida de un panel a un archivo en la máquina donde corre la flota,
   volcando primero el búfer de repetición, de modo que se conserva justo aquello que te hizo pulsar la tecla; `C-t L`
   lo relee en un panel temporal que sigue el archivo. Texto plano, secuencias de escape eliminadas, rotación en
