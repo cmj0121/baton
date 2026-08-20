@@ -16,10 +16,11 @@ agent, grouped into the tasks they belong to, any one a keystroke away.
 
 You hold the baton. The agents play. You conduct. 🎼
 
-![Baton cockpit demo — panels on a dashboard, zoom to drive one, group into a work item, open the conductor and the global shell](docs/assets/baton-demo.png)
+![Baton cockpit demo — the key list, then panels spawned, the conductor opened, two panels grouped into a work item, and the same ? pressed again in the split and in the zoom](docs/assets/baton-demo.png)
 
-_Spawn panels, zoom into one to drive it, group two into a work item, call the conductor with `n C` and the global shell with
-`n h` — and `?` is always there for the keys._
+_Press `?` before anything else: the key list is tabbed by purpose, and it is the list of the view you are standing in. Then
+spawn panels, call the conductor with `n C`, mark two with `g g` and group them with `g c` — and press `?` again in the
+split, and `C-t ?` in the zoom. Same key, three different tables. `v l` and `v p` close it out on the tree._
 
 _Clip generated from [`baton-demo.tape`](docs/assets/baton-demo.tape) — regeneration steps are in the tape header. The
 conductor's agent CLI is a stand-in ([`demo-agent.sh`](docs/assets/demo-agent.sh)) so the clip records the same on any

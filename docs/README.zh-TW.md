@@ -16,10 +16,11 @@ agent,依所屬任務分組,任何一個都只差一個按鍵。
 
 指揮棒在你手上,agent 們負責演奏,你來指揮。🎼
 
-![Baton 座艙示範——儀表板上的面板、放大以驅動其中一個、把兩個併成一個工作項目、開啟 conductor 與 global shell](assets/baton-demo.png)
+![Baton 座艙示範——先叫出鍵表、開面板、開啟 conductor、把兩個併成工作項目,再於分割畫面與 zoom 裡按同一個 ? 鍵](assets/baton-demo.png)
 
-_開面板、放大進其中一個來操作、把兩個併成一個工作項目、用 `n C` 叫出 conductor、用 `n h` 叫出 global shell——而 `?`
-隨時都在,告訴你按鍵。_
+_什麼都還沒做,先按 `?`:鍵表依用途分頁,而且它是你當下所在那個畫面的鍵表。接著開面板、用 `n C` 叫出 conductor、用
+`g g` 標記兩個再用 `g c` 併成工作項目——然後在分割畫面裡再按一次 `?`,在 zoom 裡按 `C-t ?`。同一個鍵,三張不同的表。
+最後用 `v l` 與 `v p` 收在樹狀檢視上。_
 
 _影片由 [`baton-demo.tape`](assets/baton-demo.tape) 產生——重製步驟寫在該 tape 檔的檔頭。片中 conductor 的
 agent CLI 是替身([`demo-agent.sh`](assets/demo-agent.sh)),好讓任何機器都錄得出同一支影片;它透過 socket

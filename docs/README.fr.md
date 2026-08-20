@@ -16,10 +16,12 @@ bord en direct de chaque agent, regroupé selon les tâches auxquelles ils appar
 
 Vous tenez la baguette. Les agents jouent. Vous dirigez. 🎼
 
-![Démo du cockpit Baton — des panneaux sur un tableau de bord, zoom pour en piloter un, regroupement en élément de travail, ouverture du conductor et du global shell](assets/baton-demo.png)
+![Démo du cockpit Baton — la liste des touches, des panneaux ouverts, le conductor appelé, deux panneaux regroupés en élément de travail, et le même ? pressé de nouveau dans la vue divisée et dans le zoom](assets/baton-demo.png)
 
-_Ouvrez des panneaux, zoomez sur l'un d'eux pour le piloter, regroupez-en deux en un élément de travail, appelez le
-conductor avec `n C` et le global shell avec `n h` — et `?` est toujours là pour les touches._
+_Appuyez sur `?` avant toute chose : la liste des touches est répartie en onglets par usage, et c'est celle de la vue où
+vous vous trouvez. Ouvrez ensuite des panneaux, appelez le conductor avec `n C`, marquez-en deux avec `g g` et regroupez-les
+avec `g c` — puis appuyez de nouveau sur `?` dans la vue divisée, et sur `C-t ?` dans le zoom. Même touche, trois tableaux
+différents. `v l` et `v p` concluent sur l'arborescence._
 
 _Clip généré à partir de [`baton-demo.tape`](assets/baton-demo.tape) — les étapes de régénération sont dans l'en-tête du
 fichier tape. Le CLI d'agent du conductor est une doublure ([`demo-agent.sh`](assets/demo-agent.sh)) afin que le clip

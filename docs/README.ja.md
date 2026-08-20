@@ -17,10 +17,11 @@ Baton と AI agent の関係は、tmux と shell の関係と同じです。**�
 
 指揮棒はあなたの手の中に。agent たちが演奏し、あなたが指揮する。🎼
 
-![Baton コックピットのデモ——ダッシュボード上の panel、1 つにズームして操作、2 つを work item にまとめる、conductor と global shell を開く](assets/baton-demo.png)
+![Baton コックピットのデモ——まずキー一覧、panel を起こし、conductor を開き、2 つを work item にまとめ、分割表示と zoom で同じ ? をもう一度](assets/baton-demo.png)
 
-_panel を起こし、1 つにズームして操作し、2 つを work item にまとめ、`n C` で conductor を、`n h` で global shell を
-呼び出す——そして `?` はいつでもそこにあり、キーを教えてくれます。_
+_何よりも先に `?` を押します——キー一覧は目的ごとにタブ分けされていて、いま立っている view のものが出ます。続けて panel
+を起こし、`n C` で conductor を呼び、`g g` で 2 つを選んで `g c` で work item にまとめ——分割表示でもう一度 `?`、zoom
+では `C-t ?`。同じキーで、三つの違う表。最後は `v l` と `v p` でツリーに落ち着きます。_
 
 _この映像は [`baton-demo.tape`](assets/baton-demo.tape) から生成されています——再生成の手順は tape のヘッダに
 あります。conductor の agent CLI は代役([`demo-agent.sh`](assets/demo-agent.sh))で、どのマシンでも同じ映像を
