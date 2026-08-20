@@ -4,6 +4,26 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v1.3.0](https://github.com/cmj0121/baton/releases/tag/v1.3.0) — how much is left
+
+2026-08-20
+
+- **The account's quota, as bars** — `v u` gains a fourth view: the 5-hour and weekly rate-limit windows with a
+  countdown to each reset. The footer could say what you had spent; it can now say whether the next turn will be
+  refused, which is the number a fleet is actually run against.
+- **`v U` opens it in full** — every window the source reported, the per-model weekly ceilings, the extra-usage credit
+  balance, and the panels spending them. The last column is a panel's share of the window against how much of the
+  five-hour quota is gone: how much of your real ceiling one agent has eaten.
+- **The reading costs nothing** — Claude Code hands its session state to whatever runs as its status line, so Baton
+  launches its panels **wrapping** the status line you already had. No network call, no credential, no token spent, and
+  a panel inside Baton renders exactly what it would outside one. `usage.limits: oauth` opts into the account endpoint
+  instead — the only source for the credit balance, and the only one that reads a credential.
+- **Absent stays absent** — a window no source reported gets no row, a countdown past its reset goes away rather than
+  resting at `0:00:00`, and a reading nobody has restated in five minutes is marked rather than dropped or trusted. A
+  bar at 0% would assert a full tank on an account minutes from a refusal.
+- **The countdown settles into two shapes** — `2:12:23` under a day, `2d8h` past it. `usage.countdown-format` is gone;
+  an old config that still carries it is ignored, not an error.
+
 ## [v1.2.1](https://github.com/cmj0121/baton/releases/tag/v1.2.1) — press it to find it
 
 2026-08-19
