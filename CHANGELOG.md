@@ -4,6 +4,22 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v1.3.1](https://github.com/cmj0121/baton/releases/tag/v1.3.1) — one fleet per machine
+
+2026-08-21
+
+- **One backend per user** — the control socket was named after the caller's login session, so opening baton in a
+  second terminal started a second daemon instead of attaching to the fleet you already had. It is now one fixed path
+  (`$XDG_RUNTIME_DIR/baton/baton.sock`, or `$HOME/.baton/baton.sock`), so the first launch starts the daemon and every
+  launch after it attaches another cockpit to the backend already running.
+- **The guards finally mean what they said** — the session lock, the stale-socket sweep and the liveness probe are all
+  keyed on the socket path, so they had only ever enforced one backend per terminal. A race between two cold starts
+  against a socket a crash left behind is still settled by the advisory lock rather than by whoever binds first.
+- **The remote bridge stops guessing** — `baton --stdio` used to scan the runtime dir for the newest socket that
+  answered, because sshd runs it in a session of its own. With one fixed path there is nothing to search.
+- **Upgrading** — a daemon started by an older baton keeps running on its `baton-<sid>.sock` and is not found by this
+  one; stop it before starting the new fleet. `BATON_SOCK` still overrides the path for a deliberately separate fleet.
+
 ## [v1.3.0](https://github.com/cmj0121/baton/releases/tag/v1.3.0) — how much is left
 
 2026-08-20
