@@ -71,9 +71,10 @@ func TestBridgeSocketHonoursAnExplicitChoice(t *testing.T) {
 	}
 }
 
-// TestBridgeSocketFindsTheRunningFleet is the reason the bridge cannot just call
-// paths.Socket(): sshd runs it in a session of its own, so the per-session path
-// names a socket nothing has ever bound.
+// TestBridgeSocketFindsTheRunningFleet: the bridge attaches to the fleet already
+// running on the host. sshd runs it in a session of its own, which used to matter
+// when the socket name carried a session id; now the path is fixed per user, so
+// resolving it is all the discovery the bridge needs.
 func TestBridgeSocketFindsTheRunningFleet(t *testing.T) {
 	dir := shortDir(t)
 	t.Setenv("XDG_RUNTIME_DIR", dir)
@@ -82,12 +83,7 @@ func TestBridgeSocketFindsTheRunningFleet(t *testing.T) {
 	}
 	t.Setenv(paths.EnvSocket, "")
 
-	// A stale socket file from a crashed daemon, and a live one beside it.
-	stale := filepath.Join(dir, "baton", "baton-1.sock")
-	if err := os.WriteFile(stale, nil, 0o600); err != nil {
-		t.Fatalf("write stale socket: %v", err)
-	}
-	live := liveFleet(t, filepath.Join(dir, "baton"), "baton-2.sock")
+	live := liveFleet(t, filepath.Join(dir, "baton"), "baton.sock")
 
 	got, err := bridgeSocket(0, filepath.Join(dir, "baton.log"), "")
 	if err != nil {

@@ -3,7 +3,6 @@ package paths
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -113,21 +112,13 @@ func TestWriteFileAtomicParentSyncTolerated(t *testing.T) {
 	}
 }
 
-// TestSessionIDPositive pins that sessionID resolves to a positive integer via
-// the getsid path (the common case), so Socket carries a stable per-session id.
-func TestSessionIDPositive(t *testing.T) {
-	if id := sessionID(); id <= 0 {
-		t.Fatalf("sessionID() = %d, want a positive session/ppid", id)
-	}
-}
-
-// TestSocketCarriesSessionID ties Socket's default path to sessionID so the
-// socket name is unique per login session.
-func TestSocketCarriesSessionID(t *testing.T) {
+// TestSocketIsOneFixedPathPerUser pins the whole point of the socket name: it
+// carries no session id, so `baton` launched from any terminal resolves the same
+// path and attaches to the one backend instead of starting a second one.
+func TestSocketIsOneFixedPathPerUser(t *testing.T) {
 	t.Setenv("BATON_SOCK", "")
 	t.Setenv("XDG_RUNTIME_DIR", "/run/user/7")
-	got := Socket()
-	if !strings.Contains(got, "/baton/baton-") || !strings.HasSuffix(got, ".sock") {
-		t.Fatalf("Socket() = %q, want a /baton/baton-<id>.sock name", got)
+	if got, want := Socket(), "/run/user/7/baton/baton.sock"; got != want {
+		t.Fatalf("Socket() = %q, want %q", got, want)
 	}
 }

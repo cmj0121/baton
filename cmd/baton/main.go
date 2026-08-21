@@ -1,14 +1,15 @@
 // Command baton is an agent-friendly terminal multiplexer.
 //
-// Running `baton` starts the background server for this login session (if one is
-// not already running) and attaches a cockpit to it.
+// Running `baton` starts the background server for this user (if one is not
+// already running) and attaches a cockpit to it. There is one backend per user on
+// a machine, so a second `baton` — from any terminal — attaches to the same fleet.
 //
-//	-l, --log FILE  write logs to FILE (default: a per-session file)
+//	-l, --log FILE  write logs to FILE (default: $HOME/.baton/baton.log)
 //	-v, -vv         increase log verbosity
 //	-h, --help      show help and exit
 //	-V, --version   show the version and exit
 //
-// Two subcommands drive the fleet over the session's socket without the cockpit:
+// Two subcommands drive the fleet over the control socket without the cockpit:
 // `baton ctl` is a thin control client for a human or a script (see ctl.go), and
 // `baton mcp` is a Model Context Protocol server an agent's .mcp.json launches so
 // it can spawn, group, signal, and send prompts to panels (see mcp.go).
@@ -117,7 +118,7 @@ func main() {
 }
 
 // resolveLogPath picks the log file: the explicit --log flag when set, otherwise
-// the per-session default. An empty flag means "use the default".
+// the shared default. An empty flag means "use the default".
 func resolveLogPath(flag string) string {
 	if flag != "" {
 		return flag
@@ -143,8 +144,8 @@ func claimDaemonRole() bool {
 	return true
 }
 
-// attach starts the session's server if needed, then runs the cockpit. With
-// force, any running server is stopped first so the session comes up fresh. An
+// attach starts the user's server if needed, then runs the cockpit. With force,
+// any running server is stopped first so the fleet comes up fresh. An
 // explicit plugin path is handed to the daemon child through BATON_PLUGIN.
 func attach(verbose int, logPath, pluginPath string, force bool) error {
 	if force {
@@ -158,8 +159,8 @@ func attach(verbose int, logPath, pluginPath string, force bool) error {
 	return runClient(verbose, logPath, pluginPath)
 }
 
-// stopDaemon force-stops this session's running daemon, if any, and waits for it
-// to release the socket. It is a no-op (bar tidying a stale socket) when no
+// stopDaemon force-stops the running daemon, if any, and waits for it to release
+// the socket. It is a no-op (bar tidying a stale socket) when no
 // server is alive.
 func stopDaemon(sock string) error {
 	if !alive(sock) {
@@ -205,8 +206,8 @@ func setupLogger(verbosity int, logPath string) error {
 	return nil
 }
 
-// startDaemon ensures this session's server is running, launching it in the
-// background if not. Exactly one server runs per login session (one socket).
+// startDaemon ensures this user's server is running, launching it in the
+// background if not. Exactly one server runs per user (one socket).
 func startDaemon(verbose int, logPath, pluginPath string) error {
 	sock := paths.Socket()
 	if alive(sock) {
@@ -230,8 +231,8 @@ func startDaemon(verbose int, logPath, pluginPath string) error {
 	}
 	defer func() { _ = logf.Close() }()
 
-	// Re-exec ourselves as the daemon, pinned to this session's socket and log
-	// file and carrying the same verbosity.
+	// Re-exec ourselves as the daemon, pinned to the control socket and log file
+	// and carrying the same verbosity.
 	proc := exec.Command(exe, daemonArgs(logPath, verbose)...)
 	proc.Env = daemonEnviron(os.Environ(), sock, pluginPath)
 	proc.Stdout = logf
@@ -255,7 +256,7 @@ func runServer() error {
 		return fmt.Errorf("prepare socket dir: %w", err)
 	}
 
-	// One backend per session, decided here rather than by who reaches bind first
+	// One backend per user, decided here rather than by who reaches bind first
 	// (see claimSession). Losing is ordinary — every cockpit starting at once
 	// tries to bring a backend up — so it is not reported as a failure: the
 	// winner's socket is what they all attach to.
@@ -286,7 +287,7 @@ func runServer() error {
 	return runServerOn(ln, sock)
 }
 
-// buildServerOptions projects the hot-reloadable settings and the per-session
+// buildServerOptions projects the hot-reloadable settings and the persisted
 // state file onto the server's construction options. The replay-buffer option is
 // added only when the config sets a positive size, leaving the server's built-in
 // default in place otherwise.
@@ -741,7 +742,7 @@ func alive(sock string) bool {
 
 // clearStaleSocket removes a leftover socket (and its orphaned PID file) from a
 // crashed server, but refuses to clobber a live one — enforcing one server per
-// session. A SIGKILLed daemon never runs its own cleanup, so we tidy both files
+// socket. A SIGKILLed daemon never runs its own cleanup, so we tidy both files
 // here before a fresh daemon takes the session.
 func clearStaleSocket(sock string) error {
 	if _, err := os.Stat(sock); err != nil {
@@ -826,7 +827,7 @@ func daemonArgs(logPath string, verbose int) []string {
 
 // daemonEnviron builds the environment for the re-executed daemon child from a
 // base environment (normally os.Environ()): it marks the child with daemonEnv=1
-// and pins it to this session's socket. A non-empty pluginPath is carried across
+// and pins it to the control socket. A non-empty pluginPath is carried across
 // the re-exec via BATON_PLUGIN, because the re-sessioned child cannot see the
 // parent's --plugin flag.
 func daemonEnviron(base []string, sock, pluginPath string) []string {

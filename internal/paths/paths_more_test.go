@@ -17,9 +17,8 @@ func TestSocketUsesEnvOverride(t *testing.T) {
 func TestSocketUsesXDGRuntimeDir(t *testing.T) {
 	t.Setenv("BATON_SOCK", "")
 	t.Setenv("XDG_RUNTIME_DIR", "/run/user/42")
-	got := Socket()
-	if !strings.HasPrefix(got, "/run/user/42/baton/baton-") || !strings.HasSuffix(got, ".sock") {
-		t.Fatalf("Socket() = %q, want it under XDG_RUNTIME_DIR/baton", got)
+	if got, want := Socket(), "/run/user/42/baton/baton.sock"; got != want {
+		t.Fatalf("Socket() = %q, want %q", got, want)
 	}
 }
 
@@ -27,9 +26,8 @@ func TestSocketFallsBackToHome(t *testing.T) {
 	t.Setenv("BATON_SOCK", "")
 	t.Setenv("XDG_RUNTIME_DIR", "")
 	t.Setenv("HOME", "/home/tester")
-	got := Socket()
-	if !strings.HasPrefix(got, "/home/tester/.baton/baton-") {
-		t.Fatalf("Socket() = %q, want it under $HOME/.baton", got)
+	if got, want := Socket(), "/home/tester/.baton/baton.sock"; got != want {
+		t.Fatalf("Socket() = %q, want %q", got, want)
 	}
 }
 

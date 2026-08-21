@@ -3,13 +3,9 @@
 package paths
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
-
-	"golang.org/x/sys/unix"
 )
 
 // Environment variables baton reads and injects. EnvSocket points a client at
@@ -25,49 +21,16 @@ const (
 	EnvPanelID = "BATON_PANEL_ID"
 )
 
-// Socket returns the control socket path. It is scoped to the caller's login
-// session, so there is one and only one server per session. Override with
-// BATON_SOCK — which is also how the daemon child inherits the parent's choice,
-// since it re-sessions itself and could not otherwise recompute the same path.
+// Socket returns the control socket path. It is one fixed path per user, so a
+// machine has one and only one backend and every cockpit — whichever terminal it
+// is launched from — attaches to the same fleet. Override with BATON_SOCK, which
+// is also how the daemon child inherits the parent's choice, since it re-sessions
+// itself and is never told the path any other way.
 func Socket() string {
 	if v := os.Getenv(EnvSocket); v != "" {
 		return v
 	}
-	return filepath.Join(runtimeDir(), fmt.Sprintf("baton-%d.sock", sessionID()))
-}
-
-// Sockets lists every baton control socket in the runtime directory, newest
-// first. It exists for the remote bridge (`baton --stdio`), which is run by
-// sshd in a session of its OWN — so Socket() would resolve to a path no fleet
-// has ever bound, and a remote cockpit would attach to a daemon it just started
-// rather than to the fleet the person actually has running on that machine.
-//
-// Newest first because that is the fleet most likely meant: the sockets are
-// per login session, and the one bound most recently is the session still in
-// use. The caller filters the list for one that answers.
-func Sockets() []string {
-	matches, err := filepath.Glob(filepath.Join(runtimeDir(), "baton-*.sock"))
-	if err != nil || len(matches) == 0 {
-		return nil
-	}
-	type entry struct {
-		path string
-		mod  int64
-	}
-	entries := make([]entry, 0, len(matches))
-	for _, m := range matches {
-		fi, err := os.Stat(m)
-		if err != nil {
-			continue
-		}
-		entries = append(entries, entry{m, fi.ModTime().UnixNano()})
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].mod > entries[j].mod })
-	out := make([]string, len(entries))
-	for i, e := range entries {
-		out[i] = e.path
-	}
-	return out
+	return filepath.Join(runtimeDir(), "baton.sock")
 }
 
 // PidFile returns the daemon PID file that pairs with the given socket. It is
@@ -77,7 +40,7 @@ func PidFile(socket string) string {
 	return strings.TrimSuffix(socket, ".sock") + ".pid"
 }
 
-// LockFile returns the daemon's session lock that pairs with the given socket.
+// LockFile returns the daemon's exclusive lock that pairs with the given socket.
 // Like PidFile it is derived from the socket path, so the daemon child resolves
 // the same path from BATON_SOCK after it re-sessions itself.
 //
@@ -89,24 +52,23 @@ func LockFile(socket string) string {
 }
 
 // StateFile returns the persisted fleet/layout snapshot that pairs with the
-// given socket. Like PidFile it is derived from the socket path, so one
-// daemon-per-session owns one state file and the daemon child resolves the same
-// path from BATON_SOCK after it re-sessions itself.
+// given socket. Like PidFile it is derived from the socket path, so the one
+// daemon owns one state file and the daemon child resolves the same path from
+// BATON_SOCK after it re-sessions itself.
 func StateFile(socket string) string {
 	return strings.TrimSuffix(socket, ".sock") + ".state.json"
 }
 
 // QueueDir returns the task-backlog directory that pairs with the given socket —
 // one file per queued task. Like StateFile it is derived from the socket path, so
-// one daemon-per-session owns one backlog and the daemon child resolves the same
-// path from BATON_SOCK after it re-sessions itself.
+// the one daemon owns one backlog and the daemon child resolves the same path
+// from BATON_SOCK after it re-sessions itself.
 func QueueDir(socket string) string {
 	return strings.TrimSuffix(socket, ".sock") + ".queue"
 }
 
 // LogFile is the default log file ($HOME/.baton/baton.log), used when --log is
-// not given. One server runs per login session, so it needs no per-instance
-// suffix.
+// not given. One server runs per user, so it needs no per-instance suffix.
 func LogFile() string {
 	return filepath.Join(home(), ".baton", "baton.log")
 }
@@ -140,10 +102,9 @@ func ConductorFile() string {
 // it up.
 //
 // It is deliberately not scoped to a socket, unlike the state and queue files.
-// The rate limits belong to the account, not to a fleet: two baton sessions on
-// the same machine are measured against one quota, and a reading either of them
-// harvests is equally true for the other. Scoping it per session would have each
-// fleet blind to what the other had already learned.
+// The rate limits belong to the account, not to a fleet: a reading harvested
+// under one BATON_SOCK is equally true under another, and the file outlives the
+// daemon that wrote it.
 //
 // A file rather than a socket message because the writer is a status line. Claude
 // Code re-runs it on every render — several times a second while an agent works —
@@ -281,13 +242,4 @@ func home() string {
 		return h
 	}
 	return os.Getenv("HOME")
-}
-
-// sessionID identifies the caller's login session by its process session id, so
-// each session maps to its own socket. Falls back to the parent PID.
-func sessionID() int {
-	if sid, err := unix.Getsid(0); err == nil && sid > 0 {
-		return sid
-	}
-	return os.Getppid()
 }

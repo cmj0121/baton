@@ -286,8 +286,8 @@ reset / clean / discard / `--force`);`push` 與 `worktree-remove` 會先確認�
 worktree 基準目錄是 `panel.editor` / `panel.worktree-dir`,和其餘設定一樣可熱重載。完整的操作表與設定見
 [GIT.md](./GIT.zh-TW.md)。
 
-**持久化與重生。** 常駐程式能撐過自己的重啟。在每次結構性變更時,它會把整隊寫進一個 per-session 的**狀態檔**
-(`internal/state`,像 pid 檔一樣從 socket 路徑推導出來,每個 session 一個常駐程式)——每個面板不可變的產生規格
+**持久化與重生。** 常駐程式能撐過自己的重啟。在每次結構性變更時,它會把整隊寫進一個**狀態檔**
+(`internal/state`,像 pid 檔一樣從 socket 路徑推導出來,一隊一份)——每個面板不可變的產生規格
 (指令、引數、workdir)、群組成員關係、釘選、順序、id 計數器,以及每個群組的可見磚數。寫入會透過一個一格深的髒
 通道匯整,並由一個 saver goroutine 在熱鎖之外沖刷;`SIGINT`/`SIGTERM` 的處理器會在離開前呼叫 `SaveNow`,所以即使
 `os.Exit` 跳過了 saver,最後一個動作也能撐過一次乾淨的關機。存檔是原子且耐久的(暫存檔、fsync、rename、fsync
@@ -338,7 +338,7 @@ close-on-done 旗標。當排程器找不到空閒 agent 時,它會替這樣的�
 上限之下),把任務派工到那裡,並在被要求時,於任務安定後回收那個 agent。待辦佇列於是變成一個真正的工作佇列,會長出
 它自己的短暫工作者,而不只是一個蓋在常備隊伍上的緩衝區。一個沒有產生規格的任務,仍然只搭乘整隊裡已有的 agent。
 
-待辦佇列是**持久化的**。每個任務是 `$HOME/.baton/<session>.queue/` 底下的一個 JSON 檔,原子地寫入,並在任務離開
+待辦佇列是**持久化的**。每個任務是 `$HOME/.baton/baton.queue/` 底下的一個 JSON 檔,原子地寫入,並在任務離開
 待辦佇列時由排程器移除——所以一次常駐程式重啟會還原佇列。一個已經指派給某個沒撐過重啟的面板的任務會被重新入列
 (保留它的 id 與嘗試計數),而不是遺失。佇列是**選擇性加入的(opt-in)**:沒有 `queue` 設定區塊時,常駐程式會接受
 派工但不跑排程器,所以自動抽取永遠不會嚇到你。`queue.max` 為未指派的待辦佇列設上限;`queue.concurrency` 為一個
@@ -538,3 +538,11 @@ close-on-done 旗標。當排程器找不到空閒 agent 時,它會替這樣的�
 | **Monitor**          | 監看面板的存活、閒置與值得注意的輸出。                      |
 | **Event dispatcher** | 把每次變更廣播給訂閱者與 hook。                             |
 | **Panels**           | 那些即時終端機本身——每個都是一個 agent 或一個 shell。       |
+
+**每個使用者一個 backend。** 控制 socket 是一條固定路徑——`$XDG_RUNTIME_DIR/baton/baton.sock`,沒設時則是
+`$HOME/.baton/baton.sock`——所以這台機器上每一個 `baton` 都會解析到同一隊。第一次啟動會拉起常駐程式;之後每一次
+啟動,不管是在哪個終端機打的,都只是再接上一個 cockpit 到那個已經在跑的 backend。pid 檔、advisory lock、狀態檔
+與待辦目錄全都是把這條路徑的副檔名換掉推導出來的,所以它們會跟著自己所屬的那一隊走。兩個冷啟動同時搶一個崩潰
+留下的 socket 時,勝負由 `baton.lock` 上的 advisory flock 決定,而不是誰先 `bind`:輸的那個安靜退出,贏家綁定的
+socket 就是大家一起接上去的那個。`BATON_SOCK` 可以覆寫這條路徑——想刻意另外跑一隊時用它,常駐子行程也是靠它在
+重新 re-exec、換掉 session 之後繼承父行程的選擇。

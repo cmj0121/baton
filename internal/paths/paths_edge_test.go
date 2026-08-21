@@ -1,7 +1,6 @@
 package paths
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -72,14 +71,13 @@ func TestHomeUnsetYieldsRelativePaths(t *testing.T) {
 
 // TestSocketHomeUnsetXDGUnset covers Socket's fallback chain when both
 // BATON_SOCK and XDG_RUNTIME_DIR are empty and HOME is empty too: the runtime
-// dir collapses to a relative ".baton" and the socket name still carries the
-// session id and suffix.
+// dir collapses to a relative ".baton" and the socket keeps its fixed name.
 func TestSocketHomeUnsetXDGUnset(t *testing.T) {
 	t.Setenv("BATON_SOCK", "")
 	t.Setenv("XDG_RUNTIME_DIR", "")
 	t.Setenv("HOME", "")
 	got := Socket()
-	if !strings.HasPrefix(got, ".baton/baton-") || !strings.HasSuffix(got, ".sock") {
-		t.Fatalf("Socket() = %q, want it under relative .baton with a -<id>.sock name", got)
+	if got != ".baton/baton.sock" {
+		t.Fatalf("Socket() = %q, want it under relative .baton", got)
 	}
 }
