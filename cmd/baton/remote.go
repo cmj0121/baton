@@ -175,29 +175,23 @@ func bridge(in io.Reader, out io.Writer, sock string) error {
 
 // bridgeSocket picks the fleet the bridge attaches to.
 //
-// It cannot simply use paths.Socket(): sshd runs `baton --stdio` in a session of
-// its own, so the per-session path resolves to one nothing has ever bound, and a
-// remote cockpit would attach to a daemon it had just started rather than to the
-// fleet the person actually has running on that machine. So: an explicit
-// BATON_SOCK wins, then the newest socket that answers, and only when there is
-// no fleet at all does it start one — exactly as a local attach would.
+// The control socket is one fixed path per user, so the bridge lands on the same
+// fleet the person has running on that machine even though sshd runs `baton
+// --stdio` in a session of its own — and an explicit BATON_SOCK still wins,
+// since Socket() reads it. It probes with a deadline rather than trusting the
+// socket file, which may have been left behind by a crashed daemon on a host it
+// cannot ask about, and only when nothing answers does it start a fleet —
+// exactly as a local attach would.
 func bridgeSocket(verbose int, logPath, pluginPath string) (string, error) {
-	if v := os.Getenv(paths.EnvSocket); v != "" {
-		if err := startDaemon(verbose, logPath, pluginPath); err != nil {
-			return "", err
-		}
-		return v, nil
-	}
-	for _, sock := range paths.Sockets() {
-		if aliveWithin(sock, stdioBridgeTimeout) {
-			return sock, nil
-		}
+	sock := paths.Socket()
+	if aliveWithin(sock, stdioBridgeTimeout) {
+		return sock, nil
 	}
 	log.Info().Msg("no fleet is running here; starting one for the remote attach")
 	if err := startDaemon(verbose, logPath, pluginPath); err != nil {
 		return "", err
 	}
-	return paths.Socket(), nil
+	return sock, nil
 }
 
 // aliveWithin reports whether a server answers on sock inside d. It is alive()
