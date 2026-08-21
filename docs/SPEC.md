@@ -318,7 +318,7 @@ commit editor and the worktree base directory are `panel.editor` / `panel.worktr
 [GIT.md](./GIT.md) for the full op table and the config.
 
 **Persistence and respawn.** The daemon survives its own restart. On every structural change it writes the fleet to a
-per-session **state file** (`internal/state`, derived from the socket path like the pid file, one daemon-per-session) —
+**state file** (`internal/state`, derived from the socket path like the pid file, one per fleet) —
 each panel's immutable spawn spec (command, args, workdir), group membership, pins, order, the id counter, and each
 group's visible-tile count. Writes are coalesced through a one-deep dirty channel and flushed off the hot lock by a saver
 goroutine; the `SIGINT`/`SIGTERM` handler calls `SaveNow` before exit, so the last action survives a clean shutdown even
@@ -375,7 +375,7 @@ dispatches the task there, and reaps that agent once the task settles if asked. 
 queue that grows its own ephemeral workers, not just a buffer over the standing fleet. A task with no spawn spec still
 only rides the agents already in the fleet.
 
-The backlog is **persistent**. Each task is one JSON file under `$HOME/.baton/<session>.queue/`, written atomically and
+The backlog is **persistent**. Each task is one JSON file under `$HOME/.baton/baton.queue/`, written atomically and
 removed by the scheduler when the task leaves the backlog — so a daemon restart restores the queue. A task already
 assigned to a panel that did not survive the restart is re-queued (its id and attempt count kept) rather than lost. The
 queue is **opt-in**: with no `queue` config block the daemon takes dispatches but runs no scheduler, so the auto-drain
@@ -586,3 +586,13 @@ The picture, read from top to bottom:
 | **Monitor**          | Watches panels for liveness, idleness, and notable output.                     |
 | **Event dispatcher** | Broadcasts every change to subscribers and hooks.                              |
 | **Panels**           | The live terminals themselves — each an agent or a shell.                      |
+
+**One backend per user.** The control socket is one fixed path — `$XDG_RUNTIME_DIR/baton/baton.sock`, or
+`$HOME/.baton/baton.sock` when that is unset — so every `baton` on the machine resolves the same fleet. The first
+launch starts the daemon; every launch after it attaches another cockpit to the backend already running, whichever
+terminal it was typed in. The pid file, the advisory lock, the state file and the backlog directory are all derived
+from that path by swapping the suffix, so they follow the fleet they belong to. Two cold starts racing against a
+socket a crash left behind are settled by an advisory `flock` on `baton.lock` rather than by whoever reaches `bind`
+first: the loser exits quietly, and the socket the winner binds is what they all attach to. `BATON_SOCK` overrides the
+path — how a second, deliberately separate fleet is run, and how the daemon child inherits the parent's choice across
+the re-exec that re-sessions it.
