@@ -1700,6 +1700,12 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 		return "conductor role: remote access is an operator surface"
 	case "task.drain":
 		return "conductor role: draining the backlog is an operator action"
+	case "conductor.reset":
+		// Resetting the workspace deletes the conductor's own accumulated state
+		// while it is the thing running in it. It is an operator's escape hatch for
+		// a workspace that has gone bad, and an agent that has gone bad is exactly
+		// the one that must not be able to reach for it.
+		return "conductor role: resetting the workspace is an operator action"
 	case "panel.close", "panel.signal", "panel.input", "panel.dispatch":
 		// Self-targeted control is forbidden: closing/signalling itself kills the
 		// agent mid-command, feeding itself input loops, or dispatching a task onto
@@ -1831,6 +1837,11 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "panel.purge":
 		if s.purgeExited() > 0 {
 			s.broadcastFleet()
+		}
+	case "conductor.reset":
+		if err := s.resetConductorWorkspace(); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
 		}
 	case "panel.group":
 		if err := s.groupPanels(cmd.IDs, cmd.Group); err != nil {
@@ -2344,6 +2355,36 @@ func (s *Server) makeConductorWorkspace(id string) (string, error) {
 	writeConductorFiles(ws, id)
 	log.Info().Str("panel", id).Str("workspace", ws).Msg("conductor workspace ready")
 	return ws, nil
+}
+
+// resetConductorWorkspace deletes this socket's conductor workspace, so the next
+// conductor starts from nothing. It is the way out of a workspace whose collected
+// state has gone bad — the ordinary lifecycle keeps it, and a reboot is otherwise
+// the only thing that clears it.
+//
+// It refuses while a conductor exists in the fleet, exited slot included. Deleting
+// the directory under a live agent would leave it running in an unlinked cwd,
+// which fails in ways that look like anything but a reset; and a panel that is
+// merely exited can still be re-run, which would silently recreate the workspace
+// straight after. Close it first — the message says so, because a wedged conductor
+// is precisely when someone reaches for this.
+func (s *Server) resetConductorWorkspace() error {
+	s.mu.Lock()
+	live := s.hasConductorLocked()
+	s.mu.Unlock()
+	if live {
+		return fmt.Errorf("close the conductor first, then reset its workspace")
+	}
+
+	ws, err := paths.ConductorWorkspace(s.socketPath())
+	if err != nil {
+		return fmt.Errorf("resolve conductor workspace: %w", err)
+	}
+	if err := paths.RemoveConductorWorkspace(ws); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reset conductor workspace: %w", err)
+	}
+	log.Info().Str("workspace", ws).Msg("conductor workspace reset")
+	return nil
 }
 
 // writeConductorFiles (re)writes the conductor's workspace wiring, so the agent's

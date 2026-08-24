@@ -226,6 +226,13 @@ func (c *Client) DrainQueue() error {
 	return c.Do(proto.Command{Action: "task.drain"})
 }
 
+// ResetConductor deletes the conductor's workspace, so the next conductor opens
+// into an empty one. The server refuses while a conductor still exists in the
+// fleet — close it first.
+func (c *Client) ResetConductor() error {
+	return c.Do(proto.Command{Action: "conductor.reset"})
+}
+
 // Tasks returns the current backlog snapshot. Like exchange it trails the request
 // with a config.get barrier, capturing the "tasks" reply before the barrier.
 func (c *Client) Tasks() ([]proto.Task, error) {

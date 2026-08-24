@@ -283,3 +283,105 @@ func TestConductorOperatorBrief(t *testing.T) {
 		}
 	}
 }
+
+// TestConductorResetWorkspace covers the escape hatch behind
+// `baton ctl conductor reset`: it is refused while a conductor still exists in
+// the fleet, it clears the workspace once that conductor is closed, and the
+// conductor role can never reach for it.
+func TestConductorResetWorkspace(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir()) // keep the workspace out of the real runtime dir
+	sock := filepath.Join(t.TempDir(), "baton.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	srv := server.New(ln)
+	go func() { _ = srv.Serve() }()
+
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	recv(t, c) // welcome
+	recv(t, c) // empty panels
+
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: "agent", Path: "/bin/cat", Conductor: true}); err != nil {
+		t.Fatalf("create conductor: %v", err)
+	}
+	cid := recv(t, c).Panels[0].ID
+	ws := srv.PanelDir(cid)
+	if ws == "" {
+		t.Fatal("the conductor has no workspace")
+	}
+	marker := filepath.Join(ws, "settings.local.json")
+	if err := os.WriteFile(marker, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	// Refused while the conductor is there: deleting the directory under a live
+	// agent leaves it running in an unlinked cwd.
+	if err := c.Send(proto.Command{Action: "conductor.reset"}); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if got := recv(t, c); got.Type != "error" || !strings.Contains(got.Error, "close the conductor first") {
+		t.Fatalf("reset should be refused while the conductor is live, got %+v", got)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("a refused reset must not touch the workspace: %v", err)
+	}
+
+	// Closed, then reset: the workspace and everything in it is gone.
+	if err := c.Send(proto.Command{Action: "panel.close", ID: cid}); err != nil {
+		t.Fatalf("close conductor: %v", err)
+	}
+	recv(t, c) // panels snapshot without it
+	if err := c.Send(proto.Command{Action: "conductor.reset"}); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if err := c.Send(proto.Command{Action: "panel.list"}); err != nil { // barrier
+		t.Fatalf("list: %v", err)
+	}
+	if got := recv(t, c); got.Type != "panels" {
+		t.Fatalf("reset should have been accepted, got %+v", got)
+	}
+	if _, err := os.Stat(ws); !os.IsNotExist(err) {
+		t.Fatalf("workspace %s should be gone after a reset, stat err = %v", ws, err)
+	}
+}
+
+// TestConductorResetFenced checks the fence: an agent whose state has gone bad is
+// exactly the one that must not be able to erase the record of it. (The name is
+// kept short on purpose — t.TempDir() plus a long test name overflows the ~104
+// byte cap on a unix socket path.)
+func TestConductorResetFenced(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "baton.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() { _ = server.New(ln).Serve() }()
+
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	recv(t, c) // welcome
+	recv(t, c) // empty panels
+
+	if err := c.Send(proto.Command{Action: "hello", Role: "conductor", Self: "1"}); err != nil {
+		t.Fatalf("hello conductor: %v", err)
+	}
+	recv(t, c) // welcome
+	recv(t, c) // panels snapshot
+
+	if err := c.Send(proto.Command{Action: "conductor.reset"}); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if got := recv(t, c); got.Type != "error" || !strings.Contains(got.Error, "conductor role") {
+		t.Fatalf("the conductor role should be fenced from conductor.reset, got %+v", got)
+	}
+}
