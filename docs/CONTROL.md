@@ -13,18 +13,26 @@ that keep an agent driving its own host from wrecking it.
 ## The conductor
 
 Press **`n C`** on the dashboard to open the conductor. It is a normal agent (your default agent profile, `claude` out of
-the box), with three differences:
+the box), with four differences:
 
 - **Singleton.** There is one and only one conductor per server; the server refuses a second. It is **not a card in the
   fleet** — it shows as a **mark in the `FLEET` heading** (with its live state), since it drives the fleet rather than
   being one of it, and stays out of the roster, the counts, and the attention nudges. `n C` is how you reach it: it **zooms**
-  a live conductor so you can watch its work, **re-runs** an exited one (a fresh workspace, so it reloads its brief) and
-  zooms the restart, or **spawns** one when there is none and zooms it the moment it lands.
-- **Control-only workspace.** The conductor runs in a fresh, private, throwaway directory under baton's runtime dir —
-  never your source tree. Its only local surface is the control wiring baton drops in: the briefing (written as both
-  `BATON.md` and `CLAUDE.md`, the latter so the default Claude conductor auto-reads it as project instructions) and a
-  `.mcp.json`. So the agent's path of least resistance is to drive baton, not to wander your code. The workspace is
-  regenerated on respawn and removed when the conductor is closed.
+  a live conductor so you can watch its work, **re-runs** an exited one (its wiring is rewritten, so it reloads its
+  brief) and zooms the restart, or **spawns** one when there is none and zooms it the moment it lands.
+- **Control-only workspace.** The conductor runs in a private directory of baton's own — never your source tree. Its
+  only local surface is the control wiring baton drops in: the briefing (written as both `BATON.md` and `CLAUDE.md`,
+  the latter so the default Claude conductor auto-reads it as project instructions) and a `.mcp.json`. So the agent's
+  path of least resistance is to drive baton, not to wander your code.
+- **One workspace, kept until you reboot.** There is one workspace per control socket, not one per open, so closing the
+  conductor and opening it again lands in the same directory with the settings it had collected — the permission grants
+  an agent writes beside itself survive a restart instead of being asked for every time. It lives under
+  `$XDG_RUNTIME_DIR/baton/` (or your temporary directory), it is created only if it is not already there, and it is
+  **cleared when the host reboots**: baton stamps it with the boot it belongs to and rebuilds it from scratch when that
+  no longer matches. `baton ctl conductor reset` clears it on demand — close the conductor first, and note that the
+  conductor itself is fenced from that verb. The path is logged when the conductor opens, since the directory is named
+  after a hash of the socket. One caveat: the base comes from the environment the daemon was started in, so a daemon
+  started from an ssh session and one started from a desktop terminal can resolve different workspaces.
 - **Fenced.** The conductor acts under a scoped role (see [Guardrails](#guardrails)): it drives the rest of the fleet but
   cannot act on its own panel, stop the server, or fork-bomb the host.
 
@@ -75,6 +83,7 @@ acts, and exits.
 | `baton ctl queue cancel <id>`                                      | cancel a queued task by id                                                    |
 | `baton ctl queue promote <id>` / `demote <id>`                     | move a queued task to the head / tail of the backlog                          |
 | `baton ctl queue drain`                                            | clear every queued task                                                       |
+| `baton ctl conductor reset`                                        | delete the conductor's workspace so the next one starts clean                 |
 
 ```sh
 # Stand up a reviewer next to a worker and hand it the task.

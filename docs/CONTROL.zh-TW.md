@@ -12,17 +12,24 @@
 ## conductor
 
 在儀表板上按 **`n C`** 開啟 conductor。它就是一個一般的 agent(你的預設 agent 設定檔,開箱即 `claude`),
-只有三點不同:
+只有四點不同:
 
 - **單例(Singleton)。** 每台伺服器有且只有一個 conductor;伺服器會拒絕第二個。它**不是隊伍裡的一張卡片**
   ——而是顯示為 **`FLEET` 標題上的一個標記**(帶著它的即時狀態),因為它是驅動整隊、而非隊伍的一員,
   於是不列入名冊、不計入數量、也不觸發提醒推播。`n C` 是你抵達它的方式:它會**放大(zoom)** 一個運行中的
-  conductor,讓你看它工作;**重跑(re-run)** 一個已結束的(全新工作區,因此會重新載入它的簡報)並放大重啟後的它;
+  conductor,讓你看它工作;**重跑(re-run)** 一個已結束的(接線會重寫,因此會重新載入它的簡報)並放大重啟後的它;
   或在沒有任何 conductor 時**開一個(spawn)**,並在它落地的當下就放大進去。
-- **僅供控制的工作區。** conductor 跑在 baton runtime 目錄下一個全新、私有、用過即丟的目錄裡——
-  絕不會是你的原始碼樹。它唯一的本機介面是 baton 放進去的控制接線:簡報(同時寫成 `BATON.md` 與 `CLAUDE.md`,
-  後者是為了讓預設的 Claude conductor 自動把它讀成專案指示)以及一個 `.mcp.json`。如此一來,這個 agent 阻力最小
-  的路徑就是去驅動 baton,而不是四處翻你的程式碼。工作區會在重生時重新產生,並在 conductor 關閉時移除。
+- **僅供控制的工作區。** conductor 跑在 baton 自己的一個私有目錄裡——絕不會是你的原始碼樹。它唯一的本機介面是
+  baton 放進去的控制接線:簡報(同時寫成 `BATON.md` 與 `CLAUDE.md`,後者是為了讓預設的 Claude conductor
+  自動把它讀成專案指示)以及一個 `.mcp.json`。如此一來,這個 agent 阻力最小的路徑就是去驅動 baton,
+  而不是四處翻你的程式碼。
+- **一個工作區,留到你重開機為止。** 工作區是每個控制 socket 一份,而不是每次開啟一份,所以關掉 conductor
+  再開一次會回到同一個目錄、帶著它先前收集的設定——agent 寫在自己旁邊的權限授權會跨重啟存活,
+  不必每次都重按一遍。它位於 `$XDG_RUNTIME_DIR/baton/`(或你的暫存目錄)底下,只有在不存在時才建立,
+  並且**在主機重開機時清空**:baton 會為它蓋上所屬那次開機的戳記,一旦對不上就整個重建。
+  `baton ctl conductor reset` 可以隨時清掉它——請先關閉 conductor,另外 conductor 自己被柵欄擋在這個指令之外。
+  目錄名是 socket 的雜湊,所以 conductor 開啟時會把路徑寫進日誌。一個但書:base 取自 daemon 啟動時所處的環境,
+  因此從 ssh session 啟動的 daemon 與從桌面終端機啟動的,可能會算出不同的工作區。
 - **圍上柵欄(Fenced)。** conductor 在一個限定範圍的角色下行動(見 [護欄](#護欄)):它驅動隊伍其餘成員,
   但不能對自己的面板動手、不能停掉伺服器,也不能對宿主 fork-bomb。
 
@@ -71,6 +78,7 @@ named "report" and pause for me.
 | `baton ctl queue cancel <id>`                                      | 依 id 取消一項已排入的任務                                 |
 | `baton ctl queue promote <id>` / `demote <id>`                     | 把一項已排入的任務移到待辦的最前 / 最後                    |
 | `baton ctl queue drain`                                            | 清空每一項已排入的任務                                     |
+| `baton ctl conductor reset`                                        | 刪掉 conductor 的工作區,讓下一個從乾淨狀態開始             |
 
 ```sh
 # Stand up a reviewer next to a worker and hand it the task.
