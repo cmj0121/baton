@@ -48,21 +48,21 @@ func TestSecureSocketReturnsRealChmodError(t *testing.T) {
 	}
 }
 
-// TestNewConductorWorkspaceMkdirFails covers the MkdirAll failure branch: when
-// the runtime base cannot be created (its parent is a regular file) the helper
+// TestConductorWorkspaceMkdirFails covers the MkdirAll failure branch: when the
+// temporary base cannot be created (its parent is a regular file) the helper
 // returns an error and an empty path rather than a workspace.
-func TestNewConductorWorkspaceMkdirFails(t *testing.T) {
+func TestConductorWorkspaceMkdirFails(t *testing.T) {
 	dir := t.TempDir()
 	notADir := filepath.Join(dir, "afile")
 	if err := os.WriteFile(notADir, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// runtimeDir() becomes <notADir>/baton; MkdirAll under a regular file fails.
+	// conductorBase() becomes <notADir>/baton; MkdirAll under a regular file fails.
 	t.Setenv("XDG_RUNTIME_DIR", notADir)
 
-	ws, err := NewConductorWorkspace()
+	ws, err := ConductorWorkspace("/run/baton.sock")
 	if err == nil {
-		t.Fatalf("NewConductorWorkspace should fail when the base cannot be created; got %q", ws)
+		t.Fatalf("ConductorWorkspace should fail when the base cannot be created; got %q", ws)
 	}
 	if ws != "" {
 		t.Errorf("workspace path = %q, want empty string on failure", ws)

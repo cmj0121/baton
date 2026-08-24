@@ -102,9 +102,10 @@ func TestConductorGuardrails(t *testing.T) {
 }
 
 // TestConductorPanelSpawn checks the conductor panel: it is the singleton, runs
-// in a server-managed ephemeral workspace (not the requested dir) seeded with a
-// primer and the identity env, and that workspace is removed when it is closed.
+// in a server-managed workspace (not the requested dir) seeded with a primer and
+// the identity env, and that workspace outlives the panel that used it.
 func TestConductorPanelSpawn(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir()) // keep the workspace out of the real runtime dir
 	sock := filepath.Join(t.TempDir(), "baton.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
@@ -182,13 +183,40 @@ func TestConductorPanelSpawn(t *testing.T) {
 		t.Fatalf("second conductor should be refused, got %+v", got)
 	}
 
-	// Closing the conductor removes its workspace.
+	// Closing the conductor keeps its workspace: it belongs to the socket, and the
+	// next conductor opens straight back into the settings this one collected.
 	if err := c.Send(proto.Command{Action: "panel.close", ID: cid}); err != nil {
 		t.Fatalf("close conductor: %v", err)
 	}
 	recv(t, c) // panels snapshot without it
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatalf("workspace %s should be removed after close, stat err = %v", dir, err)
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		t.Fatalf("workspace %s should survive the close, stat err = %v", dir, err)
+	}
+
+	// …and the next conductor lands in that very directory rather than a new one.
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: "agent", Path: "/bin/cat", Conductor: true}); err != nil {
+		t.Fatalf("second conductor: %v", err)
+	}
+	var next string
+	for range 10 {
+		got := recv(t, c)
+		if got.Type != "panels" {
+			continue
+		}
+		for _, p := range got.Panels {
+			if p.Conductor {
+				next = p.ID
+			}
+		}
+		if next != "" {
+			break
+		}
+	}
+	if next == "" {
+		t.Fatal("the conductor did not come back")
+	}
+	if again := srv.PanelDir(next); again != dir {
+		t.Fatalf("reopened conductor dir = %q, want the retained workspace %q", again, dir)
 	}
 }
 

@@ -3,9 +3,16 @@
 package paths
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
+
+	"github.com/shirou/gopsutil/v4/host"
 )
 
 // Environment variables baton reads and injects. EnvSocket points a client at
@@ -145,17 +152,199 @@ func SecureSocket(socket string) error {
 	return nil
 }
 
-// NewConductorWorkspace creates a fresh, private, ephemeral directory for a
-// conductor panel under baton's runtime dir and returns its path. The conductor
-// agent runs here instead of in any source tree, so its only local surface is
-// the baton control wiring the server drops in — not the user's code. The caller
-// removes it when the conductor panel is closed.
-func NewConductorWorkspace() (string, error) {
-	base := runtimeDir()
-	if err := os.MkdirAll(base, 0o700); err != nil {
+// ConductorWorkspace returns the conductor panel's workspace for the given
+// control socket, creating it when it is not already there. The conductor agent
+// runs here instead of in any source tree, so its only local surface is the baton
+// control wiring the server drops in — not the user's code.
+//
+// It is one fixed directory per socket rather than a fresh one per open, so a
+// conductor that is closed and opened again comes back to the settings it had
+// collected (the permission grants an agent writes beside itself) instead of
+// starting from nothing every time. Deriving the name from the socket keeps the
+// promise the rest of this file makes — one daemon owns one of everything — so a
+// second fleet under BATON_SOCK gets a workspace of its own rather than sharing,
+// and deleting, this one's.
+//
+// The name is a hash of the socket path rather than the path itself, because the
+// base moved: StateFile and QueueDir sit beside the socket and are unique by
+// construction, while these all land in one shared temporary base, where two
+// sockets named baton.sock in different directories would otherwise collide —
+// exactly the shape a test that binds under t.TempDir() produces.
+//
+// The workspace is wiped and rebuilt when the host has rebooted since it was
+// created (see clearIfRebooted); it is not removed when the conductor is closed.
+func ConductorWorkspace(socket string) (string, error) {
+	base := conductorBase()
+	if err := ensurePrivateDir(base); err != nil {
 		return "", err
 	}
-	return os.MkdirTemp(base, "conductor-")
+	ws := filepath.Join(base, conductorName(socket))
+	if err := clearIfRebooted(ws); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(ws, 0o700); err != nil {
+		return "", err
+	}
+	return ws, nil
+}
+
+// ConductorStampFile is the host-boot stamp that pairs with a conductor
+// workspace. It sits beside the workspace rather than inside it: the workspace is
+// the agent's own directory and the stamp decides whether that directory lives,
+// so a conductor that rewrites its cwd cannot rewrite the record of which boot it
+// belongs to.
+func ConductorStampFile(workspace string) string {
+	return workspace + ".boot"
+}
+
+// RemoveConductorWorkspace deletes a conductor workspace and its boot stamp. It
+// is the escape hatch behind `baton ctl conductor reset`, for a workspace whose
+// accumulated state has gone bad; the ordinary lifecycle never removes one.
+func RemoveConductorWorkspace(workspace string) error {
+	if err := os.RemoveAll(workspace); err != nil {
+		return err
+	}
+	return os.Remove(ConductorStampFile(workspace))
+}
+
+// LegacyConductorWorkspaces lists the throwaway conductor directories left behind
+// by versions that made a fresh MkdirTemp workspace per open and removed it on
+// close. That removal only ran if the daemon reached it, so a crash or a hard
+// kill leaked one every time, and they accumulate for as long as baton has been
+// installed. The current workspace is never included, whichever base it is in.
+//
+// It lists rather than deletes so the caller can log what it is dropping: these
+// are directories the user never asked for, but they are still the user's.
+func LegacyConductorWorkspaces(current string) []string {
+	var found []string
+	seen := map[string]bool{}
+	for _, base := range []string{conductorBase(), runtimeDir()} {
+		if seen[base] {
+			continue
+		}
+		seen[base] = true
+		matches, err := filepath.Glob(filepath.Join(base, "conductor-*"))
+		if err != nil {
+			continue
+		}
+		for _, m := range matches {
+			if m == current || m == ConductorStampFile(current) {
+				continue
+			}
+			if fi, err := os.Lstat(m); err != nil || !fi.IsDir() {
+				continue // a stamp file, or something that vanished under us
+			}
+			found = append(found, m)
+		}
+	}
+	return found
+}
+
+// ensurePrivateDir creates a directory with owner-only permissions and refuses to
+// hand it back unless it really is one: a directory, not a symlink, owned by this
+// user, and unreachable by group or other. The conductor workspace used to be
+// unguessable (MkdirTemp), and dropping that for a fixed path means the checks
+// have to be made explicitly — under a shared /tmp the base is a name any other
+// user can claim first.
+func ensurePrivateDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	// Lstat, not Stat, and after MkdirAll rather than before: MkdirAll is happy to
+	// find a symlink pointing at an existing directory, and that is the case worth
+	// catching. Nothing has been written yet when this runs.
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	switch {
+	case fi.Mode()&os.ModeSymlink != 0:
+		return fmt.Errorf("%s is a symlink, refusing to use it", dir)
+	case !fi.IsDir():
+		return fmt.Errorf("%s is not a directory", dir)
+	case fi.Mode().Perm()&0o077 != 0:
+		return fmt.Errorf("%s is reachable by group or other (%04o)", dir, fi.Mode().Perm())
+	case !ownedByCaller(fi):
+		return fmt.Errorf("%s is not owned by uid %d", dir, os.Getuid())
+	}
+	return nil
+}
+
+// conductorBase is the per-user temporary directory the conductor workspace lives
+// in. It is deliberately temporary rather than beside the socket: the workspace
+// holds an agent's accumulated state, and the contract is that a reboot clears
+// it. $XDG_RUNTIME_DIR delivers that by itself (tmpfs, emptied on logout), which
+// is why it comes first; os.TempDir() is the fallback everywhere else and needs
+// the boot stamp to make the same promise.
+//
+// Note that both are read from the environment, so a daemon started from an ssh
+// session and one started from a desktop terminal can resolve different bases and
+// therefore different workspaces. That is a known and accepted limit: the socket
+// is one fixed path per user, so in practice one daemon serves them all and the
+// base is whatever the process that started it had.
+func conductorBase() string {
+	if rt := os.Getenv("XDG_RUNTIME_DIR"); rt != "" {
+		return filepath.Join(rt, "baton")
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("baton-%d", os.Getuid()))
+}
+
+// conductorName is the workspace directory name for a socket: stable for the same
+// socket, distinct for any other. Half a SHA-256 word is plenty — this separates
+// a handful of fleets on one machine, it does not resist an adversary.
+func conductorName(socket string) string {
+	abs := socket
+	if a, err := filepath.Abs(socket); err == nil {
+		abs = a
+	}
+	sum := sha256.Sum256([]byte(abs))
+	return "conductor-" + hex.EncodeToString(sum[:4])
+}
+
+// clearIfRebooted removes the workspace when the host has rebooted since the
+// stamp beside it was written, and (re)writes the stamp. It is what makes "the
+// conductor forgets across a reboot" true on every platform rather than only
+// where the temporary base happens to be cleared for us: $XDG_RUNTIME_DIR is
+// emptied on logout, but macOS keeps $TMPDIR across a reboot and sweeps
+// /private/tmp on a three-day timer, so relying on the location alone would give
+// three different behaviours and no way to test any of them.
+//
+// A host boot time we cannot read is treated as "same boot": failing to clear
+// costs the user a stale workspace, while clearing on a bad reading throws away
+// state they were promised would survive a restart. The comparison allows a small
+// skew because the boot time is derived from the current clock on some platforms
+// and drifts by a second or two when that clock is adjusted.
+func clearIfRebooted(ws string) error {
+	boot, err := hostBootTime()
+	if err != nil {
+		return nil
+	}
+	stamp := ConductorStampFile(ws)
+	if raw, err := os.ReadFile(stamp); err == nil {
+		if sec, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64); err == nil {
+			if d := boot.Sub(time.Unix(sec, 0)); d < bootSkew && d > -bootSkew {
+				return nil // same boot: the workspace and its memory stay
+			}
+		}
+	}
+	if err := os.RemoveAll(ws); err != nil {
+		return err
+	}
+	return WriteFileAtomic(stamp, []byte(strconv.FormatInt(boot.Unix(), 10)+"\n"), 0o600)
+}
+
+// bootSkew is how far two readings of the host boot time may differ and still
+// mean the same boot.
+const bootSkew = 5 * time.Second
+
+// hostBootTime reports when the host last booted. It is a variable so a test can
+// pretend the machine rebooted without one.
+var hostBootTime = func() (time.Time, error) {
+	sec, err := host.BootTime()
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Unix(int64(sec), 0), nil
 }
 
 // WriteFileAtomic writes data to path atomically and durably: it writes a sibling

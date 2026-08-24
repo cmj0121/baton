@@ -33,7 +33,7 @@ func TestPruneExitedCapsFleet(t *testing.T) {
 	s.panels = append(s.panels, panel.Panel{ID: "live2", State: panel.Running})
 
 	s.mu.Lock()
-	stop, _ := s.pruneExitedLocked()
+	stop := s.pruneExitedLocked()
 	s.mu.Unlock()
 
 	if len(stop) != over {

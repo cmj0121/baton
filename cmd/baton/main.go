@@ -362,6 +362,31 @@ func limitsOption(cfg config.Config) server.Option {
 // from the effective config, wires the plugin and the signal-driven
 // shutdown/reload, and serves until the listener closes. It returns when Serve
 // returns on its own; a SIGINT/SIGTERM instead tidies up and exits the process.
+// sweepLegacyConductorWorkspaces drops the throwaway conductor directories older
+// versions of baton left behind. Each open used to make a fresh MkdirTemp
+// workspace and delete it on close, so every crash or hard kill leaked one, and
+// they pile up for as long as baton has been installed. There is one conductor
+// workspace per socket now, and it is not one of these.
+//
+// It runs once per daemon start, from here rather than from the server, so no test
+// that builds a Server can reach a real user's runtime directory. Each removal is
+// logged: this is the user's disk, and a directory disappearing silently is worse
+// than the clutter.
+func sweepLegacyConductorWorkspaces(sock string) {
+	current, err := paths.ConductorWorkspace(sock)
+	if err != nil {
+		log.Warn().Err(err).Msg("could not resolve the conductor workspace; skipping the legacy sweep")
+		return
+	}
+	for _, ws := range paths.LegacyConductorWorkspaces(current) {
+		if err := os.RemoveAll(ws); err != nil {
+			log.Warn().Err(err).Str("workspace", ws).Msg("could not remove a legacy conductor workspace")
+			continue
+		}
+		log.Info().Str("workspace", ws).Msg("removed a legacy conductor workspace")
+	}
+}
+
 func runServerOn(ln net.Listener, sock string) error {
 	// Record the PID so clients can force-stop this daemon (baton --force / the
 	// in-TUI restart). Non-fatal if it cannot be written.
@@ -380,6 +405,7 @@ func runServerOn(ln net.Listener, sock string) error {
 	}
 	rc := reloadableSettings(cfg)
 	stateF := paths.StateFile(sock)
+	sweepLegacyConductorWorkspaces(sock)
 	srv := server.New(ln, append(buildServerOptions(rc, stateF), usageOption(cfg), limitsOption(cfg))...)
 	srv.Restore() // seed the fleet from the last snapshot (all as exited dead slots) before serving
 
