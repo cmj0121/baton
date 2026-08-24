@@ -30,6 +30,7 @@ type ctlCLI struct {
 	Dispatch      ctlDispatch      `cmd:"" help:"Assign a task brief to a panel and deliver it as a unit."`
 	DispatchGroup ctlDispatchGroup `cmd:"" name:"dispatch-group" help:"Dispatch one task to every member of a work item."`
 	Queue         ctlQueue         `cmd:"" help:"Manage the task backlog (add/list/cancel/drain)."`
+	Conductor     ctlConductor     `cmd:"" help:"Manage the conductor (reset its workspace)."`
 }
 
 // ctlMain parses and runs `baton ctl <command>`. It is kept separate from the
@@ -200,6 +201,16 @@ func (x ctlDispatchGroup) Run(c *control.Client) error {
 }
 
 // ctlQueue groups the backlog verbs under `baton ctl queue …`.
+type ctlConductor struct {
+	Reset ctlConductorReset `cmd:"" help:"Delete the conductor's workspace so the next one starts clean."`
+}
+
+type ctlConductorReset struct{}
+
+func (ctlConductorReset) Run(c *control.Client) error {
+	return c.ResetConductor()
+}
+
 type ctlQueue struct {
 	Add     ctlQueueAdd     `cmd:"" help:"Enqueue a task for the scheduler to drain onto a free agent."`
 	List    ctlQueueList    `cmd:"" help:"Print the backlog as JSON."`

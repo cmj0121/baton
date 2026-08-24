@@ -875,11 +875,10 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 		}
 	}
 
-	var stop []string       // PTYs to reap after the lock: pruned dead slots + a self-exited ephemeral
-	var workspaces []string // conductor workspaces to remove after the lock
+	var stop []string // PTYs to reap after the lock: pruned dead slots + a self-exited ephemeral
 	if found {
 		s.emit("panel.exit", fields)
-		stop, workspaces = s.pruneExitedLocked()
+		stop = s.pruneExitedLocked()
 	} else if _, ok := s.ephemeral[id]; ok {
 		// A diff/scratch ephemeral panel exited on its own (it never lives in
 		// s.panels). Drop it from the ephemeral set and every conn's, so it stops
@@ -898,9 +897,6 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 		s.cg.Release(sid)                 // the panel is gone for good; drop its cgroup with it
 		s.releaseContainer(sid)           // and the container it was launched in, if it had one
 		s.stopLogging(sid, logMarkClosed) // …and its transcript is finished rather than abandoned
-	}
-	for _, ws := range workspaces {
-		_ = os.RemoveAll(ws)
 	}
 
 	if found {
@@ -1704,6 +1700,12 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 		return "conductor role: remote access is an operator surface"
 	case "task.drain":
 		return "conductor role: draining the backlog is an operator action"
+	case "conductor.reset":
+		// Resetting the workspace deletes the conductor's own accumulated state
+		// while it is the thing running in it. It is an operator's escape hatch for
+		// a workspace that has gone bad, and an agent that has gone bad is exactly
+		// the one that must not be able to reach for it.
+		return "conductor role: resetting the workspace is an operator action"
 	case "panel.close", "panel.signal", "panel.input", "panel.dispatch":
 		// Self-targeted control is forbidden: closing/signalling itself kills the
 		// agent mid-command, feeding itself input loops, or dispatching a task onto
@@ -1835,6 +1837,11 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "panel.purge":
 		if s.purgeExited() > 0 {
 			s.broadcastFleet()
+		}
+	case "conductor.reset":
+		if err := s.resetConductorWorkspace(); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
 		}
 	case "panel.group":
 		if err := s.groupPanels(cmd.IDs, cmd.Group); err != nil {
@@ -2070,7 +2077,7 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 // limits alone.
 //
 // A conductor panel is a special agent: the server enforces at most one, runs it
-// in a fresh ephemeral workspace (not any source tree) instead of dir, and
+// in the socket's managed workspace (not any source tree) instead of dir, and
 // injects the socket + identity env so the agent inside can drive the fleet under
 // the scoped conductor role.
 func (s *Server) createPanel(kind, path string, args []string, dir, profile string, conductor, globalShell bool) (string, error) {
@@ -2106,7 +2113,7 @@ func (s *Server) createPanel(kind, path string, args []string, dir, profile stri
 	}
 	s.mu.Unlock()
 
-	// A conductor runs in a server-managed ephemeral workspace, never dir, and
+	// A conductor runs in the server-managed workspace for this socket, never dir, and
 	// carries the identity env. Build them before the spec so a failure cleans up
 	// the reservation and any half-made workspace. Every other agent panel gets
 	// the same identity minus the scoped role: it is told which panel it is, and
@@ -2168,7 +2175,9 @@ func (s *Server) createPanel(kind, path string, args []string, dir, profile stri
 
 	if err := s.startPanel(id, profile, spec); err != nil {
 		if conductor {
-			_ = os.RemoveAll(dir) // drop the workspace we just made
+			// The workspace stays: it is this socket's one conductor workspace, and it
+			// may already hold the settings an earlier conductor collected. A failed
+			// spawn is no reason to throw those away — the next attempt reuses it.
 			s.clearConductorPending()
 		}
 		if globalShell {
@@ -2331,15 +2340,51 @@ func (s *Server) socketPath() string {
 	return paths.Socket()
 }
 
-// makeConductorWorkspace creates a fresh conductor workspace and seeds it with the
+// makeConductorWorkspace resolves this socket's one conductor workspace — creating
+// it, or reusing what a previous conductor left there — and seeds it with the
 // control wiring (see writeConductorFiles).
+//
+// The path is logged because it is no longer guessable: the directory name is a
+// hash of the socket, and a user who wants to look inside it (or delete it by
+// hand) has no other way to find out where it went.
 func (s *Server) makeConductorWorkspace(id string) (string, error) {
-	ws, err := paths.NewConductorWorkspace()
+	ws, err := paths.ConductorWorkspace(s.socketPath())
 	if err != nil {
 		return "", fmt.Errorf("create conductor workspace: %w", err)
 	}
 	writeConductorFiles(ws, id)
+	log.Info().Str("panel", id).Str("workspace", ws).Msg("conductor workspace ready")
 	return ws, nil
+}
+
+// resetConductorWorkspace deletes this socket's conductor workspace, so the next
+// conductor starts from nothing. It is the way out of a workspace whose collected
+// state has gone bad — the ordinary lifecycle keeps it, and a reboot is otherwise
+// the only thing that clears it.
+//
+// It refuses while a conductor exists in the fleet, exited slot included. Deleting
+// the directory under a live agent would leave it running in an unlinked cwd,
+// which fails in ways that look like anything but a reset; and a panel that is
+// merely exited can still be re-run, which would silently recreate the workspace
+// straight after. Close it first — the message says so, because a wedged conductor
+// is precisely when someone reaches for this.
+func (s *Server) resetConductorWorkspace() error {
+	s.mu.Lock()
+	live := s.hasConductorLocked()
+	s.mu.Unlock()
+	if live {
+		return fmt.Errorf("close the conductor first, then reset its workspace")
+	}
+
+	ws, err := paths.ConductorWorkspace(s.socketPath())
+	if err != nil {
+		return fmt.Errorf("resolve conductor workspace: %w", err)
+	}
+	if err := paths.RemoveConductorWorkspace(ws); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reset conductor workspace: %w", err)
+	}
+	log.Info().Str("workspace", ws).Msg("conductor workspace reset")
+	return nil
 }
 
 // writeConductorFiles (re)writes the conductor's workspace wiring, so the agent's
@@ -2931,9 +2976,11 @@ const maxExitedPanels = 128
 // their retained spec and monitor state so a busy daemon's fleet cannot grow
 // without bound. Live panels are never touched, and the newest exited slots (the
 // ones a user is most likely reviewing) are kept. It returns the ids whose PTY the
-// caller must Stop and any conductor workspaces to remove — both AFTER releasing
-// s.mu, since they touch the PTY manager and the filesystem. Caller holds s.mu.
-func (s *Server) pruneExitedLocked() (stop, workspaces []string) {
+// caller must Stop AFTER releasing s.mu, since that touches the PTY manager. A
+// pruned conductor leaves its workspace on disk: the workspace belongs to the
+// socket rather than to the panel, and the next conductor opens straight back
+// into it. Caller holds s.mu.
+func (s *Server) pruneExitedLocked() (stop []string) {
 	exited := 0
 	for i := range s.panels {
 		if s.panels[i].State == panel.Exited {
@@ -2942,18 +2989,13 @@ func (s *Server) pruneExitedLocked() (stop, workspaces []string) {
 	}
 	drop := exited - maxExitedPanels
 	if drop <= 0 {
-		return nil, nil
+		return nil
 	}
 	kept := make([]panel.Panel, 0, len(s.panels))
 	for _, p := range s.panels {
 		if drop > 0 && p.State == panel.Exited {
 			drop--
 			stop = append(stop, p.ID)
-			if p.Conductor {
-				if ws := s.specs[p.ID].Dir; ws != "" {
-					workspaces = append(workspaces, ws)
-				}
-			}
 			s.mon.forget(p.ID)
 			delete(s.specs, p.ID)
 			delete(s.sessions, p.ID)
@@ -2970,7 +3012,7 @@ func (s *Server) pruneExitedLocked() (stop, workspaces []string) {
 		kept = append(kept, p)
 	}
 	s.panels = kept
-	return stop, workspaces
+	return stop
 }
 
 // dispatchReady reports whether a panel in this state can receive a dispatched
@@ -3390,14 +3432,11 @@ func (s *Server) respawnPanel(id string) error {
 	// not quietly depend on that invariant holding in a restored state file.
 	if isAgent || isConductor {
 		if isConductor {
-			if spec.Dir == "" || !dirExists(spec.Dir) {
-				ws, err := paths.NewConductorWorkspace()
-				if err != nil {
-					return err
-				}
-				spec.Dir = ws
+			ws, err := s.makeConductorWorkspace(id)
+			if err != nil {
+				return err
 			}
-			writeConductorFiles(spec.Dir, id)
+			spec.Dir = ws
 			spec.Env = s.conductorEnv(id)
 		} else {
 			spec.Env = s.panelEnv(id)
@@ -3509,10 +3548,6 @@ func (s *Server) closePanel(id string) error {
 		return fmt.Errorf("no panel with id %q", id)
 	}
 	title := s.panels[idx].Title
-	workspace := "" // a conductor's ephemeral workspace, removed once the panel is gone
-	if s.panels[idx].Conductor {
-		workspace = s.specs[id].Dir
-	}
 	s.advanceTaskLocked(id, task.Failed, "panel closed") // closing a panel mid-task abandons it
 	s.panels = slices.Delete(s.panels, idx, idx+1)
 	s.mon.forget(id)
@@ -3533,9 +3568,10 @@ func (s *Server) closePanel(id string) error {
 	s.cg.Release(id)                 // the panel is gone for good; drop its cgroup with it
 	s.releaseContainer(id)           // and the container it was launched in, if it had one
 	s.stopLogging(id, logMarkClosed) // …and its transcript is finished rather than abandoned
-	if workspace != "" {
-		_ = os.RemoveAll(workspace)
-	}
+	// A conductor's workspace stays on disk. It is keyed on the control socket, not
+	// on this panel, and the settings the agent collected there are the whole point
+	// of it surviving: the next conductor opens into the same directory. Only a
+	// reboot (paths.ConductorWorkspace) or an explicit reset clears it.
 	log.Info().Str("panel", title).Msg("panel closed")
 	return nil
 }
@@ -3889,15 +3925,9 @@ func (s *Server) purgeExited() int {
 	s.mu.Lock()
 	kept := make([]panel.Panel, 0, len(s.panels))
 	var gone []string
-	var workspaces []string // ephemeral conductor workspaces to remove once purged
 	for _, p := range s.panels {
 		if p.State == panel.Exited {
 			gone = append(gone, p.ID)
-			if p.Conductor {
-				if ws := s.specs[p.ID].Dir; ws != "" {
-					workspaces = append(workspaces, ws)
-				}
-			}
 			s.mon.forget(p.ID)
 			delete(s.specs, p.ID)    // purged for good; drop its retained spawn spec
 			delete(s.sessions, p.ID) // …and the session ids its usage was attributed through
@@ -3915,9 +3945,6 @@ func (s *Server) purgeExited() int {
 		s.cg.Release(id)                 // purged for good; drop its cgroup with it
 		s.releaseContainer(id)           // and the container it was launched in, if it had one
 		s.stopLogging(id, logMarkClosed) // …and its transcript is finished rather than abandoned
-	}
-	for _, ws := range workspaces {
-		_ = os.RemoveAll(ws)
 	}
 	if len(gone) > 0 {
 		log.Info().Int("count", len(gone)).Msg("purged exited panels")
