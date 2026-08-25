@@ -4684,9 +4684,6 @@ func (m model) statusBar(left, hint string) string {
 	// chip, which said only that the leader was down and said it on the
 	// dashboard alone. The keys it can still take ride in the hint region below.
 	prefixBadge := m.pendingCap()
-	if h := m.pendingHint(cmdBinding); h != "" {
-		hint = h
-	}
 	clock := seg("⏱ "+m.now.Format("15:04:05"), colDark, colCyan)
 	stats := m.statsStrip()
 
@@ -4707,6 +4704,14 @@ func (m model) statusBar(left, hint string) string {
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 0 {
 		gap = 0
+	}
+	// The which-key line replaces the help hint while a run is open, and it is
+	// chosen against the room the bar actually has: the labelled form when it fits,
+	// the keys alone when it does not. This is why the gap is measured first —
+	// asking for the hint before knowing the width is what left the old code with
+	// nothing to do but throw a too-wide line away.
+	if h := m.pendingHintWithin(cmdBinding, gap); h != "" {
+		hint = h
 	}
 	// The key readout rides beside the help hint. It is the first thing to go
 	// when the bar runs out of room — losing "? keys" would cost more.

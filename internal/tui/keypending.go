@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // The run of keys typed so far towards a binding, and the clock that bounds it.
@@ -263,22 +265,81 @@ func (m model) pendingTokens() []string {
 // landing rather than by reading the manual — so it is built from the same key
 // map the matcher uses and cannot advertise a key that would not work.
 func (m model) pendingHint(want func(binding) bool) string {
-	if len(m.pending) == 0 {
-		return ""
-	}
-	next := seqNext(m.keymap(), m.pending, want)
+	next := m.pendingNext(want)
 	if len(next) == 0 {
 		return ""
 	}
+	return m.hintLabelled(next)
+}
+
+// pendingHintWithin is the which-key line in the widest form that fits in cols:
+// the labelled line, else the keys alone, else as many keys as fit with a "+N"
+// for the rest.
+//
+// The status bar used to drop the hint whole when it would not fit, and it never
+// fit: the labels are the sentences the key map shows in two columns, so the four
+// landing families needed 206, 336, 138 and 25 columns against the ~55 a
+// 128-column terminal can spare. Only the one-member family ever appeared, which
+// meant the self-teaching half of the landing keys did not ship at all.
+//
+// Keys alone are a real answer rather than a consolation. The run so far is
+// already on the bar ("g …"), so "g · c · a · u" says how many there are and
+// which ones they are — enough to press one and find out, which is the loop the
+// feature is for. The labels come back the moment there is room for them.
+func (m model) pendingHintWithin(want func(binding) bool, cols int) string {
+	next := m.pendingNext(want)
+	if len(next) == 0 || cols <= 0 {
+		return ""
+	}
+	if full := m.hintLabelled(next); lipgloss.Width(full) <= cols {
+		return full
+	}
+	// Keys only, dropping members from the tail until what is left fits. The count
+	// of what was dropped rides along, so a truncated family still says it is one.
+	for n := len(next); n > 0; n-- {
+		if line := m.hintKeys(next, n); lipgloss.Width(line) <= cols {
+			return line
+		}
+	}
+	return ""
+}
+
+// pendingNext is the set of keys the open run can still take, or nothing when no
+// run is open.
+func (m model) pendingNext(want func(binding) bool) []contin {
+	if len(m.pending) == 0 {
+		return nil
+	}
+	return seqNext(m.keymap(), m.pending, want)
+}
+
+// hintLabelled is the full form: every key beside what it does, named by the
+// binding's short label. The key map's sentences stay in the key map — four of
+// them on one line is what made this hint too wide to ever render.
+func (m model) hintLabelled(next []contin) string {
 	parts := make([]string, 0, len(next))
 	for _, c := range next {
 		label := "…"
 		if c.b.name != "" {
-			label = m.bindDesc(c.b)
+			label = m.bindShort(c.b)
 		}
 		parts = append(parts, m.barStrong().Render(keyLabel(c.key))+m.bar().Render(" "+label))
 	}
 	return strings.Join(parts, " · ")
+}
+
+// hintKeys is the narrow form: the first n keys, with a "+N" when that is not all
+// of them.
+func (m model) hintKeys(next []contin, n int) string {
+	parts := make([]string, 0, n+1)
+	for _, c := range next[:n] {
+		parts = append(parts, m.barStrong().Render(keyLabel(c.key)))
+	}
+	line := strings.Join(parts, m.bar().Render(" · "))
+	if rest := len(next) - n; rest > 0 {
+		line += m.bar().Render(fmt.Sprintf(" +%d", rest))
+	}
+	return line
 }
 
 // --- which half of the key map is in play -------------------------------------

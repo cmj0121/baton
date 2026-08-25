@@ -49,6 +49,14 @@ baton 動作是領導鍵 `C-t` 再接同一個鍵。其餘不變——你在儀�
  DASHBOARD │ g …  g mark · c create · a add · u ungroup            ⏱ 09:34:51  ● attached · local
 ```
 
+這一行會依據狀態列實際剩下的寬度調整。空間夠時每個鍵都帶著標籤;不夠時——成員多的家族碰上窄終端機——就只留下按鍵本身,
+而連按鍵都放不下的家族會說明它省略了幾個:
+
+```text
+ DASHBOARD │ v …  u · k · p · l · g · U                            ⏱ 09:34:51  ● attached · local
+ DASHBOARD │ v …  u · k · p +3                                     ⏱ 09:34:51  ● attached · local
+```
+
 沒有任何中繼鍵同時是一個獨立動作,所以一個完整的序列在你按下最後一鍵的當下就觸發。不等待,也不會有歧義。
 
 ### 逾時

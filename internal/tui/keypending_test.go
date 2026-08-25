@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 // rebind puts a binding on a new sequence, the way the key map editor or a
@@ -253,4 +256,107 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// The which-key line has to fit the bar it rides on. Before the narrow form, the
+// status bar dropped it whole when it did not fit — and it never fit: the four
+// landing families needed 206, 336, 138 and 25 columns against the ~55 a
+// 128-column terminal can spare, so only the one-member family ever appeared and
+// the self-teaching half of the landing keys did not ship.
+
+// hintGap is what the hint region gets on a 128-column terminal, once the mode
+// chip and the right-hand caps have taken theirs.
+const hintGap = 55
+
+func landedModel(land string) model {
+	return press(model{fleet: sampleFleet(), mode: modeDashboard, cursor: 1, width: 128, height: 40}, land)
+}
+
+// TestWhichKeyHintAlwaysShowsSomething is the bug, stated as a test: every
+// landing family says something at a width a real terminal has.
+func TestWhichKeyHintAlwaysShowsSomething(t *testing.T) {
+	for _, land := range []string{"n", "v", "g", "x"} {
+		m := landedModel(land)
+		h := m.pendingHintWithin(cmdBinding, hintGap)
+		if h == "" {
+			t.Errorf("landing %q renders no hint at %d columns", land, hintGap)
+			continue
+		}
+		if w := lipgloss.Width(h); w > hintGap {
+			t.Errorf("landing %q hint is %d columns, more than the %d it has", land, w, hintGap)
+		}
+	}
+}
+
+// TestWhichKeyHintNamesEveryMember checks the narrow form is a real answer rather
+// than a consolation: the whole family's keys are there to be pressed.
+func TestWhichKeyHintNamesEveryMember(t *testing.T) {
+	m := landedModel("g")
+	h := m.pendingHintWithin(cmdBinding, hintGap)
+	for _, k := range []string{"g", "c", "a", "u"} {
+		if !strings.Contains(h, k) {
+			t.Errorf("the g family's %q is missing from %q", k, h)
+		}
+	}
+}
+
+// TestWhichKeyHintLabelsTheFamily checks the two halves compose: short labels
+// bring the g family down to a line a real bar can carry, so the form the docs
+// have always advertised — "g mark · c create · a add · u ungroup" — is the one
+// that renders. Long descriptions belong to the key map, which has two columns
+// for them.
+func TestWhichKeyHintLabelsTheFamily(t *testing.T) {
+	m := landedModel("g")
+	h := m.pendingHintWithin(cmdBinding, hintGap)
+	for _, want := range []string{"mark", "create", "add", "ungroup"} {
+		if !strings.Contains(h, want) {
+			t.Errorf("the g family hint should label its keys with %q, got %q", want, h)
+		}
+	}
+	if strings.Contains(h, "mark a panel for grouping") {
+		t.Errorf("the key map's sentence leaked into the hint: %q", h)
+	}
+}
+
+// TestWhichKeyHintFallsBackToKeys checks the fallback still exists for the family
+// that short labels cannot rescue: v has six members, and even labelled it needs
+// more columns than the bar has.
+func TestWhichKeyHintFallsBackToKeys(t *testing.T) {
+	m := landedModel("v")
+	wide := m.pendingHintWithin(cmdBinding, 400)
+	if !strings.Contains(wide, "usage") {
+		t.Fatalf("a wide bar should carry the labels, got %q", wide)
+	}
+	narrow := m.pendingHintWithin(cmdBinding, hintGap)
+	if strings.Contains(narrow, "usage") {
+		t.Fatalf("a bar too narrow for six labels should drop to keys alone, got %q", narrow)
+	}
+	if lipgloss.Width(narrow) > hintGap || narrow == "" {
+		t.Fatalf("the narrow form should fit and say something, got %q", narrow)
+	}
+}
+
+// TestWhichKeyHintCountsWhatItDropped checks a family too wide even for its keys
+// still says how many there are, rather than quietly showing a partial one.
+func TestWhichKeyHintCountsWhatItDropped(t *testing.T) {
+	m := landedModel("v")
+	h := m.pendingHintWithin(cmdBinding, 8)
+	if h == "" {
+		t.Fatal("even 8 columns should carry a key or two")
+	}
+	if !strings.Contains(h, "+") {
+		t.Fatalf("a truncated family should say how many it dropped, got %q", h)
+	}
+	if w := lipgloss.Width(h); w > 8 {
+		t.Fatalf("the truncated hint is %d columns, more than the 8 it has", w)
+	}
+}
+
+// TestWhichKeyHintEmptyWithoutARun checks the hint belongs to an open run: with
+// nothing pending the bar keeps its help text.
+func TestWhichKeyHintEmptyWithoutARun(t *testing.T) {
+	m := model{fleet: sampleFleet(), mode: modeDashboard, width: 128}
+	if h := m.pendingHintWithin(cmdBinding, hintGap); h != "" {
+		t.Fatalf("no run is open, yet the hint says %q", h)
+	}
 }
