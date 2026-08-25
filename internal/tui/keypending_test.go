@@ -300,17 +300,39 @@ func TestWhichKeyHintNamesEveryMember(t *testing.T) {
 	}
 }
 
-// TestWhichKeyHintPrefersLabels checks the labelled form comes back the moment
-// there is room for it — the narrow form is a fallback, not a replacement.
-func TestWhichKeyHintPrefersLabels(t *testing.T) {
+// TestWhichKeyHintLabelsTheFamily checks the two halves compose: short labels
+// bring the g family down to a line a real bar can carry, so the form the docs
+// have always advertised — "g mark · c create · a add · u ungroup" — is the one
+// that renders. Long descriptions belong to the key map, which has two columns
+// for them.
+func TestWhichKeyHintLabelsTheFamily(t *testing.T) {
 	m := landedModel("g")
+	h := m.pendingHintWithin(cmdBinding, hintGap)
+	for _, want := range []string{"mark", "create", "add", "ungroup"} {
+		if !strings.Contains(h, want) {
+			t.Errorf("the g family hint should label its keys with %q, got %q", want, h)
+		}
+	}
+	if strings.Contains(h, "mark a panel for grouping") {
+		t.Errorf("the key map's sentence leaked into the hint: %q", h)
+	}
+}
+
+// TestWhichKeyHintFallsBackToKeys checks the fallback still exists for the family
+// that short labels cannot rescue: v has six members, and even labelled it needs
+// more columns than the bar has.
+func TestWhichKeyHintFallsBackToKeys(t *testing.T) {
+	m := landedModel("v")
 	wide := m.pendingHintWithin(cmdBinding, 400)
-	if !strings.Contains(wide, "mark") {
+	if !strings.Contains(wide, "usage") {
 		t.Fatalf("a wide bar should carry the labels, got %q", wide)
 	}
 	narrow := m.pendingHintWithin(cmdBinding, hintGap)
-	if strings.Contains(narrow, "mark") {
-		t.Fatalf("a narrow bar should drop to keys alone, got %q", narrow)
+	if strings.Contains(narrow, "usage") {
+		t.Fatalf("a bar too narrow for six labels should drop to keys alone, got %q", narrow)
+	}
+	if lipgloss.Width(narrow) > hintGap || narrow == "" {
+		t.Fatalf("the narrow form should fit and say something, got %q", narrow)
 	}
 }
 

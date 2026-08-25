@@ -216,61 +216,69 @@ type binding struct {
 	desc string
 	act  action
 	cat  string // purpose section header in the key map
+
+	// short is the one- or two-word form the which-key hint uses when there is room
+	// to label the keys — "mark", "create", "add", "ungroup" against a whole line of
+	// desc each. desc is written to be read in the key map's two columns, where a
+	// sentence is right; strung onto one status-bar line, four of them cost more
+	// columns than a terminal has (see pendingHintWithin). Empty falls back to desc,
+	// so a binding without one is legible rather than blank.
+	short string
 }
 
 // bindings lists every editable command grouped by purpose — the order the key
 // map shows them, and tab jumps between these groups. This is the single source
 // of truth for the in-view key map and the config keys.
 var bindings = []binding{
-	{"new-panel", keyNewPanel, "spawn a new shell panel", actNewPanel, "Panels"},
-	{"new-panel-here", keyNewHere, "spawn a shell panel in the focused panel's directory", actNewHere, "Panels"},
-	{"new-panel-form", keyNewForm, "new panel (choose the command)", actNewForm, "Panels"},
-	{"new-agent", keyNewAgent, "spawn an agent panel in a workdir", actNewAgent, "Panels"},
-	{"conductor", keyConductor, "open the conductor — an agent that drives the fleet", actConductor, "Panels"},
-	{"global-shell", keyGlobalShell, "open the global shell — a host shell always one key away", actGlobalShell, "Panels"},
-	{"close", keyClose, "close the selected panel", actClose, "Panels"},
-	{"respawn", keyRespawn, "re-run exited panel(s) in the selection", actRespawn, "Panels"},
-	{"purge-exited", keyPurge, "purge all exited panels", actPurge, "Panels"},
-	{"signal", keySignal, "send a signal to the panel(s)", actSignal, "Panels"},
-	{"search", keySearch, "find panels · search the scrollback (zoom)", actSearch, "Panels"},
-	{"fleet-search", keyFleetSearch, "search every panel's output for a term", actFleetSearch, "Panels"},
-	{"diff", keyDiff, "show the work-tree diff (agent panel)", actDiff, "Panels"},
-	{"dispatch", keyDispatch, "dispatch a task to the agent panel", actDispatch, "Panels"},
-	{"enqueue", keyEnqueue, "enqueue a task for any free agent (a work item, if selected)", actEnqueue, "Panels"},
-	{"queue", keyQueue, "manage the task queue (list · reorder · cancel · drain)", actQueue, "Panels"},
-	{"log", keyLogToggle, "start / stop logging the panel's output to a file (prefix)", actLogToggle, "Panels"},
-	{"log-view", keyLogView, "open that log in a temporary panel, following it (prefix)", actLogView, "Panels"},
+	{"new-panel", keyNewPanel, "spawn a new shell panel", actNewPanel, "Panels", "shell"},
+	{"new-panel-here", keyNewHere, "spawn a shell panel in the focused panel's directory", actNewHere, "Panels", "here"},
+	{"new-panel-form", keyNewForm, "new panel (choose the command)", actNewForm, "Panels", "command"},
+	{"new-agent", keyNewAgent, "spawn an agent panel in a workdir", actNewAgent, "Panels", "agent"},
+	{"conductor", keyConductor, "open the conductor — an agent that drives the fleet", actConductor, "Panels", "conductor"},
+	{"global-shell", keyGlobalShell, "open the global shell — a host shell always one key away", actGlobalShell, "Panels", "global shell"},
+	{"close", keyClose, "close the selected panel", actClose, "Panels", "close"},
+	{"respawn", keyRespawn, "re-run exited panel(s) in the selection", actRespawn, "Panels", "re-run"},
+	{"purge-exited", keyPurge, "purge all exited panels", actPurge, "Panels", "purge"},
+	{"signal", keySignal, "send a signal to the panel(s)", actSignal, "Panels", "signal"},
+	{"search", keySearch, "find panels · search the scrollback (zoom)", actSearch, "Panels", "find"},
+	{"fleet-search", keyFleetSearch, "search every panel's output for a term", actFleetSearch, "Panels", "grep fleet"},
+	{"diff", keyDiff, "show the work-tree diff (agent panel)", actDiff, "Panels", "diff"},
+	{"dispatch", keyDispatch, "dispatch a task to the agent panel", actDispatch, "Panels", "dispatch"},
+	{"enqueue", keyEnqueue, "enqueue a task for any free agent (a work item, if selected)", actEnqueue, "Panels", "enqueue"},
+	{"queue", keyQueue, "manage the task queue (list · reorder · cancel · drain)", actQueue, "Panels", "queue"},
+	{"log", keyLogToggle, "start / stop logging the panel's output to a file (prefix)", actLogToggle, "Panels", "log"},
+	{"log-view", keyLogView, "open that log in a temporary panel, following it (prefix)", actLogView, "Panels", "read log"},
 
-	{"mark", keyMark, "mark a panel for grouping", actMark, "Work items"},
-	{"group", keyGroup, "group the marked panels", actGroup, "Work items"},
-	{"add", keyAdd, "add the marked panels to the selected group", actAdd, "Work items"},
-	{"ungroup", keyUngroup, "ungroup the selected work item", actUngroup, "Work items"},
-	{"rename", keyRename, "rename the panel or group", actRename, "Work items"},
-	{"favourite", keyFavourite, "favourite the panel or group (sorts it to the front)", actFavourite, "Work items"},
-	{"move", keyGrab, "pick a row up — arrows carry it, enter drops it", actGrab, "Work items"},
-	{"expand", keyExpand, "show or hide what is nested under the row", actExpand, "Work items"},
+	{"mark", keyMark, "mark a panel for grouping", actMark, "Work items", "mark"},
+	{"group", keyGroup, "group the marked panels", actGroup, "Work items", "create"},
+	{"add", keyAdd, "add the marked panels to the selected group", actAdd, "Work items", "add"},
+	{"ungroup", keyUngroup, "ungroup the selected work item", actUngroup, "Work items", "ungroup"},
+	{"rename", keyRename, "rename the panel or group", actRename, "Work items", "rename"},
+	{"favourite", keyFavourite, "favourite the panel or group (sorts it to the front)", actFavourite, "Work items", "favourite"},
+	{"move", keyGrab, "pick a row up — arrows carry it, enter drops it", actGrab, "Work items", "move"},
+	{"expand", keyExpand, "show or hide what is nested under the row", actExpand, "Work items", "expand"},
 
-	{"help", keyHelp, "view the keys for this view", actHelp, "View"},
-	{"usage-footer", keyUsage, "cycle the usage footer: off, window, focused panel", actUsageToggle, "View"},
-	{"keycast", keyKeycast, "toggle the key-press readout in the footer", actKeycastToggle, "View"},
-	{"preview", keyPreview, "toggle the detail pane beside the dashboard tree", actPreviewToggle, "View"},
-	{"layout", keyDashLayout, "the dashboard's cards or tree — the tree on a small fleet", actDashLayout, "View"},
-	{"group-by", keyLens, "cycle the group-by lens: work item, directory, profile, state", actLens, "View"},
-	{"key-map", keyEditMap, "edit the key map (prefix)", actEditMap, "View"},
-	{"panel-config", keyPanelConfig, "configure panel defaults (prefix)", actPanelConfig, "View"},
-	{"scroll", keyScroll, "scroll mode — line / page (prefix)", actScroll, "View"},
-	{"dashboard", keyDashboard, "jump to the dashboard (prefix)", actDashboard, "View"},
-	{"proc-tree", keyProcTree, "process tree — the daemon's OS processes (prefix)", actProcTree, "View"},
-	{"usage-view", keyUsageView, "account usage — quota bars and who is spending them", actUsageView, "View"},
-	{"inbox", keyInbox, "the attention inbox — clear what needs a human (prefix)", actInbox, "View"},
-	{"remote", keyRemote, "remote access — the passkey and the live connections (prefix)", actRemote, "View"},
-	{"back", keyBack, "back one level: zoom→group→dashboard (C-t b in a zoom)", actBack, "View"},
-	{"commands", keyCommands, "open the plugin command picker (prefix)", actCommands, "View"},
-	{"scratch", keyScratch, "toggle a floating scratch shell (prefix)", actScratch, "View"},
+	{"help", keyHelp, "view the keys for this view", actHelp, "View", "keys"},
+	{"usage-footer", keyUsage, "cycle the usage footer: off, window, focused panel", actUsageToggle, "View", "usage"},
+	{"keycast", keyKeycast, "toggle the key-press readout in the footer", actKeycastToggle, "View", "keycast"},
+	{"preview", keyPreview, "toggle the detail pane beside the dashboard tree", actPreviewToggle, "View", "preview"},
+	{"layout", keyDashLayout, "the dashboard's cards or tree — the tree on a small fleet", actDashLayout, "View", "layout"},
+	{"group-by", keyLens, "cycle the group-by lens: work item, directory, profile, state", actLens, "View", "group by"},
+	{"key-map", keyEditMap, "edit the key map (prefix)", actEditMap, "View", "key map"},
+	{"panel-config", keyPanelConfig, "configure panel defaults (prefix)", actPanelConfig, "View", "panel config"},
+	{"scroll", keyScroll, "scroll mode — line / page (prefix)", actScroll, "View", "scroll"},
+	{"dashboard", keyDashboard, "jump to the dashboard (prefix)", actDashboard, "View", "dashboard"},
+	{"proc-tree", keyProcTree, "process tree — the daemon's OS processes (prefix)", actProcTree, "View", "processes"},
+	{"usage-view", keyUsageView, "account usage — quota bars and who is spending them", actUsageView, "View", "usage view"},
+	{"inbox", keyInbox, "the attention inbox — clear what needs a human (prefix)", actInbox, "View", "inbox"},
+	{"remote", keyRemote, "remote access — the passkey and the live connections (prefix)", actRemote, "View", "remote"},
+	{"back", keyBack, "back one level: zoom→group→dashboard (C-t b in a zoom)", actBack, "View", "back"},
+	{"commands", keyCommands, "open the plugin command picker (prefix)", actCommands, "View", "commands"},
+	{"scratch", keyScratch, "toggle a floating scratch shell (prefix)", actScratch, "View", "scratch"},
 
-	{"restart", keyRestart, "force-restart the server (prefix)", actRestart, "Session"},
-	{"reload", keyReload, "reload config (backend + cockpit)", actReload, "Session"},
-	{"detach", keyDetach, "detach (server keeps running)", actDetach, "Session"},
+	{"restart", keyRestart, "force-restart the server (prefix)", actRestart, "Session", "restart"},
+	{"reload", keyReload, "reload config (backend + cockpit)", actReload, "Session", "reload"},
+	{"detach", keyDetach, "detach (server keeps running)", actDetach, "Session", "detach"},
 }
 
 // bindDesc is a binding's description in the active language. The lookup is
@@ -278,6 +286,18 @@ var bindings = []binding{
 // rebind — or a reworded English line — never orphans a translation.
 func (m model) bindDesc(b binding) string {
 	return m.tr("bind."+b.name, b.desc)
+}
+
+// bindShort is a binding's short label in the active language — the form the
+// which-key hint labels a key with. It is keyed by the binding's stable name with
+// a ".short" suffix, so a translation can be shorter than the sentence rather
+// than being forced to reuse it. A binding with no short label falls back to its
+// description, which is long but never blank.
+func (m model) bindShort(b binding) string {
+	if b.short == "" {
+		return m.bindDesc(b)
+	}
+	return m.tr("bind."+b.name+".short", b.short)
 }
 
 // prefs is the cockpit state persisted to $HOME/.baton/config.

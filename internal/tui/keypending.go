@@ -313,13 +313,15 @@ func (m model) pendingNext(want func(binding) bool) []contin {
 	return seqNext(m.keymap(), m.pending, want)
 }
 
-// hintLabelled is the full form: every key beside what it does.
+// hintLabelled is the full form: every key beside what it does, named by the
+// binding's short label. The key map's sentences stay in the key map — four of
+// them on one line is what made this hint too wide to ever render.
 func (m model) hintLabelled(next []contin) string {
 	parts := make([]string, 0, len(next))
 	for _, c := range next {
 		label := "…"
 		if c.b.name != "" {
-			label = m.bindDesc(c.b)
+			label = m.bindShort(c.b)
 		}
 		parts = append(parts, m.barStrong().Render(keyLabel(c.key))+m.bar().Render(" "+label))
 	}
