@@ -143,10 +143,11 @@ behind every view.
 
 Everything you'd reach for while shepherding a fleet, a keystroke away:
 
-- **Agent backends** — baton knows a catalogue of agent CLIs (`claude`, `codex`, `gemini`, `aider`, `opencode`) and
-  detects which of them the machine the fleet runs on actually has. `A` lists the ones you can run and spawns the one you
-  pick; `C-t P` sets the fleet default from the same list; `C-t R` re-detects after an install. Add your own — or change
-  a preset's command, arguments, caps or container — under `panel.agents`. No new key for any of it.
+- **Agent backends** — baton knows a catalogue of agent CLIs (`claude`, `codex`, `gemini`, `aider`, `opencode`, `grok`)
+  and detects which of them the machine the fleet runs on actually has. `A` lists the ones you can run and spawns the one
+  you pick; `C-t P` sets the fleet default from the same list, and names the ones baton knows and this machine has not
+  got with where to get each; `C-t R` re-detects after an install. Add your own — or change a preset's command,
+  arguments, caps or container — under `panel.agents`. No new key for any of it.
 - **Signals** — `s` sends any signal to the selection, the focused tile, or the whole group; the picker lists the common
   ones, `o` types any name or number.
 - **Find, search, copy** — `f` filters the fleet by title or group; `/` greps every panel's output at once and lists the
