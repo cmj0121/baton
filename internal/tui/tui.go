@@ -4506,6 +4506,7 @@ func (m model) panelConfigView() string {
 	row(panelRowShell, "default shell", shellLabel(m.shellPath))
 	row(panelRowAgent, "default agent", m.defaultAgentLabel())
 	row(panelRowReplayKB, "replay buffer", replayLabel(m.replayKB))
+	body = append(body, m.missingAgentsSection()...)
 	body = append(body, "", sectionStyle.Render(spaced("RESOURCE LIMITS")), "")
 	for i, f := range limitFields {
 		row(firstLimitRow+i, f.label, limitLabel(f.get(m.limits)))
@@ -4525,6 +4526,37 @@ func (m model) panelConfigView() string {
 		centered: true,
 		clipHint: mutedStyle.Render(fmt.Sprintf("   %d/%d", m.cursor+1, numPanelConfigRows)),
 	})
+}
+
+// missingAgentsSection lists the agent backends baton knows and this machine has
+// not got, with where to get each one. It is the answer to a question the cockpit
+// used to have no way of being asked: someone running one backend had no way to
+// learn there were five more baton would spawn for them.
+//
+// It lives here and not in the spawn picker on purpose. The picker is on the way
+// to spawning something and its rule holds — an entry you cannot choose is a trap.
+// This page is where you come to find out what the fleet could do, and a name you
+// have not installed is exactly the thing you came for.
+//
+// The rows are not selectable and the cursor never enters them: there is nothing
+// to do here but read, and baton cannot install anything on your behalf.
+func (m model) missingAgentsSection() []string {
+	miss := m.missingAgents()
+	if len(miss) == 0 {
+		return nil
+	}
+	out := []string{"", sectionStyle.Render(spaced("KNOWN, NOT INSTALLED")), ""}
+	for _, b := range miss {
+		where := trimScheme(b.Homepage)
+		if where == "" {
+			where = b.Command // a user profile carries no homepage; its command is all we can say
+		}
+		out = append(out, "  "+mutedStyle.Render(fmt.Sprintf("%-16s", b.Name))+valueStyle.Render(where))
+	}
+	// The prefix has to be spelled out: reload is a prefixed binding, and seqLabel
+	// on the action alone renders a bare "R" — a key that on its own does nothing.
+	// agentpick.go says it the same way for the same reason.
+	return append(out, "", mutedStyle.Render("install one, then "+keyLabel(m.effPrefix())+" R re-detects"))
 }
 
 // inputView renders the active text-input overlay as a centred popup.

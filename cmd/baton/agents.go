@@ -11,7 +11,14 @@ import (
 
 // detectAgents works out which agent backends this machine can spawn: the
 // built-in catalogue with the user's own panel.agents profiles layered over it,
-// filtered down to the commands that are actually there.
+// each marked with whether the command behind it is actually there.
+//
+// It reports the misses rather than dropping them. A name baton knows and did not
+// find is the one thing the old filtering could not say, and the silence read as
+// "this machine has one agent backend" when the truth was "one of the six baton
+// knows". The cockpit shows the misses on the panel-config page, where you go to
+// learn what the fleet could do; the spawn picker still lists only what can be
+// spawned, because an entry you cannot choose is a trap wherever it appears.
 //
 // It runs in the DAEMON, on every config load — boot and reload alike — because
 // the PATH that decides whether an agent can be spawned is the one the panels
@@ -33,18 +40,24 @@ func detectAgents(cfg config.Config) []proto.AgentBackend {
 			Isolated: isolationIntended(prof),
 		})
 	}
-	found := detectBackends(agents.Merge(user))
+	scanned := detectBackends(agents.Merge(user))
 
-	out := make([]proto.AgentBackend, 0, len(found))
-	for _, b := range found {
-		out = append(out, proto.AgentBackend{Name: b.Name, Command: b.Command, Args: b.Args})
+	out := make([]proto.AgentBackend, 0, len(scanned))
+	for _, b := range scanned {
+		out = append(out, proto.AgentBackend{
+			Name:     b.Name,
+			Command:  b.Command,
+			Args:     b.Args,
+			Homepage: b.Homepage,
+			Missing:  b.Missing,
+		})
 	}
 	return out
 }
 
 // detectBackends is the PATH scan, held as a variable so a test can answer for a
 // machine it does not have without reaching into the agents package's own hooks.
-var detectBackends = agents.Detect
+var detectBackends = agents.Scan
 
 // isolationIntended reports whether a profile meant to run inside a container.
 // Such a profile is never tested against the host's PATH: its command runs in an

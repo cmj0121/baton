@@ -46,7 +46,7 @@ re-run with `r`. Distinct from the floating **scratch** pane (`C-t ~`), which is
 
 **Agent profiles.** An agent panel is spawned from a named **profile** — a command and its arguments — run in a **working
 directory** you choose, the directory the agent operates on. baton knows a small catalogue of agent CLIs by name
-(`claude`, `codex`, `gemini`, `aider`, `opencode`); more are defined under `panel.agents` in the config, with
+(`claude`, `codex`, `gemini`, `aider`, `opencode`, `grok`); more are defined under `panel.agents` in the config, with
 `panel.default-agent` naming the one the new-agent action spawns. The
 client resolves the profile and sends `panel.create` with the command, args, and workdir; the server starts the process
 there, and the panel's title reads `<command> · <workdir>` (e.g. `claude · baton`) so its task and place are visible at
@@ -55,9 +55,18 @@ a glance.
 **Detected backends.** On every config load the daemon checks which of the catalogue's commands the machine the _fleet_
 runs on actually has — presence on `PATH`, nothing more. The scan runs on the server because that is the machine panels
 are spawned from: a cockpit attached over a remote socket would otherwise answer with the binaries on its own laptop,
-which is worse than answering nothing. A preset carries a name and a command and nothing else — arguments, caps,
-patience, and isolation live in a `panel.agents` profile, which overrides the preset of the same name outright, and a
-profile that isolates is never tested against the host's `PATH` because its command runs inside an image.
+which is worse than answering nothing. A preset carries a name, a command, and a homepage — arguments, caps, patience,
+and isolation live in a `panel.agents` profile, which overrides the preset of the same name outright, homepage included,
+and a profile that isolates is never tested against the host's `PATH` because its command runs inside an image.
+
+The homepage is the one thing a preset says beyond what to run, and it says only where to get the CLI, never how to
+install it: a release process is someone else's to change. Each preset's command is the `bin` entry its published package
+installs, not the name its documentation uses in prose — the two can differ, and `PATH` is the only thing the scan asks
+about.
+
+The scan reports what it did not find rather than dropping it. A name baton knows and did not find is the one thing the
+old filtering could not say, and the silence read as "this machine has one agent backend" when the truth was "one of the
+six baton knows".
 
 Detection is never written back to the config: what a machine happens to have installed is a fact about the machine, not
 a statement of intent, and the only line the cockpit writes is `panel.default-agent`. **`C-t R`** (or a `SIGHUP`)
@@ -67,8 +76,12 @@ running".
 
 What that buys, in the cockpit: the new-agent action lists the backends that were found whenever there is more than one
 to choose from — with the cursor on the default, so `enter` is always the usual answer — and goes straight to the
-working-directory prompt when there is only one. The panel-config page (`C-t P`) sets the fleet default from the same
-list, and says so in the row when the configured default is not on the machine at all.
+working-directory prompt when there is only one. Neither offers a backend that was not found: an entry you cannot spawn
+is not information, it is a trap, and greying one out only moves the trap. The panel-config page (`C-t P`) sets the fleet
+default from the same list, says so in the row when the configured default is not on the machine at all, and lists the
+backends baton knows and this machine has not got with where to get each. That page is where you go to learn what the
+fleet could do, which is the one place a name you have not installed is what you came for; its rows are not selectable,
+because there is nothing to do there but read.
 
 ### Lifecycle
 

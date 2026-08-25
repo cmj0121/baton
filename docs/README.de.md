@@ -145,11 +145,12 @@ Die vollständige Tastenreferenz steht in **[docs/KEYS.md](KEYS.md)**, die Gesta
 
 Alles, wonach du beim Hüten einer Flotte greifen würdest, nur einen Tastendruck entfernt:
 
-- **Agent-Backends** — baton kennt einen Katalog von Agent-CLIs (`claude`, `codex`, `gemini`, `aider`, `opencode`) und
-  erkennt, welche davon die Maschine, auf der die Flotte läuft, tatsächlich hat. `A` listet die auf, die du starten
-  kannst, und startet die gewählte; `C-t P` setzt den Flotten-Standard aus derselben Liste; `C-t R` erkennt nach einer
-  Installation neu. Eigene hinzufügen — oder Befehl, Argumente, Grenzen und Container einer Vorlage ändern — unter
-  `panel.agents`. Für all das keine neue Taste.
+- **Agent-Backends** — baton kennt einen Katalog von Agent-CLIs (`claude`, `codex`, `gemini`, `aider`, `opencode`,
+  `grok`) und erkennt, welche davon die Maschine, auf der die Flotte läuft, tatsächlich hat. `A` listet die auf, die du
+  starten kannst, und startet die gewählte; `C-t P` setzt den Flotten-Standard aus derselben Liste und nennt die, die
+  baton kennt und diese Maschine nicht hat, samt Bezugsquelle; `C-t R` erkennt nach einer Installation neu. Eigene
+  hinzufügen — oder Befehl, Argumente, Grenzen und Container einer Vorlage ändern — unter `panel.agents`. Für all das
+  keine neue Taste.
 - **Signale** — `s` sendet ein beliebiges Signal an die Auswahl, die fokussierte Kachel oder die ganze Gruppe; der
   Picker listet die gängigen auf, mit `o` tippst du einen beliebigen Namen oder eine Nummer.
 - **Finden, Suchen, Kopieren** — `f` filtert die Flotte nach Titel oder Gruppe; `/` greppt die Ausgabe aller Panels auf
