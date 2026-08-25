@@ -45,9 +45,12 @@ resource boundary, not a filesystem or network one.
 
 The built-in primer tells the conductor _how_ to drive baton; you tell it _what to do_. Write a goal and guide in
 `$HOME/.baton/CONDUCTOR.md` and baton appends it to the conductor's briefing under an **Operator's brief** heading every
-time the conductor is spawned or re-run — so editing the file and then re-running the conductor (`n C` on an exited one, or
-after you stop a running one from its zoom) updates its standing instructions. The file is optional and never replaces the
-primer: the agent always keeps the control mechanics and the forbidden actions. For example:
+time the conductor is spawned or re-run. It is also **hot-reloadable**: `C-t R` (or a `SIGHUP` to the daemon) rewrites the
+brief into the running conductor's workspace and prints a line in its panel saying so — no need to close and reopen it.
+What a reload cannot do is change an agent's mind mid-session: an agent reads its project instructions when its session
+starts, so the refreshed brief is what it will see the next time it looks, and the notice is there to tell you there is
+something new to look at. The file is optional and never replaces the primer: the agent always keeps the control
+mechanics and the forbidden actions. For example:
 
 ```md
 # Mission
