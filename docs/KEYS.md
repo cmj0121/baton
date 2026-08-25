@@ -80,94 +80,102 @@ warns you when you do.
 leader, in a zoom; the group split has its own keys and does not reach them. A `(C-t)` row whose action needs a
 dashboard row — the work-item verbs — is refused in a zoom with the way forward on the status line.
 
-| Purpose         | Leader | Landing | Key                 | Does                                                 |
-| --------------- | ------ | ------- | ------------------- | ---------------------------------------------------- |
-| **Panels**      | (C-t)  | ·       | `p`                 | new shell panel                                      |
-|                 | (C-t)  | ·       | `A`                 | new agent panel                                      |
-|                 | (C-t)  | `n`     | `c`                 | new panel, choosing the command                      |
-|                 | (C-t)  | `n`     | `.`                 | new shell in the focused panel's directory           |
-|                 | (C-t)  | `n`     | `C`                 | the conductor, found or created                      |
-|                 | (C-t)  | `n`     | `h`                 | the global shell, found or created                   |
-|                 | (C-t)  | ·       | `w`                 | close the selection                                  |
-|                 | (C-t)  | ·       | `r`                 | re-run the exited panels under the focus             |
-|                 | (C-t)  | `x`     | `x`                 | purge every exited panel                             |
-|                 | (C-t)  | ·       | `s`                 | send a signal                                        |
-|                 | (C-t)  | ·       | `f`                 | find panels · search the scrollback in a zoom        |
-|                 | (C-t)  | ·       | `/`                 | fleet search — grep every panel's output             |
-|                 | (C-t)  | ·       | `D`                 | the work-tree diff of an agent panel                 |
-|                 | (C-t)  | ·       | `T`                 | dispatch a task to the agent                         |
-|                 | (C-t)  | ·       | `t`                 | enqueue a task for any free agent                    |
-|                 | (C-t)  | ·       | `Q`                 | manage the task queue                                |
-| **Work items**  | (C-t)  | `g`     | `g`                 | mark or unmark the selection                         |
-|                 | (C-t)  | `g`     | `c`                 | create a work item from the marked panels            |
-|                 | (C-t)  | `g`     | `a`                 | add the marked panels to the selected work item      |
-|                 | (C-t)  | `g`     | `u`                 | dissolve the selected work item                      |
-|                 | (C-t)  | ·       | `e`                 | rename the panel or work item                        |
-|                 | (C-t)  | ·       | `*`                 | favourite it, sorting it to the front                |
-|                 | (C-t)  | ·       | `m`                 | pick a row up; arrows carry it, enter drops it       |
-|                 | (C-t)  | ·       | `space`             | show or hide what is nested under the row            |
-| **View**        | (C-t)  | ·       | `?`                 | the key list for this view                           |
-|                 | (C-t)  | `v`     | `u`                 | cycle the usage footer: off, window, panel, quota    |
-|                 | (C-t)  | `v`     | `U`                 | account usage — quota bars, and who is spending them |
-|                 | (C-t)  | `v`     | `k`                 | the key-press readout in the footer                  |
-|                 | (C-t)  | `v`     | `p`                 | the detail pane beside the dashboard tree            |
-|                 | (C-t)  | `v`     | `l`                 | the dashboard layout: cards or tree                  |
-|                 | (C-t)  | `v`     | `g`                 | cycle the group-by lens                              |
-|                 | (C-t)  | ·       | `b`                 | back one level: zoom, group, dashboard               |
-| **Escapes**     | C-t    | ·       | `d`                 | go to the dashboard                                  |
-|                 | C-t    | ·       | `a`                 | the attention inbox                                  |
-|                 | C-t    | ·       | `o`                 | the process tree                                     |
-|                 | C-t    | ·       | `@`                 | remote access                                        |
-|                 | C-t    | ·       | `~`                 | the floating scratch shell                           |
-|                 | C-t    | ·       | `c`                 | the plugin command picker                            |
-|                 | C-t    | ·       | `k`                 | edit the key map                                     |
-|                 | C-t    | ·       | `P`                 | panel defaults                                       |
-|                 | C-t    | ·       | `[`                 | scroll mode                                          |
-|                 | C-t    | ·       | `l`                 | start or stop logging the panel to a file            |
-|                 | C-t    | ·       | `L`                 | open that log in a temporary panel                   |
-|                 | C-t    | ·       | `G`                 | the git menu, on a zoomed agent panel                |
-| **Session**     | C-t    | ·       | `S`                 | force-restart the server, ending the fleet           |
-|                 | (C-t)  | ·       | `R`                 | reload config; the fleet keeps running               |
-|                 | (C-t)  | ·       | `q`                 | detach; the server keeps running                     |
-| **Navigation**  | ·      | ·       | `hjkl` / arrows     | move; on the tree they also fold and unfold          |
-|                 | ·      | ·       | `enter`             | open or zoom the selection                           |
-|                 | ·      | ·       | `esc`               | cancel, or leave one layer                           |
-|                 | ·      | ·       | `tab` / `shift+tab` | next / previous                                      |
-|                 | ·      | ·       | `shift+←` / `→`     | reorder the selection                                |
-| **Group split** | ·      | ·       | `tab` / `shift+tab` | focus the next / previous tile                       |
-|                 | ·      | ·       | `+` / `-`           | show more / fewer live tiles                         |
-|                 | ·      | ·       | `L`                 | cycle the tile layout                                |
-|                 | ·      | ·       | `z`                 | resize mode — arrows grow and shrink the tile        |
-|                 | ·      | ·       | `p`                 | pin or unpin the focused member                      |
-|                 | ·      | ·       | `i`                 | interact — drive the focused tile in place           |
-|                 | ·      | ·       | `x`                 | remove the focused member from the work item         |
-|                 | ·      | ·       | `S`                 | signal every member                                  |
-|                 | ·      | ·       | `enter`             | zoom the tile, or descend into a sub-group           |
-| **Zoom**        | C-t    | ·       | `C-t`               | send a literal `C-t` to the program                  |
-| **Scroll mode** | ·      | ·       | `j` / `k`           | scroll a line                                        |
-|                 | ·      | ·       | `b` / `space`       | scroll a page                                        |
-|                 | ·      | ·       | `g` / `G`           | jump to the top / bottom                             |
-|                 | ·      | ·       | `n` / `N`           | next / previous search match                         |
-|                 | ·      | ·       | `v`                 | start a whole-line selection                         |
-|                 | ·      | ·       | `V`                 | start a block selection; `h` / `l` set its width     |
-|                 | ·      | ·       | `y`                 | copy the selection to the clipboard                  |
-|                 | ·      | ·       | `q` / `esc`         | leave scroll mode                                    |
-| **Overlays**    | ·      | ·       | `j` / `k` / arrows  | move                                                 |
-|                 | ·      | ·       | `g` / `G`           | jump to the top / bottom                             |
-|                 | ·      | ·       | `b` / `space`       | scroll a page                                        |
-|                 | ·      | ·       | `enter`             | open or apply the row                                |
-|                 | ·      | ·       | `r`                 | refresh                                              |
-|                 | ·      | ·       | `x`                 | remove the row under the cursor                      |
-|                 | ·      | ·       | `X`                 | clear every row, after a `y`/`n`                     |
-|                 | ·      | ·       | `q` / `esc`         | close                                                |
-| **Inbox**       | ·      | ·       | `i`                 | step into the panel that wants you                   |
-|                 | ·      | ·       | `-`                 | snooze the row                                       |
-| **Queue**       | ·      | ·       | `shift+↑` / `↓`     | promote / demote the task                            |
-| **Remote**      | ·      | ·       | `e` / `E`           | enable / disable remote access                       |
-|                 | ·      | ·       | `n`                 | rotate the passkey                                   |
-| **Git menu**    | ·      | ·       | `d` `l` `s`         | diff · log · status                                  |
-|                 | ·      | ·       | `a` `c` `p`         | stage all · commit · push                            |
-|                 | ·      | ·       | `b` `w` `W` `x`     | branch · worktree · worktrees · remove worktree      |
+| Purpose         | Leader | Landing | Key                 | Does                                                   |
+| --------------- | ------ | ------- | ------------------- | ------------------------------------------------------ |
+| **Panels**      | (C-t)  | ·       | `p`                 | new shell panel                                        |
+|                 | (C-t)  | ·       | `A`                 | new agent panel                                        |
+|                 | (C-t)  | `n`     | `c`                 | new panel, choosing the command                        |
+|                 | (C-t)  | `n`     | `.`                 | new shell in the focused panel's directory             |
+|                 | (C-t)  | `n`     | `C`                 | the conductor, found or created                        |
+|                 | (C-t)  | `n`     | `h`                 | the global shell, found or created                     |
+|                 | (C-t)  | ·       | `w`                 | close the selection                                    |
+|                 | (C-t)  | ·       | `r`                 | re-run the exited panels under the focus               |
+|                 | (C-t)  | `x`     | `x`                 | purge every exited panel                               |
+|                 | (C-t)  | ·       | `s`                 | send a signal                                          |
+|                 | (C-t)  | ·       | `f`                 | find panels · search the scrollback in a zoom          |
+|                 | (C-t)  | ·       | `/`                 | fleet search — grep every panel's output               |
+|                 | (C-t)  | ·       | `D`                 | the work-tree diff of an agent panel                   |
+|                 | (C-t)  | ·       | `T`                 | dispatch a task to the agent                           |
+|                 | (C-t)  | ·       | `t`                 | enqueue a task for any free agent                      |
+|                 | (C-t)  | ·       | `Q`                 | manage the task queue                                  |
+| **Work items**  | (C-t)  | `g`     | `g`                 | mark or unmark the selection                           |
+|                 | (C-t)  | `g`     | `c`                 | create a work item from the marked panels              |
+|                 | (C-t)  | `g`     | `a`                 | add the marked panels to the selected work item        |
+|                 | (C-t)  | `g`     | `u`                 | dissolve the selected work item                        |
+|                 | (C-t)  | ·       | `e`                 | rename the panel or work item                          |
+|                 | (C-t)  | ·       | `*`                 | favourite it, sorting it to the front                  |
+|                 | (C-t)  | ·       | `m`                 | pick a row up; arrows carry it, enter drops it         |
+|                 | (C-t)  | ·       | `space`             | show or hide what is nested under the row              |
+| **View**        | (C-t)  | ·       | `?`                 | the key list for this view                             |
+|                 | (C-t)  | `v`     | `u`                 | cycle the usage footer: off, window, panel, quota      |
+|                 | (C-t)  | `v`     | `U`                 | account usage — quota bars, and who is spending them   |
+|                 | (C-t)  | `v`     | `k`                 | the key-press readout in the footer                    |
+|                 | (C-t)  | `v`     | `p`                 | the detail pane beside the dashboard tree              |
+|                 | (C-t)  | `v`     | `l`                 | the dashboard layout: cards or tree                    |
+|                 | (C-t)  | `v`     | `g`                 | cycle the group-by lens                                |
+|                 | (C-t)  | ·       | `b`                 | back one level: zoom, group, dashboard                 |
+| **Escapes**     | C-t    | ·       | `d`                 | go to the dashboard                                    |
+|                 | C-t    | ·       | `a`                 | the attention inbox                                    |
+|                 | C-t    | ·       | `o`                 | the process tree                                       |
+|                 | C-t    | ·       | `@`                 | remote access                                          |
+|                 | C-t    | ·       | `~`                 | the floating scratch shell                             |
+|                 | C-t    | ·       | `c`                 | the plugin command picker                              |
+|                 | C-t    | ·       | `k`                 | edit the key map                                       |
+|                 | C-t    | ·       | `P`                 | panel defaults                                         |
+|                 | C-t    | ·       | `[`                 | scroll mode                                            |
+|                 | C-t    | ·       | `l`                 | start or stop logging the panel to a file              |
+|                 | C-t    | ·       | `L`                 | open that log in a temporary panel                     |
+|                 | C-t    | ·       | `G`                 | the git menu, on a zoomed agent panel                  |
+| **Session**     | C-t    | ·       | `S`                 | force-restart the server, ending the fleet             |
+|                 | (C-t)  | ·       | `R`                 | reload config; the fleet keeps running                 |
+|                 | (C-t)  | ·       | `q`                 | detach; the server keeps running                       |
+| **Navigation**  | ·      | ·       | `hjkl` / arrows     | move; on the tree they also fold and unfold            |
+|                 | ·      | ·       | `enter`             | open or zoom the selection                             |
+|                 | ·      | ·       | `esc`               | cancel, or leave one layer                             |
+|                 | ·      | ·       | `tab` / `shift+tab` | next / previous                                        |
+|                 | ·      | ·       | `shift+←` / `→`     | reorder the selection                                  |
+| **Group split** | ·      | ·       | `tab` / `shift+tab` | focus the next / previous tile                         |
+|                 | ·      | ·       | `+` / `-`           | show more / fewer live tiles                           |
+|                 | ·      | ·       | `L`                 | cycle the tile layout                                  |
+|                 | ·      | ·       | `z`                 | resize mode — arrows grow and shrink the tile          |
+|                 | ·      | ·       | `p`                 | pin or unpin the focused member                        |
+|                 | ·      | ·       | `i`                 | interact — drive the focused tile in place             |
+|                 | ·      | ·       | `x`                 | remove the focused member from the work item           |
+|                 | ·      | ·       | `S`                 | signal every member                                    |
+|                 | ·      | ·       | `enter`             | zoom the tile, or descend into a sub-group             |
+| **Zoom**        | C-t    | ·       | `C-t`               | send a literal `C-t` to the program                    |
+| **Scroll mode** | ·      | ·       | `j` / `k`           | scroll a line                                          |
+|                 | ·      | ·       | `b` / `space`       | scroll a page                                          |
+|                 | ·      | ·       | `g` / `G`           | jump to the top / bottom                               |
+|                 | ·      | ·       | `n` / `N`           | next / previous search match                           |
+|                 | ·      | ·       | `v`                 | start a whole-line selection                           |
+|                 | ·      | ·       | `V`                 | start a block selection; `h` / `l` set its width       |
+|                 | ·      | ·       | `y`                 | copy the selection to the clipboard                    |
+|                 | ·      | ·       | `q` / `esc`         | leave scroll mode                                      |
+| **Overlays**    | ·      | ·       | `j` / `k` / arrows  | move                                                   |
+|                 | ·      | ·       | `g` / `G`           | jump to the top / bottom                               |
+|                 | ·      | ·       | `b` / `space`       | scroll a page                                          |
+|                 | ·      | ·       | `enter`             | open or apply the row                                  |
+|                 | ·      | ·       | `r`                 | refresh                                                |
+|                 | ·      | ·       | `x`                 | remove the row under the cursor                        |
+|                 | ·      | ·       | `X`                 | clear every row, after a `y`/`n`                       |
+|                 | ·      | ·       | `q` / `esc`         | close                                                  |
+| **Inbox**       | ·      | ·       | `i`                 | step into the panel that wants you                     |
+|                 | ·      | ·       | `-`                 | snooze the row                                         |
+| **Queue**       | ·      | ·       | `shift+↑` / `↓`     | promote / demote the task                              |
+| **Remote**      | ·      | ·       | `e` / `E`           | enable / disable remote access                         |
+|                 | ·      | ·       | `n`                 | rotate the passkey                                     |
+| **Prompts**     | ·      | ·       | `tab`               | complete a path toward what is on disk                 |
+|                 | ·      | ·       | `C-b`               | delete the path segment before the cursor              |
+|                 | ·      | ·       | `C-o`               | browse for the directory (the workdir prompt)          |
+| **Workdir**     | ·      | ·       | `→` / `l`           | enter the directory under the cursor                   |
+|                 | ·      | ·       | `←` / `h`           | up one level                                           |
+|                 | ·      | ·       | `enter`             | pick it — the path lands in the prompt, still editable |
+|                 | ·      | ·       | `/`                 | narrow the listing                                     |
+|                 | ·      | ·       | `.`                 | show / hide dot directories                            |
+| **Git menu**    | ·      | ·       | `d` `l` `s`         | diff · log · status                                    |
+|                 | ·      | ·       | `a` `c` `p`         | stage all · commit · push                              |
+|                 | ·      | ·       | `b` `w` `W` `x`     | branch · worktree · worktrees · remove worktree        |
 
 Everything from **Panels** through **Session** is rebindable. Navigation and the per-view keys below it are fixed: they
 are what the view _is_, and a movable `enter` would leave a view with no way in.

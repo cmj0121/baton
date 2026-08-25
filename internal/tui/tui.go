@@ -126,6 +126,7 @@ const (
 	modeUsage       // the account-usage overlay (v U): the quota bars in full, and who is spending them
 	modeInbox       // the attention inbox (C-t a): the queue of panels wanting a human, cleared in place
 	modeRemote      // the remote overlay (C-t @): remote access, its passkey, and every live connection
+	modeDirPick     // the workdir picker (C-o from the workdir prompt): IN USE dirs, then a directory browse
 	modeZoom
 	modeGroupZoom
 	modeScreensaver // the hidden Matrix-rain + clock Easter egg (C-t E / idle auto-start)
@@ -517,9 +518,21 @@ type model struct {
 	notifyEnabled  bool
 	notifyCoalesce time.Duration
 	notifySeen     map[string]bool
-	notifyIDs      map[string]bool
-	notifyPending  []string
-	notifyAt       time.Time
+	// The workdir picker (C-o from the workdir prompt). dirPickFrom is the view to
+	// restore and dirPickInput the overlay to hand the chosen path back to, so the
+	// picker can be opened from a prompt without the prompt losing its place.
+	dirPickFrom   mode
+	dirPickInput  inputPurpose
+	dirPickDir    string // the directory the browse half is listing
+	dirPickRows   []dirRow
+	dirPickCursor int
+	dirPickHidden bool   // list dot directories too
+	dirPickFilter string // substring the listing is narrowed by
+	dirPickTyping bool   // the filter field has the keyboard
+
+	notifyIDs     map[string]bool
+	notifyPending []string
+	notifyAt      time.Time
 }
 
 // inputPurpose is what an active text-input overlay feeds on submit.
@@ -1328,6 +1341,12 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleQueueKey(key)
 	}
 
+	// The workdir picker owns the keyboard until a directory is picked or esc; it
+	// hands the path back to the prompt it was opened from.
+	if m.mode == modeDirPick {
+		return m.handleDirPickKey(key, k)
+	}
+
 	// The fleet-search results popup owns the keyboard until esc; it walks the hits
 	// and zooms the one under the cursor.
 	if m.mode == modeFleetSearch {
@@ -1847,6 +1866,10 @@ func (m model) handleInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if inputIsPath(m.input) {
 			m.inputBuf, m.inputHint = completePath(m.inputBuf)
 		}
+	case tea.KeyCtrlO: // browse for the directory instead of spelling it
+		if inputIsDir(m.input) {
+			return m.openDirPicker(m.mode), nil
+		}
 	case tea.KeySpace:
 		m.inputBuf += " "
 		m.inputHint = ""
@@ -1883,6 +1906,14 @@ func inputIsPath(p inputPurpose) bool {
 		return true
 	}
 	return false
+}
+
+// inputIsDir reports whether an overlay edits a DIRECTORY, so the workdir picker
+// (C-o) applies. It is narrower than inputIsPath on purpose: a new panel's command
+// and the default shell are paths to executables, and a picker that lists only
+// directories cannot offer either — tab completion still walks them.
+func inputIsDir(p inputPurpose) bool {
+	return p == inputAgentDir
 }
 
 // deleteLastWord trims trailing spaces, then one trailing path separator, then
@@ -3525,6 +3556,8 @@ func (m model) render() string {
 		body = m.gitOutView()
 	case m.mode == modeQueue:
 		body = m.queueView()
+	case m.mode == modeDirPick:
+		body = m.dirPickView()
 	case m.mode == modeFleetSearch:
 		body = m.fleetSearchView()
 	case m.mode == modeProcTree:
