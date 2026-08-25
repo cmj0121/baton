@@ -4,6 +4,25 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v1.6.0](https://github.com/cmj0121/baton/releases/tag/v1.6.0) — the backends you have not installed
+
+2026-08-25
+
+- **The catalogue stops hiding its own misses** — the daemon filtered the agent CLIs down to what was on `PATH` and
+  dropped the rest before anything left it, so a name baton knows and did not find never reached the cockpit. On a
+  machine with one agent CLI the other five did not exist as far as you were concerned: baton looked for them, found
+  nothing, and said nothing. `Scan` now reports every candidate with a verdict, and `C-t P` lists what is known and not
+  installed with where to get each.
+- **A preset says where to get it** — a name on its own tells someone who already knows what `opencode` is that they
+  have not got it, and tells everyone else nothing. It says where, never how: a release process is someone else's to
+  change, and an install command compiled into a binary rots where only a release can fix it.
+- **`grok` joins the catalogue** — spawned as `grok`, from the `bin` entry its published package installs rather than
+  the `grok-build` its announcement page reads as. That is the product and the repo; `PATH` is the only thing the scan
+  asks about.
+- **The spawn picker is unchanged** — `A` still lists only what it can spawn, because an entry you cannot choose is a
+  trap and greying one out only moves the trap. A default naming a backend the machine has lost now fails in the open
+  instead of dying in a fresh panel.
+
 ## [v1.5.0](https://github.com/cmj0121/baton/releases/tag/v1.5.0) — keys that teach themselves
 
 2026-08-25
