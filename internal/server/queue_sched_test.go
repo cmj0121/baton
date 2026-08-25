@@ -133,3 +133,32 @@ func TestCancelAndDrain(t *testing.T) {
 	}
 	_ = c
 }
+
+// TestQueueCapsReload checks the backlog caps swap under a running fleet, the
+// half of a SIGHUP that used to need a daemon restart: a raised queue.max lets a
+// refused task in, and a config that no longer names one restores the built-in
+// default rather than keeping the number it was last given.
+func TestQueueCapsReload(t *testing.T) {
+	s, _, _ := gateServer()
+	s.queueMax = 1
+	if _, err := s.enqueueTask("a", "", nil); err != nil {
+		t.Fatalf("first enqueue should fit: %v", err)
+	}
+	if _, err := s.enqueueTask("b", "", nil); err == nil {
+		t.Fatal("an enqueue past queue.max should be refused")
+	}
+
+	s.Reload(Settings{QueueMax: 3, QueueConcurrency: 2})
+	if _, err := s.enqueueTask("b", "", nil); err != nil {
+		t.Fatalf("a raised cap should admit the task that was just refused: %v", err)
+	}
+	if s.queueConcurrency != 2 {
+		t.Fatalf("queueConcurrency = %d, want 2", s.queueConcurrency)
+	}
+
+	// -1 is what reloadableSettings passes when the config names no queue.max.
+	s.Reload(Settings{QueueMax: -1})
+	if s.queueMax != defaultQueueMax {
+		t.Fatalf("queueMax = %d, want the built-in default %d", s.queueMax, defaultQueueMax)
+	}
+}

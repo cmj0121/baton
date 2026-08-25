@@ -380,7 +380,8 @@ removed by the scheduler when the task leaves the backlog — so a daemon restar
 assigned to a panel that did not survive the restart is re-queued (its id and attempt count kept) rather than lost. The
 queue is **opt-in**: with no `queue` config block the daemon takes dispatches but runs no scheduler, so the auto-drain
 never surprises you. `queue.max` caps the unassigned backlog; `queue.concurrency` caps how many of a group's tasks run
-at once.
+at once. Both **hot-reload** with `C-t R` or a `SIGHUP` — lowering `queue.max` below what is already queued refuses the
+next enqueue rather than dropping a task, and removing the key restores the built-in default.
 
 **Managing the backlog.** `Q` (`C-t Q` in a zoom) opens the queue manager — one row per task with its status, id, group,
 and brief (a spawn-on-demand task is badged ⚡, a finished one shows its reason). `shift+↑` / `shift+↓` promote / demote

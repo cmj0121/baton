@@ -302,7 +302,7 @@ func buildServerOptions(rc reloadable, stateF string) []server.Option {
 		server.WithLimits(rc.settings.Limits, rc.settings.AgentLimits),
 		server.WithLogging(rc.settings.LogDir, rc.settings.AgentLogDir, rc.settings.AgentLog, rc.settings.LogMaxBytes),
 		server.WithStateFile(stateF),
-		server.WithQueue(rc.queueMax, rc.queueConcurrency),
+		server.WithQueue(rc.settings.QueueMax, rc.settings.QueueConcurrency),
 	}
 	if rc.settings.ReplayBytes > 0 {
 		opts = append(opts, server.WithReplayBytes(rc.settings.ReplayBytes))
@@ -519,11 +519,10 @@ func runServerOn(ln net.Listener, sock string) error {
 // reloadable holds the server settings that can change on a SIGHUP without
 // restarting the daemon: the only knobs both the initial options and the reload
 // path derive from the config, so the two can never drift. settings is what
-// Reload swaps in wholesale; the queue caps are seeded at construction only.
+// Reload swaps in wholesale, and the backlog caps ride along in it — WithQueue
+// seeds the same two values at construction, so there is one source for both.
 type reloadable struct {
-	settings         server.Settings
-	queueMax         int // most queued tasks the backlog holds; -1 keeps the server default
-	queueConcurrency int // most tasks one work item runs at once; 0 = unlimited
+	settings server.Settings
 }
 
 // reloadableSettings projects a config onto the hot-reloadable settings, applying
@@ -555,11 +554,11 @@ func reloadableSettings(cfg config.Config) reloadable {
 	}
 	// queueMax -1 keeps the server's built-in default; a positive config caps the
 	// backlog. Concurrency passes straight through (0 = unlimited).
-	rc.queueMax = -1
+	rc.settings.QueueMax = -1
 	if cfg.Queue.Max > 0 {
-		rc.queueMax = cfg.Queue.Max
+		rc.settings.QueueMax = cfg.Queue.Max
 	}
-	rc.queueConcurrency = cfg.Queue.Concurrency
+	rc.settings.QueueConcurrency = cfg.Queue.Concurrency
 	return rc
 }
 

@@ -128,6 +128,15 @@ type Settings struct {
 	Editor            string // commit editor for the git menu (GIT_EDITOR)
 	WorktreeDir       string // base dir for new git-menu worktrees
 
+	// QueueMax is the most queued (unassigned) tasks the backlog holds and
+	// QueueConcurrency the most tasks one work item runs at once; 0 means
+	// unlimited for either, and a negative QueueMax restores the built-in default.
+	// Both are read afresh on every enqueue and every scheduler pass, so they swap
+	// under a running backlog like the rest of this struct: lowering the cap below
+	// what is already queued refuses the next enqueue rather than dropping a task.
+	QueueMax         int
+	QueueConcurrency int
+
 	// Limits is the fleet-wide resource cap and AgentLimits the per-profile caps
 	// layered over it, keyed by profile name. Only the caps are passed, never the
 	// profiles' commands: the server resolves policy, the client resolves what to run.
@@ -684,8 +693,21 @@ func (s *Server) Reload(set Settings) {
 	// open keep the path they were opened with — a log that moved mid-run would
 	// leave half a transcript in each of two places.
 	s.logDir, s.agentLogDir, s.agentLog, s.logMaxBytes = set.LogDir, set.AgentLogDir, set.AgentLog, set.LogMaxBytes
+	// The backlog caps, on the same terms WithQueue sets them at construction —
+	// except that a config which no longer names queue.max restores the built-in
+	// default rather than keeping the old number, so removing the key from the file
+	// is as much an edit as changing it.
+	if set.QueueMax >= 0 {
+		s.queueMax = set.QueueMax
+	} else {
+		s.queueMax = defaultQueueMax
+	}
+	if set.QueueConcurrency >= 0 {
+		s.queueConcurrency = set.QueueConcurrency
+	}
 	s.mu.Unlock()
 	s.applyRemoteSetting(set.Remote) // acts only on a change to `settings.remote` in the file
+	s.refreshConductorWiring()       // an edited operator brief lands without reopening the conductor
 	s.pty.SetRingCap(set.ReplayBytes)
 	s.probeEnforcement() // a reload may be the first thing to configure a cap
 
@@ -2355,6 +2377,44 @@ func (s *Server) makeConductorWorkspace(id string) (string, error) {
 	writeConductorFiles(ws, id)
 	log.Info().Str("panel", id).Str("workspace", ws).Msg("conductor workspace ready")
 	return ws, nil
+}
+
+// refreshConductorWiring rewrites the conductor's workspace wiring on a reload, so
+// an edited operator brief ($HOME/.baton/CONDUCTOR.md) reaches the conductor
+// without closing and reopening it. Before v1.4.0 there was nowhere to write it:
+// the workspace was a throwaway directory that existed only while the panel did.
+// A workspace that outlives the panel is what makes a reload able to touch it.
+//
+// It refreshes the files and says so; it does not pretend to have changed the
+// agent's mind. A running agent reads its project instructions when its session
+// starts — Claude Code reads CLAUDE.md once — so the new brief is what it will
+// see the next time it looks, and the notice tells whoever is watching that there
+// is something new to look at. Feeding the agent a prompt instead would interrupt
+// whatever it is doing mid-turn, which is a worse trade for a config reload.
+//
+// A conductor that has exited still gets its files rewritten (the workspace is
+// there and a re-run should not need a second reload) but no notice: there is
+// nothing running to tell.
+func (s *Server) refreshConductorWiring() {
+	s.mu.Lock()
+	var id, dir string
+	live := false
+	for _, p := range s.panels {
+		if p.Conductor {
+			id, dir, live = p.ID, s.specs[p.ID].Dir, p.State != panel.Exited
+			break
+		}
+	}
+	s.mu.Unlock()
+	if id == "" || dir == "" || !dirExists(dir) {
+		return
+	}
+
+	writeConductorFiles(dir, id)
+	log.Info().Str("panel", id).Str("workspace", dir).Msg("conductor brief refreshed")
+	if live {
+		s.notifyAttached(id, "\r\n[conductor brief updated — re-read BATON.md]\r\n")
+	}
 }
 
 // resetConductorWorkspace deletes this socket's conductor workspace, so the next

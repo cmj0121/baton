@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/paths"
@@ -383,5 +384,106 @@ func TestConductorResetFenced(t *testing.T) {
 	}
 	if got := recv(t, c); got.Type != "error" || !strings.Contains(got.Error, "conductor role") {
 		t.Fatalf("the conductor role should be fenced from conductor.reset, got %+v", got)
+	}
+}
+
+// TestConductorBriefReloads checks the reload path rewrites the live conductor's
+// wiring from an edited $HOME/.baton/CONDUCTOR.md, and tells whoever is attached
+// that there is something new to read. (Short name: t.TempDir() plus a long test
+// name overflows the ~104 byte cap on a unix socket path.)
+func TestConductorBriefReloads(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir()) // keep the workspace out of the real runtime dir
+	if err := os.MkdirAll(filepath.Join(home, ".baton"), 0o700); err != nil {
+		t.Fatalf("mkdir .baton: %v", err)
+	}
+	const first = "Keep two reviewers running on the api repo."
+	brief := filepath.Join(home, ".baton", "CONDUCTOR.md")
+	if err := os.WriteFile(brief, []byte("# Mission\n\n"+first+"\n"), 0o600); err != nil {
+		t.Fatalf("write CONDUCTOR.md: %v", err)
+	}
+
+	sock := filepath.Join(t.TempDir(), "baton.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	srv := server.New(ln)
+	go func() { _ = srv.Serve() }()
+
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	recv(t, c) // welcome
+	recv(t, c) // empty panels
+
+	if err := c.Send(proto.Command{Action: "panel.create", Kind: "agent", Path: "/bin/cat", Conductor: true}); err != nil {
+		t.Fatalf("create conductor: %v", err)
+	}
+	cid := recv(t, c).Panels[0].ID
+	if err := c.Send(proto.Command{Action: "panel.attach", ID: cid}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	// Barrier: the connection is served in order, so a panels snapshot answering
+	// this proves the attach above has been processed and the notice below will
+	// have somewhere to go.
+	if err := c.Send(proto.Command{Action: "panel.list"}); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for range 10 {
+		if recv(t, c).Type == "panels" {
+			break
+		}
+	}
+
+	// The operator edits the brief while the conductor runs. Nothing has told the
+	// server yet, so the workspace still carries the old one.
+	const second = "Stop spawning reviewers; drain the backlog instead."
+	if err := os.WriteFile(brief, []byte("# Mission\n\n"+second+"\n"), 0o600); err != nil {
+		t.Fatalf("rewrite CONDUCTOR.md: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(srv.PanelDir(cid), "BATON.md"))
+	if err != nil {
+		t.Fatalf("read BATON.md: %v", err)
+	}
+	if strings.Contains(string(data), second) {
+		t.Fatal("the workspace picked up the edit before any reload")
+	}
+
+	srv.Reload(server.Settings{QueueMax: -1}) // what SIGHUP and the cockpit reload both call
+
+	for _, name := range []string{"BATON.md", "CLAUDE.md"} {
+		data, err := os.ReadFile(filepath.Join(srv.PanelDir(cid), name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if !strings.Contains(string(data), second) {
+			t.Fatalf("%s should carry the edited brief after a reload, got:\n%s", name, data)
+		}
+		if strings.Contains(string(data), first) {
+			t.Fatalf("%s should no longer carry the superseded brief, got:\n%s", name, data)
+		}
+		if !strings.Contains(string(data), "You are the baton conductor") {
+			t.Fatalf("%s should keep the built-in primer, got:\n%s", name, data)
+		}
+	}
+
+	// …and the panel says so, so a watching human knows there is something new. The
+	// client routes "output" to its own channel, so read that one.
+	deadline := time.After(5 * time.Second)
+	var notice string
+	for notice == "" {
+		select {
+		case msg := <-c.Output:
+			if strings.Contains(string(msg.Data), "brief updated") {
+				notice = string(msg.Data)
+			}
+		case <-deadline:
+			t.Fatal("a reload should tell an attached cockpit the brief changed")
+		}
 	}
 }
