@@ -128,6 +128,15 @@ type Settings struct {
 	Editor            string // commit editor for the git menu (GIT_EDITOR)
 	WorktreeDir       string // base dir for new git-menu worktrees
 
+	// QueueMax is the most queued (unassigned) tasks the backlog holds and
+	// QueueConcurrency the most tasks one work item runs at once; 0 means
+	// unlimited for either, and a negative QueueMax restores the built-in default.
+	// Both are read afresh on every enqueue and every scheduler pass, so they swap
+	// under a running backlog like the rest of this struct: lowering the cap below
+	// what is already queued refuses the next enqueue rather than dropping a task.
+	QueueMax         int
+	QueueConcurrency int
+
 	// Limits is the fleet-wide resource cap and AgentLimits the per-profile caps
 	// layered over it, keyed by profile name. Only the caps are passed, never the
 	// profiles' commands: the server resolves policy, the client resolves what to run.
@@ -684,6 +693,18 @@ func (s *Server) Reload(set Settings) {
 	// open keep the path they were opened with — a log that moved mid-run would
 	// leave half a transcript in each of two places.
 	s.logDir, s.agentLogDir, s.agentLog, s.logMaxBytes = set.LogDir, set.AgentLogDir, set.AgentLog, set.LogMaxBytes
+	// The backlog caps, on the same terms WithQueue sets them at construction —
+	// except that a config which no longer names queue.max restores the built-in
+	// default rather than keeping the old number, so removing the key from the file
+	// is as much an edit as changing it.
+	if set.QueueMax >= 0 {
+		s.queueMax = set.QueueMax
+	} else {
+		s.queueMax = defaultQueueMax
+	}
+	if set.QueueConcurrency >= 0 {
+		s.queueConcurrency = set.QueueConcurrency
+	}
 	s.mu.Unlock()
 	s.applyRemoteSetting(set.Remote) // acts only on a change to `settings.remote` in the file
 	s.refreshConductorWiring()       // an edited operator brief lands without reopening the conductor

@@ -454,7 +454,7 @@ func TestConductorBriefReloads(t *testing.T) {
 		t.Fatal("the workspace picked up the edit before any reload")
 	}
 
-	srv.Reload(server.Settings{}) // what SIGHUP and the cockpit reload both call
+	srv.Reload(server.Settings{QueueMax: -1}) // what SIGHUP and the cockpit reload both call
 
 	for _, name := range []string{"BATON.md", "CLAUDE.md"} {
 		data, err := os.ReadFile(filepath.Join(srv.PanelDir(cid), name))

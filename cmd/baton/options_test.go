@@ -47,16 +47,16 @@ func TestReloadableSettingsBranches(t *testing.T) {
 	if rc.settings.DefaultDir != "/tmp/work" {
 		t.Errorf("defaultDir = %q, want /tmp/work", rc.settings.DefaultDir)
 	}
-	if rc.queueMax != 200 {
-		t.Errorf("queueMax = %d, want 200", rc.queueMax)
+	if rc.settings.QueueMax != 200 {
+		t.Errorf("queueMax = %d, want 200", rc.settings.QueueMax)
 	}
-	if rc.queueConcurrency != 3 {
-		t.Errorf("queueConcurrency = %d, want 3", rc.queueConcurrency)
+	if rc.settings.QueueConcurrency != 3 {
+		t.Errorf("queueConcurrency = %d, want 3", rc.settings.QueueConcurrency)
 	}
 
 	// The unset path: no toggle, no replay override → strict defaults.
 	def := reloadableSettings(config.Config{})
-	if def.settings.AllowNameConflict || def.settings.ReplayBytes != 0 || def.queueMax != -1 {
+	if def.settings.AllowNameConflict || def.settings.ReplayBytes != 0 || def.settings.QueueMax != -1 {
 		t.Errorf("unset config should keep strict defaults, got %+v", def)
 	}
 }
