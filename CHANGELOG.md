@@ -4,6 +4,24 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v1.5.0](https://github.com/cmj0121/baton/releases/tag/v1.5.0) — keys that teach themselves
+
+2026-08-25
+
+- **The which-key hint finally renders** — pressing a landing key was meant to show the family it opens; it showed
+  nothing. The status bar built the line, measured it, and threw it away when it did not fit, and it never fit: the four
+  families needed 206, 336, 138 and 25 columns against the ~55 a 128-column terminal can spare. The gap is now measured
+  first and the hint is fitted to it — labelled where there is room, the keys alone where there is not, and the keys it
+  can show with a `+N` for the rest when even that is too wide.
+- **Every binding carries a short label** — `mark`, `create`, `add`, `ungroup`, against a line of prose each. The key
+  map keeps its sentences, where two columns make them right. The families drop to 49, 70, 37 and 7 columns, so three
+  of the four now render fully labelled, and `docs/KEYS.md` stops advertising a line the code could not produce.
+- **Browse for a workdir** — `C-o` at the new-agent workdir prompt opens a picker: the directories the fleet's panels
+  are already working in (busiest first), then a directories-only filesystem browse. What it picks fills the field and
+  stays editable, so typing a path you know is still the shortest route and tab still completes it.
+- **Two stale issues closed** — remote-over-SSH had shipped without its proposal being closed, and the which-key
+  hint's own issue is what this release answers.
+
 ## [v1.4.1](https://github.com/cmj0121/baton/releases/tag/v1.4.1) — the reload reaches further
 
 2026-08-25
