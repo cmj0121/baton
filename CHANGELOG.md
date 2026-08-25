@@ -4,6 +4,29 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v1.4.0](https://github.com/cmj0121/baton/releases/tag/v1.4.0) — the conductor remembers
+
+2026-08-25
+
+- **One conductor workspace, not one per open** — the conductor ran in a fresh throwaway directory every time it was
+  opened, so nothing it collected there survived: the permission grants it writes beside itself were asked for again on
+  every open, and an agent that keys its transcripts on the working directory left a fresh orphan behind each time. It
+  is now one fixed directory per control socket, created only if it is not already there and kept when the panel is
+  closed. `BATON_SOCK` still gets a workspace of its own.
+- **Cleared when the host reboots** — the workspace carries a stamp of the boot it belongs to and is rebuilt from
+  scratch when that no longer matches. Putting it somewhere temporary is not enough on its own: `$XDG_RUNTIME_DIR` is
+  emptied on logout, but macOS keeps `$TMPDIR` across a reboot and sweeps `/private/tmp` on a three-day timer.
+- **The leak is gone** — the old cleanup only ran if the daemon reached it, so every crash or hard kill left a
+  `conductor-*` directory behind, for as long as baton had been installed. There is one workspace now, and the daemon
+  sweeps the directories older versions leaked at start, logging each one it removes.
+- **`baton ctl conductor reset`** — a workspace that is kept is a workspace that can go bad, so there is a way to clear
+  it without waiting for a reboot. It is refused while a conductor still exists (close it first) and fenced from the
+  conductor role itself: an agent that has gone wrong is the one that must not be able to erase its own state.
+- **Upgrading** — nothing to do. The first conductor opened under v1.4.0 starts in a new, empty workspace; the throwaway
+  directories earlier versions left in `$XDG_RUNTIME_DIR/baton/` or `$HOME/.baton/` are removed when the daemon next
+  starts. Note the workspace's base is read from the environment the daemon was started in, so a daemon started from an
+  ssh session and one started from a desktop terminal can resolve different workspaces.
+
 ## [v1.3.1](https://github.com/cmj0121/baton/releases/tag/v1.3.1) — one fleet per machine
 
 2026-08-21
