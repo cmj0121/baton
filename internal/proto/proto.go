@@ -363,9 +363,18 @@ type LimitCredit struct {
 // restart, attention and isolation stay on the server's own profile and are
 // applied there, so a frontend never has to be trusted with them.
 type AgentBackend struct {
-	Name    string   `json:"name"`
-	Command string   `json:"command"`
-	Args    []string `json:"args,omitempty"`
+	Name     string   `json:"name"`
+	Command  string   `json:"command"`
+	Args     []string `json:"args,omitempty"`
+	Homepage string   `json:"homepage,omitempty"` // where to get it; set on presets, empty on a user profile
+
+	// Missing says the command was not found on the fleet's machine. The polarity
+	// is the compatibility story and is not free to flip: a daemon older than this
+	// field sends only the backends it found and no flag at all, so the zero value
+	// has to mean "installed". An Installed bool would decode those as false and
+	// paint a working fleet as having nothing — which is the exact failure the
+	// field exists to prevent.
+	Missing bool `json:"missing,omitempty"`
 }
 
 // RemoteConn is one live attachment in the remote overlay's list: where it came

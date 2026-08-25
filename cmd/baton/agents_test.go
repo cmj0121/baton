@@ -5,6 +5,7 @@ import (
 
 	"github.com/cmj0121/baton/internal/agents"
 	"github.com/cmj0121/baton/internal/config"
+	"github.com/cmj0121/baton/internal/proto"
 )
 
 // swapDetect makes the PATH scan answer for a machine the test describes.
@@ -15,12 +16,10 @@ func swapDetect(t *testing.T, installed ...string) {
 		on[n] = true
 	}
 	prev := detectBackends
-	detectBackends = func(cands []agents.Backend) []agents.Backend {
-		out := make([]agents.Backend, 0, len(cands))
+	detectBackends = func(cands []agents.Backend) []agents.Scanned {
+		out := make([]agents.Scanned, 0, len(cands))
 		for _, b := range cands {
-			if b.Isolated || on[b.Command] {
-				out = append(out, b)
-			}
+			out = append(out, agents.Scanned{Backend: b, Missing: !b.Isolated && !on[b.Command]})
 		}
 		return out
 	}
@@ -39,19 +38,53 @@ func TestDetectAgentsLayersUserProfiles(t *testing.T) {
 	}
 	got := detectAgents(cfg)
 
-	byName := map[string]int{}
-	for i, b := range got {
-		byName[b.Name] = i
+	byName := map[string]proto.AgentBackend{}
+	for _, b := range got {
+		byName[b.Name] = b
 	}
-	if len(got) != 3 {
-		t.Fatalf("want claude + gemini + inhouse, got %+v", got)
+	if b, ok := byName["gemini"]; !ok || b.Missing || len(b.Args) != 1 || b.Args[0] != "--yolo" {
+		t.Fatalf("the user's gemini profile should win and be installed, got %+v", b)
 	}
-	if i, ok := byName["gemini"]; !ok || len(got[i].Args) != 1 || got[i].Args[0] != "--yolo" {
-		t.Fatalf("the user's gemini profile should win, got %+v", got)
+	if b, ok := byName["claude"]; !ok || b.Missing {
+		t.Fatalf("claude is on this machine, got %+v ok=%v", b, ok)
 	}
-	if _, ok := byName["codex"]; ok {
-		t.Fatalf("a backend this machine does not have should not be offered, got %+v", got)
+	if b, ok := byName["inhouse"]; !ok || b.Missing {
+		t.Fatalf("the user's own profile is on this machine, got %+v ok=%v", b, ok)
 	}
+
+	// The whole change: a backend the machine has not got is reported, not dropped,
+	// so the cockpit can name it instead of pretending the catalogue is what it
+	// found. It carries where to get it.
+	b, ok := byName["codex"]
+	if !ok || !b.Missing {
+		t.Fatalf("a backend this machine lacks should be reported as missing, got %+v ok=%v", b, ok)
+	}
+	if b.Homepage == "" {
+		t.Fatalf("a missing preset with no homepage says a name and nothing else, got %+v", b)
+	}
+}
+
+// TestDetectAgentsUserProfilesCarryNoHomepage pins the layering's edge: a profile
+// that overrides a preset replaces it outright, homepage included. Keeping the
+// preset's URL would point someone at the official CLI to explain why THEIR
+// command is missing, which is a different program with the same name.
+func TestDetectAgentsUserProfilesCarryNoHomepage(t *testing.T) {
+	swapDetect(t) // an empty machine, so every entry comes back missing
+
+	cfg := config.Config{}
+	cfg.Panel.Agents = map[string]config.AgentProfile{
+		"claude": {Command: "/opt/bin/our-claude"},
+	}
+	for _, b := range detectAgents(cfg) {
+		if b.Name != "claude" {
+			continue
+		}
+		if b.Homepage != "" {
+			t.Fatalf("an overridden preset should not keep the preset homepage, got %+v", b)
+		}
+		return
+	}
+	t.Fatal("the overridden profile is not in the catalogue at all")
 }
 
 // TestDetectAgentsKeepsIsolatedProfiles pins the container case end to end: the
@@ -65,9 +98,15 @@ func TestDetectAgentsKeepsIsolatedProfiles(t *testing.T) {
 		"boxed": {Command: "claude", Isolate: "docker", Image: "example/agent"},
 		"plain": {Command: "claude"},
 	}
-	got := detectAgents(cfg)
-	if len(got) != 1 || got[0].Name != "boxed" {
-		t.Fatalf("only the isolated profile should survive an empty machine, got %+v", got)
+	byName := map[string]proto.AgentBackend{}
+	for _, b := range detectAgents(cfg) {
+		byName[b.Name] = b
+	}
+	if b, ok := byName["boxed"]; !ok || b.Missing {
+		t.Fatalf("an isolated profile runs in an image, so an empty host must not mark it missing, got %+v ok=%v", b, ok)
+	}
+	if b, ok := byName["plain"]; !ok || !b.Missing {
+		t.Fatalf("a host profile on an empty machine is missing, got %+v ok=%v", b, ok)
 	}
 }
 
