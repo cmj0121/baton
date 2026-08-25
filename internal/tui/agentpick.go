@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -42,7 +43,18 @@ const (
 // user's own profiles are a better answer than an empty list.
 func (m model) availableAgents() []proto.AgentBackend {
 	if len(m.backends) > 0 {
-		return m.backends
+		// The misses ride the same list so the config page can name them; the picker
+		// drops them here. An all-missing fleet returns an empty list rather than
+		// falling through to the config fallback below — a daemon that scanned and
+		// found nothing has answered the question, and openAgentPicker's "no agent
+		// backend found" is the right thing to say.
+		out := make([]proto.AgentBackend, 0, len(m.backends))
+		for _, b := range m.backends {
+			if !b.Missing {
+				out = append(out, b)
+			}
+		}
+		return out
 	}
 	names := make([]string, 0, len(m.agents)+1)
 	for name := range m.agents {
@@ -195,6 +207,9 @@ func (m model) resolveAgentNamed(name string) (config.AgentProfile, string, bool
 	}
 	for _, b := range m.backends {
 		if b.Name == name {
+			if b.Missing {
+				break // known, but the binary is not on the fleet's machine
+			}
 			return config.AgentProfile{Command: b.Command, Args: b.Args}, name, true
 		}
 	}
@@ -228,4 +243,33 @@ func (m model) defaultAgentLabel() string {
 		return name + "  (not found)"
 	}
 	return name
+}
+
+// missingAgents is the other half of the detection result: the backends baton
+// knows and this machine has not got, in catalogue order.
+//
+// It is what the panel-config page lists. The spawn picker never sees it — the
+// two pages want opposite things from the same scan, and this is the one that
+// wants to say "there is more than this".
+func (m model) missingAgents() []proto.AgentBackend {
+	out := make([]proto.AgentBackend, 0, len(m.backends))
+	for _, b := range m.backends {
+		if b.Missing {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// trimScheme shortens a homepage for a terminal: the scheme and any trailing
+// slash carry no information a reader needs and cost columns the popup has to
+// find elsewhere. What is left is still what you would type into a browser.
+func trimScheme(u string) string {
+	for _, p := range []string{"https://", "http://"} {
+		if rest, ok := strings.CutPrefix(u, p); ok {
+			u = rest
+			break
+		}
+	}
+	return strings.TrimSuffix(u, "/")
 }
