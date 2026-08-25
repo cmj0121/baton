@@ -4,6 +4,22 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v1.4.1](https://github.com/cmj0121/baton/releases/tag/v1.4.1) — the reload reaches further
+
+2026-08-25
+
+- **The conductor's brief hot-reloads** — `$HOME/.baton/CONDUCTOR.md` reached the agent only when the conductor was
+  spawned or re-run, so the one file whose whole purpose is to steer it was the one file a reload ignored. `C-t R` (or a
+  `SIGHUP`) now rewrites it into the running conductor's workspace and prints a line in its panel saying so. It refreshes
+  the brief; it does not change a running agent's mind — an agent reads its project instructions when its session starts,
+  so the new brief is what it sees the next time it looks, and the notice is there to tell you there is something new.
+- **The queue caps hot-reload** — `queue.max` and `queue.concurrency` were seeded at construction and nowhere else, so
+  changing either meant restarting the daemon and losing every panel. Both now swap under a running backlog. Removing
+  `queue.max` from the config restores the built-in default, and lowering it below what is already queued refuses the
+  next enqueue rather than dropping a task.
+- **One source for the backlog caps** — the construction path and the reload path used to read them separately; they now
+  come from the same place, so the two can no longer drift apart.
+
 ## [v1.4.0](https://github.com/cmj0121/baton/releases/tag/v1.4.0) — the conductor remembers
 
 2026-08-25
