@@ -59,6 +59,22 @@ Baton starts its background server and drops you on the **dashboard** — your h
 
 Lost? **`?`** always shows the keys for wherever you are.
 
+## Why not just tmux?
+
+Because tmux has no idea what is in the pane. It hands you windows; you supply the memory of which one is which, and you
+find out an agent has been waiting on you by cycling through them until you see it. Baton assumes the pane holds an
+agent, and the rest follows from that:
+
+| What you are doing            | tmux, by hand                         | Baton                                                                             |
+| ----------------------------- | ------------------------------------- | --------------------------------------------------------------------------------- |
+| Finding who needs you         | cycle the panes and read              | a live state per panel, and a `C-t a` inbox of the ones that stopped for a human  |
+| Keeping related work together | name the windows, remember the scheme | work items — a named group of panels, made with two keys                          |
+| Handing work out              | type it into each pane yourself       | dispatch a task to one or a whole group, or let a conductor agent drive the fleet |
+| Stopping a runaway build      | nothing                               | CPU, memory and process caps, held over the panel's whole process tree            |
+| Knowing what the fleet costs  | nothing                               | the billing window's tokens and cost, and your quota bars, traced to a panel      |
+
+Baton is not a tmux replacement and does not want your shells — run it inside tmux if that is where you live.
+
 ## Concept
 
 - **Agents, not shells.** The unit of work is a running agent, not a window to babysit.
