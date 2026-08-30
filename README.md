@@ -216,16 +216,7 @@ And the cockpit you would expect of a multiplexer, each a keystroke away:
 | Appearance           | —               | theme and custom split grids in `$HOME/.baton/TUI.yaml` — **[docs/TUI.md](docs/TUI.md)**      |
 | Mouse                | —               | off by default, so your terminal's own selection stays available                              |
 | Language             | —               | the key list reads in English or 繁體中文 — **[docs/TUI.md](docs/TUI.md#language)**           |
-
-## Screensaver
-
-Walk away and let it sit. After a few idle minutes — or on the hidden `C-t E` — the cockpit drops into a full-screen
-Matrix rain with the **BATON** wordmark and a big clock floating in the middle. It's a frontend-only takeover: nothing is
-sent to the server, and any key or click brings your view straight back.
-
-![Baton screensaver — a Matrix digital rain with the BATON wordmark and a big clock](docs/assets/baton-screensaver.png)
-
-_Clip generated from [`baton-screensaver.tape`](docs/assets/baton-screensaver.tape) — regeneration steps are in the tape header._
+| Screen protector     | —               | a full-screen digital rain when the cockpit rests — **[docs/TUI.md](docs/TUI.md)**            |
 
 ## Architecture
 
