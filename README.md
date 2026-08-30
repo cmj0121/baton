@@ -18,13 +18,12 @@ You hold the baton. The agents play. You conduct. 🎼
 
 ![Baton cockpit demo — the key list, then panels spawned, the conductor opened, two panels grouped into a work item, and the same ? pressed again in the split and in the zoom](docs/assets/baton-demo.png)
 
-_Press `?` before anything else: the key list is tabbed by purpose, and it is the list of the view you are standing in. Then
-spawn panels, call the conductor with `n C`, mark two with `g g` and group them with `g c` — and press `?` again in the
-split, and `C-t ?` in the zoom. Same key, three different tables. `v l` and `v p` close it out on the tree._
+_One key does the whole tour: `?` lists the keys for wherever you are. Panels spawn, `n C` calls the conductor, `g g`
+then `g c` groups two into a work item — and `?` again in the split, `C-t ?` in the zoom, are three different tables._
 
-_Clip generated from [`baton-demo.tape`](docs/assets/baton-demo.tape) — regeneration steps are in the tape header. The
-conductor's agent CLI is a stand-in ([`demo-agent.sh`](docs/assets/demo-agent.sh)) so the clip records the same on any
-machine; the fleet it drives over the socket is real._
+_Recorded from [`baton-demo.tape`](docs/assets/baton-demo.tape); the conductor's agent CLI is a stand-in
+([`demo-agent.sh`](docs/assets/demo-agent.sh)) so the clip records the same on any machine, and the fleet it drives over
+the socket is real._
 
 ## Get started
 
