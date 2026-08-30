@@ -158,75 +158,64 @@ behind every view.
 
 ## Features
 
-Everything you'd reach for while shepherding a fleet, a keystroke away:
+Five things Baton does that a terminal multiplexer does not:
 
-- **Agent backends** — baton knows a catalogue of agent CLIs (`claude`, `codex`, `gemini`, `aider`, `opencode`, `grok`)
-  and detects which of them the machine the fleet runs on actually has. `A` lists the ones you can run and spawns the one
-  you pick; `C-t P` sets the fleet default from the same list, and names the ones baton knows and this machine has not
-  got with where to get each; `C-t R` re-detects after an install. Add your own — or change a preset's command,
-  arguments, caps or container — under `panel.agents`. No new key for any of it.
-- **Signals** — `s` sends any signal to the selection, the focused tile, or the whole group; the picker lists the common
-  ones, `o` types any name or number.
-- **Find, search, copy** — `f` filters the fleet by title or group; `/` greps every panel's output at once and lists the
-  hits grouped by panel — `enter` zooms the one you pick, landed on the match; `C-t f` regex-searches a panel's scrollback; scroll
-  mode (`C-t [`) selects and copies over OSC52, so it works over SSH with no helper binary.
-- **Diff** — `D` (or `C-t D` in a zoom) pops up the agent panel's work-tree diff — staged and unstaged at once,
-  untracked included — in a master-detail overlay.
-- **Git** — `C-t G` opens a git menu against the zoomed agent: diff, log, status, stage, commit, push, branch, and
-  worktrees. See **[docs/GIT.md](docs/GIT.md)**.
-- **Conductor & control** — `n C` opens a conductor: an agent that drives the fleet for you. It spawns, groups, signals,
-  and prompts the other panels over the socket — through `baton ctl` or the `baton mcp` tools — fenced so it can't wreck
-  its own host. Set its goal in `$HOME/.baton/CONDUCTOR.md`. See **[docs/CONTROL.md](docs/CONTROL.md)**.
-- **Global shell** — `n h` opens the global shell: a single plain host shell the server holds in `$HOME`, always one
-  keystroke away. Like the conductor it is a mark in the FLEET heading rather than a card, and the server keeps just one —
-  it survives a restart as a dead slot you re-run with `r`. Unlike the conductor it drives nothing: no scoped role, no
-  managed workspace. (Distinct from the floating **scratch** shell `C-t ~`, which is transient and dies on detach.)
-- **Tasks & the queue** — `T` dispatches a brief to an agent (or fans it to a whole work item), recorded on the card and
-  delivered when the agent is ready. `Q` manages a persistent backlog a server-owned scheduler drains onto free agents —
-  the **you → conductor → fleet** flow. A `task.pre` Lua hook can rewrite or veto a brief; `task.change` watches it.
-- **Groups & summary** — `+` / `-` dial how many members stream as live tiles; the rest fold into one summary tile.
-  Pinned members always stream. `L` cycles the split's **layout** — the even grid, `main-vertical`, `main-horizontal`,
-  `stack`, or your own grids from `TUI.yaml`.
-- **Resource limits** — cap what a panel may use — CPU, memory, processes — and hold its **whole process tree** to it, so
-  a runaway build cannot take the machine with it. Set a fleet-wide floor and per-agent overrides in the config or under
-  `C-t P`; `C-t R` applies them to the running fleet. Enforced with cgroup v2 on Linux, and the panel says plainly when a
-  host cannot enforce them. See **[docs/LIMITS.md](docs/LIMITS.md)**.
-- **Container isolation** — opt-in per agent profile: `isolate: docker` runs that profile's panels inside a container
-  with your worktree mounted, so an agent that goes wrong is confined to a workspace. You name the image (Baton ships
-  none); `mount`, `network`, `env-allow` and `user` decide what else crosses, and nothing from your environment does
-  unless you name it. The caps still apply, enforced by the runtime. Off by default, and not a boundary against a
-  hostile agent. See **[docs/ISOLATION.md](docs/ISOLATION.md)**.
-- **Restart policy** — off by default; set `panel.restart: on-failure` and a panel whose process dies abnormally comes
-  back, with an exponential backoff and a limit that settles it loudly rather than looping. A clean exit, a panel you
-  closed, and one you signalled are all left alone. Overridable per agent profile.
-- **Remembered directory** — a panel's live working directory is tracked from the shell's own OSC 7 report, or the
-  process table when it makes none. A re-run lands where you were, `n .` opens a shell in the focused panel's directory,
-  the path identifies the card, and the git menus follow an agent into a worktree. See
-  **[docs/RESTART.md](docs/RESTART.md)**.
-- **Appearance** — `$HOME/.baton/TUI.yaml` reshapes the cockpit: a colour **theme** and the group-split **layouts**,
-  hot-reloaded with `C-t R`. See **[docs/TUI.md](docs/TUI.md)**.
-- **Usage and quota** — `v u` cycles a footer readout: the billing window's token usage and cost with a countdown
-  (`⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31`), the focused panel's share of it, or your account's **rate-limit bars**
-  (`⊙ 5h ▓▓▓▓▓░░░ 2:14:31 · 7d ▓▓▓░░░░░ 3d4h`). `v U` opens the lot — every quota window, the extra-usage
-  credit, and which panels are eating them. The totals come from Claude Code's transcripts (so they can be traced to a
-  panel); the quota comes from the panels' own status line, which Baton wraps rather than replaces. See
-  **[docs/USAGE.md](docs/USAGE.md)**.
-- **Panel logging** — `C-t l` pipes a panel's output to a file on the machine the fleet runs on, flushing the replay
-  buffer in first so you keep what made you press it; `C-t L` reads it back in a temporary panel that follows the file.
-  Plain text, escape sequences stripped, rolled at `log-max-mb`. Off until you set `panel.log-dir`; a profile can log
-  from spawn. See **[docs/LOGGING.md](docs/LOGGING.md)**.
+- **Attention, not polling** — a fleet is mostly fine; you are looking at the screen because of the few panels that are
+  not. One quiet clock ranks every one of them — `running`, `idle` at ten seconds, `done` for an agent that finished its
+  turn, `stuck` when it has gone on too long — and an agent can raise its own hand above the lot. `C-t a` opens the
+  inbox from any view and the queue is cleared from there; `settings.notify` sends an OSC 9 desktop notification when
+  nobody is looking, coalesced, and never for `done`. See **[docs/ATTENTION.md](docs/ATTENTION.md)**.
+- **A conductor** — `n C` opens an agent that drives the fleet for you: it spawns, groups, signals and prompts the other
+  panels over the socket, through `baton ctl` or the `baton mcp` tools, fenced so it cannot wreck its own host. Set its
+  goal in `$HOME/.baton/CONDUCTOR.md`. See **[docs/CONTROL.md](docs/CONTROL.md)**.
+- **Tasks and a backlog** — `T` dispatches a brief to an agent, or fans it across a whole work item; it is recorded on
+  the card and delivered when the agent is ready. `Q` manages a persistent backlog that a server-owned scheduler drains
+  onto free agents. A `task.pre` Lua hook can rewrite or veto a brief; `task.change` watches it.
+- **Caps over the whole process tree** — cap what a panel may use, CPU, memory and processes, and hold its **whole
+  process tree** to it, so a runaway build cannot take the machine with it. A fleet-wide floor with per-agent overrides,
+  applied to the running fleet by `C-t R`, enforced with cgroup v2 on Linux — and the panel says plainly when a host
+  cannot enforce them. See **[docs/LIMITS.md](docs/LIMITS.md)**.
+- **Usage traced to a panel** — `v u` cycles a footer readout: the billing window's tokens and cost with a countdown
+  (`⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31`), the focused panel's share of it, or your account's rate-limit bars
+  (`⊙ 5h ▓▓▓▓▓░░░ 2:14:31 · 7d ▓▓▓░░░░░ 3d4h`). `v U` opens the lot — every quota window, the extra-usage credit, and
+  which panels are eating them. See **[docs/USAGE.md](docs/USAGE.md)**.
+
+Four more that most of them do not have either:
+
+- **Container isolation** — opt in per agent profile with `isolate: docker`, and that profile's panels run inside a
+  container with your worktree mounted. You name the image (Baton ships none); `mount`, `network`, `env-allow` and
+  `user` decide what else crosses, and nothing from your environment does unless you name it. Off by default, and not a
+  boundary against a hostile agent. See **[docs/ISOLATION.md](docs/ISOLATION.md)**.
+- **Grep the whole fleet** — `/` searches every panel's output at once and lists the hits grouped by panel; `enter`
+  zooms the one you pick, landed on the match. `C-t f` regex-searches a single scrollback, and scroll mode (`C-t [`)
+  selects and copies over OSC 52, so it works over SSH with no helper binary.
+- **Agent backends** — Baton knows a catalogue of agent CLIs (`claude`, `codex`, `gemini`, `aider`, `opencode`, `grok`)
+  and detects which of them the machine the fleet runs on actually has. `A` spawns the one you pick; `C-t P` sets the
+  fleet default and names the ones this machine has not got with where to get each; `C-t R` re-detects after an install.
+  Add your own — command, arguments, caps or container — under `panel.agents`.
 - **Remote access** — `baton --remote` attaches the same cockpit to a fleet on **another machine**, over the ssh you
-  already use to reach it: no listening port, no TLS, no key exchange of baton's own. Off by default; `settings.remote`
-  or `C-t @` turns it on and mints an 8-character passkey that is never written to disk. `C-t @` also lists every live
-  connection with its source, role and duration — `x` kicks one, `n` rotates the passkey, `E` shuts remote down. See
+  already use to reach it: no listening port, no TLS, no key exchange of Baton's own. Off by default; `C-t @` turns it
+  on, mints a passkey that is never written to disk, and lists every live connection to kick, rotate or shut down. See
   **[docs/REMOTE.md](docs/REMOTE.md)**.
-- **Persistence & respawn** — Baton remembers its fleet across a restart; panels come back as inert exited slots and
-  `r` re-runs them from their retained spec.
-- **Reload** — `C-t R` (or a `SIGHUP` to the daemon) hot-reloads config without restarting the fleet.
-- **Mouse** — off by default so your terminal's own selection stays available; toggle it in the key map to scroll and
-  select with the wheel.
-- **Language** — the `?` key list and the `C-t k` key map read in English or 繁體中文. Set `settings.language`, cycle it
-  live from the key map, or just let your `$LANG` decide. See **[docs/TUI.md](docs/TUI.md#language)**.
+
+And the cockpit you would expect of a multiplexer, each a keystroke away:
+
+| Feature              | Key             | What it does                                                                                  |
+| -------------------- | --------------- | --------------------------------------------------------------------------------------------- |
+| Diff                 | `D`             | the agent panel's work-tree diff — staged and unstaged at once, untracked included            |
+| Git                  | `C-t G`         | diff, log, status, stage, commit, push, branch and worktrees — **[docs/GIT.md](docs/GIT.md)** |
+| Signals              | `s`             | any signal to the selection, the focused tile or the whole group                              |
+| Find                 | `f`             | filter the fleet by title or group                                                            |
+| Group layouts        | `+` `-` `L`     | how many members stream as live tiles, and the shape of the split                             |
+| Global shell         | `n h`           | one plain host shell the server holds in `$HOME`, always one keystroke away                   |
+| Remembered directory | `n .`           | panels track their live directory from OSC 7 — **[docs/RESTART.md](docs/RESTART.md)**         |
+| Panel logging        | `C-t l` `C-t L` | pipe a panel's output to a file, and read it back — **[docs/LOGGING.md](docs/LOGGING.md)**    |
+| Persistence          | `r`             | the fleet survives a restart as exited slots you re-run from their retained spec              |
+| Restart policy       | —               | `panel.restart: on-failure` brings a panel back with a backoff and a limit                    |
+| Hot reload           | `C-t R`         | config without restarting the fleet — or a `SIGHUP` to the daemon                             |
+| Appearance           | —               | theme and custom split grids in `$HOME/.baton/TUI.yaml` — **[docs/TUI.md](docs/TUI.md)**      |
+| Mouse                | —               | off by default, so your terminal's own selection stays available                              |
+| Language             | —               | the key list reads in English or 繁體中文 — **[docs/TUI.md](docs/TUI.md#language)**           |
 
 ## Screensaver
 
