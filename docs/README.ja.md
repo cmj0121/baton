@@ -2,6 +2,8 @@
 
 > 拡張可能で、agent にやさしいターミナルマルチプレクサ。
 
+[![Release](https://img.shields.io/github/v/release/cmj0121/baton)](https://github.com/cmj0121/baton/releases/latest)
+[![License](https://img.shields.io/github/license/cmj0121/baton)](../LICENSE)
 [![CI](https://github.com/cmj0121/baton/actions/workflows/ci.yml/badge.svg)](https://github.com/cmj0121/baton/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/cmj0121/baton/branch/main/graph/badge.svg)](https://codecov.io/gh/cmj0121/baton)
 
@@ -19,13 +21,12 @@ Baton と AI agent の関係は、tmux と shell の関係と同じです。**�
 
 ![Baton コックピットのデモ——まずキー一覧、panel を起こし、conductor を開き、2 つを work item にまとめ、分割表示と zoom で同じ ? をもう一度](assets/baton-demo.png)
 
-_何よりも先に `?` を押します——キー一覧は目的ごとにタブ分けされていて、いま立っている view のものが出ます。続けて panel
-を起こし、`n C` で conductor を呼び、`g g` で 2 つを選んで `g c` で work item にまとめ——分割表示でもう一度 `?`、zoom
-では `C-t ?`。同じキーで、三つの違う表。最後は `v l` と `v p` でツリーに落ち着きます。_
+_一つのキーで一巡します。`?` はいま立っている view のキーを出す——panel を起こし、`n C` で conductor を呼び、
+`g g` から `g c` で 2 つを work item にまとめ、そして分割表示の `?` と zoom の `C-t ?` は三つの違う表です。_
 
-_この映像は [`baton-demo.tape`](assets/baton-demo.tape) から生成されています——再生成の手順は tape のヘッダに
-あります。conductor の agent CLI は代役([`demo-agent.sh`](assets/demo-agent.sh))で、どのマシンでも同じ映像を
-録れるようにしてあります。socket 越しに動かしている fleet のほうは本物です。_
+_この映像は [`baton-demo.tape`](assets/baton-demo.tape) から生成されています。conductor の agent CLI は代役
+([`demo-agent.sh`](assets/demo-agent.sh))で、どのマシンでも同じ映像が録れます。socket 越しに動かしている fleet
+のほうは本物です。_
 
 ## はじめる
 
@@ -60,6 +61,22 @@ Baton はバックグラウンドサーバを起動し、あなたを**ダッシ
 3. **`q`** を押してデタッチし、席を立ちます——すべては動き続けます。いつでも `baton` で戻ってこられます。
 
 迷いましたか?**`?`** はいつでも、今いる場所のキーを見せてくれます。
+
+## tmux ではだめなのか
+
+tmux は pane の中身を知らないからです。渡されるのは窓だけで、どれがどれかを覚えておくのはあなたの仕事。agent が
+ずっと待っていたことに気づくには、一つずつ切り替えて見るしかありません。Baton は pane の中身が agent だと前提を
+置き、あとはそこから出てきます:
+
+| やっていること          | tmux で手作業                | Baton                                                                      |
+| ----------------------- | ---------------------------- | -------------------------------------------------------------------------- |
+| 誰が待っているかを知る  | pane を順に切り替えて読む    | panel ごとの生きた状態と、人を待って止まったものが並ぶ `C-t a` の受信箱    |
+| 関係する仕事をまとめる  | 窓に名前を付け、規則を覚える | work item——名前の付いた panel のまとまり、キー 2 つで作れる                |
+| 仕事を渡す              | pane ごとに自分で打ち込む    | task を一つにも group 全体にも配る、または conductor に fleet を動かさせる |
+| 暴走した build を止める | なし                         | CPU・メモリ・プロセス数の上限を、panel のプロセスツリー全体に効かせる      |
+| いくらかかっているか    | なし                         | 請求ウィンドウの token とコスト、そして quota バーを panel 単位で          |
+
+Baton は tmux の置き換えではないし、あなたの shell を欲しがってもいません——tmux の中で動かして構いません。
 
 ## コンセプト
 
@@ -140,87 +157,64 @@ Baton は 3 つの画面で操作し、キー 1 つで行き来します:
 
 ## 機能
 
-fleet の面倒を見るときに手を伸ばしたくなるものは、すべてキー 1 つの距離にあります:
+ターミナルマルチプレクサにはできないことが五つ:
 
-- **Agent バックエンド** — baton は agent CLI の名簿(`claude`、`codex`、`gemini`、`aider`、`opencode`、`grok`)を知っ
-  ていて、fleet が動いているマシンに実際にどれが入っているかを検出します。`A` は動かせるものだけを並べ、選んだものを
-  起動します。`C-t P` は同じ一覧から fleet の既定値を設定し、あわせて baton が知っていてこのマシンには入っていないもの
-  を、入手先とともに挙げます。インストール後は `C-t R` で再検出します。自前のものを足す、あるいはプリセットのコマン
-  ド・引数・上限・コンテナを変えるなら `panel.agents` の下へ。どれにも新しいキーはありません。
-- **シグナル(Signals)** — `s` は選択中のもの、フォーカス中のタイル、あるいはグループ全体に任意のシグナルを送ります。
-  ピッカーがよく使うものを並べ、`o` で任意の名前や番号を打てます。
-- **検索・探索・コピー** — `f` はタイトルやグループで fleet を絞り込みます。`/` はすべての panel の出力を一度に
-  grep し、ヒットを panel ごとにまとめて並べます——`enter` で選んだものをズームすると、ヒット位置に着地します。
-  `C-t f` は 1 つの panel のスクロールバックを正規表現で検索します。スクロールモード(`C-t [`)は OSC52 で選択・
-  コピーするので、補助バイナリなしで SSH 越しでも動きます。
-- **Diff** — `D`(ズーム中は `C-t D`)で、その agent panel の作業ツリーの diff——ステージ済みと未ステージを
-  一度に、未追跡も含めて——をマスター・ディテールのオーバーレイで表示します。
-- **Git** — `C-t G` はズーム中の agent に対して git メニューを開きます:diff、log、status、ステージ、commit、
-  push、ブランチ、worktree。**[docs/GIT.md](GIT.md)** を参照してください。
-- **Conductor と制御** — `n C` は conductor を開きます:あなたの代わりに fleet を動かす agent です。`baton ctl` や
-  `baton mcp` のツールを通じて socket 越しに panel を起こし、まとめ、シグナルを送り、他の panel に指示を出します。
-  自分のホストを壊せないよう柵で囲ってあります。その目標は `$HOME/.baton/CONDUCTOR.md` で設定します。
-  **[docs/CONTROL.md](CONTROL.md)** を参照してください。
-- **Global shell** — `n h` は global shell を開きます:サーバが `$HOME` に 1 つだけ持つ素のホスト shell で、つねに
-  キー 1 つの距離にあります。conductor と同じくカードではなく FLEET 見出し上のマークとして現れ、サーバはただ 1 つ
-  だけを保持します——再起動後は終了済みの空きスロットとして残り、`r` で再実行できます。conductor と違い、何も
-  動かしません:限定された役割も、管理されたワークスペースもありません。(デタッチで消える一時的なフローティングの
-  **scratch** shell `C-t ~` とは別物です。)
-- **タスクとキュー** — `T` は指示書を 1 つの agent に(あるいは work item 全体へ配って)投げ、カードに記録し、
-  agent の準備ができたら届けます。`Q` は永続的なバックログを管理し、サーバが持つスケジューラがそれを空いている
-  agent へと流し込みます——**あなた → conductor → fleet** の流れです。`task.pre` という Lua hook は指示書を
-  書き換えたり拒否したりでき、`task.change` はそれを見張ります。
-- **グループとサマリ** — `+` / `-` で、何人のメンバーをライブタイルとしてストリームするかを調整します。残りは
-  1 枚のサマリタイルに畳まれます。pin されたメンバーはつねにストリームします。`L` は分割画面の**レイアウト**を
-  順に切り替えます——均等グリッド、`main-vertical`、`main-horizontal`、`stack`、あるいは `TUI.yaml` で自分が
-  定義したグリッド。
-- **リソース上限** — 1 つの panel が使ってよい量——CPU、メモリ、プロセス数——に上限をかけ、しかも**プロセスツリー
-  全体**をそれに従わせます。暴走したビルドがマシンごと道連れにすることはありません。fleet 全体の下限と agent ごとの
-  上書きを設定ファイル、あるいは `C-t P` で指定し、`C-t R` で走っている fleet に適用します。Linux では cgroup v2 で
-  強制され、ホストが強制できない場合は panel がはっきりそう告げます。**[docs/LIMITS.md](LIMITS.md)** を
-  参照してください。
-- **コンテナ隔離** — agent profile ごとのオプトイン:`isolate: docker` はその profile の panel を、あなたの
-  worktree をマウントしたコンテナの中で実行します。壊れた動きをする agent が届く範囲はワークスペースだけになります。
-  image はあなたが指定します(Baton は同梱しません)。ほかに何が越えるかは `mount`、`network`、`env-allow`、`user`
-  が決め、環境変数は名前を挙げたものしか渡りません。リソース上限は runtime 側で引き続き有効です。既定はオフで、
-  敵対的な agent に対する境界ではありません。**[docs/ISOLATION.md](ISOLATION.md)** を参照してください。
-- **外観** — `$HOME/.baton/TUI.yaml` がコックピットを作り替えます:配色の**テーマ**と、グループ分割の
-  **レイアウト**。`C-t R` でホットリロードされます。**[docs/TUI.md](TUI.md)** を参照してください。
-- **使用量フッタ** — `v u` は、その日の token 使用量とコスト(`⊙ 1.2M tok · ≈$12.34 API`)を表示するフッタを
-  切り替えます。既定では Claude Code 自身の transcript を読み(Pro/Max のサブスクリプションでも動きます)、
-  キーがあれば Anthropic Admin API を使います。コストは API 換算であり、サブスクリプションの請求額ではありません。
-  **[docs/USAGE.md](USAGE.md)** を参照してください。
-- **利用上限バー** — `v u` は 5 時間 / 週次の rate-limit 上限バーも巡回し、`v U` は上限の全体像と、
-  それを消費しているパネルを開きます。上限は Baton がラップする(置き換えない)パネル自身の
-  ステータスラインから来ます。見 **[docs/USAGE.md](USAGE.md)**。
-- **パネルのログ** — `C-t l` はパネルの出力を、fleet が動いているマシン上のファイルへ流します。まずリプレイ
-  バッファを流し込むので、キーを押させた当のものが残ります。`C-t L` はそれを、ファイルを追い続ける一時パネルで
-  読み返します。プレーンテキスト、エスケープシーケンスは除去済み、`log-max-mb` でローテーション。
-  `panel.log-dir` を設定するまではオフで、プロファイル単位で spawn 時から記録させることもできます。
-  **[docs/LOGGING.md](LOGGING.md)** を参照してください。
-- **リモート接続** — `baton --remote` は、**別のマシン**上の fleet に同じ cockpit を接続します。使うのは、あなたが
-  そのマシンに入るのに普段から使っている ssh です。待ち受けポートも TLS も、baton 独自の鍵交換もありません。既定は
-  オフで、`settings.remote` か `C-t @` が有効化し、ディスクには決して書かれない 8 文字の passkey を発行します。
-  `C-t @` は接続中のすべてのセッションを、その出所・ロール・接続時間とともに一覧します。`x` で切断、`n` で passkey
-  の更新、`E` でリモートの停止。**[docs/REMOTE.md](REMOTE.md)** を参照してください。
-- **永続化と復活** — Baton は再起動をまたいで fleet を覚えています。panel は動かない終了済みスロットとして戻り、
-  `r` が保持された仕様からそれらを再実行します。
-- **リロード** — `C-t R`(または常駐プロセスへの `SIGHUP`)は、fleet を再起動せずに設定をホットリロードします。
-- **マウス** — 既定ではオフで、ターミナル自身の選択機能を残してあります。キーマップで有効にすれば、ホイールで
-  スクロールと選択ができます。
-- **言語** — `?` のキー一覧と `C-t k` のキーマップは英語または 繁體中文 で表示されます。`settings.language` を
-  設定するか、キーマップからその場で切り替えるか、あるいは `$LANG` に任せてしまってもかまいません。
-  **[docs/TUI.md](TUI.md#language)** を参照してください。
+- **ポーリングしない注意** — fleet はたいてい無事です。画面を見ているのは、無事ではない数個のためでしょう。一本の
+  静かな時計がすべての panel を並べます——`running`、10 秒で `idle`、一巡を終えた agent の `done`、長引きすぎた
+  `stuck`——そして agent は自分で手を挙げ、この段全体を追い越せます。`C-t a` はどの view からでも受信箱を開き、
+  待ち行列はそこで片付きます。`settings.notify` は誰も見ていないときに OSC 9 のデスクトップ通知を出し、まとめて
+  送られ、`done` では決して鳴りません。**[docs/ATTENTION.md](ATTENTION.md)** を参照。
+- **conductor** — `n C` は fleet をあなたの代わりに動かす agent を開きます。socket 越しに——`baton ctl` あるいは
+  `baton mcp` の tool を通じて——panel を起こし、まとめ、signal を送り、他の panel に prompt を渡します。自分の
+  ホストを壊せないよう柵が張られています。目標は `$HOME/.baton/CONDUCTOR.md` に。
+  **[docs/CONTROL.md](CONTROL.md)** を参照。
+- **task とキュー** — `T` は brief を一つの agent に、あるいは work item 全体に配ります。カードに記録され、agent
+  の準備ができた時点で届きます。`Q` は永続的なバックログを扱い、サーバ側のスケジューラが空いた agent へ流し込みます。
+  Lua の `task.pre` フックは brief を書き換えたり拒否したりでき、`task.change` はそれを見張ります。
+- **プロセスツリー全体にかかる上限** — panel が使える CPU・メモリ・プロセス数に上限をかけ、そのプロセスツリー全体を
+  そこに抑えます。暴走した build がマシンごと持っていくことはありません。fleet 全体の下限に agent ごとの上書き、
+  `C-t R` で動いている fleet に適用、Linux では cgroup v2 で強制——強制できないホストでは panel がそう言います。
+  **[docs/LIMITS.md](LIMITS.md)** を参照。
+- **panel まで辿れる使用量** — `v u` はフッタの表示を切り替えます:請求ウィンドウの token とコストとカウントダウン
+  (`⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31`)、フォーカス中の panel の取り分、あるいはアカウントの rate-limit バー
+  (`⊙ 5h ▓▓▓▓▓░░░ 2:14:31 · 7d ▓▓▓░░░░░ 3d4h`)。`v U` は全部を開きます——各 quota ウィンドウ、追加分のクレジット、
+  そしてそれを食べている panel。**[docs/USAGE.md](USAGE.md)** を参照。
 
-## スクリーンセーバ
+多くのマルチプレクサにもない、もう四つ:
 
-席を立って、そのままにしておきましょう。数分アイドルが続くと——あるいは隠しキー `C-t E` を押すと——コックピットは
-全画面の Matrix 風デジタルレインに落ち、中央に **BATON** のワードマークと大きな時計が浮かびます。これは
-フロントエンドだけの乗っ取りです:サーバには何も送られず、どのキーやクリックでもすぐ元の画面に戻ります。
+- **コンテナ隔離** — agent profile ごとの任意機能です。`isolate: docker` にすると、その profile の panel は worktree を
+  マウントしたコンテナの中で動きます。image は自分で指定し(Baton は同梱しません)、`mount`・`network`・`env-allow`・
+  `user` が他に何を通すかを決め、環境変数は名指ししない限り渡りません。既定は off で、敵対的な agent に対する境界では
+  ありません。**[docs/ISOLATION.md](ISOLATION.md)** を参照。
+- **fleet 全体を grep** — `/` はすべての panel の出力を一度に検索し、ヒットを panel ごとにまとめて並べます。`enter`
+  で選んだものを zoom し、ヒット位置に着地します。`C-t f` は単一の scrollback を正規表現で検索し、スクロールモード
+  (`C-t [`)は OSC 52 で選択してコピーするので、SSH 越しでも補助バイナリなしで動きます。
+- **agent バックエンド** — Baton は agent CLI の名簿(`claude`、`codex`、`gemini`、`aider`、`opencode`、`grok`)を
+  持ち、fleet が動くマシンに実際に入っているものを検出します。`A` は選んだものを起こし、`C-t P` は fleet の既定を
+  決めつつ、入っていないものの入手先を並べ、`C-t R` はインストール後に再検出します。自前のものは `panel.agents` に。
+- **リモート接続** — `baton --remote` は同じコックピットを別のマシンの fleet につなぎます。使うのは元から使っている
+  ssh だけで、待ち受けポートも TLS も Baton 独自の鍵交換もありません。既定は off。`C-t @` が有効化し、ディスクに
+  書かれない passkey を発行し、生きている接続を一覧して切断・更新・停止できます。**[docs/REMOTE.md](REMOTE.md)** を参照。
 
-![Baton のスクリーンセーバ——BATON のワードマークと大きな時計をともなう Matrix 風デジタルレイン](assets/baton-screensaver.png)
+そして、マルチプレクサに期待するコックピットが、どれもキー一つで:
 
-_この映像は [`baton-screensaver.tape`](assets/baton-screensaver.tape) から生成されています——再生成の手順は tape のヘッダにあります。_
+| 機能               | キー            | 内容                                                                                |
+| ------------------ | --------------- | ----------------------------------------------------------------------------------- |
+| Diff               | `D`             | agent panel の作業ツリー diff——staged と unstaged を一度に、未追跡も                |
+| Git                | `C-t G`         | diff・log・status・stage・commit・push・branch・worktree——**[docs/GIT.md](GIT.md)** |
+| signal             | `s`             | 選択・フォーカス中のタイル・group 全体に任意の signal                               |
+| 検索               | `f`             | fleet をタイトルや group で絞り込む                                                 |
+| group のレイアウト | `+` `-` `L`     | 何個をライブタイルで流すか、そして分割の形                                          |
+| global shell       | `n h`           | サーバが持つ `$HOME` の素のホスト shell、いつでもキー一つ                           |
+| 作業ディレクトリ   | `n .`           | panel は OSC 7 から現在地を覚える——**[docs/RESTART.md](RESTART.md)**                |
+| panel のログ       | `C-t l` `C-t L` | panel の出力をファイルへ、そして読み戻す——**[docs/LOGGING.md](LOGGING.md)**         |
+| 永続化             | `r`             | fleet は再起動を越えて残り、保持した spec から再実行できる                          |
+| 再起動ポリシー     | —               | `panel.restart: on-failure` がバックオフと上限つきで panel を戻す                   |
+| ホットリロード     | `C-t R`         | fleet を止めずに設定を再読み込み——デーモンへの `SIGHUP` でも                        |
+| 外観               | —               | テーマと自作の分割グリッドは `$HOME/.baton/TUI.yaml`——**[docs/TUI.md](TUI.md)**     |
+| スクリーンセーバ   | —               | コックピットが休むと流れるデジタルの雨——**[docs/TUI.md](TUI.md)**                   |
+| マウス             | —               | 既定は off、端末自身の選択を残すため                                                |
+| 言語               | —               | キー一覧は英語と繁体字中国語——**[docs/TUI.md](TUI.md#language)**                    |
 
 ## アーキテクチャ
 

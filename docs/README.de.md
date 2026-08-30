@@ -2,6 +2,8 @@
 
 > Ein erweiterbarer, agentenfreundlicher Terminal-Multiplexer.
 
+[![Release](https://img.shields.io/github/v/release/cmj0121/baton)](https://github.com/cmj0121/baton/releases/latest)
+[![License](https://img.shields.io/github/license/cmj0121/baton)](../LICENSE)
 [![CI](https://github.com/cmj0121/baton/actions/workflows/ci.yml/badge.svg)](https://github.com/cmj0121/baton/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/cmj0121/baton/branch/main/graph/badge.svg)](https://codecov.io/gh/cmj0121/baton)
 
@@ -18,14 +20,13 @@ Du hältst den Taktstock. Die Agents spielen. Du dirigierst. 🎼
 
 ![Baton-Cockpit-Demo — die Tastenliste, gestartete Panels, der geöffnete Conductor, zwei zu einem Work Item gruppiert und dasselbe ? noch einmal im Split und im Zoom](assets/baton-demo.png)
 
-_Zuerst `?` drücken: Die Tastenliste ist nach Zweck in Reiter gegliedert und gehört zu der Ansicht, in der man gerade
-steht. Dann Panels starten, den Conductor mit `n C` rufen, zwei mit `g g` markieren und mit `g c` zu einem Work Item
-gruppieren — und `?` im Split noch einmal drücken, im Zoom `C-t ?`. Dieselbe Taste, drei verschiedene Tabellen. `v l` und
-`v p` schließen auf dem Baum ab._
+_Eine Taste macht die ganze Runde: `?` zeigt die Tasten der Ansicht, in der du gerade stehst. Panels starten, `n C`
+ruft den Conductor, `g g` und dann `g c` gruppieren zwei zu einem Work Item — und `?` im Split, `C-t ?` im Zoom sind
+drei verschiedene Tabellen._
 
-_Der Clip wurde aus [`baton-demo.tape`](assets/baton-demo.tape) erzeugt — die Schritte zur Neuaufnahme stehen im Kopf
-der Tape-Datei. Das Agent-CLI des Conductors ist ein Platzhalter ([`demo-agent.sh`](assets/demo-agent.sh)), damit der
-Clip auf jeder Maschine gleich aufgezeichnet wird; die Flotte, die er über den Socket steuert, ist echt._
+_Der Clip wurde aus [`baton-demo.tape`](assets/baton-demo.tape) erzeugt; das Agent-CLI des Conductors ist ein
+Platzhalter ([`demo-agent.sh`](assets/demo-agent.sh)), damit der Clip auf jeder Maschine gleich aufgezeichnet wird, und
+die Flotte, die er über den Socket steuert, ist echt._
 
 ## Erste Schritte
 
@@ -60,6 +61,22 @@ Baton startet seinen Hintergrund-Server und setzt dich auf dem **Dashboard** ab 
 3. Drücke **`q`**, um dich abzukoppeln und wegzugehen — alles läuft weiter. Komm jederzeit mit `baton` zurück.
 
 Verirrt? **`?`** zeigt dir immer die Tasten für die Stelle, an der du gerade bist.
+
+## Warum nicht einfach tmux?
+
+Weil tmux nicht weiß, was im Pane steckt. Es gibt dir Fenster; welches welches ist, musst du dir selbst merken, und dass
+ein Agent auf dich gewartet hat, merkst du erst, wenn du sie der Reihe nach durchgehst. Baton setzt voraus, dass im Pane
+ein Agent sitzt, und alles Weitere folgt daraus:
+
+| Was du gerade tust               | tmux, von Hand                  | Baton                                                                                                |
+| -------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Finden, wer dich braucht         | die Panes durchgehen und lesen  | ein lebendiger Zustand je Panel und ein `C-t a`-Posteingang mit denen, die auf einen Menschen warten |
+| Zusammenhängendes zusammenhalten | Fenster benennen, Schema merken | Work Items — eine benannte Gruppe von Panels, mit zwei Tasten                                        |
+| Arbeit verteilen                 | in jedes Pane selbst tippen     | eine Aufgabe an eines oder eine ganze Gruppe schicken, oder ein Conductor-Agent steuert die Flotte   |
+| Einen entlaufenen Build stoppen  | nichts                          | CPU-, Speicher- und Prozessgrenzen über den gesamten Prozessbaum des Panels                          |
+| Wissen, was die Flotte kostet    | nichts                          | Tokens und Kosten des Abrechnungsfensters und deine Quota-Balken, einem Panel zuordenbar             |
+
+Baton ist kein Ersatz für tmux und will deine Shells nicht — lass es in tmux laufen, wenn du dort zu Hause bist.
 
 ## Konzept
 
@@ -143,90 +160,70 @@ Die vollständige Tastenreferenz steht in **[docs/KEYS.md](KEYS.md)**, die Gesta
 
 ## Funktionen
 
-Alles, wonach du beim Hüten einer Flotte greifen würdest, nur einen Tastendruck entfernt:
+Fünf Dinge, die ein Terminal-Multiplexer nicht tut:
 
-- **Agent-Backends** — baton kennt einen Katalog von Agent-CLIs (`claude`, `codex`, `gemini`, `aider`, `opencode`,
-  `grok`) und erkennt, welche davon die Maschine, auf der die Flotte läuft, tatsächlich hat. `A` listet die auf, die du
-  starten kannst, und startet die gewählte; `C-t P` setzt den Flotten-Standard aus derselben Liste und nennt die, die
-  baton kennt und diese Maschine nicht hat, samt Bezugsquelle; `C-t R` erkennt nach einer Installation neu. Eigene
-  hinzufügen — oder Befehl, Argumente, Grenzen und Container einer Vorlage ändern — unter `panel.agents`. Für all das
-  keine neue Taste.
-- **Signale** — `s` sendet ein beliebiges Signal an die Auswahl, die fokussierte Kachel oder die ganze Gruppe; der
-  Picker listet die gängigen auf, mit `o` tippst du einen beliebigen Namen oder eine Nummer.
-- **Finden, Suchen, Kopieren** — `f` filtert die Flotte nach Titel oder Gruppe; `/` greppt die Ausgabe aller Panels auf
-  einmal und listet die Treffer nach Panel gruppiert — `enter` zoomt den ausgewählten, direkt auf dem Treffer gelandet; `C-t f`
-  durchsucht den Scrollback eines Panels per Regex; der Scroll-Modus (`C-t [`) markiert und kopiert über OSC52, das
-  funktioniert also auch über SSH ohne Hilfsprogramm.
-- **Diff** — `D` (oder `C-t D` im Zoom) blendet den Work-Tree-Diff des Agent-Panels ein — gestaged und ungestaged auf
-  einmal, unversionierte Dateien inklusive — in einem Master-Detail-Overlay.
-- **Git** — `C-t G` öffnet ein Git-Menü für den gezoomten Agent: diff, log, status, stage, commit, push, branch und
-  worktrees. Siehe **[docs/GIT.md](GIT.md)**.
-- **Conductor & Steuerung** — `n C` öffnet einen Conductor: einen Agent, der die Flotte für dich steuert. Er startet,
-  gruppiert, signalisiert und promptet die anderen Panels über den Socket — via `baton ctl` oder die `baton mcp`-Tools —
-  eingezäunt, damit er seinen eigenen Host nicht zerlegen kann. Sein Ziel setzt du in `$HOME/.baton/CONDUCTOR.md`.
-  Siehe **[docs/CONTROL.md](CONTROL.md)**.
-- **Global shell** — `n h` öffnet die Global Shell: eine einzelne, schlichte Host-Shell, die der Server in `$HOME` hält,
-  immer einen Tastendruck entfernt. Wie der Conductor ist sie eine Markierung in der FLEET-Überschrift statt einer Karte,
-  und der Server hält genau eine — sie überlebt einen Neustart als toter Slot, den du mit `r` erneut ausführst. Anders
-  als der Conductor steuert sie nichts: keine eingegrenzte Rolle, kein verwalteter Workspace. (Zu unterscheiden von der
-  schwebenden **scratch**-Shell `C-t ~`, die flüchtig ist und beim Abkoppeln stirbt.)
-- **Tasks & die Warteschlange** — `T` schickt einen Auftrag an einen Agent (oder verteilt ihn an ein ganzes Work Item),
-  auf der Karte vermerkt und zugestellt, sobald der Agent bereit ist. `Q` verwaltet ein persistentes Backlog, das ein
-  servereigener Scheduler an freie Agents abarbeitet — der Fluss **du → Conductor → Flotte**. Ein `task.pre`-Lua-Hook
-  kann einen Auftrag umschreiben oder ablehnen; `task.change` beobachtet ihn.
-- **Gruppen & Zusammenfassung** — `+` / `-` regeln, wie viele Mitglieder als Live-Kacheln streamen; der Rest klappt in
-  eine Zusammenfassungs-Kachel zusammen. Angepinnte Mitglieder streamen immer. `L` schaltet das **Layout** der
-  Aufteilung durch — das gleichmäßige Raster, `main-vertical`, `main-horizontal`, `stack` oder deine eigenen Raster aus
-  `TUI.yaml`.
-- **Ressourcenlimits** — begrenze, was ein Panel verbrauchen darf — CPU, Speicher, Prozesse — und halte seinen
-  **gesamten Prozessbaum** daran, damit ein außer Kontrolle geratener Build nicht die ganze Maschine mitreißt. Eine
-  flottenweite Untergrenze und Overrides pro Agent setzt du in der Konfiguration oder unter `C-t P`; `C-t R` wendet sie
-  auf die laufende Flotte an. Unter Linux mit cgroup v2 durchgesetzt — und das Panel sagt klar, wenn ein Host sie nicht
-  durchsetzen kann. Siehe **[docs/LIMITS.md](LIMITS.md)**.
-- **Container-Isolation** — pro Agent-Profil zuschaltbar: `isolate: docker` führt die Panels dieses Profils in einem
-  Container aus, in den dein Arbeitsbaum eingehängt ist — ein Agent, der etwas falsch macht, bleibt damit auf einen
-  Arbeitsbereich beschränkt. Das Image benennst du selbst (Baton liefert keines); `mount`, `network`, `env-allow` und
-  `user` entscheiden, was sonst noch hinüberkommt, und aus deiner Umgebung geht nichts hinüber, was du nicht nennst. Die
-  Limits gelten weiterhin, durchgesetzt von der Runtime. Standardmäßig aus, und keine Grenze gegen einen feindseligen
-  Agenten. Siehe **[docs/ISOLATION.md](ISOLATION.md)**.
-- **Erscheinungsbild** — `$HOME/.baton/TUI.yaml` formt das Cockpit um: ein Farb-**Theme** und die **Layouts** der
-  Gruppenaufteilung, per `C-t R` heiß neu geladen. Siehe **[docs/TUI.md](TUI.md)**.
-- **Nutzungs-Fußzeile** — `v u` schaltet eine Fußzeile mit dem Tokenverbrauch und den Kosten des Tages um
-  (`⊙ 1.2M tok · ≈$12.34 API`). Sie liest standardmäßig die Transcripts von Claude Code (funktioniert mit einem
-  Pro/Max-Abo) oder mit einem Key die Anthropic Admin API. Die Kosten sind API-äquivalent, keine Abo-Gebühr.
-  Siehe **[docs/USAGE.md](USAGE.md)**.
-- **Kontingentbalken** — `v u` schaltet auch die Kontingentbalken für das 5-Stunden- und das Wochenfenster durch, und
-  `v U` öffnet das vollständige Kontingent samt der Panels, die es verbrauchen. Das Kontingent stammt aus der
-  Statuszeile der Panels, die Baton umhüllt statt ersetzt. Siehe **[docs/USAGE.md](USAGE.md)**.
-- **Panel-Protokollierung** — `C-t l` leitet die Ausgabe eines Panels in eine Datei auf der Maschine, auf der die
-  Flotte läuft, und schreibt zuerst den Replay-Puffer hinein, damit das erhalten bleibt, weswegen du die Taste
-  gedrückt hast; `C-t L` liest es in einem temporären Panel zurück, das der Datei folgt. Klartext,
-  Escape-Sequenzen entfernt, Rotation bei `log-max-mb`. Aus, bis du `panel.log-dir` setzt; ein Profil kann ab dem
-  Start protokollieren. Siehe **[docs/LOGGING.md](LOGGING.md)**.
-- **Fernzugriff** — `baton --remote` hängt dasselbe Cockpit an eine Flotte auf **einer anderen Maschine**, über das
-  ssh, mit dem du sie ohnehin erreichst: kein lauschender Port, kein TLS, kein eigener Schlüsseltausch von baton.
-  Standardmäßig aus; `settings.remote` oder `C-t @` schaltet ihn ein und erzeugt eine 8 Zeichen lange Passkey, die nie
-  auf Platte geschrieben wird. `C-t @` listet außerdem jede offene Verbindung mit Herkunft, Rolle und Dauer — `x` wirft
-  eine hinaus, `n` erneuert die Passkey, `E` schaltet den Fernzugriff ab. Siehe **[docs/REMOTE.md](REMOTE.md)**.
-- **Persistenz & Respawn** — Baton merkt sich seine Flotte über einen Neustart hinweg; Panels kommen als inaktive,
-  beendete Slots zurück, und `r` führt sie aus ihrer aufbewahrten Spezifikation erneut aus.
-- **Neuladen** — `C-t R` (oder ein `SIGHUP` an den Daemon) lädt die Konfiguration heiß neu, ohne die Flotte neu zu starten.
-- **Maus** — standardmäßig aus, damit die eigene Textauswahl deines Terminals verfügbar bleibt; schalte sie in der
-  Tastenbelegung ein, um mit dem Rad zu scrollen und zu markieren.
-- **Sprache** — die Tastenliste unter `?` und die Tastenbelegung unter `C-t k` lesen sich auf Englisch oder 繁體中文.
-  Setze `settings.language`, schalte sie live in der Tastenbelegung durch, oder lass einfach dein `$LANG` entscheiden.
-  Siehe **[docs/TUI.md](TUI.md#language)**.
+- **Aufmerksamkeit statt Abklappern** — einer Flotte geht es meistens gut; du schaust auf den Bildschirm wegen der
+  wenigen, denen es nicht gut geht. Eine einzige stille Uhr ordnet sie alle — `running`, `idle` nach zehn Sekunden,
+  `done` für einen Agent, der seine Runde beendet hat, `stuck`, wenn es zu lange dauert — und ein Agent kann sich selbst
+  melden, über die ganze Leiter hinweg. `C-t a` öffnet aus jeder Ansicht den Posteingang, und dort wird die Schlange
+  abgearbeitet; `settings.notify` schickt eine OSC-9-Desktopbenachrichtigung, wenn niemand hinsieht, gebündelt und
+  niemals für `done`. Siehe **[docs/ATTENTION.md](ATTENTION.md)**.
+- **Ein Conductor** — `n C` öffnet einen Agent, der die Flotte für dich steuert: Er startet, gruppiert, signalisiert und
+  promptet die anderen Panels über den Socket, per `baton ctl` oder den `baton mcp`-Tools, eingezäunt, damit er seinen
+  eigenen Host nicht ruinieren kann. Sein Ziel steht in `$HOME/.baton/CONDUCTOR.md`. Siehe
+  **[docs/CONTROL.md](CONTROL.md)**.
+- **Aufgaben und ein Rückstau** — `T` gibt einen Auftrag an einen Agent oder verteilt ihn über ein ganzes Work Item; er
+  steht auf der Karte und wird zugestellt, sobald der Agent bereit ist. `Q` verwaltet einen dauerhaften Rückstau, den ein
+  serverseitiger Scheduler auf freie Agents abfließen lässt. Ein Lua-Hook `task.pre` kann einen Auftrag umschreiben oder
+  ablehnen; `task.change` beobachtet ihn.
+- **Grenzen über den gesamten Prozessbaum** — begrenze CPU, Speicher und Prozesse eines Panels und halte seinen gesamten
+  Prozessbaum daran, damit ein entlaufener Build nicht die Maschine mitnimmt. Ein flottenweiter Boden mit Overrides je
+  Agent, mit `C-t R` auf die laufende Flotte angewandt, unter Linux per cgroup v2 durchgesetzt — und das Panel sagt
+  deutlich, wenn ein Host das nicht durchsetzen kann. Siehe **[docs/LIMITS.md](LIMITS.md)**.
+- **Verbrauch bis aufs Panel** — `v u` blättert durch eine Fußzeile: Tokens und Kosten des Abrechnungsfensters mit
+  Countdown (`⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31`), der Anteil des fokussierten Panels oder die Rate-Limit-Balken
+  deines Kontos (`⊙ 5h ▓▓▓▓▓░░░ 2:14:31 · 7d ▓▓▓░░░░░ 3d4h`). `v U` öffnet alles — jedes Quota-Fenster, das
+  Zusatzguthaben und die Panels, die es verbrauchen. Siehe **[docs/USAGE.md](USAGE.md)**.
 
-## Bildschirmschoner
+Vier weitere, die die meisten auch nicht haben:
 
-Geh weg und lass es einfach laufen. Nach ein paar Minuten Leerlauf — oder auf das versteckte `C-t E` hin — fällt das
-Cockpit in einen bildschirmfüllenden Matrix-Regen mit dem **BATON**-Schriftzug und einer großen Uhr, die in der Mitte
-schwebt. Es ist eine reine Frontend-Übernahme: Nichts wird an den Server geschickt, und jede Taste oder jeder Klick holt
-deine Ansicht sofort zurück.
+- **Container-Isolation** — optional je Agent-Profil: Mit `isolate: docker` laufen die Panels dieses Profils in einem
+  Container mit eingehängtem Worktree. Das Image benennst du selbst (Baton liefert keines); `mount`, `network`,
+  `env-allow` und `user` entscheiden, was sonst hinübergeht, und aus deiner Umgebung geht nichts hinüber, was du nicht
+  benennst. Standardmäßig aus, und keine Grenze gegen einen feindlichen Agent. Siehe
+  **[docs/ISOLATION.md](ISOLATION.md)**.
+- **Die ganze Flotte greppen** — `/` durchsucht die Ausgabe aller Panels auf einmal und listet die Treffer nach Panel
+  gruppiert; `enter` zoomt den gewählten, gelandet auf dem Treffer. `C-t f` durchsucht einen einzelnen Scrollback per
+  regulärem Ausdruck, und der Scrollmodus (`C-t [`) markiert und kopiert über OSC 52, funktioniert also über SSH ohne
+  Hilfsbinary.
+- **Agent-Backends** — Baton kennt einen Katalog von Agent-CLIs (`claude`, `codex`, `gemini`, `aider`, `opencode`,
+  `grok`) und erkennt, welche auf der Maschine der Flotte tatsächlich vorhanden sind. `A` startet den gewählten, `C-t P`
+  setzt den Flottenstandard und nennt zu den fehlenden, wo es sie gibt, `C-t R` erkennt nach einer Installation neu.
+  Eigene kommen unter `panel.agents`.
+- **Fernzugriff** — `baton --remote` hängt dasselbe Cockpit an eine Flotte auf einer anderen Maschine, über das ssh, das
+  du ohnehin benutzt: kein lauschender Port, kein TLS, kein eigener Schlüsseltausch von Baton. Standardmäßig aus; `C-t @`
+  schaltet es ein, prägt einen Passkey, der nie auf die Platte geschrieben wird, und listet jede lebende Verbindung zum
+  Rauswerfen, Erneuern oder Abschalten. Siehe **[docs/REMOTE.md](REMOTE.md)**.
 
-![Baton-Bildschirmschoner — ein digitaler Matrix-Regen mit dem BATON-Schriftzug und einer großen Uhr](assets/baton-screensaver.png)
+Und das Cockpit, das man von einem Multiplexer erwartet, jeweils eine Taste entfernt:
 
-_Der Clip wurde aus [`baton-screensaver.tape`](assets/baton-screensaver.tape) erzeugt — die Schritte zur Neuaufnahme stehen im Kopf der Tape-Datei._
+| Funktion              | Taste           | Was sie tut                                                                                               |
+| --------------------- | --------------- | --------------------------------------------------------------------------------------------------------- |
+| Diff                  | `D`             | der Work-Tree-Diff des Agent-Panels — gestaged und ungestaged zugleich, unversionierte inklusive          |
+| Git                   | `C-t G`         | Diff, Log, Status, Stage, Commit, Push, Branch und Worktrees — **[docs/GIT.md](GIT.md)**                  |
+| Signale               | `s`             | ein beliebiges Signal an die Auswahl, die fokussierte Kachel oder die ganze Gruppe                        |
+| Suchen                | `f`             | die Flotte nach Titel oder Gruppe filtern                                                                 |
+| Gruppen-Layouts       | `+` `-` `L`     | wie viele Mitglieder live laufen, und die Form des Splits                                                 |
+| Globale Shell         | `n h`           | eine schlichte Host-Shell, die der Server in `$HOME` hält, immer eine Taste entfernt                      |
+| Gemerktes Verzeichnis | `n .`           | Panels verfolgen ihr Verzeichnis über OSC 7 — **[docs/RESTART.md](RESTART.md)**                           |
+| Panel-Logging         | `C-t l` `C-t L` | die Ausgabe eines Panels in eine Datei leiten und zurücklesen — **[docs/LOGGING.md](LOGGING.md)**         |
+| Persistenz            | `r`             | die Flotte übersteht einen Neustart als Slots, die du aus ihrer Spec neu startest                         |
+| Restart-Policy        | —               | `panel.restart: on-failure` holt ein Panel mit Backoff und Limit zurück                                   |
+| Hot Reload            | `C-t R`         | Konfiguration ohne Neustart der Flotte — oder ein `SIGHUP` an den Daemon                                  |
+| Erscheinungsbild      | —               | Theme und eigene Split-Raster in `$HOME/.baton/TUI.yaml` — **[docs/TUI.md](TUI.md)**                      |
+| Bildschirmschoner     | —               | ein bildschirmfüllender Datenregen, wenn das Cockpit ruht — **[docs/TUI.md](TUI.md)**                     |
+| Maus                  | —               | standardmäßig aus, damit die eigene Auswahl des Terminals bleibt                                          |
+| Sprache               | —               | die Tastenliste liest sich auf Englisch oder Traditionell-Chinesisch — **[docs/TUI.md](TUI.md#language)** |
 
 ## Architektur
 
