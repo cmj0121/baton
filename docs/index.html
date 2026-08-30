@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Baton — a terminal multiplexer for AI coding agents</title>
+    <meta
+      name="description"
+      content="One keyboard-driven cockpit for a fleet of AI coding agents: a live dashboard, work items, a task queue, per-panel resource caps, and an inbox of the agents that stopped for a human."
+    />
+    <link rel="canonical" href="https://cmj0121.github.io/baton/" />
+    <meta property="og:type" content="website" />
+    <meta
+      property="og:title"
+      content="Baton — a terminal multiplexer for AI coding agents"
+    />
+    <meta
+      property="og:description"
+      content="One keyboard-driven cockpit for a fleet of AI coding agents. You hold the baton. The agents play. You conduct."
+    />
+    <meta property="og:url" content="https://cmj0121.github.io/baton/" />
+    <meta
+      property="og:image"
+      content="https://cmj0121.github.io/baton/assets/social-preview.png"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <style>
+      :root {
+        --brand: #00afff;
+        --brand-hi: #87afff;
+        --ink: #dadada;
+        --muted: #8a8a8a;
+        --faint: #303030;
+        --bg: #0a0d12;
+        --surface: #11161d;
+        --green: #00af87;
+        --amber: #d78700;
+        --red: #d75f5f;
+        --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas,
+          monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 16px/1.65 var(--mono);
+        -webkit-font-smoothing: antialiased;
+      }
+      a {
+        color: var(--brand);
+        text-decoration: none;
+      }
+      a:hover {
+        color: var(--brand-hi);
+        text-decoration: underline;
+      }
+      .wrap {
+        max-width: 940px;
+        margin: 0 auto;
+        padding: 0 24px;
+      }
+      header {
+        padding: 72px 0 40px;
+        border-bottom: 1px solid var(--faint);
+      }
+      h1 {
+        margin: 0;
+        font-size: 44px;
+        letter-spacing: 0.22em;
+        color: var(--brand);
+      }
+      .tagline {
+        margin: 14px 0 0;
+        font-size: 19px;
+        color: var(--ink);
+      }
+      .sub {
+        margin: 10px 0 0;
+        color: var(--muted);
+        max-width: 68ch;
+      }
+      .pills {
+        margin: 22px 0 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .pill {
+        border: 1px solid var(--faint);
+        border-radius: 999px;
+        padding: 4px 12px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .cta {
+        margin: 26px 0 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+      .btn {
+        border: 1px solid var(--brand);
+        color: var(--brand);
+        padding: 9px 18px;
+        border-radius: 4px;
+        font-size: 14px;
+      }
+      .btn:hover {
+        background: var(--brand);
+        color: #000;
+        text-decoration: none;
+      }
+      .btn.ghost {
+        border-color: var(--faint);
+        color: var(--ink);
+      }
+      .btn.ghost:hover {
+        border-color: var(--brand-hi);
+        background: transparent;
+        color: var(--brand-hi);
+      }
+      section {
+        padding: 48px 0;
+        border-bottom: 1px solid var(--faint);
+      }
+      h2 {
+        margin: 0 0 20px;
+        font-size: 15px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--brand-hi);
+        font-weight: 600;
+      }
+      figure {
+        margin: 0;
+      }
+      figure img {
+        width: 100%;
+        border: 1px solid var(--faint);
+        border-radius: 6px;
+        display: block;
+      }
+      figcaption {
+        margin-top: 12px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      pre {
+        background: var(--surface);
+        border: 1px solid var(--faint);
+        border-radius: 6px;
+        padding: 14px 16px;
+        overflow-x: auto;
+        margin: 0 0 12px;
+        font-size: 14px;
+      }
+      pre .p {
+        color: var(--green);
+        user-select: none;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+        display: block;
+        overflow-x: auto;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 10px 14px 10px 0;
+        border-bottom: 1px solid var(--faint);
+        vertical-align: top;
+      }
+      th {
+        color: var(--muted);
+        font-weight: 600;
+      }
+      td.hand {
+        color: var(--muted);
+      }
+      .grid {
+        display: grid;
+        gap: 18px;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--faint);
+        border-radius: 6px;
+        padding: 18px;
+      }
+      .card h3 {
+        margin: 0 0 8px;
+        font-size: 15px;
+        color: var(--brand-hi);
+      }
+      .card p {
+        margin: 0;
+        font-size: 14px;
+        color: var(--ink);
+      }
+      .led {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 8px;
+        vertical-align: 1px;
+      }
+      .docs {
+        columns: 2;
+        column-gap: 32px;
+        font-size: 14px;
+        padding: 0;
+        margin: 0;
+        list-style: none;
+      }
+      .docs li {
+        break-inside: avoid;
+        padding: 4px 0;
+      }
+      .docs span {
+        color: var(--muted);
+      }
+      footer {
+        padding: 36px 0 64px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      footer .langs {
+        margin-top: 10px;
+      }
+      kbd {
+        background: var(--surface);
+        border: 1px solid var(--faint);
+        border-bottom-width: 2px;
+        border-radius: 4px;
+        padding: 1px 6px;
+        font-size: 13px;
+        color: var(--brand-hi);
+      }
+      @media (max-width: 640px) {
+        h1 {
+          font-size: 32px;
+        }
+        .docs {
+          columns: 1;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <h1>BATON</h1>
+        <p class="tagline">A terminal multiplexer for AI coding agents.</p>
+        <p class="sub">
+          Running a handful of coding agents at once gets messy fast — windows
+          to juggle, sessions scattered across tabs, and no single place to see
+          who is working, who is stuck, and who is waiting on you. Baton is to
+          AI agents what tmux is to shells: one keyboard-driven cockpit over the
+          whole fleet.
+        </p>
+        <p class="sub">
+          <em>You hold the baton. The agents play. You conduct.</em> 🎼
+        </p>
+        <div class="pills">
+          <span class="pill">single static binary</span>
+          <span class="pill">macOS &amp; Linux</span>
+          <span class="pill">MIT licensed</span>
+          <span class="pill">Go 1.26+</span>
+        </div>
+        <div class="cta">
+          <a class="btn" href="https://github.com/cmj0121/baton">GitHub</a>
+          <a
+            class="btn ghost"
+            href="https://github.com/cmj0121/baton/releases/latest"
+            >Latest release</a
+          >
+          <a
+            class="btn ghost"
+            href="https://github.com/cmj0121/baton/blob/main/docs/SPEC.md"
+            >Read the spec</a
+          >
+        </div>
+      </header>
+
+      <section>
+        <h2>Install</h2>
+        <pre><span class="p">$</span> brew install cmj0121/tap/baton</pre>
+        <pre><span class="p">$</span> curl -fsSL https://raw.githubusercontent.com/cmj0121/baton/main/scripts/install.sh | sh</pre>
+        <pre><span class="p">$</span> go install github.com/cmj0121/baton/cmd/baton@latest</pre>
+        <p class="sub">
+          Then run <code>baton</code>. It starts its background server and drops
+          you on the dashboard: <kbd>A</kbd> spawns an agent,
+          <kbd>enter</kbd> zooms into it, <kbd>q</kbd> detaches and leaves
+          everything running. Lost? <kbd>?</kbd> always lists the keys for
+          wherever you are.
+        </p>
+      </section>
+
+      <section>
+        <h2>The cockpit</h2>
+        <figure>
+          <img
+            src="assets/baton-demo.png"
+            alt="Baton cockpit demo — the key list, panels spawned, the conductor opened, two panels grouped into a work item, and the same ? pressed again in the split and in the zoom"
+          />
+          <figcaption>
+            One key does the whole tour: <kbd>?</kbd> lists the keys for
+            wherever you are. Panels spawn, <kbd>n C</kbd> calls the conductor,
+            <kbd>g g</kbd> then <kbd>g c</kbd> groups two into a work item — and
+            <kbd>?</kbd> again in the split, <kbd>C-t ?</kbd> in the zoom, are
+            three different tables.
+          </figcaption>
+        </figure>
+      </section>
+
+      <section>
+        <h2>Why not just tmux?</h2>
+        <p class="sub">
+          Because tmux has no idea what is in the pane. It hands you windows;
+          you supply the memory of which one is which. Baton assumes the pane
+          holds an agent, and the rest follows from that.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>What you are doing</th>
+              <th>tmux, by hand</th>
+              <th>Baton</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Finding who needs you</td>
+              <td class="hand">cycle the panes and read</td>
+              <td>
+                a live state per panel, and a <kbd>C-t a</kbd> inbox of the ones
+                that stopped for a human
+              </td>
+            </tr>
+            <tr>
+              <td>Keeping related work together</td>
+              <td class="hand">name the windows, remember the scheme</td>
+              <td>work items — a named group of panels, made with two keys</td>
+            </tr>
+            <tr>
+              <td>Handing work out</td>
+              <td class="hand">type it into each pane yourself</td>
+              <td>
+                dispatch a task to one or a whole group, or let a conductor
+                agent drive the fleet
+              </td>
+            </tr>
+            <tr>
+              <td>Stopping a runaway build</td>
+              <td class="hand">nothing</td>
+              <td>
+                CPU, memory and process caps, held over the panel's whole
+                process tree
+              </td>
+            </tr>
+            <tr>
+              <td>Knowing what the fleet costs</td>
+              <td class="hand">nothing</td>
+              <td>
+                the billing window's tokens and cost, and your quota bars,
+                traced to a panel
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Five things a multiplexer does not do</h2>
+        <div class="grid">
+          <div class="card">
+            <h3>
+              <span class="led" style="background: var(--amber)"></span
+              >Attention, not polling
+            </h3>
+            <p>
+              One quiet clock ranks every panel — running, idle, done, stuck —
+              and an agent can raise its own hand above the lot.
+              <kbd>C-t a</kbd> opens the inbox from any view, and a desktop
+              notification finds you when nobody is looking.
+            </p>
+          </div>
+          <div class="card">
+            <h3>
+              <span class="led" style="background: var(--brand)"></span>A
+              conductor
+            </h3>
+            <p>
+              An agent that drives the fleet for you: it spawns, groups, signals
+              and prompts the other panels over the socket, through
+              <code>baton ctl</code> or the <code>baton mcp</code> tools, fenced
+              so it cannot wreck its own host.
+            </p>
+          </div>
+          <div class="card">
+            <h3>
+              <span class="led" style="background: var(--green)"></span>Tasks
+              and a backlog
+            </h3>
+            <p>
+              Dispatch a brief to one agent or a whole work item, delivered when
+              it is ready. A persistent backlog is drained onto free agents by a
+              server-owned scheduler, and a Lua hook can rewrite or veto a
+              brief.
+            </p>
+          </div>
+          <div class="card">
+            <h3>
+              <span class="led" style="background: var(--red)"></span>Caps over
+              the process tree
+            </h3>
+            <p>
+              Cap a panel's CPU, memory and processes and hold its
+              <em>whole process tree</em> to it, so a runaway build cannot take
+              the machine with it. Enforced with cgroup v2 on Linux.
+            </p>
+          </div>
+          <div class="card">
+            <h3>
+              <span class="led" style="background: var(--brand-hi)"></span>Usage
+              traced to a panel
+            </h3>
+            <p>
+              The billing window's tokens and cost, the focused panel's share of
+              them, and your account's rate-limit bars — in the footer, and
+              attributable to the panel that spent them.
+            </p>
+          </div>
+          <div class="card">
+            <h3>
+              <span class="led" style="background: var(--muted)"></span>…and the
+              rest of the cockpit
+            </h3>
+            <p>
+              Work-tree diffs, a git menu, signals, fleet-wide grep, container
+              isolation, remote access over ssh, panel logging, Lua plugins,
+              themes — every one of them a keystroke away.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Documentation</h2>
+        <ul class="docs">
+          <li>
+            <a href="https://github.com/cmj0121/baton/blob/main/docs/SPEC.md"
+              >SPEC</a
+            >
+            <span>— views, lifecycle, architecture</span>
+          </li>
+          <li>
+            <a href="https://github.com/cmj0121/baton/blob/main/docs/KEYS.md"
+              >KEYS</a
+            >
+            <span>— the complete key reference</span>
+          </li>
+          <li>
+            <a
+              href="https://github.com/cmj0121/baton/blob/main/docs/ATTENTION.md"
+              >ATTENTION</a
+            >
+            <span>— the quiet ladder and the inbox</span>
+          </li>
+          <li>
+            <a href="https://github.com/cmj0121/baton/blob/main/docs/CONTROL.md"
+              >CONTROL</a
+            >
+            <span>— the conductor, ctl and mcp</span>
+          </li>
+          <li>
+            <a href="https://github.com/cmj0121/baton/blob/main/docs/LIMITS.md"
+              >LIMITS</a
+            >
+            <span>— resource caps</span>
+          </li>
+          <li>
+            <a
+              href="https://github.com/cmj0121/baton/blob/main/docs/ISOLATION.md"
+              >ISOLATION</a
+            >
+            <span>— container isolation</span>
+          </li>
+          <li>
+            <a href="https://github.com/cmj0121/baton/blob/main/docs/USAGE.md"
+              >USAGE</a
+            >
+            <span>— usage and quota</span>
+          </li>
+          <li>
+            <a href="https://github.com/cmj0121/baton/blob/main/docs/REMOTE.md"
+              >REMOTE</a
+            >
+            <span>— remote access over ssh</span>
+          </li>
+          <li>
+            <a href="https://github.com/cmj0121/baton/blob/main/docs/GIT.md"
+              >GIT</a
+            >
+            <span>— the git menu</span>
+          </li>
+          <li>
+            <a href="https://github.com/cmj0121/baton/blob/main/docs/LOGGING.md"
+              >LOGGING</a
+            >
+            <span>— panel logging</span>
+          </li>
+          <li>
+            <a href="https://github.com/cmj0121/baton/blob/main/docs/RESTART.md"
+              >RESTART</a
+            >
+            <span>— restart policy and directories</span>
+          </li>
+          <li>
+            <a href="https://github.com/cmj0121/baton/blob/main/docs/TUI.md"
+              >TUI</a
+            >
+            <span>— theme and layouts</span>
+          </li>
+          <li>
+            <a href="https://github.com/cmj0121/baton/blob/main/docs/PLUGIN.md"
+              >PLUGIN</a
+            >
+            <span>— the Lua plugin API</span>
+          </li>
+          <li>
+            <a href="https://github.com/cmj0121/baton/blob/main/SECURITY.md"
+              >SECURITY</a
+            >
+            <span>— what is and is not a boundary</span>
+          </li>
+        </ul>
+      </section>
+
+      <footer>
+        <p>
+          MIT licensed · built with
+          <a href="https://github.com/charmbracelet/bubbletea">Bubble Tea</a> ·
+          <a href="https://github.com/cmj0121/baton"
+            >github.com/cmj0121/baton</a
+          >
+        </p>
+        <p class="langs">
+          <a
+            href="https://github.com/cmj0121/baton/blob/main/docs/README.zh-TW.md"
+            >繁體中文</a
+          >
+          ·
+          <a href="https://github.com/cmj0121/baton/blob/main/docs/README.ja.md"
+            >日本語</a
+          >
+          ·
+          <a href="https://github.com/cmj0121/baton/blob/main/docs/README.ko.md"
+            >한국어</a
+          >
+          ·
+          <a href="https://github.com/cmj0121/baton/blob/main/docs/README.fr.md"
+            >Français</a
+          >
+          ·
+          <a href="https://github.com/cmj0121/baton/blob/main/docs/README.de.md"
+            >Deutsch</a
+          >
+          ·
+          <a href="https://github.com/cmj0121/baton/blob/main/docs/README.es.md"
+            >Español</a
+          >
+        </p>
+      </footer>
+    </div>
+  </body>
+</html>

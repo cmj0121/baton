@@ -2,6 +2,8 @@
 
 > Un multiplexor de terminal extensible y pensado para agentes.
 
+[![Release](https://img.shields.io/github/v/release/cmj0121/baton)](https://github.com/cmj0121/baton/releases/latest)
+[![License](https://img.shields.io/github/license/cmj0121/baton)](../LICENSE)
 [![CI](https://github.com/cmj0121/baton/actions/workflows/ci.yml/badge.svg)](https://github.com/cmj0121/baton/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/cmj0121/baton/branch/main/graph/badge.svg)](https://codecov.io/gh/cmj0121/baton)
 
@@ -19,13 +21,13 @@ Tú llevas la batuta. Los agentes tocan. Tú diriges. 🎼
 
 ![Demostración de la cabina de Baton: la lista de teclas, paneles abiertos, el conductor a la vista, dos agrupados en un work item y la misma ? pulsada de nuevo en la vista dividida y en el zoom](assets/baton-demo.png)
 
-_Pulsa `?` antes que nada: la lista de teclas está repartida en pestañas por propósito, y es la de la vista en la que
-estás. Después abre paneles, llama al conductor con `n C`, marca dos con `g g` y agrúpalos con `g c`; y vuelve a pulsar `?`
-en la vista dividida, y `C-t ?` en el zoom. La misma tecla, tres tablas distintas. `v l` y `v p` cierran sobre el árbol._
+_Una sola tecla hace el recorrido: `?` lista las teclas de la vista en la que estás. Se abren paneles, `n C` llama al
+conductor, `g g` y luego `g c` agrupan dos en un work item; y `?` en la vista dividida y `C-t ?` en el zoom son tres
+tablas distintas._
 
-_Vídeo generado a partir de [`baton-demo.tape`](assets/baton-demo.tape); los pasos para regenerarlo están en la cabecera
-del tape. La CLI de agente del conductor es un doble ([`demo-agent.sh`](assets/demo-agent.sh)) para que el vídeo salga
-igual en cualquier máquina; la flota que maneja a través del socket sí es real._
+_Vídeo generado a partir de [`baton-demo.tape`](assets/baton-demo.tape); la CLI de agente del conductor es un doble
+([`demo-agent.sh`](assets/demo-agent.sh)) para que el vídeo salga igual en cualquier máquina, y la flota que maneja a
+través del socket sí es real._
 
 ## Primeros pasos
 
@@ -60,6 +62,22 @@ Baton arranca su servidor en segundo plano y te deja en el **tablero**, tu base 
 3. Pulsa **`q`** para desacoplarte y marcharte: todo sigue en marcha. Vuelve cuando quieras con `baton`.
 
 ¿Perdido? **`?`** siempre muestra las teclas del sitio donde estés.
+
+## ¿Por qué no simplemente tmux?
+
+Porque tmux no sabe qué hay dentro del panel. Te da ventanas; cuál es cuál lo recuerdas tú, y que un agente lleva un rato
+esperándote lo descubres pasando por ellas una a una. Baton da por hecho que en el panel hay un agente, y todo lo demás
+sale de ahí:
+
+| Lo que estás haciendo            | tmux, a mano                               | Baton                                                                                             |
+| -------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| Ver quién te necesita            | pasar por los paneles y leer               | un estado vivo por panel y una bandeja `C-t a` con los que se han parado a esperar a una persona  |
+| Mantener junto lo que va junto   | nombrar las ventanas y recordar el esquema | work items: un grupo con nombre de paneles, hecho con dos teclas                                  |
+| Repartir el trabajo              | teclearlo tú en cada panel                 | mandar una tarea a uno o a todo un grupo, o dejar que un conductor maneje la flota                |
+| Frenar una compilación desbocada | nada                                       | topes de CPU, memoria y procesos, sostenidos sobre todo el árbol de procesos del panel            |
+| Saber lo que cuesta la flota     | nada                                       | los tokens y el coste de la ventana de facturación, y tus barras de cuota, atribuibles a un panel |
+
+Baton no sustituye a tmux ni quiere tus shells: si vives dentro de tmux, ejecútalo ahí.
 
 ## Concepto
 
@@ -145,87 +163,67 @@ una.
 
 ## Funcionalidades
 
-Todo lo que necesitas mientras pastoreas una flota, a una tecla de distancia:
+Cinco cosas que un multiplexor de terminal no hace:
 
-- **Backends de agente** — baton conoce un catálogo de CLIs de agente (`claude`, `codex`, `gemini`, `aider`,
-  `opencode`, `grok`) y detecta cuáles tiene realmente la máquina donde corre la flota. `A` lista los que puedes ejecutar
-  y crea el que elijas; `C-t P` fija el valor por defecto de la flota desde esa misma lista y nombra los que baton conoce
-  y esta máquina no tiene, con dónde conseguir cada uno; `C-t R` vuelve a detectar tras una instalación. Añade los tuyos
-  — o cambia el comando, los argumentos, los límites o el contenedor de un preajuste — bajo `panel.agents`. Nada de esto
-  añade una tecla nueva.
-- **Señales** — `s` envía cualquier señal a la selección, al mosaico enfocado o a todo el grupo; el selector lista las
-  más habituales y con `o` escribes cualquier nombre o número.
-- **Buscar, encontrar, copiar** — `f` filtra la flota por título o grupo; `/` hace grep en la salida de todos los paneles
-  a la vez y lista las coincidencias agrupadas por panel: `enter` hace zoom en la que elijas, aterrizando sobre la
-  coincidencia; `C-t f` busca con expresiones regulares en el historial de un panel; el modo de desplazamiento (`C-t [`)
-  selecciona y copia por OSC52, así que funciona sobre SSH sin ningún binario auxiliar.
-- **Diff** — `D` (o `C-t D` dentro de un zoom) muestra el diff del árbol de trabajo del panel de agente —lo preparado y
-  lo no preparado a la vez, incluidos los archivos sin seguimiento— en una superposición maestro-detalle.
-- **Git** — `C-t G` abre un menú de git sobre el agente ampliado: diff, log, status, preparar, commit, push, ramas y
-  worktrees. Consulta **[docs/GIT.md](GIT.md)**.
-- **Conductor y control** — `n C` abre un conductor: un agente que maneja la flota por ti. Abre paneles, los agrupa, les
-  envía señales y les da instrucciones a través del socket —mediante `baton ctl` o las herramientas de `baton mcp`—,
-  con vallas para que no pueda destrozar su propio anfitrión. Define su objetivo en `$HOME/.baton/CONDUCTOR.md`.
-  Consulta **[docs/CONTROL.md](CONTROL.md)**.
-- **Global shell** — `n h` abre la global shell: una única shell del anfitrión que el servidor mantiene en `$HOME`, siempre
-  a una tecla de distancia. Igual que el conductor, es una marca en el encabezado FLEET en vez de una tarjeta, y el
-  servidor solo guarda una: sobrevive a un reinicio como una ranura muerta que reejecutas con `r`. A diferencia del
-  conductor, no maneja nada: ni rol acotado ni espacio de trabajo gestionado. (Distinta de la shell **scratch** flotante
-  `C-t ~`, que es transitoria y muere al desacoplarte.)
-- **Tareas y la cola** — `T` despacha un encargo a un agente (o lo reparte a todo un work item), queda anotado en la
-  tarjeta y se entrega cuando el agente está listo. `Q` gestiona un backlog persistente que un planificador propio del
-  servidor va vaciando sobre los agentes libres: el flujo **tú → conductor → flota**. Un hook Lua `task.pre` puede
-  reescribir o vetar un encargo; `task.change` lo vigila.
-- **Grupos y resumen** — `+` / `-` ajustan cuántos miembros se transmiten como mosaicos en vivo; el resto se pliega en un
-  solo mosaico de resumen. Los miembros fijados siempre se transmiten. `L` rota la **disposición** de la división: la
-  cuadrícula uniforme, `main-vertical`, `main-horizontal`, `stack` o tus propias cuadrículas de `TUI.yaml`.
-- **Límites de recursos** — limita lo que puede usar un panel —CPU, memoria, procesos— y sujeta a ese límite **todo su
-  árbol de procesos**, para que una compilación desbocada no se lleve la máquina por delante. Define un mínimo para toda
-  la flota y sobrescrituras por agente en la configuración o bajo `C-t P`; `C-t R` los aplica a la flota en marcha. Se
-  imponen con cgroup v2 en Linux, y el panel lo dice claramente cuando un anfitrión no puede imponerlos. Consulta
-  **[docs/LIMITS.md](LIMITS.md)**.
-- **Aislamiento por contenedor** — opcional, por perfil de agente: `isolate: docker` ejecuta los paneles de ese perfil
-  dentro de un contenedor con tu árbol de trabajo montado, de modo que un agente que se equivoca queda confinado a un
-  espacio de trabajo. Tú nombras la imagen (Baton no incluye ninguna); `mount`, `network`, `env-allow` y `user` deciden
-  qué más cruza, y nada de tu entorno cruza si no lo nombras. Los límites siguen aplicándose, impuestos por el runtime.
-  Desactivado por defecto, y no es una frontera contra un agente hostil. Ver **[docs/ISOLATION.md](ISOLATION.md)**.
-- **Apariencia** — `$HOME/.baton/TUI.yaml` remodela la cabina: un **tema** de color y las **disposiciones** de la división
-  de grupo, recargadas en caliente con `C-t R`. Consulta **[docs/TUI.md](TUI.md)**.
-- **Pie de uso** — `v u` alterna un pie que muestra el uso de tokens y el coste del día (`⊙ 1.2M tok · ≈$12.34 API`). Por
-  defecto lee las propias transcripciones de Claude Code (funciona con una suscripción Pro/Max) o la Admin API de
-  Anthropic con una clave. El coste es el equivalente en API, no un cargo de la suscripción. Consulta
-  **[docs/USAGE.md](USAGE.md)**.
-- **Barras de cuota** — `v u` también recorre las barras de cuota de la ventana de 5 h y la semanal, y `v U` abre la
-  cuota completa junto con los paneles que la consumen. La cuota procede de la línea de estado de los propios paneles,
-  que Baton envuelve en lugar de reemplazar. Ver **[docs/USAGE.md](USAGE.md)**.
-- **Registro de paneles** — `C-t l` envía la salida de un panel a un archivo en la máquina donde corre la flota,
-  volcando primero el búfer de repetición, de modo que se conserva justo aquello que te hizo pulsar la tecla; `C-t L`
-  lo relee en un panel temporal que sigue el archivo. Texto plano, secuencias de escape eliminadas, rotación en
-  `log-max-mb`. Desactivado hasta que definas `panel.log-dir`; un perfil puede registrar desde que arranca. Consulta
-  **[docs/LOGGING.md](LOGGING.md)**.
-- **Acceso remoto** — `baton --remote` conecta el mismo puesto de mando a una flota que corre en **otra máquina**, a
-  través del ssh que ya usas para llegar a ella: sin puerto a la escucha, sin TLS y sin ningún intercambio de claves
-  propio de baton. Desactivado por defecto; `settings.remote` o `C-t @` lo activa y acuña una passkey de 8 caracteres
-  que nunca se escribe en disco. `C-t @` también lista cada conexión viva con su origen, su rol y su duración — `x`
-  expulsa una, `n` renueva la passkey, `E` apaga el acceso remoto. Consulta **[docs/REMOTE.md](REMOTE.md)**.
-- **Persistencia y renacimiento** — Baton recuerda su flota entre reinicios; los paneles vuelven como ranuras inertes ya
-  terminadas y `r` los reejecuta a partir de la especificación que se conservó.
-- **Recarga** — `C-t R` (o un `SIGHUP` al demonio) recarga la configuración en caliente sin reiniciar la flota.
-- **Ratón** — desactivado por defecto para que la selección propia de tu terminal siga disponible; actívalo en el mapa de
-  teclas para desplazarte y seleccionar con la rueda.
-- **Idioma** — la lista de teclas de `?` y el mapa de teclas de `C-t k` se leen en inglés o en 繁體中文. Configura
-  `settings.language`, rótalo en vivo desde el mapa de teclas o deja que lo decida tu `$LANG`. Consulta
-  **[docs/TUI.md](TUI.md#language)**.
+- **Atención, no rondas** — una flota está bien casi siempre; si miras la pantalla es por los pocos paneles que no lo
+  están. Un único reloj silencioso los ordena a todos — `running`, `idle` a los diez segundos, `done` para un agente que
+  ha terminado su turno, `stuck` cuando se alarga demasiado — y un agente puede levantar la mano por su cuenta, por
+  encima de toda la escalera. `C-t a` abre la bandeja desde cualquier vista y la cola se vacía ahí; `settings.notify`
+  manda una notificación de escritorio OSC 9 cuando no hay nadie mirando, agrupada, y nunca por un `done`. Ver
+  **[docs/ATTENTION.md](ATTENTION.md)**.
+- **Un conductor** — `n C` abre un agente que maneja la flota por ti: abre paneles, los agrupa, les manda señales y les
+  pasa prompts a través del socket, mediante `baton ctl` o las herramientas `baton mcp`, vallado para que no pueda
+  destrozar su propio anfitrión. Su objetivo se fija en `$HOME/.baton/CONDUCTOR.md`. Ver
+  **[docs/CONTROL.md](CONTROL.md)**.
+- **Tareas y una cola** — `T` reparte un encargo a un agente, o a todo un work item; queda anotado en la tarjeta y se
+  entrega cuando el agente está listo. `Q` gestiona una cola persistente que un planificador del servidor va vaciando
+  sobre los agentes libres. Un hook Lua `task.pre` puede reescribir o vetar un encargo; `task.change` lo vigila.
+- **Topes sobre todo el árbol de procesos** — limita la CPU, la memoria y los procesos de un panel, y sujeta a ese tope
+  su árbol de procesos entero, para que una compilación desbocada no se lleve la máquina por delante. Un suelo para toda
+  la flota con anulaciones por agente, aplicado a la flota en marcha con `C-t R`, impuesto con cgroup v2 en Linux — y el
+  panel lo dice claramente cuando un anfitrión no puede imponerlo. Ver **[docs/LIMITS.md](LIMITS.md)**.
+- **Consumo atribuible a un panel** — `v u` va rotando una lectura en el pie: los tokens y el coste de la ventana de
+  facturación con cuenta atrás (`⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31`), la parte del panel enfocado, o las barras de
+  límite de tu cuenta (`⊙ 5h ▓▓▓▓▓░░░ 2:14:31 · 7d ▓▓▓░░░░░ 3d4h`). `v U` lo abre todo: cada ventana de cuota, el
+  crédito extra y los paneles que se los están comiendo. Ver **[docs/USAGE.md](USAGE.md)**.
 
-## Salvapantallas
+Otras cuatro que la mayoría tampoco tiene:
 
-Vete y déjalo reposar. Tras unos minutos de inactividad —o con el `C-t E` oculto— la cabina cae en una lluvia digital
-Matrix a pantalla completa, con el logotipo **BATON** y un gran reloj flotando en el centro. Es una toma de control solo
-del frontend: no se envía nada al servidor, y cualquier tecla o clic te devuelve directamente a tu vista.
+- **Aislamiento en contenedor** — opcional por perfil de agente: con `isolate: docker`, los paneles de ese perfil corren
+  dentro de un contenedor con tu worktree montado. La imagen la pones tú (Baton no trae ninguna); `mount`, `network`,
+  `env-allow` y `user` deciden qué más cruza, y de tu entorno no cruza nada que no nombres. Desactivado por defecto, y no
+  es una frontera frente a un agente hostil. Ver **[docs/ISOLATION.md](ISOLATION.md)**.
+- **Grep a toda la flota** — `/` busca en la salida de todos los paneles a la vez y agrupa los aciertos por panel;
+  `enter` amplía el que elijas, posado sobre el acierto. `C-t f` busca por expresión regular en un solo historial, y el
+  modo de desplazamiento (`C-t [`) selecciona y copia por OSC 52, así que funciona sobre SSH sin binario auxiliar.
+- **Backends de agente** — Baton conoce un catálogo de CLI de agentes (`claude`, `codex`, `gemini`, `aider`, `opencode`,
+  `grok`) y detecta cuáles hay realmente en la máquina donde corre la flota. `A` lanza el que elijas; `C-t P` fija el
+  valor por defecto de la flota y dice dónde conseguir los que faltan; `C-t R` vuelve a detectar tras una instalación.
+  Los tuyos van bajo `panel.agents`.
+- **Acceso remoto** — `baton --remote` engancha la misma cabina a una flota de otra máquina, por el ssh que ya usas: sin
+  puerto a la escucha, sin TLS y sin ningún intercambio de claves propio de Baton. Desactivado por defecto; `C-t @` lo
+  enciende, acuña una passkey que nunca se escribe en disco, y lista cada conexión viva para echarla, renovarla o
+  cerrarlo todo. Ver **[docs/REMOTE.md](REMOTE.md)**.
 
-![Salvapantallas de Baton: una lluvia digital Matrix con el logotipo BATON y un gran reloj](assets/baton-screensaver.png)
+Y la cabina que se espera de un multiplexor, cada cosa a una tecla:
 
-_Vídeo generado a partir de [`baton-screensaver.tape`](assets/baton-screensaver.tape); los pasos para regenerarlo están en la cabecera del tape._
+| Función              | Tecla           | Qué hace                                                                                             |
+| -------------------- | --------------- | ---------------------------------------------------------------------------------------------------- |
+| Diff                 | `D`             | el diff del árbol de trabajo del panel — preparado y sin preparar a la vez, sin seguimiento incluido |
+| Git                  | `C-t G`         | diff, log, status, stage, commit, push, ramas y worktrees — **[docs/GIT.md](GIT.md)**                |
+| Señales              | `s`             | cualquier señal a la selección, a la tesela enfocada o a todo el grupo                               |
+| Buscar               | `f`             | filtrar la flota por título o por grupo                                                              |
+| Disposición de grupo | `+` `-` `L`     | cuántos miembros se emiten en vivo, y la forma de la división                                        |
+| Shell global         | `n h`           | un shell anfitrión simple que el servidor mantiene en `$HOME`, siempre a una tecla                   |
+| Directorio recordado | `n .`           | los paneles siguen su directorio por OSC 7 — **[docs/RESTART.md](RESTART.md)**                       |
+| Registro de panel    | `C-t l` `C-t L` | volcar la salida de un panel a un fichero y volver a leerla — **[docs/LOGGING.md](LOGGING.md)**      |
+| Persistencia         | `r`             | la flota sobrevive a un reinicio como huecos que relanzas desde su spec                              |
+| Política de reinicio | —               | `panel.restart: on-failure` devuelve un panel con espera y un límite                                 |
+| Recarga en caliente  | `C-t R`         | la configuración sin reiniciar la flota — o un `SIGHUP` al demonio                                   |
+| Apariencia           | —               | tema y rejillas propias en `$HOME/.baton/TUI.yaml` — **[docs/TUI.md](TUI.md)**                       |
+| Salvapantallas       | —               | una lluvia digital a pantalla completa cuando la cabina descansa — **[docs/TUI.md](TUI.md)**         |
+| Ratón                | —               | desactivado por defecto, para no quitarte la selección del terminal                                  |
+| Idioma               | —               | la lista de teclas se lee en inglés o en chino tradicional — **[docs/TUI.md](TUI.md#language)**      |
 
 ## Arquitectura
 

@@ -205,3 +205,8 @@ pane, or an open prompt), and a backend hiccup pulls it aside at once so an outa
 
 Impatient? The leader summons it on demand — the key is left off the key map on purpose. It is only rain and a clock; it
 touches nothing on the server. _(Hint: the leader, then the letter this whole feature is named for.)_
+
+![Baton screen protector — a Matrix digital rain with the BATON wordmark and a big clock](assets/baton-screensaver.png)
+
+_Clip generated from [`baton-screensaver.tape`](assets/baton-screensaver.tape) — regeneration steps are in the tape
+header._

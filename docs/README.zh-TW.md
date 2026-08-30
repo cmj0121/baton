@@ -2,6 +2,8 @@
 
 > 一個可擴充、對 agent 友善的終端機多工器。
 
+[![Release](https://img.shields.io/github/v/release/cmj0121/baton)](https://github.com/cmj0121/baton/releases/latest)
+[![License](https://img.shields.io/github/license/cmj0121/baton)](../LICENSE)
 [![CI](https://github.com/cmj0121/baton/actions/workflows/ci.yml/badge.svg)](https://github.com/cmj0121/baton/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/cmj0121/baton/branch/main/graph/badge.svg)](https://codecov.io/gh/cmj0121/baton)
 
@@ -18,13 +20,11 @@ agent,依所屬任務分組,任何一個都只差一個按鍵。
 
 ![Baton 座艙示範——先叫出鍵表、開面板、開啟 conductor、把兩個併成工作項目,再於分割畫面與 zoom 裡按同一個 ? 鍵](assets/baton-demo.png)
 
-_什麼都還沒做,先按 `?`:鍵表依用途分頁,而且它是你當下所在那個畫面的鍵表。接著開面板、用 `n C` 叫出 conductor、用
-`g g` 標記兩個再用 `g c` 併成工作項目——然後在分割畫面裡再按一次 `?`,在 zoom 裡按 `C-t ?`。同一個鍵,三張不同的表。
-最後用 `v l` 與 `v p` 收在樹狀檢視上。_
+_一個鍵就走完整趟:`?` 列出你當下所在畫面的按鍵。開面板、用 `n C` 叫出 conductor、`g g` 再 `g c` 把兩個併成
+工作項目——然後在分割畫面裡再按一次 `?`、在 zoom 裡按 `C-t ?`,是三張不同的表。_
 
-_影片由 [`baton-demo.tape`](assets/baton-demo.tape) 產生——重製步驟寫在該 tape 檔的檔頭。片中 conductor 的
-agent CLI 是替身([`demo-agent.sh`](assets/demo-agent.sh)),好讓任何機器都錄得出同一支影片;它透過 socket
-驅動的隊伍則是真的。_
+_影片由 [`baton-demo.tape`](assets/baton-demo.tape) 產生;片中 conductor 的 agent CLI 是替身
+([`demo-agent.sh`](assets/demo-agent.sh)),好讓任何機器都錄得出同一支影片,而它透過 socket 驅動的隊伍是真的。_
 
 ## 開始使用
 
@@ -59,6 +59,21 @@ Baton 會啟動它的背景伺服器,並把你帶到**儀表板**——你的大
 3. 按 **`q`** 卸離走人——一切都繼續在跑。隨時用 `baton` 回來。
 
 迷路了?**`?`** 永遠會顯示你當下所在畫面的按鍵。
+
+## 為什麼不直接用 tmux?
+
+因為 tmux 根本不知道 pane 裡裝的是什麼。它給你視窗,而「哪個是哪個」得由你自己記;要發現某個 agent 一直在等你,
+只能一個一個切過去看。Baton 假設 pane 裡裝的是一個 agent,其餘一切都從這裡長出來:
+
+| 你正在做的事       | 用 tmux 手動            | Baton                                                               |
+| ------------------ | ----------------------- | ------------------------------------------------------------------- |
+| 找出誰在等你       | 一個一個切過去看        | 每個面板一個即時狀態,加上一個 `C-t a` 收件匣,裡面是停下來等人的那些 |
+| 把相關的事放在一起 | 自己命名視窗,自己記規則 | 工作項目——一組具名的面板,兩個鍵就併好                               |
+| 把工作派出去       | 自己一個一個 pane 打字  | 派一份任務給一個或整組,或讓 conductor 這個 agent 替你驅動整隊       |
+| 擋住失控的建置     | 沒有                    | CPU、記憶體與行程數上限,而且管的是面板整棵行程樹                    |
+| 知道整隊花了多少   | 沒有                    | 計費窗口的 token 與成本、你的額度進度條,而且能歸屬到面板            |
+
+Baton 不是 tmux 的替代品,也不想接管你的 shell——你如果活在 tmux 裡,就把它跑在 tmux 裡。
 
 ## 概念
 
@@ -135,75 +150,61 @@ Baton 會啟動它的背景伺服器,並把你帶到**儀表板**——你的大
 
 ## 功能
 
-照看整支隊伍時你會用到的一切,都只差一個按鍵:
+五件終端機多工器做不到的事:
 
-- **Agent 後端** — baton 認得一份 agent CLI 名冊(`claude`、`codex`、`gemini`、`aider`、`opencode`、`grok`),並偵測
-  fleet 執行的那台機器上實際裝了哪些。`A` 只列出你跑得動的,並產生你挑的那一個;`C-t P` 從同一份清單設定 fleet 的預設
-  值,並列出 baton 認得、而這台機器沒有的那些,以及各自要去哪裡取得;裝好新的之後按 `C-t R` 重新偵測。要加自己的、或
-  改掉某個預設項的指令、引數、上限與容器,寫在 `panel.agents` 底下。這一切都沒有新的按鍵。
-- **訊號(Signals)** — `s` 對所選、聚焦的磚、或整個群組送出任何訊號;挑選器列出常見的,`o` 可輸入任何名稱或數字。
-- **尋找、搜尋、複製** — `f` 依標題或群組過濾整隊;`/` 一次 grep 每個面板的輸出,並把命中依面板分組列出——
-  `enter` 放大你挑的那個,直接停在命中處;`C-t f` 以正規表示式搜尋某個面板的捲動歷史;捲動模式(`C-t [`)
-  透過 OSC52 選取並複製,所以在 SSH 上也能用,不需輔助執行檔。
-- **Diff** — `D`(在放大裡是 `C-t D`)彈出該 agent 面板的工作樹 diff——已暫存與未暫存一次看,含未追蹤檔——
-  以主從式(master-detail)疊層呈現。
-- **Git** — `C-t G` 對放大中的 agent 開啟 git 選單:diff、log、status、暫存、commit、push、分支與 worktree。
-  見 **[docs/GIT.md](GIT.zh-TW.md)**。
-- **Conductor 與控制** — `n C` 開啟一個 conductor:替你驅動整隊的 agent。它透過 socket——經由 `baton ctl`
-  或 `baton mcp` 工具——開面板、分組、送訊號、對其他面板下提示,並圍上柵欄讓它無法搞壞自己的宿主。
-  在 `$HOME/.baton/CONDUCTOR.md` 設定它的目標。見 **[docs/CONTROL.md](CONTROL.zh-TW.md)**。
-- **Global shell** — `n h` 開啟 global shell:伺服器持有的單一純宿主 shell,固定開在 `$HOME`,永遠一個按鍵之遙。
-  它和 conductor 一樣是 FLEET 標題上的一個標記而非卡片,伺服器只留一個——重啟後會以已結束的空位保留,按 `r` 重跑。
-  但它不驅動任何東西:沒有受限角色、沒有受管理的工作區。(與浮動的 **scratch** shell `C-t ~` 不同,後者是短暫的,卸離即消失。)
-- **任務與佇列** — `T` 把一份簡報派給某個 agent(或散發給整個工作項目),記在卡片上,待 agent 就緒時送達。
-  `Q` 管理一份持久化的待辦佇列,由伺服器自有的排程器抽取分派給空閒的 agent——也就是
-  **你 → conductor → 隊伍** 的流程。`task.pre` 這個 Lua hook 可以改寫或否決一份簡報;`task.change` 則監看它。
-- **群組與摘要** — `+` / `-` 調整有多少成員以即時磚串流;其餘收摺成一個摘要磚。被釘選的成員永遠串流。
-  `L` 輪替分割畫面的**版面配置**——均勻網格、`main-vertical`、`main-horizontal`、`stack`,
-  或你自己在 `TUI.yaml` 裡定義的網格。
-- **資源上限** — 限制一個面板能用多少 CPU、記憶體、行程數,而且管的是它**整棵行程樹**,讓失控的建置沒辦法把整台
-  機器一起拖下水。全隊底線與 per-agent 覆寫都寫在設定檔裡,也能在 `C-t P` 裡編;`C-t R` 會把新上限套用到正在跑
-  的隊伍。Linux 上以 cgroup v2 強制,而主機若無法強制,面板會直說。見 **[docs/LIMITS.md](LIMITS.zh-TW.md)**。
+- **不必輪詢的注意力** — 一支隊伍大多時候都好好的;你會盯著螢幕,是為了不好好的那幾個。一支安靜計時器替每個面板
+  排序——`running`、十秒後的 `idle`、agent 做完一輪的 `done`、拖太久的 `stuck`——而 agent 也可以自己舉手,凌駕
+  整道階梯。`C-t a` 在任何畫面都能打開收件匣,待辦就在那裡清掉;`settings.notify` 會在沒人看著時送出 OSC 9 桌面
+  通知,會併攏,而且永遠不為 `done` 而響。見 **[docs/ATTENTION.md](ATTENTION.zh-TW.md)**。
+- **一個 conductor** — `n C` 開啟一個替你驅動整隊的 agent:它透過 socket——經由 `baton ctl` 或 `baton mcp`
+  工具——開面板、分組、送訊號、對其他面板下提示,並圍上柵欄讓它無法搞壞自己的宿主。在 `$HOME/.baton/CONDUCTOR.md`
+  設定它的目標。見 **[docs/CONTROL.md](CONTROL.zh-TW.md)**。
+- **任務與待辦佇列** — `T` 把一份簡報派給某個 agent,或散發給整個工作項目;它記在卡片上,待 agent 就緒時送達。
+  `Q` 管理一份持久化的待辦佇列,由伺服器自有的排程器抽取分派給空閒的 agent。`task.pre` 這個 Lua hook 可以改寫或
+  否決一份簡報;`task.change` 則監看它。
+- **管到整棵行程樹的上限** — 限制一個面板能用多少 CPU、記憶體、行程數,而且管的是它整棵行程樹,讓失控的建置沒
+  辦法把整台機器一起拖下水。全隊底線加上 per-agent 覆寫,`C-t R` 把新上限套用到正在跑的隊伍,Linux 上以 cgroup
+  v2 強制——主機若無法強制,面板會直說。見 **[docs/LIMITS.md](LIMITS.zh-TW.md)**。
+- **能歸屬到面板的用量** — `v u` 循環切換頁尾讀數:計費窗口的 token 用量與成本加上倒數
+  (`⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31`)、聚焦面板佔該窗口的比例,或帳號的 rate-limit 進度條
+  (`⊙ 5h ▓▓▓▓▓░░░ 2:14:31 · 7d ▓▓▓░░░░░ 3d4h`)。`v U` 打開完整畫面——每個額度窗口、額外點數,以及正在消耗
+  它們的面板。見 **[docs/USAGE.md](USAGE.zh-TW.md)**。
+
+另外四件,多數多工器也沒有:
+
 - **容器隔離** — 以 agent profile 為單位選擇性開啟:`isolate: docker` 讓該 profile 的面板跑在容器裡,並把你的
-  worktree 掛進去,這樣做錯事的 agent 被關住的是一個工作區。Image 由你指定(Baton 不提供);`mount`、`network`、
-  `env-allow` 與 `user` 決定還有什麼能過去,而你環境裡的東西除非點名否則一律不過去。資源上限一樣有效,由 runtime
-  執行。預設關閉,而且不是對付惡意 agent 的邊界。見 **[docs/ISOLATION.md](ISOLATION.zh-TW.md)**。
-- **重啟策略** — 預設關閉;設定 `panel.restart: on-failure`,行程異常結束的面板就會自己回來,帶指數退避,並且在
-  達到上限時大聲停下而不是無聲迴圈。正常結束、你關掉的、你送過 signal 的,都不會被動到。可以逐 agent profile
-  覆寫。
-- **記住工作目錄** — 面板目前的工作目錄會從 shell 自己的 OSC 7 回報學來,沒有回報時則問行程表。重跑會落在你剛才
-  所在的地方,`n .` 在聚焦面板的目錄開一個 shell,路徑成為卡片的辨識標記,git 選單也會跟著 agent 進到 worktree。
-  見 **[docs/RESTART.md](RESTART.zh-TW.md)**。
-- **外觀** — `$HOME/.baton/TUI.yaml` 重塑座艙:一組色彩**主題**與群組分割的**版面配置**,用 `C-t R` 熱重載。
-  見 **[docs/TUI.md](TUI.zh-TW.md)**。
-- **用量與額度** — `v u` 循環切換頁尾讀數:計費窗口的 token 用量與成本加上倒數
-  (`⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31`)、聚焦面板佔該窗口的比例,或帳號的
-  **rate-limit 進度條**(`⊙ 5h ▓▓▓▓▓░░░ 2:14:31 · 7d ▓▓▓░░░░░ 3d4h`)。
-  `v U` 打開完整畫面 —— 每個額度窗口、額外點數,以及正在消耗它們的面板。總量來自
-  Claude Code 的 transcript(所以能歸屬到面板);額度來自面板自己的狀態列,而 Baton
-  是包住它而不是取代它。見 **[docs/USAGE.md](USAGE.zh-TW.md)**。
-- **面板記錄** — `C-t l` 把面板輸出導向隊伍所在機器上的檔案,並先把重播緩衝區倒進去,所以讓你按下按鍵的那件事
-  會被留下來;`C-t L` 用一個會跟著檔案跑的臨時面板讀回來。純文字、escape sequence 已拿掉、到 `log-max-mb`
-  就輪替。在你設定 `panel.log-dir` 之前都是關的;profile 可以從 spawn 就開始記錄。見
-  **[docs/LOGGING.md](LOGGING.zh-TW.md)**。
-- **遠端連線** — `baton --remote` 把同一個 cockpit 接上**另一台機器**上的隊伍,走的是你本來就在用的 ssh:不開監聽
-  埠、不帶 TLS、也沒有 baton 自己發明的金鑰交換。預設關閉;`settings.remote` 或 `C-t @` 打開它,並產生一組永遠不
-  寫進磁碟的 8 字元 passkey。`C-t @` 同時列出每一條連線的來源、角色與連線時長——`x` 踢人、`n` 換碼、`E` 關閉遠端。
-  見 **[docs/REMOTE.md](REMOTE.zh-TW.md)**。
-- **持久化與重生** — Baton 會跨重啟記住它的隊伍;面板以停滯的已結束空位回來,`r` 依保留的規格把它們重跑。
-- **重載** — `C-t R`(或對常駐程式送 `SIGHUP`)在不重啟整隊的情況下熱重載設定。
-- **滑鼠** — 預設關閉,好讓終端機自己的選取仍可用;在按鍵對應裡打開它,即可用滾輪捲動與選取。
-- **語言** — `?` 按鍵清單與 `C-t k` 按鍵對應可讀英文或繁體中文。設定 `settings.language`、在按鍵對應裡即時輪替,
-  或乾脆讓你的 `$LANG` 決定。見 **[docs/TUI.zh-TW.md](TUI.zh-TW.md#語言)**。
+  worktree 掛進去。Image 由你指定(Baton 不提供);`mount`、`network`、`env-allow` 與 `user` 決定還有什麼能過去,
+  而你環境裡的東西除非點名否則一律不過去。預設關閉,而且不是對付惡意 agent 的邊界。
+  見 **[docs/ISOLATION.md](ISOLATION.zh-TW.md)**。
+- **grep 整支隊伍** — `/` 一次搜尋每個面板的輸出,並把命中依面板分組列出;`enter` 放大你挑的那個,直接停在命中處。
+  `C-t f` 以正規表示式搜尋單一面板的捲動歷史,捲動模式(`C-t [`)透過 OSC 52 選取並複製,所以在 SSH 上也能用,
+  不需輔助執行檔。
+- **Agent 後端** — Baton 認得一份 agent CLI 名冊(`claude`、`codex`、`gemini`、`aider`、`opencode`、`grok`),並
+  偵測隊伍執行的那台機器上實際裝了哪些。`A` 產生你挑的那一個;`C-t P` 設定整隊的預設值,並列出這台機器沒有的那些
+  以及各自要去哪裡取得;裝好之後按 `C-t R` 重新偵測。要加自己的——指令、引數、上限或容器——寫在 `panel.agents` 底下。
+- **遠端連線** — `baton --remote` 把同一個座艙接上另一台機器上的隊伍,走的是你本來就在用的 ssh:不開監聽埠、
+  不帶 TLS、也沒有 Baton 自己發明的金鑰交換。預設關閉;`C-t @` 打開它、產生一組永遠不寫進磁碟的 passkey,並列出
+  每一條連線,可以踢人、換碼或關閉。見 **[docs/REMOTE.md](REMOTE.zh-TW.md)**。
 
-## 螢幕保護
+以及一個多工器該有的座艙,每一項都只差一個按鍵:
 
-走開,讓它閒著。閒置幾分鐘後——或按下隱藏的 `C-t E`——座艙會落入一整面的 Matrix 數位雨,中央浮著
-**BATON** 字樣與一個大時鐘。這純粹是前端的接管:不會送任何東西到伺服器,任何按鍵或點擊都會立刻把你的畫面帶回來。
-
-![Baton 螢幕保護——帶著 BATON 字樣與大時鐘的 Matrix 數位雨](assets/baton-screensaver.png)
-
-_影片由 [`baton-screensaver.tape`](assets/baton-screensaver.tape) 產生——重製步驟寫在該 tape 檔的檔頭。_
+| 功能         | 按鍵            | 做什麼                                                                                  |
+| ------------ | --------------- | --------------------------------------------------------------------------------------- |
+| Diff         | `D`             | 該 agent 面板的工作樹 diff——已暫存與未暫存一次看,含未追蹤檔                             |
+| Git          | `C-t G`         | diff、log、status、暫存、commit、push、分支與 worktree——**[docs/GIT.md](GIT.zh-TW.md)** |
+| 訊號         | `s`             | 對所選、聚焦的磚、或整個群組送出任何訊號                                                |
+| 尋找         | `f`             | 依標題或群組過濾整隊                                                                    |
+| 群組版面     | `+` `-` `L`     | 多少成員以即時磚串流,以及分割畫面的形狀                                                 |
+| Global shell | `n h`           | 伺服器持有的單一純宿主 shell,固定開在 `$HOME`,永遠一個按鍵之遙                          |
+| 記住工作目錄 | `n .`           | 面板從 OSC 7 學到自己目前的目錄——**[docs/RESTART.md](RESTART.zh-TW.md)**                |
+| 面板記錄     | `C-t l` `C-t L` | 把面板輸出導向檔案,再讀回來——**[docs/LOGGING.md](LOGGING.zh-TW.md)**                    |
+| 持久化       | `r`             | 隊伍跨重啟留下來,成為你可以依保留規格重跑的已結束空位                                   |
+| 重啟策略     | —               | `panel.restart: on-failure` 讓面板帶著退避與上限自己回來                                |
+| 熱重載       | `C-t R`         | 不重啟整隊就重載設定——或對常駐程式送一個 `SIGHUP`                                       |
+| 外觀         | —               | 主題與自訂分割網格寫在 `$HOME/.baton/TUI.yaml`——**[docs/TUI.md](TUI.zh-TW.md)**         |
+| 螢幕保護     | —               | 座艙靜下來時的一整面數位雨——**[docs/TUI.md](TUI.zh-TW.md)**                             |
+| 滑鼠         | —               | 預設關閉,好讓終端機自己的選取仍可用                                                     |
+| 語言         | —               | 按鍵清單可讀英文或繁體中文——**[docs/TUI.md](TUI.zh-TW.md#語言)**                        |
 
 ## 架構
 

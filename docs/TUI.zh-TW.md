@@ -194,3 +194,7 @@ settings:
 
 沒耐心?領導鍵能隨傳隨到——這個按鍵是刻意不放進按鍵對應表的。它只是雨和一個時鐘;它不觸及伺服器上的任何東西。
 _(提示:領導鍵,接著按這整個功能命名所用的那個字母。)_
+
+![Baton 螢幕保護——數位雨簾幕、BATON 字樣與一個大時鐘](assets/baton-screensaver.png)
+
+_影片由 [`baton-screensaver.tape`](assets/baton-screensaver.tape) 產生——重製步驟寫在該 tape 檔的檔頭。_
