@@ -2,6 +2,8 @@
 
 > An extensible, agent-friendly terminal multiplexer.
 
+[![Release](https://img.shields.io/github/v/release/cmj0121/baton)](https://github.com/cmj0121/baton/releases/latest)
+[![License](https://img.shields.io/github/license/cmj0121/baton)](LICENSE)
 [![CI](https://github.com/cmj0121/baton/actions/workflows/ci.yml/badge.svg)](https://github.com/cmj0121/baton/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/cmj0121/baton/branch/main/graph/badge.svg)](https://codecov.io/gh/cmj0121/baton)
 
