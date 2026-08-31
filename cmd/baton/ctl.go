@@ -30,6 +30,7 @@ type ctlCLI struct {
 	Dispatch      ctlDispatch      `cmd:"" help:"Assign a task brief to a panel and deliver it as a unit."`
 	DispatchGroup ctlDispatchGroup `cmd:"" name:"dispatch-group" help:"Dispatch one task to every member of a work item."`
 	Queue         ctlQueue         `cmd:"" help:"Manage the task backlog (add/list/cancel/drain)."`
+	Score         ctlScore         `cmd:"" help:"Manage the fleet memory (submit/list/status)."`
 	Conductor     ctlConductor     `cmd:"" help:"Manage the conductor (reset its workspace)."`
 }
 

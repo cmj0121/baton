@@ -450,5 +450,21 @@ func defaultTools() []tool {
 				return "closed", nil
 			},
 		},
+		{
+			name:   "score_submit",
+			desc:   "After a round of work, record one short observation about how this fleet behaves — a habit of its agents or its workflow, not a fact about the code. It lands at the lowest tier immediately and earns importance only by recurring, so submit freely and briefly.",
+			schema: obj(map[string]any{"text": str("the observation to record — one short sentence")}, "text"),
+			run: func(c *control.Client, a args) (string, error) {
+				text := a.str("text")
+				if text == "" {
+					return "", fmt.Errorf("text is required")
+				}
+				id, err := c.ScoreSubmit(text)
+				if err != nil {
+					return "", err
+				}
+				return "recorded as " + id, nil
+			},
+		},
 	}
 }
