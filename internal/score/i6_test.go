@@ -396,6 +396,16 @@ var agentDoors = map[string]func(t *testing.T, s *Store, id string){
 			t.Fatalf("Reinforce: %v", err)
 		}
 	},
+	// The server calls Signal only for the user's own dispatches, but the STORE
+	// takes the provenance it is handed, so an agent source is a shape it must
+	// hold whatever a caller does. Driving it here is what keeps I6 a property of
+	// the store rather than of one careful call site.
+	"Signal": func(t *testing.T, s *Store, _ string) {
+		t.Helper()
+		if _, _, err := s.Signal("keep the build green", Provenance{Source: SourceAgent, SourcePanel: "p1"}); err != nil {
+			t.Fatalf("Signal: %v", err)
+		}
+	},
 }
 
 // closedDoors is every OTHER exported method, with the reason an agent cannot
@@ -406,6 +416,7 @@ var closedDoors = map[string]string{
 	"Boot":        "reports what Open's recovery pass did; writes nothing",
 	"Close":       "releases the directory claim",
 	"Dir":         "reports the directory",
+	"DrainFolds":  "hands back fold records already made; changes no entry",
 	"Explain":     "a read; its reconcile pass acts on score.md, which is the user's file",
 	"Health":      "reports counters",
 	"Len":         "counts entries",
@@ -416,6 +427,7 @@ var closedDoors = map[string]string{
 	"Render":      "a read",
 	"RenderBlock": "a read",
 	"SetPolicy":   "retunes thresholds; #37 demotes nothing and no threshold grants a tier, only earns one",
+	"Signal":      "", // in agentDoors
 	"Submit":      "", // in agentDoors
 	"Unlocked":    "reports the single-writer claim",
 	"View":        "a read, like Explain",

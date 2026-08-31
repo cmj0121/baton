@@ -727,6 +727,14 @@ func runServerOn(ln net.Listener, sock string) error {
 			_ = os.Remove(sock)
 			_ = os.Remove(pidPath)
 			_ = ln.Close()
+			// Any fold the store is still holding gets said before the daemon
+			// stops. Records are buffered for the next read to drain, and on the
+			// way out there is no next read — so a repeat counted seconds before a
+			// SIGTERM was durable in the log and named in no line anywhere, which
+			// is #38's one-line-per-fold quietly not happening in the case an
+			// operator is most likely to be investigating. Each record carries its
+			// own timestamp, so these are stamped when they happened.
+			server.ScoreFolds(scoreStore.DrainFolds())
 			// The score directory's single-writer claim goes back here rather than
 			// on a defer, because the signal path — the daemon's ordinary exit —
 			// calls os.Exit and runs no defer at all.

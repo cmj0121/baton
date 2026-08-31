@@ -634,10 +634,20 @@ type Fold struct {
 	// once, so naming the line that earned it is what keeps Counted readable.
 	Repeat string
 	Prov   Provenance // where that repeat came from: a panel, or the operator's own file
-	// Reinforcements and Tier are where the entry stands AFTER this fold, so the
-	// log line that announces a fold also answers the only question it raises.
+	// Reinforcements, UserSignals and Tier are where the entry stands AFTER this
+	// fold, so the log line that announces a fold also answers the questions it
+	// raises — including the one R4 added, which is how close this entry now is
+	// to the rung only the user can grant.
 	Reinforcements int
+	UserSignals    int
 	Tier           int
+	// At is when the fold happened, which is NOT when it is reported. Every
+	// record but a signal's is buffered for the next read to drain, and that read
+	// is the next dispatch, list or status — seconds or minutes later, or never
+	// if the daemon stops first. A line stamped with its drain time is a line
+	// that misdates the only event it exists to describe, so the moment is
+	// carried rather than taken from the clock at the far end.
+	At time.Time
 	// Duplicates is how many repeats this fold covers — more than one only on the
 	// file path, where a paste can carry the same wording many times. Counted says
 	// whether they moved the entry's counter, which they do not when the store
@@ -654,6 +664,20 @@ type Fold struct {
 	// None is inferable from another.
 	FromFile bool
 	Removed  bool
+	// FromSignal says the repeat arrived through Signal — text MATCHED against
+	// the store rather than offered to it, which today is a brief the user
+	// dispatched. It is the third door and needs a name of its own because
+	// nothing else here separates it from the second: a user's Signal fold and a
+	// user's Submit fold carry the same source and touch no line either way, and
+	// the two are not the same thing to an operator who submitted nothing. #38 §4
+	// accepts that a brief may coincidentally repeat an unrelated entry; that
+	// cost is only bearable while it is VISIBLE, and this is what lets the log
+	// name the door rather than leave it to be inferred.
+	//
+	// It rides the EVENT as well as this record (see event.Signal). A fold record
+	// lives until the next read drains it; the log outlives the daemon, and
+	// "which of my briefs promoted this" is a question asked days later.
+	FromSignal bool
 }
 
 // maxFoldNotes caps the fold records held for the next read to report. Every
@@ -919,6 +943,17 @@ type event struct {
 	// field existed decodes with it false and simply seeds nothing — which is
 	// the pre-derivation behaviour, not a wrong one.
 	RemovedLine bool `json:"removed_line,omitempty"`
+	// Signal marks a fold that came through Store.Signal — a brief the user
+	// dispatched — rather than through a submission or a duplicate line.
+	//
+	// Without it the two user-sourced doors are byte-identical in the log, and
+	// the difference is exactly what #38 §4 asks to stay visible: a submission is
+	// something the operator chose to record, and a signal is a coincidence
+	// between their brief and an entry they may never have thought about. Nothing
+	// in the store branches on it — it changes no count and no tier — so it is
+	// evidence rather than state, and an old record decoding with it false says
+	// only that the daemon that wrote it had no signals to distinguish.
+	Signal bool `json:"signal,omitempty"`
 }
 
 // foldEvent records one repeat counted into id. It carries the REPEAT's own text
@@ -933,10 +968,11 @@ type event struct {
 // reinforcement because that is the common case, not because the name is the
 // discriminator — R4's user signal must key on Source (invariant I6), never on
 // the name.
-func foldEvent(id, text string, prov Provenance, at time.Time, removedLine bool) event {
+func foldEvent(id, text string, prov Provenance, at time.Time, removedLine, signal bool) event {
 	return event{
 		Schema: Schema, Event: EventFolded, Id: id, At: at,
-		Source: prov.Source, Text: text, Prov: &prov, RemovedLine: removedLine,
+		Source: prov.Source, Text: text, Prov: &prov,
+		RemovedLine: removedLine, Signal: signal,
 	}
 }
 
@@ -1601,7 +1637,7 @@ func (s *Store) Submit(text string, prov Provenance) (Entry, bool, error) {
 		return Entry{}, false, err
 	}
 	if i := s.foldTargetLocked(e.Text); i >= 0 {
-		folded, err := s.foldLocked(i, e.Text, prov)
+		folded, _, err := s.foldLocked(i, e.Text, prov, false)
 		return folded, true, err
 	}
 	stored, err := s.submitLocked(e.Text, prov)
@@ -1888,9 +1924,10 @@ func (s *Store) foldTargetLocked(text string) int {
 
 // reinforceLocked counts ONE reinforcement into e, from source, and raises its
 // tier when the count earns one — returning the raised event to append when it
-// did. Every path that counts a repeat — a folded submission, a folded line, an
-// Reinforce — ends here, so the ladder is climbed in one place and a path added
-// later cannot promote by its own rules. The caller holds the lock.
+// did. Every path that counts a repeat — a folded submission, a folded line, a
+// brief the user dispatched, Reinforce — ends here, so the ladder is climbed in
+// one place and a path added later cannot promote by its own rules. The caller
+// holds the lock.
 //
 // A REWORD is deliberately not on that list. Correcting a line's wording is one
 // statement re-spelled rather than a second statement, so it counts nothing; see
@@ -1933,29 +1970,44 @@ func (s *Store) reinforceLocked(e *Entry, source string, at time.Time) (event, b
 // removed no line, so it owes none: the event is written with RemovedLine false.
 // The caller holds the lock.
 //
-// The fold is RECORDED as well as counted, on the same buffer the file path
-// uses, so the one log line per fold #38's lifecycle asks for has one producer
-// and one shape. A submission that folded is the mutation an operator cannot see
-// by looking — score.md does not move — which is precisely why it must be said.
-func (s *Store) foldLocked(i int, text string, prov Provenance) (Entry, error) {
+// It serves both of the store's TEXT-matching doors — Submit, where the repeat
+// was offered as an observation, and Signal, where it was only matched — which
+// is what fromSignal names. They differ in nothing but the record they leave,
+// and splitting them would have been two copies of an append, a counter and a
+// fold note for that one field.
+//
+// The fold is RECORDED as well as counted, and the record is RETURNED as well as
+// recorded, because the two doors want it at different moments. A submission's
+// goes on the same buffer the file path uses, for the next read to drain: it is
+// the one shape #38's "one log line per fold" has, with one producer. A signal's
+// is handed straight back instead, and is deliberately not buffered — a brief
+// promoting an entry is the case #38 §4 asks to stay visible, and a line that
+// appears on the NEXT dispatch, stamped with that dispatch's clock and lost
+// entirely if the daemon stops first, is not visibility. The caller logs it on
+// the dispatch that caused it.
+func (s *Store) foldLocked(i int, text string, prov Provenance, fromSignal bool) (Entry, Fold, error) {
 	now := time.Now().UTC()
 	e := s.entries[i]
-	evs := []event{foldEvent(e.Id, text, prov, now, false)}
+	evs := []event{foldEvent(e.Id, text, prov, now, false, fromSignal)}
 	if raised, ok := s.reinforceLocked(&e, prov.Source, now); ok {
 		evs = append(evs, raised)
 	}
+	var rec Fold
 	if err := s.applyLocked(evs, func() error {
 		s.entries[i] = e
-		s.noteFoldsLocked([]Fold{{
-			Id: e.Id, Text: e.Text, Repeat: text, Prov: prov,
-			Reinforcements: e.Reinforcements, Tier: e.Tier,
-			Duplicates: 1, Counted: true,
-		}})
+		rec = Fold{
+			Id: e.Id, Text: e.Text, Repeat: text, Prov: prov, At: now,
+			Reinforcements: e.Reinforcements, UserSignals: e.UserSignals, Tier: e.Tier,
+			Duplicates: 1, Counted: true, FromSignal: fromSignal,
+		}
+		if !fromSignal {
+			s.noteFoldsLocked([]Fold{rec})
+		}
 		return nil
 	}); err != nil {
-		return Entry{}, err
+		return Entry{}, Fold{}, err
 	}
-	return e, nil
+	return e, rec, nil
 }
 
 // Reinforce bumps an entry's counter and logs who did it: a fold when an agent
@@ -1994,6 +2046,104 @@ func (s *Store) Reinforce(id, source string) error {
 		s.entries[i] = e
 		return nil
 	})
+}
+
+// Signal counts text as a reinforcement of the entry it repeats, and changes
+// nothing at all when it repeats none. It is #38 §4's second source of the user
+// signal: a brief the user dispatched, matched against the store with the same
+// normaliser folding uses.
+//
+// It is Submit's fold half WITHOUT Submit's other half, and that is the whole
+// difference between them. A brief is evidence that something the fleet already
+// remembers still matters; it is not an observation being offered, so text that
+// matches nothing must leave no trace. Reaching for Submit here would fill
+// score.md with one entry per dispatch.
+//
+// prov is the caller's to supply, exactly as Submit's is, and for the reason
+// invariant I6 exists: this package does not know who called it, so a store that
+// stamped SourceUser here on its own authority would be the store deciding the
+// one thing #38 §4 says only the connection can. The server passes what the
+// connection says (see Server.connProvenance) and calls this only for the user's
+// own dispatches.
+//
+// The text is NOT weighed against maxEntryRunes. That cap exists to keep a
+// heavy entry out of every future brief, and Signal admits nothing — a brief
+// longer than any entry simply matches none.
+//
+// It IS scrubbed, though the match would work without it: normalize sanitises on
+// its own. What the scrub is for is everything the text is then kept in — the
+// fold event's own wording, replayed at every boot, and the fold record a server
+// turns into a log line. Submit's fold path hands foldLocked an already-scrubbed
+// Entry.Text, so doing it here is what keeps the two doors recording the same
+// kind of string; see sanitize for what an unscrubbed one costs.
+//
+// What it matches is narrower than "the brief mentions the entry", and the
+// difference matters to anyone judging the risk. normalize is sanitize plus
+// lowercasing plus a trailing-punctuation trim and NOTHING else, so the whole
+// brief must normalise to the whole entry: "table-driven" does not match "table
+// driven", and a brief that quotes two entries verbatim matches neither of them.
+// In practice that means the door fires on short, command-like briefs a person
+// retypes — and essentially never on natural prose. The realistic coincidence is
+// a SHORT entry ("run the tests") reached by two entirely ordinary dispatches,
+// which is why the record below has to name what matched.
+//
+// It returns the fold RECORD rather than the entry, and does not buffer it. A
+// caller logs it on the dispatch that caused it — see foldLocked for why a
+// signal is the one fold that must not wait for the next read. hit reports
+// whether the text folded at all; on a miss the record is zero. The coincidence
+// #38 §4 accepts is reversible the way every reinforcement is: by editing
+// score.md.
+func (s *Store) Signal(text string, prov Provenance) (rec Fold, hit bool, err error) {
+	if s == nil {
+		return Fold{}, false, errDisabled
+	}
+	text = sanitize(text)
+	if text == "" {
+		return Fold{}, false, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Read-reconcile-write, as in Submit and Reinforce, and unconditional for the
+	// reason theirs are: a wording the operator has just deleted must not swallow
+	// this, one they have just typed should match it, and no gate over filesystem
+	// timestamps is exact enough to decide that.
+	//
+	// It is the one mutation path that runs on the DISPATCH path, so it does pay
+	// a re-parse of score.md the render's own gated pass had just skipped. That
+	// is the cost BenchmarkReconcileReparse measures, once per dispatch a person
+	// typed, and the alternative is a fold counted into a line that is no longer
+	// in their file.
+	if _, rerr := s.reconcileNowLocked(); rerr != nil {
+		return Fold{}, false, rerr
+	}
+	i := s.foldTargetLocked(text)
+	if i < 0 {
+		return Fold{}, false, nil
+	}
+	_, folded, ferr := s.foldLocked(i, text, prov, true)
+	return folded, ferr == nil, ferr
+}
+
+// DrainFolds hands back every fold record the store is still holding, and clears
+// them. It is what a caller runs at SHUTDOWN.
+//
+// Fold records are buffered for the next read to drain, which on a running
+// daemon is the next dispatch, list or status. On a stopping one there is no
+// next read: a fold counted seconds before a SIGTERM was durable in the log and
+// yet had no line anywhere, which is #38's "one log line per fold" quietly not
+// happening in the one case an operator is most likely to be investigating.
+// Each record carries its own At, so a line drained here is still stamped with
+// the moment the fold happened rather than with the shutdown.
+//
+// Safe on the disabled (nil) store, like every other method here.
+func (s *Store) DrainFolds() []Fold {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.drainFoldsLocked()
 }
 
 // Refine is the entry-management verb (promote, retire, edit, …).
@@ -2899,7 +3049,7 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 		// keep it the same way: they call this only where the entry's fold record
 		// is not already marked Counted, and they mark it immediately after.
 		countRepeat := func(target int, text string) {
-			pending = append(pending, foldEvent(next[target].Id, text, userProv, now, true))
+			pending = append(pending, foldEvent(next[target].Id, text, userProv, now, true, false))
 			if raised, ok := s.reinforceLocked(&next[target], userProv.Source, now); ok {
 				pending = append(pending, raised)
 				delta.Raised++
@@ -2963,7 +3113,8 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 				if !folds[at].Counted && countable(next[target].Id, b.text) {
 					countRepeat(target, b.text)
 					folds[at].Counted, folds[at].Repeat = true, b.text
-					folds[at].Reinforcements, folds[at].Tier = next[target].Reinforcements, next[target].Tier
+					folds[at].Reinforcements, folds[at].UserSignals, folds[at].Tier =
+						next[target].Reinforcements, next[target].UserSignals, next[target].Tier
 				}
 				continue
 			}
@@ -2998,9 +3149,9 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 			}
 			folded[target] = len(folds)
 			folds = append(folds, Fold{
-				Id: next[target].Id, Text: next[target].Text, Repeat: b.text, Prov: userProv,
-				Reinforcements: next[target].Reinforcements, Tier: next[target].Tier,
-				Duplicates: 1, Counted: counted, FromFile: true,
+				Id: next[target].Id, Text: next[target].Text, Repeat: b.text, Prov: userProv, At: now,
+				Reinforcements: next[target].Reinforcements, UserSignals: next[target].UserSignals,
+				Tier: next[target].Tier, Duplicates: 1, Counted: counted, FromFile: true,
 			})
 		}
 	}

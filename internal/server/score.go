@@ -110,25 +110,50 @@ func (s *Server) scoreLook(v score.View, err error) score.View {
 // is still in the file. Announcing a deletion there would be #38's one log line
 // per fold, saying something untrue. A submission fold removed nothing and never
 // claims to; only a file fold reports the field at all.
+//
+// A DISPATCHED BRIEF is the third door, and it gets its own wording because the
+// other two cannot describe it: the record reads exactly like the one the
+// operator's own `ctl score submit` leaves — same source, no line touched — and
+// yet they submitted nothing. #38 §4 accepts that a brief may coincidentally
+// repeat an unrelated entry, and that cost is only bearable while it is visible,
+// so the line has to say a dispatch was what counted rather than leave it to be
+// worked out.
 func logScoreFolds(folds []score.Fold) {
 	for _, f := range folds {
+		// `at` is the fold's OWN moment, not this line's. Every record but a
+		// signal's waits for the next read to drain it, so zerolog's timestamp is
+		// when the daemon got round to saying it and can be minutes out; see
+		// score.Fold.At.
 		e := log.Info().Str("id", f.Id).Str("entry", f.Text).Str("duplicate", f.Repeat).
 			Int("duplicates", f.Duplicates).Str("source", f.Prov.Source).
-			Int("reinforcements", f.Reinforcements).Int("tier", f.Tier).
-			Bool("counted", f.Counted)
+			Int("reinforcements", f.Reinforcements).Int("user_signals", f.UserSignals).
+			Int("tier", f.Tier).Bool("counted", f.Counted).Time("at", f.At)
 		if f.Prov.SourcePanel != "" {
 			e = e.Str("panel", f.Prov.SourcePanel)
 		}
 		msg := "score folded a repeat into an existing entry"
-		if f.FromFile {
+		switch {
+		case f.FromFile:
 			e = e.Bool("removed", f.Removed)
 			msg = "score folded a duplicate line out of score.md"
 			if !f.Removed {
 				msg = "score folded a duplicate line but could not remove it from score.md"
 			}
+		case f.FromSignal:
+			msg = "score counted a brief the user dispatched as a repeat of an existing entry"
 		}
 		e.Msg(msg)
 	}
+}
+
+// ScoreFolds writes the fold lines for records a caller drained itself, and is
+// the daemon's way of emptying the buffer on the way out (cmd/baton's cleanup).
+// It exists for the reason ScoreCounters does: internal/score is stdlib-only and
+// never logs, so the shape of these lines lives here, and a shutdown that
+// hand-rolled its own would be the second producer logScoreFolds was written to
+// prevent.
+func ScoreFolds(folds []score.Fold) {
+	logScoreFolds(folds)
 }
 
 // ScoreCounters stamps a log event with everything one pass of the store did and
@@ -169,6 +194,11 @@ func ScoreCounters(e *zerolog.Event, d score.Delta, h score.Health) *zerolog.Eve
 // task.enqueue and panel.dispatch-group ride empty briefs, because injecting at
 // a queued or fanned-out delivery is R5's problem (#39). An unknown id yields a
 // bare brief and is left for dispatchScored to report.
+//
+// It only READS the memory. A brief the user wrote is one of #38 §4's two
+// sources of the user signal, but that is recorded by scoreSignal after the
+// dispatch has actually landed — a brief a task.pre hook vetoed, or one that
+// failed on an unknown panel id, is not the user telling the fleet anything.
 func (s *Server) dispatchBrief(id, prompt string) TaskBrief {
 	ctx, _ := s.panelContext(id)
 	b := TaskBrief{Prompt: prompt, Panel: id, Group: ctx.Group, Cwd: ctx.Cwd, Profile: ctx.Profile}
@@ -179,6 +209,105 @@ func (s *Server) dispatchBrief(id, prompt string) TaskBrief {
 	b.Score = v.Block
 	logScoreInjection(ctx, v)
 	return b
+}
+
+// scoreSignal records a brief the USER dispatched as a reinforcement of whatever
+// entry it repeats — #38 §4's second source, the one that needs no protocol
+// beyond the connection it arrived on.
+//
+// It runs AFTER the dispatch has landed, not while the brief is being built. A
+// task.pre hook can veto a dispatch and an unknown panel id can fail one, and
+// either way nothing reached an agent; counting those would make the signal a
+// record of what the user ASKED for rather than of what the fleet was told, and
+// the entry would climb on briefs that never happened.
+//
+// It counts the user's OWN text rather than the brief the hook chain produced.
+// A task.pre hook may rewrite a prompt freely, so ranking its output as the
+// user's voice would let a plugin reach the one tier #37 reserves for the
+// operator — the same self-report #38 §4 rules out, arriving through the
+// customisation point instead of through an agent.
+//
+// The discrimination is connProvenance's and nothing else's: an agent panel can
+// dispatch too (a conductor driving a worker), and an agent's brief is not the
+// user asking for anything.
+//
+// A brief that matches no entry does nothing at all — Store.Signal admits
+// nothing, so a dispatch is never an observation being recorded. It is not free
+// even then, and this is the cost R4 actually adds to a dispatch: like every
+// other mutation path the store has, Signal re-reads score.md unconditionally
+// rather than through the render's fingerprint gate. On a large store that is
+// about a millisecond for a miss and rather more for a hit, which dwarfs
+// anything the entry's own size costs the ranking — anyone tuning this should
+// start here. It is a path a person drives one dispatch at a time, and it is
+// never on an agent's.
+//
+// The fold is logged HERE, on the dispatch that caused it, through the same
+// logScoreFolds every other fold goes through. Store.Signal hands the record
+// back rather than buffering it for the next read, because #38 §4's accepted
+// cost is only bearable while it is visible and a line that arrives on the next
+// dispatch — or not at all, if the daemon stops first — is not that.
+func (s *Server) scoreSignal(cc *clientConn, prompt string) {
+	if !s.scoreState.available() {
+		return
+	}
+	prov := s.connProvenance(cc)
+	if prov.Source != score.SourceUser {
+		return
+	}
+	rec, hit, err := s.scoreState.Store.Signal(prompt, prov)
+	switch {
+	case err != nil && !s.scoreState.failing.Load():
+		// Only when the dispatch's own view has not already said it. The two calls
+		// share a reconcile pass and therefore share their failure, and scoreLook's
+		// latch exists precisely so an unreadable score.md is reported on the
+		// dispatch it started on rather than on every dispatch after it.
+		log.Warn().Err(err).Str("dir", s.scoreState.Store.Dir()).
+			Msg("score could not count the user's brief as a reinforcement")
+	case hit:
+		logScoreFolds([]score.Fold{rec})
+	}
+}
+
+// connProvenance is #38 §4's discrimination and the ONE place it is made: a
+// connection that declared a self on hello is an agent inside a panel, and one
+// that did not is the TUI or `baton ctl` from the operator's own shell.
+//
+// BE CLEAR ABOUT WHAT THIS IS. cc.self is assigned straight from the hello
+// frame's Self field and validated against nothing (see the hello case in
+// onCommand). It is what an HONEST client declares, not something the daemon
+// verified. What makes it work is only that the daemon injects BATON_PANEL_ID
+// into every agent panel it spawns, so an ordinary agent is stamped correctly
+// without doing anything, while `env -u BATON_PANEL_ID baton ctl score submit`
+// from inside that same panel is stamped as the user.
+//
+// That is not a hole to be closed here. #38's Trust and exposure section says
+// outright that an agent which unsets its own environment can pose as a cockpit,
+// and that one with filesystem access can write score.md directly — Score does
+// not claim to be a boundary against a hostile agent, and invariant I6 protects
+// against a fleet reinforcing its own conclusions, not against an adversary. A
+// check here would buy nothing while both of those stand.
+//
+// Two consequences worth knowing before trusting a stamp. A SHELL panel gets no
+// identity environment at all, so an agent CLI a user starts by hand inside one
+// is stamped as the user for as long as it runs — no forging required. And the
+// ROLE fence cannot substitute: BATON_ROLE reaches the conductor panel alone, so
+// an ordinary worker panel's connection is unfenced and would look exactly like
+// a cockpit.
+//
+// The agent branch also carries the three ranking dimensions, read through
+// panelContext because that is where a dispatch reads them: an entry's recorded
+// cwd and a dispatch's cwd have to come from one reader or they can never be
+// equal. A cockpit has no panel row, so it records none of the three and its
+// entries rank on tier and recency alone.
+func (s *Server) connProvenance(cc *clientConn) score.Provenance {
+	if cc.self == "" {
+		return score.Provenance{Source: score.SourceUser}
+	}
+	prov := score.Provenance{Source: score.SourceAgent, SourcePanel: cc.self}
+	if ctx, ok := s.panelContext(cc.self); ok {
+		prov.SourceCwd, prov.SourceProfile, prov.SourceGroup = ctx.Cwd, ctx.Profile, ctx.Group
+	}
+	return prov
 }
 
 // logScoreInjection names the entries this brief is carrying, and the context
@@ -254,33 +383,12 @@ func (s *Server) panelContext(id string) (ctx score.Context, found bool) {
 }
 
 // scoreSubmit handles score.submit: record cmd.Prompt as a new entry, stamped
-// with provenance derived from the connection (#38 §4). A connection that
-// declared a self on hello is an agent panel, so the entry carries that panel's
-// id — plus its profile, cwd and group when the row is still in the fleet, which
-// are the three dimensions the ranking matches a dispatch against — while one
-// that did not is the operator's cockpit, which has no panel row and therefore
-// records none of the three. The store refuses plainly when
-// disabled (nil), and that refusal is the whole disabled story: no flag here.
-//
-// The source it stamps is what the top tier turns on (invariant I6), so it must
-// never be a CLAIM: an agent that could say "the user told me this" could
-// promote anything it liked. cc.self is the discriminator because it is
-// injected into the panel's environment by the daemon and declared on hello,
-// which is a fact about the connection rather than a field the submitter fills
-// in. The ROLE fence cannot serve — BATON_ROLE reaches the conductor panel
-// alone, so an ordinary worker panel's connection is unfenced and would look
-// like a cockpit.
+// with the provenance of the connection it arrived on — see connProvenance,
+// which is where #38 §4's rule lives and which a dispatched brief now asks the
+// same question of. The store refuses plainly when disabled (nil), and that
+// refusal is the whole disabled story: no flag here.
 func (s *Server) scoreSubmit(cc *clientConn, cmd proto.Command) {
-	prov := score.Provenance{Source: score.SourceUser}
-	if cc.self != "" {
-		prov = score.Provenance{Source: score.SourceAgent, SourcePanel: cc.self}
-		// Through panelContext, which is where a dispatch reads the same three
-		// properties: an entry's recorded cwd and a dispatch's cwd have to come
-		// from one reader or they can never be equal. See panelContext.
-		if ctx, ok := s.panelContext(cc.self); ok {
-			prov.SourceCwd, prov.SourceProfile, prov.SourceGroup = ctx.Cwd, ctx.Profile, ctx.Group
-		}
-	}
+	prov := s.connProvenance(cc)
 	// A nil store is not always "switched off": it is also a directory another
 	// daemon holds and a set of files that would not open. Say which, so the
 	// answer is actionable rather than merely accurate.
