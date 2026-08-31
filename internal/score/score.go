@@ -65,8 +65,9 @@ const Schema = 1
 // a starting point, not a discovery — which is why the knob exists.
 //
 // It caps the working set, NOT the store: everything outside it is still held,
-// still reconciled, and still ranked — see rankAllLocked and orderRanked, the
-// read that shows what did not make the cut and why (#42).
+// still reconciled, and still ranked, and score.list shows all of it with each
+// entry's Standing — capped there too, the tier of everything past the seventh
+// entry appeared in no surface at all (#42).
 const defaultWorkingSet = 7
 
 // defaultRankWeight is what an unset ranking weight becomes: x2 per dimension,
@@ -109,14 +110,14 @@ type Rank struct {
 	// one weight that is not a match/miss: every entry's recency factor is
 	// interpolated linearly between one at the oldest last-reinforcement position
 	// in the log and this weight at the newest. See recencyFactor.
-	Recency float64
+	Recency float64 `json:"recency"`
 	// Cwd, Profile and Group are each worth their weight when the entry's
 	// recorded value for that dimension equals the dispatching panel's, and one
 	// otherwise. They are independent, so an entry matching all three is worth
 	// their product.
-	Cwd     float64
-	Profile float64
-	Group   float64
+	Cwd     float64 `json:"cwd"`
+	Profile float64 `json:"profile"`
+	Group   float64 `json:"group"`
 }
 
 // Policy is everything about the store's behaviour an operator configures: the
@@ -460,11 +461,15 @@ func (e *Entry) setText(raw string) {
 // read from the operator's cockpit carries, since a cockpit is not a panel and
 // has no directory, profile or group of its own to match. Every context factor
 // then reads one — see matchFactor, which never matches an empty value.
+// The fields carry wire names because score.list ECHOES the context it ranked
+// against, so an operator can see that a listing was contextless rather than
+// inferring it from a column of ones. Every one is omitempty, which makes the
+// contextless read a visibly empty object.
 type Context struct {
-	Panel   string
-	Profile string
-	Cwd     string
-	Group   string
+	Panel   string `json:"panel,omitempty"`
+	Profile string `json:"profile,omitempty"`
+	Cwd     string `json:"cwd,omitempty"`
+	Group   string `json:"group,omitempty"`
 }
 
 // Delta is what ONE reconcile pass changed in the operator's files. The pass
@@ -659,8 +664,8 @@ const (
 )
 
 // Ranked is one entry with the arithmetic that placed it, and where that placing
-// left it. It is the OPERATOR's view of the ranking, never the dispatch's, which
-// needs only the entries themselves.
+// left it. It is the OPERATOR's view of the ranking — score.list is built from
+// it — and never the dispatch's, which needs only the entries themselves.
 type Ranked struct {
 	Entry
 	Rank    float64 `json:"rank"`
@@ -816,7 +821,7 @@ func foldEvent(id, text string, prov Provenance, at time.Time, removedLine bool)
 type Store struct {
 	mu      sync.Mutex
 	dir     string
-	entries []Entry             // score.md file order — the render order in S0
+	entries []Entry             // score.md file order; the RENDER order is the ranking's
 	burned  map[string]struct{} // every id the log has ever named; never reissued
 	boot    Delta               // what Open's recovery pass did to the operator's files
 	health  Health
@@ -1181,8 +1186,8 @@ func (s *Store) View(ctx Context) (View, error) {
 
 // Explain is View plus the ranking laid out: every entry the store holds, in
 // rank order, each with the factors that produced its rank and whether it made
-// the working set. It is the OPERATOR's read, never a dispatch's, which needs
-// the working set and nothing else.
+// the working set. It is the OPERATOR's read — score.list — and never a
+// dispatch's, which needs the working set and nothing else.
 //
 // It is a second entry point rather than a field View always fills because the
 // cost is not the same: a breakdown per entry is an allocation the size of the

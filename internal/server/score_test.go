@@ -309,7 +309,7 @@ func TestScoreSubmitDisabled(t *testing.T) {
 // TestScoreListAndStatus checks both read verbs' reply shapes, enabled and
 // disabled: list is always a JSON array, status reports
 // enabled/entries/rendered/dir honestly in each state. The two counts are both
-// reported so status can explain its own gap when the render limit bites.
+// reported so status can explain its own gap when the working-set budget bites.
 func TestScoreListAndStatus(t *testing.T) {
 	st, dir := scoreStore(t)
 	if _, _, err := st.Submit("one real entry", score.Provenance{Source: "user"}); err != nil {
@@ -322,21 +322,18 @@ func TestScoreListAndStatus(t *testing.T) {
 		want   statusReply
 		listed int // entries score.list returns
 	}{
-		{"enabled", st, statusReply{Enabled: true, Available: true, Entries: 1, Rendered: 1, PromoteAt: 3, Dir: dir}, 1},
+		{"enabled", st, statusReply{
+			Enabled: true, Available: true, Entries: 1, Rendered: 1,
+			PromoteAt: 3, WorkingSet: 7,
+			Rank: score.Rank{Recency: 2, Cwd: 2, Profile: 2, Group: 2}, Dir: dir,
+		}, 1},
 		{"disabled", nil, statusReply{Reason: "score is disabled"}, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := scoreServer(tc.st)
 
-			cc := conn("")
-			s.onCommand(cc, proto.Command{Action: "score.list"})
-			msg := reply(t, cc)
-			var entries []score.Entry
-			if msg.Type != "score" || json.Unmarshal(msg.Score, &entries) != nil {
-				t.Fatalf("score.list must answer a score array, got %+v", msg)
-			}
-			if len(entries) != tc.listed {
+			if entries := listed(t, s, "").Entries; len(entries) != tc.listed {
 				t.Fatalf("want %d listed entries, got %+v", tc.listed, entries)
 			}
 

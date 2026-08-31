@@ -78,9 +78,9 @@ type ScoreConfig struct {
 	// read as unset rather than as switching the memory off, which is what
 	// score.enabled is for.
 	//
-	// It caps the BRIEF, never the store: everything the store holds is still
-	// reconciled and still ranked whatever this says, and the budget only decides
-	// how many of them one dispatch carries (#42).
+	// It caps the BRIEF, never the store: `baton ctl score list` reports every
+	// entry the store holds whatever this says, and marks which of them the
+	// working set took (#42).
 	WorkingSet int `yaml:"working-set,omitempty"`
 
 	// Enabled turns the subsystem off entirely when false: no injection into

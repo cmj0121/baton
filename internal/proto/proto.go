@@ -70,7 +70,7 @@ const EventBufferSize = 256
 type Command struct {
 	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | panel.tail | panel.diff | panel.git | panel.log | panel.logview | panel.scratch | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run | remote.status | remote.enable | remote.disable | remote.rotate | remote.kick | score.submit | score.list | score.status
 	Kind      string   `json:"kind,omitempty"`      // panel kind for "panel.create" (default "shell")
-	ID        string   `json:"id,omitempty"`        // target panel for close/attach/input/resize/diff, or the panel to rename
+	ID        string   `json:"id,omitempty"`        // target panel for close/attach/input/resize/diff, the panel to rename, or the panel "score.list" ranks its entries for (empty = rank against no context)
 	Path      string   `json:"path,omitempty"`      // init command (binary path) for "panel.create"; empty = default shell
 	Args      []string `json:"args,omitempty"`      // command arguments for "panel.create" (an agent profile's args)
 	Profile   string   `json:"profile,omitempty"`   // the agent profile the spawn came from; the server resolves THAT profile's resource limits from its own config, so a client never carries a policy it could widen
@@ -426,10 +426,23 @@ type ServerMsg struct {
 	Failed     bool        `json:"failed,omitempty"`      // on "gitout", the op exited non-zero (its message is in Text)
 
 	// Score is a score.* verb's reply payload, set on "score": the created entry
-	// id for score.submit, the entry list for score.list, the status object for
-	// score.status. It rides as raw JSON rather than three typed fields because
-	// the shapes are additive and version together with internal/score (#39);
-	// old clients ignore the unknown field entirely.
+	// id for score.submit, the ranked entry list and the context it was ranked
+	// against for score.list, the status object for score.status. It rides as raw
+	// JSON rather than three typed fields because the shapes are additive and
+	// version together with internal/score (#39); old clients ignore the unknown
+	// field entirely.
+	//
+	// score.list's payload gained that envelope in R3 (#42), moving from a bare
+	// array to {context, entries}. That is a shape change rather than an appended
+	// field, so it would be a ProtocolVersion bump under the rule above — except
+	// that the rule protects PEERS, and at the time R3 landed score.list had
+	// never been in a tagged release, so there was no peer to protect.
+	//
+	// THAT EXEMPTION IS SPENT. It was true of the window between the S0 skeleton
+	// and the first tag carrying R3, and of nothing after: from that tag onward
+	// there are clients in the field speaking this shape, and reshaping
+	// score.list again is an ordinary breaking change under the rule above. Read
+	// it as a record of one decision, not as a standing licence.
 	Score json.RawMessage `json:"score,omitempty"`
 
 	// The merged effective client config, set on "config": defaults <- YAML <-

@@ -404,18 +404,29 @@ func (c *Client) ScoreSubmit(text string) (id string, folded bool, err error) {
 	return out.Id, out.Folded, nil
 }
 
-// ScoreList returns every recorded fleet-memory entry as the server's raw JSON
-// array — the shared presentation for `baton ctl score list`.
-func (c *Client) ScoreList() (string, error) {
-	payload, err := c.scoreExchange(proto.Command{Action: "score.list"})
+// ScoreList returns every recorded fleet-memory entry as the server's raw JSON,
+// each carrying the rank and the factor breakdown that placed it, whether the
+// working set took it and — when it did not — which cap left it out, beside the
+// context they were ranked against. The shared presentation for
+// `baton ctl score list`.
+//
+// panel names the panel to rank for: its directory, profile and group are what
+// the context dimensions are matched against, which is what makes the reply an
+// answer about the brief THAT panel gets. Empty ranks against no context at all
+// — the cockpit's own view, where every context factor is 1.0 — and the echoed
+// context is what tells the two apart. A panel the fleet does not have is an
+// error, never a silent fallback to the contextless answer.
+func (c *Client) ScoreList(panel string) (string, error) {
+	payload, err := c.scoreExchange(proto.Command{Action: "score.list", ID: panel})
 	if err != nil {
 		return "", err
 	}
 	return string(payload), nil
 }
 
-// ScoreStatus returns the fleet-memory status object (enabled, entries, dir) as
-// the server's raw JSON — the shared presentation for `baton ctl score status`.
+// ScoreStatus returns the fleet-memory status object (enabled, entries, the
+// tuning in force, dir) as the server's raw JSON — the shared presentation for
+// `baton ctl score status`.
 func (c *Client) ScoreStatus() (string, error) {
 	payload, err := c.scoreExchange(proto.Command{Action: "score.status"})
 	if err != nil {
