@@ -408,15 +408,33 @@ func runServerOn(ln net.Listener, sock string) error {
 	stateF := paths.StateFile(sock)
 	sweepLegacyConductorWorkspaces(sock)
 	// The fleet memory (#39). A failed Open logs and boots WITHOUT a store —
-	// corrupt score files never block the fleet (#38 lifecycle) — and
-	// `score.enabled: false` hands the server a nil store, which the score
-	// package treats as the disabled one.
+	// corrupt score files never block the fleet (#38 lifecycle), and a second
+	// daemon pointed at the same score directory is refused there rather than
+	// clobbering the first one's files — and `score.enabled: false` hands the
+	// server a nil store, which the score package treats as the disabled one.
 	var scoreStore *score.Store
 	if cfg.Score.IsEnabled() {
-		if st, serr := score.Open(cfg.Score.Directory()); serr != nil {
+		st, serr := score.Open(cfg.Score.Directory())
+		switch {
+		case serr != nil:
 			log.Warn().Err(serr).Str("dir", cfg.Score.Directory()).Msg("score store open failed; running without fleet memory")
-		} else {
+		default:
 			scoreStore = st
+			if st.Unlocked() {
+				log.Warn().Str("dir", cfg.Score.Directory()).
+					Msg("score directory cannot be locked on this filesystem; a second daemon here would corrupt it")
+			}
+			// #38's lifecycle asks for one line per recovery action, so what the
+			// boot pass did to the operator's files is visible without reading the
+			// event log by hand.
+			if d, h := st.Boot(), st.Health(); d != (score.Delta{}) || h != (score.Health{}) {
+				log.Info().Int("admitted", d.Admitted).Int("reattributed", d.Reattributed).
+					Int("adopted", d.Adopted).Int("superseded", d.Superseded).
+					Int("retired", d.Retired).Int("reprojected", d.Reprojected).
+					Int("oversized", h.Oversized).Int("torn_events", h.TornEvents).
+					Int("cache_write_failures", h.CacheWriteFailures).
+					Str("dir", cfg.Score.Directory()).Msg("score recovered")
+			}
 		}
 	}
 	srv := server.New(ln, append(buildServerOptions(rc, stateF), usageOption(cfg), limitsOption(cfg), server.WithScore(scoreStore))...)
@@ -503,6 +521,10 @@ func runServerOn(ln net.Listener, sock string) error {
 			_ = os.Remove(sock)
 			_ = os.Remove(pidPath)
 			_ = ln.Close()
+			// The score directory's single-writer claim goes back here rather than
+			// on a defer, because the signal path — the daemon's ordinary exit —
+			// calls os.Exit and runs no defer at all.
+			scoreStore.Close()
 		})
 	}
 	defer cleanup()
