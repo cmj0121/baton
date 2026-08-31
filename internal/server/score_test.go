@@ -209,7 +209,10 @@ func TestScoreSubmitProvenance(t *testing.T) {
 	}
 
 	agent := find(submit(conn("p1"), "always run make lint"))
-	want := score.Provenance{Source: "agent", SourcePanel: "p1", SourceProfile: "claude", SourceCwd: "/work/auth"}
+	want := score.Provenance{
+		Source: "agent", SourcePanel: "p1",
+		SourceProfile: "claude", SourceCwd: "/work/auth", SourceGroup: "auth",
+	}
 	if agent.Provenance != want {
 		t.Fatalf("agent provenance mis-stamped: %+v", agent.Provenance)
 	}

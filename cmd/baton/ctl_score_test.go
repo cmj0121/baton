@@ -18,7 +18,7 @@ func ctlScoredServer(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_RUNTIME_DIR", home)
-	st, err := score.Open(t.TempDir(), 0)
+	st, err := score.Open(t.TempDir(), score.Policy{})
 	if err != nil {
 		t.Fatalf("open score store: %v", err)
 	}

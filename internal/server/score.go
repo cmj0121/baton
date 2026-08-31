@@ -167,8 +167,10 @@ func (s *Server) dispatchBrief(id, prompt string) TaskBrief {
 // scoreSubmit handles score.submit: record cmd.Prompt as a new entry, stamped
 // with provenance derived from the connection (#38 §4). A connection that
 // declared a self on hello is an agent panel, so the entry carries that panel's
-// id — plus its profile and cwd when the row is still in the fleet — while one
-// that did not is the operator's cockpit. The store refuses plainly when
+// id — plus its profile, cwd and group when the row is still in the fleet, which
+// are the three dimensions the ranking matches a dispatch against — while one
+// that did not is the operator's cockpit, which has no panel row and therefore
+// records none of the three. The store refuses plainly when
 // disabled (nil), and that refusal is the whole disabled story: no flag here.
 func (s *Server) scoreSubmit(cc *clientConn, cmd proto.Command) {
 	prov := score.Provenance{Source: "user"}
@@ -177,6 +179,7 @@ func (s *Server) scoreSubmit(cc *clientConn, cmd proto.Command) {
 		s.mu.Lock()
 		if idx := s.indexLocked(cc.self); idx >= 0 {
 			prov.SourceCwd = s.panels[idx].Cwd
+			prov.SourceGroup = s.panels[idx].Group
 			prov.SourceProfile = s.specs[cc.self].Profile
 		}
 		s.mu.Unlock()
@@ -285,7 +288,7 @@ func (s *Server) scoreStatus() json.RawMessage {
 		Entries:   v.Total,
 		Rendered:  len(v.Entries),
 		Oversized: v.Health.Oversized,
-		PromoteAt: v.PromoteAt,
+		PromoteAt: v.Policy.PromoteAt,
 		Dir:       s.scoreState.Store.Dir(),
 	})
 }

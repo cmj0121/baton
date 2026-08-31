@@ -881,7 +881,7 @@ func TestOwedRemovalsAreBoundedNarrowly(t *testing.T) {
 // recurrence.
 func TestEveryOwedLineIsRemembered(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir, 10)
+	s, err := Open(dir, Policy{PromoteAt: 10})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

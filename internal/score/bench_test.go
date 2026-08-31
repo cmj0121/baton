@@ -22,7 +22,7 @@ func BenchmarkReconcileReparse(b *testing.B) {
 	for _, n := range []int{100, 5000} {
 		b.Run(fmt.Sprintf("entries=%d", n), func(b *testing.B) {
 			dir := b.TempDir()
-			s, err := Open(dir, defaultPromoteAt)
+			s, err := Open(dir, Policy{})
 			if err != nil {
 				b.Fatalf("Open: %v", err)
 			}
@@ -75,7 +75,7 @@ func BenchmarkReconcileReparse(b *testing.B) {
 // reaches by rewording, not a synthetic worst case.
 func BenchmarkSubmitFoldLookup(b *testing.B) {
 	dir := b.TempDir()
-	s, err := Open(dir, defaultPromoteAt)
+	s, err := Open(dir, Policy{})
 	if err != nil {
 		b.Fatalf("Open: %v", err)
 	}

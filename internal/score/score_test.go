@@ -16,6 +16,18 @@ import (
 // idRe is the shape of a store-issued id: short lowercase hex.
 var idRe = regexp.MustCompile(`^[0-9a-f]{6}$`)
 
+// renderedByID is the working set keyed by entry id. Tests that care WHICH
+// entries a context renders — rather than in what order — go through it, since
+// the order is the ranking's to decide.
+func renderedByID(t *testing.T, s *Store, ctx Context) map[string]Entry {
+	t.Helper()
+	out := map[string]Entry{}
+	for _, e := range s.Render(ctx) {
+		out[e.Id] = e
+	}
+	return out
+}
+
 // readFile is a test helper that fails instead of returning an error.
 func readFile(t *testing.T, dir, name string) string {
 	t.Helper()
@@ -29,7 +41,7 @@ func readFile(t *testing.T, dir, name string) string {
 func TestOpenSeedsHeaderOnFirstRun(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "score")
 
-	s, err := Open(dir, defaultPromoteAt)
+	s, err := Open(dir, Policy{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -90,7 +102,7 @@ func TestOpenExistingNeverReseeds(t *testing.T) {
 				t.Fatalf("write score.md: %v", err)
 			}
 
-			s, err := Open(dir, defaultPromoteAt)
+			s, err := Open(dir, Policy{})
 			if err != nil {
 				t.Fatalf("Open: %v", err)
 			}
@@ -107,7 +119,7 @@ func TestOpenExistingNeverReseeds(t *testing.T) {
 
 func TestSubmitAppendsAllThreeFiles(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir, defaultPromoteAt)
+	s, err := Open(dir, Policy{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -177,7 +189,7 @@ func TestSubmitAppendsAllThreeFiles(t *testing.T) {
 // terminal.
 func TestSubmitNeutralisesControlSequences(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir, defaultPromoteAt)
+	s, err := Open(dir, Policy{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -222,7 +234,7 @@ func TestSubmitNeutralisesControlSequences(t *testing.T) {
 // count.
 func TestSubmitRefusesOverLong(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir, defaultPromoteAt)
+	s, err := Open(dir, Policy{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -265,7 +277,7 @@ func TestLoadSanitisesOperatorEdits(t *testing.T) {
 		t.Fatalf("write score.md: %v", err)
 	}
 
-	s, err := Open(dir, defaultPromoteAt)
+	s, err := Open(dir, Policy{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -290,7 +302,7 @@ func TestLoadSanitisesOperatorEdits(t *testing.T) {
 }
 
 func TestSubmitRejectsEmpty(t *testing.T) {
-	s, err := Open(t.TempDir(), defaultPromoteAt)
+	s, err := Open(t.TempDir(), Policy{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -311,7 +323,7 @@ func TestSubmitRejectsEmpty(t *testing.T) {
 // resurrected them.
 func TestSeedNeverReachesABrief(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir, defaultPromoteAt)
+	s, err := Open(dir, Policy{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -330,7 +342,7 @@ func TestSeedNeverReachesABrief(t *testing.T) {
 		t.Fatalf("remove snapshot: %v", err)
 	}
 	s.Close() // one writer per directory; hand the claim over
-	re, err := Open(dir, defaultPromoteAt)
+	re, err := Open(dir, Policy{})
 	if err != nil {
 		t.Fatalf("reopen without a snapshot: %v", err)
 	}
@@ -350,14 +362,14 @@ func TestSeedNeverReachesABrief(t *testing.T) {
 
 func TestSubmitSurvivesReopen(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir, defaultPromoteAt)
+	s, err := Open(dir, Policy{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	e := submit(t, s, "persisted")
 
 	s.Close()
-	re, err := Open(dir, defaultPromoteAt)
+	re, err := Open(dir, Policy{})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -374,7 +386,7 @@ func TestSubmitSurvivesReopen(t *testing.T) {
 }
 
 func TestSubmitConcurrent(t *testing.T) {
-	s, err := Open(t.TempDir(), defaultPromoteAt)
+	s, err := Open(t.TempDir(), Policy{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -393,8 +405,8 @@ func TestSubmitConcurrent(t *testing.T) {
 	wg.Wait()
 
 	got := len(s.Render(Context{Group: "g"}))
-	if got != renderLimit {
-		t.Fatalf("Render returned %d entries, want the render limit %d", got, renderLimit)
+	if got != defaultWorkingSet {
+		t.Fatalf("Render returned %d entries, want the working-set budget %d", got, defaultWorkingSet)
 	}
 	reconcile(t, s)
 }
@@ -407,11 +419,11 @@ func TestRender(t *testing.T) {
 	}{
 		{"seed only", 0, 0},
 		{"under the limit", 3, 3},
-		{"capped at the limit", 10, renderLimit},
+		{"capped at the working-set budget", 10, defaultWorkingSet},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s, err := Open(t.TempDir(), defaultPromoteAt)
+			s, err := Open(t.TempDir(), Policy{})
 			if err != nil {
 				t.Fatalf("Open: %v", err)
 			}
@@ -432,7 +444,7 @@ func TestRenderEmptyAndDisabled(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, scoreMD), nil, 0o600); err != nil {
 		t.Fatalf("write score.md: %v", err)
 	}
-	s, err := Open(dir, defaultPromoteAt)
+	s, err := Open(dir, Policy{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -463,11 +475,16 @@ func TestRenderEmptyAndDisabled(t *testing.T) {
 
 // TestRenderBlockWording checks the tier wording of the injected block. The
 // entries are planted straight into the store rather than through the files:
-// no tier above 1 can be reached through the API until R3 promotes one, and
-// score.json is a cache R1 never reads back, so the files cannot express this
-// state at all. The seam under test is the rendering, not how a tier is earned.
+// tier 3 is unreachable through the API until R4 brings the user signal
+// (maxEarnedTier), and score.json is a cache Open never reads back, so the
+// files cannot express this state at all. The seam under test is the rendering,
+// not how a tier is earned.
+//
+// The expected ORDER is the ranking's, not the slice's: every entry here has
+// the same last-reinforcement position and no provenance, so tier is the only
+// factor that varies and the block reads highest tier first.
 func TestRenderBlockWording(t *testing.T) {
-	s := &Store{entries: []Entry{
+	s := &Store{policy: Policy{}.clamp(), entries: []Entry{
 		{Id: "aaaaaa", Text: "first", Tier: 1},
 		{Id: "bbbbbb", Text: "second", Tier: 2},
 		{Id: "cccccc", Text: "third", Tier: 3},
@@ -476,10 +493,10 @@ func TestRenderBlockWording(t *testing.T) {
 
 	got := s.RenderBlock(Context{Panel: "p1"})
 	want := "── Score ──\n" +
-		"- first [noted]\n" +
-		"- second [note and take care]\n" +
-		"- third [important]\n" +
 		"- off the scale [noted]\n" +
+		"- third [important]\n" +
+		"- second [note and take care]\n" +
+		"- first [noted]\n" +
 		"───────────\n"
 	if got != want {
 		t.Fatalf("RenderBlock:\n got: %q\nwant: %q", got, want)
@@ -488,7 +505,7 @@ func TestRenderBlockWording(t *testing.T) {
 
 func TestReinforce(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir, defaultPromoteAt)
+	s, err := Open(dir, Policy{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -507,7 +524,7 @@ func TestReinforce(t *testing.T) {
 	// The counter is replayed from the log, and so is the tier those two
 	// reinforcements earned: three occurrences is the default threshold.
 	s.Close()
-	re, err := Open(dir, defaultPromoteAt)
+	re, err := Open(dir, Policy{})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -532,7 +549,7 @@ func TestReinforce(t *testing.T) {
 }
 
 func TestRefineIsStubbed(t *testing.T) {
-	s, err := Open(t.TempDir(), defaultPromoteAt)
+	s, err := Open(t.TempDir(), Policy{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -544,7 +561,7 @@ func TestRefineIsStubbed(t *testing.T) {
 
 func TestReconcilePicksUpOperatorEdits(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir, defaultPromoteAt)
+	s, err := Open(dir, Policy{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -601,7 +618,7 @@ func TestOpenToleratesCorruptSnapshot(t *testing.T) {
 				t.Fatalf("write score.json: %v", err)
 			}
 
-			s, err := Open(dir, defaultPromoteAt)
+			s, err := Open(dir, Policy{})
 			if err != nil {
 				t.Fatalf("Open: %v", err)
 			}
@@ -633,7 +650,7 @@ func TestTornEventLogTailTolerated(t *testing.T) {
 		t.Fatalf("write events: %v", err)
 	}
 
-	s, err := Open(dir, defaultPromoteAt)
+	s, err := Open(dir, Policy{})
 	if err != nil {
 		t.Fatalf("Open with torn log tail: %v", err)
 	}

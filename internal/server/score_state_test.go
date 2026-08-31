@@ -45,7 +45,7 @@ func status(t *testing.T, s *Server) statusReply {
 func scoreStore(t *testing.T) (*score.Store, string) {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := score.Open(dir, 0)
+	st, err := score.Open(dir, score.Policy{})
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

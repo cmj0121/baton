@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -57,16 +58,187 @@ import (
 // on. See reconcileLocked's live branch.
 const Schema = 1
 
-// renderLimit is how many entries Render returns (S0: first N in file order;
-// R3 replaces the selection with real ranking).
-const renderLimit = 7
+// defaultWorkingSet is how many entries one brief carries when score.working-set
+// is unset. Seven, because #37 asks for a handful rather than a list: the block
+// is prepended to every direct dispatch, and past a handful the agent is being
+// handed a document to weigh rather than a few standing facts to act on. It is
+// a starting point, not a discovery — which is why the knob exists.
+//
+// It caps the working set, NOT the store: everything outside it is still held,
+// still reconciled, and still ranked — see rankAllLocked and orderRanked, the
+// read that shows what did not make the cut and why (#42).
+const defaultWorkingSet = 7
+
+// defaultRankWeight is what an unset ranking weight becomes: x2 per dimension,
+// so an entry matching all three context dimensions and freshest in the log
+// outranks a stale unmatched one of the same tier by x16.
+//
+// Two rather than something finer because the weights are multiplied, not
+// added: three dimensions at x2 already span a factor of eight, which is wider
+// than the tier ladder itself, and a fourth factor for recency sits on top of
+// that. A larger unit would let one matching dimension outweigh the earned tier
+// entirely, which inverts what #37 says importance is.
+const defaultRankWeight = 2.0
+
+// minRankWeight is the floor every weight is raised to, and the value that
+// switches a dimension OFF.
+//
+// Below one, a weight would PENALISE a match — an entry from this very panel's
+// directory ranking below one from anywhere else — and no operator wants that
+// semantics, so it is not offered. At exactly one the dimension multiplies by
+// one whether it matches or not, which is the whole of "this does not matter to
+// me" and the only rule an operator has to remember about the knob.
+const minRankWeight = 1.0
+
+// maxRankWeight bounds the other end, and is about arithmetic rather than taste.
+// The rank is a product of five factors, so a weight far past this one carries
+// the product out of float64 and every matching entry lands on +Inf together —
+// the ranking silently stopping ranking, which is the failure mode this store
+// spends its whole budget avoiding. A million already means "always first" by
+// any measure the tier ladder can offer.
+const maxRankWeight = 1e6
+
+// Rank is the weight each ranking dimension carries. See Store.rankLocked for
+// how they combine and Factors for what one entry's arithmetic looks like.
+//
+// A weight is a MULTIPLIER on a match, never a penalty on a miss: a dimension
+// that does not match multiplies by one. So one is the floor and the off
+// switch, and clamp is where both those rules live.
+type Rank struct {
+	// Recency is what the NEWEST entry's last reinforcement is worth. It is the
+	// one weight that is not a match/miss: every entry's recency factor is
+	// interpolated linearly between one at the oldest last-reinforcement position
+	// in the log and this weight at the newest. See recencyFactor.
+	Recency float64
+	// Cwd, Profile and Group are each worth their weight when the entry's
+	// recorded value for that dimension equals the dispatching panel's, and one
+	// otherwise. They are independent, so an entry matching all three is worth
+	// their product.
+	Cwd     float64
+	Profile float64
+	Group   float64
+}
+
+// Policy is everything about the store's behaviour an operator configures: the
+// recurrence threshold a tier is earned at, how many entries one brief carries,
+// and what each ranking dimension is worth.
+//
+// It is ONE value rather than a knob per setter because every one of them is a
+// number the live store compares — none is state to swap — so they reload
+// together on SIGHUP and are chosen together at Open. A zero field means "not
+// set" and lands on this package's default; see clamp for each.
+type Policy struct {
+	PromoteAt  int
+	WorkingSet int
+	Rank       Rank
+}
+
+// clamp is the policy a caller's numbers actually become. Every field is
+// operator input arriving from a YAML file, so this is the boundary the store
+// validates at, and it is total: there is no rejected policy, only a clamped
+// one, because a daemon that refuses to boot over a weight is worse than one
+// that says what it is running.
+func (p Policy) clamp() Policy {
+	return Policy{
+		PromoteAt:  clampPromoteAt(p.PromoteAt),
+		WorkingSet: clampWorkingSet(p.WorkingSet),
+		Rank: Rank{
+			Recency: clampWeight(p.Rank.Recency),
+			Cwd:     clampWeight(p.Rank.Cwd),
+			Profile: clampWeight(p.Rank.Profile),
+			Group:   clampWeight(p.Rank.Group),
+		},
+	}
+}
+
+// clampWorkingSet is how many entries a brief actually carries. Zero — the
+// value of a config key nobody wrote — and anything below it fall back to
+// defaultWorkingSet, exactly as clampPromoteAt does, because "unset" and
+// "fewer than one entry" are the same instruction to switch the feature off,
+// and score.enabled is where that is said. There is no upper bound: an operator
+// who asks for thirty gets thirty, and #37's "a handful" is a default rather
+// than a rule the store enforces on them.
+func clampWorkingSet(n int) int {
+	if n < 1 {
+		return defaultWorkingSet
+	}
+	return n
+}
+
+// clampWeight is what one ranking weight actually becomes.
+//
+// Two branches, and they say different things. Zero or less — the value of a
+// key nobody wrote, and a negative nobody means — is UNSET, so it lands on
+// defaultRankWeight, the same reading clampPromoteAt gives its zero. A weight
+// the operator did write is kept, raised to minRankWeight if it is below the
+// floor and lowered to maxRankWeight if it is past the ceiling; see both
+// constants for why each end exists.
+//
+// The NaN branch is LOAD-BEARING, not tidiness, and it is tested by name
+// because every ordinary comparison against a NaN is false so it would
+// otherwise fall through the ordering into the "keep it" branch. A NaN weight
+// makes a NaN rank, and a NaN rank makes rankBefore non-total: `a.Rank !=
+// b.Rank` is TRUE for two NaNs, so the first key claims the pair is separable
+// and `a.Rank > b.Rank` is false, so it separates them the wrong way round from
+// b's point of view — and the position and id keys underneath are never
+// reached. The sort's output then depends on the algorithm's comparison order,
+// which is #38's verification check 4 failing outright. This branch is the only
+// thing that keeps a NaN out of the arithmetic: every other input to the rank is
+// an int tier or finite by construction.
+//
+// Note what this means for switching a dimension off: the value is 1.0, not 0.
+// Zero is "I did not set this", and there is no spelling of "off" that is also
+// a plausible typo for a weight.
+func clampWeight(w float64) float64 {
+	if math.IsNaN(w) || w <= 0 {
+		return defaultRankWeight
+	}
+	return min(max(w, minRankWeight), maxRankWeight)
+}
+
+// maxBlockRunes caps the whole rendered block, counted over the runes its entry
+// LINES contribute. It is the working-set budget's backstop, not a second
+// budget.
+//
+// score.working-set has a floor and deliberately no ceiling: #37 calls a handful
+// a default rather than a rule, and an operator who asks for thirty entries
+// should get thirty. But the budget bounds the entry COUNT and nothing bounds
+// what a count buys, so `working-set: 1000000` on a full store prepends a third
+// of a megabyte to every direct dispatch — the same failure maxEntryRunes exists
+// to stop, one level up. Capping the BYTES rather than the count is what closes
+// it without taking the count knob away from the operator, and it holds however
+// the size is reached: many entries, or few maximal ones.
+//
+// Eight thousand is TWENTY-FOUR entries at the maxEntryRunes limit — 8000/300 is
+// twenty-six, but blockRunes counts the decoration too, and a maximal tier-2
+// entry costs 324 runes with its bullet and its "note and take care". Twenty-five
+// where they are all tier 1. Either way it is about three and a half times the
+// default budget of seven, so it is out of the way of any working set #37 would
+// call a handful.
+//
+// Past it the block simply stops — the lowest-ranked entries are dropped whole,
+// never truncated mid-entry (#42's rendering rule) — and the drop is neither
+// silent nor guessed at: score.list gives every entry a Standing, and an entry
+// the backstop excluded reads block-full rather than below-budget. score.status
+// says so too, beside the oversized gauge that explains the other cap.
+//
+// RUNES, not bytes, matching maxEntryRunes so the two caps count the same
+// thing — but do not read "8000" as "8 KB" when sizing anything downstream.
+// A full block of ASCII entries is about 7.8 KB; the same 8000 runes of zh-TW
+// is about 22.8 KB, because UTF-8 spends three bytes on a CJK rune and only the
+// bullet and the tier wording stay one. This project ships translated docs and
+// has zh-TW users, so that is the ordinary case rather than the exotic one. The
+// unit stays runes because the cap is about how much an agent is asked to read,
+// which is closer to runes than to bytes, and because a byte cap would silently
+// hold a CJK fleet to a third of the entries.
+const maxBlockRunes = 8000
 
 // maxEntryRunes caps the weight of one entry, mirroring internal/server's
 // maxReasonRunes. #37 asks a score entry to be one to three sentences, and 300
-// runes is that with room to spare. The cap matters because renderLimit caps
-// the entry COUNT, not the byte weight: without a length limit a single 200 KB
-// entry sits inside the first renderLimit entries and is prepended to every
-// direct dispatch, forever.
+// runes is that with room to spare. The cap matters because the working-set
+// budget caps the entry COUNT, not the byte weight: without a length limit a
+// single 200 KB entry outranks its way into the working set and is prepended to
+// every direct dispatch, forever.
 //
 // The cap is enforced ASYMMETRICALLY on the store's two input channels, and the
 // asymmetry is deliberate:
@@ -186,12 +358,26 @@ var seedHeader = []string{
 	"# Edit or delete lines freely; anything that is not an entry is ignored.",
 }
 
-// Provenance records where an entry came from, so ranking (R3) can weight
-// entries by the panel, profile, and directory that produced them.
+// Provenance records where an entry came from, so the ranking can weight an
+// entry by the panel, profile, group, and directory that produced it. See
+// Factors for which of these fields the ranking actually reads.
+//
+// Every field but Source is EMPTY on an entry the operator's own cockpit or
+// score.md contributed: the store is told "user" and nothing else, because the
+// server fills the rest from the panel the submitting connection declared and
+// that panel's row in the fleet, and a cockpit connection declares no panel. So
+// an operator's own entries never match a context dimension and rank on tier
+// and recency alone.
+//
+// SourceGroup is appended and optional, so the schema stays 1 for the same
+// reason the R1 and R2 additions did — see Schema. An entry stored before it
+// existed decodes with it empty, which is exactly how the ranking treats an
+// unrecorded dimension anyway.
 type Provenance struct {
 	SourcePanel   string `json:"source_panel,omitempty"`   // panel id that submitted it
 	SourceProfile string `json:"source_profile,omitempty"` // agent profile of that panel
 	SourceCwd     string `json:"source_cwd,omitempty"`     // working directory of that panel
+	SourceGroup   string `json:"source_group,omitempty"`   // fleet group of that panel
 	Source        string `json:"source"`                   // "user" or "agent"
 }
 
@@ -199,9 +385,13 @@ type Provenance struct {
 // stable across snapshot rewrites, so score.md lines, log events, and the
 // snapshot all name the same entry.
 type Entry struct {
-	Id             string     `json:"id"`
-	Text           string     `json:"text"`
-	Tier           int        `json:"tier"` // 1..3, earned by recurrence; wording in RenderBlock
+	Id   string `json:"id"`
+	Text string `json:"text"`
+	// Tier is 1 or 2 today, earned by recurrence; the wording each renders with
+	// is in tierWording. The ladder #37 defines goes to 3, but nothing can reach
+	// it until R4 (#43) brings the user signal invariant I6 rests on, and
+	// maxEarnedTier is what holds every path — computed and replayed — to that.
+	Tier           int        `json:"tier"`
 	Provenance     Provenance `json:"provenance"`
 	Reinforcements int        `json:"reinforcements"` // repeats counted into this entry since it was first said
 	// Aliases are the entry's prior wordings, newest last, kept so a repeat of a
@@ -254,8 +444,22 @@ func (e *Entry) setText(raw string) {
 	e.norm = normalize(e.Text)
 }
 
-// Context is what the renderer knows about the dispatch asking for entries.
-// S0 ignores it entirely; R3's ranking scores entries against it.
+// Context is what the renderer knows about the dispatch asking for entries: the
+// panel a brief is being built for, and the three properties of that panel an
+// entry's provenance can be matched against.
+//
+// Only Cwd, Profile and Group are ranked; see Factors, which is the list of
+// what the arithmetic actually reads. Panel is carried for the caller's own
+// use — a plugin hook is handed it, and it is what a fold record names — and is
+// deliberately NOT a ranking dimension: an entry submitted by one panel is not
+// thereby about that panel, panel ids are per-session while the log outlives
+// them, and #38's fleet scope wants an entry to reach every panel rather than
+// return to the one that said it.
+//
+// The zero Context is a legitimate value and not a missing one: it is what a
+// read from the operator's cockpit carries, since a cockpit is not a panel and
+// has no directory, profile or group of its own to match. Every context factor
+// then reads one — see matchFactor, which never matches an empty value.
 type Context struct {
 	Panel   string
 	Profile string
@@ -387,6 +591,127 @@ type Health struct {
 	RejectedRaises int
 }
 
+// Factors is one entry's ranking arithmetic, dimension by dimension. The rank
+// is their product and nothing else, which is what lets a surface report the
+// reason beside the number: multiplied out, "3.4" answers "why is this entry in
+// my brief" with a figure, and #38's invariant I8 asks for an answer an
+// operator can act on without reading the event log.
+//
+// Every field is a multiplier of at least one. Tier is the earned ladder, 1/2/3
+// and never configurable. Recency slides between one and the configured weight
+// with the entry's position in the log. Cwd, Profile and Group are each the
+// configured weight on a match and one on a miss — so a field reading exactly
+// one is a dimension that either did not match or was switched off, and the
+// policy in force is what tells those two apart (see Store.Policy).
+type Factors struct {
+	Tier    float64 `json:"tier"`
+	Recency float64 `json:"recency"`
+	Cwd     float64 `json:"cwd"`
+	Profile float64 `json:"profile"`
+	Group   float64 `json:"group"`
+}
+
+// product is the rank: the five factors multiplied, in this order and nowhere
+// else. Every rank the store reports comes from here, so a surface that
+// multiplies the breakdown out reproduces the reported number EXACTLY rather
+// than to within a rounding — float64 multiplication is deterministic, but only
+// for a fixed order of operands.
+func (f Factors) product() float64 {
+	return f.Tier * f.Recency * f.Cwd * f.Profile * f.Group
+}
+
+// Standing is where one entry ended up relative to the working set, and — when
+// it is outside — WHY.
+//
+// It exists because "why is this entry in my brief" and "why is this one not"
+// are the same question and the breakdown only answers the first. There are
+// three ways to be out, they are not distinguishable from an entry's own fields,
+// and an operator who cannot tell them apart cannot act: a budget too small is
+// fixed with score.working-set, a full block by shortening entries or lowering
+// the budget, and an over-long line by editing score.md. Reporting one number
+// and leaving the rest to be inferred is the gap invariant I8 names.
+//
+// The values are hyphenated strings rather than an int, because they travel on
+// the wire to a person and to `jq`, and a number would need this comment beside
+// it to mean anything.
+type Standing string
+
+const (
+	// StandingActive is in the working set: an entry a dispatch for this context
+	// would actually inject.
+	StandingActive Standing = "active"
+	// StandingBelowBudget is ranked below score.working-set. The entry is fine;
+	// there were simply higher-ranked ones ahead of it. It is reported for EVERY
+	// entry past the count, including the ones the rune backstop had already
+	// stopped: two caps exclude those, and this is the one the operator can turn.
+	StandingBelowBudget Standing = "below-budget"
+	// StandingBlockFull is ranked inside the budget and still left out, because
+	// the block's rune backstop was spent before the entry was reached — see
+	// maxBlockRunes. It means the budget is wider than the bytes allow, which is
+	// invisible from the entry itself, and it is the one exclusion widening
+	// score.working-set would not fix.
+	StandingBlockFull Standing = "block-full"
+	// StandingOversized is too long to inject at any budget (maxEntryRunes). It is
+	// the only one of the three that is a property of the entry rather than of
+	// what was ahead of it, and the only one an operator fixes by editing the
+	// line.
+	StandingOversized Standing = "oversized"
+)
+
+// Ranked is one entry with the arithmetic that placed it, and where that placing
+// left it. It is the OPERATOR's view of the ranking, never the dispatch's, which
+// needs only the entries themselves.
+type Ranked struct {
+	Entry
+	Rank    float64 `json:"rank"`
+	Factors Factors `json:"factors"`
+	// Standing is where this entry ended up, and why when it is out; see
+	// Standing. Active is exactly Standing == StandingActive, carried as its own
+	// field because "is it in the brief" is the common question and
+	// `select(.active)` is what the CLI's help advertises. Both are assigned from
+	// one call to budget.take, so they cannot come to disagree.
+	Standing Standing `json:"standing"`
+	Active   bool     `json:"active"`
+
+	// at is the entry's last-reinforcement position in the log — the same number
+	// Recency is interpolated from — kept for the tie-break in rankBefore. It is
+	// not on the wire: a raw log ordinal explains nothing an operator can use,
+	// and Factors.Recency already carries the part of it that changes the answer.
+	at int
+}
+
+// rankBefore reports whether a sorts ahead of b in the ranking. It is a strict
+// TOTAL order, which is what #38's verification check 4 needs — the same log and
+// context yielding the same working set on two machines — because a merely
+// partial order leaves the sort free to place ties by whatever the algorithm
+// happens to do.
+//
+// Total ONLY because no rank can be NaN. A NaN would satisfy the first key's
+// inequality while failing its comparison, so the pair would be treated as
+// separable and ordered inconsistently, and the two keys below would never be
+// consulted. clampWeight is where that is prevented, at the one boundary a NaN
+// can enter through; see its NaN branch.
+//
+// The three keys, in order: rank descending, then last-reinforcement position
+// descending, then id ascending. Position before id so a tie between two equally
+// ranked entries goes to the one the fleet said most recently, which is the same
+// preference the recency factor states; id last because it is unique, so the
+// order is total there and cannot fall through.
+//
+// Both tie-break keys are derived from the LOG, never from score.md's line
+// order. The file is the operator's — they can shuffle it in an editor — and
+// invariant I5 wants the ranking to be a function of the log and the context.
+func rankBefore(a, b Ranked) bool {
+	switch {
+	case a.Rank != b.Rank:
+		return a.Rank > b.Rank
+	case a.at != b.at:
+		return a.at > b.at
+	default:
+		return a.Id < b.Id
+	}
+}
+
 // View is one consistent look at the store, taken without letting go of its
 // lock: what a dispatch would inject, how much the store holds, what it is
 // withholding, and what the reconcile pass that produced the answer changed.
@@ -403,11 +728,29 @@ type View struct {
 	Health  Health
 	Delta   Delta  // what this look's pass changed; zero when score.md had not moved
 	Folds   []Fold // repeats folded since the last look, for the server to log
-	// PromoteAt is the recurrence threshold in force. It rides the view rather
-	// than a second call because score.status reports it beside the counts, and
-	// a knob read through its own lock is a knob read from a different moment
-	// than everything it is meant to explain.
-	PromoteAt int
+	// Ranked is EVERY entry the store holds, ranked against this look's context
+	// and marked with whether it made the working set. It is populated by Explain
+	// and left nil by View: the dispatch path needs the working set and nothing
+	// else, and building a breakdown per entry per brief would put the whole
+	// store's arithmetic on the path a brief is delivered through.
+	Ranked []Ranked
+	// Policy is the tuning in force — the recurrence threshold, the working-set
+	// budget, and the ranking weights. It rides the view rather than a second
+	// call because score.status reports it beside the counts it explains, and a
+	// knob read through its own lock is a knob read from a different moment than
+	// everything it is meant to explain.
+	Policy Policy
+	// BlockFull says the working set stopped because the block's rune backstop
+	// was spent (maxBlockRunes), rather than because the budget or the store ran
+	// out.
+	//
+	// It is here for the reason Health.Oversized is: three separate caps can make
+	// Entries shorter than the budget, and an unexplained gap between them looks
+	// the same whichever one bit. Two of the three already had names on the
+	// status surface; this is the third. An operator whose brief carries five of
+	// a budget of forty is told which knob to reach for rather than left to
+	// subtract one number from another.
+	BlockFull bool
 	Unlocked  bool // the store is running without its single-writer claim
 }
 
@@ -494,9 +837,29 @@ type Store struct {
 	mdSize  int64
 	mdIno   uint64
 
-	// promoteAt is how many times an entry must be said to earn tier 2; see
-	// defaultPromoteAt and SetPromoteAt.
-	promoteAt int
+	// policy is the tuning the store compares against: the recurrence threshold,
+	// the working-set budget, and the ranking weights. Always clamped — Open and
+	// SetPolicy are the only writers and both clamp on the way in.
+	policy Policy
+
+	// seq is how many event records the log holds, and lastAt is the position of
+	// each entry's LAST REINFORCEMENT in it — the entry's own submission until
+	// something reinforces it. Together they are the whole of what the ranking
+	// knows about time (invariant I5): a position, never a clock, so a laptop
+	// that slept for a week and an NTP correction cannot reorder a working set.
+	//
+	// They are maintained in exactly two places, and the two must agree or a
+	// restart would reorder the fleet's memory: replayLocked counts the records
+	// it parses out of the log, and appendEvents counts the records it lands in
+	// it. Both go through noteEventLocked, which is why it exists.
+	//
+	// lastAt is keyed by id and may name ids the entry set does not carry — an
+	// event that became durable on a path that then failed to reach memory, as
+	// burned may — because it is read only through an entry that is present. A
+	// retire deletes its key, which is what keeps a long-running daemon's map
+	// bounded by the live set rather than by the log.
+	seq    int
+	lastAt map[string]int
 
 	// folds are the fold records the next View reports.
 	//
@@ -556,19 +919,24 @@ type Store struct {
 // errDisabled is returned by mutations on the disabled (nil) store.
 var errDisabled = errors.New("score is disabled")
 
-// Open opens (or creates) the store in dir under the recurrence threshold
-// promoteAt — how many times an entry must be said to earn tier 2, clamped as
-// SetPromoteAt describes, so a zero from a config field nobody set lands on
-// defaultPromoteAt. The directory is created 0700 and every file 0600.
+// Open opens (or creates) the store in dir under the policy p, clamped as
+// Policy.clamp describes, so a zero field from a config key nobody wrote lands
+// on this package's default. The directory is created 0700 and every file 0600.
 //
-// The threshold is taken HERE rather than set after the fact, because Open's
-// own recovery pass already makes durable tier decisions: it folds duplicate
-// lines and reads the rewordings made while the daemon was down — the expected
+// The policy is taken HERE rather than set after the fact, because Open's own
+// recovery pass already makes durable tier decisions: it folds duplicate lines
+// and reads the rewordings made while the daemon was down — the expected
 // workflow — and every one of those goes through reinforceLocked. A store
-// constructed on the default and retuned a moment later would have promoted
+// constructed on the defaults and retuned a moment later would have promoted
 // entries under a policy nobody chose, and the `raised` events recording it are
 // durable, replayed at every boot, and uncorrectable: #37 demotes nothing.
-// SetPromoteAt is the RE-tuning path (SIGHUP) and nothing else.
+// SetPolicy is the RE-tuning path (SIGHUP) and nothing else.
+//
+// The ranking half of the policy makes no durable decision — it changes order,
+// never tier — so its reason for being here is the weaker one: nothing then
+// depends on the daemon calling its reload path before its first dispatch,
+// which is an ordering in another package that no test in this one would catch
+// breaking.
 //
 // SINGLE WRITER. Open takes an exclusive advisory lock on score.lock and holds
 // it until Close. Two daemons on two sockets both default to $HOME/.baton — and
@@ -597,7 +965,7 @@ var errDisabled = errors.New("score is disabled")
 // Open calls the *Locked helpers without holding the mutex — the store is not
 // published to any other goroutine until Open returns, so their "caller holds
 // the lock" contract is trivially satisfied here.
-func Open(dir string, promoteAt int) (s *Store, err error) {
+func Open(dir string, p Policy) (s *Store, err error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -606,7 +974,7 @@ func Open(dir string, promoteAt int) (s *Store, err error) {
 	if err != nil {
 		return nil, err
 	}
-	s = newStore(dir, promoteAt)
+	s = newStore(dir, p)
 	s.release, s.unlocked = release, !locked
 	// A store that fails to boot must not keep the directory claimed.
 	defer func() {
@@ -639,11 +1007,12 @@ func Open(dir string, promoteAt int) (s *Store, err error) {
 
 // newStore assembles a store over dir with its three file paths joined once —
 // dir is immutable afterwards and all three are touched on the dispatch path —
-// and under the threshold it will spend its whole life comparing against unless
-// a reload retunes it. Open adds the directory claim and the recovery pass.
-func newStore(dir string, promoteAt int) *Store {
+// and under the policy it will spend its whole life comparing against unless a
+// reload retunes it. Open adds the directory claim and the recovery pass.
+func newStore(dir string, p Policy) *Store {
 	return &Store{
-		dir: dir, burned: map[string]struct{}{}, promoteAt: clampPromoteAt(promoteAt),
+		dir: dir, burned: map[string]struct{}{}, policy: p.clamp(),
+		lastAt:     map[string]int{},
 		mdPath:     filepath.Join(dir, scoreMD),
 		jsonPath:   filepath.Join(dir, scoreJSON),
 		eventsPath: filepath.Join(dir, scoreEvents),
@@ -689,47 +1058,52 @@ func clampPromoteAt(n int) int {
 	return n
 }
 
-// SetPromoteAt RE-tunes the recurrence threshold a running store compares
-// against, and is only that: the threshold a store is born with is Open's
-// argument, so no pass ever runs under a policy nobody chose. It is safe on the
-// disabled (nil) store and safe to call on a running one, which is what lets
-// score.promote-at ride the daemon's SIGHUP reload while score.dir and
-// score.enabled still need a restart: the threshold is a number this store
-// compares, not a store to swap under in-flight dispatches. n is clamped as
-// clampPromoteAt describes.
+// SetPolicy RE-tunes a running store, and is only that: the policy a store is
+// born with is Open's argument, so no pass ever runs under a policy nobody
+// chose. It is safe on the disabled (nil) store and safe to call on a running
+// one, which is what lets score.promote-at, score.rank and score.working-set
+// ride the daemon's SIGHUP reload while score.dir and score.enabled still need
+// a restart: every field here is a number this store COMPARES, not a store to
+// swap under in-flight dispatches. p is clamped as Policy.clamp describes.
 //
-// Changing it never re-tiers what is already stored. Tiers are replayed from the
-// log's raised events, so an entry that earned tier 2 keeps it (nothing is
-// demoted) and one that has not yet earned it is measured against the new
-// number at its next reinforcement.
+// Retuning never re-tiers and never demotes. Tiers are replayed from the log's
+// raised events, so an entry that earned tier 2 keeps it and one that has not
+// yet earned it is measured against the new threshold at its next
+// reinforcement; the ranking half changes ORDER and touches no tier at all.
 //
-// It reports whether this call MOVED the threshold, so the daemon can log a
-// reload that changed the policy and stay quiet about the far more common one
-// that did not. The number itself is PromoteAt's job, which the caller already
-// asks on the branch where the config would not load.
-func (s *Store) SetPromoteAt(n int) (changed bool) {
+// It reports whether this call MOVED anything, so the daemon can log a reload
+// that changed the policy and stay quiet about the far more common one that did
+// not. The policy itself is Policy's job, which the caller already asks on the
+// branch where the config would not load.
+func (s *Store) SetPolicy(p Policy) (changed bool) {
 	if s == nil {
 		return false
 	}
-	n = clampPromoteAt(n)
+	p = p.clamp()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	changed = s.promoteAt != n
-	s.promoteAt = n
+	changed = s.policy != p
+	s.policy = p
 	return changed
 }
 
-// PromoteAt is the recurrence threshold in force: how many times an entry must
-// be said to earn tier 2. Zero on the disabled (nil) store. It is reported by
-// score.status, because a knob whose effect an operator cannot observe is a knob
-// they cannot trust (invariant I8).
-func (s *Store) PromoteAt() int {
+// Policy is the tuning in force: the recurrence threshold, the working-set
+// budget, and the ranking weights, all clamped. Zero on the disabled (nil)
+// store.
+//
+// A knob whose effect an operator cannot observe is a knob they cannot trust
+// (invariant I8), and the ranking weights are the sharpest case of that: a
+// weight of one is indistinguishable in a rank breakdown from a dimension that
+// simply did not match. So the value is readable here and on every View, which
+// is where a reply reporting the tuning beside the counts it explains takes it
+// from — one hold of the lock for both.
+func (s *Store) Policy() Policy {
 	if s == nil {
-		return 0
+		return Policy{}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.promoteAt
+	return s.policy
 }
 
 // Boot is what Open's recovery pass did to the operator's files. Zero on the
@@ -785,10 +1159,11 @@ func (s *Store) Reconcile() (Delta, error) {
 }
 
 // View reconciles score.md and answers from the result WITHOUT letting go of
-// the lock in between. It is the whole read side of the store: the entries a
-// dispatch would inject and the block they render as, the totals a status reply
-// reports, the gauge that explains the gap between them, and what the pass
-// changed for the caller to log.
+// the lock in between. It is the DISPATCH path's read: the entries a dispatch
+// would inject and the block they render as, the totals a status reply reports,
+// the gauge that explains the gap between them, and what the pass changed for
+// the caller to log. An operator asking why an entry is in the brief wants
+// Explain, which adds the ranking's own arithmetic.
 //
 // Both halves matter. Folding the reconcile in makes #38's invariant I2 — no
 // render, list or status acts on a stale view — structural rather than three
@@ -801,24 +1176,80 @@ func (s *Store) Reconcile() (Delta, error) {
 // to read, and a brief built on slightly old memory beats no brief at all. The
 // error rides alongside, for the server to log — this package never logs.
 func (s *Store) View(ctx Context) (View, error) {
+	return s.look(ctx, false)
+}
+
+// Explain is View plus the ranking laid out: every entry the store holds, in
+// rank order, each with the factors that produced its rank and whether it made
+// the working set. It is the OPERATOR's read, never a dispatch's, which needs
+// the working set and nothing else.
+//
+// It is a second entry point rather than a field View always fills because the
+// cost is not the same: a breakdown per entry is an allocation the size of the
+// store, and View runs once per brief. Everything else about the two reads is
+// identical, reconcile included, so a surface built on either sees the same
+// consistency guarantees (see View).
+func (s *Store) Explain(ctx Context) (View, error) {
+	return s.look(ctx, true)
+}
+
+// look is View's and Explain's shared body: one stat off the lock, one gated
+// reconcile pass, and everything that reads the entry set done in one hold of
+// the lock. explain chooses which of the two rankings is run — see Explain.
+//
+// What is deliberately OUTSIDE the hold is the sort and the block formatting.
+// Both work on slices this call already owns, so neither needs the lock, and
+// both are O(n) or worse in the size of the store: holding the mutex across a
+// twenty-thousand-entry sort would stall every concurrent dispatch for as long
+// as one operator's score.list takes. Everything the view CLAIMS about the
+// store — the totals, the health, the pass's delta, the policy — is still read
+// in the single hold, which is the consistency View's doc promises.
+func (s *Store) look(ctx Context, explain bool) (View, error) {
 	if s == nil {
 		return View{}, nil
 	}
 
 	fi, exists, err := statMD(s.mdPath)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var delta Delta
-	if err == nil {
-		delta, err = s.reconcileGatedLocked(fi, exists)
+	var (
+		v      View
+		ranked []Ranked
+	)
+	func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		var delta Delta
+		if err == nil {
+			delta, err = s.reconcileGatedLocked(fi, exists)
+		}
+		var (
+			entries []Entry
+			full    bool
+		)
+		if explain {
+			ranked = s.rankAllLocked(ctx)
+		} else {
+			entries, full = s.renderLocked(ctx)
+		}
+		v = View{
+			Entries: entries, Total: len(s.entries),
+			Health: s.health, Delta: delta, Folds: s.drainFoldsLocked(),
+			Policy: s.policy, BlockFull: full, Unlocked: s.unlocked,
+		}
+	}()
+	if explain {
+		// The working set is READ OFF the ranked list rather than selected a
+		// second time, so an operator's view of what is injected cannot disagree
+		// with what a dispatch for the same context actually injects.
+		v.Ranked, v.BlockFull = orderRanked(ranked, v.Policy)
+		for i := range v.Ranked {
+			if v.Ranked[i].Active {
+				v.Entries = append(v.Entries, v.Ranked[i].Entry)
+			}
+		}
 	}
-	entries := s.renderLocked(ctx)
-	return View{
-		Entries: entries, Block: renderBlock(entries), Total: len(s.entries),
-		Health: s.health, Delta: delta, Folds: s.drainFoldsLocked(),
-		PromoteAt: s.promoteAt, Unlocked: s.unlocked,
-	}, err
+	v.Block = renderBlock(v.Entries)
+	return v, err
 }
 
 // statMD stats score.md, reporting whether it is there. A missing file is not
@@ -1313,7 +1744,7 @@ func (s *Store) reinforceLocked(e *Entry, at time.Time) (event, bool) {
 	// Occurrences, not reinforcements: the submission that created the entry is
 	// the first time it was said, and the threshold is stated in the units an
 	// operator counts in. See defaultPromoteAt.
-	if e.Tier >= maxEarnedTier || e.Reinforcements+1 < s.promoteAt {
+	if e.Tier >= maxEarnedTier || e.Reinforcements+1 < s.policy.PromoteAt {
 		return event{}, false
 	}
 	e.Tier++
@@ -1397,19 +1828,22 @@ func (s *Store) Refine(op, id, arg string) error {
 	return errors.New("score refine: not implemented until R6")
 }
 
-// Render returns the entries to inject for the given dispatch context, or nil
-// when the store is empty or disabled. Everything it returns is injected into a
-// real agent's brief, so nothing the store seeds may reach it — which is why an
-// absent score.md is written back as comment lines rather than entries — and
-// nothing over the weight cap may reach it either, which is why an over-long
-// operator line is skipped here rather than refused at the file (maxEntryRunes).
+// Render returns the working set for the given dispatch context — the
+// highest-ranked entries a brief carries — or nil when the store is empty or
+// disabled. It can be SHORTER than the policy's working-set budget for either of
+// two reasons: an entry too long to inject is skipped (maxEntryRunes), and the
+// block stops on a whole entry once its rune backstop is spent (maxBlockRunes).
+// Explain is where those are told apart, one Standing per entry.
+//
+// Everything it returns is injected into a real agent's brief, so nothing the
+// store seeds may reach it — which is why an absent score.md is written back as
+// comment lines rather than entries — and nothing over the weight cap may reach
+// it either, which is why an over-long operator line is skipped here rather
+// than refused at the file (maxEntryRunes).
 //
 // Render does NOT reconcile: the caller does, once per read path, so that a
 // status reply's Len and Render see one consistent view and the store never
 // does file I/O from a function with no way to report its errors.
-//
-// S0 dummy (R3 replaces): the first renderLimit renderable entries in file
-// order — the context is ignored and nothing is ranked.
 func (s *Store) Render(ctx Context) []Entry {
 	if s == nil {
 		return nil
@@ -1417,31 +1851,359 @@ func (s *Store) Render(ctx Context) []Entry {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.renderLocked(ctx)
+	entries, _ := s.renderLocked(ctx)
+	return entries
+}
+
+// recencySpanLocked is the oldest and newest last-reinforcement positions
+// across every entry the store holds — the two ends recencyFactor interpolates
+// between. The caller holds the lock.
+//
+// The span is taken over ALL entries rather than over the injectable ones the
+// working set is drawn from, so that score.list's numbers and a dispatch's are
+// the same numbers. It could not change an ORDER either way: the factor is
+// monotone in the position, so narrowing the span rescales every entry's
+// recency without reordering any two of them.
+func (s *Store) recencySpanLocked() (oldest, newest int) {
+	if len(s.entries) == 0 {
+		return 0, 0
+	}
+	oldest = s.lastAt[s.entries[0].Id]
+	newest = oldest
+	for i := 1; i < len(s.entries); i++ {
+		at := s.lastAt[s.entries[i].Id]
+		oldest, newest = min(oldest, at), max(newest, at)
+	}
+	return oldest, newest
+}
+
+// recencyFactor maps one entry's last-reinforcement position linearly onto
+// [1, w]: the oldest entry in the store gets 1, the newest gets the configured
+// weight, everything between gets its share.
+//
+// A POSITION, never a timestamp, which is the whole of invariant I5. The log
+// records times for the person reading the history and nothing ranks on them,
+// so a laptop that slept for a week, an NTP correction, and a timezone change
+// all leave the working set exactly as it was.
+//
+// A span of zero — one entry, or a store whose entries all last moved on the
+// same record — has no oldest-to-newest ramp to sit on, so every entry gets the
+// floor. That is a uniform multiplier, so it cannot change an order; it is the
+// floor rather than the weight only so the reported rank does not claim a
+// recency bonus that no comparison was made for.
+//
+// DO NOT HOIST THE RATIO OUT OF THE EXPRESSION. Go permits — and on arm64 the
+// compiler takes — the fusion of `x*y + z` into a single FMA instruction with
+// one rounding instead of two, while amd64 emits two. That is a licensed
+// difference, not a compiler bug, and it is worth one ULP: enough to flip an
+// exact tie, which is enough to give two machines different working sets for
+// the same log and break #38's verification check 4 across architectures.
+//
+// The expression below is safe by its SHAPE and by nothing else. The addition's
+// right operand is a DIVISION, and there is no fused multiply-divide-add, so
+// the multiply's result must be rounded before the divide and the divide's
+// before the add — three roundings, identical everywhere. Written the obvious
+// way instead:
+//
+//	ratio := float64(at-oldest) / float64(newest-oldest)
+//	return 1 + (w-1)*ratio
+//
+// the add's operand becomes a bare multiply and arm64 emits FMADDD. Both forms
+// were compiled and disassembled to confirm it. Factors.product is safe for a
+// different reason — a pure multiply chain has no add to fuse into.
+func recencyFactor(at, oldest, newest int, w float64) float64 {
+	if newest <= oldest {
+		return minRankWeight
+	}
+	return 1 + (w-1)*float64(at-oldest)/float64(newest-oldest)
+}
+
+// matchFactor is what one context dimension is worth: the configured weight
+// when the entry's recorded value equals the dispatch's, and one otherwise.
+//
+// An EMPTY value never matches, on either side. An entry with no recorded cwd
+// does not know where it came from, and a dispatch with no cwd is not asking
+// about one — treating the two as equal would hand every entry the operator
+// submitted from their own cockpit (which records no panel, profile, group or
+// cwd at all; see Provenance) a full match on every dimension of a context the
+// server could not fill, which is the widest possible boost for the least
+// possible evidence. So "unknown" is not a value that can agree with anything,
+// including itself.
+func matchFactor(have, want string, w float64) float64 {
+	if have != "" && have == want {
+		return w
+	}
+	return minRankWeight
+}
+
+// rankLocked is the ranking, and the only place it is computed:
+//
+//	rank = tier x recency x cwd x profile x group
+//
+// Multiplicative rather than lexicographic (settled with the user, #42) so the
+// dimensions compose: an entry two tiers down can still lead the brief if it is
+// fresh AND from this panel's directory, profile and group, which is the
+// judgement an operator makes by hand and the ordering #38 §5 describes.
+//
+// It is a pure function of the log and the context — no clock is reachable from
+// here — which is invariant I5 and #38's verification check 4: the same log
+// replayed on another machine ranks identically for the same context.
+//
+// The caller holds the lock and supplies the span, which is computed once per
+// look rather than once per entry.
+func (s *Store) rankLocked(e Entry, ctx Context, oldest, newest int) Ranked {
+	at := s.lastAt[e.Id]
+	f := Factors{
+		Tier:    float64(e.Tier),
+		Recency: recencyFactor(at, oldest, newest, s.policy.Rank.Recency),
+		Cwd:     matchFactor(e.Provenance.SourceCwd, ctx.Cwd, s.policy.Rank.Cwd),
+		Profile: matchFactor(e.Provenance.SourceProfile, ctx.Profile, s.policy.Rank.Profile),
+		Group:   matchFactor(e.Provenance.SourceGroup, ctx.Group, s.policy.Rank.Group),
+	}
+	return Ranked{Entry: e, Rank: f.product(), Factors: f, at: at}
+}
+
+// blockRunes is what one entry adds to the rendered block: its text plus the
+// bullet, the tier wording, and the brackets and newline renderBlock wraps them
+// in. The border lines are fixed overhead outside the budget, since they are
+// there whether the block carries one entry or twenty.
+//
+// It must track writeBlockLine, which is what actually renders the line it is
+// predicting the length of. A drift makes the cap approximate rather than wrong
+// — the budget is a backstop with several times the default working set of
+// headroom — but the pairing is checked by a test rather than left to the next
+// reader to notice. Arithmetic rather than len(the built string) because this
+// runs per entry on the dispatch path and the string would be thrown away.
+func blockRunes(e Entry) int {
+	return len("- ") + len([]rune(e.Text)) + len(" [") + len(tierWording(e.Tier)) + len("]\n")
+}
+
+// minBlockRunes is the least one entry can possibly add: a single rune of text
+// at the shortest tier wording. It is the shape of the CHEAPEST line rather than
+// a guess, and TestBlockRunesArithmetic holds it to that.
+const minBlockRunes = len("- ") + 1 + len(" [") + len("noted") + len("]\n")
+
+// MaxReachableWorkingSet is the largest working-set budget the rune backstop can
+// ever let a brief spend, even on the shortest entries the store can hold.
+//
+// It is exported because a budget above it is DEAD CONFIG, in the same sense a
+// cwd weight is dead when panel.track-cwd is off: the operator wrote a number
+// down, the daemon accepted it, and no dispatch will ever reach it. The daemon
+// says so on load rather than leaving the gap between `working_set` and
+// `rendered` to be puzzled over — see the caller in cmd/baton.
+//
+// There is deliberately no CLAMP to match. #37 leaves how many entries a brief
+// carries to the operator, and a budget that is merely optimistic still behaves:
+// it simply never binds, and the rune backstop does. Refusing it would be this
+// package overruling a choice it was told not to make.
+const MaxReachableWorkingSet = maxBlockRunes / minBlockRunes
+
+// budget is the working set's two limits taken together: how many entries a
+// brief carries (the policy's) and how many runes their lines may add up to
+// (maxBlockRunes). Both selection paths ask it, so an entry is in the working
+// set exactly when renderLocked takes it and when orderRanked marks it Active.
+//
+// closed is the standing the budget has settled on, empty until one of the two
+// limits stops it. It is what lets a walk carry on assigning reasons after it
+// has stopped taking: an operator asking why an entry is NOT in their brief
+// needs an answer for every entry, not only for the ones the walk reached before
+// it gave up. Once set it never changes, which is what keeps a later, lighter
+// entry from being taken behind one that did not fit — see take.
+//
+// seen counts the candidates OFFERED rather than the slots left over, because a
+// closed budget still owes every entry behind it a reason: once BOTH caps have
+// bitten, how many entries were ahead of this one is the only thing that tells
+// them apart. Oversized entries are not counted — they were never candidates, so
+// they must not push a lighter entry past the count.
+type budget struct {
+	slots  int // entries the count budget allows
+	seen   int // injectable entries offered so far, taken or not
+	runes  int // block runes still allowed
+	closed Standing
+}
+
+func newBudget(p Policy) budget { return budget{slots: p.WorkingSet, runes: maxBlockRunes} }
+
+// take decides an entry's Standing, and is the ONE place that decision is made —
+// so the reason score.list reports and the selection a brief actually makes
+// cannot say different things.
+//
+// The three ways out of the working set fail differently, and the differences
+// are what keep the two selection paths agreeing:
+//
+//   - StandingOversized is checked FIRST and charges nothing. An entry too heavy
+//     to inject at all (maxEntryRunes) was never a candidate — renderLocked
+//     filters it out before ranking — so orderRanked must not let it consume a
+//     slot, must not let it close the budget, and must not describe it by a
+//     budget already closed. Its own weight is the more specific truth either
+//     way.
+//   - StandingBelowBudget is the count budget spent: this entry had at least
+//     score.working-set injectable entries ranked ahead of it. It is decided
+//     before the block is consulted, and it OUTRANKS a block that closed earlier.
+//     Past the count both caps really do exclude the entry, and only one of them
+//     is a knob — maxBlockRunes is not configurable — so answering block-full
+//     there sends the operator to shorten entries when widening
+//     score.working-set is what would let this one in.
+//   - StandingBlockFull is the rune backstop, and only for entries INSIDE the
+//     count budget: the ones a wider budget would not have helped. It ends the
+//     taking rather than skipping ahead to something lighter that would have
+//     fitted. Terminal on purpose: renderLocked holds only the highest-ranked few
+//     and has no lighter candidate to promote, so a skipping rule would let the
+//     two paths disagree about the working set. Filling in rank order and
+//     stopping is the rule both can keep, and it costs at most one entry's worth
+//     of headroom out of twenty-four.
+//
+// Which cap closed the budget FIRST is still what closed records, so
+// View.BlockFull keeps meaning "the runes ran out" however many below-budget
+// entries are listed behind it.
+func (b *budget) take(e Entry) Standing {
+	if !e.Injectable() {
+		return StandingOversized
+	}
+	b.seen++
+	switch {
+	case b.seen > b.slots:
+		if b.closed == "" {
+			b.closed = StandingBelowBudget
+		}
+		return StandingBelowBudget
+	case b.closed != "":
+		return b.closed
+	}
+	n := blockRunes(e)
+	if n > b.runes {
+		b.closed = StandingBlockFull
+		return b.closed
+	}
+	b.runes -= n
+	return StandingActive
 }
 
 // renderLocked is Render's body, so View — which must not let go of the lock
 // between reconciling and answering — can ask without dropping it. The caller
 // holds the lock.
-func (s *Store) renderLocked(ctx Context) []Entry {
-	_ = ctx
-	var out []Entry
+//
+// It selects into a slice the size of the working set rather than ranking the
+// whole store into one list and sorting it. This runs on the DISPATCH path,
+// once per brief, and the budget is a handful while the store is not: sorting
+// five thousand entries to keep seven would put the store's whole arithmetic,
+// and an allocation the size of it, on the path a brief is delivered through.
+// rankAllLocked is the shape that does rank everything, and it is reached only
+// by an operator asking.
+//
+// The two must agree, and they do because they share rankLocked and
+// rankBefore: an insertion into a list kept in that order yields the same first
+// N as sorting by it, since the order is total (see rankBefore).
+func (s *Store) renderLocked(ctx Context) (out []Entry, full bool) {
+	n := s.policy.WorkingSet
+	oldest, newest := s.recencySpanLocked()
+	// Kept in rank order as it fills; at most n long, and n is a handful.
+	var top []Ranked
 	for _, e := range s.entries {
 		if !e.Injectable() {
 			continue
 		}
-		if out == nil {
-			// Sized on first use rather than up front, because Render's contract is
-			// nil — not an empty slice — when nothing renders, and scoreList tells
-			// the two apart to keep score.list an array rather than JSON null.
-			out = make([]Entry, 0, min(renderLimit, len(s.entries)))
+		r := s.rankLocked(e, ctx, oldest, newest)
+		at := len(top)
+		for at > 0 && rankBefore(r, top[at-1]) {
+			at--
 		}
-		out = append(out, e)
-		if len(out) == renderLimit {
+		if at == n {
+			continue // worse than every entry already held, and the set is full
+		}
+		if len(top) < n {
+			top = append(top, Ranked{})
+		}
+		copy(top[at+1:], top[at:])
+		top[at] = r
+	}
+	// The rune backstop is applied to the SELECTED set, in rank order, and not
+	// during the insertion above: an entry that fits early can be evicted by a
+	// better one later, so charging it on the way in would spend budget on
+	// entries that never made the working set. top holds only injectable entries
+	// and is no longer than the count budget, so the only standing that can end
+	// this walk is StandingBlockFull and the result is a prefix. See
+	// maxBlockRunes.
+	b := newBudget(s.policy)
+	kept := 0
+	for _, r := range top {
+		if b.take(r.Entry) != StandingActive {
 			break
 		}
+		kept++
+	}
+	full = b.closed == StandingBlockFull
+	if kept == 0 {
+		// nil, not an empty slice: scoreList tells the two apart to keep
+		// score.list's entries an array rather than JSON null.
+		return nil, full
+	}
+	out = make([]Entry, kept)
+	for i := range out {
+		out[i] = top[i].Entry
+	}
+	return out, full
+}
+
+// rankAllLocked ranks EVERY entry the store holds against ctx, in the entry
+// set's own order and without marking anything — orderRanked does both of those,
+// off the lock. The caller holds the lock.
+//
+// It exists because a multiplicative rank without its breakdown answers "why is
+// this entry in my brief" with a number rather than a reason, and invariant I8
+// says an operator must not need the event log to understand what the fleet is
+// being told. Uncapped, for the same reason: capped at the working set, the tier
+// of everything past it appeared in no surface at all (#42).
+func (s *Store) rankAllLocked(ctx Context) []Ranked {
+	if len(s.entries) == 0 {
+		return nil
+	}
+	oldest, newest := s.recencySpanLocked()
+	out := make([]Ranked, len(s.entries))
+	for i, e := range s.entries {
+		out[i] = s.rankLocked(e, ctx, oldest, newest)
 	}
 	return out
+}
+
+// orderRanked sorts a ranked set and marks the working set in it. It runs OFF
+// the store lock, which is why it is a package function over a slice rather
+// than a method: the sort is O(n log n) with an allocation the size of the
+// store behind it, and holding the mutex across it would stall every concurrent
+// dispatch for as long as an operator's score.list takes. The ranking itself
+// has to be under the lock, since it reads the entry set; the ordering does
+// not, since the slice is the caller's own copy by then.
+//
+// The copies are safe to hold: an Entry's Text is a string, and its Aliases are
+// only ever replaced with a fresh slice, never written through spare capacity —
+// which appendAlias does deliberately, for exactly this reason.
+//
+// Standing, and the Active flag derived from it, are decided here rather than by
+// the caller so that one rule marks the working set — and it is the SAME rule
+// renderLocked applies, see budget.take. An entry can be out of the brief for
+// three different reasons and none of them is visible from the entry itself, so
+// the reason is carried rather than left to be inferred; see Standing.
+func orderRanked(out []Ranked, p Policy) (ranked []Ranked, full bool) {
+	slices.SortFunc(out, func(a, b Ranked) int {
+		switch {
+		case rankBefore(a, b):
+			return -1
+		case rankBefore(b, a):
+			return 1
+		default:
+			return 0
+		}
+	})
+	// Every entry gets a standing, including the ones past the point where the
+	// budget stopped taking: "why is this NOT in my brief" is a question about
+	// all of them, and a walk that broke out here would leave the tail with no
+	// answer at all. budget.closed is what makes carrying on safe — see take.
+	b := newBudget(p)
+	for i := range out {
+		out[i].Standing = b.take(out[i].Entry)
+		out[i].Active = out[i].Standing == StandingActive
+	}
+	return out, b.closed == StandingBlockFull
 }
 
 // RenderBlock renders the injectable text block: a bordered "── Score ──"
@@ -1462,14 +2224,22 @@ func renderBlock(entries []Entry) string {
 	b.Grow(64 * (len(entries) + 1))
 	b.WriteString("── Score ──\n")
 	for _, e := range entries {
-		b.WriteString("- ")
-		b.WriteString(e.Text)
-		b.WriteString(" [")
-		b.WriteString(tierWording(e.Tier))
-		b.WriteString("]\n")
+		writeBlockLine(&b, e)
 	}
 	b.WriteString("───────────\n")
 	return b.String()
+}
+
+// writeBlockLine writes the one line an entry contributes to the block. It is
+// its own function so that blockRunes, which must predict this line's length
+// without building it, can be checked against it by a test rather than by a
+// comment asking the next reader to keep them in step.
+func writeBlockLine(b *strings.Builder, e Entry) {
+	b.WriteString("- ")
+	b.WriteString(e.Text)
+	b.WriteString(" [")
+	b.WriteString(tierWording(e.Tier))
+	b.WriteString("]\n")
 }
 
 // tierWording is how strongly a tier speaks in the injected block.
@@ -1552,6 +2322,7 @@ func (s *Store) replayLocked() error {
 			continue
 		}
 		s.burned[ev.Id] = struct{}{}
+		s.noteEventLocked(ev)
 		switch ev.Event {
 		case EventSubmitted:
 			if !placed[ev.Id] {
@@ -1647,6 +2418,17 @@ func (s *Store) replayLocked() error {
 	for id := range s.owed {
 		if live[id] == nil {
 			delete(s.owed, id)
+		}
+	}
+	// Same for its position: an id with no live entry is never ranked, so keeping
+	// its last-reinforcement position would grow the map with the whole log's
+	// history of retirements. A retire deletes the key as it is replayed; this
+	// catches the id whose events arrived in an order no retire closed — a
+	// submission torn away from its own entry, and the ids the recovery table
+	// re-admits under a fresh submission later in the same log.
+	for id := range s.lastAt {
+		if live[id] == nil {
+			delete(s.lastAt, id)
 		}
 	}
 	return nil
@@ -2288,10 +3070,40 @@ func (s *Store) writeSnapshotLocked() error {
 	return writeFileAtomic(s.jsonPath, data, 0o600)
 }
 
+// noteEventLocked gives one log record its position and records what that
+// position means for the ranking. The caller holds the lock.
+//
+// It is the ONE place recency is derived, called by replayLocked for every
+// record it parses out of the log and by appendEvents for every record it lands
+// in it. The two must produce identical positions or a restart would reorder
+// the fleet's memory, and one function called from both is what makes that
+// structural rather than two lists someone keeps in step by hand.
+//
+// The names that move an entry's position are exactly the ones replayLocked
+// counts as a reinforcement — a fold, a user signal, and an edit the OPERATOR
+// made — plus the submission that created the entry, which is where an entry
+// nothing has reinforced yet sits. A `raised` takes a position like every other
+// record but moves nothing: a tier is the CONSEQUENCE of a reinforcement, and
+// counting it as one too would let a single fold that crossed the threshold
+// count twice. A `retired` drops the key, because a retired entry is not
+// ranked and its id is never reissued.
+func (s *Store) noteEventLocked(ev event) {
+	s.seq++
+	switch {
+	case ev.Event == EventSubmitted, ev.Event == EventFolded, ev.Event == EventUserSignal:
+		s.lastAt[ev.Id] = s.seq
+	case ev.Event == EventEdited && ev.Source == "user":
+		s.lastAt[ev.Id] = s.seq
+	case ev.Event == EventRetired:
+		delete(s.lastAt, ev.Id)
+	}
+}
+
 // appendEvents appends every event as its own log line, in one write and one
-// fsync. Batching is what keeps a large reconcile off the dispatch path's neck:
-// the cost of a durable append is the fsync, so a pass over a thousand changed
-// lines must not pay a thousand of them.
+// fsync, and gives each its position in the log. Batching is what keeps a large
+// reconcile off the dispatch path's neck: the cost of a durable append is the
+// fsync, so a pass over a thousand changed lines must not pay a thousand of
+// them. The caller holds the lock.
 func (s *Store) appendEvents(evs []event) error {
 	// Marshalled straight into the buffer that is written, because a batch can be
 	// the whole store: joining the records and then re-joining that with the
@@ -2305,7 +3117,16 @@ func (s *Store) appendEvents(evs []event) error {
 		buf.Write(data)
 		buf.Write(newline)
 	}
-	return appendDurable(s.eventsPath, buf.Bytes())
+	if err := appendDurable(s.eventsPath, buf.Bytes()); err != nil {
+		return err
+	}
+	// Positions are taken only now, and only here, because appendDurable is
+	// all-or-nothing: a write that landed no bytes must leave the store's idea of
+	// the log's length exactly where a re-Open would find it.
+	for _, ev := range evs {
+		s.noteEventLocked(ev)
+	}
+	return nil
 }
 
 // appendDurable appends rec to the file at path, ALL OF IT OR NONE OF IT. rec
@@ -2506,8 +3327,8 @@ func (s *Store) Dir() string {
 }
 
 // Len is how many entries the store holds — the honest count, unlike Render,
-// which caps at renderLimit and withholds anything over the weight cap. Zero on
-// the disabled (nil) store.
+// which caps at the working-set budget and withholds anything over the weight
+// cap. Zero on the disabled (nil) store.
 func (s *Store) Len() int {
 	if s == nil {
 		return 0

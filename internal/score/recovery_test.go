@@ -17,7 +17,7 @@ import (
 // so a test may reopen the same directory.
 func openStore(t *testing.T, dir string) *Store {
 	t.Helper()
-	s, err := Open(dir, defaultPromoteAt)
+	s, err := Open(dir, Policy{})
 	if err != nil {
 		t.Fatalf("Open(%s): %v", dir, err)
 	}
@@ -232,7 +232,9 @@ func TestRecoveryRebuildsFromLogWithoutTheSnapshot(t *testing.T) {
 	if re.Len() != 2 {
 		t.Fatalf("entries after the rebuild = %d, want 2", re.Len())
 	}
-	got := re.Render(Context{})[0]
+	// By id, not by position: the working set is RANKED, so which entry leads it
+	// is the ranking's business and not this test's.
+	got := renderedByID(t, re, Context{})[first.Id]
 	if got.Text != "keep the build green, always" || len(got.Aliases) != 1 || got.Aliases[0] != "keep the build green" {
 		t.Fatalf("rebuilt entry = %+v, want the reworded text with the old wording as an alias", got)
 	}

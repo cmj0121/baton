@@ -84,7 +84,13 @@ func TestLiveEditReachesScoreListAndStatus(t *testing.T) {
 	if msg.Type != "score" || json.Unmarshal(msg.Score, &entries) != nil {
 		t.Fatalf("score.list must answer a score array, got %+v", msg)
 	}
-	if len(entries) != 2 || entries[0].Text != "a line the operator typed" {
+	// By membership, not by position: score.list is RANKED, so which of the two
+	// leads it is the ranking's business and not this test's.
+	texts := map[string]bool{}
+	for _, e := range entries {
+		texts[e.Text] = true
+	}
+	if len(entries) != 2 || !texts["a line the operator typed"] || !texts["and another"] {
 		t.Fatalf("score.list = %+v, want the operator's two lines", entries)
 	}
 
