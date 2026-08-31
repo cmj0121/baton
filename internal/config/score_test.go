@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cmj0121/baton/internal/paths"
@@ -49,7 +50,7 @@ func TestScoreLoad(t *testing.T) {
 	if err := paths.EnsureDir(paths.ConfigFile()); err != nil {
 		t.Fatal(err)
 	}
-	yaml := "score:\n  dir: ~/scores\n  enabled: false\n"
+	yaml := "score:\n  dir: ~/scores\n  enabled: false\n  promote-at: 5\n"
 	if err := os.WriteFile(paths.ConfigFile(), []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -63,6 +64,11 @@ func TestScoreLoad(t *testing.T) {
 	if want := filepath.Join(home, "scores"); got.Score.Directory() != want {
 		t.Errorf("Directory() = %q; want %q", got.Score.Directory(), want)
 	}
+	// The recurrence threshold reaches the store as it stands; the floor and the
+	// default belong to score.SetPromoteAt, not to the parser.
+	if got.Score.PromoteAt != 5 {
+		t.Errorf("promote_at = %d; want 5", got.Score.PromoteAt)
+	}
 }
 
 // TestScoreRoundTrip saves a config carrying a score section and loads it back,
@@ -71,7 +77,7 @@ func TestScoreLoad(t *testing.T) {
 func TestScoreRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	off := false
-	want := Config{Score: ScoreConfig{Dir: "~/scores", Enabled: &off}}
+	want := Config{Score: ScoreConfig{Dir: "~/scores", PromoteAt: 4, Enabled: &off}}
 	if err := want.Save(); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -84,5 +90,46 @@ func TestScoreRoundTrip(t *testing.T) {
 	}
 	if got.Score.Enabled == nil || *got.Score.Enabled {
 		t.Errorf("enabled should round-trip as false, got %+v", got.Score.Enabled)
+	}
+	if got.Score.PromoteAt != 4 {
+		t.Errorf("promote_at should round-trip, got %d", got.Score.PromoteAt)
+	}
+}
+
+// TestScoreLegacyPromoteAtIsCaught covers the key that is NOT in force. The YAML
+// decoder is not strict, so a file left saying `promote_at:` while this branch
+// was in testing parses without complaint, contributes nothing, and leaves the
+// store on a threshold nobody chose. Nothing shipped under the underscore, so no
+// shim is owed — but the daemon has to be able to say the key is being ignored,
+// and it can only do that if the parse notices it.
+func TestScoreLegacyPromoteAtIsCaught(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := paths.EnsureDir(paths.ConfigFile()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.ConfigFile(), []byte("score:\n  promote_at: 7\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !got.Score.StalePromoteAt {
+		t.Fatal("the underscore spelling went unnoticed")
+	}
+	// Noticed, never obeyed: the threshold in force is still the default.
+	if got.Score.PromoteAt != 0 {
+		t.Fatalf("promote-at = %d; want the stale key to contribute nothing", got.Score.PromoteAt)
+	}
+	// And it never travels back into the file a Save rewrites.
+	if err := got.Save(); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	data, err := os.ReadFile(paths.ConfigFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "promote_at") {
+		t.Fatalf("a saved config carried the stale key forward:\n%s", data)
 	}
 }

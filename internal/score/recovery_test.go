@@ -17,7 +17,7 @@ import (
 // so a test may reopen the same directory.
 func openStore(t *testing.T, dir string) *Store {
 	t.Helper()
-	s, err := Open(dir)
+	s, err := Open(dir, defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("Open(%s): %v", dir, err)
 	}

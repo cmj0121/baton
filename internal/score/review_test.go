@@ -331,7 +331,7 @@ func TestReplayPlacesARestoredEntryOnce(t *testing.T) {
 		t.Fatalf("write events: %v", err)
 	}
 
-	s := newStore(dir)
+	s := newStore(dir, defaultPromoteAt)
 	if err := s.replayLocked(); err != nil {
 		t.Fatalf("replay: %v", err)
 	}

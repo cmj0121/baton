@@ -23,6 +23,7 @@ type statusReply struct {
 	Entries   int    `json:"entries"`
 	Rendered  int    `json:"rendered"`
 	Oversized int    `json:"oversized"`
+	PromoteAt int    `json:"promote_at"`
 	Dir       string `json:"dir"`
 }
 
@@ -44,7 +45,7 @@ func status(t *testing.T, s *Server) statusReply {
 func scoreStore(t *testing.T) (*score.Store, string) {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := score.Open(dir)
+	st, err := score.Open(dir, 0)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -69,7 +70,7 @@ func TestScoreStatusDistinguishesOffFromUnavailable(t *testing.T) {
 		reason string
 		want   statusReply
 	}{
-		{"running", st, true, "", statusReply{Enabled: true, Available: true, Entries: 0, Rendered: 0, Dir: dir}},
+		{"running", st, true, "", statusReply{Enabled: true, Available: true, Entries: 0, Rendered: 0, PromoteAt: 3, Dir: dir}},
 		{"held by another daemon", nil, true, held, statusReply{Enabled: true, Reason: held}},
 		{"switched off", nil, false, "score is switched off in the config (score.enabled: false)",
 			statusReply{Reason: "score is switched off in the config (score.enabled: false)"}},

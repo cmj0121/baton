@@ -29,7 +29,7 @@ func readFile(t *testing.T, dir, name string) string {
 func TestOpenSeedsHeaderOnFirstRun(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "score")
 
-	s, err := Open(dir)
+	s, err := Open(dir, defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestOpenExistingNeverReseeds(t *testing.T) {
 				t.Fatalf("write score.md: %v", err)
 			}
 
-			s, err := Open(dir)
+			s, err := Open(dir, defaultPromoteAt)
 			if err != nil {
 				t.Fatalf("Open: %v", err)
 			}
@@ -107,16 +107,13 @@ func TestOpenExistingNeverReseeds(t *testing.T) {
 
 func TestSubmitAppendsAllThreeFiles(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir)
+	s, err := Open(dir, defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 
 	prov := Provenance{SourcePanel: "p1", SourceProfile: "dev", SourceCwd: "/work", Source: "agent"}
-	e, _, err := s.Submit("  ship it\nby friday  ", prov)
-	if err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
+	e := submitAs(t, s, "  ship it\nby friday  ", prov)
 	if e.Text != "ship it by friday" {
 		t.Errorf("text = %q, want newline flattened and trimmed", e.Text)
 	}
@@ -180,7 +177,7 @@ func TestSubmitAppendsAllThreeFiles(t *testing.T) {
 // terminal.
 func TestSubmitNeutralisesControlSequences(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir)
+	s, err := Open(dir, defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -189,10 +186,7 @@ func TestSubmitNeutralisesControlSequences(t *testing.T) {
 	// zero-width space, and a bare CR that would rewrite the line in place.
 	const payload = "\x1b]52;c;cGF5bG9hZA==\x07keep \x1b[1;31mthis\x1b[2J\r\u202etext\u200b visible"
 
-	e, _, err := s.Submit(payload, Provenance{Source: "agent", SourcePanel: "p1"})
-	if err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
+	e := submitAs(t, s, payload, Provenance{Source: "agent", SourcePanel: "p1"})
 	if e.Text != "]52;c;cGF5bG9hZA==keep [1;31mthis[2J text visible" {
 		t.Fatalf("stored text = %q, want the escapes stripped to inert prose", e.Text)
 	}
@@ -228,7 +222,7 @@ func TestSubmitNeutralisesControlSequences(t *testing.T) {
 // count.
 func TestSubmitRefusesOverLong(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir)
+	s, err := Open(dir, defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -271,7 +265,7 @@ func TestLoadSanitisesOperatorEdits(t *testing.T) {
 		t.Fatalf("write score.md: %v", err)
 	}
 
-	s, err := Open(dir)
+	s, err := Open(dir, defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -296,7 +290,7 @@ func TestLoadSanitisesOperatorEdits(t *testing.T) {
 }
 
 func TestSubmitRejectsEmpty(t *testing.T) {
-	s, err := Open(t.TempDir())
+	s, err := Open(t.TempDir(), defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -317,7 +311,7 @@ func TestSubmitRejectsEmpty(t *testing.T) {
 // resurrected them.
 func TestSeedNeverReachesABrief(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir)
+	s, err := Open(dir, defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -336,7 +330,7 @@ func TestSeedNeverReachesABrief(t *testing.T) {
 		t.Fatalf("remove snapshot: %v", err)
 	}
 	s.Close() // one writer per directory; hand the claim over
-	re, err := Open(dir)
+	re, err := Open(dir, defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("reopen without a snapshot: %v", err)
 	}
@@ -356,14 +350,14 @@ func TestSeedNeverReachesABrief(t *testing.T) {
 
 func TestSubmitSurvivesReopen(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir)
+	s, err := Open(dir, defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	e := submit(t, s, "persisted")
 
 	s.Close()
-	re, err := Open(dir)
+	re, err := Open(dir, defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -380,7 +374,7 @@ func TestSubmitSurvivesReopen(t *testing.T) {
 }
 
 func TestSubmitConcurrent(t *testing.T) {
-	s, err := Open(t.TempDir())
+	s, err := Open(t.TempDir(), defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -417,7 +411,7 @@ func TestRender(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s, err := Open(t.TempDir())
+			s, err := Open(t.TempDir(), defaultPromoteAt)
 			if err != nil {
 				t.Fatalf("Open: %v", err)
 			}
@@ -438,7 +432,7 @@ func TestRenderEmptyAndDisabled(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, scoreMD), nil, 0o600); err != nil {
 		t.Fatalf("write score.md: %v", err)
 	}
-	s, err := Open(dir)
+	s, err := Open(dir, defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -494,7 +488,7 @@ func TestRenderBlockWording(t *testing.T) {
 
 func TestReinforce(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir)
+	s, err := Open(dir, defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -510,16 +504,17 @@ func TestReinforce(t *testing.T) {
 		t.Error("Reinforce of unknown id succeeded, want error")
 	}
 
-	// The counter is replayed from the log, tier untouched (no promotion yet).
+	// The counter is replayed from the log, and so is the tier those two
+	// reinforcements earned: three occurrences is the default threshold.
 	s.Close()
-	re, err := Open(dir)
+	re, err := Open(dir, defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
 	entries := re.Render(Context{})
 	got := entries[len(entries)-1]
-	if got.Reinforcements != 2 || got.Tier != 1 {
-		t.Fatalf("after reinforce: %+v, want 2 reinforcements at tier 1", got)
+	if got.Reinforcements != 2 || got.Tier != 2 {
+		t.Fatalf("after reinforce: %+v, want 2 reinforcements at tier 2", got)
 	}
 
 	// And the log recorded who reinforced, in the #38 vocabulary: an agent
@@ -537,7 +532,7 @@ func TestReinforce(t *testing.T) {
 }
 
 func TestRefineIsStubbed(t *testing.T) {
-	s, err := Open(t.TempDir())
+	s, err := Open(t.TempDir(), defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -549,7 +544,7 @@ func TestRefineIsStubbed(t *testing.T) {
 
 func TestReconcilePicksUpOperatorEdits(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir)
+	s, err := Open(dir, defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -606,7 +601,7 @@ func TestOpenToleratesCorruptSnapshot(t *testing.T) {
 				t.Fatalf("write score.json: %v", err)
 			}
 
-			s, err := Open(dir)
+			s, err := Open(dir, defaultPromoteAt)
 			if err != nil {
 				t.Fatalf("Open: %v", err)
 			}
@@ -638,7 +633,7 @@ func TestTornEventLogTailTolerated(t *testing.T) {
 		t.Fatalf("write events: %v", err)
 	}
 
-	s, err := Open(dir)
+	s, err := Open(dir, defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("Open with torn log tail: %v", err)
 	}

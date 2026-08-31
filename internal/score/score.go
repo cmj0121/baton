@@ -85,6 +85,15 @@ const renderLimit = 7
 //     say so, because a line that silently does nothing is worse than the bug.
 const maxEntryRunes = 300
 
+// maxEarnedTier is the highest tier RECURRENCE can reach. Tier 3 is not
+// reachable from this ladder at all, by construction rather than by arithmetic:
+// invariant I6 says no sequence of agent submissions may reach it, because the
+// top tier is what #37 reserves for the user asking repeatedly, and an agent
+// that can climb there alone can make the fleet reinforce its own wrong
+// conclusion. R4 (#43) adds the user signal that raises the last step; until it
+// does, nothing in the store may promote past this.
+const maxEarnedTier = 2
+
 // maxAliases is how many prior wordings one entry keeps for folding.
 //
 // Eight, because an alias is worth keeping only while a repeat of it is more
@@ -98,6 +107,25 @@ const maxEntryRunes = 300
 // Nothing is destroyed by the cap (I7): a dropped wording stays in the log with
 // the edit that retired it. It simply stops folding.
 const maxAliases = 8
+
+// defaultPromoteAt is how many times an entry must be said before it is raised
+// from tier 1 ("noted") to tier 2 ("note and take care") — counting its first
+// submission and every reinforcement since.
+//
+// Three, because the number has to separate a recurrence from a coincidence and
+// nothing smaller does. Two would promote on the first repeat, and one repeat is
+// routinely an artefact rather than a pattern: an agent retrying a failed task
+// submits the same observation twice in a minute, and two panels hitting one
+// wall at the same moment do too. The third time is the first that cannot be
+// explained by a single incident — it means the observation came back AFTER
+// having already been recorded and repeated, which is exactly what #37 calls
+// evidence rather than declaration. Higher than three delays every promotion by
+// days of fleet time for a certainty nothing here needs: tier 2 says "note and
+// take care", not "obey", and the entry was already being injected at tier 1.
+//
+// It is a starting point, not a discovery — which is why score.promote-at
+// exists. See ScoreConfig.
+const defaultPromoteAt = 3
 
 // staleWindow is how long after score.md's recorded mtime the fingerprint is
 // distrusted outright.
@@ -249,6 +277,7 @@ type Delta struct {
 	Adopted      int // entries whose wording the log never carried, taken from the file
 	Superseded   int // entries whose text the operator changed
 	Folded       int // entries a duplicate line was counted into — at most one per entry; see View.Folds for the lines removed
+	Raised       int // entries this pass's reinforcements earned a tier
 	Retired      int // entries score.md no longer carries
 	Reprojected  int // entries written back into a score.md that had gone missing
 }
@@ -271,9 +300,10 @@ type Fold struct {
 	// once, so naming the line that earned it is what keeps Counted readable.
 	Repeat string
 	Prov   Provenance // where that repeat came from: a panel, or the operator's own file
-	// Reinforcements is where the entry stands AFTER this fold, so the log line
-	// that announces a fold also answers the only question it raises.
+	// Reinforcements and Tier are where the entry stands AFTER this fold, so the
+	// log line that announces a fold also answers the only question it raises.
 	Reinforcements int
+	Tier           int
 	// Duplicates is how many repeats this fold covers — more than one only on the
 	// file path, where a paste can carry the same wording many times. Counted says
 	// whether they moved the entry's counter, which they do not when the store
@@ -349,6 +379,12 @@ type Health struct {
 	SwallowedRepeats int
 	UnreportedFolds  int
 	AliasEvictions   int
+	// RejectedRaises is how many `raised` records named a tier this build will
+	// not grant; see maxEarnedTier and replayLocked. Zero for a log this daemon
+	// wrote on its own, so anything else is a hand-edited log, a truncated record
+	// that decoded oddly, or a log from a build that knows a tier this one does
+	// not — none of them errors, but none of them silent either.
+	RejectedRaises int
 }
 
 // View is one consistent look at the store, taken without letting go of its
@@ -361,13 +397,18 @@ type Health struct {
 // reply reported an entry total and a rendered total read from two different
 // views — the very gap "one reconcile for both counts" claimed to close.
 type View struct {
-	Entries  []Entry // what a dispatch would inject, in render order
-	Block    string  // Entries as the injectable text block; empty when there are none
-	Total    int     // every entry the store holds, injectable or not
-	Health   Health
-	Delta    Delta  // what this look's pass changed; zero when score.md had not moved
-	Folds    []Fold // repeats folded since the last look, for the server to log
-	Unlocked bool   // the store is running without its single-writer claim
+	Entries []Entry // what a dispatch would inject, in render order
+	Block   string  // Entries as the injectable text block; empty when there are none
+	Total   int     // every entry the store holds, injectable or not
+	Health  Health
+	Delta   Delta  // what this look's pass changed; zero when score.md had not moved
+	Folds   []Fold // repeats folded since the last look, for the server to log
+	// PromoteAt is the recurrence threshold in force. It rides the view rather
+	// than a second call because score.status reports it beside the counts, and
+	// a knob read through its own lock is a knob read from a different moment
+	// than everything it is meant to explain.
+	PromoteAt int
+	Unlocked  bool // the store is running without its single-writer claim
 }
 
 // snapshot is the persisted shape of score.json: a cache of the log's fold.
@@ -387,6 +428,7 @@ type event struct {
 	Source string      `json:"source,omitempty"`     // who acted ("user"/"agent"); empty otherwise
 	Text   string      `json:"text,omitempty"`       // the entry's text at submitted/edited, and the repeat's own wording at folded
 	Prov   *Provenance `json:"provenance,omitempty"` // where a submitted entry, or a folded repeat, came from
+	Tier   int         `json:"tier,omitempty"`       // the tier reached, at raised
 	// RemovedLine marks a fold that took a LINE out of score.md. It is named for
 	// its EFFECT rather than for where the repeat came from, because the effect
 	// is what the boot derivation is built on: only a fold that removed a line
@@ -452,6 +494,10 @@ type Store struct {
 	mdSize  int64
 	mdIno   uint64
 
+	// promoteAt is how many times an entry must be said to earn tier 2; see
+	// defaultPromoteAt and SetPromoteAt.
+	promoteAt int
+
 	// folds are the fold records the next View reports.
 	//
 	// owed is the removals the store still owes: entry id → the exact bytes of
@@ -510,8 +556,19 @@ type Store struct {
 // errDisabled is returned by mutations on the disabled (nil) store.
 var errDisabled = errors.New("score is disabled")
 
-// Open opens (or creates) the store in dir. The directory is created 0700 and
-// every file 0600.
+// Open opens (or creates) the store in dir under the recurrence threshold
+// promoteAt — how many times an entry must be said to earn tier 2, clamped as
+// SetPromoteAt describes, so a zero from a config field nobody set lands on
+// defaultPromoteAt. The directory is created 0700 and every file 0600.
+//
+// The threshold is taken HERE rather than set after the fact, because Open's
+// own recovery pass already makes durable tier decisions: it folds duplicate
+// lines and reads the rewordings made while the daemon was down — the expected
+// workflow — and every one of those goes through reinforceLocked. A store
+// constructed on the default and retuned a moment later would have promoted
+// entries under a policy nobody chose, and the `raised` events recording it are
+// durable, replayed at every boot, and uncorrectable: #37 demotes nothing.
+// SetPromoteAt is the RE-tuning path (SIGHUP) and nothing else.
 //
 // SINGLE WRITER. Open takes an exclusive advisory lock on score.lock and holds
 // it until Close. Two daemons on two sockets both default to $HOME/.baton — and
@@ -540,7 +597,7 @@ var errDisabled = errors.New("score is disabled")
 // Open calls the *Locked helpers without holding the mutex — the store is not
 // published to any other goroutine until Open returns, so their "caller holds
 // the lock" contract is trivially satisfied here.
-func Open(dir string) (s *Store, err error) {
+func Open(dir string, promoteAt int) (s *Store, err error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -549,7 +606,7 @@ func Open(dir string) (s *Store, err error) {
 	if err != nil {
 		return nil, err
 	}
-	s = newStore(dir)
+	s = newStore(dir, promoteAt)
 	s.release, s.unlocked = release, !locked
 	// A store that fails to boot must not keep the directory claimed.
 	defer func() {
@@ -581,11 +638,12 @@ func Open(dir string) (s *Store, err error) {
 }
 
 // newStore assembles a store over dir with its three file paths joined once —
-// dir is immutable afterwards and all three are touched on the dispatch path.
-// Open adds the directory claim and the recovery pass.
-func newStore(dir string) *Store {
+// dir is immutable afterwards and all three are touched on the dispatch path —
+// and under the threshold it will spend its whole life comparing against unless
+// a reload retunes it. Open adds the directory claim and the recovery pass.
+func newStore(dir string, promoteAt int) *Store {
 	return &Store{
-		dir: dir, burned: map[string]struct{}{},
+		dir: dir, burned: map[string]struct{}{}, promoteAt: clampPromoteAt(promoteAt),
 		mdPath:     filepath.Join(dir, scoreMD),
 		jsonPath:   filepath.Join(dir, scoreJSON),
 		eventsPath: filepath.Join(dir, scoreEvents),
@@ -617,6 +675,61 @@ func (s *Store) Unlocked() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.unlocked
+}
+
+// clampPromoteAt is the recurrence threshold a caller's number actually becomes.
+// Below two — including the zero of a config field nobody set — it falls back to
+// defaultPromoteAt. Two is the floor because a tier is EARNED here: at one, an
+// entry would arrive at tier 2 on the submission that created it, which is
+// granting importance rather than counting it, and #37 has no way to say that.
+func clampPromoteAt(n int) int {
+	if n < 2 {
+		return defaultPromoteAt
+	}
+	return n
+}
+
+// SetPromoteAt RE-tunes the recurrence threshold a running store compares
+// against, and is only that: the threshold a store is born with is Open's
+// argument, so no pass ever runs under a policy nobody chose. It is safe on the
+// disabled (nil) store and safe to call on a running one, which is what lets
+// score.promote-at ride the daemon's SIGHUP reload while score.dir and
+// score.enabled still need a restart: the threshold is a number this store
+// compares, not a store to swap under in-flight dispatches. n is clamped as
+// clampPromoteAt describes.
+//
+// Changing it never re-tiers what is already stored. Tiers are replayed from the
+// log's raised events, so an entry that earned tier 2 keeps it (nothing is
+// demoted) and one that has not yet earned it is measured against the new
+// number at its next reinforcement.
+//
+// It reports whether this call MOVED the threshold, so the daemon can log a
+// reload that changed the policy and stay quiet about the far more common one
+// that did not. The number itself is PromoteAt's job, which the caller already
+// asks on the branch where the config would not load.
+func (s *Store) SetPromoteAt(n int) (changed bool) {
+	if s == nil {
+		return false
+	}
+	n = clampPromoteAt(n)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed = s.promoteAt != n
+	s.promoteAt = n
+	return changed
+}
+
+// PromoteAt is the recurrence threshold in force: how many times an entry must
+// be said to earn tier 2. Zero on the disabled (nil) store. It is reported by
+// score.status, because a knob whose effect an operator cannot observe is a knob
+// they cannot trust (invariant I8).
+func (s *Store) PromoteAt() int {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.promoteAt
 }
 
 // Boot is what Open's recovery pass did to the operator's files. Zero on the
@@ -703,7 +816,8 @@ func (s *Store) View(ctx Context) (View, error) {
 	entries := s.renderLocked(ctx)
 	return View{
 		Entries: entries, Block: renderBlock(entries), Total: len(s.entries),
-		Health: s.health, Delta: delta, Folds: s.drainFoldsLocked(), Unlocked: s.unlocked,
+		Health: s.health, Delta: delta, Folds: s.drainFoldsLocked(),
+		PromoteAt: s.promoteAt, Unlocked: s.unlocked,
 	}, err
 }
 
@@ -1185,6 +1299,27 @@ func (s *Store) foldTargetLocked(text string) int {
 	return -1
 }
 
+// reinforceLocked counts ONE reinforcement into e and raises its tier when the
+// count earns one, returning the raised event to append when it did. Every path
+// that counts a repeat — a folded submission, a folded line, an operator's
+// reword, Reinforce — ends here, so the ladder is climbed in one place and a
+// path added later cannot promote by its own rules. The caller holds the lock.
+//
+// It can never reach tier 3: see maxEarnedTier. It also raises at most one step
+// per reinforcement, so an entry cannot skip a rung by being submitted twenty
+// times at once.
+func (s *Store) reinforceLocked(e *Entry, at time.Time) (event, bool) {
+	e.Reinforcements++
+	// Occurrences, not reinforcements: the submission that created the entry is
+	// the first time it was said, and the threshold is stated in the units an
+	// operator counts in. See defaultPromoteAt.
+	if e.Tier >= maxEarnedTier || e.Reinforcements+1 < s.promoteAt {
+		return event{}, false
+	}
+	e.Tier++
+	return event{Schema: Schema, Event: EventRaised, Id: e.Id, At: at, Tier: e.Tier}, true
+}
+
 // foldLocked counts a repeat into the entry at i instead of adding a line: one
 // log event, one counter, and score.md is not touched at all — there is no new
 // line to append, and the surviving wording is the one already in the file. It
@@ -1199,12 +1334,15 @@ func (s *Store) foldLocked(i int, text string, prov Provenance) (Entry, error) {
 	now := time.Now().UTC()
 	e := s.entries[i]
 	evs := []event{foldEvent(e.Id, text, prov, now, false)}
-	e.Reinforcements++
+	if raised, ok := s.reinforceLocked(&e, now); ok {
+		evs = append(evs, raised)
+	}
 	if err := s.applyLocked(evs, func() error {
 		s.entries[i] = e
 		s.noteFoldsLocked([]Fold{{
 			Id: e.Id, Text: e.Text, Repeat: text, Prov: prov,
-			Reinforcements: e.Reinforcements, Duplicates: 1, Counted: true,
+			Reinforcements: e.Reinforcements, Tier: e.Tier,
+			Duplicates: 1, Counted: true,
 		}})
 		return nil
 	}); err != nil {
@@ -1216,6 +1354,8 @@ func (s *Store) foldLocked(i int, text string, prov Provenance) (Entry, error) {
 // Reinforce bumps an entry's counter and logs who did it: a fold when an agent
 // reinforces (in #38's model a fold IS the agent-side reinforcement), a
 // user-signal when the operator does. Either way the count can earn the entry a
+// tier — see reinforceLocked, which is where every path that counts a repeat
+// ends.
 func (s *Store) Reinforce(id, source string) error {
 	if s == nil {
 		return errDisabled
@@ -1240,7 +1380,9 @@ func (s *Store) Reinforce(id, source string) error {
 	now := time.Now().UTC()
 	e := s.entries[i]
 	evs := []event{{Schema: Schema, Event: name, Id: id, At: now, Source: source}}
-	e.Reinforcements++
+	if raised, ok := s.reinforceLocked(&e, now); ok {
+		evs = append(evs, raised)
+	}
 	return s.applyLocked(evs, func() error {
 		s.entries[i] = e
 		return nil
@@ -1449,6 +1591,36 @@ func (s *Store) replayLocked() error {
 					}
 					s.owed[ev.Id] = addOwed(s.owed[ev.Id], sanitize(ev.Text))
 				}
+			}
+		case EventRaised:
+			// The tier is REPLAYED from the log rather than recomputed from the
+			// counts against the current threshold. Both invariants want it that
+			// way: I1, because the same log then yields the same tiers whatever
+			// score.promote-at says on this machine today, and #37's "nothing is
+			// demoted", because raising the threshold must not quietly pull
+			// entries back down.
+			//
+			// It is bounded by maxEarnedTier, the SAME constant the computed path
+			// obeys, so the ceiling is one fact rather than two that can drift —
+			// which is what makes "tier 3 is unreachable until R4" true of every
+			// way an entry can arrive at a tier, replay included. A raise above it
+			// is IGNORED rather than lowered to it: a record that cannot be true
+			// is not evidence of a smaller true one, so the entry keeps the tier
+			// it earned and this build under-claims rather than lies, as
+			// panel.ParseState does for a state string it does not know. The log
+			// is the operator's own file and #38 declines to be a boundary against
+			// filesystem access, so this guards the constant, not them. R4 lifts
+			// it when it brings the user signal.
+			switch e := live[ev.Id]; {
+			case e == nil:
+			case ev.Tier >= 1 && ev.Tier <= maxEarnedTier:
+				e.Tier = ev.Tier
+			default:
+				// Counted rather than merely ignored: a log that asks for a tier
+				// this build will not grant is a fact about the log, and silence
+				// about it is how an operator ends up asking why an entry reads as
+				// "noted" when the history says otherwise.
+				s.health.RejectedRaises++
 			}
 		case EventEdited:
 			if e := live[ev.Id]; e != nil {
@@ -1662,7 +1834,10 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 					Source: "user", Text: text,
 				})
 				reword(&e, text, &pass.AliasEvictions)
-				e.Reinforcements++
+				if raised, ok := s.reinforceLocked(&e, now); ok {
+					pending = append(pending, raised)
+					delta.Raised++
+				}
 				delta.Superseded++
 			}
 			next = append(next, e)
@@ -1690,10 +1865,10 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 	// exactly like one pasted below it, because neither is resolved until both
 	// lines have been read.
 	//
-	// It answers with a POSITION in next, so the fold record and the count both
-	// land here, beside the decision that earned them, rather than in a second
-	// loop over every surviving entry whose only work was turning ids back into
-	// positions. Determinism is untouched: bullets are walked in file order,
+	// It answers with a POSITION in next, so the fold record and the reinforcement
+	// both land here, beside the decision that earned them, rather than in a
+	// second loop over every surviving entry whose only work was turning ids back
+	// into positions. Determinism is untouched: bullets are walked in file order,
 	// which is what that loop was reconstructing.
 	//
 	// Both maps below are left nil until something needs them: a file whose every
@@ -1713,7 +1888,8 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 	if len(bullets) > 0 {
 		index := newFoldIndex(next)
 		// countRepeat records ONE repeat against the entry at position target in
-		// next. The event's SOURCE is what says the operator folded this, not the
+		// next: the fold event, the reinforcement it earns, and the raise that may
+		// follow. The event's SOURCE is what says the operator folded this, not the
 		// event's NAME; see foldEvent. RemovedLine is true because this pass is
 		// about to take the line out — the effect, not the provenance, is what
 		// decides whether a removal can be owed.
@@ -1723,7 +1899,10 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 		// is not already marked Counted, and they mark it immediately after.
 		countRepeat := func(target int, text string) {
 			pending = append(pending, foldEvent(next[target].Id, text, userProv, now, true))
-			next[target].Reinforcements++
+			if raised, ok := s.reinforceLocked(&next[target], now); ok {
+				pending = append(pending, raised)
+				delta.Raised++
+			}
 			delta.Folded++
 		}
 		for _, b := range bullets {
@@ -1783,7 +1962,7 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 				if !folds[at].Counted && countable(next[target].Id, b.text) {
 					countRepeat(target, b.text)
 					folds[at].Counted, folds[at].Repeat = true, b.text
-					folds[at].Reinforcements = next[target].Reinforcements
+					folds[at].Reinforcements, folds[at].Tier = next[target].Reinforcements, next[target].Tier
 				}
 				continue
 			}
@@ -1819,7 +1998,8 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 			folded[target] = len(folds)
 			folds = append(folds, Fold{
 				Id: next[target].Id, Text: next[target].Text, Repeat: b.text, Prov: userProv,
-				Reinforcements: next[target].Reinforcements, Duplicates: 1, Counted: counted, FromFile: true,
+				Reinforcements: next[target].Reinforcements, Tier: next[target].Tier,
+				Duplicates: 1, Counted: counted, FromFile: true,
 			})
 		}
 	}

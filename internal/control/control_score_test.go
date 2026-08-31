@@ -18,7 +18,7 @@ import (
 func startScoredServer(t *testing.T) string {
 	t.Helper()
 	t.Setenv("SHELL", "/bin/sh")
-	st, err := score.Open(t.TempDir())
+	st, err := score.Open(t.TempDir(), 0)
 	if err != nil {
 		t.Fatalf("open score store: %v", err)
 	}

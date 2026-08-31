@@ -873,11 +873,19 @@ func TestOwedRemovalsAreBoundedNarrowly(t *testing.T) {
 // them counted the other on the next pass, and the one it had forgotten on the
 // pass after that, alternating for as long as the failure lasted: a static file
 // climbing a tier per pass. That is the exact harm the whole mechanism exists to
-// prevent: one unchanged file adding an occurrence per pass, for as long as the
-// disk stays broken.
+// prevent, and it is PERMANENT — a raised event is durable, replayed at every
+// boot, and #37 demotes nothing, so the unearned tier outlives the bad disk.
+//
+// The threshold here is deliberately out of reach, so a single raised event
+// anywhere in the log means the ladder was climbed by something other than
+// recurrence.
 func TestEveryOwedLineIsRemembered(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, dir)
+	s, err := Open(dir, 10)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(s.Close)
 	e := submit(t, s, "run the linter first")
 
 	head := "- [" + e.Id + "] run the linter first\n"
@@ -925,14 +933,22 @@ func TestEveryOwedLineIsRemembered(t *testing.T) {
 	}
 	writable()
 
+	// Durable and replayed forever, so the absence has to hold in the log rather
+	// than merely in memory.
+	for _, ev := range events(t, dir) {
+		if ev.Event == EventRaised {
+			t.Fatalf("a tier was earned by a failing disk: %+v", ev)
+		}
+	}
+
 	// Recovery settles both lines at once: the pass that finally rewrites takes
 	// them out, counts nothing more, and owes nothing after.
 	d := reconcile(t, s)
 	if d.Folded != 0 {
 		t.Fatalf("recovery pass = %+v, want the already-durable folds not counted again", d)
 	}
-	if got := s.Render(Context{})[0]; got.Reinforcements != 2 {
-		t.Fatalf("entry = %+v, want the two occurrences it actually earned", got)
+	if got := s.Render(Context{})[0]; got.Reinforcements != 2 || got.Tier != 1 {
+		t.Fatalf("entry = %+v, want two occurrences and no tier", got)
 	}
 	if n := strings.Count(readFile(t, dir, scoreMD), "un the linter first"); n != 1 {
 		t.Fatalf("score.md carries the wording %d times, want both owed lines removed", n)

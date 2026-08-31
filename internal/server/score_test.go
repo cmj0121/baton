@@ -319,7 +319,7 @@ func TestScoreListAndStatus(t *testing.T) {
 		want   statusReply
 		listed int // entries score.list returns
 	}{
-		{"enabled", st, statusReply{Enabled: true, Available: true, Entries: 1, Rendered: 1, Dir: dir}, 1},
+		{"enabled", st, statusReply{Enabled: true, Available: true, Entries: 1, Rendered: 1, PromoteAt: 3, Dir: dir}, 1},
 		{"disabled", nil, statusReply{Reason: "score is disabled"}, 0},
 	}
 	for _, tc := range cases {
