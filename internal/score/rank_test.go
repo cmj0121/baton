@@ -467,8 +467,10 @@ func TestRankingChangesOrderNeverTier(t *testing.T) {
 	}
 }
 
-// TestRankingCannotReachTierThree keeps R4's promise out of R3's reach: tier 3
-// needs a user signal (invariant I6), and no amount of ranking pressure is one.
+// TestRankingCannotReachTierThree keeps the top tier out of the ranking's reach:
+// it needs a user signal (invariant I6), and no amount of ranking pressure is
+// one. Ranking reads a tier and never writes one, so the pressure here is on the
+// factors rather than on the ladder — which is exactly what must not matter.
 func TestRankingCannotReachTierThree(t *testing.T) {
 	s := openStore(t, t.TempDir())
 	s.SetPolicy(Policy{PromoteAt: 2, Rank: Rank{Recency: 100, Cwd: 100, Profile: 100, Group: 100}})
@@ -486,11 +488,11 @@ func TestRankingCannotReachTierThree(t *testing.T) {
 		t.Fatalf("Explain: %v", err)
 	}
 	for _, r := range v.Ranked {
-		if r.Tier > maxEarnedTier {
-			t.Fatalf("entry reached tier %d, want no more than %d until R4", r.Tier, maxEarnedTier)
+		if r.Tier > agentEarnedTier {
+			t.Fatalf("an agent's repetition reached tier %d, want no more than %d", r.Tier, agentEarnedTier)
 		}
-		if r.Factors.Tier > float64(maxEarnedTier) {
-			t.Fatalf("the tier factor was %v, want no more than %d", r.Factors.Tier, maxEarnedTier)
+		if r.Factors.Tier > float64(agentEarnedTier) {
+			t.Fatalf("the tier factor was %v, want no more than %d", r.Factors.Tier, agentEarnedTier)
 		}
 	}
 }
@@ -859,7 +861,10 @@ func TestStandingMatchesTheBrief(t *testing.T) {
 // recomputation lives here.
 func TestBlockRunesArithmetic(t *testing.T) {
 	maximal := strings.Repeat("z", maxEntryRunes)
-	for _, tc := range []struct{ tier, want int }{{1, 25}, {2, 24}} {
+	// Every rung the ladder now reaches, since it is the DEAREST line that sets
+	// the twenty-four in maxBlockRunes' doc and the dearest wording is not the
+	// top one's.
+	for _, tc := range []struct{ tier, want int }{{1, 25}, {2, 24}, {3, 25}} {
 		e := Entry{Text: maximal, Tier: tc.tier}
 		if got := maxBlockRunes / blockRunes(e); got != tc.want {
 			t.Fatalf("tier %d: %d runes each buys %d entries, but maxBlockRunes' doc says %d",

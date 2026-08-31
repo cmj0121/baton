@@ -417,8 +417,9 @@ func scorePolicy(cfg config.ScoreConfig, err error) (p score.Policy, ok bool) {
 		return score.Policy{}, false
 	}
 	return score.Policy{
-		PromoteAt:  cfg.PromoteAt,
-		WorkingSet: cfg.WorkingSet,
+		PromoteAt:     cfg.PromoteAt,
+		UserSignalsAt: cfg.UserSignalsAt,
+		WorkingSet:    cfg.WorkingSet,
 		Rank: score.Rank{
 			Recency: cfg.Rank.Recency,
 			Cwd:     cfg.Rank.Cwd,
@@ -427,6 +428,23 @@ func scorePolicy(cfg config.ScoreConfig, err error) (p score.Policy, ok bool) {
 		},
 	}, true
 }
+
+// implausibleUserSignalsAt is where a user-signal threshold stops looking like a
+// choice and starts looking like a typo.
+//
+// It is NOT a clamp and NOT an arithmetic ceiling, which is what separates it
+// from score.MaxReachableWorkingSet: there the rune backstop makes a wide budget
+// provably unspendable, whereas any user-signal threshold is reachable by an
+// operator willing to say a thing that many times. #37 leaves the number to
+// them, so the store honours whatever it is given and this only says so out
+// loud.
+//
+// Twenty, because the knob counts the USER's own repetitions of ONE entry, by
+// hand, over the life of a fleet. Past twenty the top tier is unreachable in
+// practice rather than in theory, and `user-signals-at: 999999` — a fat finger,
+// or a number meant for another key — would otherwise switch the whole rung off
+// in silence, which is the failure invariant I8 exists to prevent.
+const implausibleUserSignalsAt = 20
 
 // warnScorePolicy says what the file asked for that the daemon is not doing. It
 // runs at boot and on every reload, like the stale-key warning it sits beside,
@@ -471,6 +489,15 @@ func warnScorePolicy(cfg config.Config, want score.Policy, st *score.Store) {
 	if want.PromoteAt != 0 && want.PromoteAt != got.PromoteAt {
 		log.Warn().Int("configured", want.PromoteAt).Int("in_force", got.PromoteAt).
 			Msg("score.promote-at is out of range and was clamped")
+	}
+	if want.UserSignalsAt != 0 && want.UserSignalsAt != got.UserSignalsAt {
+		log.Warn().Int("configured", want.UserSignalsAt).Int("in_force", got.UserSignalsAt).
+			Msg("score.user-signals-at is out of range and was clamped")
+	}
+	if got.UserSignalsAt > implausibleUserSignalsAt {
+		log.Warn().Int("score.user-signals-at", got.UserSignalsAt).
+			Msg("score.user-signals-at is high enough that the top tier is effectively unreachable; " +
+				"it counts the user's own repetitions of one entry, not an agent's")
 	}
 	if want.WorkingSet != 0 && want.WorkingSet != got.WorkingSet {
 		log.Warn().Int("configured", want.WorkingSet).Int("in_force", got.WorkingSet).
@@ -622,10 +649,11 @@ func runServerOn(ln net.Listener, sock string) error {
 		}
 		rc := reloadableSettings(res.Config)
 		srv.Reload(rc.settings)
-		// score.promote-at, score.rank and score.working-set DO reload — each is a
-		// number the live store compares, so a fleet whose entries are climbing
-		// too eagerly, or whose briefs are carrying the wrong few, is retuned with
-		// C-t R rather than by restarting and returning every panel as Exited.
+		// score.promote-at, score.user-signals-at, score.rank and score.working-set
+		// DO reload — each is a number the live store compares, so a fleet whose
+		// entries are climbing too eagerly, or whose briefs are carrying the wrong
+		// few, is retuned with C-t R rather than by restarting and returning every
+		// panel as Exited.
 		// Tiers already earned are replayed from the log and never move, and the
 		// ranking half changes order and no tier at all (see Store.SetPolicy).
 		//
@@ -657,7 +685,8 @@ func runServerOn(ln net.Listener, sock string) error {
 		if want, ok := scorePolicy(res.Config.Score, err); ok {
 			if scoreStore.SetPolicy(want) {
 				p := scoreStore.Policy()
-				log.Info().Int("promote_at", p.PromoteAt).Int("working_set", p.WorkingSet).
+				log.Info().Int("promote_at", p.PromoteAt).Int("user_signals_at", p.UserSignalsAt).
+					Int("working_set", p.WorkingSet).
 					Float64("rank_recency", p.Rank.Recency).Float64("rank_cwd", p.Rank.Cwd).
 					Float64("rank_profile", p.Rank.Profile).Float64("rank_group", p.Rank.Group).
 					Msg("score policy changed")

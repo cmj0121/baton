@@ -26,9 +26,10 @@ type ScoreConfig struct {
 	// number lives there rather than here. Two is the floor because a tier is earned: at
 	// one an entry would arrive already promoted.
 	//
-	// Tier 3 is not on this knob. It needs a signal that came from the user
-	// rather than from an agent's claim, so no threshold can reach it (#38's
-	// invariant I6).
+	// The top tier is not on this knob. Recurrence alone stops one rung below
+	// it, because it takes a signal that came from the user rather than from an
+	// agent's claim (#38's invariant I6); UserSignalsAt is how many of those it
+	// takes.
 	//
 	// Hyphenated, like every other key in this config: it is the only YAML name
 	// the file had ever spelled with an underscore. It is in no doc, no example
@@ -36,6 +37,24 @@ type ScoreConfig struct {
 	// The JSON side of score.status stays promote_at, which is the proto
 	// convention.
 	PromoteAt int `yaml:"promote-at,omitempty"`
+
+	// UserSignalsAt is how many times the USER must reinforce an entry before it
+	// may climb to tier 3 ("important"). Unset, and anything below two, lands on
+	// the store's default of two; see score.defaultUserSignalsAt for why that is
+	// the number and why it is the smallest one that can be right.
+	//
+	// What counts is the user SAYING THE THING AGAIN: typing a duplicate line
+	// into score.md, submitting a repeat from their own shell, or dispatching a
+	// brief that matches an entry. Correcting a line's wording is not one of them
+	// — an edit is one statement re-spelled rather than a second statement — so a
+	// run of typo fixes cannot walk an entry to the top tier.
+	//
+	// It is a SEPARATE knob from PromoteAt rather than a reuse of it because the
+	// two count different things: PromoteAt counts occurrences from any source,
+	// and this counts only the user's. An entry still has to climb the ordinary
+	// ladder to get there — the user signal lifts the ceiling, it does not skip
+	// a rung.
+	UserSignalsAt int `yaml:"user-signals-at,omitempty"`
 
 	// StalePromoteAt says the file spelled the threshold the OLD way, and exists
 	// for one reason: so the daemon can say the key is being ignored. The YAML
@@ -106,10 +125,15 @@ type ScoreConfig struct {
 // and never granted by config, so a fleet cannot be told to ignore what it has
 // learned is important.
 type RankConfig struct {
-	// Recency is what the most recently reinforced entry is worth. It is the one
+	// Recency is what the most recently touched entry is worth. It is the one
 	// dimension that is not a match: every entry's factor slides linearly between
-	// 1.0 at the oldest last-reinforcement position in the event log and this
-	// weight at the newest.
+	// 1.0 at the oldest position in the event log and this weight at the newest.
+	//
+	// TOUCHED rather than reinforced, which matters if you are tuning this to
+	// promote what the fleet is actually working on. An entry's position moves on
+	// its submission, on every reinforcement, and on an operator editing its line
+	// — and an edit counts no reinforcement, so a line you reworded ranks as
+	// fresh without having earned anything. See score.Store.lastAt.
 	//
 	// A POSITION, not a time. Nothing in the ranking reads a clock (invariant
 	// I5), so a laptop that slept for a week or an NTP correction cannot reorder

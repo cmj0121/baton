@@ -261,10 +261,19 @@ func (s *Server) panelContext(id string) (ctx score.Context, found bool) {
 // that did not is the operator's cockpit, which has no panel row and therefore
 // records none of the three. The store refuses plainly when
 // disabled (nil), and that refusal is the whole disabled story: no flag here.
+//
+// The source it stamps is what the top tier turns on (invariant I6), so it must
+// never be a CLAIM: an agent that could say "the user told me this" could
+// promote anything it liked. cc.self is the discriminator because it is
+// injected into the panel's environment by the daemon and declared on hello,
+// which is a fact about the connection rather than a field the submitter fills
+// in. The ROLE fence cannot serve — BATON_ROLE reaches the conductor panel
+// alone, so an ordinary worker panel's connection is unfenced and would look
+// like a cockpit.
 func (s *Server) scoreSubmit(cc *clientConn, cmd proto.Command) {
-	prov := score.Provenance{Source: "user"}
+	prov := score.Provenance{Source: score.SourceUser}
 	if cc.self != "" {
-		prov = score.Provenance{Source: "agent", SourcePanel: cc.self}
+		prov = score.Provenance{Source: score.SourceAgent, SourcePanel: cc.self}
 		// Through panelContext, which is where a dispatch reads the same three
 		// properties: an entry's recorded cwd and a dispatch's cwd have to come
 		// from one reader or they can never be equal. See panelContext.
@@ -391,10 +400,10 @@ func (s *Server) scoreList(cc *clientConn, cmd proto.Command) {
 // the entry and the policy. Whichever it was, score.list carries the same answer
 // per entry as a Standing.
 //
-// promote_at, working_set and rank are the tuning actually in force, which is
-// not the same as what the config file says: all of them reload on SIGHUP, all
-// of them are clamped, and a config that failed to parse leaves the running
-// values alone. An operator retuning them has no other way to confirm the
+// promote_at, user_signals_at, working_set and rank are the tuning actually in
+// force, which is not the same as what the config file says: all of them reload
+// on SIGHUP, all of them are clamped, and a config that failed to parse leaves
+// the running values alone. An operator retuning them has no other way to confirm the
 // daemon took the change, and a knob whose effect cannot be observed is one
 // they cannot trust (invariant I8). rank matters most of the three, because a
 // weight of 1.0 is indistinguishable in a score.list breakdown from a dimension
@@ -424,31 +433,33 @@ func (s *Server) scoreStatus() json.RawMessage {
 		rank = &r
 	}
 	return scoreJSON(struct {
-		Enabled    bool        `json:"enabled"`
-		Available  bool        `json:"available"`
-		Unlocked   bool        `json:"unlocked,omitempty"`
-		Reason     string      `json:"reason,omitempty"`
-		Entries    int         `json:"entries"`
-		Rendered   int         `json:"rendered"`
-		Oversized  int         `json:"oversized"`
-		BlockFull  bool        `json:"block_full,omitempty"`
-		PromoteAt  int         `json:"promote_at,omitempty"`
-		WorkingSet int         `json:"working_set,omitempty"`
-		Rank       *score.Rank `json:"rank,omitempty"`
-		Dir        string      `json:"dir,omitempty"`
+		Enabled       bool        `json:"enabled"`
+		Available     bool        `json:"available"`
+		Unlocked      bool        `json:"unlocked,omitempty"`
+		Reason        string      `json:"reason,omitempty"`
+		Entries       int         `json:"entries"`
+		Rendered      int         `json:"rendered"`
+		Oversized     int         `json:"oversized"`
+		BlockFull     bool        `json:"block_full,omitempty"`
+		PromoteAt     int         `json:"promote_at,omitempty"`
+		UserSignalsAt int         `json:"user_signals_at,omitempty"`
+		WorkingSet    int         `json:"working_set,omitempty"`
+		Rank          *score.Rank `json:"rank,omitempty"`
+		Dir           string      `json:"dir,omitempty"`
 	}{
-		Enabled:    s.scoreState.Enabled,
-		Available:  s.scoreState.available(),
-		Unlocked:   v.Unlocked,
-		Reason:     s.scoreState.reason(),
-		Entries:    v.Total,
-		Rendered:   len(v.Entries),
-		Oversized:  v.Health.Oversized,
-		BlockFull:  v.BlockFull,
-		PromoteAt:  v.Policy.PromoteAt,
-		WorkingSet: v.Policy.WorkingSet,
-		Rank:       rank,
-		Dir:        s.scoreState.Store.Dir(),
+		Enabled:       s.scoreState.Enabled,
+		Available:     s.scoreState.available(),
+		Unlocked:      v.Unlocked,
+		Reason:        s.scoreState.reason(),
+		Entries:       v.Total,
+		Rendered:      len(v.Entries),
+		Oversized:     v.Health.Oversized,
+		BlockFull:     v.BlockFull,
+		PromoteAt:     v.Policy.PromoteAt,
+		UserSignalsAt: v.Policy.UserSignalsAt,
+		WorkingSet:    v.Policy.WorkingSet,
+		Rank:          rank,
+		Dir:           s.scoreState.Store.Dir(),
 	})
 }
 

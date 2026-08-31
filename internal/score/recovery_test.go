@@ -298,8 +298,13 @@ func TestReconcileReword(t *testing.T) {
 	if len(got.Aliases) != 1 || got.Aliases[0] != "run the tests" {
 		t.Fatalf("aliases = %v, want the superseded wording kept for folding", got.Aliases)
 	}
-	if got.Reinforcements != 1 {
-		t.Fatalf("reinforcements = %d, want the edit counted as a user signal", got.Reinforcements)
+	// A correction is not a repetition, so neither counter moves — see the reword
+	// branch of reconcileLocked. Everything else about the reword still happens.
+	if got.Reinforcements != 0 || got.UserSignals != 0 {
+		t.Fatalf("entry = %+v, want a reword to count nothing", got)
+	}
+	if got.Tier != 1 {
+		t.Fatalf("tier = %d, want the reword to have earned nothing", got.Tier)
 	}
 	if got.Provenance.SourcePanel != "p1" {
 		t.Fatalf("provenance = %+v, want the original submitter kept", got.Provenance)
