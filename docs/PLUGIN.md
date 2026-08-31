@@ -176,18 +176,41 @@ baton.on("task.pre", function(t)
 end)
 ```
 
-The hook receives a `{ prompt, group }` table and returns one of:
+The hook receives a `{ prompt, group, score, cwd, profile, panel }` table — the brief plus the context it rides with:
 
-| Return                      | Effect                                               |
-| --------------------------- | ---------------------------------------------------- |
-| `nil` / nothing / `true`    | pass the brief through unchanged                     |
-| a string                    | rewrite the prompt to that string                    |
-| `{ prompt = "…" }`          | rewrite the prompt                                   |
-| `false` / `{ drop = true }` | veto — the task is dropped, the caller gets an error |
+| Field     | Holds                                                                                                           |
+| --------- | --------------------------------------------------------------------------------------------------------------- |
+| `prompt`  | the brief's text — the one field every intake point carries                                                     |
+| `group`   | the group the task targets; empty when it targets none                                                          |
+| `score`   | the rendered score block a dispatch would inject; empty when there is none — a queued task carries no score yet |
+| `cwd`     | the working directory the task will land in; empty at enqueue time                                              |
+| `profile` | the agent profile of the target panel; empty at enqueue time                                                    |
+| `panel`   | the id of the panel the brief will be delivered to; empty at enqueue time                                       |
 
-Hooks **chain** (a later hook sees the earlier one's rewrite) and the **first veto stops the chain**. It runs at the
+`prompt` and `score` are the two fields a hook may rewrite; the rest are read-only context. The return contract is
+**backward compatible** — a hook written before `score` existed keeps its exact old meaning:
+
+| Return                      | Effect                                                                                                        |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `nil` / nothing / `true`    | pass the brief through unchanged (prompt **and** score)                                                       |
+| a string                    | rewrite the prompt **only**; the score is untouched                                                           |
+| a table                     | may set `prompt`, `drop`, and `score` — `score = ""` drops the score block, an absent key leaves it untouched |
+| `false` / `{ drop = true }` | veto — the task is dropped, the caller gets an error                                                          |
+
+A table's `score` value must be a string; any other type is ignored. Hooks **chain over both fields** (a later hook
+sees the earlier one's rewrite of prompt and score alike) and the **first veto stops the chain**. It runs at the
 `dispatch`, `dispatch-group`, and `enqueue` intake points; plugin-originated dispatches bypass it, so it never re-enters
 itself.
+
+The `score` field is fed by Score, the fleet-scope memory
+([#37](https://github.com/cmj0121/baton/issues/37), in development) — until it ships, the field simply rides empty.
+Stripping the block for one group is a one-line table return:
+
+```lua
+baton.on("task.pre", function(t)
+  if t.group == "scratch" then return { score = "" } end  -- this group works without fleet memory
+end)
+```
 
 `task.pre` is **fail-open** by contract: no hook, a throwing hook, or a hook that runs past the timeout all leave the
 brief unchanged. The filter blocks the dispatch on the single Lua worker, so a slow hook is bounded — past the deadline
