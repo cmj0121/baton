@@ -27,8 +27,11 @@ func startScoredServer(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	t.Cleanup(func() { _ = ln.Close() })
-	go func() { _ = server.New(ln, server.WithScore(st)).Serve() }()
+	t.Cleanup(func() { _ = ln.Close(); st.Close() })
+	// The store and the config knob are separate states on the wire (score.status
+	// reports both), so a server standing in for a healthy daemon declares both.
+	state := server.ScoreState{Store: st, Enabled: true}
+	go func() { _ = server.New(ln, server.WithScore(state)).Serve() }()
 	return sock
 }
 
@@ -71,17 +74,20 @@ func TestScoreRoundtrip(t *testing.T) {
 		t.Fatalf("status: %v", err)
 	}
 	var got struct {
-		Enabled  bool   `json:"enabled"`
-		Entries  int    `json:"entries"`
-		Rendered int    `json:"rendered"`
-		Dir      string `json:"dir"`
+		Enabled   bool   `json:"enabled"`
+		Available bool   `json:"available"`
+		Reason    string `json:"reason"`
+		Entries   int    `json:"entries"`
+		Rendered  int    `json:"rendered"`
+		Dir       string `json:"dir"`
 	}
 	if err := json.Unmarshal([]byte(st), &got); err != nil {
 		t.Fatalf("ScoreStatus should be a JSON object, got %q: %v", st, err)
 	}
 	// entries counts what is on disk, rendered what the fleet would be told —
-	// equal here, and rendered is what score.list answered with.
-	if !got.Enabled || got.Entries != 1 || got.Rendered != len(entries) || got.Dir == "" {
+	// equal here, and rendered is what score.list answered with. A running store
+	// is on AND available, and has no reason to give.
+	if !got.Enabled || !got.Available || got.Reason != "" || got.Entries != 1 || got.Rendered != len(entries) || got.Dir == "" {
 		t.Fatalf("status should report the running store, got %+v (list has %d)", got, len(entries))
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -57,9 +58,7 @@ func TestOpenSeedsHeaderOnFirstRun(t *testing.T) {
 	if perm := di.Mode().Perm(); perm&0o077 != 0 {
 		t.Errorf("dir perm = %o, want group/other bits clear", perm)
 	}
-	if _, err := s.Submit("the first real note", Provenance{Source: "user"}); err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
+	submit(t, s, "the first real note")
 	for _, name := range []string{scoreMD, scoreJSON, scoreEvents} {
 		fi, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
@@ -162,7 +161,7 @@ func TestSubmitAppendsAllThreeFiles(t *testing.T) {
 	if snap.Schema != Schema {
 		t.Errorf("snapshot schema = %d, want %d", snap.Schema, Schema)
 	}
-	if got := snap.Entries[e.Id]; got != e {
+	if got := snap.Entries[e.Id]; !reflect.DeepEqual(got, e) {
 		t.Errorf("snapshot entry = %+v, want %+v", got, e)
 	}
 	if _, err := os.Stat(filepath.Join(dir, scoreJSON+".tmp")); !os.IsNotExist(err) {
@@ -286,9 +285,7 @@ func TestLoadSanitisesOperatorEdits(t *testing.T) {
 	}
 
 	// Reconcile is the runtime re-read, and must scrub on that path too.
-	if err := s.Reconcile(); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	reconcile(t, s)
 	if got := s.Render(Context{})[0].Text; strings.ContainsRune(got, 0x1b) {
 		t.Errorf("Reconcile reloaded a raw escape: %q", got)
 	}
@@ -334,6 +331,7 @@ func TestSeedNeverReachesABrief(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, scoreJSON)); err != nil && !os.IsNotExist(err) {
 		t.Fatalf("remove snapshot: %v", err)
 	}
+	s.Close() // one writer per directory; hand the claim over
 	re, err := Open(dir)
 	if err != nil {
 		t.Fatalf("reopen without a snapshot: %v", err)
@@ -345,9 +343,7 @@ func TestSeedNeverReachesABrief(t *testing.T) {
 		t.Fatalf("a lost snapshot resurrected the seed into a brief: %q", got)
 	}
 
-	if _, err := re.Submit("real memory", Provenance{Source: "user"}); err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
+	submit(t, re, "real memory")
 	got := re.RenderBlock(Context{Panel: "p1"})
 	if want := "── Score ──\n- real memory [noted]\n───────────\n"; got != want {
 		t.Fatalf("RenderBlock:\n got: %q\nwant: %q", got, want)
@@ -360,11 +356,9 @@ func TestSubmitSurvivesReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	e, err := s.Submit("persisted", Provenance{Source: "user"})
-	if err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
+	e := submit(t, s, "persisted")
 
+	s.Close()
 	re, err := Open(dir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
@@ -373,7 +367,7 @@ func TestSubmitSurvivesReopen(t *testing.T) {
 	if len(entries) != 1 { // the seeded header lines are not entries
 		t.Fatalf("entries after reopen = %d, want 1", len(entries))
 	}
-	if got := entries[0]; got != e {
+	if got := entries[0]; !reflect.DeepEqual(got, e) {
 		t.Errorf("reopened entry = %+v, want %+v", got, e)
 	}
 	if re.Len() != 1 {
@@ -404,9 +398,7 @@ func TestSubmitConcurrent(t *testing.T) {
 	if got != renderLimit {
 		t.Fatalf("Render returned %d entries, want the render limit %d", got, renderLimit)
 	}
-	if err := s.Reconcile(); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	reconcile(t, s)
 }
 
 func TestRender(t *testing.T) {
@@ -460,7 +452,7 @@ func TestRenderEmptyAndDisabled(t *testing.T) {
 	if got := disabled.RenderBlock(Context{}); got != "" {
 		t.Errorf("disabled RenderBlock = %q, want empty", got)
 	}
-	if err := disabled.Reconcile(); err != nil {
+	if _, err := disabled.Reconcile(); err != nil {
 		t.Errorf("disabled Reconcile = %v, want nil", err)
 	}
 	if _, err := disabled.Submit("x", Provenance{}); err == nil {
@@ -471,32 +463,19 @@ func TestRenderEmptyAndDisabled(t *testing.T) {
 	}
 }
 
+// TestRenderBlockWording checks the tier wording of the injected block. The
+// entries are planted straight into the store rather than through the files:
+// no tier above 1 can be reached through the API until R3 promotes one, and
+// score.json is a cache R1 never reads back, so the files cannot express this
+// state at all. The seam under test is the rendering, not how a tier is earned.
 func TestRenderBlockWording(t *testing.T) {
-	// Tiers cannot be set through the S0 API, so plant them via the files: text
-	// and order from score.md, tiers from the snapshot.
-	dir := t.TempDir()
-	md := "- [aaaaaa] first\n- [bbbbbb] second\n- [cccccc] third\n- [dddddd] off the scale\n"
-	if err := os.WriteFile(filepath.Join(dir, scoreMD), []byte(md), 0o600); err != nil {
-		t.Fatalf("write score.md: %v", err)
-	}
-	snap := snapshot{Schema: Schema, Entries: map[string]Entry{
-		"aaaaaa": {Id: "aaaaaa", Tier: 1},
-		"bbbbbb": {Id: "bbbbbb", Tier: 2},
-		"cccccc": {Id: "cccccc", Tier: 3},
-		"dddddd": {Id: "dddddd", Tier: 9},
+	s := &Store{entries: []Entry{
+		{Id: "aaaaaa", Text: "first", Tier: 1},
+		{Id: "bbbbbb", Text: "second", Tier: 2},
+		{Id: "cccccc", Text: "third", Tier: 3},
+		{Id: "dddddd", Text: "off the scale", Tier: 9},
 	}}
-	data, err := json.Marshal(snap)
-	if err != nil {
-		t.Fatalf("marshal snapshot: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, scoreJSON), data, 0o600); err != nil {
-		t.Fatalf("write score.json: %v", err)
-	}
 
-	s, err := Open(dir)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
 	got := s.RenderBlock(Context{Panel: "p1"})
 	want := "── Score ──\n" +
 		"- first [noted]\n" +
@@ -515,10 +494,7 @@ func TestReinforce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	e, err := s.Submit("reinforce me", Provenance{Source: "user"})
-	if err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
+	e := submit(t, s, "reinforce me")
 
 	if err := s.Reinforce(e.Id, "agent"); err != nil {
 		t.Fatalf("Reinforce: %v", err)
@@ -530,7 +506,8 @@ func TestReinforce(t *testing.T) {
 		t.Error("Reinforce of unknown id succeeded, want error")
 	}
 
-	// Counter persisted via the snapshot, tier untouched (S0: no promotion).
+	// The counter is replayed from the log, tier untouched (S0: no promotion).
+	s.Close()
 	re, err := Open(dir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
@@ -579,9 +556,7 @@ func TestReconcilePicksUpOperatorEdits(t *testing.T) {
 		t.Fatalf("write score.md: %v", err)
 	}
 
-	if err := s.Reconcile(); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	reconcile(t, s)
 	entries := s.Render(Context{})
 	if len(entries) != 1 { // the handwritten line; the header is not an entry
 		t.Fatalf("entries after reconcile = %d, want 1", len(entries))
@@ -594,15 +569,18 @@ func TestReconcilePicksUpOperatorEdits(t *testing.T) {
 		t.Errorf("Reconcile rewrote score.md:\n got: %q\nwant: %q", got, md)
 	}
 
-	// Operator deletes the whole file: the store empties, no error.
+	// The whole FILE going missing is not an edit — see projectLocked. The store
+	// writes it back rather than reading it as "delete everything"; emptying the
+	// file, which TestReconcileDeletedLine covers, is the statement that retires.
 	if err := os.Remove(filepath.Join(dir, scoreMD)); err != nil {
 		t.Fatalf("remove score.md: %v", err)
 	}
-	if err := s.Reconcile(); err != nil {
-		t.Fatalf("Reconcile after delete: %v", err)
+	reconcile(t, s)
+	if got := s.Render(Context{}); len(got) != 1 || got[0].Id != "abc123" {
+		t.Errorf("entries after deleting score.md = %v, want the entry re-projected", got)
 	}
-	if got := s.Render(Context{}); got != nil {
-		t.Errorf("entries after deleting score.md = %v, want nil", got)
+	if got := readFile(t, dir, scoreMD); !strings.Contains(got, "- [abc123] handwritten wisdom") {
+		t.Errorf("score.md was not re-projected:\n%s", got)
 	}
 }
 
@@ -650,7 +628,7 @@ func TestTornEventLogTailTolerated(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, scoreMD), []byte("- [abc123] present\n"), 0o600); err != nil {
 		t.Fatalf("write score.md: %v", err)
 	}
-	torn := `{"schema":1,"event":"submitted","id":"abc123","at":"2026-08-30T00:00:00Z"}` + "\n" +
+	torn := `{"schema":1,"event":"submitted","id":"abc123","at":"2026-08-30T00:00:00Z","text":"present","provenance":{"source":"user"}}` + "\n" +
 		`{"schema":1,"event":"subm` // crash mid-append, no newline
 	if err := os.WriteFile(filepath.Join(dir, scoreEvents), []byte(torn), 0o600); err != nil {
 		t.Fatalf("write events: %v", err)
@@ -660,9 +638,7 @@ func TestTornEventLogTailTolerated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open with torn log tail: %v", err)
 	}
-	if _, err := s.Submit("after the tear", Provenance{Source: "user"}); err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
+	submit(t, s, "after the tear")
 
 	// The new event landed on its own line; only the torn line stays broken.
 	lines := strings.Split(strings.TrimSuffix(readFile(t, dir, scoreEvents), "\n"), "\n")

@@ -411,12 +411,12 @@ type Server struct {
 	// once in New, then read without a lock — like writeInput above.
 	pidOf func(id string) int
 
-	// score is the fleet memory (internal/score) rendered into directly
-	// dispatched briefs and served over the score.* verbs. Nil is the disabled
-	// store — the score package renders nothing and refuses mutations plainly on
-	// nil — so the server holds no enabled flag of its own. Set once in New,
-	// then read without a lock, like writeInput above.
-	score *score.Store
+	// scoreState is the fleet memory (internal/score): the store whose entries are
+	// rendered into directly dispatched briefs and served over the score.* verbs,
+	// what the config asked for, why no store is running when none is, and whether
+	// score.md has become unreadable. Held as one value because those are four
+	// readings of one subsystem — see scoreState.
+	scoreState scoreState
 
 	// Ephemeral diff panels. ephemeral is the set of live "diff:<n>" ids spawned
 	// as PTYs but deliberately kept out of s.panels/s.specs, so persistence
@@ -567,13 +567,68 @@ func WithQueue(max, concurrency int) Option {
 	}
 }
 
+// ScoreState is everything the server is TOLD about the fleet memory: the store
+// itself, what the config asked for, and why no store is running when none is.
+//
+// The three travel together in one value on purpose. They were briefly two
+// options, and every caller then had to remember to pass both — a server given
+// a live store and no state answered score.status with `enabled:false,
+// available:true`, which is not a state that exists. One option makes the
+// contradiction unrepresentable rather than merely discouraged, which matters
+// because #41-#46 all wire this.
+type ScoreState struct {
+	Store   *score.Store // nil when no store is running
+	Enabled bool         // the score.enabled config knob
+	Reason  string       // why Store is nil; empty when it opened normally
+}
+
+// scoreState is what the server HOLDS: the option's value, kept whole rather
+// than dissolved into loose fields two readers re-correlate by hand, plus the
+// fourth reading of the same subsystem — whether score.md has stopped being
+// readable. That one lives here because it belongs to the same answer: a store
+// that opened fine and whose file has since become a directory is `available`
+// with no reason to report, while the operator's edits sit inert. Invariant I8
+// is precisely that they must not have to read the daemon log to find out.
+//
+// It is a distinct type from ScoreState because the latch is an atomic — every
+// connection's command loop reads it — and an atomic cannot ride a value
+// callers construct and copy.
+type scoreState struct {
+	ScoreState
+	failing atomic.Bool // score.md could not be read on the last attempt
+}
+
+// available reports that a store is running. It is not the same question as
+// "is the fleet memory healthy" — see reason.
+func (st *scoreState) available() bool { return st.Store != nil }
+
+// reason is why the fleet memory is not doing its job, phrased for whoever
+// asked, and empty when it is. It answers for both the store that never opened
+// and the score.md that has stopped being readable, because to the operator
+// those are one question.
+func (st *scoreState) reason() string {
+	switch {
+	case st.Store == nil && st.Reason != "":
+		return st.Reason
+	case st.Store == nil:
+		return "score is disabled"
+	case st.failing.Load():
+		return "score.md cannot be read; serving the last view the store did read"
+	default:
+		return ""
+	}
+}
+
 // WithScore hands the server the fleet-memory store whose entries are injected
-// into directly dispatched briefs and served over the score.* verbs. A nil
-// store is the disabled subsystem — the score package treats nil as the
-// disabled store — so the caller decides enabled/disabled by what it passes and
-// the server never re-asks the config.
-func WithScore(st *score.Store) Option {
-	return func(s *Server) { s.score = st }
+// into directly dispatched briefs and served over the score.* verbs, together
+// with why it is absent when it is. A nil Store is the subsystem not running;
+// Enabled and Reason are what let score.status and score.submit tell "switched
+// off" apart from "unavailable" instead of answering both with a bare
+// "disabled". The server never re-asks the config.
+func WithScore(st ScoreState) Option {
+	return func(s *Server) {
+		s.scoreState.ScoreState = st
+	}
 }
 
 // UsageDisplay is how the frontends should present the window: the fractions of
