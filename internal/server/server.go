@@ -1871,6 +1871,38 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	}
 	switch cmd.Action {
 	case "hello":
+		// A hello may ADD fences and may never drop one.
+		//
+		// Everything a hello declares is a fence input: roleConductor gates
+		// guardConductor, and self gates self-targeting and the score source. Both
+		// were re-assignable on a live connection, so a peer could greet as
+		// conductor panel 5, send a second hello with no role and no self, and
+		// walk out of the conductor fence on a connection the daemon had already
+		// admitted — demonstrated against a running daemon, where task.drain was
+		// refused before the re-hello and allowed after.
+		//
+		// Refusing every second hello would have been simpler, but a connection
+		// legitimately greets plain and then declares what it is. The rule that
+		// covers both is monotonic: a role or a self, once set, is what this
+		// connection is for the rest of its life. Setting one from empty is only
+		// ever a restriction — a conductor is fenced where a cockpit is not, and a
+		// declared self can be refused self-targeting and is stamped as an agent
+		// rather than as the user (see connProvenance) — so the direction that
+		// adds them needs no guard, and the direction that removes them has none
+		// to offer.
+		if cc.greeted && (weakens(cc.role, cmd.Role) || weakens(cc.self, cmd.Self)) {
+			// Said out loud. A peer trying to shed a fence it already declared is
+			// either a broken client or the thing this guard exists for, and an
+			// operator can act on neither if the connection just disappears. It is
+			// also the only server-side check standing between an agent panel and
+			// the top tier (see connProvenance), which makes a silent drop here the
+			// one this daemon can least afford.
+			log.Warn().Str("role", cc.role).Str("self", cc.self).
+				Str("wanted_role", cmd.Role).Str("wanted_self", cmd.Self).
+				Msg("dropping a connection that tried to re-declare its role or panel")
+			send(cc, goodbye("hello: this connection has already declared its role and panel"))
+			return
+		}
 		// A cockpit that reached this daemon over the ssh bridge declares
 		// roleRemote and carries the passkey. Refuse it here, before it can send a
 		// single other command, and tell it why on the way out.
@@ -2097,7 +2129,15 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		// known here, so the brief carries its context and the rendered score block
 		// — the one path that injects fleet memory (#39).
 		s.dispatchFiltered(cc, s.dispatchBrief(cmd.ID, cmd.Prompt), func(b TaskBrief) error {
-			return s.dispatchScored(cmd.ID, b.Prompt, b.Score, cmd.Submit)
+			if err := s.dispatchScored(cmd.ID, b.Prompt, b.Score, cmd.Submit); err != nil {
+				return err
+			}
+			// Only now: a brief the hook chain vetoed or the delivery refused never
+			// reached an agent, and #38 §4's signal is the user telling the FLEET
+			// something. cmd.Prompt rather than b.Prompt, because a hook's rewrite
+			// is the plugin author's words and not the user's; see scoreSignal.
+			s.scoreSignal(cc, cmd.Prompt)
+			return nil
 		})
 	case "panel.dispatch-group":
 		// Fan one task to every member of a work item — the mechanic behind racing N
@@ -2332,6 +2372,13 @@ func (s *Server) createPanel(kind, path string, args []string, dir, profile stri
 	// those are not the fleet, so they are not the transcript either.
 	s.autoLog(id, profile)
 	return id, nil
+}
+
+// weakens reports whether re-declaring a hello field as want would drop or
+// change what the connection already said it was. Empty is "not declared", so
+// filling one in is allowed and everything else is not.
+func weakens(have, want string) bool {
+	return have != "" && have != want
 }
 
 // hasConductorLocked reports whether a conductor panel already exists or is mid-

@@ -694,6 +694,7 @@ func Load() (Config, error) {
 		Score struct {
 			StalePromoteAt any            `yaml:"promote_at"`
 			PromoteAt      any            `yaml:"promote-at"`
+			UserSignalsAt  any            `yaml:"user-signals-at"`
 			WorkingSet     any            `yaml:"working-set"`
 			Rank           map[string]any `yaml:"rank"`
 		} `yaml:"score"`
@@ -701,8 +702,9 @@ func Load() (Config, error) {
 	_ = yaml.Unmarshal(data, &loose)
 	c.Score.StalePromoteAt = loose.Score.StalePromoteAt != nil
 	c.Score.BadNumbers = badNumbers(map[string]any{
-		"score.promote-at":  loose.Score.PromoteAt,
-		"score.working-set": loose.Score.WorkingSet,
+		"score.promote-at":      loose.Score.PromoteAt,
+		"score.user-signals-at": loose.Score.UserSignalsAt,
+		"score.working-set":     loose.Score.WorkingSet,
 	}, loose.Score.Rank)
 	if perr != nil {
 		return c, fmt.Errorf("parse config %s: %w", paths.ConfigFile(), perr)

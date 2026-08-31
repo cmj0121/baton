@@ -16,18 +16,19 @@ import (
 // scoreState — and so `status`, the helper below, stays reachable from every
 // test in the package.
 type statusReply struct {
-	Enabled    bool       `json:"enabled"`
-	Available  bool       `json:"available"`
-	Unlocked   bool       `json:"unlocked"`
-	Reason     string     `json:"reason"`
-	Entries    int        `json:"entries"`
-	Rendered   int        `json:"rendered"`
-	Oversized  int        `json:"oversized"`
-	BlockFull  bool       `json:"block_full"`
-	PromoteAt  int        `json:"promote_at"`
-	WorkingSet int        `json:"working_set"`
-	Rank       score.Rank `json:"rank"`
-	Dir        string     `json:"dir"`
+	Enabled       bool       `json:"enabled"`
+	Available     bool       `json:"available"`
+	Unlocked      bool       `json:"unlocked"`
+	Reason        string     `json:"reason"`
+	Entries       int        `json:"entries"`
+	Rendered      int        `json:"rendered"`
+	Oversized     int        `json:"oversized"`
+	BlockFull     bool       `json:"block_full"`
+	PromoteAt     int        `json:"promote_at"`
+	UserSignalsAt int        `json:"user_signals_at"`
+	WorkingSet    int        `json:"working_set"`
+	Rank          score.Rank `json:"rank"`
+	Dir           string     `json:"dir"`
 }
 
 // status runs score.status against s and decodes the reply.
@@ -75,7 +76,7 @@ func TestScoreStatusDistinguishesOffFromUnavailable(t *testing.T) {
 	}{
 		{"running", st, true, "", statusReply{
 			Enabled: true, Available: true, Entries: 0, Rendered: 0,
-			PromoteAt: 3, WorkingSet: 7,
+			PromoteAt: 3, UserSignalsAt: 2, WorkingSet: 7,
 			Rank: score.Rank{Recency: 2, Cwd: 2, Profile: 2, Group: 2}, Dir: dir,
 		}},
 		{"held by another daemon", nil, true, held, statusReply{Enabled: true, Reason: held}},

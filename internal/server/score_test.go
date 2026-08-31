@@ -324,7 +324,7 @@ func TestScoreListAndStatus(t *testing.T) {
 	}{
 		{"enabled", st, statusReply{
 			Enabled: true, Available: true, Entries: 1, Rendered: 1,
-			PromoteAt: 3, WorkingSet: 7,
+			PromoteAt: 3, UserSignalsAt: 2, WorkingSet: 7,
 			Rank: score.Rank{Recency: 2, Cwd: 2, Profile: 2, Group: 2}, Dir: dir,
 		}, 1},
 		{"disabled", nil, statusReply{Reason: "score is disabled"}, 0},

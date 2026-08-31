@@ -54,7 +54,7 @@ func TestScoreLoad(t *testing.T) {
 	if err := paths.EnsureDir(paths.ConfigFile()); err != nil {
 		t.Fatal(err)
 	}
-	yaml := "score:\n  dir: ~/scores\n  enabled: false\n  promote-at: 5\n" +
+	yaml := "score:\n  dir: ~/scores\n  enabled: false\n  promote-at: 5\n  user-signals-at: 4\n" +
 		"  working-set: 3\n  rank:\n    recency: 4\n    cwd: 2.5\n    profile: 1\n    group: 8\n"
 	if err := os.WriteFile(paths.ConfigFile(), []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
@@ -73,6 +73,11 @@ func TestScoreLoad(t *testing.T) {
 	// default belong to score.Policy.clamp, not to the parser.
 	if got.Score.PromoteAt != 5 {
 		t.Errorf("promote_at = %d; want 5", got.Score.PromoteAt)
+	}
+	// The user-signal threshold rides the same way, under the hyphenated spelling
+	// every other key in this file uses.
+	if got.Score.UserSignalsAt != 4 {
+		t.Errorf("user-signals-at = %d; want 4", got.Score.UserSignalsAt)
 	}
 	// So do the ranking knobs, hyphenated like every other key in this file. A
 	// weight of exactly 1 has to survive the parse unchanged, because that is how
@@ -93,7 +98,7 @@ func TestScoreRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	off := false
 	want := Config{Score: ScoreConfig{
-		Dir: "~/scores", PromoteAt: 4, WorkingSet: 5,
+		Dir: "~/scores", PromoteAt: 4, UserSignalsAt: 3, WorkingSet: 5,
 		Rank: RankConfig{Recency: 3, Cwd: 1, Profile: 2, Group: 1.5}, Enabled: &off,
 	}}
 	if err := want.Save(); err != nil {
@@ -111,6 +116,9 @@ func TestScoreRoundTrip(t *testing.T) {
 	}
 	if got.Score.PromoteAt != 4 {
 		t.Errorf("promote_at should round-trip, got %d", got.Score.PromoteAt)
+	}
+	if got.Score.UserSignalsAt != 3 {
+		t.Errorf("user-signals-at should round-trip, got %d", got.Score.UserSignalsAt)
 	}
 }
 

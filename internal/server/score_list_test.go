@@ -334,7 +334,7 @@ func TestScoreStatusOmitsWeightsWithoutAStore(t *testing.T) {
 	if err := json.Unmarshal(reply(t, cc).Score, &raw); err != nil {
 		t.Fatalf("status must be an object: %v", err)
 	}
-	for _, key := range []string{"rank", "working_set", "promote_at"} {
+	for _, key := range []string{"rank", "working_set", "promote_at", "user_signals_at"} {
 		if _, ok := raw[key]; ok {
 			t.Fatalf("status reported %q with no store running: %v", key, raw)
 		}
@@ -362,7 +362,8 @@ func TestScoreStatusReportsTheTuningInForce(t *testing.T) {
 	st, _ := scoreStore(t)
 	s, _ := scoreServer(st)
 
-	if got := status(t, s); got.WorkingSet != 7 || got.Rank != (score.Rank{Recency: 2, Cwd: 2, Profile: 2, Group: 2}) {
+	if got := status(t, s); got.WorkingSet != 7 || got.UserSignalsAt != 2 ||
+		got.Rank != (score.Rank{Recency: 2, Cwd: 2, Profile: 2, Group: 2}) {
 		t.Fatalf("status = %+v, want the package defaults", got)
 	}
 
@@ -370,13 +371,13 @@ func TestScoreStatusReportsTheTuningInForce(t *testing.T) {
 	// has to follow — clamped, which is the number actually in force rather than
 	// the one the file asked for.
 	st.SetPolicy(score.Policy{
-		PromoteAt: 4, WorkingSet: 2,
+		PromoteAt: 4, UserSignalsAt: 5, WorkingSet: 2,
 		Rank: score.Rank{Recency: 3, Cwd: 0.5, Profile: 1, Group: 0},
 	})
 	want := score.Rank{Recency: 3, Cwd: 1, Profile: 1, Group: 2}
 	got := status(t, s)
-	if got.PromoteAt != 4 || got.WorkingSet != 2 || got.Rank != want {
-		t.Fatalf("status = %+v, want promote_at 4, working_set 2 and rank %+v", got, want)
+	if got.PromoteAt != 4 || got.UserSignalsAt != 5 || got.WorkingSet != 2 || got.Rank != want {
+		t.Fatalf("status = %+v, want promote_at 4, user_signals_at 5, working_set 2 and rank %+v", got, want)
 	}
 }
 

@@ -46,11 +46,13 @@ import (
 // event log. Bump it on a breaking change to either shape; a snapshot written
 // with a newer schema is ignored as if corrupt.
 //
-// R1 added `text` and `provenance` to the event and `aliases` to the entry, and
-// R2 added `tier` to the event. All four are appended optional fields — an old
-// line decodes with them zero, and an old reader ignores them — so the version
-// stays 1, for the same reason proto.ProtocolVersion does not move on an
-// appended field. What an appended
+// R1 added `text` and `provenance` to the event and `aliases` to the entry, R2
+// added `tier` to the event, and R4 added `user_signals` to the entry. All of
+// them are appended optional fields — an old line decodes with them zero, and
+// an old reader ignores them — so the version stays 1, for the same reason
+// proto.ProtocolVersion does not move on an appended field. R4's is doubly safe
+// on top of that: score.json is a cache Open never reads back, and the count is
+// rebuilt from the log's own sources at every replay. What an appended
 // field cannot fix is a record that never carried the text at all, and the
 // pre-R1 log is exactly that; replayLocked and reconcileLocked handle it as
 // "text unknown" rather than as an empty entry the file then edits, because
@@ -106,10 +108,15 @@ const maxRankWeight = 1e6
 // that does not match multiplies by one. So one is the floor and the off
 // switch, and clamp is where both those rules live.
 type Rank struct {
-	// Recency is what the NEWEST entry's last reinforcement is worth. It is the
-	// one weight that is not a match/miss: every entry's recency factor is
-	// interpolated linearly between one at the oldest last-reinforcement position
-	// in the log and this weight at the newest. See recencyFactor.
+	// Recency is what the entry the fleet touched most recently is worth. It is
+	// the one weight that is not a match/miss: every entry's recency factor is
+	// interpolated linearly between one at the oldest last-movement position in
+	// the log and this weight at the newest. See recencyFactor.
+	//
+	// Last MOVEMENT, not last reinforcement: an operator's reword moves an
+	// entry's position while counting no reinforcement at all, so a fresh-looking
+	// entry may have earned nothing lately. See Store.lastAt for the full list of
+	// what moves it and noteEventLocked for why the edit is on that list.
 	Recency float64 `json:"recency"`
 	// Cwd, Profile and Group are each worth their weight when the entry's
 	// recorded value for that dimension equals the dispatching panel's, and one
@@ -129,9 +136,23 @@ type Rank struct {
 // together on SIGHUP and are chosen together at Open. A zero field means "not
 // set" and lands on this package's default; see clamp for each.
 type Policy struct {
-	PromoteAt  int
-	WorkingSet int
-	Rank       Rank
+	PromoteAt     int
+	UserSignalsAt int
+	WorkingSet    int
+	Rank          Rank
+}
+
+// ceiling is the highest tier e may currently be raised to: the top of the
+// ladder once the user has said it UserSignalsAt times, and agentEarnedTier
+// until then. It is the ONE place those two constants are chosen between, so
+// invariant I6 is a property of this function rather than of every caller that
+// promotes — and lifting the ceiling for an entry the user has spoken for
+// cannot move any other entry's tier, because nothing here writes one.
+func (p Policy) ceiling(e Entry) int {
+	if e.UserSignals >= p.UserSignalsAt {
+		return maxEarnedTier
+	}
+	return agentEarnedTier
 }
 
 // clamp is the policy a caller's numbers actually become. Every field is
@@ -141,8 +162,9 @@ type Policy struct {
 // that says what it is running.
 func (p Policy) clamp() Policy {
 	return Policy{
-		PromoteAt:  clampPromoteAt(p.PromoteAt),
-		WorkingSet: clampWorkingSet(p.WorkingSet),
+		PromoteAt:     clampPromoteAt(p.PromoteAt),
+		UserSignalsAt: clampUserSignalsAt(p.UserSignalsAt),
+		WorkingSet:    clampWorkingSet(p.WorkingSet),
 		Rank: Rank{
 			Recency: clampWeight(p.Rank.Recency),
 			Cwd:     clampWeight(p.Rank.Cwd),
@@ -258,14 +280,38 @@ const maxBlockRunes = 8000
 //     say so, because a line that silently does nothing is worse than the bug.
 const maxEntryRunes = 300
 
-// maxEarnedTier is the highest tier RECURRENCE can reach. Tier 3 is not
-// reachable from this ladder at all, by construction rather than by arithmetic:
-// invariant I6 says no sequence of agent submissions may reach it, because the
-// top tier is what #37 reserves for the user asking repeatedly, and an agent
-// that can climb there alone can make the fleet reinforce its own wrong
-// conclusion. R4 (#43) adds the user signal that raises the last step; until it
-// does, nothing in the store may promote past this.
-const maxEarnedTier = 2
+// maxEarnedTier is the highest tier ANY path in this package may write. It is
+// the ladder's end: tierWording has no rung above it, so an entry standing
+// above it would render as a rung this build has no words for.
+//
+// Three paths put a number in Entry.Tier — newEntry, reinforceLocked and
+// replayLocked — and each is bounded where it stands. That there are only three
+// is checked rather than remembered: TestEveryTierWriteIsRegistered parses every
+// non-test file in this package and fails on a tier write it does not already
+// know about, so a fourth cannot arrive unnoticed. What it does NOT check is
+// what any of them then does with the number; the behavioural tests are what
+// hold the bound itself.
+const maxEarnedTier = 3
+
+// agentEarnedTier is as high as RECURRENCE alone climbs, and is invariant I6
+// stated as a number.
+//
+// #37 reserves the top rung for the user asking repeatedly, so no run of agent
+// submissions may reach it: an agent that can climb there alone can make the
+// fleet reinforce its own wrong conclusion, which is the failure Score exists
+// to notice rather than to commit. An entry stops here until the user has said
+// it Policy.UserSignalsAt times; see Policy.ceiling, which is the one place the
+// two constants are chosen between.
+//
+// The bound is on the COMPUTED path — reinforceLocked, the only place a raised
+// event is built. replayLocked is bounded by maxEarnedTier instead, and
+// deliberately: a tier is replayed from the log rather than recomputed from the
+// counts, so that the same log yields the same tiers whatever this machine's
+// thresholds say (invariant I1). That is not a hole in I6, because the only
+// thing that ever WRITES a raised event above this rung is a reinforcement the
+// user's own signals unlocked. A log claiming otherwise came from a hand edit,
+// and #38 declines to be a boundary against filesystem access.
+const agentEarnedTier = 2
 
 // maxAliases is how many prior wordings one entry keeps for folding.
 //
@@ -299,6 +345,42 @@ const maxAliases = 8
 // It is a starting point, not a discovery — which is why score.promote-at
 // exists. See ScoreConfig.
 const defaultPromoteAt = 3
+
+// defaultUserSignalsAt is how many USER signals an entry needs before it may
+// climb past agentEarnedTier — how many times the user has to say a thing for
+// #37's "the user asking repeatedly" to be satisfied.
+//
+// Two, and a knob of its own rather than a reuse of score.promote-at, because
+// the two answer different questions: promote-at asks how often an observation
+// must recur before recurrence is evidence, and this asks how many times the
+// user must weigh in before their weighing in is deliberate. One would make it
+// "the user mentioned it", which is not repetition at all; three demands for
+// one thing is rare enough in practice that the top tier would go unused.
+//
+// It counts the user SAYING THE THING AGAIN — a duplicate line in score.md that
+// folds, a repeat submitted from their shell, a brief that matches — and never a
+// correction to a line they already wrote; see the reword branch of
+// reconcileLocked for why an edit is not a repetition.
+//
+// It is deliberately the SMALLEST number that means "more than once", because
+// the count it is compared against can be SHORT — in one place, by at most one
+// occurrence. A byte-identical retype of a just-folded wording is swallowed
+// across a daemon restart, because the boot pass cannot tell an operator who
+// retyped the same bytes from a removal it already owed; that is the only way a
+// user signal genuinely goes missing, and Health.SwallowedRepeats counts it.
+// Two tolerates it — the user says the thing a third time and the entry climbs
+// — where a larger threshold makes them buy the rung twice.
+//
+// The store's other two conservative counts are NOT losses, and are not what
+// this number is sized against. One reconcile pass counting a single
+// reinforcement however many duplicate lines carry the wording is #37's own
+// ruling, settled in R2: recurrence means the observation came back after being
+// recorded, and one paste is one action rather than five hundred returns. And a
+// repeated editor save of one duplicate counting once per save is R2 leaving
+// the judgement here — this issue's answer is that it counts, because a user
+// who saves the same duplicate twice has said it twice, which is the whole
+// question the top tier turns on.
+const defaultUserSignalsAt = 2
 
 // staleWindow is how long after score.md's recorded mtime the fingerprint is
 // distrusted outright.
@@ -338,9 +420,30 @@ const (
 	EventRetired    = "retired"     // an entry left the store
 )
 
+// SourceUser and SourceAgent are the two sources a reinforcement can carry, and
+// the whole of #38 §4's discrimination.
+//
+// They are exported because this package does not make that distinction — the
+// SERVER does, from the connection a command arrived on, and hands the answer
+// here as provenance. Naming them once is what keeps the one string invariant
+// I6 rests on from being spelled differently at the two ends of that hand-off.
+//
+// The distinction lives in the SOURCE and never in the event name. A user
+// submission that folds into an entry emits EventFolded stamped SourceUser, not
+// EventUserSignal, so a rule keyed on the name would miss every user signal
+// that happened to repeat something already stored — which, repetition being
+// the whole point of Score, is the case that matters most.
+const (
+	SourceUser  = "user"
+	SourceAgent = "agent"
+)
+
 // sourceRecovery stamps an event the recovery pass emitted on nobody's behalf,
-// so replay can tell it from an operator's edit. Only "user" counts as the
-// signal invariant I6 guards; every other source is bookkeeping.
+// so the history shows it as the machine's bookkeeping rather than as something
+// the operator did. Nothing branches on it any more — an `edited` event moves no
+// counter whatever its source — but the log is read by people, and an adoption
+// attributed to the operator would be the history telling them they wrote
+// something they did not.
 const sourceRecovery = "recovery"
 
 // seedHeader is what an ABSENT score.md is written back as: comment lines that
@@ -353,10 +456,18 @@ const sourceRecovery = "recovery"
 // "demo: …" back into every agent's brief. Lines that parseLine already skips
 // need no flag, no cache, and no rebuild rule that a later issue has to
 // remember: they cannot become entries, because they never were.
+// The last line is the only place an operator learns the one undo the store
+// has. Nothing demotes an entry (#37), so a tier granted in error would look
+// permanent — but deleting a line's id retires that entry and admits its text
+// afresh at tier 1, in a single save, with the old entry's whole history intact
+// in the log (I7). It matters more since R4: the top tier is now reachable, and
+// a brief that coincidentally matched an entry is exactly the kind of promotion
+// an operator wants to take back.
 var seedHeader = []string{
 	"# This file is baton's fleet memory — one entry per line, like:",
 	"#   - [e7f3a2] the agent was asked to gain permission",
 	"# Edit or delete lines freely; anything that is not an entry is ignored.",
+	"# Deleting a line's [id] starts that entry over: same text, back at the bottom.",
 }
 
 // Provenance records where an entry came from, so the ranking can weight an
@@ -379,7 +490,7 @@ type Provenance struct {
 	SourceProfile string `json:"source_profile,omitempty"` // agent profile of that panel
 	SourceCwd     string `json:"source_cwd,omitempty"`     // working directory of that panel
 	SourceGroup   string `json:"source_group,omitempty"`   // fleet group of that panel
-	Source        string `json:"source"`                   // "user" or "agent"
+	Source        string `json:"source"`                   // SourceUser or SourceAgent
 }
 
 // Entry is one remembered note. Its id is a short hex handle (like "e7f3a2")
@@ -388,13 +499,27 @@ type Provenance struct {
 type Entry struct {
 	Id   string `json:"id"`
 	Text string `json:"text"`
-	// Tier is 1 or 2 today, earned by recurrence; the wording each renders with
-	// is in tierWording. The ladder #37 defines goes to 3, but nothing can reach
-	// it until R4 (#43) brings the user signal invariant I6 rests on, and
-	// maxEarnedTier is what holds every path — computed and replayed — to that.
+	// Tier is the earned rung, 1 to maxEarnedTier; the wording each renders with
+	// is in tierWording. Recurrence alone stops at agentEarnedTier — the top rung
+	// is the user's to grant (invariant I6), and Policy.ceiling is where the two
+	// bounds are chosen between.
 	Tier           int        `json:"tier"`
 	Provenance     Provenance `json:"provenance"`
 	Reinforcements int        `json:"reinforcements"` // repeats counted into this entry since it was first said
+	// UserSignals is how many of those reinforcements came from the USER rather
+	// than from an agent — the count Policy.ceiling weighs, and so the only thing
+	// that lets an entry past agentEarnedTier.
+	//
+	// It counts reinforcements and not occurrences, which is #38's glossary
+	// exactly: a user signal IS a reinforcement that originates from the user, so
+	// the submission that created the entry is not one of them however it was
+	// sourced. An entry the user wrote into score.md and never touched again has
+	// said itself once, which is not "repeatedly".
+	//
+	// What counts is Provenance.Source == SourceUser, never the event's NAME: a
+	// user submission that folds emits EventFolded, and keying on EventUserSignal
+	// would miss it. Appended and optional, so the schema stays 1 — see Schema.
+	UserSignals int `json:"user_signals,omitempty"`
 	// Aliases are the entry's prior wordings, newest last, kept so a repeat of a
 	// superseded phrasing still folds into this entry (invariant I4). The list is
 	// deduplicated by folding key and capped at maxAliases.
@@ -509,10 +634,20 @@ type Fold struct {
 	// once, so naming the line that earned it is what keeps Counted readable.
 	Repeat string
 	Prov   Provenance // where that repeat came from: a panel, or the operator's own file
-	// Reinforcements and Tier are where the entry stands AFTER this fold, so the
-	// log line that announces a fold also answers the only question it raises.
+	// Reinforcements, UserSignals and Tier are where the entry stands AFTER this
+	// fold, so the log line that announces a fold also answers the questions it
+	// raises — including the one R4 added, which is how close this entry now is
+	// to the rung only the user can grant.
 	Reinforcements int
+	UserSignals    int
 	Tier           int
+	// At is when the fold happened, which is NOT when it is reported. Every
+	// record but a signal's is buffered for the next read to drain, and that read
+	// is the next dispatch, list or status — seconds or minutes later, or never
+	// if the daemon stops first. A line stamped with its drain time is a line
+	// that misdates the only event it exists to describe, so the moment is
+	// carried rather than taken from the clock at the far end.
+	At time.Time
 	// Duplicates is how many repeats this fold covers — more than one only on the
 	// file path, where a paste can carry the same wording many times. Counted says
 	// whether they moved the entry's counter, which they do not when the store
@@ -529,6 +664,20 @@ type Fold struct {
 	// None is inferable from another.
 	FromFile bool
 	Removed  bool
+	// FromSignal says the repeat arrived through Signal — text MATCHED against
+	// the store rather than offered to it, which today is a brief the user
+	// dispatched. It is the third door and needs a name of its own because
+	// nothing else here separates it from the second: a user's Signal fold and a
+	// user's Submit fold carry the same source and touch no line either way, and
+	// the two are not the same thing to an operator who submitted nothing. #38 §4
+	// accepts that a brief may coincidentally repeat an unrelated entry; that
+	// cost is only bearable while it is VISIBLE, and this is what lets the log
+	// name the door rather than leave it to be inferred.
+	//
+	// It rides the EVENT as well as this record (see event.Signal). A fold record
+	// lives until the next read drains it; the log outlives the daemon, and
+	// "which of my briefs promoted this" is a question asked days later.
+	FromSignal bool
 }
 
 // maxFoldNotes caps the fold records held for the next read to report. Every
@@ -678,10 +827,11 @@ type Ranked struct {
 	Standing Standing `json:"standing"`
 	Active   bool     `json:"active"`
 
-	// at is the entry's last-reinforcement position in the log — the same number
-	// Recency is interpolated from — kept for the tie-break in rankBefore. It is
-	// not on the wire: a raw log ordinal explains nothing an operator can use,
-	// and Factors.Recency already carries the part of it that changes the answer.
+	// at is the entry's last-movement position in the log (see Store.lastAt) — the
+	// same number Recency is interpolated from — kept for the tie-break in
+	// rankBefore. It is not on the wire: a raw log ordinal explains nothing an
+	// operator can use, and Factors.Recency already carries the part of it that
+	// changes the answer.
 	at int
 }
 
@@ -697,11 +847,11 @@ type Ranked struct {
 // consulted. clampWeight is where that is prevented, at the one boundary a NaN
 // can enter through; see its NaN branch.
 //
-// The three keys, in order: rank descending, then last-reinforcement position
+// The three keys, in order: rank descending, then last-movement position
 // descending, then id ascending. Position before id so a tie between two equally
-// ranked entries goes to the one the fleet said most recently, which is the same
-// preference the recency factor states; id last because it is unique, so the
-// order is total there and cannot fall through.
+// ranked entries goes to the one the fleet touched most recently, which is the
+// same preference the recency factor states; id last because it is unique, so
+// the order is total there and cannot fall through.
 //
 // Both tie-break keys are derived from the LOG, never from score.md's line
 // order. The file is the operator's — they can shuffle it in an editor — and
@@ -773,7 +923,7 @@ type event struct {
 	Event  string      `json:"event"`
 	Id     string      `json:"id"`
 	At     time.Time   `json:"at"`
-	Source string      `json:"source,omitempty"`     // who acted ("user"/"agent"); empty otherwise
+	Source string      `json:"source,omitempty"`     // who acted: SourceUser, SourceAgent, or sourceRecovery on nobody's behalf; empty otherwise
 	Text   string      `json:"text,omitempty"`       // the entry's text at submitted/edited, and the repeat's own wording at folded
 	Prov   *Provenance `json:"provenance,omitempty"` // where a submitted entry, or a folded repeat, came from
 	Tier   int         `json:"tier,omitempty"`       // the tier reached, at raised
@@ -793,6 +943,17 @@ type event struct {
 	// field existed decodes with it false and simply seeds nothing — which is
 	// the pre-derivation behaviour, not a wrong one.
 	RemovedLine bool `json:"removed_line,omitempty"`
+	// Signal marks a fold that came through Store.Signal — a brief the user
+	// dispatched — rather than through a submission or a duplicate line.
+	//
+	// Without it the two user-sourced doors are byte-identical in the log, and
+	// the difference is exactly what #38 §4 asks to stay visible: a submission is
+	// something the operator chose to record, and a signal is a coincidence
+	// between their brief and an entry they may never have thought about. Nothing
+	// in the store branches on it — it changes no count and no tier — so it is
+	// evidence rather than state, and an old record decoding with it false says
+	// only that the daemon that wrote it had no signals to distinguish.
+	Signal bool `json:"signal,omitempty"`
 }
 
 // foldEvent records one repeat counted into id. It carries the REPEAT's own text
@@ -807,10 +968,11 @@ type event struct {
 // reinforcement because that is the common case, not because the name is the
 // discriminator — R4's user signal must key on Source (invariant I6), never on
 // the name.
-func foldEvent(id, text string, prov Provenance, at time.Time, removedLine bool) event {
+func foldEvent(id, text string, prov Provenance, at time.Time, removedLine, signal bool) event {
 	return event{
 		Schema: Schema, Event: EventFolded, Id: id, At: at,
-		Source: prov.Source, Text: text, Prov: &prov, RemovedLine: removedLine,
+		Source: prov.Source, Text: text, Prov: &prov,
+		RemovedLine: removedLine, Signal: signal,
 	}
 }
 
@@ -847,11 +1009,20 @@ type Store struct {
 	// SetPolicy are the only writers and both clamp on the way in.
 	policy Policy
 
-	// seq is how many event records the log holds, and lastAt is the position of
-	// each entry's LAST REINFORCEMENT in it — the entry's own submission until
-	// something reinforces it. Together they are the whole of what the ranking
-	// knows about time (invariant I5): a position, never a clock, so a laptop
-	// that slept for a week and an NTP correction cannot reorder a working set.
+	// seq is how many event records the log holds, and lastAt is each entry's
+	// LAST-MOVEMENT position in it: the record that most recently did something
+	// to that entry. Together they are the whole of what the ranking knows about
+	// time (invariant I5): a position, never a clock, so a laptop that slept for
+	// a week and an NTP correction cannot reorder a working set.
+	//
+	// MOVEMENT rather than reinforcement, and the difference is one case. The
+	// records that move it are the submission that created the entry, every
+	// reinforcement, AND an edit the operator made — and since R4 ruled that a
+	// reword counts no reinforcement, that last one moves the position while
+	// leaving both counters alone. So an entry's position is not its
+	// reinforcement count's twin, and reading it as one is wrong in exactly the
+	// case an operator is most likely to be looking at. noteEventLocked holds the
+	// list and says why the edit is on it.
 	//
 	// They are maintained in exactly two places, and the two must agree or a
 	// restart would reorder the fleet's memory: replayLocked counts the records
@@ -1059,6 +1230,22 @@ func (s *Store) Unlocked() bool {
 func clampPromoteAt(n int) int {
 	if n < 2 {
 		return defaultPromoteAt
+	}
+	return n
+}
+
+// clampUserSignalsAt is the user-signal threshold a caller's number actually
+// becomes. Below two — including the zero of a config field nobody set — it
+// falls back to defaultUserSignalsAt.
+//
+// Two is the floor for the reason it is the default: #37 reserves the top tier
+// for the user asking REPEATEDLY, and at one a single signal would grant it, so
+// the knob would be able to say something #37 has no way to mean. There is no
+// upper bound — an operator who wants the top rung to take five demands gets
+// five — which is the asymmetry clampPromoteAt has for the same reason.
+func clampUserSignalsAt(n int) int {
+	if n < 2 {
+		return defaultUserSignalsAt
 	}
 	return n
 }
@@ -1450,7 +1637,7 @@ func (s *Store) Submit(text string, prov Provenance) (Entry, bool, error) {
 		return Entry{}, false, err
 	}
 	if i := s.foldTargetLocked(e.Text); i >= 0 {
-		folded, err := s.foldLocked(i, e.Text, prov)
+		folded, _, err := s.foldLocked(i, e.Text, prov, false)
 		return folded, true, err
 	}
 	stored, err := s.submitLocked(e.Text, prov)
@@ -1735,21 +1922,42 @@ func (s *Store) foldTargetLocked(text string) int {
 	return -1
 }
 
-// reinforceLocked counts ONE reinforcement into e and raises its tier when the
-// count earns one, returning the raised event to append when it did. Every path
-// that counts a repeat — a folded submission, a folded line, an operator's
-// reword, Reinforce — ends here, so the ladder is climbed in one place and a
-// path added later cannot promote by its own rules. The caller holds the lock.
+// reinforceLocked counts ONE reinforcement into e, from source, and raises its
+// tier when the count earns one — returning the raised event to append when it
+// did. Every path that counts a repeat — a folded submission, a folded line, a
+// brief the user dispatched, Reinforce — ends here, so the ladder is climbed in
+// one place and a path added later cannot promote by its own rules. The caller
+// holds the lock.
 //
-// It can never reach tier 3: see maxEarnedTier. It also raises at most one step
-// per reinforcement, so an entry cannot skip a rung by being submitted twenty
-// times at once.
-func (s *Store) reinforceLocked(e *Entry, at time.Time) (event, bool) {
+// A REWORD is deliberately not on that list. Correcting a line's wording is one
+// statement re-spelled rather than a second statement, so it counts nothing; see
+// the reword branch of reconcileLocked.
+//
+// It is also the only place a raised event is built, which is what makes
+// invariant I6 provable rather than merely intended: an entry passes
+// agentEarnedTier exactly when Policy.ceiling says the user has signalled for
+// it, and source is the only thing that moves UserSignals. It raises at most
+// one step per reinforcement, so an entry cannot skip a rung by being submitted
+// twenty times at once — reaching the top therefore costs at least PromoteAt
+// occurrences for the middle rung and one more after it.
+//
+// source is the REINFORCEMENT's, never the entry's: an agent repeating what the
+// user first wrote is an agent signal, and the user repeating what an agent
+// first said is a user one. Any source that is not SourceUser counts toward
+// recurrence and nothing else — which today means an agent's, since the
+// recovery pass never reaches here at all. Its adoption of a wording the log
+// never carried is an `edited` event stamped sourceRecovery and no
+// reinforcement, deliberately: nobody edited anything, and a manufactured user
+// signal is what invariant I6 cannot survive.
+func (s *Store) reinforceLocked(e *Entry, source string, at time.Time) (event, bool) {
 	e.Reinforcements++
+	if source == SourceUser {
+		e.UserSignals++
+	}
 	// Occurrences, not reinforcements: the submission that created the entry is
 	// the first time it was said, and the threshold is stated in the units an
 	// operator counts in. See defaultPromoteAt.
-	if e.Tier >= maxEarnedTier || e.Reinforcements+1 < s.policy.PromoteAt {
+	if e.Tier >= s.policy.ceiling(*e) || e.Reinforcements+1 < s.policy.PromoteAt {
 		return event{}, false
 	}
 	e.Tier++
@@ -1762,29 +1970,44 @@ func (s *Store) reinforceLocked(e *Entry, at time.Time) (event, bool) {
 // removed no line, so it owes none: the event is written with RemovedLine false.
 // The caller holds the lock.
 //
-// The fold is RECORDED as well as counted, on the same buffer the file path
-// uses, so the one log line per fold #38's lifecycle asks for has one producer
-// and one shape. A submission that folded is the mutation an operator cannot see
-// by looking — score.md does not move — which is precisely why it must be said.
-func (s *Store) foldLocked(i int, text string, prov Provenance) (Entry, error) {
+// It serves both of the store's TEXT-matching doors — Submit, where the repeat
+// was offered as an observation, and Signal, where it was only matched — which
+// is what fromSignal names. They differ in nothing but the record they leave,
+// and splitting them would have been two copies of an append, a counter and a
+// fold note for that one field.
+//
+// The fold is RECORDED as well as counted, and the record is RETURNED as well as
+// recorded, because the two doors want it at different moments. A submission's
+// goes on the same buffer the file path uses, for the next read to drain: it is
+// the one shape #38's "one log line per fold" has, with one producer. A signal's
+// is handed straight back instead, and is deliberately not buffered — a brief
+// promoting an entry is the case #38 §4 asks to stay visible, and a line that
+// appears on the NEXT dispatch, stamped with that dispatch's clock and lost
+// entirely if the daemon stops first, is not visibility. The caller logs it on
+// the dispatch that caused it.
+func (s *Store) foldLocked(i int, text string, prov Provenance, fromSignal bool) (Entry, Fold, error) {
 	now := time.Now().UTC()
 	e := s.entries[i]
-	evs := []event{foldEvent(e.Id, text, prov, now, false)}
-	if raised, ok := s.reinforceLocked(&e, now); ok {
+	evs := []event{foldEvent(e.Id, text, prov, now, false, fromSignal)}
+	if raised, ok := s.reinforceLocked(&e, prov.Source, now); ok {
 		evs = append(evs, raised)
 	}
+	var rec Fold
 	if err := s.applyLocked(evs, func() error {
 		s.entries[i] = e
-		s.noteFoldsLocked([]Fold{{
-			Id: e.Id, Text: e.Text, Repeat: text, Prov: prov,
-			Reinforcements: e.Reinforcements, Tier: e.Tier,
-			Duplicates: 1, Counted: true,
-		}})
+		rec = Fold{
+			Id: e.Id, Text: e.Text, Repeat: text, Prov: prov, At: now,
+			Reinforcements: e.Reinforcements, UserSignals: e.UserSignals, Tier: e.Tier,
+			Duplicates: 1, Counted: true, FromSignal: fromSignal,
+		}
+		if !fromSignal {
+			s.noteFoldsLocked([]Fold{rec})
+		}
 		return nil
 	}); err != nil {
-		return Entry{}, err
+		return Entry{}, Fold{}, err
 	}
-	return e, nil
+	return e, rec, nil
 }
 
 // Reinforce bumps an entry's counter and logs who did it: a fold when an agent
@@ -1810,19 +2033,117 @@ func (s *Store) Reinforce(id, source string) error {
 		return fmt.Errorf("score: no entry %q", id)
 	}
 	name := EventFolded
-	if source == "user" {
+	if source == SourceUser {
 		name = EventUserSignal
 	}
 	now := time.Now().UTC()
 	e := s.entries[i]
 	evs := []event{{Schema: Schema, Event: name, Id: id, At: now, Source: source}}
-	if raised, ok := s.reinforceLocked(&e, now); ok {
+	if raised, ok := s.reinforceLocked(&e, source, now); ok {
 		evs = append(evs, raised)
 	}
 	return s.applyLocked(evs, func() error {
 		s.entries[i] = e
 		return nil
 	})
+}
+
+// Signal counts text as a reinforcement of the entry it repeats, and changes
+// nothing at all when it repeats none. It is #38 §4's second source of the user
+// signal: a brief the user dispatched, matched against the store with the same
+// normaliser folding uses.
+//
+// It is Submit's fold half WITHOUT Submit's other half, and that is the whole
+// difference between them. A brief is evidence that something the fleet already
+// remembers still matters; it is not an observation being offered, so text that
+// matches nothing must leave no trace. Reaching for Submit here would fill
+// score.md with one entry per dispatch.
+//
+// prov is the caller's to supply, exactly as Submit's is, and for the reason
+// invariant I6 exists: this package does not know who called it, so a store that
+// stamped SourceUser here on its own authority would be the store deciding the
+// one thing #38 §4 says only the connection can. The server passes what the
+// connection says (see Server.connProvenance) and calls this only for the user's
+// own dispatches.
+//
+// The text is NOT weighed against maxEntryRunes. That cap exists to keep a
+// heavy entry out of every future brief, and Signal admits nothing — a brief
+// longer than any entry simply matches none.
+//
+// It IS scrubbed, though the match would work without it: normalize sanitises on
+// its own. What the scrub is for is everything the text is then kept in — the
+// fold event's own wording, replayed at every boot, and the fold record a server
+// turns into a log line. Submit's fold path hands foldLocked an already-scrubbed
+// Entry.Text, so doing it here is what keeps the two doors recording the same
+// kind of string; see sanitize for what an unscrubbed one costs.
+//
+// What it matches is narrower than "the brief mentions the entry", and the
+// difference matters to anyone judging the risk. normalize is sanitize plus
+// lowercasing plus a trailing-punctuation trim and NOTHING else, so the whole
+// brief must normalise to the whole entry: "table-driven" does not match "table
+// driven", and a brief that quotes two entries verbatim matches neither of them.
+// In practice that means the door fires on short, command-like briefs a person
+// retypes — and essentially never on natural prose. The realistic coincidence is
+// a SHORT entry ("run the tests") reached by two entirely ordinary dispatches,
+// which is why the record below has to name what matched.
+//
+// It returns the fold RECORD rather than the entry, and does not buffer it. A
+// caller logs it on the dispatch that caused it — see foldLocked for why a
+// signal is the one fold that must not wait for the next read. hit reports
+// whether the text folded at all; on a miss the record is zero. The coincidence
+// #38 §4 accepts is reversible the way every reinforcement is: by editing
+// score.md.
+func (s *Store) Signal(text string, prov Provenance) (rec Fold, hit bool, err error) {
+	if s == nil {
+		return Fold{}, false, errDisabled
+	}
+	text = sanitize(text)
+	if text == "" {
+		return Fold{}, false, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Read-reconcile-write, as in Submit and Reinforce, and unconditional for the
+	// reason theirs are: a wording the operator has just deleted must not swallow
+	// this, one they have just typed should match it, and no gate over filesystem
+	// timestamps is exact enough to decide that.
+	//
+	// It is the one mutation path that runs on the DISPATCH path, so it does pay
+	// a re-parse of score.md the render's own gated pass had just skipped. That
+	// is the cost BenchmarkReconcileReparse measures, once per dispatch a person
+	// typed, and the alternative is a fold counted into a line that is no longer
+	// in their file.
+	if _, rerr := s.reconcileNowLocked(); rerr != nil {
+		return Fold{}, false, rerr
+	}
+	i := s.foldTargetLocked(text)
+	if i < 0 {
+		return Fold{}, false, nil
+	}
+	_, folded, ferr := s.foldLocked(i, text, prov, true)
+	return folded, ferr == nil, ferr
+}
+
+// DrainFolds hands back every fold record the store is still holding, and clears
+// them. It is what a caller runs at SHUTDOWN.
+//
+// Fold records are buffered for the next read to drain, which on a running
+// daemon is the next dispatch, list or status. On a stopping one there is no
+// next read: a fold counted seconds before a SIGTERM was durable in the log and
+// yet had no line anywhere, which is #38's "one log line per fold" quietly not
+// happening in the one case an operator is most likely to be investigating.
+// Each record carries its own At, so a line drained here is still stamped with
+// the moment the fold happened rather than with the shutdown.
+//
+// Safe on the disabled (nil) store, like every other method here.
+func (s *Store) DrainFolds() []Fold {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.drainFoldsLocked()
 }
 
 // Refine is the entry-management verb (promote, retire, edit, …).
@@ -1860,9 +2181,10 @@ func (s *Store) Render(ctx Context) []Entry {
 	return entries
 }
 
-// recencySpanLocked is the oldest and newest last-reinforcement positions
-// across every entry the store holds — the two ends recencyFactor interpolates
-// between. The caller holds the lock.
+// recencySpanLocked is the oldest and newest last-movement positions across
+// every entry the store holds — the two ends recencyFactor interpolates between.
+// See Store.lastAt for what a movement is; it is not the same set of records as
+// a reinforcement. The caller holds the lock.
 //
 // The span is taken over ALL entries rather than over the injectable ones the
 // working set is drawn from, so that score.list's numbers and a dispatch's are
@@ -1882,9 +2204,9 @@ func (s *Store) recencySpanLocked() (oldest, newest int) {
 	return oldest, newest
 }
 
-// recencyFactor maps one entry's last-reinforcement position linearly onto
-// [1, w]: the oldest entry in the store gets 1, the newest gets the configured
-// weight, everything between gets its share.
+// recencyFactor maps one entry's last-movement position (see Store.lastAt)
+// linearly onto [1, w]: the oldest entry in the store gets 1, the newest gets
+// the configured weight, everything between gets its share.
 //
 // A POSITION, never a timestamp, which is the whole of invariant I5. The log
 // records times for the person reading the history and nothing ranks on them,
@@ -2350,6 +2672,13 @@ func (s *Store) replayLocked() error {
 		case EventFolded, EventUserSignal:
 			if e := live[ev.Id]; e != nil {
 				e.Reinforcements++
+				// The SOURCE, not the name — see SourceUser. Both event names reach
+				// here and either can carry either source, so counting EventUserSignal
+				// records instead would miss every user submission that folded and
+				// would count an agent's Reinforce as the user's.
+				if ev.Source == SourceUser {
+					e.UserSignals++
+				}
 				// The wording a fold took out of score.md, so the boot pass can
 				// check it against the file — see Store.owed.
 				//
@@ -2376,17 +2705,24 @@ func (s *Store) replayLocked() error {
 			// demoted", because raising the threshold must not quietly pull
 			// entries back down.
 			//
-			// It is bounded by maxEarnedTier, the SAME constant the computed path
-			// obeys, so the ceiling is one fact rather than two that can drift —
-			// which is what makes "tier 3 is unreachable until R4" true of every
-			// way an entry can arrive at a tier, replay included. A raise above it
-			// is IGNORED rather than lowered to it: a record that cannot be true
-			// is not evidence of a smaller true one, so the entry keeps the tier
-			// it earned and this build under-claims rather than lies, as
-			// panel.ParseState does for a state string it does not know. The log
-			// is the operator's own file and #38 declines to be a boundary against
-			// filesystem access, so this guards the constant, not them. R4 lifts
-			// it when it brings the user signal.
+			// It is bounded by maxEarnedTier — the ladder's end — so an entry can
+			// never be rendered at a rung tierWording has no words for. It is one
+			// of the three tier writes TestEveryTierWriteIsRegistered knows about.
+			// It is deliberately NOT bounded by Policy.ceiling,
+			// which is the computed path's bound: ceiling reads a threshold this
+			// machine configures, so replaying through it would give one log two
+			// different sets of tiers on two machines, which is invariant I1
+			// exactly. I6 is not weakened by that, because the only thing that
+			// ever writes a raised event past agentEarnedTier is reinforceLocked
+			// with the user's signals behind it.
+			//
+			// A raise above the bound is IGNORED rather than lowered to it: a
+			// record that cannot be true is not evidence of a smaller true one, so
+			// the entry keeps the tier it earned and this build under-claims
+			// rather than lies, as panel.ParseState does for a state string it
+			// does not know. The log is the operator's own file and #38 declines
+			// to be a boundary against filesystem access, so this guards the
+			// constant, not them.
 			switch e := live[ev.Id]; {
 			case e == nil:
 			case ev.Tier >= 1 && ev.Tier <= maxEarnedTier:
@@ -2400,13 +2736,14 @@ func (s *Store) replayLocked() error {
 			}
 		case EventEdited:
 			if e := live[ev.Id]; e != nil {
+				// The wording changes and NO counter moves, whatever the source —
+				// which is the computed path's rule exactly, so a restart cannot
+				// disagree with the pass that wrote the record. See the reword
+				// branch of reconcileLocked for why an edit counts nothing, and
+				// note that this is also why the recovery pass's own adoption
+				// (sourceRecovery) needs no branch of its own any more: nobody
+				// edited anything there either.
 				reword(e, ev.Text, &s.health.AliasEvictions)
-				// An edit through score.md is itself the user signal #38 §3 asks
-				// for; a conductor reword (R6) carries another source and changes
-				// only the wording.
-				if ev.Source == "user" {
-					e.Reinforcements++
-				}
 			}
 		case EventRetired:
 			delete(live, ev.Id)
@@ -2426,7 +2763,7 @@ func (s *Store) replayLocked() error {
 		}
 	}
 	// Same for its position: an id with no live entry is never ranked, so keeping
-	// its last-reinforcement position would grow the map with the whole log's
+	// its last-movement position would grow the map with the whole log's
 	// history of retirements. A retire deletes the key as it is replayed; this
 	// catches the id whose events arrived in an order no retire closed — a
 	// submission torn away from its own entry, and the ids the recovery table
@@ -2446,7 +2783,8 @@ func (s *Store) replayLocked() error {
 //
 //   - a line whose id is live and whose text is unchanged → nothing happened
 //   - a line whose id is live and whose text changed → superseded: the old
-//     wording becomes an alias and the edit counts as a user signal
+//     wording becomes an alias, and NOTHING is counted — a correction is not a
+//     repetition
 //   - a line whose id is live but whose text the log never carried → the text is
 //     adopted silently: unknown is not "was empty", so it is not an edit and
 //     must not manufacture the user signal I6 rests on
@@ -2546,7 +2884,7 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 		now      = time.Now().UTC()
 		// The provenance of everything score.md contributes: whoever wrote the
 		// line, the store only knows it as the operator's own file.
-		userProv = Provenance{Source: "user"}
+		userProv = Provenance{Source: SourceUser}
 		// bullets are the lines that named no live entry — a plain bullet, or one
 		// repeating an id the pass already placed. Whether each is a repeat of
 		// something else in the file cannot be known until every line has been
@@ -2616,15 +2954,41 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 				e.setText(text)
 				delta.Adopted++
 			case e.Text != text:
+				// Recorded, aliased, and COUNTED AS NOTHING. A reword is not a
+				// repetition: #37's model is that an observation came back after
+				// being recorded, and one statement corrected three times is one
+				// statement said once. R1 and R2 counted it as a reinforcement,
+				// which was harmless while recurrence stopped at agentEarnedTier —
+				// R4 is what turns a typo fix into the currency that unlocks the
+				// top rung, and three ordinary corrections to one line reaching
+				// tier 3 is not what #37 reserves it for.
+				//
+				// What DOES count as the user saying a thing again is the user
+				// saying it again: a duplicate line typed into score.md that folds
+				// below, a `ctl score submit` that folds, and a brief that matches
+				// (Signal). All three are a second statement; this is one statement
+				// re-spelled. The entry keeps the tier it earned, the prior wording
+				// stays an alias (invariant I4), and the edit is in the log either
+				// way (I7).
+				//
+				// What that alias buys is narrower than I4 sounds, and the
+				// narrowing bites on THIS door. A repeat of the old wording folds
+				// when it arrives through Submit or Signal, which match against
+				// aliases; a duplicate LINE carrying the old wording does not,
+				// because the file pass indexes only the wordings the file
+				// currently shows (see newFoldIndex). It is admitted as a second
+				// entry saying the same thing instead. That is the deliberate,
+				// pre-existing rule this table already states above — folding a
+				// file line DELETES it, and deleting the operator's line is only
+				// justified while the file still shows that wording — and R6's
+				// conductor `merge` is what joins the pair. So the operator whose
+				// reword this is may see their old phrasing come back as its own
+				// entry, and nothing here counts that as a repetition either.
 				pending = append(pending, event{
 					Schema: Schema, Event: EventEdited, Id: id, At: now,
-					Source: "user", Text: text,
+					Source: SourceUser, Text: text,
 				})
 				reword(&e, text, &pass.AliasEvictions)
-				if raised, ok := s.reinforceLocked(&e, now); ok {
-					pending = append(pending, raised)
-					delta.Raised++
-				}
 				delta.Superseded++
 			}
 			next = append(next, e)
@@ -2685,8 +3049,8 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 		// keep it the same way: they call this only where the entry's fold record
 		// is not already marked Counted, and they mark it immediately after.
 		countRepeat := func(target int, text string) {
-			pending = append(pending, foldEvent(next[target].Id, text, userProv, now, true))
-			if raised, ok := s.reinforceLocked(&next[target], now); ok {
+			pending = append(pending, foldEvent(next[target].Id, text, userProv, now, true, false))
+			if raised, ok := s.reinforceLocked(&next[target], userProv.Source, now); ok {
 				pending = append(pending, raised)
 				delta.Raised++
 			}
@@ -2749,7 +3113,8 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 				if !folds[at].Counted && countable(next[target].Id, b.text) {
 					countRepeat(target, b.text)
 					folds[at].Counted, folds[at].Repeat = true, b.text
-					folds[at].Reinforcements, folds[at].Tier = next[target].Reinforcements, next[target].Tier
+					folds[at].Reinforcements, folds[at].UserSignals, folds[at].Tier =
+						next[target].Reinforcements, next[target].UserSignals, next[target].Tier
 				}
 				continue
 			}
@@ -2784,9 +3149,9 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 			}
 			folded[target] = len(folds)
 			folds = append(folds, Fold{
-				Id: next[target].Id, Text: next[target].Text, Repeat: b.text, Prov: userProv,
-				Reinforcements: next[target].Reinforcements, Tier: next[target].Tier,
-				Duplicates: 1, Counted: counted, FromFile: true,
+				Id: next[target].Id, Text: next[target].Text, Repeat: b.text, Prov: userProv, At: now,
+				Reinforcements: next[target].Reinforcements, UserSignals: next[target].UserSignals,
+				Tier: next[target].Tier, Duplicates: 1, Counted: counted, FromFile: true,
 			})
 		}
 	}
@@ -3084,20 +3449,37 @@ func (s *Store) writeSnapshotLocked() error {
 // the fleet's memory, and one function called from both is what makes that
 // structural rather than two lists someone keeps in step by hand.
 //
-// The names that move an entry's position are exactly the ones replayLocked
-// counts as a reinforcement — a fold, a user signal, and an edit the OPERATOR
-// made — plus the submission that created the entry, which is where an entry
-// nothing has reinforced yet sits. A `raised` takes a position like every other
-// record but moves nothing: a tier is the CONSEQUENCE of a reinforcement, and
-// counting it as one too would let a single fold that crossed the threshold
-// count twice. A `retired` drops the key, because a retired entry is not
-// ranked and its id is never reissued.
+// The names that move an entry's position are every reinforcement — a fold and
+// a user signal — plus the submission that created the entry, which is where an
+// entry nothing has reinforced yet sits, plus an edit the OPERATOR made.
+//
+// That last one is the only place recency and the reinforcement count disagree,
+// and they are MEANT to: recency is what is current, the count is what was
+// earned. A reword counts nothing (see reconcileLocked) because a correction is
+// not a repetition, and it moves the position anyway.
+//
+// The case that decides it is an operator correcting a WRONG entry. If the edit
+// did not move the position, the corrected text would rank exactly where the
+// wrong text sat — measured on a ten-entry store, that is last, and in no brief
+// at all. The operator would have fixed the thing the fleet keeps acting on and
+// changed nothing about what the fleet is told, with no way to tell that from a
+// fix that took. Ranking an entry as stale because correcting it bought no tier
+// is the wrong answer to a different question.
+//
+// A `raised` takes a position like every other record but moves nothing: a tier
+// is the CONSEQUENCE of a reinforcement, and counting it as one too would let a
+// single fold that crossed the threshold count twice. A `retired` drops the
+// key, because a retired entry is not ranked and its id is never reissued.
 func (s *Store) noteEventLocked(ev event) {
 	s.seq++
 	switch {
 	case ev.Event == EventSubmitted, ev.Event == EventFolded, ev.Event == EventUserSignal:
 		s.lastAt[ev.Id] = s.seq
-	case ev.Event == EventEdited && ev.Source == "user":
+	case ev.Event == EventEdited && ev.Source == SourceUser:
+		// Deliberate, and deliberately unlike reconcileLocked's reword branch,
+		// which counts this same event as no reinforcement at all. An operator who
+		// corrects a wrong entry must not leave the corrected text ranked where
+		// the wrong text sat; see this function's doc before reconciling the two.
 		s.lastAt[ev.Id] = s.seq
 	case ev.Event == EventRetired:
 		delete(s.lastAt, ev.Id)

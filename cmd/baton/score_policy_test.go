@@ -19,7 +19,7 @@ import (
 // this is what keeps it one.
 func TestScorePolicyGate(t *testing.T) {
 	cfg := config.ScoreConfig{
-		PromoteAt: 8, WorkingSet: 9,
+		PromoteAt: 8, UserSignalsAt: 4, WorkingSet: 9,
 		Rank: config.RankConfig{Recency: 2, Cwd: 3, Profile: 3, Group: 3},
 	}
 
@@ -28,7 +28,7 @@ func TestScorePolicyGate(t *testing.T) {
 		t.Fatal("a config that parsed should choose the policy")
 	}
 	want := score.Policy{
-		PromoteAt: 8, WorkingSet: 9,
+		PromoteAt: 8, UserSignalsAt: 4, WorkingSet: 9,
 		Rank: score.Rank{Recency: 2, Cwd: 3, Profile: 3, Group: 3},
 	}
 	if got != want {
@@ -97,7 +97,7 @@ func TestWarnScorePolicySaysWhatWasClamped(t *testing.T) {
 	// Asked for below the floor and past the ceiling, plus a threshold and a
 	// budget the store raised, plus a cwd weight that cannot ever match.
 	want := score.Policy{
-		PromoteAt: 1, WorkingSet: -4,
+		PromoteAt: 1, UserSignalsAt: implausibleUserSignalsAt + 1, WorkingSet: -4,
 		Rank: score.Rank{Recency: 0.5, Cwd: 1e300, Profile: 0, Group: 3},
 	}
 	// What the store makes of that, written out rather than computed: the

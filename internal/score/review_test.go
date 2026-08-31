@@ -247,8 +247,13 @@ func TestReconcileBatchesItsAppends(t *testing.T) {
 // TestPreR1LogRecordAdoptsTextWithoutAUserSignal covers the log records that
 // predate events carrying their text. Replaying one leaves the entry's wording
 // unknown, and score.md supplies it — but unknown is not "was empty", so
-// adopting it must not look like an operator edit. A manufactured user signal
-// there would feed the one thing invariant I6 says agents cannot reach alone.
+// adopting it must not look like an operator edit.
+//
+// Since R4's ruling that a reword counts nothing, no `edited` event moves a
+// counter at all, so the adoption could not manufacture a signal even if it were
+// stamped as the operator's. What is still at stake is the HISTORY: an adoption
+// attributed to the user is the log saying they wrote something they did not,
+// and the source is what keeps that honest.
 //
 // The adoption is still RECORDED, sourced to the recovery pass: an unrecorded
 // one would be redone at every boot, and the wording would exist only in
@@ -269,8 +274,11 @@ func TestPreR1LogRecordAdoptsTextWithoutAUserSignal(t *testing.T) {
 	if got.Text != "the wording the file has" {
 		t.Fatalf("text = %q, want the file's wording adopted", got.Text)
 	}
-	if got.Reinforcements != 0 {
-		t.Fatalf("reinforcements = %d, want no manufactured user signal", got.Reinforcements)
+	if got.Reinforcements != 0 || got.UserSignals != 0 {
+		t.Fatalf("entry = %+v, want no manufactured reinforcement and no manufactured user signal", got)
+	}
+	if got.Tier != 1 {
+		t.Fatalf("tier = %d after an adoption, want the bottom rung it arrived on", got.Tier)
 	}
 	if len(got.Aliases) != 0 {
 		t.Fatalf("aliases = %v, want none — there was no prior wording to supersede", got.Aliases)

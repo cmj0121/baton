@@ -474,11 +474,10 @@ func TestRenderEmptyAndDisabled(t *testing.T) {
 }
 
 // TestRenderBlockWording checks the tier wording of the injected block. The
-// entries are planted straight into the store rather than through the files:
-// tier 3 is unreachable through the API until R4 brings the user signal
-// (maxEarnedTier), and score.json is a cache Open never reads back, so the
-// files cannot express this state at all. The seam under test is the rendering,
-// not how a tier is earned.
+// entries are planted straight into the store rather than through the files
+// because one of them stands at tier 9, which no path in the store can produce
+// and score.json — a cache Open never reads back — cannot express either. The
+// seam under test is the rendering, not how a tier is earned.
 //
 // The expected ORDER is the ranking's, not the slice's: every entry here has
 // the same last-reinforcement position and no provenance, so tier is the only
