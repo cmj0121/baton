@@ -121,8 +121,9 @@ func TestMissingScoreMDIsReprojected(t *testing.T) {
 	if d.Reprojected != 2 || d.Retired != 0 {
 		t.Fatalf("pass = %+v, want two re-projections and no retirement", d)
 	}
-	// The provenance survives, because nothing was retired and re-admitted.
-	if got := s.Render(Context{})[0]; got.Provenance.SourcePanel != "p1" {
+	// The provenance survives, because nothing was retired and re-admitted. By
+	// id, not by position: the working set is ranked, not in file order.
+	if got := renderedByID(t, s, Context{})[first.Id]; got.Provenance.SourcePanel != "p1" {
 		t.Fatalf("entry = %+v, want the original submitter kept", got)
 	}
 
@@ -331,7 +332,7 @@ func TestReplayPlacesARestoredEntryOnce(t *testing.T) {
 		t.Fatalf("write events: %v", err)
 	}
 
-	s := newStore(dir, defaultPromoteAt)
+	s := newStore(dir, Policy{})
 	if err := s.replayLocked(); err != nil {
 		t.Fatalf("replay: %v", err)
 	}

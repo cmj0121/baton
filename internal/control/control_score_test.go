@@ -18,7 +18,7 @@ import (
 func startScoredServer(t *testing.T) string {
 	t.Helper()
 	t.Setenv("SHELL", "/bin/sh")
-	st, err := score.Open(t.TempDir(), 0)
+	st, err := score.Open(t.TempDir(), score.Policy{})
 	if err != nil {
 		t.Fatalf("open score store: %v", err)
 	}
@@ -70,13 +70,23 @@ func TestScoreRoundtrip(t *testing.T) {
 		t.Fatalf("repeat = (%q, folded=%v), want (%q, folded=true)", again, folded, id)
 	}
 
-	list, err := c.ScoreList()
+	list, err := c.ScoreList("")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	var entries []score.Entry
-	if err := json.Unmarshal([]byte(list), &entries); err != nil {
-		t.Fatalf("ScoreList should be a JSON array, got %q: %v", list, err)
+	var listed struct {
+		Context score.Context  `json:"context"`
+		Entries []score.Ranked `json:"entries"`
+	}
+	if err := json.Unmarshal([]byte(list), &listed); err != nil {
+		t.Fatalf("ScoreList should be a JSON object, got %q: %v", list, err)
+	}
+	entries := listed.Entries
+	// Ranked against nothing, because this client named no panel — and the echo
+	// is what says so, rather than leaving the operator to infer it from the
+	// column of 1.0s in every breakdown.
+	if listed.Context != (score.Context{}) {
+		t.Fatalf("ScoreList(\"\") echoed %+v, want the empty context", listed.Context)
 	}
 	if !strings.Contains(list, id) {
 		t.Fatalf("the submitted entry %q should be in the list, got:\n%s", id, list)
@@ -97,10 +107,12 @@ func TestScoreRoundtrip(t *testing.T) {
 	if err := json.Unmarshal([]byte(st), &got); err != nil {
 		t.Fatalf("ScoreStatus should be a JSON object, got %q: %v", st, err)
 	}
-	// entries counts what is on disk, rendered what the fleet would be told —
-	// equal here, and rendered is what score.list answered with. A running store
-	// is on AND available, and has no reason to give.
-	if !got.Enabled || !got.Available || got.Reason != "" || got.Entries != 1 || got.Rendered != len(entries) || got.Dir == "" {
+	// entries counts what is on disk and rendered what one brief would be told;
+	// score.list answers with the ENTRIES, uncapped, since #42 (the working set
+	// is the `active` flag on each of them). The two counts are equal here only
+	// because one entry is under any budget. A running store is on AND
+	// available, and has no reason to give.
+	if !got.Enabled || !got.Available || got.Reason != "" || got.Entries != len(entries) || got.Rendered != 1 || got.Dir == "" {
 		t.Fatalf("status should report the running store, got %+v (list has %d)", got, len(entries))
 	}
 }
@@ -120,12 +132,12 @@ func TestScoreDisabled(t *testing.T) {
 	if _, _, err := c.ScoreSubmit("remember me"); err == nil || !strings.Contains(err.Error(), "disabled") {
 		t.Fatalf("submit on a disabled store should be refused plainly, got %v", err)
 	}
-	list, err := c.ScoreList()
+	list, err := c.ScoreList("")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if strings.TrimSpace(list) != "[]" {
-		t.Fatalf("a disabled store should list an empty array, got %q", list)
+	if strings.TrimSpace(list) != `{"context":{},"entries":[]}` {
+		t.Fatalf("a disabled store should list no entries under an empty context, got %q", list)
 	}
 	st, err := c.ScoreStatus()
 	if err != nil {
@@ -140,7 +152,7 @@ func TestScoreDisabled(t *testing.T) {
 	if _, _, err := c.ScoreSubmit("after close"); err == nil {
 		t.Fatal("submit on a closed client should error")
 	}
-	if _, err := c.ScoreList(); err == nil {
+	if _, err := c.ScoreList(""); err == nil {
 		t.Fatal("list on a closed client should error")
 	}
 	if _, err := c.ScoreStatus(); err == nil {

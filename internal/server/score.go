@@ -35,8 +35,27 @@ import (
 // is the last one the store did read, which is a brief built on slightly old
 // memory rather than no brief at all.
 func (s *Server) scoreView(ctx score.Context) score.View {
-	v, err := s.scoreState.Store.View(ctx)
+	return s.scoreLook(s.scoreState.Store.View(ctx))
+}
 
+// scoreExplain is scoreView's operator-facing twin: the same reconcile, the
+// same logging, the same failure handling, over Store.Explain — which adds
+// every entry the store holds, ranked, with the factors that placed it.
+//
+// It is a second call rather than a flag on the first because the two reads
+// cost differently: a factor breakdown per entry is an allocation the size of
+// the store, and scoreView runs once per brief. Only score.list asks for it.
+func (s *Server) scoreExplain(ctx score.Context) score.View {
+	return s.scoreLook(s.scoreState.Store.Explain(ctx))
+}
+
+// scoreLook is what both reads do with the answer: log the folds, latch the
+// failure, and report what the pass changed. It takes the store call's two
+// results directly, so each read is a single expression and neither can end up
+// with a copy of the logging that drifts from the other's — a fold is the one
+// mutation an operator cannot see by looking at their own file, and #38 asks for
+// exactly one log line per fold whichever read drained it.
+func (s *Server) scoreLook(v score.View, err error) score.View {
 	// One line per fold, FIRST — before the error branch below, because a failing
 	// pass is exactly when a fold most needs saying. A fold can be durable and
 	// counted and still leave the pass in error (the rewrite that should have
@@ -151,35 +170,107 @@ func ScoreCounters(e *zerolog.Event, d score.Delta, h score.Health) *zerolog.Eve
 // a queued or fanned-out delivery is R5's problem (#39). An unknown id yields a
 // bare brief and is left for dispatchScored to report.
 func (s *Server) dispatchBrief(id, prompt string) TaskBrief {
-	b := TaskBrief{Prompt: prompt, Panel: id}
-	s.mu.Lock()
-	if idx := s.indexLocked(id); idx >= 0 {
-		b.Group, b.Cwd = s.panels[idx].Group, s.panels[idx].Cwd
-		b.Profile = s.specs[id].Profile
-	}
-	s.mu.Unlock()
-	// The store takes its own lock, so this runs off s.mu; a nil (disabled) store
-	// yields the zero view and nothing is injected.
-	b.Score = s.scoreView(score.Context{Panel: b.Panel, Profile: b.Profile, Cwd: b.Cwd, Group: b.Group}).Block
+	ctx, _ := s.panelContext(id)
+	b := TaskBrief{Prompt: prompt, Panel: id, Group: ctx.Group, Cwd: ctx.Cwd, Profile: ctx.Profile}
+	// panelContext has let go of s.mu and the store takes its own lock, so this
+	// runs off both; a nil (disabled) store yields the zero view and nothing is
+	// injected.
+	v := s.scoreView(ctx)
+	b.Score = v.Block
+	logScoreInjection(ctx, v)
 	return b
+}
+
+// logScoreInjection names the entries this brief is carrying, and the context
+// that put them there.
+//
+// Nothing else can answer "why did panel 7 get this entry" after the fact. The
+// factor breakdown answers it for a listing taken NOW, against the store as it
+// stands now — but a brief is delivered once, against the panel's directory and
+// the log's positions at that moment, and by the time anyone asks, an entry may
+// have been reworded, retired, or outranked. It is the same invariant I8
+// obligation the breakdown is: the fleet must not be told something an operator
+// cannot afterwards account for.
+//
+// Silent when nothing was injected, which is the ordinary case for an empty or
+// disabled store and is already said elsewhere.
+func logScoreInjection(ctx score.Context, v score.View) {
+	if len(v.Entries) == 0 {
+		return
+	}
+	ids := zerolog.Arr()
+	for _, e := range v.Entries {
+		ids = ids.Str(e.Id)
+	}
+	e := log.Info().Str("panel", ctx.Panel).Array("entries", ids).
+		Int("injected", len(v.Entries)).Int("of", v.Total)
+	// The context, only where there is one: an entry matches a dimension by
+	// equalling it, so a field the panel does not have is a field nothing was
+	// ranked on, and printing it empty would read as one that was.
+	if ctx.Cwd != "" {
+		e = e.Str("cwd", ctx.Cwd)
+	}
+	if ctx.Profile != "" {
+		e = e.Str("profile", ctx.Profile)
+	}
+	if ctx.Group != "" {
+		e = e.Str("group", ctx.Group)
+	}
+	e.Msg("score injected into a direct dispatch")
+}
+
+// panelContext is the ranking context of the panel id: the three properties an
+// entry's provenance is matched against, plus the id itself. found is false when
+// the fleet has no such panel, and the context is then the zero one — every
+// dimension unmatched, which is what an unknown id has to mean.
+//
+// It is the ONE place a context is built from a panel, and that is what makes
+// the cwd dimension able to match at all. Both ends of the comparison come from
+// here: score.submit stamps an entry's provenance with it, and dispatchBrief and
+// score.list rank against it. Two readers would not merely be untidy — an entry
+// whose cwd was recorded one way can never equal a dispatch's read another way,
+// so the weight would silently apply to some entries and not others.
+//
+// The directory therefore goes through panelCwd rather than the panels row's own
+// Cwd field. That field is learned lazily: a panel spawned with --dir has not
+// reported one yet while it is still starting, so an entry submitted in that
+// window recorded NO source_cwd — and provenance is written once, so that entry
+// could never match a cwd for the rest of its life. panelCwd samples the process
+// table on demand, which is exactly the moment something is about to use the
+// path. It takes s.mu itself, so it is called after this one has let go.
+func (s *Server) panelContext(id string) (ctx score.Context, found bool) {
+	ctx.Panel = id
+	s.mu.Lock()
+	idx := s.indexLocked(id)
+	if idx < 0 {
+		s.mu.Unlock()
+		return ctx, false
+	}
+	ctx.Group = s.panels[idx].Group
+	ctx.Profile = s.specs[id].Profile
+	s.mu.Unlock()
+	ctx.Cwd = s.panelCwd(id)
+	return ctx, true
 }
 
 // scoreSubmit handles score.submit: record cmd.Prompt as a new entry, stamped
 // with provenance derived from the connection (#38 §4). A connection that
 // declared a self on hello is an agent panel, so the entry carries that panel's
-// id — plus its profile and cwd when the row is still in the fleet — while one
-// that did not is the operator's cockpit. The store refuses plainly when
+// id — plus its profile, cwd and group when the row is still in the fleet, which
+// are the three dimensions the ranking matches a dispatch against — while one
+// that did not is the operator's cockpit, which has no panel row and therefore
+// records none of the three. The store refuses plainly when
 // disabled (nil), and that refusal is the whole disabled story: no flag here.
 func (s *Server) scoreSubmit(cc *clientConn, cmd proto.Command) {
 	prov := score.Provenance{Source: "user"}
 	if cc.self != "" {
 		prov = score.Provenance{Source: "agent", SourcePanel: cc.self}
-		s.mu.Lock()
-		if idx := s.indexLocked(cc.self); idx >= 0 {
-			prov.SourceCwd = s.panels[idx].Cwd
-			prov.SourceProfile = s.specs[cc.self].Profile
+		// Through panelContext, which is where a dispatch reads the same three
+		// properties: an entry's recorded cwd and a dispatch's cwd have to come
+		// from one reader or they can never be equal. See panelContext.
+		if ctx, ok := s.panelContext(cc.self); ok {
+			prov.SourceCwd, prov.SourceProfile, prov.SourceGroup = ctx.Cwd, ctx.Profile, ctx.Group
 		}
-		s.mu.Unlock()
 	}
 	// A nil store is not always "switched off": it is also a directory another
 	// daemon holds and a set of files that would not open. Say which, so the
@@ -211,16 +302,59 @@ func (s *Server) scoreSubmit(cc *clientConn, cmd proto.Command) {
 	}{Id: e.Id, Folded: folded})})
 }
 
-// scoreList is the score.list payload: the store's entries. S0 has no richer
-// read than the view's rendered set — an empty context returns the first N
-// entries in file order, which is the dummy the walking skeleton promises (#39);
-// R3 gives the list a real view of its own.
-func (s *Server) scoreList() json.RawMessage {
-	entries := s.scoreView(score.Context{}).Entries
-	if entries == nil {
-		entries = []score.Entry{} // an empty list, never JSON null
+// scoreList answers score.list: EVERY entry the store holds, in rank order, each
+// with its tier, its rank, the five factors that multiply out to that rank, and
+// whether the working set took it — beside the context they were ranked
+// against.
+//
+// Uncapped, which is the point. It used to answer with the view's rendered set
+// — seven entries — so a store past seven hid the tier of everything after
+// them from score.list, score.status and score.md alike, and only the raw
+// event log had it. R2 made tiers real, so an operator could be told an entry
+// was important with no way to see which ones those were (#42). Invariant I8
+// is the rule that forbids that: the operator must not have to read the log to
+// understand what the fleet is being told.
+//
+// The BREAKDOWN is the other half of the same obligation. A multiplicative rank
+// reported alone answers "why is this entry in my brief" with a number; the
+// factors answer it with a reason, and an operator who multiplies the five gets
+// the rank beside them exactly (see score.Factors).
+//
+// The reply ECHOES the context it ranked against, and that is not decoration.
+// cmd.ID may name a panel, in which case the ranking runs against that panel's
+// directory, profile and group — the question an operator actually has, which
+// is "why is this in the brief THAT panel gets". Named nothing, the context is
+// empty: a cockpit is not a panel and has nothing of its own to match, so every
+// context factor reads 1.0 and the order is tier and recency alone.
+//
+// Without the echo those two answers are indistinguishable in the payload.
+// `active` reads exactly like "this is in the brief", and every real direct
+// dispatch fills Cwd from the panel row and usually Profile — so a contextless
+// `active` set is one no real panel dispatch will produce. The breakdown leaves
+// a trail, since every context factor sits at 1.0 while score.status reports
+// weights of 2.0, but that resolves to "nothing matched" rather than "nothing
+// COULD match", and telling those apart is the whole of invariant I8 here.
+//
+// An id no panel answers to is REFUSED rather than quietly ranked against
+// nothing, for the same reason: silently answering a question about panel 7 with
+// the contextless listing is the exact ambiguity the echo exists to remove.
+func (s *Server) scoreList(cc *clientConn, cmd proto.Command) {
+	ctx := score.Context{}
+	if cmd.ID != "" {
+		var found bool
+		if ctx, found = s.panelContext(cmd.ID); !found {
+			send(cc, proto.ServerMsg{Type: "error", Error: "no panel " + cmd.ID})
+			return
+		}
 	}
-	return scoreJSON(entries)
+	ranked := s.scoreExplain(ctx).Ranked
+	if ranked == nil {
+		ranked = []score.Ranked{} // an empty list, never JSON null
+	}
+	send(cc, proto.ServerMsg{Type: "score", Score: scoreJSON(struct {
+		Context score.Context  `json:"context"`
+		Entries []score.Ranked `json:"entries"`
+	}{Context: ctx, Entries: ranked})})
 }
 
 // scoreStatus is the score.status payload: whether the subsystem is switched
@@ -239,22 +373,33 @@ func (s *Server) scoreList() json.RawMessage {
 // opened normally and whose score.md has since become unreadable is available,
 // enabled, and inert.
 //
-// Both counts are reported because they legitimately disagree: the listed
-// entries ride the render, which caps at the render limit and withholds
-// anything over the entry weight cap, so a store past either would show a
-// shorter list than its entry count with no way to tell whether the gap was a
-// cap or a bug. Naming the rendered count lets status explain its own gap.
+// Both counts are reported because they legitimately disagree: rendered is the
+// WORKING SET, which is capped at the working-set budget and withholds anything
+// over the entry weight cap, so a store past either would carry fewer entries
+// in its briefs than it holds with no way to tell whether the gap was a cap or a
+// bug. Naming the rendered count lets status explain its own gap — and
+// working_set below names the cap it was measured against.
 //
-// oversized then says WHICH cap. A line too long to inject is withheld from
-// score.list as well as from every brief, so without this the operator's own
-// entry is invisible everywhere except the file they typed it into, and the
-// entries/rendered gap looks identical to an ordinary render-limit truncation.
+// oversized and block_full then say WHICH cap. Three of them can make rendered
+// fall short of the budget — an entry too long to inject at all, the block's
+// rune backstop, and the budget itself — and from the two counts alone every
+// one of them looks like the same ordinary truncation. oversized is the count of
+// lines withheld for their own weight, which without this do nothing anywhere
+// except sit in the file the operator typed them into. block_full says the
+// working set stopped because the injected block ran out of runes rather than
+// out of budget, which is the only one of the three that is invisible from both
+// the entry and the policy. Whichever it was, score.list carries the same answer
+// per entry as a Standing.
 //
-// promote_at is the recurrence threshold actually in force, which is not the
-// same as the one in the config file: it reloads on SIGHUP, it has a floor, and
-// a config that failed to parse leaves the running value alone. An operator
-// retuning it has no other way to confirm the daemon took the change, and a knob
-// whose effect cannot be observed is one they cannot trust (invariant I8).
+// promote_at, working_set and rank are the tuning actually in force, which is
+// not the same as what the config file says: all of them reload on SIGHUP, all
+// of them are clamped, and a config that failed to parse leaves the running
+// values alone. An operator retuning them has no other way to confirm the
+// daemon took the change, and a knob whose effect cannot be observed is one
+// they cannot trust (invariant I8). rank matters most of the three, because a
+// weight of 1.0 is indistinguishable in a score.list breakdown from a dimension
+// that simply did not match — the factor reads 1.0 either way, and only the
+// policy says which happened.
 //
 // unlocked reports a store running without its single-writer claim, which
 // happens where the filesystem cannot lock — an NFS $HOME being exactly where
@@ -267,26 +412,43 @@ func (s *Server) scoreList() json.RawMessage {
 // all of them, so the reply can never mix two readings of the store.
 func (s *Server) scoreStatus() json.RawMessage {
 	v := s.scoreView(score.Context{})
+	// The weights are OMITTED rather than reported as zeros when no store is
+	// running. A view of a store that is not there is the zero view, and zero is
+	// a value the clamp can never produce — every weight in force is at least
+	// one — so printing it would be the reply inventing a policy. available and
+	// reason already carry the truth on that branch. promote_at and working_set
+	// elide themselves through omitempty for the same reason.
+	var rank *score.Rank
+	if s.scoreState.available() {
+		r := v.Policy.Rank
+		rank = &r
+	}
 	return scoreJSON(struct {
-		Enabled   bool   `json:"enabled"`
-		Available bool   `json:"available"`
-		Unlocked  bool   `json:"unlocked,omitempty"`
-		Reason    string `json:"reason,omitempty"`
-		Entries   int    `json:"entries"`
-		Rendered  int    `json:"rendered"`
-		Oversized int    `json:"oversized"`
-		PromoteAt int    `json:"promote_at,omitempty"`
-		Dir       string `json:"dir,omitempty"`
+		Enabled    bool        `json:"enabled"`
+		Available  bool        `json:"available"`
+		Unlocked   bool        `json:"unlocked,omitempty"`
+		Reason     string      `json:"reason,omitempty"`
+		Entries    int         `json:"entries"`
+		Rendered   int         `json:"rendered"`
+		Oversized  int         `json:"oversized"`
+		BlockFull  bool        `json:"block_full,omitempty"`
+		PromoteAt  int         `json:"promote_at,omitempty"`
+		WorkingSet int         `json:"working_set,omitempty"`
+		Rank       *score.Rank `json:"rank,omitempty"`
+		Dir        string      `json:"dir,omitempty"`
 	}{
-		Enabled:   s.scoreState.Enabled,
-		Available: s.scoreState.available(),
-		Unlocked:  v.Unlocked,
-		Reason:    s.scoreState.reason(),
-		Entries:   v.Total,
-		Rendered:  len(v.Entries),
-		Oversized: v.Health.Oversized,
-		PromoteAt: v.PromoteAt,
-		Dir:       s.scoreState.Store.Dir(),
+		Enabled:    s.scoreState.Enabled,
+		Available:  s.scoreState.available(),
+		Unlocked:   v.Unlocked,
+		Reason:     s.scoreState.reason(),
+		Entries:    v.Total,
+		Rendered:   len(v.Entries),
+		Oversized:  v.Health.Oversized,
+		BlockFull:  v.BlockFull,
+		PromoteAt:  v.Policy.PromoteAt,
+		WorkingSet: v.Policy.WorkingSet,
+		Rank:       rank,
+		Dir:        s.scoreState.Store.Dir(),
 	})
 }
 

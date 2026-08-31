@@ -18,7 +18,7 @@ func TestTierIsEarnedAtTheThreshold(t *testing.T) {
 		t.Run(fmt.Sprintf("promote_at=%d", promoteAt), func(t *testing.T) {
 			dir := t.TempDir()
 			s := openStore(t, dir)
-			s.SetPromoteAt(promoteAt)
+			s.SetPolicy(Policy{PromoteAt: promoteAt})
 
 			e := submit(t, s, "keep the build green")
 			if e.Tier != 1 {
@@ -114,11 +114,11 @@ func TestTiersReplayIdenticallyAndIgnoreTheThreshold(t *testing.T) {
 	// The same log, read twice, and the second time by a store configured with a
 	// threshold no entry in it ever met.
 	for _, promoteAt := range []int{defaultPromoteAt, 50} {
-		again, err := Open(dir, defaultPromoteAt)
+		again, err := Open(dir, Policy{})
 		if err != nil {
 			t.Fatalf("reopen: %v", err)
 		}
-		again.SetPromoteAt(promoteAt)
+		again.SetPolicy(Policy{PromoteAt: promoteAt})
 		byID := map[string]Entry{}
 		for _, e := range again.Render(Context{}) {
 			byID[e.Id] = e
@@ -167,7 +167,7 @@ func TestBootPassObeysTheConfiguredThreshold(t *testing.T) {
 
 	t.Run("the default promotes", func(t *testing.T) {
 		dir := seed(t)
-		s, err := Open(dir, defaultPromoteAt)
+		s, err := Open(dir, Policy{})
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}
@@ -179,13 +179,13 @@ func TestBootPassObeysTheConfiguredThreshold(t *testing.T) {
 
 	t.Run("a chosen threshold is in force at boot", func(t *testing.T) {
 		dir := seed(t)
-		s, err := Open(dir, 10)
+		s, err := Open(dir, Policy{PromoteAt: 10})
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}
 		t.Cleanup(s.Close)
-		if got := s.PromoteAt(); got != 10 {
-			t.Fatalf("PromoteAt = %d, want the store built under the chosen number", got)
+		if got := s.Policy().PromoteAt; got != 10 {
+			t.Fatalf("Policy().PromoteAt = %d, want the store built under the chosen number", got)
 		}
 		if got := s.Render(Context{})[0]; got.Tier != 1 || got.Reinforcements != 2 {
 			t.Fatalf("entry = %+v, want the repeat counted and no tier granted", got)
@@ -207,21 +207,21 @@ func TestBootPassObeysTheConfiguredThreshold(t *testing.T) {
 func TestPromoteAtFloor(t *testing.T) {
 	for _, n := range []int{0, 1, -3} {
 		s := openStore(t, t.TempDir())
-		s.SetPromoteAt(n)
+		s.SetPolicy(Policy{PromoteAt: n})
 		if e := submit(t, s, "keep the build green"); e.Tier != 1 {
-			t.Fatalf("SetPromoteAt(%d): a first submission arrived at tier %d, want 1", n, e.Tier)
+			t.Fatalf("SetPolicy(promote-at %d): a first submission arrived at tier %d, want 1", n, e.Tier)
 		}
 		if _, _, err := s.Submit("keep the build green", Provenance{Source: "agent"}); err != nil {
 			t.Fatalf("Submit: %v", err)
 		}
 		if got := s.Render(Context{})[0]; got.Tier != 1 {
-			t.Fatalf("SetPromoteAt(%d): tier %d after two occurrences, want the default of %d to apply", n, got.Tier, defaultPromoteAt)
+			t.Fatalf("SetPolicy(promote-at %d): tier %d after two occurrences, want the default of %d to apply", n, got.Tier, defaultPromoteAt)
 		}
 	}
 	// And nil is the disabled store: setting a threshold on it is a no-op, not a
 	// panic, like every other method here.
 	var disabled *Store
-	disabled.SetPromoteAt(4)
+	disabled.SetPolicy(Policy{PromoteAt: 4})
 }
 
 // TestReplayCannotBeTalkedPastTheCeiling keeps maxEarnedTier the single fact the

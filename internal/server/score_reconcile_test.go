@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,14 +76,14 @@ func TestLiveEditReachesScoreListAndStatus(t *testing.T) {
 
 	editScoreMD(t, dir, "- a line the operator typed\n- and another\n")
 
-	cc := conn("")
-	s.onCommand(cc, proto.Command{Action: "score.list"})
-	msg := reply(t, cc)
-	var entries []score.Entry
-	if msg.Type != "score" || json.Unmarshal(msg.Score, &entries) != nil {
-		t.Fatalf("score.list must answer a score array, got %+v", msg)
+	entries := listed(t, s, "").Entries
+	// By membership, not by position: score.list is RANKED, so which of the two
+	// leads it is the ranking's business and not this test's.
+	texts := map[string]bool{}
+	for _, e := range entries {
+		texts[e.Text] = true
 	}
-	if len(entries) != 2 || entries[0].Text != "a line the operator typed" {
+	if len(entries) != 2 || !texts["a line the operator typed"] || !texts["and another"] {
 		t.Fatalf("score.list = %+v, want the operator's two lines", entries)
 	}
 
@@ -98,7 +97,9 @@ func TestLiveEditReachesScoreListAndStatus(t *testing.T) {
 func TestReconcileOnADisabledStoreIsInert(t *testing.T) {
 	s, _ := scoreServer(nil)
 	s.scoreView(score.Context{})
-	if got := s.scoreList(); string(got) != "[]" {
-		t.Fatalf("score.list on a disabled store = %s, want an empty array", got)
+	cc := conn("")
+	s.scoreList(cc, proto.Command{Action: "score.list"})
+	if got := string(reply(t, cc).Score); got != `{"context":{},"entries":[]}` {
+		t.Fatalf("score.list on a disabled store = %s, want an empty list under an empty context", got)
 	}
 }

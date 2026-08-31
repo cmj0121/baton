@@ -16,15 +16,18 @@ import (
 // scoreState — and so `status`, the helper below, stays reachable from every
 // test in the package.
 type statusReply struct {
-	Enabled   bool   `json:"enabled"`
-	Available bool   `json:"available"`
-	Unlocked  bool   `json:"unlocked"`
-	Reason    string `json:"reason"`
-	Entries   int    `json:"entries"`
-	Rendered  int    `json:"rendered"`
-	Oversized int    `json:"oversized"`
-	PromoteAt int    `json:"promote_at"`
-	Dir       string `json:"dir"`
+	Enabled    bool       `json:"enabled"`
+	Available  bool       `json:"available"`
+	Unlocked   bool       `json:"unlocked"`
+	Reason     string     `json:"reason"`
+	Entries    int        `json:"entries"`
+	Rendered   int        `json:"rendered"`
+	Oversized  int        `json:"oversized"`
+	BlockFull  bool       `json:"block_full"`
+	PromoteAt  int        `json:"promote_at"`
+	WorkingSet int        `json:"working_set"`
+	Rank       score.Rank `json:"rank"`
+	Dir        string     `json:"dir"`
 }
 
 // status runs score.status against s and decodes the reply.
@@ -45,7 +48,7 @@ func status(t *testing.T, s *Server) statusReply {
 func scoreStore(t *testing.T) (*score.Store, string) {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := score.Open(dir, 0)
+	st, err := score.Open(dir, score.Policy{})
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -70,7 +73,11 @@ func TestScoreStatusDistinguishesOffFromUnavailable(t *testing.T) {
 		reason string
 		want   statusReply
 	}{
-		{"running", st, true, "", statusReply{Enabled: true, Available: true, Entries: 0, Rendered: 0, PromoteAt: 3, Dir: dir}},
+		{"running", st, true, "", statusReply{
+			Enabled: true, Available: true, Entries: 0, Rendered: 0,
+			PromoteAt: 3, WorkingSet: 7,
+			Rank: score.Rank{Recency: 2, Cwd: 2, Profile: 2, Group: 2}, Dir: dir,
+		}},
 		{"held by another daemon", nil, true, held, statusReply{Enabled: true, Reason: held}},
 		{"switched off", nil, false, "score is switched off in the config (score.enabled: false)",
 			statusReply{Reason: "score is switched off in the config (score.enabled: false)"}},
@@ -128,7 +135,9 @@ func TestReconcileFailureIsLatched(t *testing.T) {
 		t.Fatal("a failing reconcile did not latch, so it logs on every dispatch")
 	}
 	// The last view read is still served — a stale brief beats no brief.
-	if got := s.scoreList(); !strings.Contains(string(got), "still readable") {
+	cc := conn("")
+	s.scoreList(cc, proto.Command{Action: "score.list"})
+	if got := string(reply(t, cc).Score); !strings.Contains(got, "still readable") {
 		t.Fatalf("score.list = %s, want the last view the store did read", got)
 	}
 	// And the operator is told, rather than being shown a healthy status while
@@ -178,7 +187,7 @@ func TestScoreStatusReportsWithheldLines(t *testing.T) {
 	case got.Rendered != 1:
 		t.Fatalf("status = %+v, want it withheld from the brief", got)
 	case got.Oversized != 1:
-		t.Fatalf("status = %+v, want the gap explained as a weight cap, not a render limit", got)
+		t.Fatalf("status = %+v, want the gap explained as a weight cap, not the working-set budget", got)
 	}
 }
 

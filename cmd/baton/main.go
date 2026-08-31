@@ -388,23 +388,138 @@ func sweepLegacyConductorWorkspaces(sock string) {
 	}
 }
 
-// openScore opens the fleet memory (#39) and reports why no store is running
-// when none is. The configured recurrence threshold goes in at construction,
-// because Open's own recovery pass promotes: it folds and rewords whatever the
-// operator edited into score.md while the daemon was down, and those `raised`
-// events are durable and never demoted. applyConfig re-tunes the same knob on
-// every reload; this is the one place it is CHOSEN. A failed Open logs and boots
+// scorePolicy is the store's tuning as the config file spells it — the
+// recurrence threshold, the working-set budget, and the ranking weights — and
+// the GATE on a file that would not parse. ok false means this file chooses no
+// policy at all.
+//
+// It is the one translation between the two shapes AND the one gate, because
+// both halves have to be the same at boot and on reload or one file produces two
+// live policies. They did not used to be: boot handed openScore the config
+// struct whatever config.Load's error said, while the reload path gated
+// SetPolicy on that error being nil. One mistyped weight was then enough for a
+// restart to apply `working-set: 9` while a SIGHUP applied nothing — two
+// policies from one file, chosen by whether the operator reloaded or restarted,
+// with nothing said about either. A mistyped number fails the whole decode (see
+// config.badNumbers, which is how the key gets named), so this is not a corner.
+//
+// A failed load is not a file saying "use the defaults". At boot there is no
+// running policy to keep, so the store is built on its own defaults; on a reload
+// the running one stands. Both are the same rule — a broken file never chooses —
+// and the difference is only in what there is to fall back to.
+//
+// Nothing is clamped here. The store clamps every field on the way in (see
+// score.Policy.clamp), so the defaults and the floors are stated once, in the
+// package that acts on them; warnScorePolicy is what says when a clamp moved a
+// number the operator wrote.
+func scorePolicy(cfg config.ScoreConfig, err error) (p score.Policy, ok bool) {
+	if err != nil {
+		return score.Policy{}, false
+	}
+	return score.Policy{
+		PromoteAt:  cfg.PromoteAt,
+		WorkingSet: cfg.WorkingSet,
+		Rank: score.Rank{
+			Recency: cfg.Rank.Recency,
+			Cwd:     cfg.Rank.Cwd,
+			Profile: cfg.Rank.Profile,
+			Group:   cfg.Rank.Group,
+		},
+	}, true
+}
+
+// warnScorePolicy says what the file asked for that the daemon is not doing. It
+// runs at boot and on every reload, like the stale-key warning it sits beside,
+// because a config mistake persists until it is fixed and the reload is exactly
+// when it was made.
+//
+// Three things, each invisible otherwise (invariant I8):
+//
+//   - a key whose value is not a number. That failed the whole decode, so NO
+//     part of this file's score policy is in force — including the keys that
+//     were fine — and the generic load warning names the plugin rather than the
+//     section. Named per key, so the operator has something to fix.
+//   - a value the store CLAMPED. `rank.cwd: 0.5` runs as 1.0, which switches the
+//     dimension off rather than penalising a miss, and `1e300` runs as 1e6.
+//     Reported whether or not the reload changed anything, since a clamp that
+//     lands on the value already in force changes nothing and is the case an
+//     operator is most likely to be confused by. An UNSET key is not a clamp: it
+//     asked for nothing and got the default.
+//   - a cwd weight that cannot ever match, because panel.track-cwd is off. The
+//     weight is then dead config: no panel reports a directory, so no entry
+//     records one and no dispatch has one to compare.
+func warnScorePolicy(cfg config.Config, want score.Policy, st *score.Store) {
+	for _, key := range cfg.Score.BadNumbers {
+		log.Warn().Str("key", key).
+			Msg("config value is not a number; no score policy from this file is in force")
+	}
+	// The rest compares what was asked against what is IN FORCE, so it needs a
+	// store to ask. With none — switched off, or a directory another daemon holds
+	// — there is no in-force policy, and comparing against the zero one would
+	// report every key the operator set as clamped to nothing. The store's
+	// absence is already reported through score.status and every refusal.
+	if st == nil {
+		return
+	}
+	got := st.Policy()
+	clamped := func(key string, asked, force float64) {
+		if asked != 0 && asked != force {
+			log.Warn().Str("key", key).Float64("configured", asked).Float64("in_force", force).
+				Msg("score weight is out of range and was clamped")
+		}
+	}
+	if want.PromoteAt != 0 && want.PromoteAt != got.PromoteAt {
+		log.Warn().Int("configured", want.PromoteAt).Int("in_force", got.PromoteAt).
+			Msg("score.promote-at is out of range and was clamped")
+	}
+	if want.WorkingSet != 0 && want.WorkingSet != got.WorkingSet {
+		log.Warn().Int("configured", want.WorkingSet).Int("in_force", got.WorkingSet).
+			Msg("score.working-set is out of range and was clamped")
+	}
+	clamped("score.rank.recency", want.Rank.Recency, got.Rank.Recency)
+	clamped("score.rank.cwd", want.Rank.Cwd, got.Rank.Cwd)
+	clamped("score.rank.profile", want.Rank.Profile, got.Rank.Profile)
+	clamped("score.rank.group", want.Rank.Group, got.Rank.Group)
+
+	if track, terr := cfg.Panel.CwdTracking(); terr == nil && track == cwd.Off && got.Rank.Cwd > 1 {
+		log.Warn().Float64("score.rank.cwd", got.Rank.Cwd).
+			Msg("score.rank.cwd cannot match while panel.track-cwd is off; no panel reports a directory to record or compare")
+	}
+	// A budget the block's rune backstop can never spend is dead config in the
+	// same sense that cwd weight is: the number was written down, the daemon
+	// accepted it, and no dispatch will ever reach it. Said here rather than left
+	// as an unexplained gap between working_set and rendered on score.status —
+	// which is where the operator would otherwise meet it, one brief at a time.
+	// Not clamped: #37 leaves the count to the operator, and a budget that never
+	// binds still behaves. See score.MaxReachableWorkingSet.
+	if got.WorkingSet > score.MaxReachableWorkingSet {
+		log.Warn().Int("score.working-set", got.WorkingSet).
+			Int("reachable", score.MaxReachableWorkingSet).
+			Msg("score.working-set is larger than the injected block can ever carry; the rune cap will bind first")
+	}
+}
+
+// openScore opens the fleet memory (#39) under the policy p — scorePolicy's, so
+// a file that would not parse hands it the zero policy and the store boots on
+// its own defaults rather than on half a broken file — and reports why no store
+// is running when none is.
+//
+// The policy goes in at construction, because Open's
+// own recovery pass promotes: it folds and rewords whatever the operator edited
+// into score.md while the daemon was down, and those `raised` events are
+// durable and never demoted. applyConfig re-tunes the same policy on every
+// reload; this is the one place it is CHOSEN. A failed Open logs and boots
 // WITHOUT a store — corrupt score files never block the fleet (#38 lifecycle),
 // and a second daemon pointed at the same score directory is refused there
 // rather than clobbering the first one's files. The reason travels to the server
 // so score.status and score.submit can say WHICH of "switched off",
 // "unavailable", and "running" this daemon is in; a boot log line alone would
 // leave the operator of a second BATON_SOCK fleet guessing.
-func openScore(cfg config.ScoreConfig) (*score.Store, string) {
+func openScore(cfg config.ScoreConfig, p score.Policy) (*score.Store, string) {
 	if !cfg.IsEnabled() {
 		return nil, "score is switched off in the config (score.enabled: false)"
 	}
-	st, err := score.Open(cfg.Directory(), cfg.PromoteAt)
+	st, err := score.Open(cfg.Directory(), p)
 	if err != nil {
 		log.Warn().Err(err).Str("dir", cfg.Directory()).Msg("score store open failed; running without fleet memory")
 		return nil, err.Error()
@@ -442,7 +557,22 @@ func runServerOn(ln net.Listener, sock string) error {
 	rc := reloadableSettings(cfg)
 	stateF := paths.StateFile(sock)
 	sweepLegacyConductorWorkspaces(sock)
-	scoreStore, scoreReason := openScore(cfg.Score)
+	// Note what is NOT gated on the load error: score.dir and score.enabled are
+	// taken from cfg whatever it says, while the policy is not. That asymmetry is
+	// deliberate, and it is the safe direction of each.
+	//
+	// A policy read from a half-parsed file is a wrong POLICY — entries climb at
+	// the wrong threshold, briefs carry the wrong few — and every one of those is
+	// recoverable by fixing the file, so refusing to guess costs nothing. A
+	// directory read from a half-parsed file is a wrong STORE: the daemon would
+	// open a different score.md, and the fleet's memory silently splits in two
+	// with each half durable and neither wrong-looking. Falling back to the
+	// default directory over a typo in a weight is the one mistake here that the
+	// operator cannot see and the log cannot undo. The same holds for enabled:
+	// switching the memory off over an unrelated typo is a bigger surprise than
+	// running it on the numbers the daemon can still read.
+	scorePol, _ := scorePolicy(cfg.Score, err)
+	scoreStore, scoreReason := openScore(cfg.Score, scorePol)
 	srv := server.New(ln, append(buildServerOptions(rc, stateF), usageOption(cfg), limitsOption(cfg),
 		server.WithScore(server.ScoreState{Store: scoreStore, Enabled: cfg.Score.IsEnabled(), Reason: scoreReason}))...)
 	srv.Restore() // seed the fleet from the last snapshot (all as exited dead slots) before serving
@@ -492,11 +622,12 @@ func runServerOn(ln net.Listener, sock string) error {
 		}
 		rc := reloadableSettings(res.Config)
 		srv.Reload(rc.settings)
-		// score.promote-at DOES reload — it is a number the live store compares,
-		// so a fleet whose entries are climbing too eagerly is retuned with C-t R
-		// rather than by restarting and returning every panel as Exited. Tiers
-		// already earned are replayed from the log and never move (see
-		// Store.SetPromoteAt).
+		// score.promote-at, score.rank and score.working-set DO reload — each is a
+		// number the live store compares, so a fleet whose entries are climbing
+		// too eagerly, or whose briefs are carrying the wrong few, is retuned with
+		// C-t R rather than by restarting and returning every panel as Exited.
+		// Tiers already earned are replayed from the log and never move, and the
+		// ranking half changes order and no tier at all (see Store.SetPolicy).
 		//
 		// score.dir / score.enabled deliberately do NOT: the store is opened once
 		// at boot (above), because swapping a live store under in-flight
@@ -505,10 +636,10 @@ func runServerOn(ln net.Listener, sock string) error {
 		//
 		// A config that would not PARSE is not a config that says "use the
 		// default": `cfg` is the zero value then, and retuning the store from it
-		// would quietly undo an operator's threshold on the reload that told them
-		// their file has a typo in it. The running value stands until a file the
-		// daemon could actually read asks for another one — and the load failure
-		// is already warned about above, so this branch stays silent.
+		// would quietly undo an operator's whole policy on the reload that told
+		// them their file has a typo in it. The running values stand until a file
+		// the daemon could actually read asks for others — and the load failure is
+		// already warned about above, so this branch stays silent.
 		// A file still spelling the key `promote_at` is not a parse error — the
 		// YAML decoder is not strict, so the key is dropped and the threshold
 		// silently falls back to the default. Say so: the operator wrote a number
@@ -518,9 +649,22 @@ func runServerOn(ln net.Listener, sock string) error {
 		if err == nil && cfg.Score.StalePromoteAt {
 			log.Warn().Msg("config key score.promote_at is ignored; the key is score.promote-at")
 		}
-		if err == nil && scoreStore.SetPromoteAt(res.Config.Score.PromoteAt) {
-			log.Info().Int("promote_at", scoreStore.PromoteAt()).
-				Msg("score recurrence threshold changed")
+		// The SAME gate boot uses, and the same warnings, so one file cannot
+		// produce one live policy on a restart and another on a reload. This runs
+		// on the first pass too — applyConfig(false), before Serve — which is why
+		// the boot path above only OPENS the store and says nothing about it: two
+		// call sites logged the same clamp twice on every start.
+		if want, ok := scorePolicy(res.Config.Score, err); ok {
+			if scoreStore.SetPolicy(want) {
+				p := scoreStore.Policy()
+				log.Info().Int("promote_at", p.PromoteAt).Int("working_set", p.WorkingSet).
+					Float64("rank_recency", p.Rank.Recency).Float64("rank_cwd", p.Rank.Cwd).
+					Float64("rank_profile", p.Rank.Profile).Float64("rank_group", p.Rank.Group).
+					Msg("score policy changed")
+			}
+			warnScorePolicy(res.Config, want, scoreStore)
+		} else {
+			warnScorePolicy(cfg, score.Policy{}, scoreStore)
 		}
 		srv.SetOutputEvents(res.WantOutput)
 		srv.SetTitleHook(res.WantTitle)

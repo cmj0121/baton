@@ -2163,7 +2163,7 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		// memory is fed by agents and operators alike.
 		s.scoreSubmit(cc, cmd)
 	case "score.list":
-		send(cc, proto.ServerMsg{Type: "score", Score: s.scoreList()})
+		s.scoreList(cc, cmd)
 	case "score.status":
 		send(cc, proto.ServerMsg{Type: "score", Score: s.scoreStatus()})
 	default:

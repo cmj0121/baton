@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -672,25 +673,99 @@ func Load() (Config, error) {
 		}
 		return c, fmt.Errorf("read config: %w", err)
 	}
-	if err := yaml.Unmarshal(data, &c); err != nil {
-		return c, fmt.Errorf("parse config %s: %w", paths.ConfigFile(), err)
-	}
+	perr := yaml.Unmarshal(data, &c)
+	// A SECOND pass over the same bytes, into a shape nothing can fail to decode
+	// into, because two things about the score section are invisible from the
+	// first one.
+	//
 	// score.promote-at was spelled with an underscore before it was hyphenated,
 	// and the decoder is not strict: the old key parses, contributes nothing, and
-	// the threshold falls back to a default nobody chose. A second pass over the
-	// same bytes is what notices it — the file is a few kilobytes and is read once
-	// at boot and once per SIGHUP, and the alternative (a field carrying the old
-	// key) would ride back into the file the next Save rewrites. The error is
-	// dropped because the parse above already succeeded on these bytes.
-	var stale struct {
+	// the threshold falls back to a default nobody chose. A field carrying the
+	// old key would have ridden back into the file the next Save rewrites, so it
+	// is noticed here instead.
+	//
+	// And a score number the operator mistyped — `recency: fast` — fails the
+	// STRICT pass, which takes the whole file down with it and leaves the daemon
+	// on defaults with one line naming neither the section nor the key. This pass
+	// runs whether or not that happened, and precisely for the case where it did,
+	// so the warning can name what the operator has to fix. The file is a few
+	// kilobytes and is read once at boot and once per SIGHUP.
+	var loose struct {
 		Score struct {
-			PromoteAt *int `yaml:"promote_at"`
+			StalePromoteAt any            `yaml:"promote_at"`
+			PromoteAt      any            `yaml:"promote-at"`
+			WorkingSet     any            `yaml:"working-set"`
+			Rank           map[string]any `yaml:"rank"`
 		} `yaml:"score"`
 	}
-	_ = yaml.Unmarshal(data, &stale)
-	c.Score.StalePromoteAt = stale.Score.PromoteAt != nil
+	_ = yaml.Unmarshal(data, &loose)
+	c.Score.StalePromoteAt = loose.Score.StalePromoteAt != nil
+	c.Score.BadNumbers = badNumbers(map[string]any{
+		"score.promote-at":  loose.Score.PromoteAt,
+		"score.working-set": loose.Score.WorkingSet,
+	}, loose.Score.Rank)
+	if perr != nil {
+		return c, fmt.Errorf("parse config %s: %w", paths.ConfigFile(), perr)
+	}
 	c.normalize()
 	return c, nil
+}
+
+// badNumbers names the score keys whose value is present but is not a number,
+// sorted so a reload logs them in the same order every time. Those are exactly
+// the values that make the strict parse fail, which is why they have to be found
+// without one.
+//
+// A key that is ABSENT, and one written with no value at all, are both left out:
+// the first is nothing, and the second decodes as unset and lands on the
+// package's default, which is what an operator who commented a value out meant.
+// Only a value the strict pass would reject is reported.
+//
+// Which means it does NOT catch a float written where an int is expected.
+// yaml.v3 truncates silently, so `promote-at: 2.5` and `working-set: 3.7` parse
+// cleanly and the daemon runs on 2 and 3 with nothing said (verified against
+// v3.0.1). That is the decoder's behaviour and not a gap this function ever
+// claimed to cover: it reports values the STRICT pass rejects, and those are
+// not among them. Closing it would mean re-deciding, here, which of the two
+// numbers an operator meant.
+//
+// The keys it looks at are kept honest by TestBadNumbersCoversEveryNumericKey,
+// which walks ScoreConfig's own yaml tags: `loose` spells them a second time,
+// and a numeric key added to the config struct alone would otherwise be missing
+// from the warning with nothing to notice it.
+//
+// The rank map is separate because it is one level deeper, and because a `rank:`
+// that is not a mapping at all leaves it nil — nothing to name, and the parse
+// error the caller already returns is what covers that.
+func badNumbers(top map[string]any, rank map[string]any) []string {
+	var out []string
+	add := func(key string, v any) {
+		if v == nil || isYAMLNumber(v) {
+			return
+		}
+		out = append(out, key)
+	}
+	for key, v := range top {
+		add(key, v)
+	}
+	for key, v := range rank {
+		add("score.rank."+key, v)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// isYAMLNumber reports whether a value decoded into `any` is one yaml.v3 would
+// also decode into an int or a float64 field. Those are the only two shapes it
+// produces for a numeric scalar; a quoted number is a string and is rejected
+// here for the same reason the strict pass rejects it.
+func isYAMLNumber(v any) bool {
+	switch v.(type) {
+	case int, int64, uint64, float64:
+		return true
+	default:
+		return false
+	}
 }
 
 // LoadTUI reads the cockpit appearance file ($HOME/.baton/TUI.yaml). A missing

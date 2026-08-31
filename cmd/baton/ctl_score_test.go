@@ -18,7 +18,7 @@ func ctlScoredServer(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_RUNTIME_DIR", home)
-	st, err := score.Open(t.TempDir(), 0)
+	st, err := score.Open(t.TempDir(), score.Policy{})
 	if err != nil {
 		t.Fatalf("open score store: %v", err)
 	}
@@ -62,6 +62,18 @@ func TestCtlScoreRuns(t *testing.T) {
 		if err := r.Run(c); err != nil {
 			t.Fatalf("%T.Run: %v", r, err)
 		}
+	}
+
+	// Naming a panel the fleet does not have is REFUSED, not answered with the
+	// contextless listing under a different name — the whole reason the reply
+	// echoes the context it ranked against.
+	if err := (ctlScoreList{Panel: "nosuchpanel"}).Run(c); err == nil {
+		t.Fatal("score list for an unknown panel should error, not fall back to a contextless ranking")
+	}
+
+	// The kong path takes the optional argument as well as omitting it.
+	if code := ctlMain([]string{"score", "list"}); code != 0 {
+		t.Fatalf("ctl score list exit = %d, want 0", code)
 	}
 
 	// The kong path parses and runs the nested subcommand end to end.

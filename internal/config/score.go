@@ -5,7 +5,14 @@ import (
 )
 
 // ScoreConfig configures the fleet-scope memory (issue #37): where the three
-// score files live and whether the subsystem runs at all.
+// score files live, whether the subsystem runs at all, how many times an
+// observation must recur before it earns a tier, how many entries one brief
+// carries, and what each ranking dimension is worth.
+//
+// Everything but Dir and Enabled reloads on SIGHUP — they are numbers the live
+// store compares rather than state to swap — and everything but Dir and Enabled
+// is clamped by the store rather than here; see score.Policy.clamp for the
+// defaults and the floors.
 type ScoreConfig struct {
 	// Dir is the directory holding score.md, score.json, and score-events.jsonl.
 	// Empty means $HOME/.baton. Resolved through paths.Expand, so "~" works.
@@ -45,12 +52,82 @@ type ScoreConfig struct {
 	// or the one the daemon broadcasts.
 	StalePromoteAt bool `yaml:"-" json:"-"`
 
+	// BadNumbers names the score keys whose value is present and is not a number
+	// — `working-set: lots`, `rank: {recency: fast}` — and exists for the reason
+	// StalePromoteAt does: so the daemon can say which key to fix.
+	//
+	// It matters more than the stale key does. A mistyped number fails the strict
+	// parse, which takes the WHOLE file down: Load returns an error, the daemon
+	// keeps its running score policy on a reload and boots on the package
+	// defaults, and the one line it logs names neither the section nor the key.
+	// The operator's next move is to reload again and watch nothing change. See
+	// config.badNumbers, which finds them without the parse that failed.
+	//
+	// Set by Load from the file's own bytes, never by a key of its own: it is a
+	// fact about a parse, so it must not ride into the config a Save rewrites or
+	// the one the daemon broadcasts.
+	BadNumbers []string `yaml:"-" json:"-"`
+
+	// Rank is what each ranking dimension is worth when it matches. Unset weights
+	// land on the store's default; see RankConfig and score.clampWeight.
+	Rank RankConfig `yaml:"rank,omitempty"`
+
+	// WorkingSet is how many entries one brief carries — the highest-ranked few,
+	// not the first few. Unset, and anything below one, lands on the store's
+	// default of seven; see score.clampWorkingSet for why "fewer than one" is
+	// read as unset rather than as switching the memory off, which is what
+	// score.enabled is for.
+	//
+	// It caps the BRIEF, never the store: `baton ctl score list` reports every
+	// entry the store holds whatever this says, and marks which of them the
+	// working set took (#42).
+	WorkingSet int `yaml:"working-set,omitempty"`
+
 	// Enabled turns the subsystem off entirely when false: no injection into
 	// briefs, submissions refused with a plain reason, files left untouched.
 	// It is a pointer for the reason every Settings toggle is: unset means
 	// "use the default" (on), which an explicit false must stay distinguishable
 	// from across a rewrite of the file.
 	Enabled *bool `yaml:"enabled,omitempty"`
+}
+
+// RankConfig weights the ranking's four dimensions (#42). An entry's rank is
+//
+//	tier x recency x cwd x profile x group
+//
+// so these are MULTIPLIERS, and the rule an operator has to remember is a
+// single one: 1.0 means the dimension does not matter. A weight below one would
+// penalise a match rather than reward it, which is not a semantics anyone
+// wants, so the store raises anything below one to the floor rather than
+// honouring it; unset (zero) means the default of 2.0, not "off". See
+// score.clampWeight, which is where both rules live.
+//
+// The tier itself is deliberately NOT here. It is earned by recurrence (#37)
+// and never granted by config, so a fleet cannot be told to ignore what it has
+// learned is important.
+type RankConfig struct {
+	// Recency is what the most recently reinforced entry is worth. It is the one
+	// dimension that is not a match: every entry's factor slides linearly between
+	// 1.0 at the oldest last-reinforcement position in the event log and this
+	// weight at the newest.
+	//
+	// A POSITION, not a time. Nothing in the ranking reads a clock (invariant
+	// I5), so a laptop that slept for a week or an NTP correction cannot reorder
+	// what the fleet is being told.
+	Recency float64 `yaml:"recency,omitempty"`
+
+	// Cwd, Profile and Group are each worth their weight when the entry was
+	// submitted from a panel whose working directory, agent profile, or fleet
+	// group matches the one being dispatched to, and 1.0 otherwise. They are
+	// independent, so an entry matching all three is worth their product.
+	//
+	// An entry with no recorded value for a dimension never matches, and neither
+	// does a dispatch with none — "unknown" is not a value that agrees with
+	// itself. Entries the operator submitted from their own cockpit record none
+	// of the three, so they rank on tier and recency alone.
+	Cwd     float64 `yaml:"cwd,omitempty"`
+	Profile float64 `yaml:"profile,omitempty"`
+	Group   float64 `yaml:"group,omitempty"`
 }
 
 // IsEnabled reports whether the score subsystem runs. Unset defaults to on —
