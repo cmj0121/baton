@@ -388,6 +388,41 @@ func sweepLegacyConductorWorkspaces(sock string) {
 	}
 }
 
+// openScore opens the fleet memory (#39) and reports why no store is running
+// when none is. A failed Open logs and boots WITHOUT a store — corrupt score
+// files never block the fleet (#38 lifecycle), and a second daemon pointed at
+// the same score directory is refused there rather than clobbering the first
+// one's files. The reason travels to the server so score.status and
+// score.submit can say WHICH of "switched off", "unavailable", and "running"
+// this daemon is in; a boot log line alone would leave the operator of a second
+// BATON_SOCK fleet guessing.
+func openScore(cfg config.ScoreConfig) (*score.Store, string) {
+	if !cfg.IsEnabled() {
+		return nil, "score is switched off in the config (score.enabled: false)"
+	}
+	st, err := score.Open(cfg.Directory())
+	if err != nil {
+		log.Warn().Err(err).Str("dir", cfg.Directory()).Msg("score store open failed; running without fleet memory")
+		return nil, err.Error()
+	}
+	if st.Unlocked() {
+		log.Warn().Str("dir", cfg.Directory()).
+			Msg("score directory cannot be locked on this filesystem; a second daemon here would corrupt it")
+	}
+	// #38's lifecycle asks for one line per recovery action, so what the boot
+	// pass did to the operator's files is visible without reading the event log
+	// by hand.
+	if d, h := st.Boot(), st.Health(); d != (score.Delta{}) || h != (score.Health{}) {
+		log.Info().Int("admitted", d.Admitted).Int("reattributed", d.Reattributed).
+			Int("adopted", d.Adopted).Int("superseded", d.Superseded).
+			Int("retired", d.Retired).Int("reprojected", d.Reprojected).
+			Int("oversized", h.Oversized).Int("torn_events", h.TornEvents).
+			Int("cache_write_failures", h.CacheWriteFailures).
+			Str("dir", cfg.Directory()).Msg("score recovered")
+	}
+	return st, ""
+}
+
 func runServerOn(ln net.Listener, sock string) error {
 	// Record the PID so clients can force-stop this daemon (baton --force / the
 	// in-TUI restart). Non-fatal if it cannot be written.
@@ -407,37 +442,9 @@ func runServerOn(ln net.Listener, sock string) error {
 	rc := reloadableSettings(cfg)
 	stateF := paths.StateFile(sock)
 	sweepLegacyConductorWorkspaces(sock)
-	// The fleet memory (#39). A failed Open logs and boots WITHOUT a store —
-	// corrupt score files never block the fleet (#38 lifecycle), and a second
-	// daemon pointed at the same score directory is refused there rather than
-	// clobbering the first one's files — and `score.enabled: false` hands the
-	// server a nil store, which the score package treats as the disabled one.
-	var scoreStore *score.Store
-	if cfg.Score.IsEnabled() {
-		st, serr := score.Open(cfg.Score.Directory())
-		switch {
-		case serr != nil:
-			log.Warn().Err(serr).Str("dir", cfg.Score.Directory()).Msg("score store open failed; running without fleet memory")
-		default:
-			scoreStore = st
-			if st.Unlocked() {
-				log.Warn().Str("dir", cfg.Score.Directory()).
-					Msg("score directory cannot be locked on this filesystem; a second daemon here would corrupt it")
-			}
-			// #38's lifecycle asks for one line per recovery action, so what the
-			// boot pass did to the operator's files is visible without reading the
-			// event log by hand.
-			if d, h := st.Boot(), st.Health(); d != (score.Delta{}) || h != (score.Health{}) {
-				log.Info().Int("admitted", d.Admitted).Int("reattributed", d.Reattributed).
-					Int("adopted", d.Adopted).Int("superseded", d.Superseded).
-					Int("retired", d.Retired).Int("reprojected", d.Reprojected).
-					Int("oversized", h.Oversized).Int("torn_events", h.TornEvents).
-					Int("cache_write_failures", h.CacheWriteFailures).
-					Str("dir", cfg.Score.Directory()).Msg("score recovered")
-			}
-		}
-	}
-	srv := server.New(ln, append(buildServerOptions(rc, stateF), usageOption(cfg), limitsOption(cfg), server.WithScore(scoreStore))...)
+	scoreStore, scoreReason := openScore(cfg.Score)
+	srv := server.New(ln, append(buildServerOptions(rc, stateF), usageOption(cfg), limitsOption(cfg),
+		server.WithScore(server.ScoreState{Store: scoreStore, Enabled: cfg.Score.IsEnabled(), Reason: scoreReason}))...)
 	srv.Restore() // seed the fleet from the last snapshot (all as exited dead slots) before serving
 
 	// The Lua plugin subsystem (docs/PLUGIN.md). Wire the server's event sink and

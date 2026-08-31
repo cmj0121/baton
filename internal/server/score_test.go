@@ -34,8 +34,11 @@ func scoreServer(st *score.Store) (*Server, *[]byte) {
 		spawning:        map[string]bool{},
 		taskDirty:       make(chan string, 8),
 		dirty:           make(chan struct{}, 1),
-		score:           st,
 	}
+	// Through the real option rather than by setting the fields: a test store
+	// stands for a daemon whose config said yes and whose Open succeeded, and the
+	// option is what keeps the store and the knob from disagreeing.
+	WithScore(ScoreState{Store: st, Enabled: st != nil})(s)
 	s.writeInput = func(id string, data []byte) { delivered = append(delivered, data...) }
 	return s, &delivered
 }
@@ -73,10 +76,7 @@ func noError(t *testing.T, cc *clientConn) {
 // prompt, hands the task.pre filter the panel's full context, and still records
 // the bare prompt as the panel's brief — cards and restarts never carry the block.
 func TestDirectDispatchInjectsScore(t *testing.T) {
-	st, err := score.Open(t.TempDir()) // a fresh store holds no entries
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, _ := scoreStore(t) // a fresh store holds no entries
 	if _, err := st.Submit("prefer table-driven tests", score.Provenance{Source: "user"}); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -133,10 +133,7 @@ func TestDirectDispatchNilStore(t *testing.T) {
 // (per-member delivery is R5): the filter sees an empty-context brief and the
 // member receives the bare prompt even with a live store holding entries.
 func TestGroupDispatchCarriesNoScore(t *testing.T) {
-	st, err := score.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, _ := scoreStore(t)
 	s, delivered := scoreServer(st)
 
 	var seen TaskBrief
@@ -157,10 +154,7 @@ func TestGroupDispatchCarriesNoScore(t *testing.T) {
 // TestEnqueueBriefCarriesNoScore checks the queued path: task.enqueue hands the
 // filter an empty-context brief — a queued task carries no score by design (R5).
 func TestEnqueueBriefCarriesNoScore(t *testing.T) {
-	st, err := score.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, _ := scoreStore(t)
 	s, _ := scoreServer(st)
 
 	var seen TaskBrief
@@ -182,10 +176,7 @@ func TestEnqueueBriefCarriesNoScore(t *testing.T) {
 // declared a self submits as that agent panel (id, profile, cwd joined from the
 // fleet), while a self-less cockpit submits as the user.
 func TestScoreSubmitProvenance(t *testing.T) {
-	st, err := score.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, _ := scoreStore(t)
 	s, _ := scoreServer(st)
 
 	find := func(id string) score.Entry {
@@ -242,29 +233,19 @@ func TestScoreSubmitDisabled(t *testing.T) {
 // enabled/entries/rendered/dir honestly in each state. The two counts are both
 // reported so status can explain its own gap when the render limit bites.
 func TestScoreListAndStatus(t *testing.T) {
-	dir := t.TempDir()
-	st, err := score.Open(dir)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, dir := scoreStore(t)
 	if _, err := st.Submit("one real entry", score.Provenance{Source: "user"}); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 
-	type status struct {
-		Enabled  bool   `json:"enabled"`
-		Entries  int    `json:"entries"`
-		Rendered int    `json:"rendered"`
-		Dir      string `json:"dir"`
-	}
 	cases := []struct {
 		name   string
 		st     *score.Store
-		want   status
+		want   statusReply
 		listed int // entries score.list returns
 	}{
-		{"enabled", st, status{Enabled: true, Entries: 1, Rendered: 1, Dir: dir}, 1},
-		{"disabled", nil, status{}, 0},
+		{"enabled", st, statusReply{Enabled: true, Available: true, Entries: 1, Rendered: 1, Dir: dir}, 1},
+		{"disabled", nil, statusReply{Reason: "score is disabled"}, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -281,13 +262,7 @@ func TestScoreListAndStatus(t *testing.T) {
 				t.Fatalf("want %d listed entries, got %+v", tc.listed, entries)
 			}
 
-			s.onCommand(cc, proto.Command{Action: "score.status"})
-			msg = reply(t, cc)
-			var got status
-			if msg.Type != "score" || json.Unmarshal(msg.Score, &got) != nil {
-				t.Fatalf("score.status must answer a score object, got %+v", msg)
-			}
-			if got != tc.want {
+			if got := status(t, s); got != tc.want {
 				t.Fatalf("status %+v, want %+v", got, tc.want)
 			}
 		})

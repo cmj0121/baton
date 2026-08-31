@@ -29,7 +29,10 @@ func ctlScoredServer(t *testing.T) string {
 		t.Fatalf("listen: %v", err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
-	go func() { _ = server.New(ln, server.WithScore(st)).Serve() }()
+	// One option carries the store and the config knob together, so a stand-in
+	// daemon cannot report a live store as a disabled subsystem.
+	state := server.ScoreState{Store: st, Enabled: true}
+	go func() { _ = server.New(ln, server.WithScore(state)).Serve() }()
 	return sock
 }
 
