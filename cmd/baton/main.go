@@ -418,6 +418,9 @@ func openScore(cfg config.ScoreConfig) (*score.Store, string) {
 			Int("retired", d.Retired).Int("reprojected", d.Reprojected).
 			Int("oversized", h.Oversized).Int("torn_events", h.TornEvents).
 			Int("cache_write_failures", h.CacheWriteFailures).
+			Int("swallowed_repeats", h.SwallowedRepeats).
+			Int("unreported_folds", h.UnreportedFolds).
+			Int("alias_evictions", h.AliasEvictions).
 			Str("dir", cfg.Directory()).Msg("score recovered")
 	}
 	return st, ""

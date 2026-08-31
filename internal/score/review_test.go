@@ -3,6 +3,7 @@ package score
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -99,10 +100,7 @@ func TestSameSizeEditInsideOneMtimeTickIsSeen(t *testing.T) {
 func TestMissingScoreMDIsReprojected(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, dir)
-	first, err := s.Submit("keep the build green", Provenance{Source: "agent", SourcePanel: "p1"})
-	if err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
+	first := submitAs(t, s, "keep the build green", Provenance{Source: "agent", SourcePanel: "p1"})
 	submit(t, s, "ask before force-pushing")
 
 	if err := os.Remove(filepath.Join(dir, scoreMD)); err != nil {
@@ -203,7 +201,10 @@ func TestReconcileBatchesItsAppends(t *testing.T) {
 	const n = 1000
 	var md strings.Builder
 	for i := range n {
+		// Distinct wordings on purpose: identical ones fold into a single entry
+		// now, and this test needs a thousand CHANGED lines in one pass.
 		md.WriteString("- entry number ")
+		md.WriteString(strconv.Itoa(i))
 		md.WriteString(strings.Repeat("x", 1+i%5))
 		md.WriteString("\n")
 	}

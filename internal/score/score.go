@@ -33,20 +33,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Schema is the current on-disk schema version, shared by the snapshot and the
 // event log. Bump it on a breaking change to either shape; a snapshot written
 // with a newer schema is ignored as if corrupt.
 //
-// R1 added `text` and `provenance` to the event and `aliases` to the entry. All
-// three are appended optional fields — an old line decodes with them zero, and
-// an old reader ignores them — so the version stays 1, for the same reason
-// proto.ProtocolVersion does not move on an appended field. What an appended
+// R1 added `text` and `provenance` to the event and `aliases` to the entry, and
+// R2 added `tier` to the event. All four are appended optional fields — an old
+// line decodes with them zero, and an old reader ignores them — so the version
+// stays 1, for the same reason proto.ProtocolVersion does not move on an
+// appended field. What an appended
 // field cannot fix is a record that never carried the text at all, and the
 // pre-R1 log is exactly that; replayLocked and reconcileLocked handle it as
 // "text unknown" rather than as an empty entry the file then edits, because
@@ -82,6 +85,20 @@ const renderLimit = 7
 //     say so, because a line that silently does nothing is worse than the bug.
 const maxEntryRunes = 300
 
+// maxAliases is how many prior wordings one entry keeps for folding.
+//
+// Eight, because an alias is worth keeping only while a repeat of it is more
+// likely to mean this entry than to mean something else. An entry reworded eight
+// times has drifted, and the ninth-oldest phrasing folding into what it says
+// today is the shape of "remembering wrong" that #38 §1 spends its whole budget
+// avoiding. The cap also bounds what an editing session can cost: three hundred
+// rewords is three hundred wordings persisted in score.json and replayed at
+// every boot, for an entry that is one line of text.
+//
+// Nothing is destroyed by the cap (I7): a dropped wording stays in the log with
+// the edit that retired it. It simply stops folding.
+const maxAliases = 8
+
 // staleWindow is how long after score.md's recorded mtime the fingerprint is
 // distrusted outright.
 //
@@ -113,8 +130,8 @@ var newline = []byte{'\n'}
 // even where nothing emits them yet, so later issues need no schema bump.
 const (
 	EventSubmitted  = "submitted"   // a new entry entered the store (Submit, and reconcile admitting a user's line)
-	EventFolded     = "folded"      // an agent-side reinforcement folded into an entry (emitted now by Reinforce; R2 folds near-duplicate submissions too)
-	EventRaised     = "raised"      // an entry's tier was promoted (R3)
+	EventFolded     = "folded"      // a repeat was counted into an existing entry rather than added as a line
+	EventRaised     = "raised"      // an entry's tier was promoted by recurrence
 	EventUserSignal = "user-signal" // the operator reinforced an entry (emitted now, by Reinforce)
 	EventEdited     = "edited"      // an entry's text changed — via score.md now, via the conductor in R6
 	EventRetired    = "retired"     // an entry left the store
@@ -156,13 +173,21 @@ type Provenance struct {
 type Entry struct {
 	Id             string     `json:"id"`
 	Text           string     `json:"text"`
-	Tier           int        `json:"tier"` // 1..3; wording in RenderBlock
+	Tier           int        `json:"tier"` // 1..3, earned by recurrence; wording in RenderBlock
 	Provenance     Provenance `json:"provenance"`
-	Reinforcements int        `json:"reinforcements"` // times Reinforce or a user edit hit this entry
+	Reinforcements int        `json:"reinforcements"` // repeats counted into this entry since it was first said
 	// Aliases are the entry's prior wordings, newest last, kept so a repeat of a
-	// superseded phrasing still folds into this entry (invariant I4). R1 only
-	// records them; R2's folding is what reads them.
+	// superseded phrasing still folds into this entry (invariant I4). The list is
+	// deduplicated by folding key and capped at maxAliases.
 	Aliases []string `json:"aliases,omitempty"`
+
+	// norm is Text's folding key, computed where the text is set rather than once
+	// per pass. Unexported, so it never reaches score.json — it is derived, and a
+	// cache inside a cache is one more thing that can stop being true. Every
+	// reconcile pass over an edited file used to normalise every entry again; at
+	// a few thousand entries that was the pass's whole allocation budget, and the
+	// pass runs on the dispatch path while the operator is still typing.
+	norm string
 }
 
 // Injectable reports whether the entry is light enough to prepend to every
@@ -188,7 +213,9 @@ func (e Entry) Injectable() bool {
 // text arrives on and what sanitize stops is an escape sequence replayed into
 // every agent's pty on every dispatch, durably.
 func newEntry(id, raw string, prov Provenance) Entry {
-	return Entry{Id: id, Text: sanitize(raw), Tier: 1, Provenance: prov}
+	e := Entry{Id: id, Tier: 1, Provenance: prov}
+	e.setText(raw)
+	return e
 }
 
 // setText replaces an entry's wording, scrubbing it on the way in — see
@@ -196,6 +223,7 @@ func newEntry(id, raw string, prov Provenance) Entry {
 // already, to compare it or to log it, pays only a scan here.
 func (e *Entry) setText(raw string) {
 	e.Text = sanitize(raw)
+	e.norm = normalize(e.Text)
 }
 
 // Context is what the renderer knows about the dispatch asking for entries.
@@ -220,9 +248,74 @@ type Delta struct {
 	Reattributed int // of those, ones whose id the log already knew: the original provenance is lost
 	Adopted      int // entries whose wording the log never carried, taken from the file
 	Superseded   int // entries whose text the operator changed
+	Folded       int // entries a duplicate line was counted into — at most one per entry; see View.Folds for the lines removed
 	Retired      int // entries score.md no longer carries
 	Reprojected  int // entries written back into a score.md that had gone missing
 }
+
+// Fold is one repeat counted into an entry that already said it: what survived,
+// what repeated it, where the repeat came from, and where the entry stands now.
+//
+// It covers BOTH ways a repeat arrives, because they are one lifecycle event and
+// #38 asks for one log line per fold. A submission that folded leaves score.md
+// untouched, so it is the mutation an operator cannot see by looking; a folded
+// LINE is the pass's only destructive act, and a count alone cannot say which
+// line went. The store never logs, so the records ride out to the server, which
+// is the single place they become log lines.
+type Fold struct {
+	Id   string // the entry the repeats were counted into
+	Text string // that entry's surviving wording
+	// Repeat is one of those repeats exactly as it was written: the one that
+	// moved the entry's counter where any of them did, and otherwise the first
+	// the pass saw. Where a record covers several lines the counter moves at most
+	// once, so naming the line that earned it is what keeps Counted readable.
+	Repeat string
+	Prov   Provenance // where that repeat came from: a panel, or the operator's own file
+	// Reinforcements is where the entry stands AFTER this fold, so the log line
+	// that announces a fold also answers the only question it raises.
+	Reinforcements int
+	// Duplicates is how many repeats this fold covers — more than one only on the
+	// file path, where a paste can carry the same wording many times. Counted says
+	// whether they moved the entry's counter, which they do not when the store
+	// already owes their removal (see Store.owed).
+	Duplicates int
+	Counted    bool
+	// FromFile says the repeats were LINES in score.md, which the pass then takes
+	// out; Removed whether they actually left it, which they do not when the
+	// rewrite that should have taken them out failed. Removed is meaningless on a
+	// submission fold, where no line ever existed to remove.
+	//
+	// The flags are separate because the pass can do each without the others, and
+	// one flag for several would let the log claim a deletion that never happened.
+	// None is inferable from another.
+	FromFile bool
+	Removed  bool
+}
+
+// maxFoldNotes caps the fold records held for the next read to report. Every
+// View drains them — that is every dispatch, list and status — so the buffer is
+// normally one pass deep; the cap exists only so a daemon nobody ever reads from
+// cannot accumulate them without limit. Past it the RECORDS are dropped, never
+// the folds: Delta and the event log still carry what happened.
+const maxFoldNotes = 128
+
+// maxOwedRemovals caps how many wordings ONE entry may be remembered as owing a
+// removal for. See Store.owed for the debt itself; this is only its bound.
+//
+// Both sources are finite but neither is small by construction. A pass's set is
+// one wording per duplicate LINE the file still shows, which is bounded by a
+// file the pass has already read whole — but the boot derivation's is one per
+// fold event in a log that grows forever, and the file it would be checked
+// against has not been read yet.
+//
+// Sixty-four is chosen for what it costs to be wrong. Byte-identical re-pastes
+// collapse to one, so reaching it takes sixty-four DIFFERENTLY typed duplicates
+// of a single observation, folded across sixty-four passes without one
+// successful rewrite between them. Past it the OLDEST goes, because a wording
+// folded longer ago is the least likely to still be on a line — and the cost of
+// forgetting one is at worst a repeat counted that should have been swallowed,
+// never a line removed, because owed reaches nothing but the decision to count.
+const maxOwedRemovals = 64
 
 // Health is the store's standing rather than any one pass's work: what it is
 // currently withholding, and what has gone wrong since Open.
@@ -241,6 +334,21 @@ type Health struct {
 	// full or read-only disk that will break the next append, which does.
 	TornEvents         int
 	CacheWriteFailures int
+	// The three things the store does quietly and correctly, counted because
+	// each is otherwise discoverable only by subtracting one number from
+	// another — and because each of them is the store choosing to remember
+	// less, which an operator is entitled to see it doing.
+	//
+	// SwallowedRepeats is duplicate lines removed without being counted, because
+	// the fold was already durable and only the removal was owed (see the fold
+	// branch of reconcileLocked). UnreportedFolds is fold records dropped past
+	// maxFoldNotes, so a pass that removed two hundred lines and named a hundred
+	// and twenty-eight of them says so. AliasEvictions is prior wordings pushed
+	// out of an entry by maxAliases, each one a phrasing that will no longer
+	// fold — the entry it would have joined simply gains a twin instead.
+	SwallowedRepeats int
+	UnreportedFolds  int
+	AliasEvictions   int
 }
 
 // View is one consistent look at the store, taken without letting go of its
@@ -257,8 +365,9 @@ type View struct {
 	Block    string  // Entries as the injectable text block; empty when there are none
 	Total    int     // every entry the store holds, injectable or not
 	Health   Health
-	Delta    Delta // what this look's pass changed; zero when score.md had not moved
-	Unlocked bool  // the store is running without its single-writer claim
+	Delta    Delta  // what this look's pass changed; zero when score.md had not moved
+	Folds    []Fold // repeats folded since the last look, for the server to log
+	Unlocked bool   // the store is running without its single-writer claim
 }
 
 // snapshot is the persisted shape of score.json: a cache of the log's fold.
@@ -276,8 +385,43 @@ type event struct {
 	Id     string      `json:"id"`
 	At     time.Time   `json:"at"`
 	Source string      `json:"source,omitempty"`     // who acted ("user"/"agent"); empty otherwise
-	Text   string      `json:"text,omitempty"`       // the entry's text at submitted/edited
-	Prov   *Provenance `json:"provenance,omitempty"` // where a submitted entry came from
+	Text   string      `json:"text,omitempty"`       // the entry's text at submitted/edited, and the repeat's own wording at folded
+	Prov   *Provenance `json:"provenance,omitempty"` // where a submitted entry, or a folded repeat, came from
+	// RemovedLine marks a fold that took a LINE out of score.md. It is named for
+	// its EFFECT rather than for where the repeat came from, because the effect
+	// is what the boot derivation is built on: only a fold that removed a line
+	// can owe a removal. A later path that folds a file line without removing it
+	// — R6's merge, the id-carrying duplicate the recovery table already admits —
+	// must leave this false, and a name about provenance would have read as true
+	// for it.
+	//
+	// Nothing else can supply the distinction: Source says WHO repeated the
+	// wording, and an operator submitting through `ctl score submit` is "user"
+	// exactly as their own file is.
+	//
+	// Appended and optional, so the schema stays 1. A fold logged before this
+	// field existed decodes with it false and simply seeds nothing — which is
+	// the pre-derivation behaviour, not a wrong one.
+	RemovedLine bool `json:"removed_line,omitempty"`
+}
+
+// foldEvent records one repeat counted into id. It carries the REPEAT's own text
+// and provenance, not the entry's: a fold is the one mutation whose input
+// reaches no file otherwise — score.md keeps the wording that was already there
+// and score.json keeps a count — so without them the store could say how often
+// something has been said but never who said it, which is what #38 leans on
+// where it declines to police the content of a submission.
+//
+// The event is EventFolded whoever repeated the wording, and "user" or "agent"
+// lives in Source alone. #38's glossary calls a fold the agent-side
+// reinforcement because that is the common case, not because the name is the
+// discriminator — R4's user signal must key on Source (invariant I6), never on
+// the name.
+func foldEvent(id, text string, prov Provenance, at time.Time, removedLine bool) event {
+	return event{
+		Schema: Schema, Event: EventFolded, Id: id, At: at,
+		Source: prov.Source, Text: text, Prov: &prov, RemovedLine: removedLine,
+	}
 }
 
 // Store is the fleet memory backed by one directory. A nil *Store is the
@@ -307,6 +451,55 @@ type Store struct {
 	mdCtime time.Time
 	mdSize  int64
 	mdIno   uint64
+
+	// folds are the fold records the next View reports.
+	//
+	// owed is the removals the store still owes: entry id → the exact bytes of
+	// EVERY duplicate line that is already folded in the log but may still be in
+	// score.md. It is ONE fact with one lifetime and one clearing rule — a debt
+	// is settled by a pass that successfully rewrites score.md without those
+	// bytes, and a pass that rewrites nothing settles every debt it did not
+	// re-incur, because it has just read the whole file and found none of them.
+	//
+	// EVERY wording, not the newest, because one entry can owe several at once: a
+	// pass whose rewrite fails leaves each duplicate it folded sitting in the
+	// file, and the next pass counts any of them the store has forgotten. Holding
+	// one wording per entry made that a ladder — a static file climbing a tier
+	// per pass for as long as the disk stayed broken — and #37 demotes nothing,
+	// so the tier outlived the episode that manufactured it. The wordings are a
+	// SLICE rather than a set: nothing here iterates them to produce a result,
+	// countable only asks whether one is present, and a slice cannot let map
+	// order reach an answer (invariant I1). addOwed keeps them deduplicated and
+	// bounded; see maxOwedRemovals.
+	//
+	// It is never written down. Persisting it would put recovery-relevant state
+	// in score.json, the one file #38 calls a disposable cache and Open never
+	// reads — the mistake the S0 demo flag made, provable by deleting the
+	// snapshot and watching the behaviour change. It survives a restart by being
+	// DERIVED instead, at Open, from the two things that are true: the fold event
+	// records the wording it removed (event.RemovedLine), and score.md either
+	// still shows those exact bytes or does not.
+	//
+	// Say plainly what the derivation catches, because it is wider than the
+	// failed rewrite it was built for: ANY fold whose exact bytes are back in
+	// score.md at the next boot. A clean fold, the operator retyping that line
+	// verbatim, and a restart before the next read is enough — no disk failure
+	// anywhere — and their genuine repeat is removed and counted zero.
+	//
+	// Two things bound that, and both are structural rather than hopeful. Only a
+	// fold that took a LINE out of the file is recorded as owing anything, so a
+	// submission an agent folded can never make a pass swallow an operator's
+	// typing. And the comparison is BYTE-EXACT: after a clean fold of "Run the
+	// linter first.", retyping "RUN THE LINTER FIRST!" folds and counts normally.
+	// What misfires is a byte-identical retype — the re-paste-from-the-same-
+	// clipboard case, which is the one that most deserves swallowing.
+	//
+	// One invariant keeps it safe, and reconcileLocked's countable closure is
+	// where that is enforced rather than asserted: owed reaches nothing but the
+	// decision to COUNT. It can never remove a line folding had not already
+	// decided to remove.
+	folds []Fold
+	owed  map[string][]string
 
 	// release drops the directory lock, and unlocked records that the filesystem
 	// could not provide one. See Open.
@@ -510,7 +703,7 @@ func (s *Store) View(ctx Context) (View, error) {
 	entries := s.renderLocked(ctx)
 	return View{
 		Entries: entries, Block: renderBlock(entries), Total: len(s.entries),
-		Health: s.health, Delta: delta, Unlocked: s.unlocked,
+		Health: s.health, Delta: delta, Folds: s.drainFoldsLocked(), Unlocked: s.unlocked,
 	}, err
 }
 
@@ -631,6 +824,31 @@ func (s *Store) appendMDLocked(line string) error {
 	return err
 }
 
+// applyLocked is the store's mutation order, in one place: the events are made
+// durable, and ONLY then does apply move memory to match them. The log is the
+// truth, so nothing the store believes — a counter, a tier, an entry — may
+// outlive a failed append, and a path that reversed the two would report a
+// promotion the next boot has never heard of.
+//
+// It was three hand-written sequences and three doc comments saying the same
+// thing before, one per mutation path, and #43's user signal would have been the
+// fourth — on the path where a tier running ahead of a failed append matters
+// most. apply reports its own failure (submitLocked has a score.md line to
+// append between the two), and memory that never landed is not committed.
+//
+// The commit is not part of the outcome; see refreshCacheLocked. The caller
+// holds the lock.
+func (s *Store) applyLocked(evs []event, apply func() error) error {
+	if err := s.appendEvents(evs); err != nil {
+		return err
+	}
+	if err := apply(); err != nil {
+		return err
+	}
+	s.commitLocked()
+	return nil
+}
+
 // commitLocked settles what a mutation leaves behind: the gauge of entries too
 // heavy to inject, and the score.json cache. Every path that changes the entry
 // set ends here, so neither can be forgotten by one added later. The caller
@@ -640,25 +858,31 @@ func (s *Store) commitLocked() {
 	s.refreshCacheLocked()
 }
 
-// Submit records a new note with its provenance and returns the stored entry.
-// Text is sanitised and weighed here, at the boundary the untrusted string
-// enters the store on; see sanitize and maxEntryRunes.
+// Submit records a note with its provenance and returns the entry it landed in,
+// and whether it FOLDED into one the store already held rather than starting a
+// new one — #38's "get back new or folded into id". Text is sanitised and
+// weighed here, at the boundary the untrusted string enters the store on; see
+// sanitize and maxEntryRunes.
 //
-// S0 dummy (R2 replaces): every submission is a brand-new entry at tier 1 —
-// no folding of near-duplicates into reinforcements yet.
-func (s *Store) Submit(text string, prov Provenance) (Entry, error) {
+// A repeat is counted into the existing entry instead of adding a line, so the
+// same observation submitted by twelve panels is one entry with twelve
+// reinforcements rather than twelve entries nobody can rank. What counts as a
+// repeat is normalize, and nothing else.
+func (s *Store) Submit(text string, prov Provenance) (Entry, bool, error) {
 	if s == nil {
-		return Entry{}, errDisabled
+		return Entry{}, false, errDisabled
 	}
 
 	// Scrubbed and weighed as the entry it would become, so the admission policy
-	// is asked once and in one place rather than restated here.
+	// is asked once and in one place rather than restated here. A repeat is
+	// weighed too: an over-long submission is refused whether or not it would
+	// have folded, because the caller's mistake is the same either way.
 	e := newEntry("", text, prov)
 	switch {
 	case e.Text == "":
-		return Entry{}, errors.New("score: empty submission")
+		return Entry{}, false, errors.New("score: empty submission")
 	case !e.Injectable():
-		return Entry{}, fmt.Errorf("score: submission is %d runes, limit is %d", len([]rune(e.Text)), maxEntryRunes)
+		return Entry{}, false, fmt.Errorf("score: submission is %d runes, limit is %d", len([]rune(e.Text)), maxEntryRunes)
 	}
 
 	s.mu.Lock()
@@ -668,10 +892,19 @@ func (s *Store) Submit(text string, prov Provenance) (Entry, error) {
 	// overwritten and a line they deleted is not resurrected by this write. The
 	// reconcile is unconditional rather than fingerprint-gated: writes are rare,
 	// and no gate over filesystem timestamps is exact.
+	//
+	// It also has to run before the fold target is chosen: a wording the operator
+	// has just deleted must not swallow this submission, and one they have just
+	// typed should.
 	if _, err := s.reconcileNowLocked(); err != nil {
-		return Entry{}, err
+		return Entry{}, false, err
 	}
-	return s.submitLocked(e.Text, prov)
+	if i := s.foldTargetLocked(e.Text); i >= 0 {
+		folded, err := s.foldLocked(i, e.Text, prov)
+		return folded, true, err
+	}
+	stored, err := s.submitLocked(e.Text, prov)
+	return stored, false, err
 }
 
 // sanitize scrubs text at the boundary it enters the store on, for the same
@@ -753,12 +986,236 @@ func needsScrub(text string) bool {
 	return false
 }
 
+// normalize is the folding key. Two wordings fold into one entry when, and only
+// when, their normalised forms are byte-identical (#38 §1). This comment is the
+// contract: it is what an operator wondering why two lines did not merge, and
+// what R6's semantic `merge`, both read.
+//
+// What it considers:
+//
+//   - CASE. Unicode simple lower-casing, so "Run The Tests" and "run the tests"
+//     are one entry. Simple rather than special-cased, and no locale is ever
+//     consulted: invariant I1 asks the same log to yield the same tiers on every
+//     machine, and locale-aware casing (Turkish dotless i) would make that false.
+//   - WHITESPACE. Every run of whitespace collapses to one space and the ends
+//     are trimmed, so a line an editor re-wrapped or re-indented still folds.
+//   - TRAILING PUNCTUATION. Punctuation at the very END is dropped, so "run the
+//     tests." folds with "run the tests". Only at the end: interior punctuation
+//     is content — "don't" is not "dont", and "a, b" is not "a b".
+//
+// What it deliberately does NOT consider:
+//
+//   - MEANING. No stemming, no stop words, no synonyms, no similarity score, no
+//     edit distance. Two wordings of the same observation each sit at tier 1 and
+//     neither ever climbs. #38 §1 accepted that outright — Score remembers less
+//     rather than remembering wrong — and merging by meaning is the conductor's
+//     job in R6, where an agent proposes it and a human can see it happen.
+//   - WORD ORDER. "tests before push" and "before push tests" are two entries.
+//   - ACCENTS or UNICODE NORMAL FORM. The NFC and NFD spellings of one accented
+//     word do not fold; normalising that needs golang.org/x/text and this
+//     package is stdlib-only.
+//
+// It is a pure function of its argument — no clock, no map, no locale, no
+// package state — which is what makes a replayed log fold identically (I1).
+// It is sanitize plus two steps, rather than its own builder, because every
+// input it is given has already been through sanitize — setText scrubs, aliases
+// are former Entry.Texts, and both reconcile call sites scrub their line first —
+// so the whitespace half of the contract was being implemented twice. Composing
+// them keeps the "an editor re-wrapped it and it still folds" promise true for a
+// caller that has NOT scrubbed, and costs nothing in the common case: sanitize
+// returns its argument untouched for plain ASCII (needsScrub), strings.ToLower
+// does the same when there is nothing to lower, and the trim is a reslice.
+func normalize(text string) string {
+	return strings.TrimRightFunc(strings.ToLower(sanitize(text)), trimmable)
+}
+
+// trimmable is what normalize drops from the END of a wording: punctuation, so
+// "run the tests." folds with "run the tests", and the space a trimmed
+// punctuation mark can leave behind ("run the tests ." → "run the tests ").
+// Nothing else can end a sanitized string in a space.
+func trimmable(r rune) bool {
+	return unicode.IsPunct(r) || unicode.IsSpace(r)
+}
+
+// normEq reports whether text normalises to key, without normalising it: it
+// walks text's runes through the same transform normalize applies and compares
+// each against key as it goes. key MUST already be a normalize output — every
+// caller has one in hand — since the comparison relies on it carrying no
+// trimmable tail of its own.
+//
+// It exists because the folding key of an ALIAS is the one key the store cannot
+// cache. Entry.norm covers the current wording, but a submission is matched
+// against every prior wording too (invariant I4), and normalising those on each
+// Submit built and threw away a string per alias per entry: at five thousand
+// entries holding the full maxAliases, forty thousand allocations under the
+// store mutex, stalling every concurrent View, to answer one lookup.
+func normEq(text, key string) bool {
+	var (
+		n       int  // bytes of key matched so far
+		emitted bool // anything at all has come out of the transform
+		over    bool // past key's end, on runes only a trailing trim can excuse
+		pending bool // a run of whitespace is waiting to become one space
+	)
+	// match consumes one transformed rune, reporting whether equality is still
+	// possible. Runes past key's end are not a mismatch if the trim would have
+	// taken them — that is how "run the tests." matches the key "run the tests".
+	match := func(r rune) bool {
+		switch {
+		case over, n == len(key):
+			if !trimmable(r) {
+				return false
+			}
+			over = true
+			return true
+		}
+		kr, size := utf8.DecodeRuneInString(key[n:])
+		if kr != r {
+			return false
+		}
+		n += size
+		return true
+	}
+	for _, r := range text {
+		switch {
+		case unicode.IsSpace(r):
+			pending = true
+			continue
+		case unicode.IsControl(r), unicode.Is(unicode.Cf, r), r == unicode.ReplacementChar:
+			continue
+		}
+		if pending && emitted && !match(' ') {
+			return false
+		}
+		pending = false
+		emitted = true
+		if !match(unicode.ToLower(r)) {
+			return false
+		}
+	}
+	return n == len(key)
+}
+
+// foldIndex answers "which entry already says this", mapping a normalised
+// wording to the POSITION of the entry that owns it in the slice it was built
+// over. Positions rather than ids because every consumer wants one: the pass
+// that reads it goes on to reinforce the entry and name it in a fold record, and
+// an id would have to be scanned back into a position to do either.
+//
+// It indexes what the entries VISIBLY say — their current wordings, in their
+// order, and nothing else. Folding on the score.md path deletes the operator's
+// line, and the justification for deleting it is that the file still shows the
+// wording on another line: true of a current-text match, false of an alias. So a
+// remembered wording may still COUNT a repeat on the submission path, where
+// nothing is deleted (see foldTargetLocked), but on the file path it admits a
+// new entry instead.
+//
+// It is only ever built and read, never iterated, so no answer of the store's
+// depends on Go's map order (I1). Where two entries claim one wording — the
+// operator pasted a duplicate and both lines carry ids — the FIRST in the entry
+// order wins, so the winner is the file's order rather than the hash's.
+type foldIndex map[string]int
+
+// newFoldIndex indexes the given entries by their current wordings.
+func newFoldIndex(entries []Entry) foldIndex {
+	f := make(foldIndex, len(entries))
+	for i := range entries {
+		f.addKey(entries[i].norm, i)
+	}
+	return f
+}
+
+// addKey registers an already-normalised wording at position at, keeping the
+// first claim on it.
+//
+// A wording that normalises to nothing is never registered. A line of pure
+// punctuation is exactly that, and indexing it would fold every other such line
+// into the first one — entries that share no word at all, merged because both
+// were noise.
+func (f foldIndex) addKey(key string, at int) {
+	if key == "" {
+		return
+	}
+	if _, taken := f[key]; !taken {
+		f[key] = at
+	}
+}
+
+// lookup reports which entry text is a repeat of, if any.
+func (f foldIndex) lookup(text string) (int, bool) {
+	at, ok := f[normalize(text)]
+	return at, ok
+}
+
+// foldTargetLocked is the index of the entry text repeats, or -1 for a wording
+// the store has never seen. An entry is repeated by its current text AND by
+// every prior wording it has kept, which is what makes a repeat of a superseded
+// phrasing still fold into the entry that was reworded (invariant I4). The
+// caller holds the lock.
+//
+// Two linear passes rather than an index, because the index would be built for
+// ONE lookup and thrown away — the build is already O(entries), so the map is
+// pure overhead, and the alias half of it could not even reuse Entry.norm.
+// Current wordings are scanned first and aliases second, which is the same
+// precedence a single index gave: a wording an entry still says beats one it
+// used to.
+//
+// Keeping an index on the Store instead would be state to invalidate at every
+// submit, fold, reword, admission and retirement — the kind that goes stale
+// silently — in a call that is about to fsync twice. Submit is a mutation path,
+// not the render path: a dispatch reads through View, which builds the file
+// pass's index only when score.md has actually moved.
+func (s *Store) foldTargetLocked(text string) int {
+	key := normalize(text)
+	if key == "" {
+		// Nothing owns the empty key; see addKey.
+		return -1
+	}
+	for i := range s.entries {
+		if s.entries[i].norm == key {
+			return i
+		}
+	}
+	for i := range s.entries {
+		for _, a := range s.entries[i].Aliases {
+			if normEq(a, key) {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// foldLocked counts a repeat into the entry at i instead of adding a line: one
+// log event, one counter, and score.md is not touched at all — there is no new
+// line to append, and the surviving wording is the one already in the file. It
+// removed no line, so it owes none: the event is written with RemovedLine false.
+// The caller holds the lock.
+//
+// The fold is RECORDED as well as counted, on the same buffer the file path
+// uses, so the one log line per fold #38's lifecycle asks for has one producer
+// and one shape. A submission that folded is the mutation an operator cannot see
+// by looking — score.md does not move — which is precisely why it must be said.
+func (s *Store) foldLocked(i int, text string, prov Provenance) (Entry, error) {
+	now := time.Now().UTC()
+	e := s.entries[i]
+	evs := []event{foldEvent(e.Id, text, prov, now, false)}
+	e.Reinforcements++
+	if err := s.applyLocked(evs, func() error {
+		s.entries[i] = e
+		s.noteFoldsLocked([]Fold{{
+			Id: e.Id, Text: e.Text, Repeat: text, Prov: prov,
+			Reinforcements: e.Reinforcements, Duplicates: 1, Counted: true,
+		}})
+		return nil
+	}); err != nil {
+		return Entry{}, err
+	}
+	return e, nil
+}
+
 // Reinforce bumps an entry's counter and logs who did it: a fold when an agent
 // reinforces (in #38's model a fold IS the agent-side reinforcement), a
-// user-signal when the operator does.
-//
-// S0 dummy (R3 replaces): the counter increments and the event is logged, but
-// no tier promotion (raised) happens yet.
+// user-signal when the operator does. Either way the count can earn the entry a
 func (s *Store) Reinforce(id, source string) error {
 	if s == nil {
 		return errDisabled
@@ -780,15 +1237,14 @@ func (s *Store) Reinforce(id, source string) error {
 	if source == "user" {
 		name = EventUserSignal
 	}
-	// Durable append first, memory second: the log is the truth, so the counter
-	// must never run ahead of a failed write. The commit that follows is not part
-	// of the outcome; see refreshCacheLocked.
-	if err := s.appendEvents([]event{{Schema: Schema, Event: name, Id: id, At: time.Now().UTC(), Source: source}}); err != nil {
-		return err
-	}
-	s.entries[i].Reinforcements++
-	s.commitLocked()
-	return nil
+	now := time.Now().UTC()
+	e := s.entries[i]
+	evs := []event{{Schema: Schema, Event: name, Id: id, At: now, Source: source}}
+	e.Reinforcements++
+	return s.applyLocked(evs, func() error {
+		s.entries[i] = e
+		return nil
+	})
 }
 
 // Refine is the entry-management verb (promote, retire, edit, …).
@@ -889,32 +1345,33 @@ func tierWording(tier int) string {
 // submitLocked appends a new entry to all three files. The caller holds the
 // lock.
 //
-// The write order is what makes the reported outcome honest. The log goes
-// first, then score.md, and memory only after both landed: a failure at either
-// step returns an error with the entry absent from memory, from Render, and —
-// after the next boot's recovery pass, which retires a logged entry score.md
-// lacks — from the store. The snapshot comes last and its failure is NOT an
-// error, because score.json is a cache this package rebuilds from the log at
-// every Open: reporting a failed cache refresh as a failed submission would
-// tell the caller nothing was stored when the entry is durable in two files.
+// The write order is what makes the reported outcome honest, and applyLocked is
+// where it is stated: the log goes first, then score.md, and memory only after
+// both landed, so a failure at either step returns an error with the entry
+// absent from memory, from Render, and — after the next boot's recovery pass,
+// which retires a logged entry score.md lacks — from the store. The snapshot
+// comes last and its failure is NOT an error, because score.json is a cache this
+// package rebuilds from the log at every Open: reporting a failed cache refresh
+// as a failed submission would tell the caller nothing was stored when the entry
+// is durable in two files.
 func (s *Store) submitLocked(text string, prov Provenance) (Entry, error) {
 	id, err := s.newIDLocked()
 	if err != nil {
 		return Entry{}, err
 	}
-	if err := s.appendEvents([]event{{
+	e := newEntry(id, text, prov)
+	if err := s.applyLocked([]event{{
 		Schema: Schema, Event: EventSubmitted, Id: id, At: time.Now().UTC(),
 		Source: prov.Source, Text: text, Prov: &prov,
-	}}); err != nil {
+	}}, func() error {
+		if err := s.appendMDLocked(formatLine(e.Id, e.Text)); err != nil {
+			return err
+		}
+		s.entries = append(s.entries, e)
+		return nil
+	}); err != nil {
 		return Entry{}, err
 	}
-	e := newEntry(id, text, prov)
-	if err := s.appendMDLocked(formatLine(e.Id, e.Text)); err != nil {
-		return Entry{}, err
-	}
-
-	s.entries = append(s.entries, e)
-	s.commitLocked()
 	return e, nil
 }
 
@@ -975,11 +1432,27 @@ func (s *Store) replayLocked() error {
 		case EventFolded, EventUserSignal:
 			if e := live[ev.Id]; e != nil {
 				e.Reinforcements++
+				// The wording a fold took out of score.md, so the boot pass can
+				// check it against the file — see Store.owed.
+				//
+				// RemovedLine is what narrows this to the folds that can owe a
+				// removal at all. A SUBMIT-path fold never touches score.md: an
+				// agent repeated something, the entry's counter moved, and no line
+				// was ever there to remove. Seeding from those too made the boot
+				// pass swallow an operator who later typed the same bytes into
+				// their file — a genuine repeat, against a removal that was never
+				// owed by anyone. A user-signal is out for the same reason: only a
+				// fold removes a line.
+				if ev.Event == EventFolded && ev.RemovedLine && ev.Text != "" {
+					if s.owed == nil {
+						s.owed = map[string][]string{}
+					}
+					s.owed[ev.Id] = addOwed(s.owed[ev.Id], sanitize(ev.Text))
+				}
 			}
 		case EventEdited:
 			if e := live[ev.Id]; e != nil {
-				e.Aliases = appendAlias(e.Aliases, e.Text)
-				e.setText(ev.Text)
+				reword(e, ev.Text, &s.health.AliasEvictions)
 				// An edit through score.md is itself the user signal #38 §3 asks
 				// for; a conductor reword (R6) carries another source and changes
 				// only the wording.
@@ -998,6 +1471,12 @@ func (s *Store) replayLocked() error {
 			s.entries = append(s.entries, *e)
 		}
 	}
+	// A retired entry can owe nothing: its lines are gone with it.
+	for id := range s.owed {
+		if live[id] == nil {
+			delete(s.owed, id)
+		}
+	}
 	return nil
 }
 
@@ -1014,23 +1493,33 @@ func (s *Store) replayLocked() error {
 //     must not manufacture the user signal I6 rests on
 //   - a line whose id is unknown or retired → admitted as a user-sourced entry
 //     under that id (the crash-after-md-before-log window, and the operator
-//     restoring a line they had deleted)
-//   - a bullet with no id, or a second line repeating an id already resolved →
-//     a new user-sourced entry whose id is generated and written back into the file
+//     restoring a line they had deleted), and admitted even where its wording
+//     repeats a live entry's: only an ID-LESS duplicate folds. A line that
+//     carries an id carries the operator's own decision about which entry it is,
+//     and I3 says their file wins. The cost is that restoring a deleted line
+//     whose wording duplicates a live entry leaves two entries saying the same
+//     thing, which no later fold can join — so #38 §3's "folding cleans those
+//     up" holds for the id-less duplicate an editing operator actually makes,
+//     and R6's conductor `merge` is what resolves the other one.
+//   - a bullet with no id, or a second line repeating an id already resolved,
+//     that REPEATS a wording the file still shows on another line → folded into
+//     that entry and dropped from the file; see the resolution below
+//   - any other bullet with no id, or second line repeating an id → a new
+//     user-sourced entry whose id is generated and written back into the file
 //   - a live entry no line carries → retired, in the log, never destroyed (I7)
 //
 // An ABSENT score.md is not in that table at all; see projectLocked.
 //
 // The whole pass is computed without touching the disk, then committed as ONE
-// append and ONE fsync. Per-line durability would be per-line fsync, and this
-// runs on the dispatch path: emptying a thousand-entry file would hold the
-// store mutex — and with it every other score-touching connection — for
-// seconds. The log still records one event per change; only the syscall pattern
-// is batched.
+// append and ONE fsync, and the file is rewritten only after that append lands.
+// Per-line durability would be per-line fsync, and this runs on the dispatch
+// path: emptying a thousand-entry file would hold the store mutex — and with it
+// every other score-touching connection — for seconds. The log still records one
+// event per change; only the syscall pattern is batched.
 //
-// score.md itself is rewritten only to write back ids the pass assigned, and
-// then only those lines: every other byte of the operator's file is preserved
-// verbatim.
+// score.md itself is rewritten only to write back ids the pass assigned and to
+// remove the duplicate lines it folded: every other byte of the operator's file
+// is preserved verbatim.
 func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err error) {
 	// The gauge and the cache follow the entry set, and this is the only place a
 	// pass can have moved it — however the pass returns, including the early exit
@@ -1041,6 +1530,30 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 			s.commitLocked()
 		}
 	}()
+
+	// What the pass has to say about itself. The counters are accumulated HERE
+	// and folded into s.health only where the pass commits its entries, so "a
+	// pass that does not commit changes nothing" needs no unwind step to get
+	// wrong: it is simply not applied. The earlier shape mutated s.health during
+	// the compute phase and restored it on a deferred tail guarded by a zero
+	// delta — which a pass whose only work was a SWALLOWED fold satisfies, so a
+	// failing rewrite reverted a counter belonging to a pass that kept every
+	// other piece of its state. (Counters replayLocked moves are a different
+	// thing entirely: they describe the whole log's history, as TornEvents
+	// always has.)
+	var pass Health
+
+	// countable reports whether a duplicate line may move its entry's counter. It
+	// is the ONLY thing the owed derivation reaches, and that is a fact about this
+	// closure's signature rather than a claim about statement order in a loop
+	// three hundred lines long: the sole thing it can return is a bool, and the
+	// line's removal is decided by the caller before it is asked. So the worst the
+	// derivation can do — however wrong its premise, on any log, from any build —
+	// is count a repeat it should have counted, or fail to. It can never remove a
+	// line that folding had not already decided to remove.
+	countable := func(id, text string) bool {
+		return !slices.Contains(s.owed[id], text)
+	}
 
 	var lines []string
 	if exists {
@@ -1072,32 +1585,29 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 		pending  []event
 		rewrite  bool
 		now      = time.Now().UTC()
+		// The provenance of everything score.md contributes: whoever wrote the
+		// line, the store only knows it as the operator's own file.
+		userProv = Provenance{Source: "user"}
+		// bullets are the lines that named no live entry — a plain bullet, or one
+		// repeating an id the pass already placed. Whether each is a repeat of
+		// something else in the file cannot be known until every line has been
+		// read, so they are collected here and resolved below, in file order.
+		bullets []bullet
+		// folds is what the pass folded, one record per entry: for the server to
+		// log, and — if the rewrite fails — for the removals the store still owes.
+		folds []Fold
 	)
 	// admit takes a line into the store as the operator's, under the id the line
 	// already carries.
 	admit := func(id, text string) Entry {
-		prov := Provenance{Source: "user"}
 		pending = append(pending, event{
 			Schema: Schema, Event: EventSubmitted, Id: id, At: now,
-			Source: prov.Source, Text: text, Prov: &prov,
+			Source: userProv.Source, Text: text, Prov: &userProv,
 		})
 		s.burned[id] = struct{}{}
 		resolved[id] = true
 		delta.Admitted++
-		return newEntry(id, text, prov)
-	}
-	// admitFresh takes a line that names no usable id — a plain bullet the
-	// operator typed, or a copy-pasted duplicate of an id already resolved —
-	// under a generated id, written back into that line.
-	admitFresh := func(text string) error {
-		id, err := s.newIDLocked()
-		if err != nil {
-			return err
-		}
-		next = append(next, admit(id, text))
-		out = append(out, formatLine(id, text))
-		rewrite = true
-		return nil
+		return newEntry(id, text, userProv)
 	}
 
 	for _, line := range lines {
@@ -1123,11 +1633,11 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 		switch {
 		case id == "", resolved[id]:
 			// A bullet carrying no id, or a file repeating an id the pass already
-			// placed: two entries cannot share one id, so the line gets an id of
-			// its own written back.
-			if err := admitFresh(text); err != nil {
-				return Delta{}, err
-			}
+			// placed. It becomes either a fold or a new entry, and which one
+			// depends on lines this pass has not read yet, so the line is kept as
+			// the operator wrote it and the decision is taken below.
+			out = append(out, line)
+			bullets = append(bullets, bullet{at: len(out) - 1, text: text})
 		case live:
 			e := s.entries[idx]
 			resolved[id] = true
@@ -1151,8 +1661,7 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 					Schema: Schema, Event: EventEdited, Id: id, At: now,
 					Source: "user", Text: text,
 				})
-				e.Aliases = appendAlias(e.Aliases, e.Text)
-				e.setText(text)
+				reword(&e, text, &pass.AliasEvictions)
 				e.Reinforcements++
 				delta.Superseded++
 			}
@@ -1171,6 +1680,150 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 		}
 	}
 
+	// Now that every line has been read, the bullets can be told apart: a repeat
+	// of an entry the file still carries, or a new entry of the operator's.
+	//
+	// The index is built over NEXT — the entries that survive this pass — which
+	// is what makes a fold safe and order-independent at once. A repeat can never
+	// be counted into an entry the retire loop below is about to remove, because
+	// such an entry is not in next; and a duplicate pasted above its twin behaves
+	// exactly like one pasted below it, because neither is resolved until both
+	// lines have been read.
+	//
+	// It answers with a POSITION in next, so the fold record and the count both
+	// land here, beside the decision that earned them, rather than in a second
+	// loop over every surviving entry whose only work was turning ids back into
+	// positions. Determinism is untouched: bullets are walked in file order,
+	// which is what that loop was reconstructing.
+	//
+	// Both maps below are left nil until something needs them: a file whose every
+	// line already carries an id — the overwhelmingly common one, re-read on every
+	// dispatch while the operator has it open — allocates nothing here at all.
+	var (
+		folded  map[int]int // fold record index by position in next
+		dropped []int       // positions in out to remove
+		// owing is what the pass will owe if its rewrite fails: entry id → every
+		// wording it folded out of the file, since a failed rewrite leaves all of
+		// them on their lines. Collected where the line is dropped rather than
+		// from the fold records, which hold one wording per entry however many
+		// lines went. Left nil until a line is actually folded, so the common pass
+		// allocates nothing.
+		owing map[string][]string
+	)
+	if len(bullets) > 0 {
+		index := newFoldIndex(next)
+		// countRepeat records ONE repeat against the entry at position target in
+		// next. The event's SOURCE is what says the operator folded this, not the
+		// event's NAME; see foldEvent. RemovedLine is true because this pass is
+		// about to take the line out — the effect, not the provenance, is what
+		// decides whether a removal can be owed.
+		//
+		// The one-per-entry-per-pass cap is the callers' to keep, and both of them
+		// keep it the same way: they call this only where the entry's fold record
+		// is not already marked Counted, and they mark it immediately after.
+		countRepeat := func(target int, text string) {
+			pending = append(pending, foldEvent(next[target].Id, text, userProv, now, true))
+			next[target].Reinforcements++
+			delta.Folded++
+		}
+		for _, b := range bullets {
+			target, repeat := index.lookup(b.text)
+			if !repeat {
+				id, ierr := s.newIDLocked()
+				if ierr != nil {
+					return Delta{}, ierr
+				}
+				next = append(next, admit(id, b.text))
+				out[b.at] = formatLine(id, b.text)
+				// The entry just appended already holds this wording's key: the
+				// bullet's text was normalised for the lookup above and again by
+				// setText, and normalising it a third time here bought nothing.
+				index.addKey(next[len(next)-1].norm, len(next)-1)
+				rewrite = true
+				continue
+			}
+			// The duplicate LINE is dropped from score.md, and that is the one
+			// place this pass edits the operator's file beyond writing an id back.
+			// Leaving it would be worse in both directions: with no id it would
+			// fold again on every pass, counting one paste forever; with the
+			// target's id written into it, the file would carry one entry on two
+			// lines and the next pass would split them again. What is lost is a
+			// line that normalises to one still in the file, and nothing is
+			// destroyed (I7) — the exact bytes, and the fact that the operator
+			// typed them, are on the fold event.
+			//
+			// Decided BEFORE anything is counted, and without consulting the owed
+			// derivation — the invariant countable exists to make structural.
+			dropped = append(dropped, b.at)
+			rewrite = true
+			// Every dropped line owes its removal until the rewrite lands, whether
+			// or not it moved a counter. The two are separate questions, and a
+			// wording this pass forgets is one the next pass counts again.
+			if owing == nil {
+				owing = make(map[string][]string, 1)
+			}
+			owing[next[target].Id] = addOwed(owing[next[target].Id], b.text)
+			if at, seen := folded[target]; seen {
+				folds[at].Duplicates++
+				// The entry takes one reinforcement per pass, but WHICH of its
+				// duplicate lines earns it must not be settled by whichever the
+				// file happens to list first. An earlier line may have been
+				// declined because the store already owed ITS removal, while this
+				// one is a genuine repeat with a claim to the count. So the
+				// question is asked again for this line, and the record promoted if
+				// it passes.
+				//
+				// The pass's cap survives it: the only route in is a record that
+				// is not yet Counted, and the promotion marks it Counted before the
+				// next duplicate is read, so however many lines a paste carries the
+				// entry still moves once. The record is re-pointed at the line that
+				// actually earned the count, since a record naming a line it
+				// declined while claiming Counted would be the log describing
+				// something that did not happen.
+				if !folds[at].Counted && countable(next[target].Id, b.text) {
+					countRepeat(target, b.text)
+					folds[at].Counted, folds[at].Repeat = true, b.text
+					folds[at].Reinforcements = next[target].Reinforcements
+				}
+				continue
+			}
+			// ONE reinforcement per entry per pass, however many lines carry the
+			// wording. A pass is one observation of the file's state, and #37's
+			// model is that recurrence means the observation CAME BACK after being
+			// recorded — a 500-line clipboard paste is one action, not five
+			// hundred returns. (A stale editor buffer re-saved by hand still
+			// counts once per save; the store cannot tell that from deliberate
+			// emphasis, and R4 weighs what a user's repeat is worth.)
+			//
+			// The count is also skipped when the store already OWES this exact
+			// line's removal: it folded once, the log holds it, and only the
+			// deletion is outstanding — counting again would let one paste climb
+			// the ladder on its own. What is declined is THIS line's claim to the
+			// pass's one count, not the entry's: another duplicate may still earn
+			// it, which is what the promotion above is for. The loss is one
+			// occurrence and never text, since those exact bytes are already in the
+			// log on the earlier fold event; it lands on the SwallowedRepeats gauge
+			// and the fold record names the wording, so the store says out loud
+			// what it declined to count. The alternative at this boundary was one paste counted TWICE
+			// and promoted, and "remembers less" is the side of that trade this
+			// store takes everywhere else.
+			counted := countable(next[target].Id, b.text)
+			if counted {
+				countRepeat(target, b.text)
+			} else {
+				pass.SwallowedRepeats++
+			}
+			if folded == nil {
+				folded = make(map[int]int, 2)
+			}
+			folded[target] = len(folds)
+			folds = append(folds, Fold{
+				Id: next[target].Id, Text: next[target].Text, Repeat: b.text, Prov: userProv,
+				Reinforcements: next[target].Reinforcements, Duplicates: 1, Counted: counted, FromFile: true,
+			})
+		}
+	}
+
 	for i := range s.entries {
 		id := s.entries[i].Id
 		if resolved[id] {
@@ -1180,43 +1833,162 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 		delta.Retired++
 	}
 
-	// One append, one fsync, for everything the pass decided. Nothing above
-	// touched memory, so a failure here leaves the store exactly as it was and
-	// says so; the dropped fingerprint makes the next read try again. Ids drawn
-	// for a failed pass stay burned, which costs nothing — an id nobody used is
-	// simply never issued.
+	// One append, one fsync, for everything the pass decided — the folds
+	// included, and BEFORE the rewrite that removes the lines they came from.
+	// That order is the whole guarantee: score.md is the only place a duplicate
+	// line exists, so destroying it before the record of it is durable is the one
+	// way this store can lose an operator's text outright, and no probe of the
+	// log's writability is the same promise as a landed write. What the order
+	// costs is a fold that is durable while its line is still in the file, which
+	// the owed bookkeeping below settles.
+	//
+	// Nothing above touched the store, so a failure here leaves it exactly as it
+	// was and says so — the pass's own counters included, since they are still
+	// sitting in `pass`. The dropped fingerprint makes the next read try again.
+	// Ids drawn for a failed pass stay burned, which costs nothing — an id nobody
+	// used is simply never issued.
 	if len(pending) > 0 {
 		if err := s.appendEvents(pending); err != nil {
 			s.forgetMDLocked()
 			return Delta{}, err
 		}
 	}
+	// The commit point: memory and the counters that describe it move together,
+	// once, and only here. Everything after this either finishes the file or
+	// fails trying, and both keep what this line just made true.
 	s.entries = next
+	s.health.SwallowedRepeats += pass.SwallowedRepeats
+	s.health.AliasEvictions += pass.AliasEvictions
 
-	if rewrite {
-		// A whole-file replace, because the ids have to be written back into the
-		// lines that lack them and a partial rewrite of a file a person is editing
-		// is worse. It is the one place the store can lose an operator's work: a
-		// save landing between the ReadFile above and this rename is overwritten,
-		// and unlike a lost server write it is not replayable from the log. The
-		// window is a few hundred microseconds and only opens when the operator
-		// has just added an id-less bullet, which is why it is accepted rather
-		// than locked against — the alternative is holding a lock across an
-		// operator's editing session.
-		//
-		// A failure here is returned, not unwound: the events are already durable,
-		// so memory keeps them, and the file simply does not have the ids yet, so
-		// the next pass re-admits those lines under new ids and retires these.
-		// Noisy in the log, correct in the end. The fingerprint is dropped either
-		// way, by the write itself.
-		err = s.writeMDLocked(out)
-	} else {
+	if len(dropped) > 0 {
+		// Drop the folded lines from the file the pass is about to write. They
+		// were kept in place until now so that a pass failing anywhere above
+		// leaves the operator's file exactly as they wrote it. Filtered in place:
+		// out was made by this pass, nothing else holds it, and every element only
+		// ever moves leftward.
+		kept, d := out[:0], 0
+		for i, line := range out {
+			if d < len(dropped) && dropped[d] == i {
+				d++
+				continue
+			}
+			kept = append(kept, line)
+		}
+		out = kept
+	}
+
+	if !rewrite {
+		// No line was dropped — every fold asks for a rewrite — so this pass
+		// re-incurred nothing, and it has just read the whole file without finding
+		// the bytes of any debt it was carrying. Every one of them is settled.
+		s.owed = nil
 		// Remember the stat taken BEFORE the read rather than a fresh one: a save
 		// landing between the two makes the next pass look stale and re-run, which
 		// is idempotent — the other order would mark an unread edit as seen.
 		s.noteMDFromLocked(fi)
+		return delta, nil
 	}
-	return delta, err
+
+	// A whole-file replace, because the ids have to be written back into the
+	// lines that lack them and a partial rewrite of a file a person is editing is
+	// worse. It is the one place the store can lose an operator's work: a save
+	// landing between the ReadFile above and this rename is overwritten, and
+	// unlike a lost server write it is not replayable from the log. The window is
+	// a few hundred microseconds and only opens when the operator has just added
+	// an id-less bullet, which is why it is accepted rather than locked against —
+	// the alternative is holding a lock across an operator's editing session.
+	//
+	// A failure here is returned, not unwound: the events above are already
+	// durable, so memory keeps them, and the file simply does not have the ids
+	// yet, so the next pass re-admits those lines under new ids and retires
+	// these. Noisy in the log, correct in the end. The fingerprint is dropped
+	// either way, by the write itself.
+	if err = s.writeMDLocked(out); err != nil {
+		// The duplicate lines are still in the file and their folds are already
+		// durable, so their removal is now what the store OWES. "Noisy in the log,
+		// correct in the end" holds for an admit, an edit and a retire, because
+		// each is idempotent across passes — the next pass reads the same file and
+		// decides the same thing. A fold is not. Its trigger is the LINE this
+		// write should have removed, so without this the next pass counts the same
+		// paste again, and the one after that again, until the disk lets go: one
+		// paste climbing the ladder on its own.
+		//
+		// Debts this pass did NOT re-incur are settled by the same assignment,
+		// which is the whole clearing rule: their bytes were not in the file this
+		// pass just read.
+		s.owed = owing
+		// Reported all the same, with Removed false. The fold is durable and it
+		// counted, so saying nothing would hide a change the store really made —
+		// but the lines are still in the operator's file, and a record that let
+		// the daemon announce a deletion here would be describing something that
+		// did not happen.
+		s.noteFoldsLocked(folds)
+		return delta, err
+	}
+	// The lines are gone from the file now, and only now, so this is where a
+	// record may say so — and where every debt is settled, this pass's folds
+	// included: the file was rewritten without their bytes.
+	for i := range folds {
+		folds[i].Removed = true
+	}
+	s.noteFoldsLocked(folds)
+	s.owed = nil
+	return delta, nil
+}
+
+// addOwed records that one more wording is owed a removal, keeping the list
+// deduplicated — the same bytes on two lines are one debt — and bounded at
+// maxOwedRemovals by dropping the OLDEST. Both places a debt is taken on go
+// through it, so the shape and the bound are one rule rather than two.
+//
+// Order is the order the debts were taken on, which is file order in a pass and
+// log order at boot. Nothing reads it as a sequence; it is a slice so that
+// nothing CAN read a map's order as one (invariant I1).
+func addOwed(owed []string, text string) []string {
+	if slices.Contains(owed, text) {
+		return owed
+	}
+	if len(owed) == maxOwedRemovals {
+		owed = append(owed[:0], owed[1:]...)
+	}
+	return append(owed, text)
+}
+
+// bullet is a score.md line that named no live entry, held with the position it
+// occupies in the pass's output so the pass can decide later whether the line
+// becomes an entry or is folded away. See reconcileLocked.
+type bullet struct {
+	at   int
+	text string
+}
+
+// noteFoldsLocked keeps this pass's fold records for the next View to report.
+// The caller holds the lock.
+//
+// They are buffered rather than returned because a fold can be discovered by any
+// pass, including the one a Submit runs before it writes, and the caller of a
+// mutation has nowhere to put them. Every read drains the buffer, so the entry a
+// fold deleted a line from is named in the daemon log whichever path noticed it.
+func (s *Store) noteFoldsLocked(folds []Fold) {
+	for i := range folds {
+		if len(s.folds) >= maxFoldNotes {
+			// Counted, not merely dropped: without this the only trace of a
+			// removal nobody named is the arithmetic between a pass reporting two
+			// hundred folds and a log carrying a hundred and twenty-eight lines.
+			s.health.UnreportedFolds += len(folds) - i
+			return
+		}
+		s.folds = append(s.folds, folds[i])
+	}
+}
+
+// drainFoldsLocked takes the buffered fold records, leaving none behind: each
+// one describes a deletion that happened once and is reported once. The caller
+// holds the lock.
+func (s *Store) drainFoldsLocked() []Fold {
+	folds := s.folds
+	s.folds = nil
+	return folds
 }
 
 // projectLocked handles an ABSENT score.md, which #38's recovery table lists
@@ -1238,6 +2010,9 @@ func (s *Store) projectLocked() (Delta, error) {
 	if err := s.writeMDLocked(out); err != nil {
 		return Delta{}, err
 	}
+	// The file now carries one line per entry and no duplicates, so nothing the
+	// store owed a removal is in it any more; see Store.owed.
+	s.owed = nil
 	return Delta{Reprojected: len(s.entries)}, nil
 }
 
@@ -1253,20 +2028,57 @@ func (s *Store) recountOversizedLocked() {
 	s.health.Oversized = n
 }
 
-// appendAlias keeps a prior wording for folding, newest last and without
-// repeats — a wording restored and reworded again should appear once. It never
-// writes through the source slice's spare capacity, because the entry it came
-// from may still be held by a caller of Render.
-func appendAlias(aliases []string, prior string) []string {
+// appendAlias keeps a prior wording for folding, newest last, without repeats
+// and no more than maxAliases of them. It never writes through the source
+// slice's spare capacity, because the entry it came from may still be held by a
+// caller of Render.
+//
+// "Without repeats" means without repeats AS THE INDEX SEES THEM: two wordings
+// with one folding key are one alias, because that is all either can ever match.
+// Storing "x" and "X." both would grow the list — and score.json, and every
+// boot's replay — with a distinction nothing downstream can act on.
+//
+// Past the cap the OLDEST wording goes, which is the one least likely to be
+// repeated next; see maxAliases for why there is a cap at all.
+func appendAlias(aliases []string, prior string) (out []string, evicted bool) {
 	if prior == "" {
-		return aliases
+		return aliases, false
 	}
+	key := normalize(prior)
 	for _, a := range aliases {
-		if a == prior {
-			return aliases
+		// normEq rather than normalize(a) == key: this runs on every reword, and
+		// building a key per alias just to throw it away was nine of its ten
+		// allocations at the cap.
+		if normEq(a, key) {
+			return aliases, false
 		}
 	}
-	return append(aliases[:len(aliases):len(aliases)], prior)
+	out = append(aliases[:len(aliases):len(aliases)], prior)
+	if len(out) > maxAliases {
+		// Reported to the caller rather than done quietly: an evicted wording
+		// stops folding, so the next repeat of it starts a second entry saying
+		// what this one already says. That is the safe direction — a missed fold
+		// costs a duplicate at tier 1, where a wrong one merges two things a
+		// person did not ask to merge — but it is not nothing, and the health
+		// gauge is where the store says what it has chosen to forget.
+		out, evicted = out[len(out)-maxAliases:], true
+	}
+	return out, evicted
+}
+
+// reword retires an entry's current wording into its aliases and gives it the
+// new one — the three steps that must happen together, with the eviction counter
+// the one most easily forgotten. It is package-level and takes the counter by
+// pointer because the two callers count into different places: replayLocked
+// straight into the store's standing health, and a reconcile pass into the
+// counters it applies only if it commits. R6's merge is slated to be the third.
+func reword(e *Entry, text string, evictions *int) {
+	var evicted bool
+	e.Aliases, evicted = appendAlias(e.Aliases, e.Text)
+	if evicted {
+		*evictions++
+	}
+	e.setText(text)
 }
 
 // refreshCacheLocked rewrites score.json from memory. Its error is deliberately

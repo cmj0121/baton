@@ -384,21 +384,24 @@ func (c *Client) scoreExchange(cmd proto.Command) (json.RawMessage, error) {
 	}
 }
 
-// ScoreSubmit records text as a fleet-memory note (score.submit) and returns
-// the id of the entry it created — the one fact a caller can act on, extracted
-// here so the CLI and the MCP tool share the presentation.
-func (c *Client) ScoreSubmit(text string) (string, error) {
+// ScoreSubmit records text as a fleet-memory note (score.submit) and returns the
+// id of the entry it landed in, and whether it FOLDED into one the store already
+// held rather than starting a new one. Those two are the whole of what the
+// caller can act on — #38's "new or folded into id" — extracted here so the CLI
+// and the MCP tool share the presentation.
+func (c *Client) ScoreSubmit(text string) (id string, folded bool, err error) {
 	payload, err := c.scoreExchange(proto.Command{Action: "score.submit", Prompt: text})
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	var out struct {
-		Id string `json:"id"`
+		Id     string `json:"id"`
+		Folded bool   `json:"folded"`
 	}
 	if err := json.Unmarshal(payload, &out); err != nil || out.Id == "" {
-		return "", fmt.Errorf("malformed score.submit reply: %s", payload)
+		return "", false, fmt.Errorf("malformed score.submit reply: %s", payload)
 	}
-	return out.Id, nil
+	return out.Id, out.Folded, nil
 }
 
 // ScoreList returns every recorded fleet-memory entry as the server's raw JSON

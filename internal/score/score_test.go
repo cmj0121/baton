@@ -113,7 +113,7 @@ func TestSubmitAppendsAllThreeFiles(t *testing.T) {
 	}
 
 	prov := Provenance{SourcePanel: "p1", SourceProfile: "dev", SourceCwd: "/work", Source: "agent"}
-	e, err := s.Submit("  ship it\nby friday  ", prov)
+	e, _, err := s.Submit("  ship it\nby friday  ", prov)
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -161,8 +161,12 @@ func TestSubmitAppendsAllThreeFiles(t *testing.T) {
 	if snap.Schema != Schema {
 		t.Errorf("snapshot schema = %d, want %d", snap.Schema, Schema)
 	}
-	if got := snap.Entries[e.Id]; !reflect.DeepEqual(got, e) {
-		t.Errorf("snapshot entry = %+v, want %+v", got, e)
+	// The folding key is derived and deliberately not persisted, so the decoded
+	// entry has none; everything score.json is FOR must match exactly.
+	want := e
+	want.norm = ""
+	if got := snap.Entries[e.Id]; !reflect.DeepEqual(got, want) {
+		t.Errorf("snapshot entry = %+v, want %+v", got, want)
 	}
 	if _, err := os.Stat(filepath.Join(dir, scoreJSON+".tmp")); !os.IsNotExist(err) {
 		t.Errorf("snapshot temp file left behind (stat err = %v)", err)
@@ -185,7 +189,7 @@ func TestSubmitNeutralisesControlSequences(t *testing.T) {
 	// zero-width space, and a bare CR that would rewrite the line in place.
 	const payload = "\x1b]52;c;cGF5bG9hZA==\x07keep \x1b[1;31mthis\x1b[2J\r\u202etext\u200b visible"
 
-	e, err := s.Submit(payload, Provenance{Source: "agent", SourcePanel: "p1"})
+	e, _, err := s.Submit(payload, Provenance{Source: "agent", SourcePanel: "p1"})
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -230,16 +234,16 @@ func TestSubmitRefusesOverLong(t *testing.T) {
 	}
 	before := readFile(t, dir, scoreMD)
 
-	if _, err := s.Submit(strings.Repeat("é", maxEntryRunes), Provenance{Source: "user"}); err != nil {
+	if _, _, err := s.Submit(strings.Repeat("é", maxEntryRunes), Provenance{Source: "user"}); err != nil {
 		t.Fatalf("a submission exactly at the limit must be accepted: %v", err)
 	}
 	// Padding that the sanitiser removes must not push a legal note over the
 	// limit: the cap is measured after scrubbing, not before.
 	padded := strings.Repeat("a", maxEntryRunes) + strings.Repeat("\x1b", 50)
-	if _, err := s.Submit(padded, Provenance{Source: "agent"}); err != nil {
+	if _, _, err := s.Submit(padded, Provenance{Source: "agent"}); err != nil {
 		t.Fatalf("escape padding must not inflate the rune count: %v", err)
 	}
-	if _, err := s.Submit(strings.Repeat("z", maxEntryRunes+1), Provenance{Source: "agent"}); err == nil {
+	if _, _, err := s.Submit(strings.Repeat("z", maxEntryRunes+1), Provenance{Source: "agent"}); err == nil {
 		t.Fatal("an over-long submission succeeded, want a refusal")
 	}
 
@@ -299,7 +303,7 @@ func TestSubmitRejectsEmpty(t *testing.T) {
 	// Blank, then a payload of nothing but scrubbed classes: ESC, BEL, U+200B
 	// ZERO WIDTH SPACE, U+202E RIGHT-TO-LEFT OVERRIDE, U+FFFD REPLACEMENT.
 	for _, text := range []string{"  \n ", "\x1b\x07\u200b\u202e\ufffd"} {
-		if _, err := s.Submit(text, Provenance{Source: "user"}); err == nil {
+		if _, _, err := s.Submit(text, Provenance{Source: "user"}); err == nil {
 			t.Errorf("Submit(%q) succeeded, want error — it sanitises to nothing", text)
 		}
 	}
@@ -387,7 +391,7 @@ func TestSubmitConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			if _, err := s.Submit(fmt.Sprintf("note %d", i), Provenance{Source: "agent"}); err != nil {
+			if _, _, err := s.Submit(fmt.Sprintf("note %d", i), Provenance{Source: "agent"}); err != nil {
 				t.Errorf("Submit %d: %v", i, err)
 			}
 		}(i)
@@ -418,7 +422,7 @@ func TestRender(t *testing.T) {
 				t.Fatalf("Open: %v", err)
 			}
 			for i := 0; i < tt.submits; i++ {
-				if _, err := s.Submit(fmt.Sprintf("note %d", i), Provenance{Source: "user"}); err != nil {
+				if _, _, err := s.Submit(fmt.Sprintf("note %d", i), Provenance{Source: "user"}); err != nil {
 					t.Fatalf("Submit: %v", err)
 				}
 			}
@@ -455,7 +459,7 @@ func TestRenderEmptyAndDisabled(t *testing.T) {
 	if _, err := disabled.Reconcile(); err != nil {
 		t.Errorf("disabled Reconcile = %v, want nil", err)
 	}
-	if _, err := disabled.Submit("x", Provenance{}); err == nil {
+	if _, _, err := disabled.Submit("x", Provenance{}); err == nil {
 		t.Error("disabled Submit succeeded, want refusal")
 	}
 	if err := disabled.Reinforce("abc123", "user"); err == nil {
@@ -506,7 +510,7 @@ func TestReinforce(t *testing.T) {
 		t.Error("Reinforce of unknown id succeeded, want error")
 	}
 
-	// The counter is replayed from the log, tier untouched (S0: no promotion).
+	// The counter is replayed from the log, tier untouched (no promotion yet).
 	s.Close()
 	re, err := Open(dir)
 	if err != nil {
@@ -612,7 +616,7 @@ func TestOpenToleratesCorruptSnapshot(t *testing.T) {
 			}
 
 			// The next mutation heals the snapshot.
-			if _, err := s.Submit("heal", Provenance{Source: "user"}); err != nil {
+			if _, _, err := s.Submit("heal", Provenance{Source: "user"}); err != nil {
 				t.Fatalf("Submit: %v", err)
 			}
 			var snap snapshot

@@ -20,10 +20,19 @@ type ctlScoreSubmit struct {
 	Text string `arg:"" help:"The observation to record — one short sentence."`
 }
 
+// Run prints the id the note landed in, and says so when the store recognised
+// the text as a repeat of one it already holds. The id stays the first token, so
+// a script reading it with `cut` or `read` is unaffected, but an operator
+// submitting the same observation four times can now see that three of them were
+// counted rather than recorded — which is the whole of what the memory did.
 func (x ctlScoreSubmit) Run(c *control.Client) error {
-	id, err := c.ScoreSubmit(x.Text)
+	id, folded, err := c.ScoreSubmit(x.Text)
 	if err != nil {
 		return err
+	}
+	if folded {
+		fmt.Println(id, "(folded into an entry the fleet already remembers)")
+		return nil
 	}
 	fmt.Println(id)
 	return nil

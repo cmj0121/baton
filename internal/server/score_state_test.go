@@ -106,7 +106,7 @@ func TestScoreStatusDistinguishesOffFromUnavailable(t *testing.T) {
 // needs is the transition in and the transition out.
 func TestReconcileFailureIsLatched(t *testing.T) {
 	st, dir := scoreStore(t)
-	if _, err := st.Submit("still readable", score.Provenance{Source: "user"}); err != nil {
+	if _, _, err := st.Submit("still readable", score.Provenance{Source: "user"}); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 	s, _ := scoreServer(st)
@@ -158,7 +158,7 @@ func TestReconcileFailureIsLatched(t *testing.T) {
 // reads exactly like an ordinary render-limit truncation.
 func TestScoreStatusReportsWithheldLines(t *testing.T) {
 	st, dir := scoreStore(t)
-	if _, err := st.Submit("a normal note", score.Provenance{Source: "user"}); err != nil {
+	if _, _, err := st.Submit("a normal note", score.Provenance{Source: "user"}); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 	s, _ := scoreServer(st)

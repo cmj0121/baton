@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -99,11 +100,12 @@ func TestBatchedAppendIsAllOrNothing(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, dir)
 
-	// Thirty long bullets: one admit batch of roughly eleven kilobytes, against
-	// a log that does not exist yet.
+	// Thirty long bullets, each a distinct wording so none of them folds into
+	// another: one admit batch of roughly eleven kilobytes, against a log that
+	// does not exist yet.
 	var md strings.Builder
-	for range 30 {
-		md.WriteString("- " + strings.Repeat("x", 250) + "\n")
+	for i := range 30 {
+		md.WriteString("- " + strconv.Itoa(i) + strings.Repeat("x", 250) + "\n")
 	}
 	writeMD(t, dir, md.String())
 	before := s.Render(Context{})

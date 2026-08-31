@@ -35,6 +35,16 @@ import (
 // memory rather than no brief at all.
 func (s *Server) scoreView(ctx score.Context) score.View {
 	v, err := s.scoreState.Store.View(ctx)
+
+	// One line per fold, FIRST — before the error branch below, because a failing
+	// pass is exactly when a fold most needs saying. A fold can be durable and
+	// counted and still leave the pass in error (the rewrite that should have
+	// removed the line failed), and score.md is then the one place that cannot
+	// show it: the entry's counter moved, no line was added, and the operator
+	// would be left with a tier they cannot account for. Returning early dropped
+	// these records on the floor, since View drains them either way.
+	logScoreFolds(v.Folds)
+
 	if err != nil {
 		// Latch the failure. A score.md the store cannot read stays unreadable,
 		// and the gate is not armed by a failed pass, so the naive shape logs an
@@ -59,18 +69,62 @@ func (s *Server) scoreView(ctx score.Context) score.View {
 	// Oversized is a gauge rather than a counter, and is the operator's only
 	// warning that a line they wrote is too long to inject; see
 	// score.maxEntryRunes.
+	//
+	// The other health counters ride along because each of them is the store
+	// choosing to remember less: a repeat removed without being counted, a
+	// removal nobody named, a prior wording that will no longer fold. None is an
+	// error, and none is visible any other way.
 	if v.Delta != (score.Delta{}) {
 		log.Info().Int("admitted", v.Delta.Admitted).
 			Int("reattributed", v.Delta.Reattributed).
 			Int("adopted", v.Delta.Adopted).
 			Int("superseded", v.Delta.Superseded).
+			Int("folded", v.Delta.Folded).
 			Int("retired", v.Delta.Retired).
 			Int("reprojected", v.Delta.Reprojected).
 			Int("oversized", v.Health.Oversized).
 			Int("cache_write_failures", v.Health.CacheWriteFailures).
+			Int("swallowed_repeats", v.Health.SwallowedRepeats).
+			Int("unreported_folds", v.Health.UnreportedFolds).
+			Int("alias_evictions", v.Health.AliasEvictions).
 			Msg("score reconciled the operator's edits")
 	}
 	return v
+}
+
+// logScoreFolds writes the one line per fold #38's lifecycle asks for. It is the
+// SINGLE producer of that line, for both ways a repeat arrives: the store buffers
+// a record wherever it folds — a submission or a duplicate score.md line — and
+// every View drains them here. Two hand-rolled log sites with two messages and
+// two field sets meant an operator grepping for folds found two shapes for one
+// concept, and #43 would have added a third.
+//
+// A count alone cannot answer "which line did it take" once the line is gone, so
+// each record names the surviving wording beside the repeat. The message then
+// follows what actually happened rather than what the pass set out to do:
+// `counted: false` is a repeat the store already owed the removal of, taken out
+// now, and `removed: false` is the other half — the fold is durable but the line
+// is still in the file. Announcing a deletion there would be #38's one log line
+// per fold, saying something untrue. A submission fold removed nothing and never
+// claims to; only a file fold reports the field at all.
+func logScoreFolds(folds []score.Fold) {
+	for _, f := range folds {
+		e := log.Info().Str("id", f.Id).Str("entry", f.Text).Str("duplicate", f.Repeat).
+			Int("duplicates", f.Duplicates).Str("source", f.Prov.Source).
+			Int("reinforcements", f.Reinforcements).Bool("counted", f.Counted)
+		if f.Prov.SourcePanel != "" {
+			e = e.Str("panel", f.Prov.SourcePanel)
+		}
+		msg := "score folded a repeat into an existing entry"
+		if f.FromFile {
+			e = e.Bool("removed", f.Removed)
+			msg = "score folded a duplicate line out of score.md"
+			if !f.Removed {
+				msg = "score folded a duplicate line but could not remove it from score.md"
+			}
+		}
+		e.Msg(msg)
+	}
 }
 
 // dispatchBrief builds the task.pre brief for a DIRECT dispatch to panel id: the
@@ -117,12 +171,27 @@ func (s *Server) scoreSubmit(cc *clientConn, cmd proto.Command) {
 		send(cc, proto.ServerMsg{Type: "error", Error: s.scoreState.reason()})
 		return
 	}
-	e, err := s.scoreState.Store.Submit(cmd.Prompt, prov)
+	e, folded, err := s.scoreState.Store.Submit(cmd.Prompt, prov)
 	if err != nil {
 		send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 		return
 	}
-	send(cc, proto.ServerMsg{Type: "score", Score: scoreJSON(map[string]string{"id": e.Id})})
+	// The fold is not logged here. The store recorded it on the same buffer a
+	// folded score.md line lands on, and logScoreFolds — reached by the next
+	// view, which every dispatch, list and status takes — is the one place either
+	// becomes a log line. A plain submission needs none: it is already visible as
+	// a new line in score.md, while a fold leaves the file untouched, which is
+	// why it is the mutation worth saying out loud.
+	//
+	// The reply says WHICH of the two happened, per #38's "get back new or folded
+	// into id". Without it four identical submissions answer with one id and
+	// nothing to tell the first from the rest, and an agent cannot learn that the
+	// fleet already knew what it just said — which is the one thing worth knowing
+	// when a submission is free.
+	send(cc, proto.ServerMsg{Type: "score", Score: scoreJSON(struct {
+		Id     string `json:"id"`
+		Folded bool   `json:"folded,omitempty"`
+	}{Id: e.Id, Folded: folded})})
 }
 
 // scoreList is the score.list payload: the store's entries. S0 has no richer

@@ -29,11 +29,53 @@ func openStore(t *testing.T, dir string) *Store {
 // tests whose subject IS the provenance still call Submit directly.
 func submit(t *testing.T, s *Store, text string) Entry {
 	t.Helper()
-	e, err := s.Submit(text, Provenance{Source: "user"})
+	e, _, err := s.Submit(text, Provenance{Source: "user"})
 	if err != nil {
 		t.Fatalf("Submit(%q): %v", text, err)
 	}
 	return e
+}
+
+// submitAs records a note with the provenance under test, failing on refusal.
+// The plain submit above hardcodes the operator, and sixteen call sites had
+// re-expanded the whole Submit call just to name a panel.
+func submitAs(t *testing.T, s *Store, text string, prov Provenance) Entry {
+	t.Helper()
+	e, _, err := s.Submit(text, prov)
+	if err != nil {
+		t.Fatalf("Submit(%q, %+v): %v", text, prov, err)
+	}
+	return e
+}
+
+// unwritable takes the write bits off path for the rest of the test and returns
+// the undo, so a test can watch a write fail and then watch the retry succeed.
+// The store rewrites score.md through a sibling temp file, so passing the
+// DIRECTORY is how a rewrite is made to fail and nothing else.
+func unwritable(t *testing.T, path string) (restore func()) {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	mode := fi.Mode().Perm()
+	if err := os.Chmod(path, mode&^0o222); err != nil {
+		t.Fatalf("chmod %s: %v", path, err)
+	}
+	restore = func() { _ = os.Chmod(path, mode) }
+	t.Cleanup(restore)
+	return restore
+}
+
+// reconcileMustFail runs a pass that a path made unwritable should stop. It is
+// where the run-as-root skip is stated — once, rather than at every site that
+// takes a write bit away: root ignores the permission bits, and so do a few
+// filesystems, and neither is a failure of the store.
+func reconcileMustFail(t *testing.T, s *Store) {
+	t.Helper()
+	if _, err := s.Reconcile(); err == nil {
+		t.Skip("the path this test made unwritable is still writable; this test needs an unprivileged user")
+	}
 }
 
 // reconcile runs one pass and returns what THAT pass changed, failing the test
@@ -139,10 +181,7 @@ func TestRecoveryMDLineWithNoLogRecord(t *testing.T) {
 func TestRecoveryLogEntryTheFileLacks(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, dir)
-	e, err := s.Submit("this one gets deleted", Provenance{Source: "agent", SourcePanel: "p1"})
-	if err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
+	e := submitAs(t, s, "this one gets deleted", Provenance{Source: "agent", SourcePanel: "p1"})
 	s.Close()
 
 	// The operator empties score.md in their editor and the daemon restarts.
@@ -172,10 +211,7 @@ func TestRecoveryLogEntryTheFileLacks(t *testing.T) {
 func TestRecoveryRebuildsFromLogWithoutTheSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, dir)
-	first, err := s.Submit("keep the build green", Provenance{Source: "agent", SourcePanel: "p1", SourceProfile: "claude", SourceCwd: "/work"})
-	if err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
+	first := submitAs(t, s, "keep the build green", Provenance{Source: "agent", SourcePanel: "p1", SourceProfile: "claude", SourceCwd: "/work"})
 	submit(t, s, "ask before force-pushing")
 	if err := s.Reinforce(first.Id, "agent"); err != nil {
 		t.Fatalf("Reinforce: %v", err)
@@ -245,10 +281,7 @@ func TestRecoveryFirstRunIsEmpty(t *testing.T) {
 func TestReconcileReword(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, dir)
-	e, err := s.Submit("run the tests", Provenance{Source: "agent", SourcePanel: "p1"})
-	if err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
+	e := submitAs(t, s, "run the tests", Provenance{Source: "agent", SourcePanel: "p1"})
 
 	writeMD(t, dir, "- ["+e.Id+"] run the tests before pushing\n")
 	d := reconcile(t, s)
@@ -409,10 +442,7 @@ func TestSubmitReportsTheOutcomeItActuallyHad(t *testing.T) {
 			t.Fatalf("mkdir over the snapshot: %v", err)
 		}
 
-		e, err := s.Submit("durable in two files", Provenance{Source: "user"})
-		if err != nil {
-			t.Fatalf("Submit reported failure for an entry it stored: %v", err)
-		}
+		e := submitAs(t, s, "durable in two files", Provenance{Source: "user"})
 		if s.Len() != 1 {
 			t.Fatalf("entries = %d, want the submission", s.Len())
 		}
@@ -434,7 +464,7 @@ func TestSubmitReportsTheOutcomeItActuallyHad(t *testing.T) {
 			t.Fatalf("mkdir over the log: %v", err)
 		}
 
-		if _, err := s.Submit("never stored", Provenance{Source: "user"}); err == nil {
+		if _, _, err := s.Submit("never stored", Provenance{Source: "user"}); err == nil {
 			t.Fatal("Submit reported success though nothing could be logged")
 		}
 		if s.Len() != 0 {
@@ -528,14 +558,8 @@ func TestCrashBetweenWritesKeepsWhatTheUserTyped(t *testing.T) {
 func TestLiveEditIsVisibleToTheNextRead(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, dir)
-	reworded, err := s.Submit("say please", Provenance{Source: "agent", SourcePanel: "p1"})
-	if err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
-	deleted, err := s.Submit("say thanks", Provenance{Source: "agent", SourcePanel: "p1"})
-	if err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
+	reworded := submitAs(t, s, "say please", Provenance{Source: "agent", SourcePanel: "p1"})
+	deleted := submitAs(t, s, "say thanks", Provenance{Source: "agent", SourcePanel: "p1"})
 
 	// One editor save: reword one line, delete another, add a third with no id.
 	writeMD(t, dir, "- ["+reworded.Id+"] say please, every time\n- ask before deleting a branch\n")

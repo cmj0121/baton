@@ -49,12 +49,25 @@ func TestScoreRoundtrip(t *testing.T) {
 	}
 	defer func() { _ = c.Close() }()
 
-	id, err := c.ScoreSubmit("agents in this fleet forget to run the linter")
+	id, folded, err := c.ScoreSubmit("agents in this fleet forget to run the linter")
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 	if id == "" {
 		t.Fatal("submit returned an empty id")
+	}
+	if folded {
+		t.Fatal("a first submission came back as a fold")
+	}
+	// The same observation again comes back as the same entry, said to have
+	// folded — #38's "new or folded into id", which is what lets the CLI and the
+	// MCP tool tell an agent the fleet already knew this.
+	again, folded, err := c.ScoreSubmit("Agents in this fleet forget to run the linter.")
+	if err != nil {
+		t.Fatalf("submit repeat: %v", err)
+	}
+	if again != id || !folded {
+		t.Fatalf("repeat = (%q, folded=%v), want (%q, folded=true)", again, folded, id)
 	}
 
 	list, err := c.ScoreList()
@@ -104,7 +117,7 @@ func TestScoreDisabled(t *testing.T) {
 	}
 	defer func() { _ = c.Close() }()
 
-	if _, err := c.ScoreSubmit("remember me"); err == nil || !strings.Contains(err.Error(), "disabled") {
+	if _, _, err := c.ScoreSubmit("remember me"); err == nil || !strings.Contains(err.Error(), "disabled") {
 		t.Fatalf("submit on a disabled store should be refused plainly, got %v", err)
 	}
 	list, err := c.ScoreList()
@@ -124,7 +137,7 @@ func TestScoreDisabled(t *testing.T) {
 
 	// Once the connection is closed, every wrapper fails fast on the send.
 	_ = c.Close()
-	if _, err := c.ScoreSubmit("after close"); err == nil {
+	if _, _, err := c.ScoreSubmit("after close"); err == nil {
 		t.Fatal("submit on a closed client should error")
 	}
 	if _, err := c.ScoreList(); err == nil {

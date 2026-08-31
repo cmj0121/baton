@@ -37,11 +37,11 @@ func editScoreMD(t *testing.T, dir, content string) {
 // the very next dispatch delivers.
 func TestLiveEditReachesTheNextDispatch(t *testing.T) {
 	st, dir := scoreStore(t)
-	reworded, err := st.Submit("prefer table-driven tests", score.Provenance{Source: "user"})
+	reworded, _, err := st.Submit("prefer table-driven tests", score.Provenance{Source: "user"})
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if _, err := st.Submit("drop this one", score.Provenance{Source: "user"}); err != nil {
+	if _, _, err := st.Submit("drop this one", score.Provenance{Source: "user"}); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 	s, delivered := scoreServer(st)
@@ -70,7 +70,7 @@ func TestLiveEditReachesTheNextDispatch(t *testing.T) {
 // already moved past either.
 func TestLiveEditReachesScoreListAndStatus(t *testing.T) {
 	st, dir := scoreStore(t)
-	if _, err := st.Submit("one real entry", score.Provenance{Source: "user"}); err != nil {
+	if _, _, err := st.Submit("one real entry", score.Provenance{Source: "user"}); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 	s, _ := scoreServer(st)

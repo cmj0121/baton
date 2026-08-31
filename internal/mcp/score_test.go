@@ -42,9 +42,10 @@ func TestMCPScoreSubmit(t *testing.T) {
 		`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"score_submit","arguments":{"text":"this fleet races agents on the same brief"}}}`,
 		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"score_submit","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"score_submit","arguments":{"text":"This fleet races agents on the same brief."}}}`,
 	)
-	if len(resps) != 3 {
-		t.Fatalf("want 3 responses, got %d", len(resps))
+	if len(resps) != 4 {
+		t.Fatalf("want 4 responses, got %d", len(resps))
 	}
 
 	tools, _ := resps[0].Result["tools"].([]any)
@@ -63,6 +64,11 @@ func TestMCPScoreSubmit(t *testing.T) {
 	}
 	if resps[2].Result["isError"] != true {
 		t.Fatalf("score_submit without text should be a tool error, got %+v", resps[2].Result)
+	}
+	// The same observation again is FOLDED, and the tool says so: an agent that
+	// submits freely learns which of its notes the fleet already had.
+	if txt := contentText(t, resps[3].Result); !strings.Contains(txt, "folded into ") {
+		t.Fatalf("a repeat should come back as a fold, got %q", txt)
 	}
 }
 
