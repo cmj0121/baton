@@ -675,6 +675,20 @@ func Load() (Config, error) {
 	if err := yaml.Unmarshal(data, &c); err != nil {
 		return c, fmt.Errorf("parse config %s: %w", paths.ConfigFile(), err)
 	}
+	// score.promote-at was spelled with an underscore before it was hyphenated,
+	// and the decoder is not strict: the old key parses, contributes nothing, and
+	// the threshold falls back to a default nobody chose. A second pass over the
+	// same bytes is what notices it — the file is a few kilobytes and is read once
+	// at boot and once per SIGHUP, and the alternative (a field carrying the old
+	// key) would ride back into the file the next Save rewrites. The error is
+	// dropped because the parse above already succeeded on these bytes.
+	var stale struct {
+		Score struct {
+			PromoteAt *int `yaml:"promote_at"`
+		} `yaml:"score"`
+	}
+	_ = yaml.Unmarshal(data, &stale)
+	c.Score.StalePromoteAt = stale.Score.PromoteAt != nil
 	c.normalize()
 	return c, nil
 }

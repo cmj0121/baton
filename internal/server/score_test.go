@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -77,7 +78,7 @@ func noError(t *testing.T, cc *clientConn) {
 // the bare prompt as the panel's brief — cards and restarts never carry the block.
 func TestDirectDispatchInjectsScore(t *testing.T) {
 	st, _ := scoreStore(t) // a fresh store holds no entries
-	if _, err := st.Submit("prefer table-driven tests", score.Provenance{Source: "user"}); err != nil {
+	if _, _, err := st.Submit("prefer table-driven tests", score.Provenance{Source: "user"}); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 	s, delivered := scoreServer(st)
@@ -195,10 +196,14 @@ func TestScoreSubmitProvenance(t *testing.T) {
 			t.Fatalf("want a score reply, got %+v", msg)
 		}
 		var out struct {
-			Id string `json:"id"`
+			Id     string `json:"id"`
+			Folded bool   `json:"folded"`
 		}
 		if err := json.Unmarshal(msg.Score, &out); err != nil || out.Id == "" {
 			t.Fatalf("reply must carry the entry id: %s (%v)", msg.Score, err)
+		}
+		if out.Folded {
+			t.Fatalf("a first submission was reported as a fold: %s", msg.Score)
 		}
 		return out.Id
 	}
@@ -212,6 +217,76 @@ func TestScoreSubmitProvenance(t *testing.T) {
 	user := find(submit(conn(""), "ship on fridays never"))
 	if want := (score.Provenance{Source: "user"}); user.Provenance != want {
 		t.Fatalf("user provenance mis-stamped: %+v", user.Provenance)
+	}
+}
+
+// TestScoreSubmitReportsAFold is #38's "new or folded into id" on the wire. Four
+// identical submissions answer with one id, so without the flag the caller
+// cannot tell the submission that created the entry from the three that were
+// counted into it — and an agent never learns the fleet already knew.
+func TestScoreSubmitReportsAFold(t *testing.T) {
+	st, _ := scoreStore(t)
+	s, _ := scoreServer(st)
+
+	var ids []string
+	var folds []bool
+	for range 4 {
+		cc := conn("p1")
+		s.onCommand(cc, proto.Command{Action: "score.submit", Prompt: "always run make lint"})
+		msg := reply(t, cc)
+		var out struct {
+			Id     string `json:"id"`
+			Folded bool   `json:"folded"`
+		}
+		if msg.Type != "score" || json.Unmarshal(msg.Score, &out) != nil {
+			t.Fatalf("want a score reply, got %+v", msg)
+		}
+		ids, folds = append(ids, out.Id), append(folds, out.Folded)
+	}
+
+	for i, id := range ids {
+		if id != ids[0] {
+			t.Fatalf("submission %d landed in %q, want the one entry %q", i, id, ids[0])
+		}
+	}
+	if want := []bool{false, true, true, true}; !reflect.DeepEqual(folds, want) {
+		t.Fatalf("folded = %v, want %v — the first records, the rest fold", folds, want)
+	}
+	if st.Len() != 1 {
+		t.Fatalf("entries = %d, want the repeats folded", st.Len())
+	}
+
+	// A submission that folded leaves score.md untouched, so it is the mutation
+	// an operator cannot see by looking — which is why the store records it on
+	// the same buffer a folded LINE lands on, and why the next view is where
+	// either becomes #38's one log line per fold. Draining them through the
+	// server is what proves there is a single producer.
+	s.onCommand(conn(""), proto.Command{Action: "score.list"})
+	v, err := st.View(score.Context{})
+	if err != nil {
+		t.Fatalf("View: %v", err)
+	}
+	if len(v.Folds) != 0 {
+		t.Fatalf("folds = %+v, want the view that logged them to have drained them", v.Folds)
+	}
+
+	// One more, so the record itself can be read rather than inferred: a
+	// submission fold names the panel that repeated the wording, and claims no
+	// removal, because no line ever existed to remove.
+	s.onCommand(conn("p2"), proto.Command{Action: "score.submit", Prompt: "Always run make lint!"})
+	if v, err = st.View(score.Context{}); err != nil {
+		t.Fatalf("View: %v", err)
+	}
+	if len(v.Folds) != 1 {
+		t.Fatalf("folds = %+v, want the one fold that submission made", v.Folds)
+	}
+	switch f := v.Folds[0]; {
+	case f.Id != ids[0], f.Text != "always run make lint", f.Repeat != "Always run make lint!":
+		t.Fatalf("fold = %+v, want the surviving wording beside the repeat", f)
+	case !f.Counted, f.FromFile, f.Removed:
+		t.Fatalf("fold = %+v, want a counted submission fold that removed nothing", f)
+	case f.Prov.Source != "agent", f.Prov.SourcePanel != "p2":
+		t.Fatalf("fold = %+v, want the panel that repeated it", f)
 	}
 }
 
@@ -234,7 +309,7 @@ func TestScoreSubmitDisabled(t *testing.T) {
 // reported so status can explain its own gap when the render limit bites.
 func TestScoreListAndStatus(t *testing.T) {
 	st, dir := scoreStore(t)
-	if _, err := st.Submit("one real entry", score.Provenance{Source: "user"}); err != nil {
+	if _, _, err := st.Submit("one real entry", score.Provenance{Source: "user"}); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 
@@ -244,7 +319,7 @@ func TestScoreListAndStatus(t *testing.T) {
 		want   statusReply
 		listed int // entries score.list returns
 	}{
-		{"enabled", st, statusReply{Enabled: true, Available: true, Entries: 1, Rendered: 1, Dir: dir}, 1},
+		{"enabled", st, statusReply{Enabled: true, Available: true, Entries: 1, Rendered: 1, PromoteAt: 3, Dir: dir}, 1},
 		{"disabled", nil, statusReply{Reason: "score is disabled"}, 0},
 	}
 	for _, tc := range cases {

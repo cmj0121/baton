@@ -18,7 +18,7 @@ func ctlScoredServer(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_RUNTIME_DIR", home)
-	st, err := score.Open(t.TempDir())
+	st, err := score.Open(t.TempDir(), 0)
 	if err != nil {
 		t.Fatalf("open score store: %v", err)
 	}
@@ -51,6 +51,10 @@ func TestCtlScoreRuns(t *testing.T) {
 		Run(*control.Client) error
 	}{
 		ctlScoreSubmit{Text: "operators drain the queue before lunch"},
+		// The same observation again: the store folds it, and the handler takes
+		// its other branch — the one that tells the operator their note was
+		// counted into an entry rather than added as one.
+		ctlScoreSubmit{Text: "Operators drain the queue before lunch."},
 		ctlScoreList{},
 		ctlScoreStatus{},
 	}

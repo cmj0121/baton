@@ -16,12 +16,12 @@ import (
 // corrupting the first one's view.
 func TestSingleWriterPerDirectory(t *testing.T) {
 	dir := t.TempDir()
-	first, err := Open(dir)
+	first, err := Open(dir, defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 
-	second, err := Open(dir)
+	second, err := Open(dir, defaultPromoteAt)
 	if err == nil {
 		second.Close()
 		t.Fatal("a second store opened the same directory; the claim is not enforced")
@@ -32,7 +32,7 @@ func TestSingleWriterPerDirectory(t *testing.T) {
 
 	// Close hands the directory over, which is what makes a restart work.
 	first.Close()
-	third, err := Open(dir)
+	third, err := Open(dir, defaultPromoteAt)
 	if err != nil {
 		t.Fatalf("reopen after Close: %v", err)
 	}
@@ -51,11 +51,11 @@ func TestOpenReleasesTheClaimWhenItFails(t *testing.T) {
 		t.Fatalf("mkdir over the log: %v", err)
 	}
 
-	if s, err := Open(dir); err == nil {
+	if s, err := Open(dir, defaultPromoteAt); err == nil {
 		s.Close()
 		t.Fatal("Open succeeded with an unreadable event log")
 	}
-	s, err := Open(dir)
+	s, err := Open(dir, defaultPromoteAt)
 	if err == nil {
 		s.Close()
 		t.Fatal("Open succeeded on the second try, so the first failure was not the log")

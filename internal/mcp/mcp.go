@@ -459,9 +459,15 @@ func defaultTools() []tool {
 				if text == "" {
 					return "", fmt.Errorf("text is required")
 				}
-				id, err := c.ScoreSubmit(text)
+				id, folded, err := c.ScoreSubmit(text)
 				if err != nil {
 					return "", err
+				}
+				// A fold is worth saying out loud: it tells the agent the fleet
+				// already knew this, which is the one thing that makes submitting
+				// freely cheap rather than noisy.
+				if folded {
+					return "folded into " + id + ", which the fleet already remembers", nil
 				}
 				return "recorded as " + id, nil
 			},

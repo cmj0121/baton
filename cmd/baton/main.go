@@ -389,18 +389,22 @@ func sweepLegacyConductorWorkspaces(sock string) {
 }
 
 // openScore opens the fleet memory (#39) and reports why no store is running
-// when none is. A failed Open logs and boots WITHOUT a store — corrupt score
-// files never block the fleet (#38 lifecycle), and a second daemon pointed at
-// the same score directory is refused there rather than clobbering the first
-// one's files. The reason travels to the server so score.status and
-// score.submit can say WHICH of "switched off", "unavailable", and "running"
-// this daemon is in; a boot log line alone would leave the operator of a second
-// BATON_SOCK fleet guessing.
+// when none is. The configured recurrence threshold goes in at construction,
+// because Open's own recovery pass promotes: it folds and rewords whatever the
+// operator edited into score.md while the daemon was down, and those `raised`
+// events are durable and never demoted. applyConfig re-tunes the same knob on
+// every reload; this is the one place it is CHOSEN. A failed Open logs and boots
+// WITHOUT a store — corrupt score files never block the fleet (#38 lifecycle),
+// and a second daemon pointed at the same score directory is refused there
+// rather than clobbering the first one's files. The reason travels to the server
+// so score.status and score.submit can say WHICH of "switched off",
+// "unavailable", and "running" this daemon is in; a boot log line alone would
+// leave the operator of a second BATON_SOCK fleet guessing.
 func openScore(cfg config.ScoreConfig) (*score.Store, string) {
 	if !cfg.IsEnabled() {
 		return nil, "score is switched off in the config (score.enabled: false)"
 	}
-	st, err := score.Open(cfg.Directory())
+	st, err := score.Open(cfg.Directory(), cfg.PromoteAt)
 	if err != nil {
 		log.Warn().Err(err).Str("dir", cfg.Directory()).Msg("score store open failed; running without fleet memory")
 		return nil, err.Error()
@@ -413,11 +417,7 @@ func openScore(cfg config.ScoreConfig) (*score.Store, string) {
 	// pass did to the operator's files is visible without reading the event log
 	// by hand.
 	if d, h := st.Boot(), st.Health(); d != (score.Delta{}) || h != (score.Health{}) {
-		log.Info().Int("admitted", d.Admitted).Int("reattributed", d.Reattributed).
-			Int("adopted", d.Adopted).Int("superseded", d.Superseded).
-			Int("retired", d.Retired).Int("reprojected", d.Reprojected).
-			Int("oversized", h.Oversized).Int("torn_events", h.TornEvents).
-			Int("cache_write_failures", h.CacheWriteFailures).
+		server.ScoreCounters(log.Info(), d, h).
 			Str("dir", cfg.Directory()).Msg("score recovered")
 	}
 	return st, ""
@@ -492,10 +492,36 @@ func runServerOn(ln net.Listener, sock string) error {
 		}
 		rc := reloadableSettings(res.Config)
 		srv.Reload(rc.settings)
-		// score.dir / score.enabled deliberately do NOT reload: the store is opened
-		// once at boot (above), because swapping a live store under in-flight
+		// score.promote-at DOES reload — it is a number the live store compares,
+		// so a fleet whose entries are climbing too eagerly is retuned with C-t R
+		// rather than by restarting and returning every panel as Exited. Tiers
+		// already earned are replayed from the log and never move (see
+		// Store.SetPromoteAt).
+		//
+		// score.dir / score.enabled deliberately do NOT: the store is opened once
+		// at boot (above), because swapping a live store under in-flight
 		// dispatches is R7's lifecycle work (#39). A SIGHUP leaves the fleet
-		// memory exactly as booted.
+		// memory itself exactly as booted.
+		//
+		// A config that would not PARSE is not a config that says "use the
+		// default": `cfg` is the zero value then, and retuning the store from it
+		// would quietly undo an operator's threshold on the reload that told them
+		// their file has a typo in it. The running value stands until a file the
+		// daemon could actually read asks for another one — and the load failure
+		// is already warned about above, so this branch stays silent.
+		// A file still spelling the key `promote_at` is not a parse error — the
+		// YAML decoder is not strict, so the key is dropped and the threshold
+		// silently falls back to the default. Say so: the operator wrote a number
+		// down and is running on another one, which is the surprise this whole
+		// knob exists to avoid (invariant I8). Warned on the reload as well as at
+		// boot, because retuning the threshold is exactly when the typo is made.
+		if err == nil && cfg.Score.StalePromoteAt {
+			log.Warn().Msg("config key score.promote_at is ignored; the key is score.promote-at")
+		}
+		if err == nil && scoreStore.SetPromoteAt(res.Config.Score.PromoteAt) {
+			log.Info().Int("promote_at", scoreStore.PromoteAt()).
+				Msg("score recurrence threshold changed")
+		}
 		srv.SetOutputEvents(res.WantOutput)
 		srv.SetTitleHook(res.WantTitle)
 		if data, mErr := json.Marshal(res.Config); mErr == nil {
