@@ -624,9 +624,9 @@ func TestFilterTaskRewriteAndVeto(t *testing.T) {
 		{"table drop", "", false},
 	}
 	for _, c := range cases {
-		out, allow := p.FilterTask(c.in, "build")
-		if allow != c.wantAllow || (allow && out != c.wantOut) {
-			t.Errorf("FilterTask(%q) = (%q, %v), want (%q, %v)", c.in, out, allow, c.wantOut, c.wantAllow)
+		out, allow := p.FilterTask(plugin.Brief{Prompt: c.in, Group: "build"})
+		if allow != c.wantAllow || (allow && out.Prompt != c.wantOut) {
+			t.Errorf("FilterTask(%q) = (%q, %v), want (%q, %v)", c.in, out.Prompt, allow, c.wantOut, c.wantAllow)
 		}
 	}
 }
@@ -645,9 +645,93 @@ func TestFilterTaskChains(t *testing.T) {
 	if _, err := p.Load(path, config.Config{}); err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	out, allow := p.FilterTask("go", "")
-	if !allow || out != "go [a] [b]" {
-		t.Fatalf("chained filter = (%q, %v), want (\"go [a] [b]\", true)", out, allow)
+	out, allow := p.FilterTask(plugin.Brief{Prompt: "go"})
+	if !allow || out.Prompt != "go [a] [b]" {
+		t.Fatalf("chained filter = (%q, %v), want (\"go [a] [b]\", true)", out.Prompt, allow)
+	}
+}
+
+// TestFilterTaskScoreContract pins the backward-compatible score rules: a string
+// return rewrites the prompt but never the score, a table's score key rewrites the
+// score, an empty-string score drops the block, and an absent key leaves the score
+// untouched (so a pre-score hook keeps its old meaning).
+func TestFilterTaskScoreContract(t *testing.T) {
+	h := &fakeHost{}
+	p := plugin.New(h)
+	defer p.Close()
+
+	path := writeLua(t, `
+		baton.on("task.pre", function(t)
+			if t.prompt == "string" then return "rewritten" end            -- prompt only
+			if t.prompt == "set" then return { score = "## new score" } end -- score rewrite
+			if t.prompt == "clear" then return { score = "" } end           -- score drop
+			if t.prompt == "absent" then return { prompt = "renamed" } end  -- score untouched
+		end)
+	`)
+	if _, err := p.Load(path, config.Config{}); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	cases := []struct {
+		in         string
+		wantPrompt string
+		wantScore  string
+	}{
+		{"string", "rewritten", "old score"},
+		{"set", "set", "## new score"},
+		{"clear", "clear", ""},
+		{"absent", "renamed", "old score"},
+	}
+	for _, c := range cases {
+		out, allow := p.FilterTask(plugin.Brief{Prompt: c.in, Score: "old score"})
+		if !allow || out.Prompt != c.wantPrompt || out.Score != c.wantScore {
+			t.Errorf("FilterTask(%q) = (%q, %q, %v), want (%q, %q, true)",
+				c.in, out.Prompt, out.Score, allow, c.wantPrompt, c.wantScore)
+		}
+	}
+}
+
+// TestFilterTaskScoreChains threads a brief through two hooks that each rewrite
+// prompt and score, proving the chain composes over BOTH fields — the second hook
+// sees the first one's score just as it sees its prompt.
+func TestFilterTaskScoreChains(t *testing.T) {
+	h := &fakeHost{}
+	p := plugin.New(h)
+	defer p.Close()
+
+	path := writeLua(t, `
+		baton.on("task.pre", function(t) return { prompt = t.prompt.." [a]", score = t.score.." [a]" } end)
+		baton.on("task.pre", function(t) return { prompt = t.prompt.." [b]", score = t.score.." [b]" } end)
+	`)
+	if _, err := p.Load(path, config.Config{}); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	out, allow := p.FilterTask(plugin.Brief{Prompt: "go", Score: "s"})
+	if !allow || out.Prompt != "go [a] [b]" || out.Score != "s [a] [b]" {
+		t.Fatalf("chained score filter = (%q, %q, %v), want (\"go [a] [b]\", \"s [a] [b]\", true)",
+			out.Prompt, out.Score, allow)
+	}
+}
+
+// TestFilterTaskSeesAllFields checks the hook table carries every Brief field —
+// prompt, group, score, cwd, profile, panel — by echoing them into the prompt.
+func TestFilterTaskSeesAllFields(t *testing.T) {
+	h := &fakeHost{}
+	p := plugin.New(h)
+	defer p.Close()
+
+	path := writeLua(t, `
+		baton.on("task.pre", function(t)
+			return t.prompt.."|"..t.group.."|"..t.score.."|"..t.cwd.."|"..t.profile.."|"..t.panel
+		end)
+	`)
+	if _, err := p.Load(path, config.Config{}); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	b := plugin.Brief{Prompt: "p", Group: "g", Score: "s", Cwd: "/w", Profile: "pro", Panel: "id1"}
+	out, allow := p.FilterTask(b)
+	if !allow || out.Prompt != "p|g|s|/w|pro|id1" {
+		t.Fatalf("hook fields = (%q, %v), want (\"p|g|s|/w|pro|id1\", true)", out.Prompt, allow)
 	}
 }
 
@@ -659,16 +743,16 @@ func TestFilterTaskFailsOpen(t *testing.T) {
 	defer p.Close()
 
 	// No plugin loaded → no task.pre hook → pass-through.
-	if out, allow := p.FilterTask("untouched", ""); out != "untouched" || !allow {
-		t.Fatalf("no-hook filter = (%q, %v), want (\"untouched\", true)", out, allow)
+	if out, allow := p.FilterTask(plugin.Brief{Prompt: "untouched"}); out.Prompt != "untouched" || !allow {
+		t.Fatalf("no-hook filter = (%q, %v), want (\"untouched\", true)", out.Prompt, allow)
 	}
 
 	path := writeLua(t, `baton.on("task.pre", function(t) error("boom") end)`)
 	if _, err := p.Load(path, config.Config{}); err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if out, allow := p.FilterTask("survive", ""); out != "survive" || !allow {
-		t.Fatalf("a throwing hook should fail open, got (%q, %v)", out, allow)
+	if out, allow := p.FilterTask(plugin.Brief{Prompt: "survive"}); out.Prompt != "survive" || !allow {
+		t.Fatalf("a throwing hook should fail open, got (%q, %v)", out.Prompt, allow)
 	}
 }
 
@@ -679,8 +763,8 @@ func TestFilterTaskAfterClose(t *testing.T) {
 	p := plugin.New(h)
 	p.Close()
 
-	if out, allow := p.FilterTask("late", "g"); out != "late" || !allow {
-		t.Fatalf("filter after close should fail open, got (%q, %v)", out, allow)
+	if out, allow := p.FilterTask(plugin.Brief{Prompt: "late", Group: "g"}); out.Prompt != "late" || !allow {
+		t.Fatalf("filter after close should fail open, got (%q, %v)", out.Prompt, allow)
 	}
 }
 
@@ -707,8 +791,8 @@ func TestFilterTaskConcurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 20; j++ {
-				if out, allow := p.FilterTask("go", ""); !allow || out != "go!" {
-					t.Errorf("concurrent filter = (%q, %v)", out, allow)
+				if out, allow := p.FilterTask(plugin.Brief{Prompt: "go"}); !allow || out.Prompt != "go!" {
+					t.Errorf("concurrent filter = (%q, %v)", out.Prompt, allow)
 					return
 				}
 				p.Dispatch("panel.attention", map[string]any{"title": "x"})

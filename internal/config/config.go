@@ -46,6 +46,9 @@ type Config struct {
 	// see LoadTUI); it lives here so it rides the same config broadcast to every
 	// frontend.
 	TUI TUIConfig `yaml:"tui,omitempty"`
+
+	// Score configures the fleet-scope memory (issue #37).
+	Score ScoreConfig `yaml:"score,omitempty"`
 }
 
 // TUIConfig is the cockpit appearance: the colour theme and the named group-split

@@ -38,6 +38,7 @@ import (
 	"github.com/cmj0121/baton/internal/queue"
 	"github.com/cmj0121/baton/internal/remote"
 	"github.com/cmj0121/baton/internal/restart"
+	"github.com/cmj0121/baton/internal/score"
 	"github.com/cmj0121/baton/internal/signals"
 	"github.com/cmj0121/baton/internal/state"
 	"github.com/cmj0121/baton/internal/task"
@@ -230,10 +231,10 @@ type Server struct {
 	outputEvents atomic.Bool
 	onRunCommand func(name string) error
 	// onFilterTask runs the synchronous task.pre hooks over a brief before it is
-	// delivered: it may rewrite the prompt or veto the task. It blocks on the plugin
-	// worker, so — unlike eventSink — it must be called WITHOUT s.mu held. A nil
-	// filter (no plugin) passes every brief through unchanged.
-	onFilterTask func(prompt, group string) (string, bool)
+	// delivered: it may rewrite the prompt or the score, or veto the task. It blocks
+	// on the plugin worker, so — unlike eventSink — it must be called WITHOUT s.mu
+	// held. A nil filter (no plugin) passes every brief through unchanged.
+	onFilterTask func(b TaskBrief) (TaskBrief, bool)
 	clientConfig json.RawMessage
 	pluginCmds   []proto.PluginCommand
 	footerText   string // a plugin-set persistent footer segment (baton.footer); carried on config + pushed live
@@ -410,6 +411,13 @@ type Server struct {
 	// once in New, then read without a lock — like writeInput above.
 	pidOf func(id string) int
 
+	// score is the fleet memory (internal/score) rendered into directly
+	// dispatched briefs and served over the score.* verbs. Nil is the disabled
+	// store — the score package renders nothing and refuses mutations plainly on
+	// nil — so the server holds no enabled flag of its own. Set once in New,
+	// then read without a lock, like writeInput above.
+	score *score.Store
+
 	// Ephemeral diff panels. ephemeral is the set of live "diff:<n>" ids spawned
 	// as PTYs but deliberately kept out of s.panels/s.specs, so persistence
 	// (snapshotState) and the dashboard (panelsMsg) never see them. ephSeq numbers
@@ -557,6 +565,15 @@ func WithQueue(max, concurrency int) Option {
 			s.queueConcurrency = concurrency
 		}
 	}
+}
+
+// WithScore hands the server the fleet-memory store whose entries are injected
+// into directly dispatched briefs and served over the score.* verbs. A nil
+// store is the disabled subsystem — the score package treats nil as the
+// disabled store — so the caller decides enabled/disabled by what it passes and
+// the server never re-asks the config.
+func WithScore(st *score.Store) Option {
+	return func(s *Server) { s.score = st }
 }
 
 // UsageDisplay is how the frontends should present the window: the fractions of
@@ -2021,15 +2038,18 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "panel.dispatch":
 		// Assign a task to a panel: record the brief and deliver it to the process as
 		// a unit. Unlike panel.input (raw keystrokes), the server knows the objective,
-		// so it reaches every frontend's card and the snapshot.
-		s.dispatchFiltered(cc, cmd.Prompt, "", func(p string) error {
-			return s.dispatchPanel(cmd.ID, p, cmd.Submit)
+		// so it reaches every frontend's card and the snapshot. The target panel is
+		// known here, so the brief carries its context and the rendered score block
+		// — the one path that injects fleet memory (#39).
+		s.dispatchFiltered(cc, s.dispatchBrief(cmd.ID, cmd.Prompt), func(b TaskBrief) error {
+			return s.dispatchScored(cmd.ID, b.Prompt, b.Score, cmd.Submit)
 		})
 	case "panel.dispatch-group":
 		// Fan one task to every member of a work item — the mechanic behind racing N
 		// agents on the same prompt. The reply error names an empty/unknown group.
-		s.dispatchFiltered(cc, cmd.Prompt, cmd.Group, func(p string) error {
-			_, err := s.dispatchGroup(cmd.Group, p, cmd.Submit)
+		// No score block on fan-out in S0: per-member delivery is R5's problem (#39).
+		s.dispatchFiltered(cc, TaskBrief{Prompt: cmd.Prompt, Group: cmd.Group}, func(b TaskBrief) error {
+			_, err := s.dispatchGroup(cmd.Group, b.Prompt, cmd.Submit)
 			return err
 		})
 	case "task.enqueue":
@@ -2041,8 +2061,8 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		if cmd.Path != "" {
 			spawn = &task.SpawnSpec{Command: cmd.Path, Profile: cmd.Profile, Args: cmd.Args, Dir: cmd.Dir, CloseOnDone: cmd.Ephemeral}
 		}
-		s.dispatchFiltered(cc, cmd.Prompt, cmd.Group, func(p string) error {
-			_, err := s.enqueueTask(p, cmd.Group, spawn)
+		s.dispatchFiltered(cc, TaskBrief{Prompt: cmd.Prompt, Group: cmd.Group}, func(b TaskBrief) error {
+			_, err := s.enqueueTask(b.Prompt, cmd.Group, spawn)
 			return err
 		})
 	case "task.list":
@@ -2082,6 +2102,15 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		s.ackPanel(cc, cmd)
 	case "panel.resize":
 		s.pty.Resize(cmd.ID, cmd.Rows, cmd.Cols)
+	case "score.submit":
+		// Record a fleet-memory note. Deliberately absent from guardConductor's
+		// deny list: submission is open to every panel by design (#38) — the
+		// memory is fed by agents and operators alike.
+		s.scoreSubmit(cc, cmd)
+	case "score.list":
+		send(cc, proto.ServerMsg{Type: "score", Score: s.scoreList()})
+	case "score.status":
+		send(cc, proto.ServerMsg{Type: "score", Score: s.scoreStatus()})
 	default:
 		send(cc, proto.ServerMsg{Type: "error", Error: fmt.Sprintf("unknown action %q", cmd.Action)})
 	}
@@ -2839,13 +2868,26 @@ func dispatchData(prompt, submit string) []byte {
 // monitor tick delivers them once the panel settles to idle/attention. A panel
 // already settled is written immediately. The brief is recorded either way.
 func (s *Server) dispatchPanel(id, prompt, submit string) error {
+	return s.dispatchScored(id, prompt, "", submit)
+}
+
+// dispatchScored is dispatchPanel with a score block riding the DELIVERED bytes
+// only: the block precedes the prompt in what the process receives, while the
+// recorded brief — the card, the snapshot, a restart's restore — stays the bare
+// prompt, because the block is advice for this one delivery, not part of the
+// objective. An empty scoreBlock is the plain dispatch.
+func (s *Server) dispatchScored(id, prompt, scoreBlock, submit string) error {
 	if id == "" {
 		return fmt.Errorf("panel.dispatch needs an id")
 	}
 	if prompt == "" {
 		return fmt.Errorf("panel.dispatch needs a prompt")
 	}
-	data := dispatchData(prompt, submit)
+	delivered := prompt
+	if scoreBlock != "" {
+		delivered = scoreBlock + "\n\n" + prompt
+	}
+	data := dispatchData(delivered, submit)
 
 	s.mu.Lock()
 	idx := s.indexLocked(id)

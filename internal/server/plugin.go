@@ -58,28 +58,42 @@ func (s *Server) SetRunCommand(fn func(name string) error) {
 	s.mu.Unlock()
 }
 
+// TaskBrief is the brief the task.pre filter sees and may rewrite: the prompt, the
+// score block a dispatch would inject, and the context they ride with (group, cwd,
+// profile, panel). It mirrors plugin.Brief field-for-field: the server never imports
+// internal/plugin (the plugin package equally never imports the server), so each
+// side declares its own struct and main.go adapts between them.
+type TaskBrief struct {
+	Prompt  string
+	Group   string
+	Score   string
+	Cwd     string
+	Profile string
+	Panel   string
+}
+
 // SetTaskFilter wires the synchronous task.pre filter — the one hook that can change
-// an action, rewriting or vetoing a brief before it is delivered. It blocks on the
-// plugin worker, so the dispatch path calls it without s.mu held. Call before/while
-// serving; stored under mu.
-func (s *Server) SetTaskFilter(fn func(prompt, group string) (string, bool)) {
+// an action, rewriting (prompt or score) or vetoing a brief before it is delivered.
+// It blocks on the plugin worker, so the dispatch path calls it without s.mu held.
+// Call before/while serving; stored under mu.
+func (s *Server) SetTaskFilter(fn func(b TaskBrief) (TaskBrief, bool)) {
 	s.mu.Lock()
 	s.onFilterTask = fn
 	s.mu.Unlock()
 }
 
 // filterBrief runs the wired task.pre filter over a brief and returns the
-// (possibly rewritten) prompt and whether to proceed. It reads the callback under a
+// (possibly rewritten) brief and whether to proceed. It reads the callback under a
 // brief lock, then releases it before the blocking call — the filter must never run
 // under s.mu. A nil filter (no plugin) passes the brief through unchanged.
-func (s *Server) filterBrief(prompt, group string) (string, bool) {
+func (s *Server) filterBrief(b TaskBrief) (TaskBrief, bool) {
 	s.mu.Lock()
 	fn := s.onFilterTask
 	s.mu.Unlock()
 	if fn == nil {
-		return prompt, true
+		return b, true
 	}
-	return fn(prompt, group)
+	return fn(b)
 }
 
 // dispatchFiltered is the shared body of the panel.dispatch / dispatch-group /
@@ -88,8 +102,11 @@ func (s *Server) filterBrief(prompt, group string) (string, bool) {
 // becomes a wire error; a success broadcasts the fleet. Routing all three through
 // here means they honour the filter identically, and the filter runs before action
 // takes s.mu — which is safe because onCommand holds no lock at the call site.
-func (s *Server) dispatchFiltered(cc *clientConn, prompt, group string, action func(prompt string) error) {
-	filtered, ok := s.filterBrief(prompt, group)
+// Only the direct panel.dispatch path fills Score/Cwd/Profile/Panel (see
+// dispatchBrief); a queued task or a group fan-out rides an empty brief, because
+// score injection at those deliveries is R5's problem (#39).
+func (s *Server) dispatchFiltered(cc *clientConn, b TaskBrief, action func(b TaskBrief) error) {
+	filtered, ok := s.filterBrief(b)
 	if !ok {
 		send(cc, proto.ServerMsg{Type: "error", Error: "task vetoed by a task.pre hook"})
 		return
@@ -235,6 +252,9 @@ func (s *Server) Spawn(kind, command string, args []string, dir, group string) (
 
 // Dispatch records prompt as panel id's task brief and delivers it to the process
 // as a unit, broadcasting and persisting like the wire path. It is baton.dispatch.
+// Unlike the wire path it delivers the bare prompt — no score block — since a
+// plugin-originated dispatch bypasses the task.pre chain that could edit the block
+// (S0 of #39; the wire path is the sole injection point).
 func (s *Server) Dispatch(id, prompt string) error {
 	if err := s.dispatchPanel(id, prompt, ""); err != nil {
 		return err

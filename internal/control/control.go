@@ -347,6 +347,80 @@ func (c *Client) readUntilPanels() error {
 	}
 }
 
+// scoreExchange issues one score.* command and returns the raw payload of the
+// "score" reply it produces. Like Tasks it trails the request with a config.get
+// barrier and drains up to the "config" answer, tolerating any interleaved
+// pushes ("panels", "stats", …) the server broadcasts in between — a score reply
+// is a new message type, but the connection it arrives on is as chatty as ever.
+func (c *Client) scoreExchange(cmd proto.Command) (json.RawMessage, error) {
+	if err := c.send(cmd); err != nil {
+		return nil, err
+	}
+	if err := c.send(proto.Command{Action: "config.get"}); err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(ioTimeout)
+	var payload json.RawMessage
+	var firstErr error
+	for {
+		_ = c.conn.SetReadDeadline(deadline)
+		var msg proto.ServerMsg
+		if err := c.dec.Decode(&msg); err != nil {
+			return nil, fmt.Errorf("read from baton: %w", err)
+		}
+		switch msg.Type {
+		case "error":
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s", msg.Error)
+			}
+		case "score":
+			payload = msg.Score
+		case "config":
+			if firstErr != nil {
+				return nil, firstErr
+			}
+			return payload, nil
+		}
+	}
+}
+
+// ScoreSubmit records text as a fleet-memory note (score.submit) and returns
+// the id of the entry it created — the one fact a caller can act on, extracted
+// here so the CLI and the MCP tool share the presentation.
+func (c *Client) ScoreSubmit(text string) (string, error) {
+	payload, err := c.scoreExchange(proto.Command{Action: "score.submit", Prompt: text})
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		Id string `json:"id"`
+	}
+	if err := json.Unmarshal(payload, &out); err != nil || out.Id == "" {
+		return "", fmt.Errorf("malformed score.submit reply: %s", payload)
+	}
+	return out.Id, nil
+}
+
+// ScoreList returns every recorded fleet-memory entry as the server's raw JSON
+// array — the shared presentation for `baton ctl score list`.
+func (c *Client) ScoreList() (string, error) {
+	payload, err := c.scoreExchange(proto.Command{Action: "score.list"})
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
+// ScoreStatus returns the fleet-memory status object (enabled, entries, dir) as
+// the server's raw JSON — the shared presentation for `baton ctl score status`.
+func (c *Client) ScoreStatus() (string, error) {
+	payload, err := c.scoreExchange(proto.Command{Action: "score.status"})
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
 func (c *Client) send(cmd proto.Command) error {
 	_ = c.conn.SetWriteDeadline(time.Now().Add(ioTimeout))
 	if err := c.enc.Encode(cmd); err != nil {

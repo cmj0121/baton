@@ -178,18 +178,42 @@ baton.on("task.pre", function(t)
 end)
 ```
 
-這個 hook 收到一個 `{ prompt, group }` table,並回傳以下其中之一:
+這個 hook 收到一個 `{ prompt, group, score, cwd, profile, panel }` table——那份簡報,加上它
+一路攜帶的脈絡:
 
-| 回傳                        | 效果                                  |
-| --------------------------- | ------------------------------------- |
-| `nil` / 無 / `true`         | 原封不動地讓簡報通過                  |
-| 一個字串                    | 把 prompt 改寫成那個字串              |
-| `{ prompt = "…" }`          | 改寫 prompt                           |
-| `false` / `{ drop = true }` | 否決——任務被丟棄,呼叫者會收到一個錯誤 |
+| 欄位      | 內容                                                                   |
+| --------- | ---------------------------------------------------------------------- |
+| `prompt`  | 簡報的文字——每一個攔截點都會帶上的唯一欄位                             |
+| `group`   | 任務指向的群組;沒有指向任何群組時為空                                  |
+| `score`   | 一次派送將會注入的 score 區塊,沒有時為空——排入佇列的任務尚未攜帶 score |
+| `cwd`     | 任務將落地的工作目錄;在 enqueue 時為空                                 |
+| `profile` | 目標面板的 agent profile;在 enqueue 時為空                             |
+| `panel`   | 簡報將送達的面板 id;在 enqueue 時為空                                  |
 
-Hook 會**串接**(較後的 hook 會看到前一個的改寫),而**第一個否決會終止整條串接**。它在
-`dispatch`、`dispatch-group` 與 `enqueue` 這幾個攔截點執行;外掛發起的派送會繞過它,
+`prompt` 與 `score` 是 hook 可以改寫的兩個欄位;其餘皆為唯讀的脈絡。回傳契約向後相容——
+一個在 `score` 存在之前寫成的 hook,意義維持與從前一字不差:
+
+| 回傳                        | 效果                                                                                  |
+| --------------------------- | ------------------------------------------------------------------------------------- |
+| `nil` / 無 / `true`         | 原封不動地讓簡報通過(prompt 與 score 皆然)                                            |
+| 一個字串                    | 只改寫 prompt;score 不受影響                                                          |
+| 一個 table                  | 可設定 `prompt`、`drop` 與 `score`——`score = ""` 會丟棄 score 區塊,鍵不存在則保持不動 |
+| `false` / `{ drop = true }` | 否決——任務被丟棄,呼叫者會收到一個錯誤                                                 |
+
+Table 裡的 `score` 值必須是字串;任何其他型別都會被忽略。Hook 會在這兩個欄位上一路串接
+(較後的 hook 會同時看到前一個對 prompt 與 score 的改寫),而第一個否決會終止整條串接。
+它在 `dispatch`、`dispatch-group` 與 `enqueue` 這幾個攔截點執行;外掛發起的派送會繞過它,
 所以它永遠不會再次進入自己。
+
+`score` 欄位由 Score——整隊範圍的記憶——餵入
+([#37](https://github.com/cmj0121/baton/issues/37),開發中);在它推出之前,這個欄位就只是
+空著。要為某一個群組剝除這個區塊,一個 table 回傳就夠了:
+
+```lua
+baton.on("task.pre", function(t)
+  if t.group == "scratch" then return { score = "" } end  -- this group works without fleet memory
+end)
+```
 
 `task.pre` 依契約是**故障開放(fail-open)**的:沒有 hook、一個會拋錯的 hook,或一個跑過
 逾時的 hook,全都讓簡報保持不變。這個過濾器會在唯一的 Lua worker 上阻塞派送,所以一個
@@ -320,5 +344,3 @@ built-in defaults  →  YAML config  →  plug-in.lua
 4. **`baton.notify`** 是一則 server→client 的通知,與寫入常駐程式日誌的 `baton.log` 並列。
 5. **設定優先序是 `defaults → YAML → Lua`**——YAML 是基底,外掛在其後載入並勝出。
 6. **引擎是 `gopher-lua`**——純 Go 的 Lua 5.1,沒有 cgo。
-   </content>
-   </invoke>
