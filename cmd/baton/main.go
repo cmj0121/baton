@@ -43,6 +43,7 @@ import (
 	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/plugin"
 	"github.com/cmj0121/baton/internal/restart"
+	"github.com/cmj0121/baton/internal/score"
 	"github.com/cmj0121/baton/internal/server"
 	"github.com/cmj0121/baton/internal/tui"
 	"github.com/cmj0121/baton/internal/usage"
@@ -406,7 +407,19 @@ func runServerOn(ln net.Listener, sock string) error {
 	rc := reloadableSettings(cfg)
 	stateF := paths.StateFile(sock)
 	sweepLegacyConductorWorkspaces(sock)
-	srv := server.New(ln, append(buildServerOptions(rc, stateF), usageOption(cfg), limitsOption(cfg))...)
+	// The fleet memory (#39). A failed Open logs and boots WITHOUT a store —
+	// corrupt score files never block the fleet (#38 lifecycle) — and
+	// `score.enabled: false` hands the server a nil store, which the score
+	// package treats as the disabled one.
+	var scoreStore *score.Store
+	if cfg.Score.IsEnabled() {
+		if st, serr := score.Open(cfg.Score.Directory()); serr != nil {
+			log.Warn().Err(serr).Str("dir", cfg.Score.Directory()).Msg("score store open failed; running without fleet memory")
+		} else {
+			scoreStore = st
+		}
+	}
+	srv := server.New(ln, append(buildServerOptions(rc, stateF), usageOption(cfg), limitsOption(cfg), server.WithScore(scoreStore))...)
 	srv.Restore() // seed the fleet from the last snapshot (all as exited dead slots) before serving
 
 	// The Lua plugin subsystem (docs/PLUGIN.md). Wire the server's event sink and
@@ -454,6 +467,10 @@ func runServerOn(ln net.Listener, sock string) error {
 		}
 		rc := reloadableSettings(res.Config)
 		srv.Reload(rc.settings)
+		// score.dir / score.enabled deliberately do NOT reload: the store is opened
+		// once at boot (above), because swapping a live store under in-flight
+		// dispatches is R7's lifecycle work (#39). A SIGHUP leaves the fleet
+		// memory exactly as booted.
 		srv.SetOutputEvents(res.WantOutput)
 		srv.SetTitleHook(res.WantTitle)
 		if data, mErr := json.Marshal(res.Config); mErr == nil {

@@ -102,15 +102,16 @@ func (s *Server) filterBrief(b TaskBrief) (TaskBrief, bool) {
 // becomes a wire error; a success broadcasts the fleet. Routing all three through
 // here means they honour the filter identically, and the filter runs before action
 // takes s.mu — which is safe because onCommand holds no lock at the call site.
-// Score/Cwd/Profile/Panel ride empty for now: score injection is wired at dispatch
-// separately (#39), and queued tasks carry no score by design.
-func (s *Server) dispatchFiltered(cc *clientConn, prompt, group string, action func(prompt string) error) {
-	filtered, ok := s.filterBrief(TaskBrief{Prompt: prompt, Group: group})
+// Only the direct panel.dispatch path fills Score/Cwd/Profile/Panel (see
+// dispatchBrief); a queued task or a group fan-out rides an empty brief, because
+// score injection at those deliveries is R5's problem (#39).
+func (s *Server) dispatchFiltered(cc *clientConn, b TaskBrief, action func(b TaskBrief) error) {
+	filtered, ok := s.filterBrief(b)
 	if !ok {
 		send(cc, proto.ServerMsg{Type: "error", Error: "task vetoed by a task.pre hook"})
 		return
 	}
-	if err := action(filtered.Prompt); err != nil {
+	if err := action(filtered); err != nil {
 		send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 		return
 	}
@@ -251,6 +252,9 @@ func (s *Server) Spawn(kind, command string, args []string, dir, group string) (
 
 // Dispatch records prompt as panel id's task brief and delivers it to the process
 // as a unit, broadcasting and persisting like the wire path. It is baton.dispatch.
+// Unlike the wire path it delivers the bare prompt — no score block — since a
+// plugin-originated dispatch bypasses the task.pre chain that could edit the block
+// (S0 of #39; the wire path is the sole injection point).
 func (s *Server) Dispatch(id, prompt string) error {
 	if err := s.dispatchPanel(id, prompt, ""); err != nil {
 		return err
