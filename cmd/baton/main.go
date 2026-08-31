@@ -416,7 +416,18 @@ func runServerOn(ln net.Listener, sock string) error {
 	defer plug.Close()
 	srv.SetEventSink(plug.Dispatch)
 	srv.SetRunCommand(plug.RunCommand)
-	srv.SetTaskFilter(plug.FilterTask)
+	// server.TaskBrief and plugin.Brief mirror each other field-for-field; the
+	// adapter keeps internal/server free of an internal/plugin import.
+	srv.SetTaskFilter(func(b server.TaskBrief) (server.TaskBrief, bool) {
+		out, ok := plug.FilterTask(plugin.Brief{
+			Prompt: b.Prompt, Group: b.Group, Score: b.Score,
+			Cwd: b.Cwd, Profile: b.Profile, Panel: b.Panel,
+		})
+		return server.TaskBrief{
+			Prompt: out.Prompt, Group: out.Group, Score: out.Score,
+			Cwd: out.Cwd, Profile: out.Profile, Panel: out.Panel,
+		}, ok
+	})
 	pluginPath := paths.PluginFile()
 
 	// applyConfig re-reads the YAML config, (re)runs the plugin on top of it, and

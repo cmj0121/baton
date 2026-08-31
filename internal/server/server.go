@@ -230,10 +230,10 @@ type Server struct {
 	outputEvents atomic.Bool
 	onRunCommand func(name string) error
 	// onFilterTask runs the synchronous task.pre hooks over a brief before it is
-	// delivered: it may rewrite the prompt or veto the task. It blocks on the plugin
-	// worker, so — unlike eventSink — it must be called WITHOUT s.mu held. A nil
-	// filter (no plugin) passes every brief through unchanged.
-	onFilterTask func(prompt, group string) (string, bool)
+	// delivered: it may rewrite the prompt or the score, or veto the task. It blocks
+	// on the plugin worker, so — unlike eventSink — it must be called WITHOUT s.mu
+	// held. A nil filter (no plugin) passes every brief through unchanged.
+	onFilterTask func(b TaskBrief) (TaskBrief, bool)
 	clientConfig json.RawMessage
 	pluginCmds   []proto.PluginCommand
 	footerText   string // a plugin-set persistent footer segment (baton.footer); carried on config + pushed live

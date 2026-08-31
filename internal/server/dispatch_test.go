@@ -161,14 +161,14 @@ func TestDispatchTaskFilter(t *testing.T) {
 	ln, sock, _ := listen(t)
 	srv := server.New(ln)
 	// Rewrite a "tag" brief, veto anything mentioning a secret, pass the rest.
-	srv.SetTaskFilter(func(prompt, group string) (string, bool) {
-		if strings.Contains(prompt, "secret") {
-			return "", false
+	srv.SetTaskFilter(func(b server.TaskBrief) (server.TaskBrief, bool) {
+		if strings.Contains(b.Prompt, "secret") {
+			return server.TaskBrief{}, false
 		}
-		if strings.HasPrefix(prompt, "tag ") {
-			return "[build] " + prompt, true
+		if strings.HasPrefix(b.Prompt, "tag ") {
+			b.Prompt = "[build] " + b.Prompt
 		}
-		return prompt, true
+		return b, true
 	})
 	go func() { _ = srv.Serve() }()
 

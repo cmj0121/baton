@@ -185,41 +185,54 @@ func (p *Plugin) RunCommand(name string) (err error) {
 // fails open and the (eventually-returning) hook result is discarded.
 const filterTimeout = 2 * time.Second
 
+// Brief is the task brief the task.pre filter carries: the prompt plus the context
+// it rides with. Score is the rendered score block a dispatch would inject (empty
+// when none); Cwd, Profile, and Panel say where the task will land. Hooks may
+// rewrite Prompt and Score; the other fields are read-only context.
+type Brief struct {
+	Prompt  string
+	Group   string
+	Score   string
+	Cwd     string
+	Profile string
+	Panel   string
+}
+
 // FilterTask runs the registered task.pre hooks over a brief before it is delivered,
-// returning the (possibly rewritten) prompt and whether to proceed. It is the one
-// synchronous hook that can change an action: a hook may rewrite the prompt or veto
-// the task. It is fail-open by construction — no hook, a hook error, or a timeout
-// all yield (prompt, true) — so a broken or slow plugin never blocks the fleet. The
-// result rides a buffered channel, never shared state, so a timed-out call races
-// with nothing when the worker finally finishes.
-func (p *Plugin) FilterTask(prompt, group string) (string, bool) {
+// returning the (possibly rewritten) brief and whether to proceed. It is the one
+// synchronous hook that can change an action: a hook may rewrite the prompt or the
+// score, or veto the task. It is fail-open by construction — no hook, a hook error,
+// or a timeout all yield the input brief unchanged with true — so a broken or slow
+// plugin never blocks the fleet. The result rides a buffered channel, never shared
+// state, so a timed-out call races with nothing when the worker finally finishes.
+func (p *Plugin) FilterTask(b Brief) (Brief, bool) {
 	type result struct {
-		prompt string
-		allow  bool
+		brief Brief
+		allow bool
 	}
 	ch := make(chan result, 1)
 	c := call{fn: func() {
-		np, allow := p.filterTask(prompt, group)
-		ch <- result{np, allow}
+		nb, allow := p.filterTask(b)
+		ch <- result{nb, allow}
 	}, done: make(chan struct{})}
 
 	deadline := time.After(filterTimeout)
 	select {
 	case p.calls <- c:
 	case <-deadline:
-		log.Warn().Str("group", group).Msg("task.pre worker busy, proceeding with the original brief")
-		return prompt, true
+		log.Warn().Str("group", b.Group).Msg("task.pre worker busy, proceeding with the original brief")
+		return b, true
 	case <-p.quit:
-		return prompt, true
+		return b, true
 	}
 	select {
 	case r := <-ch:
-		return r.prompt, r.allow
+		return r.brief, r.allow
 	case <-deadline:
-		log.Warn().Str("group", group).Msg("task.pre hook timed out, proceeding with the original brief")
-		return prompt, true
+		log.Warn().Str("group", b.Group).Msg("task.pre hook timed out, proceeding with the original brief")
+		return b, true
 	case <-p.quit:
-		return prompt, true
+		return b, true
 	}
 }
 
@@ -339,17 +352,28 @@ func (p *Plugin) refreshTitle(fields map[string]any) {
 }
 
 // filterTask chains the task.pre hooks over a brief on the worker thread. Each hook
-// receives a {prompt, group} table and returns one of: nil/true to pass the brief
-// through unchanged, false to veto (drop) the task, a string to rewrite the prompt,
-// or a {prompt=…, drop=…} table to do either. Hooks chain — a later hook sees the
-// prior one's rewrite — and the first veto stops the chain. A throwing hook is
-// logged and skipped (fail-open), so one bad handler never drops a task.
-func (p *Plugin) filterTask(prompt, group string) (string, bool) {
-	cur := prompt
+// receives a {prompt, group, score, cwd, profile, panel} table. The return contract
+// is BACKWARD COMPATIBLE with the pre-score {prompt, group} era:
+//   - nil/true → pass the brief through unchanged (prompt AND score)
+//   - false → veto (drop) the task
+//   - a string → rewrite the prompt only; the score is untouched
+//   - a table → may set prompt, drop, and score: a present score key rewrites the
+//     score (an empty string means "drop the score block"), an absent key leaves it
+//     untouched — so a hook written before score existed keeps its old meaning
+//
+// Hooks chain over BOTH prompt and score — a later hook sees the prior one's
+// rewrite — and the first veto stops the chain. A throwing hook is logged and
+// skipped (fail-open), so one bad handler never drops a task.
+func (p *Plugin) filterTask(b Brief) (Brief, bool) {
+	cur := b
 	for _, fn := range p.hooks["task.pre"] {
 		tbl := p.L.NewTable()
-		tbl.RawSetString("prompt", lua.LString(cur))
-		tbl.RawSetString("group", lua.LString(group))
+		tbl.RawSetString("prompt", lua.LString(cur.Prompt))
+		tbl.RawSetString("group", lua.LString(cur.Group))
+		tbl.RawSetString("score", lua.LString(cur.Score))
+		tbl.RawSetString("cwd", lua.LString(cur.Cwd))
+		tbl.RawSetString("profile", lua.LString(cur.Profile))
+		tbl.RawSetString("panel", lua.LString(cur.Panel))
 		p.L.Push(fn)
 		p.L.Push(tbl)
 		if err := p.L.PCall(1, 1, nil); err != nil {
@@ -363,16 +387,21 @@ func (p *Plugin) filterTask(prompt, group string) (string, bool) {
 			// no return → pass through unchanged
 		case lua.LBool:
 			if !bool(v) {
-				return "", false // explicit veto
+				return Brief{}, false // explicit veto
 			}
 		case lua.LString:
-			cur = string(v)
+			cur.Prompt = string(v)
 		case *lua.LTable:
 			if drop, ok := v.RawGetString("drop").(lua.LBool); ok && bool(drop) {
-				return "", false
+				return Brief{}, false
 			}
 			if s := fieldStr(v, "prompt"); s != "" {
-				cur = s
+				cur.Prompt = s
+			}
+			// Score is presence-sensitive — fieldStr cannot tell "" from absent, and
+			// an empty string is the documented way to drop the score block.
+			if s, ok := v.RawGetString("score").(lua.LString); ok {
+				cur.Score = string(s)
 			}
 		}
 	}
