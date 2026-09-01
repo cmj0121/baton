@@ -179,14 +179,14 @@ end)
 
 The hook receives a `{ prompt, group, score, cwd, profile, panel }` table — the brief plus the context it rides with:
 
-| Field     | Holds                                                                                                           |
-| --------- | --------------------------------------------------------------------------------------------------------------- |
-| `prompt`  | the brief's text — the one field every intake point carries                                                     |
-| `group`   | the group the task targets; empty when it targets none                                                          |
-| `score`   | the rendered score block a dispatch would inject; empty when there is none — a queued task carries no score yet |
-| `cwd`     | the working directory the task will land in; empty on a group fan-out                                           |
-| `profile` | the agent profile of the target panel; empty on a group fan-out                                                 |
-| `panel`   | the id of the panel the brief will be delivered to; empty on a group fan-out                                    |
+| Field     | Holds                                                                                                     |
+| --------- | --------------------------------------------------------------------------------------------------------- |
+| `prompt`  | the brief's text — the one field every intake point carries                                               |
+| `group`   | the group the task targets; empty when it targets none                                                    |
+| `score`   | the score block this delivery will inject, ranked against the panel it lands on; empty when there is none |
+| `cwd`     | the working directory the task will land in                                                               |
+| `profile` | the agent profile of the target panel                                                                     |
+| `panel`   | the id of the panel the brief will be delivered to                                                        |
 
 `prompt` and `score` are the two fields a hook may rewrite; the rest are read-only context. The return contract is
 **backward compatible** — a hook written before `score` existed keeps its exact old meaning:
@@ -205,6 +205,25 @@ a panel rather than when it is enqueued, because until then there is no panel to
 Plugin-originated dispatches bypass it, so it never re-enters itself — including a task `baton.enqueue` queued, which
 is delivered bare however long it waited.
 
+Every one of those is a **delivery to one panel**, and the brief is bound to that panel before the chain runs — so a
+fan-out racing three agents runs the chain three times, once per member, each with that member's own `cwd`, `profile`
+and `score`. A veto there drops that member alone: the command fails when it reached **no** panel — every member
+refused, or the refusals and the skips below between them leaving nothing — and otherwise succeeds with a notice saying
+how many of the group it reached and why the rest went without.
+
+A whole fan-out spends at most **two seconds** in `task.pre` — the same allowance one hook gets. The budget is checked
+before each member rather than while one is running, so the last member started can still take its own full timeout: a
+wedged hook makes the worst case about four seconds, not two. Past the budget the remaining members are **not
+dispatched at all**, and the notice **names them** so you can reach them with
+`panel.dispatch` per id, which is not budgeted. Do not simply repeat the fan-out: the group is walked in a stable order
+and every command starts with a fresh budget, so the cut falls in the same place each time — a repeat re-delivers to
+the members that already had it and still never reaches the rest.
+
+Failing closed is deliberate, and unlike the per-hook timeout beside it: there, a hook was asked and did not answer, so
+its brief goes out unfiltered. Here the remaining hooks were never asked, and dispatching work no hook examined would
+defeat the point of being able to refuse — a group with twenty members and a hook answering in a comfortable 100 ms is
+enough to reach the limit. Reaching fewer panels and being told which is recoverable; unexamined work is not.
+
 **A rewrite is delivered, never recorded.** `task list`, the panel card and the fleet snapshot all keep the prompt its
 author wrote; the rewritten text goes to the agent and nowhere else. That is what keeps a rewriting hook idempotent —
 an in-flight task is re-queued on every daemon restart, and the chain runs at delivery, so a task that carried its own
@@ -220,11 +239,12 @@ agent receiving it, so **a slow hook delays the fleet view**: deliveries are car
 until they finish nothing else that loop does — telemetry, idle settling, closing finished ephemeral workers — reports.
 A tick stops delivering once it has spent a monitor interval on it and leaves the rest for the next one, so the delay
 is bounded per tick rather than by the size of the backlog; a tick that overran logs a warning. A fast hook never
-reaches that limit, so a burst of queued work costs nothing extra when nothing is slow. And a fan-out runs the chain once per
-member, on the caller's connection: keep `task.pre` fast, or a wide group will feel slow to whoever dispatched it.
+reaches that limit, so a burst of queued work costs nothing extra when nothing is slow. And a fan-out runs the chain
+once per member, on the caller's connection: keep `task.pre` fast, or a wide group will feel slow to whoever
+dispatched it, and past the fan-out budget above it will reach fewer panels than the group holds.
 
 The `score` field is fed by Score, the fleet-scope memory
-([#37](https://github.com/cmj0121/baton/issues/37), in development) — until it ships, the field simply rides empty.
+([#37](https://github.com/cmj0121/baton/issues/37), in development) — with Score switched off it simply rides empty.
 Stripping the block for one group is a one-line table return:
 
 ```lua

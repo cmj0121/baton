@@ -388,8 +388,8 @@ type Server struct {
 	//
 	// It is the OTHER holding area, and it holds a different thing: pendingDispatch
 	// waits on a panel that is not ready, this waits on a tick that ran out of
-	// time. It is bounded by the fleet, not by the backlog: freeIdleAgentLocked passes
-	// over a panel whose task is still live, so an agent with an undelivered
+	// time. It is bounded by the fleet, not by the backlog: freeIdleAgentLocked
+	// passes over a panel whose task is still live, so an agent with an undelivered
 	// assignment is offered nothing more and at most one delivery per panel can
 	// be waiting here. Nothing prunes it for the rest — a delivery whose panel or
 	// task went away is dropped by claimDelivery when its turn comes.
@@ -416,6 +416,13 @@ type Server struct {
 	queueMax         int
 	queueConcurrency int
 	taskDirty        chan string
+
+	// fanoutBudget is how long one panel.dispatch-group spends binding members
+	// before it stops dispatching; zero is no ceiling. It is the plugin's own
+	// task.pre timeout, handed over by cmd/baton — see WithFanoutFilterBudget for
+	// why it is passed rather than restated. Set at construction, read without a
+	// lock.
+	fanoutBudget time.Duration
 
 	// writeInput delivers input bytes to a panel's PTY. It is s.pty.Write in
 	// production; a test swaps it (SetInputWriter) to record dispatched bytes
@@ -562,6 +569,23 @@ func WithStateFile(path string) Option {
 // they drive then become deterministic.
 func WithClock(now func() time.Time) Option {
 	return func(s *Server) { s.mon.now = now }
+}
+
+// WithFanoutFilterBudget sets how long one panel.dispatch-group will spend
+// binding its members before it stops dispatching the rest of them and says so.
+// Zero, the default, is no ceiling.
+//
+// The value belongs to whoever wired the task.pre filter, which is why it arrives
+// as an option: it must never be shorter than that filter's own per-hook timeout
+// or a healthy hook is cut off on the second member, and only cmd/baton can see
+// both numbers. A server with no filter wired needs no ceiling — nothing it binds
+// can block — so an unset budget is not a missing default.
+func WithFanoutFilterBudget(d time.Duration) Option {
+	return func(s *Server) {
+		if d > 0 {
+			s.fanoutBudget = d
+		}
+	}
 }
 
 // defaultQueueMax is the built-in cap on the queued (unassigned) backlog when the
@@ -1700,9 +1724,9 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 const deliveryBudget = monitorInterval
 
 // delivery is one brief on its way to a panel, carried out of s.mu so that the
-// write — and, for a brief still to be bound, the task.pre chain as well —
-// happens with the lock released. It sits in pendingDispatch while the panel is
-// not ready, and in the monitor tick's deliver list once it is.
+// write — and, for a brief still to be bound, the score render and the task.pre
+// chain as well — happens with the lock released. It sits in pendingDispatch
+// while the panel is not ready, and in the monitor tick's deliver list once it is.
 //
 // EXACTLY ONE OF data AND task/prompt IS FILLED. That is the type's invariant,
 // stated here rather than left to each reader: deliver tests d.data != nil and
@@ -1712,8 +1736,9 @@ const deliveryBudget = monitorInterval
 //
 //   - data is a brief that already is what the panel should receive, and only
 //     its write was held. A plugin-originated dispatch bypasses the chain
-//     outright, and the wire's panel.dispatch ran it at the command — against
-//     this same panel, so running it again here would run every hook twice.
+//     outright, and the wire's panel.dispatch and each member of its fan-out ran
+//     it at the command — against this same panel, so running it again here
+//     would run every hook twice.
 //
 //     Binding at the command is a deliberate exception for a DIRECT dispatch,
 //     not a description of the routes that take it: a direct dispatch owes its
@@ -1754,10 +1779,11 @@ type delivery struct {
 //
 // A brief already bound to this panel is just the write, and so is one
 // baton.enqueue queued. An unbound one is bound HERE — this is the moment the
-// panel, and with it the cwd, profile and group a brief is shaped by, is finally
-// known (#44) — and binding means the task.pre chain, which goes through the Lua
-// worker's single thread behind a 2s fail-open timeout (see filterBrief).
-// Running it under s.mu would stall every connection for up to two seconds per
+// panel, and with it the cwd, profile and group the working set is ranked
+// against, is finally known (#44) — and binding means the score render and then
+// the task.pre chain, which goes through the Lua worker's single thread behind a
+// 2s fail-open timeout (see filterBrief).
+// Running that under s.mu would stall every connection for up to two seconds per
 // queued task, so the scheduler assigns under the lock and the binding waits
 // until after the Unlock.
 //
@@ -1781,20 +1807,21 @@ func (s *Server) deliver(d delivery) {
 	var data []byte
 	if d.plugin {
 		// baton.enqueue is a plugin-originated dispatch like baton.dispatch, and gets
-		// what one gets: the bare prompt. Running the chain over it would re-enter a
-		// task.pre hook that enqueues, once per delivery, with nothing bounding it.
+		// what one gets: the bare prompt, no block. Running the chain over it would
+		// re-enter a task.pre hook that enqueues, once per delivery, unbounded.
 		data = dispatchData(d.prompt, "")
 	} else {
-		b, ok := s.filterBrief(s.deliveryBrief(d))
+		b, ok, _ := s.bindBrief(d.panel, d.prompt)
 		if !ok {
 			s.vetoQueuedTask(d)
 			return
 		}
-		// The rewrite is delivered and NOT recorded, for the reason dispatchScored
-		// gives: a task that carried its own rewrite would be rewritten again on
-		// every restart, because restoreTasksLocked re-queues an in-flight task and
-		// the chain now runs at delivery.
-		data = dispatchData(b.Prompt, "")
+		// Neither the block nor the rewrite is recorded. The block is advice for
+		// this one delivery; the rewrite is the plugin's edit of it, and a task
+		// that carried its own rewrite would be rewritten again on every restart,
+		// because restoreTasksLocked re-queues an in-flight task and the chain now
+		// runs at delivery. See dispatchScored.
+		data = briefBytes(b.Score, b.Prompt, "")
 	}
 	if !s.claimDelivery(d) {
 		return
@@ -1842,16 +1869,6 @@ func (s *Server) claimedLocked(d delivery) *task.Task {
 		return nil
 	}
 	return t
-}
-
-// deliveryBrief is the brief an unbound delivery hands the task.pre chain: the
-// prompt as it was enqueued, plus the context of the panel it is about to land
-// on — read at delivery because that is the first moment there is a panel to
-// read it from. An id the fleet no longer answers to leaves the three context
-// fields empty, which is what an unknown panel has to mean.
-func (s *Server) deliveryBrief(d delivery) TaskBrief {
-	ctx, _ := s.panelContext(d.panel)
-	return TaskBrief{Prompt: d.prompt, Panel: d.panel, Group: ctx.Group, Cwd: ctx.Cwd, Profile: ctx.Profile}
 }
 
 // vetoReason is what a task.pre veto is called, on the wire and in the backlog
@@ -2418,31 +2435,48 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		// Assign a task to a panel: record the brief and deliver it to the process as
 		// a unit. Unlike panel.input (raw keystrokes), the server knows the objective,
 		// so it reaches every frontend's card and the snapshot. The target panel is
-		// known here, so the brief carries its context and the rendered score block
-		// — the one path that injects fleet memory (#39).
+		// known here, so this IS the delivery: the brief is bound to that panel — its
+		// context and the score block ranked against it — before the chain runs.
 		//
 		// cmd.Prompt is what the task records and b.Prompt what the panel receives:
 		// a hook's rewrite is delivered, never written back onto the task. See
 		// dispatchScored for why that separation is load-bearing rather than tidy.
-		s.dispatchFiltered(cc, s.dispatchBrief(cmd.ID, cmd.Prompt), func(b TaskBrief) error {
-			if err := s.dispatchScored(cmd.ID, cmd.Prompt, b.Prompt, b.Score, cmd.Submit); err != nil {
-				return err
-			}
-			// Only now: a brief the hook chain vetoed or the delivery refused never
-			// reached an agent, and #38 §4's signal is the user telling the FLEET
-			// something. cmd.Prompt rather than b.Prompt, because a hook's rewrite
-			// is the plugin author's words and not the user's; see scoreSignal.
-			s.scoreSignal(cc, cmd.Prompt)
-			return nil
-		})
+		b, ok, _ := s.bindBrief(cmd.ID, cmd.Prompt)
+		if !ok {
+			send(cc, proto.ServerMsg{Type: "error", Error: vetoReason})
+			return
+		}
+		if err := s.dispatchScored(cmd.ID, cmd.Prompt, b, cmd.Submit); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		// Only now: a brief the hook chain vetoed or the delivery refused never
+		// reached an agent, and #38 §4's signal is the user telling the FLEET
+		// something. cmd.Prompt rather than b.Prompt, because a hook's rewrite
+		// is the plugin author's words and not the user's; see scoreSignal.
+		s.scoreSignal(cc, cmd.Prompt)
+		s.broadcastFleet()
 	case "panel.dispatch-group":
 		// Fan one task to every member of a work item — the mechanic behind racing N
-		// agents on the same prompt. The reply error names an empty/unknown group.
-		// No score block on fan-out in S0: per-member delivery is R5's problem (#39).
-		s.dispatchFiltered(cc, TaskBrief{Prompt: cmd.Prompt, Group: cmd.Group}, func(b TaskBrief) error {
-			_, err := s.dispatchGroup(cmd.Group, b.Prompt, cmd.Submit)
-			return err
-		})
+		// agents on the same prompt. Each member is its own delivery, bound to the
+		// panel it lands on, so three agents in three directories get three briefs
+		// (#44). The reply error names an empty/unknown group, or a hook that
+		// refused every member.
+		//
+		// A PARTIAL veto still succeeds, and so does a fan-out the filter budget cut
+		// short; the notice is how the caller learns of either. Seven of ten members
+		// refused used to read exactly like ten delivered, since the command answers
+		// with a fleet broadcast and no count. The two are named apart because they
+		// ask for different things: a veto is a decision, a skip is a retry.
+		f, err := s.dispatchGroupBound(cmd.Group, cmd.Prompt, cmd.Submit)
+		if err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		if notice := f.shortfall(cmd.Group); notice != "" {
+			send(cc, proto.ServerMsg{Type: "notice", Notice: notice})
+		}
+		s.broadcastFleet()
 	case "task.enqueue":
 		// Add a task to the backlog; the scheduler drains it onto a free agent. When
 		// the command carries a spawn command (Path), the task provisions its own
@@ -3263,6 +3297,35 @@ func dispatchData(prompt, submit string) []byte {
 	return append([]byte(prompt), submit...)
 }
 
+// briefBytes is what a panel receives for a whole brief: the score block, a
+// blank line, then the prompt and its submit sequence. An empty block leaves the
+// bare prompt.
+//
+// It is the ONE place the two halves are joined, which is what makes #44's rule
+// checkable rather than remembered — a queued task drained onto a panel has to
+// carry the same block a direct dispatch to that panel would have carried, and
+// two sites laying the block out would be two chances for them to differ.
+//
+// The blocked form is laid out in ONE sized buffer rather than concatenated and
+// then appended to: the block is the largest thing a dispatch carries, and
+// joining it to the prompt first copies the whole brief an extra time before
+// dispatchData copies it again. The bare form is already one allocation and goes
+// straight through.
+func briefBytes(scoreBlock, prompt, submit string) []byte {
+	if scoreBlock == "" {
+		return dispatchData(prompt, submit)
+	}
+	if submit == "" {
+		submit = defaultSubmit
+	}
+	const gap = "\n\n"
+	b := make([]byte, 0, len(scoreBlock)+len(gap)+len(prompt)+len(submit))
+	b = append(b, scoreBlock...)
+	b = append(b, gap...)
+	b = append(b, prompt...)
+	return append(b, submit...)
+}
+
 // dispatchPanel is a core action: it records prompt as the panel's task brief and
 // delivers it to the panel's process as a unit — the prompt text followed by a
 // submit sequence. Unlike raw panel.input, the server keeps the brief on the
@@ -3275,13 +3338,13 @@ func dispatchData(prompt, submit string) []byte {
 // monitor tick delivers them once the panel settles to idle/attention. A panel
 // already settled is written immediately. The brief is recorded either way.
 func (s *Server) dispatchPanel(id, prompt, submit string) error {
-	return s.dispatchScored(id, prompt, prompt, "", submit)
+	return s.dispatchScored(id, prompt, TaskBrief{Prompt: prompt}, submit)
 }
 
 // dispatchScored is dispatchPanel with the DELIVERED brief separated from the
-// RECORDED one. delivered is what the process receives — a task.pre hook's
-// rewrite, behind scoreBlock when there is one — while prompt is what the card,
-// the snapshot and a restart's restore keep.
+// RECORDED one. b is what the process receives — a task.pre hook's rewrite,
+// behind b.Score when there is one — while recorded is what the card, the
+// snapshot and a restart's restore keep.
 //
 // Both differences are delivery-time transformations, and NEITHER may become the
 // task's identity. The score block is advice for one delivery. So is the
@@ -3292,18 +3355,22 @@ func (s *Server) dispatchPanel(id, prompt, submit string) error {
 // involved. Keeping the author's text also keeps "what did I actually ask for"
 // answerable afterwards.
 //
-// dispatchPanel passes the same string for both, which is the plain dispatch.
-func (s *Server) dispatchScored(id, prompt, delivered, scoreBlock, submit string) error {
+// The delivered half arrives as the BRIEF rather than as its two strings, and
+// that is the guard: recorded and b.Prompt are both strings and are equal in the
+// plain case, so as bare positional arguments they could be swapped without
+// breaking a build or a plain-dispatch test — and the swap records the hook's
+// rewrite as the task's identity, which is the one thing this separation exists
+// to prevent. Every caller has the brief in hand already.
+//
+// dispatchPanel passes its own prompt as both, which is the plain dispatch.
+func (s *Server) dispatchScored(id, recorded string, b TaskBrief, submit string) error {
 	if id == "" {
 		return fmt.Errorf("panel.dispatch needs an id")
 	}
-	if prompt == "" {
+	if recorded == "" {
 		return fmt.Errorf("panel.dispatch needs a prompt")
 	}
-	if scoreBlock != "" {
-		delivered = scoreBlock + "\n\n" + delivered
-	}
-	data := dispatchData(delivered, submit)
+	data := briefBytes(b.Score, b.Prompt, submit)
 
 	s.mu.Lock()
 	idx := s.indexLocked(id)
@@ -3311,7 +3378,7 @@ func (s *Server) dispatchScored(id, prompt, delivered, scoreBlock, submit string
 		s.mu.Unlock()
 		return fmt.Errorf("no panel with id %q", id)
 	}
-	s.panels[idx].Task = prompt
+	s.panels[idx].Task = recorded
 	ready := dispatchReady(s.panels[idx].State)
 	status := task.Queued
 	if ready {
@@ -3320,7 +3387,7 @@ func (s *Server) dispatchScored(id, prompt, delivered, scoreBlock, submit string
 	} else {
 		s.pendingDispatch[id] = delivery{panel: id, data: data} // deliver when the panel next settles
 	}
-	s.upsertTaskLocked(id, prompt, s.panels[idx].Group, status)
+	s.upsertTaskLocked(id, recorded, s.panels[idx].Group, status)
 	s.mu.Unlock()
 
 	if ready {
@@ -3896,32 +3963,265 @@ func (s *Server) tasksMsg() proto.ServerMsg {
 	return proto.ServerMsg{Type: "tasks", Tasks: wire}
 }
 
-// dispatchGroup dispatches one prompt to every member of a named group, returning
-// how many it reached. The conductor panel is never a target — a group dispatch
-// cannot loop the control agent back onto itself. An unknown or empty group, or
-// one with no dispatchable member, errors.
-func (s *Server) dispatchGroup(group, prompt, submit string) (int, error) {
+// fanoutTargets validates a fan-out request and lists the panels it reaches: the
+// whole subtree under group, nested groups included, never the conductor — a
+// group dispatch cannot loop the control agent back onto itself. An unknown or
+// empty group, an empty prompt, or a group with no dispatchable member errors.
+//
+// Both fan-out paths come through here so they refuse the same requests and
+// reach the same panels; only what each does per member differs.
+func (s *Server) fanoutTargets(group, prompt string) ([]string, error) {
 	if group == "" {
-		return 0, fmt.Errorf("panel.dispatch-group needs a group")
+		return nil, fmt.Errorf("panel.dispatch-group needs a group")
 	}
 	if prompt == "" {
-		return 0, fmt.Errorf("panel.dispatch-group needs a prompt")
+		return nil, fmt.Errorf("panel.dispatch-group needs a prompt")
 	}
 	s.mu.Lock()
-	var ids []string
+	ids := make([]string, 0, len(s.panels))
 	for _, p := range s.panels {
-		if panel.GroupIsUnder(group, p.Group) && !p.Conductor { // the whole subtree, nested groups included
+		if panel.GroupIsUnder(group, p.Group) && !p.Conductor {
 			ids = append(ids, p.ID)
 		}
 	}
 	s.mu.Unlock()
 	if len(ids) == 0 {
-		return 0, fmt.Errorf("no panel in group %q", group)
+		return nil, fmt.Errorf("no panel in group %q", group)
+	}
+	return ids, nil
+}
+
+// dispatchGroup fans one prompt out to every member of a named group as it
+// stands, returning how many it fanned out to. It is the plugin host's path
+// (baton.dispatch_group), and like baton.dispatch it delivers the bare prompt —
+// a plugin-originated dispatch does not re-enter the task.pre chain, which it
+// could only do from inside the single Lua worker that runs that chain.
+func (s *Server) dispatchGroup(group, prompt, submit string) (int, error) {
+	ids, err := s.fanoutTargets(group, prompt)
+	if err != nil {
+		return 0, err
 	}
 	for _, id := range ids {
 		_ = s.dispatchPanel(id, prompt, submit) // each id came from the fleet a moment ago
 	}
 	return len(ids), nil
+}
+
+// The fan-out's task.pre budget is how long one panel.dispatch-group will spend
+// binding members before it stops dispatching. It is WithFanoutFilterBudget's
+// value; zero (no option) is no ceiling.
+//
+// The bound exists because the bind runs once per member on the CALLER'S
+// goroutine: without a ceiling a fan-out's worst case is N times the plugin's own
+// fail-open timeout on one connection — ten members, twenty seconds, on an
+// interactive path with no read deadline, which a cockpit experiences as a hang.
+// It was one timeout for the whole group before deliveries went per member.
+//
+// IT FAILS CLOSED, and the distinction from the plugin's own fail-open is the
+// whole reason. internal/plugin's timeout is per invocation: member K's hook was
+// asked and did not answer, so K goes out unfiltered — the hook had its say and
+// declined to use it. This budget is cumulative across the group, so past it the
+// remaining members' hooks were never asked at all. Dispatching them anyway would
+// send work no hook examined, and it is reachable with entirely healthy hooks:
+// maxConductorFleet caps the fleet only while a conductor is driving it, so a
+// group's size is bounded by nothing here, and a hook answering in a well-behaved
+// 100ms exhausts two seconds at about twenty members. The docs' own example —
+// `score = ""` to keep fleet memory out of one group — would then leak Score into
+// the group it was written to protect. A contract whose purpose is refusal cannot
+// fail open at scale. Reaching fewer panels and saying so is recoverable, because
+// the operator retries; dispatching unexamined work is not, and is invisible.
+//
+// The value is the plugin's own per-hook allowance spent once for the group,
+// which is what a fan-out cost before it went per member. It is PASSED IN from
+// cmd/baton rather than restated here: the coupling is that this must never be
+// shorter than internal/plugin's own timeout, or a healthy hook would be cut off
+// on the second member, and a copy of the number in a package that cannot see the
+// original leaves that coupling defended by a comment alone. main owns both
+// imports, so main is where the two meet. The budget is checked before each bind
+// rather than during it, so the last member bound may overrun it by up to one
+// hook timeout; a single-member group is never affected, since it cannot exceed
+// one hook's own.
+
+// memberOutcome is what one fan-out member's brief came to. The outcomes are kept
+// apart because an operator's response to each differs: a veto is a decision a
+// hook made and may not want undone, a skip is work no hook was asked about, a
+// loss is a panel that left the fleet, and a send is none of those.
+type memberOutcome int
+
+const (
+	outcomeSent    memberOutcome = iota // the brief reached the panel
+	outcomeVetoed                       // a task.pre hook refused it
+	outcomeSkipped                      // the budget was spent, so no hook was asked
+	outcomeLost                         // the panel left the fleet between the scan and the write
+)
+
+// fanoutMember is one panel the fan-out targeted and what became of its brief.
+type fanoutMember struct {
+	panel   string
+	outcome memberOutcome
+}
+
+// fanout is what one panel.dispatch-group did: every member it targeted, each
+// carrying its own outcome. The counts are DERIVED from that rather than tallied
+// beside it, because a tally cannot answer "why did THIS panel not get it" and
+// the answer has to be per panel to be actionable.
+//
+// It was three shapes for one question — two counts, one id list, and a fourth
+// outcome computed by subtracting the other three from the member count. The
+// subtraction is what makes the shape wrong rather than merely uneven: a fifth
+// outcome added later lands silently in the leftover bucket and is reported as
+// something it is not.
+//
+// Naming the panels is what turns the notice into a recovery. fanoutTargets walks
+// the fleet in stable order and every command starts with a fresh budget, so the
+// cut falls in the same place on every attempt: repeating the fan-out re-delivers
+// to the head of the group and never reaches the tail. The ids turn that into
+// panel.dispatch per id, which is not budgeted and does reach them.
+type fanout struct {
+	members []fanoutMember
+}
+
+// add records one member's outcome.
+func (f *fanout) add(id string, o memberOutcome) {
+	f.members = append(f.members, fanoutMember{panel: id, outcome: o})
+}
+
+// panels lists the members that ended in outcome o, in fan-out order.
+func (f fanout) panels(o memberOutcome) []string {
+	var ids []string
+	for _, m := range f.members {
+		if m.outcome == o {
+			ids = append(ids, m.panel)
+		}
+	}
+	return ids
+}
+
+// count is how many members ended in outcome o.
+func (f fanout) count(o memberOutcome) int {
+	return len(f.panels(o))
+}
+
+// notFullyDelivered lists the outcomes shortfall must account for, in the order
+// it reports them. Every outcome but outcomeSent belongs here: one left out is a
+// member the notice counts in "N of M" and then never explains.
+var notFullyDelivered = []memberOutcome{outcomeVetoed, outcomeSkipped, outcomeLost}
+
+// why is the clause shortfall gives for the members that ended in this outcome.
+// Each cause reads differently because the operator's next move differs: a veto
+// is a decision a hook made, and a retry will make it again; a skip is work
+// nobody has looked at, which a retry picks up; a loss is a panel that left the
+// fleet between the scan and the write — the same tolerated race dispatchGroup
+// ignores, and the only other way dispatchScored can fail here, since
+// fanoutTargets has already refused an empty group and an empty prompt.
+func (o memberOutcome) why(ids []string) string {
+	switch o {
+	case outcomeVetoed:
+		return fmt.Sprintf("a task.pre hook refused %d: %s", len(ids), strings.Join(ids, " "))
+	case outcomeSkipped:
+		return fmt.Sprintf("%d not filtered in time and not dispatched — reach them with panel.dispatch: %s",
+			len(ids), strings.Join(ids, " "))
+	case outcomeLost:
+		return fmt.Sprintf("%d left the fleet before the brief reached them: %s", len(ids), strings.Join(ids, " "))
+	}
+	return fmt.Sprintf("%d unaccounted for: %s", len(ids), strings.Join(ids, " "))
+}
+
+// shortfall is the notice a fan-out that did not reach its whole group owes the
+// caller, or "" when it reached all of it. It fires on ANY member the fan-out
+// did not deliver to, and names every cause and every panel — "dispatched",
+// answered to a command that reached four panels out of ten, is the silence this
+// exists to break.
+func (f fanout) shortfall(group string) string {
+	sent := f.count(outcomeSent)
+	if sent == len(f.members) {
+		return ""
+	}
+	var why []string
+	for _, o := range notFullyDelivered {
+		if ids := f.panels(o); len(ids) > 0 {
+			why = append(why, o.why(ids))
+		}
+	}
+	return fmt.Sprintf("dispatched to %d of %d panels in %q: %s",
+		sent, len(f.members), group, strings.Join(why, "; "))
+}
+
+// dispatchGroupBound is the wire's fan-out: each member's brief is bound to THAT
+// member before it is delivered, so the score is ranked against the panel it
+// lands on and the task.pre chain sees that panel's own cwd, profile and group.
+// One prompt racing three agents in three directories is three different briefs,
+// which is exactly what #44 asks a delivery to be.
+//
+// A hook that vetoes one member drops that member and no more; the fan-out is N
+// deliveries, not one, and refusing all of them because a hook refused a single
+// panel would make the whole command hostage to the narrowest hook. The command
+// still errors when every member was vetoed, so a single-member group keeps the
+// CONTROL FLOW it had when the chain ran once for the whole fan-out: one pass,
+// and a veto is an error to the caller. What that member sees did change — the
+// hook table now carries its panel, cwd, profile and score where it used to
+// carry {prompt, group} — and so did the wording of the whole-veto error.
+//
+// Neither a partial veto nor a spent budget is swallowed: both come back counted,
+// so the caller can be told, and both are logged. The command still succeeds when
+// members were reached, and errors when none was.
+//
+// The WHOLE BIND is charged to the budget — the score render and panelCwd's
+// process sample as well as the chain — because the monitor tick's budget charges
+// the whole bind too, and one bind cannot cost two different things depending on
+// which side of the server asked for it. What is still outside the ceiling is the
+// write itself, and the ceiling therefore bounds the binding rather than the
+// caller's total wait.
+//
+// The veto is a recorded outcome rather than an inference from the delivery
+// count, so the error says a hook refused the fan-out only when a hook actually
+// did: a member's dispatch can also fail on its own — the panel left the fleet
+// between the scan and the write — and that is the same tolerated race
+// dispatchGroup ignores.
+func (s *Server) dispatchGroupBound(group, prompt, submit string) (fanout, error) {
+	ids, err := s.fanoutTargets(group, prompt)
+	if err != nil {
+		return fanout{}, err
+	}
+	var f fanout
+	var spent time.Duration
+	for _, id := range ids {
+		if s.fanoutBudget > 0 && spent >= s.fanoutBudget {
+			f.add(id, outcomeSkipped) // never asked, so never dispatched
+			continue
+		}
+		b, ok, took := s.bindBrief(id, prompt)
+		spent += took
+		switch {
+		case !ok:
+			f.add(id, outcomeVetoed)
+		case s.dispatchScored(id, prompt, b, submit) == nil:
+			f.add(id, outcomeSent)
+		default:
+			f.add(id, outcomeLost)
+		}
+	}
+	sent, vetoed, skipped := f.count(outcomeSent), f.count(outcomeVetoed), f.panels(outcomeSkipped)
+	if len(skipped) > 0 {
+		log.Warn().Str("group", group).Int("dispatched", sent).Int("vetoed", vetoed).
+			Strs("skipped", skipped).Int("members", len(f.members)).Dur("budget", s.fanoutBudget).
+			Msg("a fan-out spent its task.pre budget; the rest of the group was NOT dispatched")
+	}
+	if vetoed > 0 {
+		// A partial veto is a silent outcome otherwise: the command succeeds, the
+		// caller is told nothing, and the members that were refused look exactly
+		// like members that were never in the group.
+		log.Warn().Str("group", group).Int("dispatched", sent).Int("vetoed", vetoed).
+			Int("members", len(f.members)).Msg("a task.pre hook refused part of a fan-out")
+	}
+	switch {
+	case vetoed == len(f.members):
+		return f, fmt.Errorf("a task.pre hook vetoed every panel in group %q", group)
+	case sent == 0:
+		return f, fmt.Errorf("reached no panel in group %q: %d vetoed, %d not filtered within %s",
+			group, vetoed, len(skipped), s.fanoutBudget)
+	}
+	return f, nil
 }
 
 // respawnPanel re-runs the backing process of an exited panel from its frozen spawn

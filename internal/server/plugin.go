@@ -96,34 +96,6 @@ func (s *Server) filterBrief(b TaskBrief) (TaskBrief, bool) {
 	return fn(b)
 }
 
-// dispatchFiltered is the shared body of the panel.dispatch / dispatch-group
-// commands: run the task.pre filter over the brief, then perform the intake
-// action with the (possibly rewritten) prompt. A veto or a failed action becomes
-// a wire error; a success broadcasts the fleet. Routing both through here means
-// they honour the filter identically, and the filter runs before action takes
-// s.mu — which is safe because onCommand holds no lock at the call site.
-//
-// task.enqueue no longer comes through. A queued task has no panel when the
-// command arrives, so there is nothing to bind a brief to and nothing for a hook
-// to decide against; its whole pass runs when the scheduler drains it onto a
-// panel (#44 decision 1).
-//
-// Only the direct panel.dispatch path fills Score/Cwd/Profile/Panel (see
-// dispatchBrief); a group fan-out rides an empty brief, because per-member
-// rendering is R5's second half (#39).
-func (s *Server) dispatchFiltered(cc *clientConn, b TaskBrief, action func(b TaskBrief) error) {
-	filtered, ok := s.filterBrief(b)
-	if !ok {
-		send(cc, proto.ServerMsg{Type: "error", Error: vetoReason})
-		return
-	}
-	if err := action(filtered); err != nil {
-		send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
-		return
-	}
-	s.broadcastFleet()
-}
-
 // SetClientConfig publishes the merged effective config served on config.get. The
 // daemon sets it after loading YAML and running the plugin; a reload refreshes it.
 func (s *Server) SetClientConfig(cfg json.RawMessage) {

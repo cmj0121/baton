@@ -601,6 +601,11 @@ func runServerOn(ln net.Listener, sock string) error {
 	scorePol, _ := scorePolicy(cfg.Score, err)
 	scoreStore, scoreReason := openScore(cfg.Score, scorePol)
 	srv := server.New(ln, append(buildServerOptions(rc, stateF), usageOption(cfg), limitsOption(cfg),
+		// The fan-out's ceiling is the plugin's own per-hook allowance, spent once
+		// for a whole group. It is handed over rather than restated in the server
+		// because this is the only place both numbers are visible, and the server's
+		// must never be the shorter of the two.
+		server.WithFanoutFilterBudget(plugin.FilterTimeout),
 		server.WithScore(server.ScoreState{Store: scoreStore, Enabled: cfg.Score.IsEnabled(), Reason: scoreReason}))...)
 	srv.Restore() // seed the fleet from the last snapshot (all as exited dead slots) before serving
 

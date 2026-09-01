@@ -5,10 +5,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
-	"github.com/cmj0121/baton/internal/ptymgr"
 	"github.com/cmj0121/baton/internal/score"
 	"github.com/cmj0121/baton/internal/task"
 )
@@ -17,31 +17,26 @@ import (
 // capturing every byte dispatch delivers. White-box on purpose: the seam under
 // test is the byte stream handed to the PTY, which the wire tests cannot see.
 // (No unix sockets here at all, so the ~104-byte path cap is moot.)
-func scoreServer(st *score.Store) (*Server, *[]byte) {
-	mo, _ := newTestMonitor()
-	var delivered []byte
-	s := &Server{
-		pty:     ptymgr.New(),
-		clients: map[*clientConn]struct{}{},
-		mon:     mo,
-		panels: []panel.Panel{{
-			ID: "p1", Kind: panel.Agent, Title: "claude #1", State: panel.Idle,
-			Group: "auth", Cwd: "/work/auth",
-		}},
-		specs:           map[string]spawnSpec{"p1": {Profile: "claude"}},
-		pendingDispatch: map[string]delivery{},
-		tasks:           map[string]*task.Task{},
-		panelTask:       map[string]string{},
-		spawning:        map[string]bool{},
-		taskDirty:       make(chan string, 8),
-		dirty:           make(chan struct{}, 1),
-	}
+//
+// It is gateServer plus a store and a byte collector, rather than a second
+// Server literal beside it. The two had drifted into the same thing: score tests
+// drive monitorTick now, so every map gateServer already fills had to be added
+// here one failure at a time, and the injected clock arrived with them.
+func scoreServer(st *score.Store) (*Server, *fakeClock, *[]byte) {
+	s, clk, _ := gateServer(panel.Panel{
+		ID: "p1", Kind: panel.Agent, Title: "claude #1", State: panel.Idle,
+		Group: "auth", Cwd: "/work/auth",
+	})
+	s.specs["p1"] = spawnSpec{Profile: "claude"}
+	s.taskDirty = make(chan string, 8)
+	s.dirty = make(chan struct{}, 1)
 	// Through the real option rather than by setting the fields: a test store
 	// stands for a daemon whose config said yes and whose Open succeeded, and the
 	// option is what keeps the store and the knob from disagreeing.
 	WithScore(ScoreState{Store: st, Enabled: st != nil})(s)
+	var delivered []byte
 	s.writeInput = func(id string, data []byte) { delivered = append(delivered, data...) }
-	return s, &delivered
+	return s, clk, &delivered
 }
 
 // conn is a throwaway client connection whose replies the test can drain.
@@ -72,16 +67,17 @@ func noError(t *testing.T, cc *clientConn) {
 	}
 }
 
-// TestDirectDispatchInjectsScore checks the one injection path (#39): a direct
-// panel.dispatch renders the score block into the DELIVERED bytes ahead of the
-// prompt, hands the task.pre filter the panel's full context, and still records
-// the bare prompt as the panel's brief — cards and restarts never carry the block.
+// TestDirectDispatchInjectsScore checks the shape every injection path shares
+// (#39): a dispatch renders the score block into the DELIVERED bytes ahead of
+// the prompt, hands the task.pre filter the panel's full context, and still
+// records the bare prompt as the panel's brief — cards and restarts never carry
+// the block.
 func TestDirectDispatchInjectsScore(t *testing.T) {
 	st, _ := scoreStore(t) // a fresh store holds no entries
 	if _, _, err := st.Submit("prefer table-driven tests", score.Provenance{Source: "user"}); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	s, delivered := scoreServer(st)
+	s, _, delivered := scoreServer(st)
 
 	var seen TaskBrief
 	s.onFilterTask = func(b TaskBrief) (TaskBrief, bool) { seen = b; return b, true }
@@ -119,7 +115,7 @@ func TestDirectDispatchInjectsScore(t *testing.T) {
 // the dispatch neither errors nor injects — the delivered bytes are exactly the
 // plain prompt plus the submit sequence.
 func TestDirectDispatchNilStore(t *testing.T) {
-	s, delivered := scoreServer(nil)
+	s, _, delivered := scoreServer(nil)
 
 	cc := conn("")
 	s.onCommand(cc, proto.Command{Action: "panel.dispatch", ID: "p1", Prompt: "fix the login flow"})
@@ -130,25 +126,186 @@ func TestDirectDispatchNilStore(t *testing.T) {
 	}
 }
 
-// TestGroupDispatchCarriesNoScore checks that fan-out stays uninjected in S0
-// (per-member delivery is R5): the filter sees an empty-context brief and the
-// member receives the bare prompt even with a live store holding entries.
-func TestGroupDispatchCarriesNoScore(t *testing.T) {
-	st, _ := scoreStore(t)
-	s, delivered := scoreServer(st)
+// scoreFleet is scoreServer with a second agent beside the first, in the same
+// group but its own directory and profile — the smallest fleet a fan-out can
+// tell apart. It records what each member received rather than one concatenated
+// stream, because "per member" is the whole assertion.
+func scoreFleet(st *score.Store) (*Server, *fakeClock, map[string]string) {
+	s, clk, _ := scoreServer(st)
+	s.panels = append(s.panels, panel.Panel{
+		ID: "p2", Kind: panel.Agent, Title: "codex #1", State: panel.Idle,
+		Group: "auth", Cwd: "/work/api",
+	})
+	s.specs["p2"] = spawnSpec{Profile: "codex"}
+	got := map[string]string{}
+	s.writeInput = func(id string, data []byte) { got[id] += string(data) }
+	return s, clk, got
+}
 
-	var seen TaskBrief
-	s.onFilterTask = func(b TaskBrief) (TaskBrief, bool) { seen = b; return b, true }
+// TestGroupDispatchBindsEachMember is the fan-out half of #44. One prompt racing
+// two agents is two deliveries, not one, so each member's brief is bound to the
+// panel it lands on: its own cwd and profile in the hook table, and a score
+// block ranked against that panel rather than against whichever member happened
+// to come first.
+func TestGroupDispatchBindsEachMember(t *testing.T) {
+	st, _ := scoreStore(t)
+	if _, _, err := st.Submit("prefer table-driven tests", score.Provenance{Source: score.SourceUser}); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	s, _, got := scoreFleet(st)
+
+	seen := map[string]TaskBrief{}
+	s.onFilterTask = func(b TaskBrief) (TaskBrief, bool) { seen[b.Panel] = b; return b, true }
 
 	cc := conn("")
 	s.onCommand(cc, proto.Command{Action: "panel.dispatch-group", Group: "auth", Prompt: "race it"})
 	noError(t, cc)
 
-	if seen.Score != "" || seen.Panel != "" || seen.Cwd != "" || seen.Profile != "" {
-		t.Fatalf("fan-out brief must ride empty in S0: %+v", seen)
+	for _, want := range []TaskBrief{
+		{Panel: "p1", Group: "auth", Cwd: "/work/auth", Profile: "claude"},
+		{Panel: "p2", Group: "auth", Cwd: "/work/api", Profile: "codex"},
+	} {
+		b, ok := seen[want.Panel]
+		if !ok {
+			t.Fatalf("no brief for %s; the chain saw %+v", want.Panel, seen)
+		}
+		if b.Cwd != want.Cwd || b.Profile != want.Profile || b.Group != want.Group {
+			t.Fatalf("brief for %s = %+v, want it bound to that member", want.Panel, b)
+		}
+		if b.Score == "" {
+			t.Fatalf("brief for %s carries no score block", want.Panel)
+		}
+		if !strings.Contains(got[want.Panel], "prefer table-driven tests") {
+			t.Fatalf("%s received %q, want the block ahead of the prompt", want.Panel, got[want.Panel])
+		}
 	}
-	if got := string(*delivered); strings.Contains(got, "── Score ──") {
-		t.Fatalf("fan-out delivery must not carry the block, got %q", got)
+}
+
+// TestGroupDispatchDropsOnlyTheVetoedMember pins the veto's reach. A fan-out is
+// N deliveries, so a hook that refuses one panel refuses that panel — the rest
+// of the race still runs. Only a hook that refuses every member fails the
+// command, which is what a single-member group did when the chain ran once for
+// the whole fan-out.
+func TestGroupDispatchDropsOnlyTheVetoedMember(t *testing.T) {
+	st, _ := scoreStore(t)
+	s, _, got := scoreFleet(st)
+	s.onFilterTask = func(b TaskBrief) (TaskBrief, bool) { return b, b.Panel != "p1" }
+
+	cc := conn("")
+	s.onCommand(cc, proto.Command{Action: "panel.dispatch-group", Group: "auth", Prompt: "race it"})
+
+	// The caller is TOLD. A partial veto succeeds, so without the notice seven of
+	// ten members refused reads exactly like ten delivered.
+	if msg := reply(t, cc); msg.Type != "notice" || !strings.Contains(msg.Notice, "1 of 2") {
+		t.Fatalf("reply = %+v, want a notice counting what the fan-out reached", msg)
+	}
+
+	if _, sent := got["p1"]; sent {
+		t.Fatalf("the vetoed member received %q", got["p1"])
+	}
+	if got["p2"] != "race it\n" {
+		t.Fatalf("p2 received %q, want the fan-out to have reached it anyway", got["p2"])
+	}
+
+	// And with every member refused there is nobody left to reach, so the command
+	// answers the caller rather than reporting a race that never started.
+	s.onFilterTask = func(TaskBrief) (TaskBrief, bool) { return TaskBrief{}, false }
+	cc = conn("")
+	s.onCommand(cc, proto.Command{Action: "panel.dispatch-group", Group: "auth", Prompt: "race it"})
+	if msg := reply(t, cc); msg.Type != "error" {
+		t.Fatalf("a wholly vetoed fan-out replied %+v, want an error", msg)
+	}
+}
+
+// TestTheFanoutBudgetFailsClosed is the whole of what the budget is allowed to
+// do. The chain runs per member on the caller's goroutine, so a wide group needs
+// a ceiling; but the budget is cumulative across the group, which means the
+// members past it were never ASKED — unlike the plugin's own per-invocation
+// fail-open, where a hook was asked and did not answer in time. Dispatching them
+// anyway would send work no hook examined, and a hook exists to refuse.
+//
+// So: reached fewer panels, said so, and delivered nothing unfiltered. Three
+// assertions carry that, and each pins a different half.
+//
+// The panels REACHED are what catch a fail-open regression: a member past the
+// budget would receive bytes. The hook COUNT catches the opposite mistake, a
+// budget that never engages — without it the chain runs for every member, so a
+// count of one is what says the ceiling did something. It does not distinguish
+// fail-open from fail-closed; the same one hook runs either way.
+//
+// The notice is the third, and it is the only one that can speak to the
+// operator's next move. A member left unreached is unreached whichever way it
+// happened, and only the words say whether a hook decided that or whether nobody
+// looked — and only the panel id says which panel to go and reach. The cut falls
+// in the same place on every attempt, so a count alone would be an instruction to
+// loop.
+func TestTheFanoutBudgetFailsClosed(t *testing.T) {
+	st, _ := scoreStore(t)
+	s, clk, got := scoreFleet(st)
+	// The real option, and the monitor's clock: the first member's hook advances
+	// time past the whole group's budget, so the cut is exact rather than a race
+	// between a sleep and a scheduler.
+	WithFanoutFilterBudget(time.Second)(s)
+
+	asked := 0
+	s.onFilterTask = func(b TaskBrief) (TaskBrief, bool) {
+		asked++
+		clk.add(2 * time.Second) // the first member alone spends the group's budget
+		return b, true
+	}
+
+	cc := conn("")
+	s.onCommand(cc, proto.Command{Action: "panel.dispatch-group", Group: "auth", Prompt: "race it"})
+
+	if asked != 1 {
+		t.Fatalf("the chain was run %d times, want it to stop at the budget", asked)
+	}
+	if len(got) != 1 {
+		t.Fatalf("panels reached = %v, want only the member that was filtered", got)
+	}
+	if got["p1"] == "" {
+		t.Fatalf("panels reached = %v, want the filtered member to have been dispatched", got)
+	}
+	msg := reply(t, cc)
+	if msg.Type != "notice" || !strings.Contains(msg.Notice, "not filtered in time") {
+		t.Fatalf("reply = %+v, want a notice saying the rest were not dispatched", msg)
+	}
+	if !strings.Contains(msg.Notice, "1 of 2") {
+		t.Fatalf("notice = %q, want it to count what the fan-out reached", msg.Notice)
+	}
+	// And NAMES them. The cut falls in the same place on every attempt, so a
+	// notice that only counted them would send the operator round a loop that
+	// re-delivers to p1 for ever and never reaches p2.
+	if !strings.Contains(msg.Notice, "p2") {
+		t.Fatalf("notice = %q, want the panel that went unreached named", msg.Notice)
+	}
+	// A veto reads differently, because the operator's move differs: a refusal is
+	// a decision that a retry will make again, a skip is one nobody has made yet.
+	if strings.Contains(msg.Notice, "refused") {
+		t.Fatalf("notice = %q, want a spent budget not reported as a veto", msg.Notice)
+	}
+}
+
+// TestAnUnknownPanelIsNeverRenderedFor is #38 §2's standing rule, and it earns a
+// test now that every delivery binds through one builder: a queued task's panel
+// can leave the fleet between the assignment and the write, so "the id names no
+// panel" is reachable from more than a mistyped dispatch. Every context factor
+// reads 1.0 against a panel that is not there, so a block rendered for one would
+// be the contextless ranking wearing that panel's name.
+func TestAnUnknownPanelIsNeverRenderedFor(t *testing.T) {
+	st, _ := scoreStore(t)
+	if _, _, err := st.Submit("prefer table-driven tests", score.Provenance{Source: score.SourceUser}); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	s, _, _ := scoreServer(st)
+
+	if b := s.dispatchBrief("nosuchpanel", "fix the login flow"); b.Score != "" {
+		t.Fatalf("brief for an absent panel = %+v, want no block rendered for it", b)
+	}
+	// And the entry really is renderable, so the check above is the rule and not
+	// an empty store.
+	if b := s.dispatchBrief("p1", "fix the login flow"); b.Score == "" {
+		t.Fatal("the same store rendered nothing for a real panel, so nothing was tested")
 	}
 }
 
@@ -158,7 +315,7 @@ func TestGroupDispatchCarriesNoScore(t *testing.T) {
 // task; see TestEnqueueDefersTheFilterToDelivery for where it lands.
 func TestEnqueueConsultsNoHook(t *testing.T) {
 	st, _ := scoreStore(t)
-	s, _ := scoreServer(st)
+	s, _, _ := scoreServer(st)
 
 	var seen []TaskBrief
 	s.onFilterTask = func(b TaskBrief) (TaskBrief, bool) { seen = append(seen, b); return b, true }
@@ -173,6 +330,94 @@ func TestEnqueueConsultsNoHook(t *testing.T) {
 	if got := taskPrompts(s); len(got) != 1 || got[0] != "later" {
 		t.Fatalf("backlog = %v, want the one queued prompt", got)
 	}
+}
+
+// TestAQueuedTaskCarriesTheSameBlockAsADirectDispatch is #44's done-when, checked
+// the only way that settles it: the bytes a queued task delivers onto a panel are
+// compared against the bytes a direct dispatch to that same panel produces, and
+// the two hook tables are compared field for field. One brief builder serves both
+// paths, so the equality is structural rather than a coincidence the next change
+// could break quietly.
+//
+// Both dispatches arrive on an AGENT connection. A cockpit's brief would record a
+// user signal on the first of the two and leave the second ranking against a
+// store the test itself had moved (#38 §4); an agent's brief counts for nothing,
+// so the memory the two paths see is the same memory.
+func TestAQueuedTaskCarriesTheSameBlockAsADirectDispatch(t *testing.T) {
+	st, _ := scoreStore(t)
+	if _, _, err := st.Submit("prefer table-driven tests", score.Provenance{Source: score.SourceUser}); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	direct, _, directBytes := scoreServer(st)
+	var seenDirect TaskBrief
+	direct.onFilterTask = func(b TaskBrief) (TaskBrief, bool) { seenDirect = b; return b, true }
+	cc := conn("p1")
+	direct.onCommand(cc, proto.Command{Action: "panel.dispatch", ID: "p1", Prompt: "fix the login flow"})
+	noError(t, cc)
+
+	queued, _, queuedBytes := scoreServer(st)
+	var seenQueued TaskBrief
+	queued.onFilterTask = func(b TaskBrief) (TaskBrief, bool) { seenQueued = b; return b, true }
+	cc = conn("p1")
+	queued.onCommand(cc, proto.Command{Action: "task.enqueue", Prompt: "fix the login flow"})
+	noError(t, cc)
+	queued.monitorTick() // the scheduler drains it onto p1 and the monitor delivers
+
+	if seenDirect.Score == "" {
+		t.Fatal("the direct dispatch carried no block, so the comparison is vacuous")
+	}
+	if seenQueued != seenDirect {
+		t.Fatalf("hook table at a queued delivery = %+v, want the direct dispatch's %+v", seenQueued, seenDirect)
+	}
+	if got, want := string(*queuedBytes), string(*directBytes); got != want {
+		t.Fatalf("queued delivery sent %q, want the direct dispatch's %q", got, want)
+	}
+	if !strings.Contains(string(*queuedBytes), "prefer table-driven tests") {
+		t.Fatalf("queued delivery sent %q, want the entry in it", string(*queuedBytes))
+	}
+}
+
+// TestASpawnOnDemandTaskScoresAtItsHeldDelivery covers the one delivery that is
+// neither immediate nor scheduled: a spawn-on-demand task provisions its panel
+// and then waits, because a panel that has not settled cannot take a prompt. Its
+// brief is bound when the monitor finally releases it — against the panel that
+// was created for it, which did not exist when the task was queued.
+func TestASpawnOnDemandTaskScoresAtItsHeldDelivery(t *testing.T) {
+	st, _ := scoreStore(t)
+	if _, _, err := st.Submit("prefer table-driven tests", score.Provenance{Source: score.SourceUser}); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	s, clk, written := gateServer() // no standing agent, so the task provisions its own
+	WithScore(ScoreState{Store: st, Enabled: true})(s)
+	var seen TaskBrief
+	s.onFilterTask = func(b TaskBrief) (TaskBrief, bool) { seen = b; return b, true }
+
+	if _, err := s.enqueueTask("hi", "", &task.SpawnSpec{Command: "cat"}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	_, spawns := schedule(s)
+	if len(spawns) != 1 {
+		t.Fatalf("expected one spawn request, got %d", len(spawns))
+	}
+	if !s.applyScheduledSpawns(spawns) {
+		t.Fatal("provisioning a panel should report a fleet change")
+	}
+	pid := s.panels[0].ID
+	if seen != (TaskBrief{}) {
+		t.Fatalf("provisioning bound the brief early: %+v", seen)
+	}
+
+	clk.add(idleAfter) // the fresh panel goes quiet
+	s.monitorTick()
+
+	if seen.Panel != pid {
+		t.Fatalf("brief = %+v, want it bound to the panel provisioned for the task", seen)
+	}
+	if seen.Score == "" || len(*written) != 1 || !strings.Contains((*written)[0], "prefer table-driven tests") {
+		t.Fatalf("brief = %+v delivered %v, want the block rendered at the held delivery", seen, *written)
+	}
+	_ = s.closePanel(pid) // reap the real process
 }
 
 // taskPrompts lists what the backlog is holding, in no particular order.
@@ -191,7 +436,7 @@ func taskPrompts(s *Server) []string {
 // fleet), while a self-less cockpit submits as the user.
 func TestScoreSubmitProvenance(t *testing.T) {
 	st, _ := scoreStore(t)
-	s, _ := scoreServer(st)
+	s, _, _ := scoreServer(st)
 
 	find := func(id string) score.Entry {
 		for _, e := range st.Render(score.Context{}) {
@@ -242,7 +487,7 @@ func TestScoreSubmitProvenance(t *testing.T) {
 // counted into it — and an agent never learns the fleet already knew.
 func TestScoreSubmitReportsAFold(t *testing.T) {
 	st, _ := scoreStore(t)
-	s, _ := scoreServer(st)
+	s, _, _ := scoreServer(st)
 
 	var ids []string
 	var folds []bool
@@ -309,7 +554,7 @@ func TestScoreSubmitReportsAFold(t *testing.T) {
 // TestScoreSubmitDisabled checks the refusal: with no store the submission is
 // turned away plainly, and nothing pretends to have recorded it.
 func TestScoreSubmitDisabled(t *testing.T) {
-	s, _ := scoreServer(nil)
+	s, _, _ := scoreServer(nil)
 
 	cc := conn("")
 	s.onCommand(cc, proto.Command{Action: "score.submit", Prompt: "remember me"})
@@ -344,7 +589,7 @@ func TestScoreListAndStatus(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s, _ := scoreServer(tc.st)
+			s, _, _ := scoreServer(tc.st)
 
 			if entries := listed(t, s, "").Entries; len(entries) != tc.listed {
 				t.Fatalf("want %d listed entries, got %+v", tc.listed, entries)

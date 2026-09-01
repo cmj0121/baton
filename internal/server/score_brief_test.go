@@ -24,10 +24,10 @@ func seedEntry(t *testing.T, st *score.Store, text string) score.Entry {
 }
 
 // dispatch drives panel.dispatch exactly as a client would, which is the whole
-// point: the signal is recorded inside dispatchFiltered's action, AFTER the hook
-// chain has passed and the delivery has succeeded, so a test that called
-// dispatchBrief directly would be testing the half of the path that no longer
-// carries the behaviour.
+// point: the signal is recorded by the panel.dispatch case AFTER the hook chain
+// has passed and the delivery has succeeded, so a test that called dispatchBrief
+// directly would be testing the half of the path that no longer carries the
+// behaviour.
 func dispatch(t *testing.T, s *Server, cc *clientConn, prompt string) {
 	t.Helper()
 	s.onCommand(cc, proto.Command{Action: "panel.dispatch", ID: "p1", Prompt: prompt})
@@ -61,7 +61,7 @@ func TestTheUsersBriefReinforcesWhatItRepeats(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st, _ := scoreStore(t)
-			s, _ := scoreServer(st)
+			s, _, _ := scoreServer(st)
 			e := seedEntry(t, st, "keep the build green")
 
 			// Not byte-identical to the entry: the match is the folding
@@ -86,7 +86,7 @@ func TestTheUsersBriefReinforcesWhatItRepeats(t *testing.T) {
 // with one line per task.
 func TestABriefAdmitsNothing(t *testing.T) {
 	st, _ := scoreStore(t)
-	s, _ := scoreServer(st)
+	s, _, _ := scoreServer(st)
 	e := seedEntry(t, st, "keep the build green")
 
 	for range 5 {
@@ -107,7 +107,7 @@ func TestABriefAdmitsNothing(t *testing.T) {
 // tier for.
 func TestTheUsersBriefCanGrantTheTopTier(t *testing.T) {
 	st, _ := scoreStore(t)
-	s, _ := scoreServer(st)
+	s, _, _ := scoreServer(st)
 	e := seedEntry(t, st, "keep the build green")
 
 	// Three dispatches: the entry climbs the ordinary ladder on the first two and
@@ -141,7 +141,7 @@ func TestABriefIsNotQuotedBackAtItself(t *testing.T) {
 	wording := map[int]string{1: "[noted]", 2: "[note and take care]", 3: "[important]"}
 
 	st, _ := scoreStore(t)
-	s, delivered := scoreServer(st)
+	s, _, delivered := scoreServer(st)
 	e := seedEntry(t, st, "keep the build green")
 
 	var raises int
@@ -177,7 +177,7 @@ func TestABriefIsNotQuotedBackAtItself(t *testing.T) {
 // signal is skipped before the store is ever reached, so the disabled fleet
 // cannot be refused a dispatch by a subsystem it switched off.
 func TestABriefIsQuietWithTheStoreOff(t *testing.T) {
-	s, delivered := scoreServer(nil)
+	s, _, delivered := scoreServer(nil)
 	dispatch(t, s, conn(""), "keep the build green")
 	if got := string(*delivered); got != "keep the build green\n" {
 		t.Fatalf("delivered %q, want the operator's own prompt and no score block", got)
@@ -194,13 +194,13 @@ func TestABriefIsQuietWithTheStoreOff(t *testing.T) {
 }
 
 // TestAVetoedBriefCountsNothing is the ordering F5 turned on, and the reason the
-// signal moved out of dispatchBrief: the brief is BUILT as an argument to
-// dispatchFiltered, so anything counted while building it is counted before the
-// hook chain has had its say. A task.pre veto means nothing reached an agent,
-// and a brief that reached no agent is not the user telling the fleet anything.
+// signal moved out of dispatchBrief: the brief is BUILT before the chain runs,
+// so anything counted while building it is counted before the hook chain has had
+// its say. A task.pre veto means nothing reached an agent, and a brief that
+// reached no agent is not the user telling the fleet anything.
 func TestAVetoedBriefCountsNothing(t *testing.T) {
 	st, _ := scoreStore(t)
-	s, delivered := scoreServer(st)
+	s, _, delivered := scoreServer(st)
 	e := seedEntry(t, st, "keep the build green")
 
 	s.onFilterTask = func(TaskBrief) (TaskBrief, bool) { return TaskBrief{}, false }
@@ -227,7 +227,7 @@ func TestAVetoedBriefCountsNothing(t *testing.T) {
 // reinforcement for a task no agent ever saw.
 func TestABriefToAnUnknownPanelCountsNothing(t *testing.T) {
 	st, _ := scoreStore(t)
-	s, _ := scoreServer(st)
+	s, _, _ := scoreServer(st)
 	e := seedEntry(t, st, "keep the build green")
 
 	cc := conn("")
@@ -271,7 +271,7 @@ func TestAHelloCannotDropAFence(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st, _ := scoreStore(t)
-			s, _ := scoreServer(st)
+			s, _, _ := scoreServer(st)
 			cc := conn("")
 
 			s.onCommand(cc, tc.first)
@@ -323,7 +323,7 @@ func drain(cc *clientConn) {
 // would be a door into the top tier that nobody had noticed opening.
 func TestConnProvenanceIsTheOneDiscrimination(t *testing.T) {
 	st, _ := scoreStore(t)
-	s, _ := scoreServer(st)
+	s, _, _ := scoreServer(st)
 
 	if got := s.connProvenance(conn("")); got != (score.Provenance{Source: score.SourceUser}) {
 		t.Fatalf("a cockpit connection = %+v, want the user and none of the three dimensions", got)
