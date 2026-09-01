@@ -343,3 +343,79 @@ func TestBadNumbersCoversEveryNumericKey(t *testing.T) {
 			got.Score.BadNumbers, want, b.String())
 	}
 }
+
+// TestUnappliedOnReloadNamesTheKeysAReloadCannotApply is the executable half of
+// ScoreConfig's own claim that everything but Dir and Enabled reloads on SIGHUP.
+// The claim used to be prose here and a hand-listed pair of comparisons in
+// cmd/baton, which is two places for one rule.
+//
+// Both directions per key. A line that fires on a reload which changed nothing
+// is a line an operator learns to scroll past, and this one has to be read the
+// once it appears.
+func TestUnappliedOnReloadNamesTheKeysAReloadCannotApply(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	on, off := true, false
+
+	for _, tc := range []struct {
+		name   string
+		booted ScoreConfig
+		now    ScoreConfig
+		want   []UnappliedKey
+	}{
+		{
+			name:   "the directory moved",
+			booted: ScoreConfig{Dir: "/srv/fleet-a"},
+			now:    ScoreConfig{Dir: "/srv/fleet-b"},
+			want:   []UnappliedKey{{Key: "score.dir", InForce: "/srv/fleet-a", Configured: "/srv/fleet-b"}},
+		},
+		{
+			name:   "the memory was switched off",
+			booted: ScoreConfig{Dir: "/srv/fleet-a", Enabled: &on},
+			now:    ScoreConfig{Dir: "/srv/fleet-a", Enabled: &off},
+			want:   []UnappliedKey{{Key: "score.enabled", InForce: "true", Configured: "false"}},
+		},
+		{
+			name:   "both at once",
+			booted: ScoreConfig{Dir: "/srv/fleet-a", Enabled: &on},
+			now:    ScoreConfig{Dir: "/srv/fleet-b", Enabled: &off},
+			want: []UnappliedKey{
+				{Key: "score.dir", InForce: "/srv/fleet-a", Configured: "/srv/fleet-b"},
+				{Key: "score.enabled", InForce: "true", Configured: "false"},
+			},
+		},
+		{
+			name:   "nothing changed",
+			booted: ScoreConfig{Dir: "/srv/fleet-a", Enabled: &on},
+			now:    ScoreConfig{Dir: "/srv/fleet-a", Enabled: &on},
+		},
+		{
+			name:   "only the keys a reload does apply changed",
+			booted: ScoreConfig{Dir: "/srv/fleet-a", PromoteAt: 3},
+			now:    ScoreConfig{Dir: "/srv/fleet-a", PromoteAt: 9, WorkingSet: 5},
+		},
+		{
+			// Unset is not a change: score.enabled defaults to on and score.dir to
+			// the shared default, so a file that never mentioned either says the same
+			// thing before and after. This is why the comparison is on RESOLVED
+			// values rather than on the written ones.
+			name:   "neither key is written down at all",
+			booted: ScoreConfig{},
+			now:    ScoreConfig{},
+		},
+		{
+			// The same directory, spelled two ways. Comparing the written strings
+			// would report a move the daemon did not make.
+			name:   "the default written out by hand",
+			booted: ScoreConfig{},
+			now:    ScoreConfig{Dir: filepath.Join(home, ".baton")},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.now.UnappliedOnReload(tc.booted)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("UnappliedOnReload = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}

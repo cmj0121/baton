@@ -115,8 +115,12 @@ func TestMissingScoreMDIsReprojected(t *testing.T) {
 	if !strings.Contains(md, "- ["+first.Id+"] keep the build green") {
 		t.Fatalf("score.md was not re-projected:\n%s", md)
 	}
-	if !strings.Contains(md, "# This file is baton's fleet memory") {
-		t.Fatalf("the re-projection dropped the header that teaches the format:\n%s", md)
+	// The re-projection is the entries and NOTHING else: one line per entry, and
+	// no line baton wrote on its own behalf.
+	for _, line := range strings.Split(strings.TrimSuffix(md, "\n"), "\n") {
+		if _, _, ok := parseLine(line); !ok {
+			t.Fatalf("the re-projection wrote a line that is not an entry: %q", line)
+		}
 	}
 	if d.Reprojected != 2 || d.Retired != 0 {
 		t.Fatalf("pass = %+v, want two re-projections and no retirement", d)
@@ -138,9 +142,11 @@ func TestMissingScoreMDIsReprojected(t *testing.T) {
 	}
 }
 
-// TestMissingScoreMDOnAFreshStoreJustSeeds keeps the first-run path honest: no
-// entries means nothing to re-project, only the header to write.
-func TestMissingScoreMDOnAFreshStoreJustSeeds(t *testing.T) {
+// TestMissingScoreMDOnAFreshStoreCreatesAnEmptyFile keeps the first-run path
+// honest: no entries means nothing to re-project, and the file is still CREATED,
+// because an absent score.md is what the recovery table reads as "the file was
+// lost" rather than as "the operator emptied it".
+func TestMissingScoreMDOnAFreshStoreCreatesAnEmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, dir)
 	if s.Len() != 0 {
@@ -149,8 +155,8 @@ func TestMissingScoreMDOnAFreshStoreJustSeeds(t *testing.T) {
 	if d := s.Boot(); d.Reprojected != 0 {
 		t.Fatalf("boot recovery = %+v, want a first run to re-project nothing", d)
 	}
-	if md := readFile(t, dir, scoreMD); !strings.Contains(md, "- [e7f3a2]") {
-		t.Fatalf("the header should still teach the entry format:\n%s", md)
+	if md := readFile(t, dir, scoreMD); md != "" {
+		t.Fatalf("a first run should write an empty score.md, got %q", md)
 	}
 }
 
@@ -368,25 +374,6 @@ func TestParseLineScrubsTheId(t *testing.T) {
 	}
 	if _, _, ok := parseLine("- [\x1b\x07] nothing left"); ok {
 		t.Error("an id that scrubs away to nothing must not parse as an entry")
-	}
-}
-
-// TestCacheWriteFailureIsCounted keeps the ops blind spot lit: the store is
-// right not to fail a durable mutation over its cache, but a rising count is the
-// early symptom of the disk that will break the next append.
-func TestCacheWriteFailureIsCounted(t *testing.T) {
-	dir := t.TempDir()
-	s := openStore(t, dir)
-	if err := os.Remove(filepath.Join(dir, scoreJSON)); err != nil && !os.IsNotExist(err) {
-		t.Fatalf("remove snapshot: %v", err)
-	}
-	if err := os.Mkdir(filepath.Join(dir, scoreJSON), 0o700); err != nil {
-		t.Fatalf("mkdir over the snapshot: %v", err)
-	}
-
-	submit(t, s, "still durable")
-	if h := s.Health(); h.CacheWriteFailures == 0 {
-		t.Fatalf("health = %+v, want the failed cache write counted", h)
 	}
 }
 

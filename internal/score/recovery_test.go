@@ -205,10 +205,14 @@ func TestRecoveryLogEntryTheFileLacks(t *testing.T) {
 	}
 }
 
-// TestRecoveryRebuildsFromLogWithoutTheSnapshot is the table's third row and
-// #38's first verification check in one: score.json is a cache, so deleting or
-// corrupting it costs nothing, and the rebuild is byte-identical.
-func TestRecoveryRebuildsFromLogWithoutTheSnapshot(t *testing.T) {
+// TestRecoveryRebuildsFromTheLogAlone is #38's first verification check: delete
+// every file but the log, restart, and the store comes back exactly as it was —
+// the entries, their tiers, their counts and their aliases.
+//
+// It is the check the whole two-file shape rests on. Nothing but the log is ever
+// read at Open, so the log has to be sufficient; when a snapshot sat beside it
+// this test could pass while the store quietly depended on the cache.
+func TestRecoveryRebuildsFromTheLogAlone(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, dir)
 	first := submitAs(t, s, "keep the build green", Provenance{Source: "agent", SourcePanel: "p1", SourceProfile: "claude", SourceCwd: "/work"})
@@ -219,22 +223,32 @@ func TestRecoveryRebuildsFromLogWithoutTheSnapshot(t *testing.T) {
 	// A reword too, so the rebuild has to replay an alias as well as a counter.
 	writeMD(t, dir, "- ["+first.Id+"] keep the build green, always\n- [b0b0b0] ask before force-pushing\n")
 	reconcile(t, s)
-	want := readFile(t, dir, scoreJSON)
+	want := renderedByID(t, s, Context{})
 	s.Close()
 
-	if err := os.Remove(filepath.Join(dir, scoreJSON)); err != nil {
-		t.Fatalf("remove snapshot: %v", err)
+	// Everything but the log goes. score.md is the truth for text and existence,
+	// so losing it is the widest loss the store can survive at all.
+	if err := os.Remove(filepath.Join(dir, scoreMD)); err != nil {
+		t.Fatalf("remove score.md: %v", err)
 	}
 	re := openStore(t, dir)
-	if got := readFile(t, dir, scoreJSON); got != want {
-		t.Fatalf("cache rebuilt from the log differs:\n got: %s\nwant: %s", got, want)
+	rebuilt := renderedByID(t, re, Context{})
+	for id, w := range want {
+		got, ok := rebuilt[id]
+		if !ok {
+			t.Fatalf("entry %s did not come back from the log alone", id)
+		}
+		if got.Text != w.Text || got.Tier != w.Tier || got.Reinforcements != w.Reinforcements ||
+			got.UserSignals != w.UserSignals || strings.Join(got.Aliases, "|") != strings.Join(w.Aliases, "|") {
+			t.Fatalf("entry %s rebuilt as %+v, want %+v", id, got, w)
+		}
 	}
 	if re.Len() != 2 {
 		t.Fatalf("entries after the rebuild = %d, want 2", re.Len())
 	}
 	// By id, not by position: the working set is RANKED, so which entry leads it
 	// is the ranking's business and not this test's.
-	got := renderedByID(t, re, Context{})[first.Id]
+	got := rebuilt[first.Id]
 	if got.Text != "keep the build green, always" || len(got.Aliases) != 1 || got.Aliases[0] != "keep the build green" {
 		t.Fatalf("rebuilt entry = %+v, want the reworded text with the old wording as an alias", got)
 	}
@@ -437,17 +451,9 @@ func TestIdsAreNeverReusedAcrossARetire(t *testing.T) {
 // TestSubmitReportsTheOutcomeItActuallyHad is Page's note on #40: the reported
 // result must match what happened on disk.
 func TestSubmitReportsTheOutcomeItActuallyHad(t *testing.T) {
-	t.Run("cache failure is not a failed submission", func(t *testing.T) {
+	t.Run("a durable submission reaches both files", func(t *testing.T) {
 		dir := t.TempDir()
 		s := openStore(t, dir)
-		// score.json as a directory: the snapshot's rename can never land, while
-		// the append-only files stay perfectly writable.
-		if err := os.Remove(filepath.Join(dir, scoreJSON)); err != nil && !os.IsNotExist(err) {
-			t.Fatalf("remove snapshot: %v", err)
-		}
-		if err := os.Mkdir(filepath.Join(dir, scoreJSON), 0o700); err != nil {
-			t.Fatalf("mkdir over the snapshot: %v", err)
-		}
 
 		e := submitAs(t, s, "durable in two files", Provenance{Source: "user"})
 		if s.Len() != 1 {

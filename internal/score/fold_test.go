@@ -163,7 +163,7 @@ func TestSubmitFoldsARepeat(t *testing.T) {
 }
 
 // TestFoldKeepsWhoSaidIt guards the provenance a fold could lose. It leaves no
-// trace in score.md and only a count in score.json, so the event log is the only
+// trace in score.md and only a count on the entry, so the event log is the only
 // place the second submitter can survive — and it must, or the store can say how
 // often something was said but never by whom.
 func TestFoldKeepsWhoSaidIt(t *testing.T) {
@@ -446,8 +446,10 @@ func TestFoldsMatchAnAlias(t *testing.T) {
 // owed. ONE mechanism settles that on both sides of a restart, and the subtests
 // below walk it in the same process and across one.
 //
-// It is never written down: score.json, the only place to write it, is the
-// disposable cache Open never reads. It survives a restart by being DERIVED
+// It is never written down: there is no file to write it to that is not the log
+// itself, and a debt is not an event — a record for something that merely has
+// not happened yet would be the operator's own history telling them it did. It
+// survives a restart by being DERIVED
 // instead — the fold event names the wording it removed, and score.md either
 // still shows those exact bytes or does not. What it cannot promise is telling
 // an owed removal from an operator who retyped the same wording verbatim in the
@@ -552,8 +554,8 @@ func TestFoldNeverDeletesWhatTheLogDoesNotHold(t *testing.T) {
 	})
 
 	// The same failure with a RESTART in the middle. What the store owes is not
-	// written down — score.json is a disposable cache and recovery state has no
-	// business in it — so a new process has to reach the same answer from the two
+	// written down — the log records events and a debt is not one — so a new
+	// process has to reach the same answer from the two
 	// things that are true: the fold event names the wording it
 	// removed, and score.md either still shows that wording or does not. If it
 	// does, the removal never landed and is owed: take the line out, count
@@ -673,7 +675,7 @@ func TestASwallowedFoldKeepsItsCounter(t *testing.T) {
 // TestAliasesAreDedupedAndCapped keeps an entry's memory of its own wordings
 // from growing without bound, and keeps it free of distinctions the index cannot
 // act on: two wordings with one folding key can only ever match the same
-// repeats, so storing both costs a line in score.json and every boot's replay to
+// repeats, so storing both costs a slot on the entry and every boot's replay to
 // buy nothing.
 func TestAliasesAreDedupedAndCapped(t *testing.T) {
 	dir := t.TempDir()
@@ -1020,7 +1022,16 @@ func TestARolledBackPassAppliesNoCounters(t *testing.T) {
 	writeMD(t, dir, fmt.Sprintf("- [%s] wording %d\n", e.Id, maxAliases+1))
 	reconcileMustFail(t, s)
 
-	if got := s.Health(); got != before {
+	// WriteFailing is held aside, because it is the ONE field a failed pass is
+	// supposed to move: it reports that the last durable write did not land, which
+	// is the fact this pass just established. Everything else is a counter the
+	// compute phase worked out, and a rolled-back pass applies none of them.
+	got := s.Health()
+	if !got.WriteFailing {
+		t.Error("a pass whose append failed left the store reporting its writes as healthy")
+	}
+	got.WriteFailing = before.WriteFailing
+	if got != before {
 		t.Fatalf("health = %+v after a failed pass, want %+v", got, before)
 	}
 	if got := s.Render(Context{})[0]; got.Text != fmt.Sprintf("wording %d", maxAliases) {
@@ -1033,5 +1044,37 @@ func TestARolledBackPassAppliesNoCounters(t *testing.T) {
 	reconcile(t, s)
 	if got := s.Health().AliasEvictions; got != 1 {
 		t.Fatalf("evictions = %d, want exactly the one the store made", got)
+	}
+	// And the latch un-says itself: a write that landed means the last one landed,
+	// which is what makes it a fact about the store rather than a scar.
+	if s.Health().WriteFailing {
+		t.Error("the store still reports its writes as failing after one landed")
+	}
+}
+
+// TestWriteFailingAnswersWhileTheStoreIsBusy is the property that makes the
+// latch reportable at the moment it matters.
+//
+// Every durable append holds the store mutex across its fsync, so on a mount
+// that has stopped answering, the write that set this bit is STILL HOLDING THE
+// LOCK. A reader that took the same lock to ask "are the writes landing" would
+// queue behind exactly the write it exists to report, and score.status would
+// hang alongside it — which is the state #38's invariant I8 calls the fourth
+// one, arriving through the door built to report it.
+//
+// Health takes the lock and so cannot be that reader; WriteFailing does not.
+// The assertion is that the accessor answers AT ALL with the mutex held, in
+// both directions, which an accessor that ever grows a lock cannot do.
+func TestWriteFailingAnswersWhileTheStoreIsBusy(t *testing.T) {
+	s := openStore(t, t.TempDir())
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.WriteFailing() {
+		t.Error("a store whose every write has landed reports them as failing")
+	}
+	s.writeFailing.Store(true)
+	if !s.WriteFailing() {
+		t.Error("the latch is set and the accessor held under the same lock says otherwise")
 	}
 }

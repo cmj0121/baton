@@ -35,7 +35,7 @@ import (
 // Three registries, one per test:
 //
 //  1. Every write to a field named Tier, anywhere in the package's non-test
-//     files, appears in tierWrites (TestEveryTierWriteIsRegistered). Three of
+//     files, appears in tierWrites (TestEveryTierWriteIsRegistered). Four of
 //     them write an ENTRY's tier; the rest copy one into a record that reports
 //     it.
 //  2. Exactly two functions name EventRaised, and only one BUILDS the record —
@@ -73,8 +73,8 @@ type tierWrite struct {
 // not assertions and nothing reads them — see this file's header, which states
 // that limit rather than leaving it to be discovered.
 //
-// Three of them write an ENTRY's tier — newEntry, reinforceLocked and
-// replayLocked — and those three are what I6 turns on. The rest copy a tier that
+// Four of them write an ENTRY's tier — newEntry, reinforceLocked, lowerLocked
+// and grantTier — and those four are what I6 turns on. The rest copy a tier that
 // has already been written into a record that reports it: a raised event, a fold
 // note, a ranking factor. None of those can invent a rung, because none computes
 // one.
@@ -82,9 +82,12 @@ var tierWrites = map[tierWrite]string{
 	{Fn: "newEntry", Type: "Entry"}: "the literal 1 — every entry starts on the bottom rung",
 	{Fn: "reinforceLocked", Expr: "e.Tier"}: "++ past a guard on Policy.ceiling, so it stops at " +
 		"agentEarnedTier until the entry's own UserSignals reach the threshold, and at maxEarnedTier after",
-	{Fn: "replayLocked", Expr: "e.Tier"}: "two writes under one key: a tier COPIED from a raised record, guarded " +
-		"to 1..maxEarnedTier, and one copied from a lowered record, guarded to strictly below the rung the entry " +
-		"is already on. Neither is computed, and a record outside its guard is rejected and counted, never clamped",
+	{Fn: "grantTier", Expr: "e.Tier"}: "the one door every REPLAYED tier comes through, and always a COPY: a " +
+		"tier from a raised record and one from a compacted record, each bounded at maxEarnedTier, and one from " +
+		"a lowered record, bounded at the rung below the one the entry is standing on. None is computed, and a " +
+		"record outside its bound is rejected and counted, never clamped",
+	{Fn: "grantTier", Expr: "*rejected"}: "the rejected-tier counter, passed by pointer for the reason alias " +
+		"passes its own — see that entry, and note that this is the package's second such write, not a new kind",
 
 	{Fn: "lowerLocked", Expr: "e.Tier"}: "-- past a guard on the bottom of the ladder. It is the package's ONE " +
 		"demotion and it takes no target: there is no tier for a caller to name, so the conductor cannot raise " +
@@ -92,17 +95,20 @@ var tierWrites = map[tierWrite]string{
 	{Fn: "lowerLocked", Type: "event"}: "the lowered record, carrying the rung the guarded -- above just landed on",
 
 	{Fn: "reinforceLocked", Type: "event"}: "the raised record, carrying the tier the guarded ++ above just produced",
-	{Fn: "foldLocked", Type: "Fold"}:       "a report of where the entry stands after the fold",
-	{Fn: "reconcileLocked", Type: "Fold"}:  "the same report, for a duplicate line the pass folded",
+	{Fn: "compactLocked", Type: "event"}: "the compacted record, carrying the rung the entry is standing on so " +
+		"the rewrite that drops its raised records does not drop the tier with them. It COPIES Entry.Tier and " +
+		"computes nothing, and replayLocked guards what it reads back exactly as it guards a raised record",
+	{Fn: "foldLocked", Type: "Fold"}:      "a report of where the entry stands after the fold",
+	{Fn: "reconcileLocked", Type: "Fold"}: "the same report, for a duplicate line the pass folded",
 	{Fn: "reconcileLocked", Expr: "folds[at].Tier"}: "the same report again, updated in place once the " +
 		"entry it describes has moved",
 	{Fn: "rankLocked", Type: "Factors"}: "the tier as a ranking multiplier — read, never written back",
 
 	// Not a tier at all. It is here because the syntax cannot say what a pointer
 	// write targets, so the walker reports every one and each has to be accounted
-	// for — which is the point: this is the package's only pointer write today,
-	// and a second one would have to be justified on this line before it could
-	// pass. See tierWalker.
+	// for — which is the point: a new one has to be justified on one of these
+	// lines before it can pass. See tierWalker, and grantTier's *rejected above,
+	// which is the other one.
 	{Fn: "alias", Expr: "*evictions"}: "the alias-eviction counter, passed by pointer so a merge and a " +
 		"reword can each report what they pushed out of Entry.Aliases into the counters they commit with",
 }
@@ -445,26 +451,27 @@ var refineScratch int
 // surface, which is what TestEveryStoreMethodIsClassified checks — a method
 // added later is unclassified until someone decides which of the two it is.
 var closedDoors = map[string]string{
-	"Boot":        "reports what Open's recovery pass did; writes nothing",
-	"Close":       "releases the directory claim",
-	"Dir":         "reports the directory",
-	"DrainFolds":  "hands back fold records already made; changes no entry",
-	"Explain":     "a read; its reconcile pass acts on score.md, which is the user's file",
-	"Health":      "reports counters",
-	"Len":         "counts entries",
-	"Policy":      "reports the tuning in force",
-	"Reconcile":   "folds score.md back in; every reinforcement it counts is the USER's, by definition of whose file it is",
-	"Lower":       "the package's one demotion: it takes no target tier at all, so there is no rung for a caller to name",
-	"Merge":       "", // in agentDoors
-	"Reinforce":   "", // in agentDoors; listed here only so the two maps can be compared by name
-	"Render":      "a read",
-	"Reword":      "re-spells one statement: the wording changes, and no counter, tier or log position moves with it",
-	"RenderBlock": "a read",
-	"SetPolicy":   "retunes thresholds; #37 demotes nothing and no threshold grants a tier, only earns one",
-	"Signal":      "", // in agentDoors
-	"Submit":      "", // in agentDoors
-	"Unlocked":    "reports the single-writer claim",
-	"View":        "a read, like Explain",
+	"Boot":         "reports what Open's recovery pass did; writes nothing",
+	"Close":        "releases the directory claim",
+	"Dir":          "reports the directory",
+	"DrainFolds":   "hands back fold records already made; changes no entry",
+	"Explain":      "a read; its reconcile pass acts on score.md, which is the user's file",
+	"Health":       "reports counters",
+	"Len":          "counts entries",
+	"Policy":       "reports the tuning in force",
+	"Reconcile":    "folds score.md back in; every reinforcement it counts is the USER's, by definition of whose file it is",
+	"Lower":        "the package's one demotion: it takes no target tier at all, so there is no rung for a caller to name",
+	"Merge":        "", // in agentDoors
+	"Reinforce":    "", // in agentDoors; listed here only so the two maps can be compared by name
+	"Render":       "a read",
+	"Reword":       "re-spells one statement: the wording changes, and no counter, tier or log position moves with it",
+	"RenderBlock":  "a read",
+	"SetPolicy":    "retunes thresholds; #37 demotes nothing and no threshold grants a tier, only earns one",
+	"Signal":       "", // in agentDoors
+	"Submit":       "", // in agentDoors
+	"Unlocked":     "reports the single-writer claim",
+	"View":         "a read, like Explain",
+	"WriteFailing": "reports whether the last durable append landed",
 }
 
 // TestEveryStoreMethodIsClassified is what keeps the proof below exhaustive. The
@@ -549,7 +556,7 @@ func TestNoAgentReachableCallReachesTheTopTier(t *testing.T) {
 // TestTheLadderIsDeterministic is invariant I1 over the rung R4 added: the same
 // sequence of sources, replayed on a second store, yields the same tiers and the
 // same user-signal counts. The user signal is a COUNT rebuilt from the log's
-// records rather than a flag carried in the snapshot, so this is the assertion
+// records rather than a flag carried anywhere else, so this is the assertion
 // that the two ways of arriving at it agree.
 func TestTheLadderIsDeterministic(t *testing.T) {
 	sources := []string{SourceAgent, SourceUser, SourceAgent, SourceUser, SourceUser, SourceAgent}

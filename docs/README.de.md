@@ -265,6 +265,8 @@ Siehe **[docs/PLUGIN.md](PLUGIN.md)**.
 - **[docs/PLUGIN.md](PLUGIN.md)** — die Lua-Plugin-API: das `baton`-Objekt, Events, Befehle und Konfiguration.
 - **[docs/CONTROL.md](CONTROL.md)** — die Flotte per Agent steuern: der Conductor, das `baton ctl`-CLI, die
   `baton mcp`-Tools und die Leitplanken.
+- **[docs/SCORE.md](SCORE.md)** — Score, das Gedächtnis der Flotte: die Datei `score.md` und ihr einziges
+  Rückgängigmachen, die Stufenleiter, die Ranking-Gewichte, die Kompaktierung und wofür es keine Grenze ist.
 
 ## DDD (Dream-Driven Development)
 

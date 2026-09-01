@@ -2,7 +2,13 @@ package main
 
 import (
 	"errors"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/score"
@@ -52,7 +58,7 @@ func TestScorePolicyGateReachesTheStore(t *testing.T) {
 	cfg := config.ScoreConfig{PromoteAt: 8, WorkingSet: 9}
 
 	p, _ := scorePolicy(cfg, errors.New("parse config: bad"))
-	st, reason := openScore(cfg, p)
+	st, reason := openScore(cfg, p, scoreOpenTimeout)
 	if st == nil {
 		t.Fatalf("openScore refused: %s", reason)
 	}
@@ -106,7 +112,7 @@ func TestWarnScorePolicySaysWhatWasClamped(t *testing.T) {
 	// The store is what says which numbers are actually in force, so the warning
 	// is driven by a real one rather than by re-deriving internal/score's rules
 	// here — that is the whole reason it takes the store and not a policy.
-	st, reason := openScore(config.ScoreConfig{Dir: t.TempDir()}, want)
+	st, reason := openScore(config.ScoreConfig{Dir: t.TempDir()}, want, scoreOpenTimeout)
 	if st == nil {
 		t.Fatalf("openScore refused: %s", reason)
 	}
@@ -125,7 +131,7 @@ func TestWarnScorePolicySaysWhatWasClamped(t *testing.T) {
 	// store is opened on it so the branch reads an IN-FORCE number, the way the
 	// daemon does, rather than the one the file asked for.
 	big := score.Policy{WorkingSet: score.MaxReachableWorkingSet + 1}
-	dead, reason := openScore(config.ScoreConfig{Dir: t.TempDir()}, big)
+	dead, reason := openScore(config.ScoreConfig{Dir: t.TempDir()}, big, scoreOpenTimeout)
 	if dead == nil {
 		t.Fatalf("openScore refused: %s", reason)
 	}
@@ -134,4 +140,171 @@ func TestWarnScorePolicySaysWhatWasClamped(t *testing.T) {
 		t.Fatalf("the store held working-set %d, want %d unclamped: #37 leaves the count to the operator", got, big.WorkingSet)
 	}
 	warnScorePolicy(config.Config{}, big, dead)
+}
+
+// TestAReloadSaysWhichScoreKeysItCannotApply is the gap between what the daemon
+// did and what it said it did.
+//
+// Every other score key reloads for real — promote-at, working-set,
+// user-signals-at and all four rank weights take effect on a SIGHUP and announce
+// themselves with `score policy changed`. score.dir and score.enabled do not,
+// deliberately, and the operator saw only `config reloaded on SIGHUP`: a success
+// line, no complaint, and a fleet still using the old directory while the new
+// one stays empty.
+//
+// Both directions per key, because a line that fires on a reload that changed
+// nothing is a line an operator learns to scroll past — and this one has to be
+// read the once it appears.
+func TestAReloadSaysWhichScoreKeysItCannotApply(t *testing.T) {
+	on, off := true, false
+	for _, tc := range []struct {
+		name   string
+		booted config.ScoreConfig
+		now    config.ScoreConfig
+		want   string
+	}{
+		{
+			name:   "the directory moved",
+			booted: config.ScoreConfig{Dir: "/srv/fleet-a"},
+			now:    config.ScoreConfig{Dir: "/srv/fleet-b"},
+			want:   "score.dir changed but a reload cannot apply it",
+		},
+		{
+			name:   "the memory was switched off",
+			booted: config.ScoreConfig{Dir: "/srv/fleet-a", Enabled: &on},
+			now:    config.ScoreConfig{Dir: "/srv/fleet-a", Enabled: &off},
+			want:   "score.enabled changed but a reload cannot apply it",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logged := captureBootLog(t)
+			warnScoreKeysAReloadCannotApply(tc.booted, tc.now)
+			got := logged()
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("the reload ignored the key and announced success:\n%s", got)
+			}
+			// And it names both sides, because "cannot apply it" without the two
+			// values leaves the operator guessing which one is running.
+			if !strings.Contains(got, "in_force") || !strings.Contains(got, "configured") {
+				t.Errorf("the line does not say what is running and what was asked for:\n%s", got)
+			}
+		})
+	}
+
+	// The silent direction: a reload of the same file, and a reload that changed
+	// only the keys that DO apply.
+	for _, tc := range []struct {
+		name   string
+		booted config.ScoreConfig
+		now    config.ScoreConfig
+	}{
+		{
+			name:   "nothing changed",
+			booted: config.ScoreConfig{Dir: "/srv/fleet-a", Enabled: &on},
+			now:    config.ScoreConfig{Dir: "/srv/fleet-a", Enabled: &on},
+		},
+		{
+			name:   "only the keys a reload does apply changed",
+			booted: config.ScoreConfig{Dir: "/srv/fleet-a", PromoteAt: 3},
+			now:    config.ScoreConfig{Dir: "/srv/fleet-a", PromoteAt: 9, WorkingSet: 5},
+		},
+		{
+			// Unset is not a change: score.enabled defaults to on and score.dir to
+			// the shared default, so a file that never mentioned either says the same
+			// thing before and after.
+			name:   "neither key is written down at all",
+			booted: config.ScoreConfig{},
+			now:    config.ScoreConfig{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logged := captureBootLog(t)
+			warnScoreKeysAReloadCannotApply(tc.booted, tc.now)
+			if got := logged(); got != "" {
+				t.Errorf("a reload that asked for nothing this cannot do still complained:\n%s", got)
+			}
+		})
+	}
+}
+
+// TestARealSIGHUPSaysTheScoreDirectoryDidNotMove is the wiring, which the
+// function-level test above cannot reach: what it compares the reloaded file
+// against has to be the config the store was OPENED from, and a call site
+// handing it the reloaded config twice would be silent on every edit while
+// passing everything above.
+//
+// So this is the operator's actual sequence — a running daemon, an edited
+// config, a real SIGHUP — read off the daemon's own log.
+func TestARealSIGHUPSaysTheScoreDirectoryDidNotMove(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_RUNTIME_DIR", home)
+	t.Setenv("BATON_PLUGIN", "")
+
+	confDir := filepath.Join(home, ".baton")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	conf := filepath.Join(confDir, "config")
+	write := func(dir string) {
+		t.Helper()
+		if err := os.WriteFile(conf, []byte("score:\n  dir: "+dir+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	booted := filepath.Join(home, "memory-a")
+	write(booted)
+
+	// NOT t.TempDir: a Unix socket path is capped around 104 bytes and this test's
+	// name alone eats most of it.
+	sockDir, err := os.MkdirTemp("", "bsk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+	sock := filepath.Join(sockDir, "b.sock")
+	t.Setenv("BATON_SOCK", sock)
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	logged := captureBootLog(t)
+	done := make(chan error, 1)
+	go func() { done <- runServerOn(ln, sock) }()
+	// The LISTENING line, not the pid file: the pid file is written at the top of
+	// runServerOn and signal.Notify comes hundreds of lines later, so a HUP sent on
+	// the pid file racing that window kills the test process outright.
+	if !waitFor(func() bool { return strings.Contains(logged(), "listening") }, 300, 10*time.Millisecond) {
+		t.Fatalf("the server never came up:\n%s", logged())
+	}
+
+	// The operator moves the memory and reloads, which is where they are entitled
+	// to believe the edit took: every other score key really does apply on a HUP.
+	write(filepath.Join(home, "memory-b"))
+	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
+		t.Fatalf("send SIGHUP: %v", err)
+	}
+	if !waitFor(func() bool { return strings.Contains(logged(), "config reloaded on SIGHUP") },
+		200, 10*time.Millisecond) {
+		t.Fatalf("the reload never ran:\n%s", logged())
+	}
+
+	_ = ln.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runServerOn returned %v, want nil", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("runServerOn did not return after the listener closed")
+	}
+
+	got := logged()
+	if !strings.Contains(got, "score.dir changed but a reload cannot apply it") {
+		t.Errorf("the daemon announced a successful reload and went on using %s:\n%s", booted, got)
+	}
+	if !strings.Contains(got, booted) {
+		t.Errorf("the warning does not name the directory still in force:\n%s", got)
+	}
 }

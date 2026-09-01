@@ -2,20 +2,17 @@
 // notes that are rendered into every directly dispatched brief so the whole
 // fleet keeps acting on them.
 //
-// The store owns three sibling files in its directory (per the #38
+// The store owns two sibling files in its directory (per the #38
 // I-invariants):
 //
 //   - score-events.jsonl — the append-only event log. The log is the truth:
 //     every mutation is an event, and the entries are rebuilt from it at every
 //     Open.
-//   - score.json — a snapshot of the entries by id. It is only a cache of the
-//     log's fold, so a corrupt or missing snapshot never fails Open and is never
-//     read back; the next mutation rewrites it atomically.
 //   - score.md — the human-facing projection, one entry per line. Operators may
 //     edit or delete it freely; it is the truth for an entry's TEXT and its
 //     EXISTENCE, and Reconcile folds their edits back in.
 //
-// Two rules decide every conflict between the three (#38 §3, invariant I3): the
+// Two rules decide every conflict between them (#38 §3, invariant I3): the
 // user's text wins, and the log replays whatever the file lost. One pass —
 // reconcileLocked — implements both the boot recovery table and the live-editor
 // table, because they are the same table read at different moments.
@@ -37,27 +34,31 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
 )
 
-// Schema is the current on-disk schema version, shared by the snapshot and the
-// event log. Bump it on a breaking change to either shape; a snapshot written
-// with a newer schema is ignored as if corrupt.
+// Schema is the current on-disk schema version, stamped on every record of the
+// event log. Bump it on a breaking change to the log's shape.
 //
 // R1 added `text` and `provenance` to the event and `aliases` to the entry, R2
 // added `tier` to the event, and R4 added `user_signals` to the entry. All of
 // them are appended optional fields — an old line decodes with them zero, and
 // an old reader ignores them — so the version stays 1, for the same reason
 // proto.ProtocolVersion does not move on an appended field. R6 added two event
-// NAMES rather than a field, which is additive in the same direction: replay
-// never reads a record's schema and its EVENT switch has no default, so a build
-// that does not know a name skips the record and under-claims. See the event
-// constants. R4's is doubly safe
-// on top of that: score.json is a cache Open never reads back, and the count is
-// rebuilt from the log's own sources at every replay. What an appended
-// field cannot fix is a record that never carried the text at all, and the
+// NAMES rather than a field, and R7 a third alongside three more appended
+// fields. Replay never reads a record's schema and its EVENT switch has no
+// default, so a build that does not know a name skips the record — which is
+// under-claiming for R6's two names and is NOT for R7's. See EventCompacted:
+// skipping a record that carries a whole entry does not lose a little of that
+// entry, it loses all of it, and score.md then hands the entry back to an older
+// build as the OPERATOR's. Bumping this would not help, because nothing reads
+// it; the version stays 1 and the honest statement lives on EventCompacted.
+//
+// What an appended field cannot fix is a record that never carried the text at
+// all, and the
 // pre-R1 log is exactly that; replayLocked and reconcileLocked handle it as
 // "text unknown" rather than as an empty entry the file then edits, because
 // treating it as an edit would manufacture the user signal invariant I6 rests
@@ -324,8 +325,8 @@ const agentEarnedTier = 2
 // times has drifted, and the ninth-oldest phrasing folding into what it says
 // today is the shape of "remembering wrong" that #38 §1 spends its whole budget
 // avoiding. The cap also bounds what an editing session can cost: three hundred
-// rewords is three hundred wordings persisted in score.json and replayed at
-// every boot, for an entry that is one line of text.
+// rewords is three hundred wordings carried on the entry and rebuilt from the
+// log at every boot, for an entry that is one line of text.
 //
 // Nothing is destroyed by the cap (I7): a dropped wording stays in the log with
 // the edit that retired it. It simply stops folding.
@@ -404,9 +405,12 @@ const staleWindow = 2 * time.Second
 // The store's files, siblings inside the score directory.
 const (
 	scoreMD     = "score.md"           // human-facing projection, one entry per line
-	scoreJSON   = "score.json"         // snapshot cache of the entries by id
 	scoreEvents = "score-events.jsonl" // append-only event log — the truth
 	scoreLock   = "score.lock"         // the single-writer claim; never read, never removed
+	// tempSuffix names the sibling writeFileAtomic renames from. It is a constant
+	// because two places have to agree on it: the write that creates it, and the
+	// boot that removes whatever a killed process left under that name.
+	tempSuffix = ".tmp"
 )
 
 // newline is the record separator of both line-oriented files, as bytes: the
@@ -427,7 +431,7 @@ var newline = []byte{'\n'}
 // under-claims — an entry without the alias, or on the rung it earned — exactly
 // as panel.ParseState does for a state string it does not know. Schema therefore
 // stays 1; see Schema, and note that replayLocked never reads a record's schema
-// at all, so a bump would reach nothing but score.json, which Open never reads.
+// at all, so the field is stamped for whoever reads the log and for nothing else.
 const (
 	EventSubmitted  = "submitted"   // a new entry entered the store (Submit, and reconcile admitting a user's line)
 	EventFolded     = "folded"      // a repeat was counted into an existing entry rather than added as a line
@@ -437,6 +441,49 @@ const (
 	EventRetired    = "retired"     // an entry left the store
 	EventMerged     = "merged"      // the conductor gave an entry another's wording to fold on; Text is that wording
 	EventLowered    = "lowered"     // the conductor pulled an entry down a rung; Tier is the rung it landed on
+
+	// EventCompacted is the only record that is a STATE rather than an action, and
+	// the only one this store writes about a moment other than the present one.
+	//
+	// It exists because compaction has to be bounded by the number of entries and
+	// not by the history it is replacing. Everything else an entry is made of can
+	// be replayed from action records, but its reinforcement counts cannot be
+	// expressed in fewer records than there were reinforcements — so a compaction
+	// spelled in the existing vocabulary would be exactly as long as the log it
+	// rewrites. This record carries the counts, the tier, the wording, the
+	// provenance and the aliases in one line.
+	//
+	// It is a name of its own rather than a `submitted` record with the extra
+	// fields hung off it, for the reason R6 gave two names of their own: the log
+	// is the operator's history, and a `submitted` stamped with today's date for
+	// an entry they wrote in March is the history telling them something untrue.
+	// The borrowed name would have bought back the provenance and nothing else —
+	// the tiers and the counts are lost either way, as below — at the price of
+	// every compaction record lying about what it is, in the one file that is the
+	// operator's own history. That trade was declined; see Schema.
+	//
+	// A COMPACTED LOG IS A ONE-WAY DOOR, and this is the one place in the store
+	// where a skipped record is not the safe direction.
+	//
+	// A build that does not know the name parses the line, BURNS the id — that
+	// happens before the switch, for every record — and then skips it. No id is
+	// reissued and no text is destroyed, so far so good. But the entry itself
+	// never gets built, so score.md's line arrives at reconcile as an id nothing
+	// in the log names, and the recovery table's rule for that is to admit it as
+	// a USER-SOURCED entry (see reconcileLocked). Measured on a real store: 1400
+	// agent-sourced entries came back as the operator's, every tier reset to 1 and
+	// every reinforcement and user-signal count zeroed — and re-upgrading does not
+	// repair it, because the older build has by then rewritten the log with those
+	// records as the truth.
+	//
+	// Losing the tiers and counts would be under-claiming. Restating an agent's
+	// entry as something the operator said is the store asserting the one fact
+	// invariant I6 exists to keep it from asserting, and #38 §4 turns on. So this
+	// is stated rather than defended: past a compaction the store is readable only
+	// by a build that knows this name, and an operator who may roll a binary back
+	// should copy score.dir before the first boot that compacts. docs/SCORE.md
+	// says so in the operator's words.
+	EventCompacted = "compacted" // a compaction carried this entry's whole current state forward; see compactLocked
 )
 
 // SourceUser and SourceAgent are the two sources a reinforcement can carry, and
@@ -481,30 +528,6 @@ const sourceRecovery = "recovery"
 // supplies it: the store writes it, on the one path only the conductor reaches.
 const sourceConductor = "conductor"
 
-// seedHeader is what an ABSENT score.md is written back as: comment lines that
-// teach the entry format by showing one.
-//
-// They are deliberately NOT entries. An earlier shape seeded two real entries
-// flagged as demo data and filtered them out at render time, but that flag lived
-// only in score.json — which this package's own doctrine calls a disposable
-// cache — so deleting the snapshot rebuilt them as ordinary entries and put
-// "demo: …" back into every agent's brief. Lines that parseLine already skips
-// need no flag, no cache, and no rebuild rule that a later issue has to
-// remember: they cannot become entries, because they never were.
-// The last line is the only place an operator learns the one undo the store
-// has. Nothing demotes an entry (#37), so a tier granted in error would look
-// permanent — but deleting a line's id retires that entry and admits its text
-// afresh at tier 1, in a single save, with the old entry's whole history intact
-// in the log (I7). It matters more since R4: the top tier is now reachable, and
-// a brief that coincidentally matched an entry is exactly the kind of promotion
-// an operator wants to take back.
-var seedHeader = []string{
-	"# This file is baton's fleet memory — one entry per line, like:",
-	"#   - [e7f3a2] the agent was asked to gain permission",
-	"# Edit or delete lines freely; anything that is not an entry is ignored.",
-	"# Deleting a line's [id] starts that entry over: same text, back at the bottom.",
-}
-
 // Provenance records where an entry came from, so the ranking can weight an
 // entry by the panel, profile, group, and directory that produced it. See
 // Factors for which of these fields the ranking actually reads.
@@ -529,8 +552,8 @@ type Provenance struct {
 }
 
 // Entry is one remembered note. Its id is a short hex handle (like "e7f3a2")
-// stable across snapshot rewrites, so score.md lines, log events, and the
-// snapshot all name the same entry.
+// stable for the entry's whole life, so a score.md line and every log record
+// about it name the same entry.
 type Entry struct {
 	Id   string `json:"id"`
 	Text string `json:"text"`
@@ -561,8 +584,8 @@ type Entry struct {
 	Aliases []string `json:"aliases,omitempty"`
 
 	// norm is Text's folding key, computed where the text is set rather than once
-	// per pass. Unexported, so it never reaches score.json — it is derived, and a
-	// cache inside a cache is one more thing that can stop being true. Every
+	// per pass. Unexported, so it reaches no file — it is derived from Text, and
+	// a stored copy is one more thing that can stop being true. Every
 	// reconcile pass over an edited file used to normalise every entry again; at
 	// a few thousand entries that was the pass's whole allocation budget, and the
 	// pass runs on the dispatch path while the operator is still typing.
@@ -750,14 +773,65 @@ type Health struct {
 	// an operator must not have to read the log to learn why their edit is not
 	// taking effect.
 	Oversized int
-	// TornEvents is how many unparsable log lines were skipped at Open, and
-	// CacheWriteFailures how many score.json rewrites failed. Neither costs any
-	// data — the first is a torn append, the second a cache the store rebuilds
-	// from the log — but a rising CacheWriteFailures is the early symptom of the
-	// full or read-only disk that will break the next append, which does.
+	// TornEvents is how many unparsable log lines were skipped at Open. It costs
+	// no data: an append-only file can only be damaged in its last record, and
+	// appendDurable unwinds every failure it can see coming, so what this counts
+	// is the tail a crash tore off.
+	//
+	// CompactionFailures is 0 or 1 and never a running total: it says whether THE
+	// LAST rewrite failed. A rewrite that lands clears it and the words below, one
+	// that fails sets both, and a pass that declined before reaching the write
+	// leaves the last answer standing. Compacted, LogBefore and LogAfter say
+	// something else — see there — and compactLocked writes all five, which is
+	// what keeps the two rules in one place instead of one here and one in a
+	// caller.
+	//
+	// It costs no data: the rewrite is atomic, so the old log is intact and the
+	// store is fully open. What it costs is the bound, so the next boot is slower
+	// than this one and every one after it slower again, which is a symptom with
+	// no other symptom.
+	//
+	// CompactionError is that failure's own words, and it is here because the
+	// counter alone reaches the operator as a number: a full-disk boot said
+	// `compaction_failures=1` and never "no space left on device", which is the
+	// half that tells them what to do about it. A string rather than an error so
+	// Health stays comparable — several callers ask whether it is the zero value.
+	// Empty when the rewrite did not fail, including when it never ran.
 	TornEvents         int
-	CacheWriteFailures int
-	// The three things the store does quietly and correctly, counted because
+	CompactionFailures int
+	CompactionError    string
+	// LogBefore and LogAfter are the event log's size on either side of the last
+	// rewrite that LANDED, and zero when none has. Deliberately not cleared by a
+	// later rewrite that failed, unlike CompactionFailures: these describe the
+	// file that is on disk, and it is still the one the boot compacted. They are
+	// the only place an operator can see the growth this exists to bound — the
+	// record count says how much the store remembers, not how much the file had
+	// swollen to holding it.
+	LogBefore int64
+	LogAfter  int64
+	// WriteFailing is whether the store's LAST durable append did not land. It
+	// latches on a failed append and clears on the next one that succeeds, so it
+	// is a fact about the store rather than a count of episodes.
+	//
+	// It exists because a store on a read-only mount reads perfectly: the boot
+	// replays, every view reconciles, and score.status answers `available: true,
+	// entries: 756` while every submission is refused. #38's invariant I8 names
+	// three states and that is a fourth — the one that lies.
+	//
+	// It is REPORTED rather than probed, which is the whole of why it is here and
+	// not in Open. A probe at open answers a question about the past: a mount that
+	// goes read-only at three in the morning was writable when it was asked, and
+	// the daemon would go on saying so. This says only what happened, and it
+	// un-says it by itself when the mount comes back. The cost is that an idle
+	// fleet on a dead mount reports nothing until something tries to write, which
+	// is honestly "no evidence of a problem" rather than a claim of health.
+	//
+	// It is the one field of this struct that is NOT kept under the store mutex;
+	// see Store.writeFailing and Store.WriteFailing, which is the accessor
+	// anything reporting on a hung write must use. Health fills it in for the
+	// callers that want the whole picture in one value.
+	WriteFailing bool
+	// The four things the store does quietly and correctly, counted because
 	// each is otherwise discoverable only by subtracting one number from
 	// another — and because each of them is the store choosing to remember
 	// less, which an operator is entitled to see it doing.
@@ -769,9 +843,16 @@ type Health struct {
 	// and twenty-eight of them says so. AliasEvictions is prior wordings pushed
 	// out of an entry by maxAliases, each one a phrasing that will no longer
 	// fold — the entry it would have joined simply gains a twin instead.
+	// Compacted is the fourth and by far the largest: how many records the last
+	// rewrite that LANDED wrote, and 0 when none has — the same rule as
+	// LogBefore. A store whose log went from two
+	// hundred thousand records to four hundred has forgotten who said what and
+	// when, and kept every entry and every id; see compactLocked for exactly
+	// which of those is which.
 	SwallowedRepeats int
 	UnreportedFolds  int
 	AliasEvictions   int
+	Compacted        int
 	// RejectedTiers is how many tier records the replay refused: a `raised`
 	// naming a tier this build will not grant, and a `lowered` naming one that is
 	// not strictly below the rung the entry is already on. Two records, one
@@ -956,15 +1037,9 @@ type View struct {
 	Unlocked  bool // the store is running without its single-writer claim
 }
 
-// snapshot is the persisted shape of score.json: a cache of the log's fold.
-type snapshot struct {
-	Schema  int              `json:"schema"`
-	Entries map[string]Entry `json:"entries"`
-}
-
 // event is one line of score-events.jsonl. Text and Prov are what make the log
 // replayable on its own: without them a rebuilt entry would have no wording and
-// no source, and score.json could not be regenerated from the log alone.
+// no source, and the log is the only thing an entry is ever rebuilt from.
 type event struct {
 	Schema int         `json:"schema"`
 	Event  string      `json:"event"`
@@ -993,6 +1068,14 @@ type event struct {
 	// field existed decodes with it false and simply seeds nothing — which is
 	// the pre-derivation behaviour, not a wrong one.
 	RemovedLine bool `json:"removed_line,omitempty"`
+	// Reinforcements, UserSignals and Aliases are the parts of an entry that no
+	// other record carries, and they appear on EventCompacted alone. Every other
+	// name leaves them zero and replay reads them nowhere else: a fold's count is
+	// the fold itself, and an alias is the `edited` or `merged` record that
+	// created it. See EventCompacted.
+	Reinforcements int      `json:"reinforcements,omitempty"`
+	UserSignals    int      `json:"user_signals,omitempty"`
+	Aliases        []string `json:"aliases,omitempty"`
 	// Signal marks a fold that came through Store.Signal — a brief the user
 	// dispatched — rather than through a submission or a duplicate line.
 	//
@@ -1009,8 +1092,8 @@ type event struct {
 // foldEvent records one repeat counted into id. It carries the REPEAT's own text
 // and provenance, not the entry's: a fold is the one mutation whose input
 // reaches no file otherwise — score.md keeps the wording that was already there
-// and score.json keeps a count — so without them the store could say how often
-// something has been said but never who said it, which is what #38 leans on
+// and nothing else records the repeat — so without them the store could say how
+// often something has been said but never who said it, which is what #38 leans on
 // where it declines to police the content of a submission.
 //
 // The event is EventFolded whoever repeated the wording, and "user" or "agent"
@@ -1038,10 +1121,21 @@ type Store struct {
 	boot    Delta               // what Open's recovery pass did to the operator's files
 	health  Health
 
-	// The three files' paths, joined once here because dir is immutable after
-	// Open and all three are read or written on the dispatch path.
+	// writeFailing is Health.WriteFailing's home, and it is an atomic rather than
+	// a field of health for one reason: the thing that reads it is reporting on a
+	// write that may be HUNG.
+	//
+	// Every durable append runs with mu held, so on a read-only or dead mount the
+	// fsync that is failing holds the lock for as long as the filesystem takes to
+	// say so. A reader that took the same lock to ask "are the writes landing"
+	// would queue behind exactly the write it exists to report, and score.status
+	// would hang alongside it. It is a single latched bit written in one place —
+	// appendEvents — so an atomic costs nothing and answers immediately.
+	writeFailing atomic.Bool
+
+	// The two files' paths, joined once here because dir is immutable after Open
+	// and both are read or written on the dispatch path.
 	mdPath     string
-	jsonPath   string
 	eventsPath string
 
 	// The last-seen fingerprint of score.md, which gates the read paths: a
@@ -1107,10 +1201,10 @@ type Store struct {
 	// order reach an answer (invariant I1). addOwed keeps them deduplicated and
 	// bounded; see maxOwedRemovals.
 	//
-	// It is never written down. Persisting it would put recovery-relevant state
-	// in score.json, the one file #38 calls a disposable cache and Open never
-	// reads — the mistake the S0 demo flag made, provable by deleting the
-	// snapshot and watching the behaviour change. It survives a restart by being
+	// It is never written down. There is no file to write it to that is not the
+	// log itself, and a debt is not an event — writing it as one would put a
+	// record in the operator's history for something that merely has not happened
+	// yet. It survives a restart by being
 	// DERIVED instead, at Open, from the two things that are true: the fold event
 	// records the wording it removed (event.RemovedLine), and score.md either
 	// still shows those exact bytes or does not.
@@ -1145,6 +1239,17 @@ type Store struct {
 // errDisabled is returned by mutations on the disabled (nil) store.
 var errDisabled = errors.New("score is disabled")
 
+// ErrSubmissionText marks the two refusals Submit makes at its own boundary,
+// BEFORE the store touches the disk: text that sanitised away to nothing, and
+// text past maxEntryRunes.
+//
+// It is exported so a caller can tell those apart from a durable write that did
+// not land, because the two have different audiences and only one of them is an
+// operator's problem. The daemon warns about a broken store on the line an
+// operator greps for exactly that; without this an agent sending spaces produces
+// the same line, and a line anyone can manufacture is one nobody can act on.
+var ErrSubmissionText = errors.New("score: submission refused")
+
 // Open opens (or creates) the store in dir under the policy p, clamped as
 // Policy.clamp describes, so a zero field from a config key nobody wrote lands
 // on this package's default. The directory is created 0700 and every file 0600.
@@ -1166,13 +1271,13 @@ var errDisabled = errors.New("score is disabled")
 //
 // SINGLE WRITER. Open takes an exclusive advisory lock on score.lock and holds
 // it until Close. Two daemons on two sockets both default to $HOME/.baton — and
-// BATON_SOCK is the documented way to run a second fleet — so they would share
-// one score.json.tmp and one in-memory view of the same files: their snapshots
-// clobber each other and their entry sets silently diverge. The lock is
-// preferred over merely documenting "run one daemon" because the store is a
-// cache-plus-log pair whose consistency it cannot check after the fact — an
-// unenforced rule here fails silently, and the loser of the race is the
-// operator's own text. The second daemon's Open fails with a plain message the
+// BATON_SOCK is the documented way to run a second fleet — so they would append
+// to one log and rewrite one score.md from two in-memory views of it: their
+// entry sets silently diverge and each one's rewrite drops the other's lines.
+// The lock is preferred over merely documenting "run one daemon" because the
+// store cannot check either file's consistency after the fact — an unenforced
+// rule here fails silently, and the loser of the race is the operator's own
+// text. The second daemon's Open fails with a plain message the
 // server reports through score.status and score.submit, rather than leaving the
 // operator to guess why their memory is empty. It is the same idiom the daemon
 // already uses for the fleet itself, over paths.LockFile (see lock_unix.go).
@@ -1184,9 +1289,14 @@ var errDisabled = errors.New("score is disabled")
 //
 // Boot then applies #38 §3's recovery table: the log is replayed for every
 // entry's bookkeeping and for the set of ids that may never be reissued, and
-// one reconcile pass over score.md decides existence and text. A corrupt
-// score.json is never even read, and a torn last line in the event log is
-// skipped and counted (see Recovery) rather than failing Open.
+// one reconcile pass over score.md decides existence and text. A torn last line
+// in the event log is skipped and counted (see Health.TornEvents) rather than
+// failing Open.
+//
+// Boot is also where the log is BOUNDED. Past compactAtBytes the recovery pass
+// is followed by a rewrite to one record per id, which is why a long-lived
+// store's boot cost tracks what it remembers rather than everything it has ever
+// been told; see compactLocked, including what that rewrite destroys.
 //
 // Open calls the *Locked helpers without holding the mutex — the store is not
 // published to any other goroutine until Open returns, so their "caller holds
@@ -1210,6 +1320,7 @@ func Open(dir string, p Policy) (s *Store, err error) {
 		}
 	}()
 
+	s.sweepTempLocked()
 	if err = s.replayLocked(); err != nil {
 		return s, err
 	}
@@ -1220,27 +1331,67 @@ func Open(dir string, p Policy) (s *Store, err error) {
 	if s.boot, err = s.reconcileLocked(fi, exists); err != nil {
 		return s, err
 	}
-	// Settle what the boot pass did not. #38's first verification check — delete
-	// score.json, restart, and the rebuilt cache is byte-identical — has to hold
-	// on a boot that changed nothing too, and a pass that DID change something
-	// has already written the snapshot itself. Gating on the delta is what keeps
-	// that from being two full rewrites and four fsyncs on every such boot.
+	// Settle what the boot pass did not: a pass that changed something has already
+	// recounted, and one that changed nothing still has to, because the gauge is
+	// computed over an entry set the replay built.
 	if s.boot == (Delta{}) {
-		s.commitLocked()
+		s.recountOversizedLocked()
 	}
+	// Bound the log, LAST: it rewrites the file the replay above was built from,
+	// so it runs only once the recovery pass has settled every debt and memory
+	// agrees with both files.
+	//
+	// Its failure is RECORDED rather than returned — the store is fully open and
+	// correct either way, and refusing a fleet its memory because a file could not
+	// be shrunk is the wrong trade. Recorded by compactLocked, which keeps all
+	// five of its own Health fields, including the error's own words; the boot
+	// adds nothing to what it reports, so a caller that is not a boot does not
+	// have to know to.
+	_, _ = s.compactLocked(compactAtBytes)
 	return s, nil
 }
 
-// newStore assembles a store over dir with its three file paths joined once —
-// dir is immutable afterwards and all three are touched on the dispatch path —
-// and under the policy it will spend its whole life comparing against unless a
+// sweepTempLocked removes the sibling temp files writeFileAtomic works through,
+// if a previous process died between creating one and renaming it. The caller
+// holds the lock, and Open holds the DIRECTORY's claim by the time this runs, so
+// no other daemon can be mid-rename on the name being removed.
+//
+// writeFileAtomic unwinds every failure it can see, so this only ever finds what
+// a signal left: one kill -9 in 40 trials landed a score-events.jsonl.tmp in the
+// operator's directory, where nothing read it and nothing would ever remove it.
+// Bounded at two fixed names, so the debris is small — and left there it is
+// still debris the store put in a directory a person looks at.
+//
+// This is not the rule about score.json. The store does not delete the
+// OPERATOR's files, and a stale score.json from an older build stays where it
+// is for them to remove; these two are the store's own, written by this package,
+// under names nothing else may use. Errors are ignored: a temp file that cannot
+// be removed is not a reason to refuse a fleet its memory.
+//
+// REGULAR FILES ONLY, which is the whole of what this may undo. writeFileAtomic
+// creates its sibling with O_CREATE and never anything else, so a directory
+// under that name was put there by something that is not this package — and
+// os.Remove takes an empty directory as happily as a file. Sweeping one would
+// widen "clean up after yourself" into "clear whatever is in my way", on a path
+// the operator can reach.
+func (s *Store) sweepTempLocked() {
+	for _, path := range []string{s.eventsPath, s.mdPath} {
+		tmp := path + tempSuffix
+		if fi, err := os.Lstat(tmp); err == nil && fi.Mode().IsRegular() {
+			_ = os.Remove(tmp)
+		}
+	}
+}
+
+// newStore assembles a store over dir with both its file paths joined once —
+// dir is immutable afterwards and both are touched on the dispatch path — and
+// under the policy it will spend its whole life comparing against unless a
 // reload retunes it. Open adds the directory claim and the recovery pass.
 func newStore(dir string, p Policy) *Store {
 	return &Store{
 		dir: dir, burned: map[string]struct{}{}, policy: p.clamp(),
 		lastAt:     map[string]int{},
 		mdPath:     filepath.Join(dir, scoreMD),
-		jsonPath:   filepath.Join(dir, scoreJSON),
 		eventsPath: filepath.Join(dir, scoreEvents),
 	}
 }
@@ -1361,13 +1512,30 @@ func (s *Store) Boot() Delta {
 
 // Health is what the store is currently withholding and what has gone wrong
 // since Open. Zero on the disabled (nil) store.
+//
+// It takes the store mutex, so it is not the way to ask about a store whose
+// writes may be hung: see WriteFailing, which is the field that answers that
+// and the one this fills in without the lock.
 func (s *Store) Health() Health {
 	if s == nil {
 		return Health{}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.health
+	h := s.health
+	h.WriteFailing = s.writeFailing.Load()
+	return h
+}
+
+// WriteFailing is whether the store's last durable append did not land, read
+// WITHOUT the store mutex. False on the disabled (nil) store.
+//
+// It is its own accessor because it is the one thing about the store that is
+// worth asking while a write is stuck: every append holds the mutex across its
+// fsync, so a caller that reached this through Health would wait on the very
+// write it is reporting. See Health.WriteFailing for what the bit means.
+func (s *Store) WriteFailing() bool {
+	return s != nil && s.writeFailing.Load()
 }
 
 // Reconcile folds operator edits of score.md back into the store: a reworded
@@ -1623,8 +1791,8 @@ func (s *Store) appendMDLocked(line string) error {
 // most. apply reports its own failure (submitLocked has a score.md line to
 // append between the two), and memory that never landed is not committed.
 //
-// The commit is not part of the outcome; see refreshCacheLocked. The caller
-// holds the lock.
+// The recount is not part of the outcome: it reads the entry set apply has just
+// settled and can neither fail nor undo it. The caller holds the lock.
 func (s *Store) applyLocked(evs []event, apply func() error) error {
 	if err := s.appendEvents(evs); err != nil {
 		return err
@@ -1632,17 +1800,8 @@ func (s *Store) applyLocked(evs []event, apply func() error) error {
 	if err := apply(); err != nil {
 		return err
 	}
-	s.commitLocked()
-	return nil
-}
-
-// commitLocked settles what a mutation leaves behind: the gauge of entries too
-// heavy to inject, and the score.json cache. Every path that changes the entry
-// set ends here, so neither can be forgotten by one added later. The caller
-// holds the lock.
-func (s *Store) commitLocked() {
 	s.recountOversizedLocked()
-	s.refreshCacheLocked()
+	return nil
 }
 
 // Submit records a note with its provenance and returns the entry it landed in,
@@ -1667,9 +1826,9 @@ func (s *Store) Submit(text string, prov Provenance) (Entry, bool, error) {
 	e := newEntry("", text, prov)
 	switch {
 	case e.Text == "":
-		return Entry{}, false, errors.New("score: empty submission")
+		return Entry{}, false, fmt.Errorf("%w: the text is empty", ErrSubmissionText)
 	case !e.Injectable():
-		return Entry{}, false, fmt.Errorf("score: submission is %d runes, limit is %d", len([]rune(e.Text)), maxEntryRunes)
+		return Entry{}, false, fmt.Errorf("%w: %d runes, limit is %d", ErrSubmissionText, len([]rune(e.Text)), maxEntryRunes)
 	}
 
 	s.mu.Lock()
@@ -2346,16 +2505,13 @@ func (s *Store) mergeLocked(keep int, other string) error {
 	var evictions int
 	alias(&survivor, absorbed.Text, &evictions)
 	// The append and the memory move by hand rather than through applyLocked, for
-	// the one thing applyLocked would add: its commitLocked. This is the only
-	// mutation the store makes in two durable steps, so it is the only one that
-	// would rewrite score.json TWICE — and the state that first snapshot
-	// describes (the survivor holding the alias, the absorbed entry still live)
-	// never leaves this hold of the mutex, so nothing can read it back. It is a
-	// whole-store map, a MarshalIndent and an atomic write with two fsyncs, paid
-	// inside the stall Store.View takes behind this lock and growing with the
-	// store: at a thousand entries it was half of a merge's allocations. The
-	// retire below carries the one commit for both halves. The ORDER argued above
-	// is untouched — this moves the cache, never the log.
+	// the one thing applyLocked would add: its recount. This is the only mutation
+	// the store makes in two durable steps, and the state the first of them
+	// describes — the survivor holding the alias, the absorbed entry still live —
+	// never leaves this hold of the mutex, so a gauge computed over it could
+	// never be read before the second step recomputed it. The retire below
+	// carries the one recount for both halves. The ORDER argued above is
+	// untouched: this moves memory, never the log.
 	if err := s.appendEvents([]event{{
 		Schema: Schema, Event: EventMerged, Id: survivor.Id, At: now,
 		Source: sourceConductor, Text: absorbed.Text,
@@ -2533,11 +2689,11 @@ func (s *Store) replaceMDLineLocked(id, repl string) error {
 // block stops on a whole entry once its rune backstop is spent (maxBlockRunes).
 // Explain is where those are told apart, one Standing per entry.
 //
-// Everything it returns is injected into a real agent's brief, so nothing the
-// store seeds may reach it — which is why an absent score.md is written back as
-// comment lines rather than entries — and nothing over the weight cap may reach
-// it either, which is why an over-long operator line is skipped here rather
-// than refused at the file (maxEntryRunes).
+// Everything it returns is injected into a real agent's brief, so it carries
+// only what the fleet earned — the store seeds nothing, so there is nothing else
+// for it to carry — and nothing over the weight cap reaches it either, which is
+// why an over-long operator line is skipped here rather than refused at the file
+// (maxEntryRunes).
 //
 // Render does NOT reconcile: the caller does, once per read path, so that a
 // status reply's Len and Render see one consistent view and the store never
@@ -2960,11 +3116,7 @@ func tierWording(tier int) string {
 // where it is stated: the log goes first, then score.md, and memory only after
 // both landed, so a failure at either step returns an error with the entry
 // absent from memory, from Render, and — after the next boot's recovery pass,
-// which retires a logged entry score.md lacks — from the store. The snapshot
-// comes last and its failure is NOT an error, because score.json is a cache this
-// package rebuilds from the log at every Open: reporting a failed cache refresh
-// as a failed submission would tell the caller nothing was stored when the entry
-// is durable in two files.
+// which retires a logged entry score.md lacks — from the store.
 func (s *Store) submitLocked(text string, prov Provenance) (Entry, error) {
 	id, err := s.newIDLocked()
 	if err != nil {
@@ -3023,7 +3175,12 @@ func (s *Store) replayLocked() error {
 		s.burned[ev.Id] = struct{}{}
 		s.noteEventLocked(ev)
 		switch ev.Event {
-		case EventSubmitted:
+		case EventSubmitted, EventCompacted:
+			// One arm, because a `compacted` record is written where a `submitted`
+			// would be — see EventCompacted for why it is a record of its own — so
+			// it OPENS the entry in exactly the same way. What it adds is the state
+			// a submission has not accumulated yet, and that is all the inner
+			// branch below does.
 			if !placed[ev.Id] {
 				order = append(order, ev.Id)
 				placed[ev.Id] = true
@@ -3037,9 +3194,26 @@ func (s *Store) replayLocked() error {
 				// carried the source as a plain field. Take it: R3 ranks on
 				// provenance and I6 rests on the user/agent distinction, so
 				// "unknown" is a worse default than the one fact the line has.
+				// It cannot fire for a `compacted` record — nothing before R7 wrote
+				// one, so every one of them carries the object.
 				prov.Source = ev.Source
 			}
 			e := newEntry(ev.Id, ev.Text, prov)
+			if ev.Event == EventCompacted {
+				// The whole entry from one record: the counts and the tier are read
+				// OFF it rather than counted up out of the log, which is the only
+				// reason the record exists. A compaction this daemon wrote can only
+				// carry a rung the ladder already granted, so grantTier's refusal
+				// never fires on its own log.
+				e.Reinforcements, e.UserSignals = ev.Reinforcements, ev.UserSignals
+				grantTier(&e, ev.Tier, maxEarnedTier, &s.health.RejectedTiers)
+				// Through alias rather than assigned, so the record's list is
+				// deduplicated by folding key and capped at maxAliases on the way in,
+				// exactly as every other path that gives an entry a prior wording is.
+				for _, a := range ev.Aliases {
+					alias(&e, a, &s.health.AliasEvictions)
+				}
+			}
 			live[ev.Id] = &e
 		case EventFolded, EventUserSignal:
 			if e := live[ev.Id]; e != nil {
@@ -3078,33 +3252,16 @@ func (s *Store) replayLocked() error {
 			// entries back down.
 			//
 			// It is bounded by maxEarnedTier — the ladder's end — so an entry can
-			// never be rendered at a rung tierWording has no words for. It is one
-			// of the three tier writes TestEveryTierWriteIsRegistered knows about.
-			// It is deliberately NOT bounded by Policy.ceiling,
-			// which is the computed path's bound: ceiling reads a threshold this
-			// machine configures, so replaying through it would give one log two
-			// different sets of tiers on two machines, which is invariant I1
-			// exactly. I6 is not weakened by that, because the only thing that
-			// ever writes a raised event past agentEarnedTier is reinforceLocked
-			// with the user's signals behind it.
-			//
-			// A raise above the bound is IGNORED rather than lowered to it: a
-			// record that cannot be true is not evidence of a smaller true one, so
-			// the entry keeps the tier it earned and this build under-claims
-			// rather than lies, as panel.ParseState does for a state string it
-			// does not know. The log is the operator's own file and #38 declines
-			// to be a boundary against filesystem access, so this guards the
-			// constant, not them.
-			switch e := live[ev.Id]; {
-			case e == nil:
-			case ev.Tier >= 1 && ev.Tier <= maxEarnedTier:
-				e.Tier = ev.Tier
-			default:
-				// Counted rather than merely ignored: a log that asks for a tier
-				// this build will not grant is a fact about the log, and silence
-				// about it is how an operator ends up asking why an entry reads as
-				// "noted" when the history says otherwise.
-				s.health.RejectedTiers++
+			// never be rendered at a rung tierWording has no words for; see
+			// grantTier, which holds the bound and the refusal for all three record
+			// types that name a tier. I6 is not weakened by the bound being the
+			// ladder rather than Policy.ceiling, because the only thing that ever
+			// writes a raised event past agentEarnedTier is reinforceLocked with
+			// the user's signals behind it. The log is the operator's own file and
+			// #38 declines to be a boundary against filesystem access, so this
+			// guards the constant, not them.
+			if e := live[ev.Id]; e != nil {
+				grantTier(e, ev.Tier, maxEarnedTier, &s.health.RejectedTiers)
 			}
 		case EventEdited:
 			if e := live[ev.Id]; e != nil {
@@ -3126,19 +3283,16 @@ func (s *Store) replayLocked() error {
 				alias(e, ev.Text, &s.health.AliasEvictions)
 			}
 		case EventLowered:
-			// A `lowered` record may only move a tier DOWN, and the guard is what
-			// makes invariant I6 hold across a RESTART as well as across a call.
-			// lowerLocked can write nothing else — it decrements — so on a log this
-			// daemon wrote the guard never fires; what it stops is a hand-edited
-			// log turning the conductor's one demotion into a promotion the ladder
-			// never granted. Rejected rather than clamped, and counted, exactly as
-			// an out-of-range `raised` record is.
-			switch e := live[ev.Id]; {
-			case e == nil:
-			case ev.Tier >= 1 && ev.Tier < e.Tier:
-				e.Tier = ev.Tier
-			default:
-				s.health.RejectedTiers++
+			// A `lowered` record may only move a tier DOWN, which is what makes
+			// invariant I6 hold across a RESTART as well as across a call. The
+			// bound handed to grantTier is therefore the rung BELOW the one the
+			// entry is standing on rather than the ladder's end. lowerLocked can
+			// write nothing else — it decrements — so on a log this daemon wrote
+			// the refusal never fires; what it stops is a hand-edited log turning
+			// the conductor's one demotion into a promotion the ladder never
+			// granted.
+			if e := live[ev.Id]; e != nil {
+				grantTier(e, ev.Tier, e.Tier-1, &s.health.RejectedTiers)
 			}
 		case EventRetired:
 			delete(live, ev.Id)
@@ -3169,6 +3323,245 @@ func (s *Store) replayLocked() error {
 		}
 	}
 	return nil
+}
+
+// compactAtBytes is the size score-events.jsonl must EXCEED at Open before the
+// boot rewrites it.
+//
+// The number is chosen from the BOOT it buys, because the file's size is only a
+// proxy for the thing that hurts. cmd/baton binds the daemon's listener before
+// it opens the store, so every millisecond the replay spends is a millisecond a
+// cockpit that has already connected sits with nothing to read.
+//
+// Measured on this store's own records — a submission plus its repeats, which
+// average 197 bytes a record: a submission carrying text and full provenance
+// runs to 299 bytes on the line and the repeat that follows it to 96 — the
+// replay costs about 9 ms and 3 MB of transient heap per megabyte of log, and it
+// is linear: 51.9 MB booted in 461-512 ms allocating ~148 MB, 13.0 MB in 115-134
+// ms, 2.6 MB in ~24 ms. Eight mebibytes is therefore around 75 ms and 24 MB,
+// which is the budget this picks — measurable on a stopwatch, invisible to a
+// person starting a daemon.
+//
+// This is the derivation's one home: it is what the next person tuning the
+// number reads. TestCompactAtBytesIsBoundedBothWays, which pins the constant
+// against a measurement rather than against another constant, points here for it
+// rather than deriving it a second time in digits of its own.
+//
+// It is far below internal/panellog's DefaultMaxMB of 64, which is the same
+// shape answering a different pressure: a panel log is written once and read by
+// a person, while this file is read in FULL at every boot, so what has to bound
+// it is not the disk it sits on.
+//
+// What compaction then delivers is not a bound on the log's size but a bound on
+// its SHAPE: one record per id the log has ever named, so a fleet's boot cost
+// stops tracking how much it has said and starts tracking how much it remembers.
+// A store that has issued more ids than this budget covers is not bounded by it
+// at all — see compactLocked, which declines a rewrite that would not shrink the
+// file rather than repeating it at every boot.
+const compactAtBytes = 8 << 20
+
+// compactLocked rewrites the event log to one record per id the log has ever
+// named, and reports how many records it wrote; zero means it did not run. The
+// caller holds the lock.
+//
+// It is one callable unit, which is why it keeps its OWN bookkeeping: all five
+// of Health's compaction fields — Compacted, LogBefore, LogAfter,
+// CompactionFailures and CompactionError — are written here, so a caller that is
+// not Open needs no knowledge of a half of the reporting that used to sit in
+// Open. What each of the five means across more than one call is settled on the
+// fields themselves; see Health.CompactionFailures.
+//
+// It runs at boot, past maxBytes, and nowhere else. It is the one operation that
+// rewrites the file every other operation appends to, and the boot is the only
+// moment at which nothing else in this process can be reading it.
+//
+// WHAT IT KEEPS. One EventCompacted record per live entry, carrying that entry's
+// whole current state, and one bare `retired` record per id that is burned but
+// no longer live. The second half is load-bearing rather than tidy: `burned` is
+// built from the log and from nothing else, and newIDLocked draws against it, so
+// a compaction that wrote only the live entries would free every retired id for
+// reissue and graft a dead entry's history onto the next newcomer that drew one.
+// That is the corruption R1 spent a round closing, and dropping the snapshot
+// leaves no second file for `burned` to have lived in.
+//
+// WHAT IT DESTROYS, said plainly, because compaction is the only thing in this
+// package that destroys anything: every action record it replaces. Who repeated
+// a wording and when, which brief counted as a signal, what a retired entry used
+// to say. And a TORN TAIL, which is not an action record it replaces: the
+// rewrite is built from what the replay parsed, so the half-line a crash left on
+// the end of the old file is not carried into the new one. It costs nothing that
+// was ever readable — replayLocked already skipped it and counted it on
+// Health.TornEvents — but the bytes stop being on disk, which is where a person
+// reading the file by hand would have found them.
+// A LIVE entry's superseded wordings survive as its aliases, so I7's
+// "the text they replace stays in the log" still holds for supersede and for
+// lower; a retired entry's text does not, because carrying it here would mean
+// holding every retirement the store has ever made in memory for the whole life
+// of the daemon, which is the unbounded growth this exists to stop.
+//
+// WHAT IT MOVES. Recency is a position in the log, so rewriting the log rewrites
+// every position. The ORDER survives — the live entries are written in their
+// existing last-movement order, so the entry that moved most recently still sits
+// highest — but the SPACING does not: entries at positions 10, 5000 and 200000
+// come back at 1, 2 and 3, and recencyFactor slides linearly between the oldest
+// and the newest, so their recency multipliers change even though their order
+// does not. I5 is untouched, since no clock is reachable from here, and so is
+// I1, since the compacted log replays identically on every machine. What an
+// operator may see is a working set reordered by some other dimension winning a
+// comparison recency used to decide.
+//
+// WHEN IT DECLINES. Each has a test that it declines, and a test that the same
+// store compacts once the condition is gone — the second half being the one R6
+// went a round without, since a guard that never lets anything through passes
+// every test that only checks it fires.
+//
+//   - the log is at or below maxBytes. The ordinary case, and the reason an
+//     ordinary store is never silently rewritten.
+//   - the store owes a removal (Store.owed). The debt is DERIVED from the very
+//     fold records a compaction drops, so compacting over one would let a later
+//     boot count a duplicate line the store has already folded — the tier ladder
+//     the owed bookkeeping exists to prevent.
+//     UNREACHABLE FROM Open, and said so rather than left to be re-derived by
+//     whoever reads this next: Open returns early on a reconcile error, and every
+//     nil-error return of reconcileLocked clears s.owed first, so the debt is
+//     always empty by the time the boot reaches here. What this guards is a
+//     DIRECT call — the only kind that can arrive holding one — which is exactly
+//     what its test makes.
+//   - the log named no ids at all. A file over the threshold that parsed into
+//     nothing is not a log this store wrote, and replacing it with an empty one
+//     would destroy the only copy of whatever it is.
+//   - the rewrite would not be smaller than what is already there. A store
+//     holding more burned ids than the threshold covers is as compact as this
+//     can make it, and without the check it would rewrite the same file at every
+//     boot for the rest of its life. The comparison is on BYTES, which is why the
+//     timestamp below is truncated to the second: time.Time marshals RFC 3339
+//     with its trailing zeros trimmed, so an untruncated stamp makes a record's
+//     width depend on the nanosecond it was written at, and two compactions of
+//     one unchanged store then differ in length by a few bytes in whichever
+//     direction the clock happened to fall.
+//
+// CRASH SAFETY. The rewrite goes through writeFileAtomic: a sibling temp file,
+// fsync, rename, then a parent-directory fsync. rename(2) is atomic, so at every
+// instant score-events.jsonl is either the whole old log or the whole new one,
+// and a crash at any point leaves the next Open a complete file to replay. A
+// failure before the rename leaves the old log byte-for-byte untouched, and is
+// reported rather than raised: a boot that refused to serve a fleet because it
+// could not shrink a file would be the worse outcome by far.
+func (s *Store) compactLocked(maxBytes int64) (int, error) {
+	fi, err := os.Stat(s.eventsPath)
+	switch {
+	case os.IsNotExist(err):
+		return 0, nil
+	case err != nil:
+		return 0, err
+	case fi.Size() <= maxBytes, len(s.owed) > 0, len(s.burned) == 0:
+		return 0, nil
+	}
+
+	// Truncated to the second, so every record this writes is exactly as wide as
+	// the same record written a moment later; see the last refusal above, which
+	// compares the rewrite's size against the file's. Nothing reads a compaction
+	// stamp for anything finer — it is bookkeeping, not a moment in the fleet's
+	// history, and the records it replaces are the ones that carried those.
+	now := time.Now().UTC().Truncate(time.Second)
+	// One pass over the entry set for both things the rewrite needs from it: the
+	// live-id set the burned ids are filtered against, and each entry's log
+	// position, read out of s.lastAt ONCE.
+	//
+	// Read once because the sort below used to read it inside the comparator,
+	// which is two map lookups and two string hashes per comparison — about 1.2
+	// million of them on a 39,500-entry store, and the bulk of what the rewrite
+	// cost. It sorts INDICES into s.entries for the same reason: copying the
+	// entry set only so the sort cannot disturb it is 176 bytes an entry where an
+	// index is 8.
+	live := make(map[string]struct{}, len(s.entries))
+	at := make([]int, len(s.entries))
+	order := make([]int, len(s.entries))
+	for i, e := range s.entries {
+		live[e.Id] = struct{}{}
+		at[i], order[i] = s.lastAt[e.Id], i
+	}
+	// The retired ids go first, and SORTED, because they are read out of a map
+	// and map order reaching the file would give one store two logs on two
+	// machines (invariant I1). They take no ranking position, so their order
+	// costs nothing else either way.
+	dead := make([]string, 0, len(s.burned))
+	for id := range s.burned {
+		if _, ok := live[id]; !ok {
+			dead = append(dead, id)
+		}
+	}
+	slices.Sort(dead)
+	// The live entries in last-movement order, which is what carries recency
+	// across the rewrite.
+	//
+	// There are no ties to break, so the sort needs no stability to be total: a
+	// position is the index of the record that moved the entry, one record names
+	// one id, and seq advances once per record. TestNoTwoLiveEntriesShareALogPosition
+	// asserts it on the side this reads — the positions BEFORE the rewrite.
+	slices.SortFunc(order, func(a, b int) int { return at[a] - at[b] })
+
+	var buf bytes.Buffer
+	// Bounded by the file it has to beat, since anything larger is a rewrite the
+	// size refusal below throws away anyway; 512 bytes a record is comfortably
+	// above the widest one this writes.
+	buf.Grow(int(min(fi.Size(), int64(len(dead)+len(order))*512)))
+	w := newLogWriter(&buf)
+	// Each record is built as it is written rather than collected first. Holding
+	// them all would hold the whole entry set a second time, plus a heap-escaping
+	// Provenance per entry, alongside the fully serialized buffer — and the only
+	// thing the collection ever bought was a second walk, which the positions
+	// below now take over `dead` and `order` instead.
+	for _, id := range dead {
+		if werr := w.write(event{Schema: Schema, Event: EventRetired, Id: id, At: now}); werr != nil {
+			return 0, werr
+		}
+	}
+	for _, i := range order {
+		e := &s.entries[i]
+		if werr := w.write(event{
+			Schema: Schema, Event: EventCompacted, Id: e.Id, At: now,
+			Text: e.Text, Prov: &e.Provenance, Tier: e.Tier,
+			Reinforcements: e.Reinforcements, UserSignals: e.UserSignals, Aliases: e.Aliases,
+		}); werr != nil {
+			return 0, werr
+		}
+	}
+	if int64(buf.Len()) >= fi.Size() {
+		return 0, nil
+	}
+	if err := writeFileAtomic(s.eventsPath, buf.Bytes(), 0o600); err != nil {
+		// The words as well as the count, for the reason Health.CompactionError
+		// gives, and reported here rather than by the caller because a compaction
+		// is one operation and its outcome is one fact.
+		s.health.CompactionFailures, s.health.CompactionError = 1, err.Error()
+		return 0, err
+	}
+	s.health.CompactionFailures, s.health.CompactionError = 0, ""
+	s.health.Compacted = len(dead) + len(order)
+	s.health.LogBefore, s.health.LogAfter = fi.Size(), int64(buf.Len())
+
+	// The store believes in the log that is on disk. The positions are re-derived
+	// through the same function replayLocked uses, over the records in the order
+	// they were just written, so what the store thinks the log says and what its
+	// own next boot will read out of it cannot disagree.
+	//
+	// The records are re-stated rather than kept: noteEventLocked reads an
+	// event's name, its id and its source, and all three are known from which
+	// loop the id came out of — everything in dead is a `retired` and everything
+	// in order a `compacted`, neither of which the source arm can match.
+	//
+	// clear rather than a fresh map: the buckets are the right size already, and
+	// the one being replaced was just read for the sort keys above.
+	s.seq = 0
+	clear(s.lastAt)
+	for _, id := range dead {
+		s.noteEventLocked(event{Event: EventRetired, Id: id})
+	}
+	for _, i := range order {
+		s.noteEventLocked(event{Event: EventCompacted, Id: s.entries[i].Id})
+	}
+	return len(dead) + len(order), nil
 }
 
 // reconcileLocked is #38 §3's table — the boot recovery one and the live-editor
@@ -3213,13 +3606,13 @@ func (s *Store) replayLocked() error {
 // remove the duplicate lines it folded: every other byte of the operator's file
 // is preserved verbatim.
 func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err error) {
-	// The gauge and the cache follow the entry set, and this is the only place a
-	// pass can have moved it — however the pass returns, including the early exit
-	// for an absent score.md and the file rewrite that failed after its events
-	// were already durable.
+	// The gauge follows the entry set, and this is the only place a pass can have
+	// moved it — however the pass returns, including the early exit for an absent
+	// score.md and the file rewrite that failed after its events were already
+	// durable.
 	defer func() {
 		if delta != (Delta{}) {
-			s.commitLocked()
+			s.recountOversizedLocked()
 		}
 	}()
 
@@ -3726,10 +4119,12 @@ func (s *Store) drainFoldsLocked() []Fold {
 // line. The table's ruling is to re-project what the log holds into a fresh
 // file. Nothing is destroyed either way. The caller holds the lock.
 //
-// With no entries this is simply the first run: the header alone, which teaches
-// the format and can never become memory.
+// With no entries this is the first run, and what it writes is an EMPTY file.
+// The store seeds nothing: what a fresh install shows is what the fleet has
+// earned, which on a fresh install is nothing at all. The format the file's
+// header used to teach is docs/SCORE.md's to teach now.
 func (s *Store) projectLocked() (Delta, error) {
-	out := append([]string(nil), seedHeader...)
+	var out []string
 	for _, e := range s.entries {
 		out = append(out, formatLine(e.Id, e.Text))
 	}
@@ -3762,8 +4157,8 @@ func (s *Store) recountOversizedLocked() {
 //
 // "Without repeats" means without repeats AS THE INDEX SEES THEM: two wordings
 // with one folding key are one alias, because that is all either can ever match.
-// Storing "x" and "X." both would grow the list — and score.json, and every
-// boot's replay — with a distinction nothing downstream can act on.
+// Storing "x" and "X." both would grow the list — and every boot's replay of it
+// — with a distinction nothing downstream can act on.
 //
 // Past the cap the OLDEST wording goes, which is the one least likely to be
 // repeated next; see maxAliases for why there is a cap at all.
@@ -3818,31 +4213,37 @@ func reword(e *Entry, text string, evictions *int) {
 	e.setText(text)
 }
 
-// refreshCacheLocked rewrites score.json from memory. Its error is deliberately
-// not returned: the snapshot is a cache the store rebuilds from the log at
-// every Open and never reads back, so a failed refresh loses nothing and the
-// next mutation retries it. Surfacing it as a mutation's error would report a
-// durable write as a failure, which is the dishonesty this file exists to
-// remove — but a silent failure is an ops blind spot, so it is counted for the
-// server to report.
-func (s *Store) refreshCacheLocked() {
-	if err := s.writeSnapshotLocked(); err != nil {
-		s.health.CacheWriteFailures++
+// grantTier writes a rung a LOG RECORD asked for onto e, or counts the refusal.
+// It is the one door every replayed tier comes through — a `raised`, a
+// `compacted` and a `lowered` — and the whole of what replayLocked may do to an
+// entry's tier.
+//
+// upper is the highest rung the record may name, and it is a parameter because
+// the ladder's end is not the only bound in play: a `raised` and a `compacted`
+// may name anything up to maxEarnedTier, while a `lowered` may only name a rung
+// strictly below the one the entry is standing on, which is what makes I6 hold
+// across a RESTART as well as across a call. Three arms spelled the same
+// admission by hand, so a change to the ladder had to find all three.
+//
+// It COPIES the number the record carries and computes nothing. The bound is
+// deliberately NOT Policy.ceiling, which is the computed path's: ceiling reads a
+// threshold this machine configures, so replaying through it would give one log
+// two different sets of tiers on two machines, which is invariant I1 exactly.
+//
+// A record outside the bound is IGNORED rather than clamped to it: a record that
+// cannot be true is not evidence of a smaller true one, so the entry keeps the
+// tier it earned and this build under-claims rather than lies, as
+// panel.ParseState does for a state string it does not know. And it is COUNTED
+// rather than merely ignored — a log that asks for a rung this build will not
+// grant is a fact about the log, and silence about it is how an operator ends up
+// asking why an entry reads as "noted" when the history says otherwise. On a log
+// this daemon wrote the refusal never fires; what it stops is a hand-edited one.
+func grantTier(e *Entry, tier, upper int, rejected *int) {
+	if tier >= 1 && tier <= upper {
+		e.Tier = tier
+		return
 	}
-}
-
-// writeSnapshotLocked rewrites score.json atomically and durably from memory.
-// The caller holds the lock.
-func (s *Store) writeSnapshotLocked() error {
-	snap := snapshot{Schema: Schema, Entries: make(map[string]Entry, len(s.entries))}
-	for _, e := range s.entries {
-		snap.Entries[e.Id] = e
-	}
-	data, err := json.MarshalIndent(snap, "", "  ")
-	if err != nil {
-		return err
-	}
-	return writeFileAtomic(s.jsonPath, data, 0o600)
+	*rejected++
 }
 
 // noteEventLocked gives one log record its position and records what that
@@ -3886,7 +4287,15 @@ func (s *Store) writeSnapshotLocked() error {
 func (s *Store) noteEventLocked(ev event) {
 	s.seq++
 	switch {
-	case ev.Event == EventSubmitted, ev.Event == EventFolded, ev.Event == EventUserSignal:
+	case ev.Event == EventSubmitted, ev.Event == EventFolded, ev.Event == EventUserSignal,
+		ev.Event == EventCompacted:
+		// A `compacted` record stands in for the submission and every reinforcement
+		// compaction replaced, so it takes the position those records would have
+		// left the entry on — which is why it sits in this arm rather than one of
+		// its own. compactLocked writes the live entries in their existing
+		// last-movement ORDER, which is what carries recency across a compaction;
+		// the SPACING between positions does not survive, and cannot — see
+		// compactLocked.
 		s.lastAt[ev.Id] = s.seq
 	case ev.Event == EventEdited && ev.Source == SourceUser:
 		// Deliberate, and deliberately unlike reconcileLocked's reword branch,
@@ -3899,27 +4308,55 @@ func (s *Store) noteEventLocked(ev event) {
 	}
 }
 
+// logWriter frames event records the way the log holds them — one JSON object
+// per line — into a buffer the caller owns.
+//
+// It is a type rather than a loop over a slice because the two writers of the
+// file have different sources: appendEvents holds the whole batch, while
+// compactLocked builds each record as it goes and never holds them all. What
+// must not have two spellings is the FRAMING, and it had: a compaction that
+// framed a record differently from an append leaves a log whose next boot reads
+// fewer records than were written, and under-claims silently.
+//
+// json.Encoder is what makes it one line at each site. It marshals straight
+// into the buffer that gets written — which is what a batch that can be the
+// whole store needs, since joining the records and then re-joining that with
+// the separator copied a thousand-event retire batch three times — and it emits
+// the record's trailing newline itself.
+type logWriter struct{ enc *json.Encoder }
+
+func newLogWriter(buf *bytes.Buffer) logWriter { return logWriter{json.NewEncoder(buf)} }
+
+// write appends ev to the buffer as its own log line.
+func (w logWriter) write(ev event) error { return w.enc.Encode(ev) }
+
 // appendEvents appends every event as its own log line, in one write and one
 // fsync, and gives each its position in the log. Batching is what keeps a large
 // reconcile off the dispatch path's neck: the cost of a durable append is the
 // fsync, so a pass over a thousand changed lines must not pay a thousand of
 // them. The caller holds the lock.
 func (s *Store) appendEvents(evs []event) error {
-	// Marshalled straight into the buffer that is written, because a batch can be
-	// the whole store: joining the records and then re-joining that with the
-	// trailing newline copied a thousand-event retire batch three times.
 	var buf bytes.Buffer
+	w := newLogWriter(&buf)
 	for _, ev := range evs {
-		data, err := json.Marshal(ev)
-		if err != nil {
+		if err := w.write(ev); err != nil {
 			return err
 		}
-		buf.Write(data)
-		buf.Write(newline)
 	}
+	// The one funnel every mutation's durable APPEND goes through, which is why
+	// the latch lives here rather than at each door: one place to set it, one to
+	// clear it, and no door that can be added later without passing it.
+	//
+	// It covers the LOG and nothing else. A rewrite of score.md is a durable write
+	// that does not come through here, so the latch is silent about one whether it
+	// landed or not. Which surface reports that failure depends on which door made
+	// the rewrite — a boot pass and a submission are reported in different places
+	// — and that is those doors' business rather than this one's.
 	if err := appendDurable(s.eventsPath, buf.Bytes()); err != nil {
+		s.writeFailing.Store(true)
 		return err
 	}
+	s.writeFailing.Store(false)
 	// Positions are taken only now, and only here, because appendDurable is
 	// all-or-nothing: a write that landed no bytes must leave the store's idea of
 	// the log's length exactly where a re-Open would find it.
@@ -4076,11 +4513,11 @@ func parseBullet(line string) (text string, ok bool) {
 
 // writeFileAtomic writes data to path atomically and durably: a sibling temp
 // file, fsync, rename into place, then a parent-directory fsync so the rename
-// survives a crash. Same idiom as internal/state's snapshot — copied, not
+// survives a crash. Same idiom as internal/state's state file — copied, not
 // imported, to keep this package stdlib-only. The fixed ".tmp" name is safe
 // because Open holds the directory's single-writer lock.
 func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
-	tmp := path + ".tmp"
+	tmp := path + tempSuffix
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
 	if err != nil {
 		return err

@@ -38,7 +38,15 @@ func readFile(t *testing.T, dir, name string) string {
 	return string(data)
 }
 
-func TestOpenSeedsHeaderOnFirstRun(t *testing.T) {
+// TestOpenStartsEmptyOnFirstRun pins what a fresh install shows: score.md is
+// CREATED (so the operator has a file to open and an absent one still means the
+// file was lost, not emptied — see projectLocked) and it is EMPTY.
+//
+// The store used to write four comment lines teaching the entry format. They
+// could never become entries, but they were still baton speaking in a file whose
+// whole contract is that its contents are the fleet's own memory. What they
+// taught is docs/SCORE.md's now.
+func TestOpenStartsEmptyOnFirstRun(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "score")
 
 	s, err := Open(dir, Policy{})
@@ -46,23 +54,15 @@ func TestOpenSeedsHeaderOnFirstRun(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 
-	// The seed teaches the format without ever becoming memory: score.md has
-	// content, the store has no entries at all.
 	if s.Len() != 0 {
-		t.Fatalf("seeded store holds %d entries, want 0 — the header is not memory", s.Len())
+		t.Fatalf("a fresh store holds %d entries, want 0", s.Len())
 	}
-	md := readFile(t, dir, scoreMD)
-	if !strings.Contains(md, "- [e7f3a2]") {
-		t.Errorf("the header should show the entry format:\n%s", md)
-	}
-	for _, line := range strings.Split(md, "\n") {
-		if _, _, ok := parseLine(line); ok {
-			t.Errorf("seeded line %q parses as an entry, want documentation only", line)
-		}
+	if md := readFile(t, dir, scoreMD); md != "" {
+		t.Errorf("a fresh score.md should be empty, got %q", md)
 	}
 
-	// The seeded file is 0600 in a 0700 directory; the other two are written by
-	// the first mutation, and inherit the same mode.
+	// The projected file is 0600 in a 0700 directory; the log is written by the
+	// first mutation, and inherits the same mode.
 	di, err := os.Stat(dir)
 	if err != nil {
 		t.Fatalf("stat dir: %v", err)
@@ -71,7 +71,7 @@ func TestOpenSeedsHeaderOnFirstRun(t *testing.T) {
 		t.Errorf("dir perm = %o, want group/other bits clear", perm)
 	}
 	submit(t, s, "the first real note")
-	for _, name := range []string{scoreMD, scoreJSON, scoreEvents} {
+	for _, name := range []string{scoreMD, scoreEvents} {
 		fi, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatalf("stat %s: %v", name, err)
@@ -117,7 +117,12 @@ func TestOpenExistingNeverReseeds(t *testing.T) {
 	}
 }
 
-func TestSubmitAppendsAllThreeFiles(t *testing.T) {
+// TestSubmitAppendsBothFiles walks one submission through the store's whole
+// durable surface, and asserts the surface itself: the log, score.md, and
+// nothing else. The third file this store used to keep — a whole-store JSON
+// snapshot rewritten on every mutation — had no reader on any path, so its
+// absence is the property worth pinning rather than its contents.
+func TestSubmitAppendsBothFiles(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(dir, Policy{})
 	if err != nil {
@@ -162,23 +167,19 @@ func TestSubmitAppendsAllThreeFiles(t *testing.T) {
 		t.Error("no submitted event logged for the new entry")
 	}
 
-	// The snapshot holds the entry, and no temp file lingers.
-	var snap snapshot
-	if err := json.Unmarshal([]byte(readFile(t, dir, scoreJSON)), &snap); err != nil {
-		t.Fatalf("snapshot is not valid JSON: %v", err)
+	// And no third file: every name in the directory is one of the two the store
+	// owns or its lock, and no atomic-write temp file lingers behind either.
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read the store directory: %v", err)
 	}
-	if snap.Schema != Schema {
-		t.Errorf("snapshot schema = %d, want %d", snap.Schema, Schema)
-	}
-	// The folding key is derived and deliberately not persisted, so the decoded
-	// entry has none; everything score.json is FOR must match exactly.
-	want := e
-	want.norm = ""
-	if got := snap.Entries[e.Id]; !reflect.DeepEqual(got, want) {
-		t.Errorf("snapshot entry = %+v, want %+v", got, want)
-	}
-	if _, err := os.Stat(filepath.Join(dir, scoreJSON+".tmp")); !os.IsNotExist(err) {
-		t.Errorf("snapshot temp file left behind (stat err = %v)", err)
+	for _, de := range ents {
+		switch de.Name() {
+		case scoreMD, scoreEvents, scoreLock:
+		default:
+			t.Errorf("the store wrote %q; it owns %s, %s and %s and nothing else",
+				de.Name(), scoreMD, scoreEvents, scoreLock)
+		}
 	}
 }
 
@@ -213,7 +214,7 @@ func TestSubmitNeutralisesControlSequences(t *testing.T) {
 	}{
 		{"entry", e.Text},
 		{scoreMD, readFile(t, dir, scoreMD)},
-		{scoreJSON, readFile(t, dir, scoreJSON)},
+		{scoreEvents, readFile(t, dir, scoreEvents)},
 		{"block", block},
 	} {
 		for _, r := range tt.text {
@@ -315,42 +316,44 @@ func TestSubmitRejectsEmpty(t *testing.T) {
 	}
 }
 
-// TestSeedNeverReachesABrief is the whole point of seeding comment lines: a
-// fresh install must inject nothing into a real agent's brief, and must keep
-// injecting nothing when the snapshot — a disposable cache by this package's own
-// doctrine — is deleted underneath it. An earlier shape seeded flagged entries,
-// and that flag lived only in score.json, so this is the exact path that
-// resurrected them.
-func TestSeedNeverReachesABrief(t *testing.T) {
+// TestAFreshInstallInjectsNothing is the removed seed's standing consequence: a
+// store nobody has taught anything renders an EMPTY block into a real agent's
+// brief, at the first boot and at every boot after it, and only what the fleet
+// actually earned ever appears there.
+//
+// It is worth its own test because it has been wrong twice. S0 seeded two demo
+// entries and filtered them at render time; the filter's flag lived in a file
+// the package called disposable, so deleting that file put "demo: …" into every
+// brief. The comment header that replaced them could not become an entry, but it
+// was still baton writing into the fleet's own memory. Nothing seeds anything
+// now, and this asserts the whole path — file, Render, and the block a dispatch
+// actually writes to a pty.
+func TestAFreshInstallInjectsNothing(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(dir, Policy{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if md := readFile(t, dir, scoreMD); md == "" {
-		t.Fatal("score.md should carry the seeded header")
+	if md := readFile(t, dir, scoreMD); md != "" {
+		t.Errorf("a fresh score.md = %q, want empty", md)
 	}
 	if got := s.Render(Context{}); got != nil {
-		t.Errorf("Render = %+v, want nil — the seed is documentation, not memory", got)
+		t.Errorf("Render = %+v, want nil — nothing has been earned yet", got)
 	}
 	if got := s.RenderBlock(Context{Panel: "p1"}); got != "" {
 		t.Errorf("RenderBlock = %q, want empty", got)
 	}
 
-	// Reopen with no snapshot at all: still nothing to inject.
-	if err := os.Remove(filepath.Join(dir, scoreJSON)); err != nil && !os.IsNotExist(err) {
-		t.Fatalf("remove snapshot: %v", err)
-	}
 	s.Close() // one writer per directory; hand the claim over
 	re, err := Open(dir, Policy{})
 	if err != nil {
-		t.Fatalf("reopen without a snapshot: %v", err)
+		t.Fatalf("reopen: %v", err)
 	}
 	if re.Len() != 0 {
-		t.Errorf("Len after dropping the snapshot = %d, want 0", re.Len())
+		t.Errorf("Len on the second boot = %d, want 0", re.Len())
 	}
 	if got := re.RenderBlock(Context{Panel: "p1"}); got != "" {
-		t.Fatalf("a lost snapshot resurrected the seed into a brief: %q", got)
+		t.Fatalf("the second boot invented a brief: %q", got)
 	}
 
 	submit(t, re, "real memory")
@@ -374,7 +377,7 @@ func TestSubmitSurvivesReopen(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	entries := re.Render(Context{})
-	if len(entries) != 1 { // the seeded header lines are not entries
+	if len(entries) != 1 {
 		t.Fatalf("entries after reopen = %d, want 1", len(entries))
 	}
 	if got := entries[0]; !reflect.DeepEqual(got, e) {
@@ -414,10 +417,10 @@ func TestSubmitConcurrent(t *testing.T) {
 func TestRender(t *testing.T) {
 	tests := []struct {
 		name    string
-		submits int // the seeded header contributes no entries
+		submits int
 		want    int
 	}{
-		{"seed only", 0, 0},
+		{"nothing submitted", 0, 0},
 		{"under the limit", 3, 3},
 		{"capped at the working-set budget", 10, defaultWorkingSet},
 	}
@@ -475,9 +478,8 @@ func TestRenderEmptyAndDisabled(t *testing.T) {
 
 // TestRenderBlockWording checks the tier wording of the injected block. The
 // entries are planted straight into the store rather than through the files
-// because one of them stands at tier 9, which no path in the store can produce
-// and score.json — a cache Open never reads back — cannot express either. The
-// seam under test is the rendering, not how a tier is earned.
+// because one of them stands at tier 9, which no path in the store can produce.
+// The seam under test is the rendering, not how a tier is earned.
 //
 // The expected ORDER is the ranking's, not the slice's: every entry here has
 // the same last-reinforcement position and no provenance, so tier is the only
@@ -618,42 +620,38 @@ func TestReconcilePicksUpOperatorEdits(t *testing.T) {
 	}
 }
 
-func TestOpenToleratesCorruptSnapshot(t *testing.T) {
-	tests := []struct {
-		name string
-		json string
-	}{
-		{"garbage", "{not json at all"},
-		{"newer schema", `{"schema":99,"entries":{"abc123":{"id":"abc123","tier":3}}}`},
+// TestAnOldSnapshotIsIgnoredAndLeftAlone covers the upgrade: a directory written
+// by a build that kept a third file still has that file in it, and this store
+// neither reads it nor removes it.
+//
+// Both halves matter. Reading it would undo the reason it was dropped, and it is
+// the one file whose contents this build has no rule for. Removing it would be
+// the store deleting something out of the operator's directory, which nothing
+// here is entitled to do (I7) — it is dead bytes, and dead bytes the operator
+// can see are better than a delete they did not ask for.
+func TestAnOldSnapshotIsIgnoredAndLeftAlone(t *testing.T) {
+	const stale = `{"schema":1,"entries":{"abc123":{"id":"abc123","text":"from the cache","tier":3}}}`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, scoreMD), []byte("- [abc123] survives\n"), 0o600); err != nil {
+		t.Fatalf("write score.md: %v", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, scoreMD), []byte("- [abc123] survives\n"), 0o600); err != nil {
-				t.Fatalf("write score.md: %v", err)
-			}
-			if err := os.WriteFile(filepath.Join(dir, scoreJSON), []byte(tt.json), 0o600); err != nil {
-				t.Fatalf("write score.json: %v", err)
-			}
+	if err := os.WriteFile(filepath.Join(dir, "score.json"), []byte(stale), 0o600); err != nil {
+		t.Fatalf("write the old snapshot: %v", err)
+	}
 
-			s, err := Open(dir, Policy{})
-			if err != nil {
-				t.Fatalf("Open: %v", err)
-			}
-			entries := s.Render(Context{})
-			if len(entries) != 1 || entries[0].Text != "survives" || entries[0].Tier != 1 {
-				t.Fatalf("entries = %+v, want the score.md entry at default tier 1", entries)
-			}
-
-			// The next mutation heals the snapshot.
-			if _, _, err := s.Submit("heal", Provenance{Source: "user"}); err != nil {
-				t.Fatalf("Submit: %v", err)
-			}
-			var snap snapshot
-			if err := json.Unmarshal([]byte(readFile(t, dir, scoreJSON)), &snap); err != nil {
-				t.Fatalf("snapshot still corrupt after Submit: %v", err)
-			}
-		})
+	s, err := Open(dir, Policy{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	// The file's tier 3 is not granted and its text is not adopted: score.md
+	// decides both, and the boot pass admits the line at tier 1.
+	entries := s.Render(Context{})
+	if len(entries) != 1 || entries[0].Text != "survives" || entries[0].Tier != 1 {
+		t.Fatalf("entries = %+v, want the score.md entry at default tier 1", entries)
+	}
+	submit(t, s, "and a mutation on top")
+	if got := readFile(t, dir, "score.json"); got != stale {
+		t.Errorf("the old snapshot was rewritten:\n got: %s\nwant: %s", got, stale)
 	}
 }
 

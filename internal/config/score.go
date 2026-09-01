@@ -1,20 +1,24 @@
 package config
 
 import (
+	"strconv"
+
 	"github.com/cmj0121/baton/internal/paths"
 )
 
-// ScoreConfig configures the fleet-scope memory (issue #37): where the three
-// score files live, whether the subsystem runs at all, how many times an
+// ScoreConfig configures the fleet-scope memory (issue #37): where the score
+// files live, whether the subsystem runs at all, how many times an
 // observation must recur before it earns a tier, how many entries one brief
 // carries, and what each ranking dimension is worth.
 //
 // Everything but Dir and Enabled reloads on SIGHUP — they are numbers the live
 // store compares rather than state to swap — and everything but Dir and Enabled
 // is clamped by the store rather than here; see score.Policy.clamp for the
-// defaults and the floors.
+// defaults and the floors. UnappliedOnReload is that first claim as code, so a
+// key that stops reloading is added here and answered there rather than in
+// whatever daemon happens to be reading this.
 type ScoreConfig struct {
-	// Dir is the directory holding score.md, score.json, and score-events.jsonl.
+	// Dir is the directory holding score.md and score-events.jsonl.
 	// Empty means $HOME/.baton. Resolved through paths.Expand, so "~" works.
 	Dir string `yaml:"dir,omitempty"`
 
@@ -171,4 +175,54 @@ func (c ScoreConfig) Directory() string {
 		return dir
 	}
 	return paths.Expand("~/.baton")
+}
+
+// UnappliedKey is one score key whose value has changed and which a running
+// daemon cannot act on: the fully qualified YAML key, the value in force, and
+// the value the file now asks for. Both values are rendered as strings because
+// the keys this covers are a path and a boolean and the caller only ever
+// reports them.
+type UnappliedKey struct {
+	Key        string
+	InForce    string
+	Configured string
+}
+
+// UnappliedOnReload is which of c's keys differ from booted and cannot be
+// applied without restarting — score.dir and score.enabled, the pair
+// ScoreConfig's own doc names as the exception to "everything reloads on
+// SIGHUP". booted is the config the daemon opened its store from; c is the file
+// a reload has read.
+//
+// It lives here rather than in the daemon for the reason StalePromoteAt and
+// BadNumbers do: a key the daemon is not honouring is a fact about the config,
+// and this file is where the claim that everything ELSE reloads is written down.
+// Said as prose here and re-implemented as a hand-listed pair of comparisons in
+// cmd/baton, the two drift the first time a key is added to one of them.
+//
+// It does not make the keys reloadable. The store opens once at boot on purpose
+// — swapping a live store under in-flight dispatches is #39's work — and what
+// this closes is the gap between what the daemon did and what it said it did,
+// which is invariant I8. An operator who moves score.dir, sends a HUP and sees a
+// success line with no complaint has every reason to believe their edit took: it
+// did not, the fleet goes on using the old directory, and the new one simply
+// stays empty.
+//
+// The comparison is on RESOLVED values, which is what keeps it quiet where it
+// should be. An empty Dir resolves to the same default the booted config
+// resolved to, and an unset Enabled to the same default on, so a file that never
+// mentioned either key says the same thing before and after.
+func (c ScoreConfig) UnappliedOnReload(booted ScoreConfig) []UnappliedKey {
+	var out []UnappliedKey
+	if dir := c.Directory(); dir != booted.Directory() {
+		out = append(out, UnappliedKey{Key: "score.dir", InForce: booted.Directory(), Configured: dir})
+	}
+	if on := c.IsEnabled(); on != booted.IsEnabled() {
+		out = append(out, UnappliedKey{
+			Key:        "score.enabled",
+			InForce:    strconv.FormatBool(booted.IsEnabled()),
+			Configured: strconv.FormatBool(on),
+		})
+	}
+	return out
 }

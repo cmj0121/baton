@@ -681,9 +681,22 @@ type scoreState struct {
 func (st *scoreState) available() bool { return st.Store != nil }
 
 // reason is why the fleet memory is not doing its job, phrased for whoever
-// asked, and empty when it is. It answers for both the store that never opened
-// and the score.md that has stopped being readable, because to the operator
-// those are one question.
+// asked, and empty when it is. It answers for the store that never opened, the
+// score.md that has stopped being readable, and the store whose writes are not
+// landing, because to the operator those are one question.
+//
+// The last of those is why `available` cannot carry this on its own. A store on
+// a read-only mount opened, replays, and reconciles: it is available by every
+// meaning that word has here, and every submission into it is refused. #38's
+// invariant I8 names three states and that is a fourth — the one that reports
+// itself healthy — so it lands where the third one already does. The store
+// reports it rather than a probe answering it; see score.Health.WriteFailing.
+//
+// It is no longer a pure read of the server's own state: the last case asks the
+// STORE. It asks through score.Store.WriteFailing rather than Health, which is
+// the whole reason that accessor exists — every append holds the store mutex
+// across its fsync, so reading this through Health would queue the answer
+// behind the hung write it is here to describe.
 func (st *scoreState) reason() string {
 	switch {
 	case st.Store == nil && st.Reason != "":
@@ -692,6 +705,8 @@ func (st *scoreState) reason() string {
 		return "score is disabled"
 	case st.failing.Load():
 		return "score.md cannot be read; serving the last view the store did read"
+	case st.Store.WriteFailing():
+		return "the store's last write did not land; the fleet's memory is readable but nothing new is being recorded"
 	default:
 		return ""
 	}

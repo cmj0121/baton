@@ -252,6 +252,8 @@ fleet を動かし、自分のコマンドを足し、設定を書く——す�
 - **[docs/PLUGIN.md](PLUGIN.md)** — Lua プラグイン API:`baton` オブジェクト、イベント、コマンド、そして設定。
 - **[docs/CONTROL.md](CONTROL.md)** — agent で fleet を動かす:conductor、`baton ctl` CLI、`baton mcp` の
   ツール、そしてガードレール。
+- **[docs/SCORE.md](SCORE.md)** — Score、fleet の記憶:`score.md` というファイルとその唯一の取り消し手段、
+  ティアの階梯、ランキングの重み、コンパクション、そしてこれが境界ではないもの。
 
 ## DDD(Dream-Driven Development、夢駆動開発)
 
