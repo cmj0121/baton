@@ -50,7 +50,11 @@ import (
 // added `tier` to the event, and R4 added `user_signals` to the entry. All of
 // them are appended optional fields — an old line decodes with them zero, and
 // an old reader ignores them — so the version stays 1, for the same reason
-// proto.ProtocolVersion does not move on an appended field. R4's is doubly safe
+// proto.ProtocolVersion does not move on an appended field. R6 added two event
+// NAMES rather than a field, which is additive in the same direction: replay
+// never reads a record's schema and its EVENT switch has no default, so a build
+// that does not know a name skips the record and under-claims. See the event
+// constants. R4's is doubly safe
 // on top of that: score.json is a cache Open never reads back, and the count is
 // rebuilt from the log's own sources at every replay. What an appended
 // field cannot fix is a record that never carried the text at all, and the
@@ -409,15 +413,30 @@ const (
 // log is split on it at every boot and appended with it at every mutation.
 var newline = []byte{'\n'}
 
-// Event names recorded in the log — the full #38 §3 vocabulary, frozen in S0
-// even where nothing emits them yet, so later issues need no schema bump.
+// Event names recorded in the log.
+//
+// The first six are #38 §3's vocabulary, frozen in S0 even where nothing emitted
+// them yet. R6 adds two, because the conductor does two things §3's list has no
+// word for: it JOINS two entries the normaliser failed to fold, and it pulls one
+// DOWN that was raised in error. Spelling either with a borrowed name would have
+// made the log lie to whoever reads it — a `raised` record carrying a lower tier
+// is the plainest example — and the log is the operator's own history.
+//
+// Adding a name is additive in the direction a version guards: a build that does
+// not know one skips the record (replayLocked's event switch has no default), so it
+// under-claims — an entry without the alias, or on the rung it earned — exactly
+// as panel.ParseState does for a state string it does not know. Schema therefore
+// stays 1; see Schema, and note that replayLocked never reads a record's schema
+// at all, so a bump would reach nothing but score.json, which Open never reads.
 const (
 	EventSubmitted  = "submitted"   // a new entry entered the store (Submit, and reconcile admitting a user's line)
 	EventFolded     = "folded"      // a repeat was counted into an existing entry rather than added as a line
 	EventRaised     = "raised"      // an entry's tier was promoted by recurrence
 	EventUserSignal = "user-signal" // the operator reinforced an entry (emitted now, by Reinforce)
-	EventEdited     = "edited"      // an entry's text changed — via score.md now, via the conductor in R6
+	EventEdited     = "edited"      // an entry's text changed — via score.md, or the conductor's reword
 	EventRetired    = "retired"     // an entry left the store
+	EventMerged     = "merged"      // the conductor gave an entry another's wording to fold on; Text is that wording
+	EventLowered    = "lowered"     // the conductor pulled an entry down a rung; Tier is the rung it landed on
 )
 
 // SourceUser and SourceAgent are the two sources a reinforcement can carry, and
@@ -445,6 +464,22 @@ const (
 // attributed to the operator would be the history telling them they wrote
 // something they did not.
 const sourceRecovery = "recovery"
+
+// sourceConductor stamps every event Refine emits. It names the DOOR the
+// mutation came through, not a claim the store verified: Refine is the
+// conductor's verb (#38 §1), and the SERVER's gate is what makes that true, by
+// comparing the connection against the panel it marked Conductor.
+//
+// It is a third source beside SourceUser and SourceAgent for the reason
+// sourceRecovery is one: it is neither. Only SourceUser moves Entry.UserSignals,
+// and only an `edited` event stamped SourceUser moves an entry's recency (see
+// noteEventLocked) — so giving the conductor's corrections a name of their own
+// is what keeps R4's ruling from being re-opened by a new caller. A conductor
+// reword counts nothing and moves nothing.
+//
+// Unexported, unlike the two sources #38 §4 discriminates on, because no caller
+// supplies it: the store writes it, on the one path only the conductor reaches.
+const sourceConductor = "conductor"
 
 // seedHeader is what an ABSENT score.md is written back as: comment lines that
 // teach the entry format by showing one.
@@ -737,12 +772,24 @@ type Health struct {
 	SwallowedRepeats int
 	UnreportedFolds  int
 	AliasEvictions   int
-	// RejectedRaises is how many `raised` records named a tier this build will
-	// not grant; see maxEarnedTier and replayLocked. Zero for a log this daemon
-	// wrote on its own, so anything else is a hand-edited log, a truncated record
-	// that decoded oddly, or a log from a build that knows a tier this one does
-	// not — none of them errors, but none of them silent either.
-	RejectedRaises int
+	// RejectedTiers is how many tier records the replay refused: a `raised`
+	// naming a tier this build will not grant, and a `lowered` naming one that is
+	// not strictly below the rung the entry is already on. Two records, one
+	// counter, because they are one fact about the log and the answer to both is
+	// the same: the entry keeps the tier it earned. See maxEarnedTier and
+	// replayLocked.
+	//
+	// It was named for raises alone until R6 added the second record it counts,
+	// and the name had to move with the meaning: an operator reading a key about
+	// refused RAISES on a log whose only refused record was a `lowered` goes
+	// hunting for a promotion that never happened, which is the failure this file
+	// spends its comments on.
+	//
+	// Zero for a log this daemon wrote on its own, so anything else is a
+	// hand-edited log, a truncated record that decoded oddly, or a log from a
+	// build that knows a tier this one does not — none of them errors, but none
+	// of them silent either.
+	RejectedTiers int
 }
 
 // Factors is one entry's ranking arithmetic, dimension by dimension. The rank
@@ -924,16 +971,19 @@ type event struct {
 	Id     string      `json:"id"`
 	At     time.Time   `json:"at"`
 	Source string      `json:"source,omitempty"`     // who acted: SourceUser, SourceAgent, or sourceRecovery on nobody's behalf; empty otherwise
-	Text   string      `json:"text,omitempty"`       // the entry's text at submitted/edited, and the repeat's own wording at folded
+	Text   string      `json:"text,omitempty"`       // the entry's text at submitted/edited, the repeat's own wording at folded, and the absorbed entry's wording at merged
 	Prov   *Provenance `json:"provenance,omitempty"` // where a submitted entry, or a folded repeat, came from
-	Tier   int         `json:"tier,omitempty"`       // the tier reached, at raised
+	Tier   int         `json:"tier,omitempty"`       // the tier reached, at raised; the tier landed on, at lowered
 	// RemovedLine marks a fold that took a LINE out of score.md. It is named for
 	// its EFFECT rather than for where the repeat came from, because the effect
 	// is what the boot derivation is built on: only a fold that removed a line
-	// can owe a removal. A later path that folds a file line without removing it
-	// — R6's merge, the id-carrying duplicate the recovery table already admits —
-	// must leave this false, and a name about provenance would have read as true
-	// for it.
+	// can owe a removal. A path that folds a file line without removing it — the
+	// id-carrying duplicate the recovery table already admits — must leave this
+	// false, and a name about provenance would have read as true for it.
+	//
+	// R6's merge takes a line out too, and emits no fold event at all: it counts
+	// nothing, so there is no repeat to record, and the retired entry's line
+	// cannot be owed to anyone because the entry itself is gone. See mergeLocked.
 	//
 	// Nothing else can supply the distinction: Source says WHO repeated the
 	// wording, and an operator submitting through `ctl score submit` is "user"
@@ -1745,8 +1795,11 @@ func needsScrub(text string) bool {
 //   - MEANING. No stemming, no stop words, no synonyms, no similarity score, no
 //     edit distance. Two wordings of the same observation each sit at tier 1 and
 //     neither ever climbs. #38 §1 accepted that outright — Score remembers less
-//     rather than remembering wrong — and merging by meaning is the conductor's
-//     job in R6, where an agent proposes it and a human can see it happen.
+//     rather than remembering wrong — and joining two such entries is the
+//     conductor's `merge` (see Store.Merge), which is a direct correction
+//     rather than a proposal: nothing here asks a human first, and what makes
+//     that bearable is that the merge counts nothing, is in the log, and leaves
+//     the operator's file theirs to edit.
 //   - WORD ORDER. "tests before push" and "before push tests" are two entries.
 //   - ACCENTS or UNICODE NORMAL FORM. The NFC and NFD spellings of one accented
 //     word do not fold; normalising that needs golang.org/x/text and this
@@ -2146,12 +2199,331 @@ func (s *Store) DrainFolds() []Fold {
 	return s.drainFoldsLocked()
 }
 
-// Refine is the entry-management verb (promote, retire, edit, …).
+// Merge, Reword and Lower are the conductor's three corrections: Merge joins two
+// entries the normaliser failed to fold, Reword replaces an entry's wording, and
+// Lower pulls one down a rung. Every one of them is #38 §1's CORRECTION right,
+// and none of them is an execution right.
 //
-// S0 stub: not implemented until R6.
-func (s *Store) Refine(op, id, arg string) error {
-	_, _, _ = op, id, arg
-	return errors.New("score refine: not implemented until R6")
+// What that distinction costs, stated once here because it is the line all three
+// are built on: NOTHING a correction does moves a counter or raises a tier. Not
+// a reinforcement, not a user signal, not an entry's recency. R4 ruled that a
+// reword is one statement re-spelled rather than a second statement, and a merge
+// is the same claim about two lines; letting either one buy what a repetition
+// buys would hand an agent panel the currency invariant I6 reserves for the
+// user. So a merged entry does not inherit the counts of the entry it absorbed,
+// and the escape hatch #38 §1 asks for is about the FUTURE: after a merge, a
+// repeat of either wording folds into the survivor (invariant I4) instead of
+// starting the split over.
+//
+// The one tier they write moves DOWN and can only move down — see lowerLocked,
+// and replayLocked's `lowered` case, which refuses a record that would raise.
+//
+// Nothing is destroyed (invariant I7): a merge retires an entry and a reword
+// supersedes a wording, and both leave the text they replace in the event log.
+// Both are reversible the way every other score change is — by editing the file.
+//
+// THREE METHODS rather than one verb taking an operation string, which is the
+// call internal/control already made one layer up and for the same reason: the
+// three take three different arguments — a second entry, a new wording, nothing
+// at all — so a shared verb types them all as one `arg` the compiler cannot
+// check, and the switch it needs is only the caller's switch moved here.
+
+// Merge folds the entry named by from into the one named by id: id survives and
+// gains from's wording as an alias, from is retired. See mergeLocked, which is
+// where the ordering of its two durable steps is argued.
+func (s *Store) Merge(id, from string) error {
+	return s.refine(id, func(i int) error { return s.mergeLocked(i, from) })
+}
+
+// Reword replaces the wording of the entry named by id, keeping the old one as
+// an alias so a repeat of it still folds. See rewordLocked.
+func (s *Store) Reword(id, text string) error {
+	return s.refine(id, func(i int) error { return s.rewordLocked(i, text) })
+}
+
+// Lower pulls the entry named by id down one rung, and takes no tier to move it
+// to. See lowerLocked, which is where that is the proof of invariant I6.
+func (s *Store) Lower(id string) error {
+	return s.refine(id, s.lowerLocked)
+}
+
+// refine is the prologue all three corrections share, and the reason they are
+// three methods rather than three copies of it: the disabled store, the lock,
+// the reconcile, and resolving id to a live entry. apply is then handed that
+// entry's index, under the lock, on a store that has just read the operator's
+// file.
+//
+// Read-reconcile-write (invariant I3), as in Submit, Reinforce and Signal:
+// correcting an entry the operator has since deleted must fail rather than
+// resurrect it, and the wording being corrected must be the one currently in
+// their file. It also settles score.md's line for every live entry, which is
+// what replaceMDLineLocked relies on.
+func (s *Store) refine(id string, apply func(i int) error) error {
+	if s == nil {
+		return errDisabled
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.reconcileNowLocked(); err != nil {
+		return err
+	}
+	i := s.indexLocked(id)
+	if i < 0 {
+		return fmt.Errorf("score refine: no entry %q", id)
+	}
+	return apply(i)
+}
+
+// mergeLocked joins the entry at other into the one at keep: the survivor gains
+// the absorbed wording as an alias, the absorbed entry retires, and its line
+// leaves score.md. The caller holds the lock and has reconciled.
+//
+// It is the escape hatch #38 §1 names for the cost exact-match folding accepts —
+// two observations that mean the same thing in different words, each sitting at
+// tier 1 and never climbing. What it buys is the alias: from here on, a
+// submission of either wording folds into the survivor. It does NOT recount the
+// past, so the survivor's tier is exactly the tier it had, and its counters are
+// exactly the counters it had. That is the invariant a merge is most likely to
+// be "improved" into breaking — carrying the absorbed entry's reinforcements
+// across looks like tidiness and is in fact the one arithmetic that would let an
+// agent panel assemble the rung invariant I6 reserves for the user, since
+// reinforceLocked promotes on Reinforcements and Policy.ceiling reads
+// UserSignals. TestMergeInheritsNoCountsFromWhatItAbsorbs is the test that
+// fails when someone tries it.
+//
+// Only the absorbed entry's CURRENT wording is carried over. Its own aliases are
+// left in the log with it — a prior phrasing of a line that itself turned out to
+// be a duplicate is two removes from anything the fleet is likely to say next,
+// and Entry.Aliases holds maxAliases of them, so carrying a whole list would
+// evict the survivor's own history to make room for it.
+//
+// # Why a merge is TWO durable steps rather than one
+//
+// The obvious shape appends `merged` and `retired` together and then rewrites
+// score.md. Its crash window is not merely untidy, it LAUNDERS PROVENANCE: the
+// log says the absorbed entry retired, the file still shows its line, and the
+// recovery table then re-admits that line as a fresh USER-sourced entry with its
+// reinforcements zeroed and its aliases gone (#38 §3, "the user's text wins").
+// An agent-sourced entry silently becomes an operator-sourced one, and that
+// distinction is the whole of what #38 §4 uses to fence the top tier — measured,
+// and reported as `admitted=1 reattributed=1`, blaming an operator who did
+// nothing. Re-running the merge repairs the file and none of the rest.
+//
+// So the retire is appended only AFTER the line is out of the file, and each
+// window that leaves is one the store already knows how to resolve:
+//
+//   - crash after the alias, before the file: both entries live, the file
+//     untouched, the alias durable and idempotent. The merge simply did not
+//     happen; running it again completes it, and nothing was re-attributed.
+//   - crash after the file, before the retire: the log still holds the entry and
+//     no line carries it, which is the recovery table's own retire row — the
+//     merge completes itself at the next reconcile, in the log, with the entry's
+//     whole history intact (I7).
+//
+// The cost is a second fsync, and a merge was not cheap to begin with: two
+// durable appends and a whole-file rewrite of score.md, measured at p90 156 ms
+// and max 304 ms, with this store's mutex held for all of it. Store.View shares
+// that mutex, so a merge can hold up a brief being assembled for another panel
+// by up to a third of a second. That is the price of the ordering above rather
+// than an oversight, and the server's rate cap is what keeps it to one such
+// stall at a time; nothing here should be described as cheap.
+func (s *Store) mergeLocked(keep int, other string) error {
+	j := s.indexLocked(other)
+	switch {
+	case j < 0:
+		return fmt.Errorf("score refine: no entry %q", other)
+	case keep == j:
+		return errors.New("score refine: an entry cannot be merged into itself")
+	}
+	now := time.Now().UTC()
+	survivor, absorbed := s.entries[keep], s.entries[j]
+	// The alias is computed before the append so its eviction can be reported,
+	// and applied to a COPY so a failed append leaves the store untouched — the
+	// order applyLocked exists to keep. NOTHING else of the absorbed entry is
+	// read: not its counts, not its tier, not its signals. See this function's
+	// doc for why that is the load-bearing line.
+	var evictions int
+	alias(&survivor, absorbed.Text, &evictions)
+	// The append and the memory move by hand rather than through applyLocked, for
+	// the one thing applyLocked would add: its commitLocked. This is the only
+	// mutation the store makes in two durable steps, so it is the only one that
+	// would rewrite score.json TWICE — and the state that first snapshot
+	// describes (the survivor holding the alias, the absorbed entry still live)
+	// never leaves this hold of the mutex, so nothing can read it back. It is a
+	// whole-store map, a MarshalIndent and an atomic write with two fsyncs, paid
+	// inside the stall Store.View takes behind this lock and growing with the
+	// store: at a thousand entries it was half of a merge's allocations. The
+	// retire below carries the one commit for both halves. The ORDER argued above
+	// is untouched — this moves the cache, never the log.
+	if err := s.appendEvents([]event{{
+		Schema: Schema, Event: EventMerged, Id: survivor.Id, At: now,
+		Source: sourceConductor, Text: absorbed.Text,
+	}}); err != nil {
+		return err
+	}
+	s.entries[keep] = survivor
+	s.health.AliasEvictions += evictions
+	// The absorbed entry's line goes, and every other byte of the operator's file
+	// stays. Before the retire, never after — see the doc.
+	if err := s.replaceMDLineLocked(absorbed.Id, ""); err != nil {
+		return err
+	}
+	return s.applyLocked([]event{{
+		Schema: Schema, Event: EventRetired, Id: absorbed.Id, At: now, Source: sourceConductor,
+	}}, func() error {
+		s.entries = slices.Delete(s.entries, j, j+1)
+		// The debt this entry owed can never be settled by removing a line now,
+		// because the line that carried its id has just gone with it. It is a
+		// narrow case — only a fold whose rewrite failed leaves a debt at all —
+		// but a debt under a burned id would outlive the entry and decline to
+		// count a genuine repeat if the recovery table ever re-admitted it.
+		// replayLocked drops the same keys for the same reason at boot.
+		delete(s.owed, absorbed.Id)
+		return nil
+	})
+}
+
+// rewordLocked replaces the entry's wording, keeping the old one as an alias so
+// a repeat of it still folds (invariant I4). The caller holds the lock and has
+// reconciled.
+//
+// It goes through the same package-level reword the operator's own edits and the
+// log replay go through, rather than re-spelling the three steps, because the
+// alias-eviction counter is the one of them most easily forgotten — and a
+// conductor that could reword without keeping the prior wording would be exactly
+// the "conductor edit makes future repeats miss" #38 §1 rules out.
+//
+// The text is weighed and scrubbed on the way in like a submission's, at the
+// same boundary and against the same caps: it reaches every agent's terminal on
+// every dispatch, and where it came from does not change what an escape sequence
+// in it would do. It is also asked the question Submit asks of a new note —
+// whether the store already says this — for the reason below.
+func (s *Store) rewordLocked(i int, raw string) error {
+	e := s.entries[i]
+	// Built as the entry it would become and asked the same two questions Submit
+	// asks of a new note, rather than re-spelling either. Entry.Injectable is the
+	// ONE statement of the weight rule, and a second copy of it here would sit on
+	// the store's newest input channel — the one path that can then store an entry
+	// Render silently withholds from every brief. setText also settles the folding
+	// key the collision check below needs.
+	cand := e
+	cand.setText(raw)
+	text := cand.Text
+	switch {
+	case text == "":
+		return errors.New("score refine: reword needs the new wording")
+	case !cand.Injectable():
+		return fmt.Errorf("score refine: wording is %d runes, limit is %d", len([]rune(text)), maxEntryRunes)
+	case text == e.Text:
+		// Refused rather than accepted as a no-op, because it is not one: the
+		// entry would take its own current wording as an alias and spend a slot of
+		// maxAliases on a phrasing already covered by Entry.Text.
+		return errors.New("score refine: the wording is unchanged")
+	}
+	// A reword must not MANUFACTURE the split that merge exists to cure. Every
+	// other admission path asks foldTargetLocked whether the store already says
+	// this — Submit before it adds a line, the file pass before it admits a
+	// bullet — and a reword that skipped the question could land one entry on
+	// another's exact folding key: two live entries, two identical lines in the
+	// operator's file, both eligible for the working set, neither able to fold
+	// into the other ever again, their counts split for good. It is not a remote
+	// shape either. score_reword's whole job is fixing an ambiguous wording, so
+	// converging two near-duplicates onto one good sentence is the natural move
+	// for the thing holding the tool.
+	//
+	// REFUSED rather than folded, and the refusal names the other entry. Folding
+	// here would decide which of the two survives on the store's own authority,
+	// silently retire the one the conductor named, and count a reinforcement on a
+	// path this whole verb promises counts nothing. Merge is the verb for joining
+	// two entries, it says which one survives, and it counts nothing — so the
+	// refusal is a signpost to it rather than a dead end.
+	//
+	// j == i is the entry matching ITSELF, which is not a collision and must stay
+	// allowed: it is every reword that only changes case or trailing punctuation,
+	// and every reword back to one of this entry's own prior wordings.
+	if j := s.foldTargetLocked(text); j >= 0 && j != i {
+		return fmt.Errorf("score refine: entry %s already says that; merge them rather than rewording one into the other", s.entries[j].Id)
+	}
+	now := time.Now().UTC()
+	evs := []event{{Schema: Schema, Event: EventEdited, Id: e.Id, At: now, Source: sourceConductor, Text: text}}
+	// Counted into a local and folded into the store's health only where the
+	// mutation commits, the way a reconcile pass holds its own counters.
+	var evictions int
+	reword(&e, text, &evictions)
+	return s.applyLocked(evs, func() error {
+		s.entries[i] = e
+		s.health.AliasEvictions += evictions
+		return s.replaceMDLineLocked(e.Id, formatLine(e.Id, e.Text))
+	})
+}
+
+// lowerLocked pulls the entry down one rung. The caller holds the lock and has
+// reconciled.
+//
+// ONE rung, with no target to name, and that is the whole proof that invariant
+// I6 survives the conductor: the verb takes no tier at all, so there is no
+// number for a caller to get wrong or for a compromised one to choose. The
+// decrement below is guarded by the bottom of the ladder and is the only tier
+// this file's conductor path writes; replayLocked's `lowered` case applies the
+// same rule to a record read back, so a hand-edited log cannot raise through it
+// either. Nothing anywhere in Refine calls Policy.ceiling, because nothing in
+// Refine goes up.
+//
+// It is #37's one and only demotion, and it destroys nothing (invariant I7): the
+// tier the entry gave up is still in the `raised` record that granted it, and
+// the `lowered` record says who took it back and when.
+func (s *Store) lowerLocked(i int) error {
+	e := s.entries[i]
+	if e.Tier <= 1 {
+		return fmt.Errorf("score refine: entry %s is already on the bottom rung", e.Id)
+	}
+	now := time.Now().UTC()
+	e.Tier--
+	evs := []event{{Schema: Schema, Event: EventLowered, Id: e.Id, At: now, Source: sourceConductor, Tier: e.Tier}}
+	return s.applyLocked(evs, func() error {
+		s.entries[i] = e
+		return nil
+	})
+}
+
+// replaceMDLineLocked rewrites score.md with the first line carrying id replaced
+// by repl, or removed when repl is empty. The caller holds the lock.
+//
+// THE FIRST line, because that is the one reconcileLocked resolves the entry
+// against: a second line repeating an id is a bullet to that pass, not this
+// entry. Acting on both would make the two writers of this file disagree about
+// which line an entry is.
+//
+// Every other byte is written back exactly as it was read — the operator's
+// prose, their comments, their blank lines. That is the rule reconcileLocked
+// already keeps ("score.md itself is rewritten only to…"), and it is the one a
+// second writer of this file could most easily break by projecting the entry set
+// over the top of it; see projectLocked, which does exactly that and is reserved
+// for a file that is not there at all.
+//
+// A file with no line for the id is left alone rather than reported: Refine
+// reconciled before it got here, so every live entry has a line, and inventing
+// an error for a state the caller has just ruled out would be a refusal nobody
+// could act on.
+func (s *Store) replaceMDLineLocked(id, repl string) error {
+	data, err := os.ReadFile(s.mdPath)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	i := slices.IndexFunc(lines, func(line string) bool {
+		got, text, ok := parseLine(line)
+		return ok && got == id && text != ""
+	})
+	if i < 0 {
+		return nil
+	}
+	if repl == "" {
+		return s.writeMDLocked(slices.Delete(lines, i, i+1))
+	}
+	lines[i] = repl
+	return s.writeMDLocked(lines)
 }
 
 // Render returns the working set for the given dispatch context — the
@@ -2732,7 +3104,7 @@ func (s *Store) replayLocked() error {
 				// this build will not grant is a fact about the log, and silence
 				// about it is how an operator ends up asking why an entry reads as
 				// "noted" when the history says otherwise.
-				s.health.RejectedRaises++
+				s.health.RejectedTiers++
 			}
 		case EventEdited:
 			if e := live[ev.Id]; e != nil {
@@ -2744,6 +3116,29 @@ func (s *Store) replayLocked() error {
 				// (sourceRecovery) needs no branch of its own any more: nobody
 				// edited anything there either.
 				reword(e, ev.Text, &s.health.AliasEvictions)
+			}
+		case EventMerged:
+			// The conductor gave this entry another's wording to fold on. Only the
+			// alias is replayed: the merge changed no count and no tier when it
+			// happened (see Refine), so there is nothing else of it to rebuild, and
+			// the entry it absorbed is retired by its own record below.
+			if e := live[ev.Id]; e != nil {
+				alias(e, ev.Text, &s.health.AliasEvictions)
+			}
+		case EventLowered:
+			// A `lowered` record may only move a tier DOWN, and the guard is what
+			// makes invariant I6 hold across a RESTART as well as across a call.
+			// lowerLocked can write nothing else — it decrements — so on a log this
+			// daemon wrote the guard never fires; what it stops is a hand-edited
+			// log turning the conductor's one demotion into a promotion the ladder
+			// never granted. Rejected rather than clamped, and counted, exactly as
+			// an out-of-range `raised` record is.
+			switch e := live[ev.Id]; {
+			case e == nil:
+			case ev.Tier >= 1 && ev.Tier < e.Tier:
+				e.Tier = ev.Tier
+			default:
+				s.health.RejectedTiers++
 			}
 		case EventRetired:
 			delete(live, ev.Id)
@@ -3398,18 +3793,28 @@ func appendAlias(aliases []string, prior string) (out []string, evicted bool) {
 	return out, evicted
 }
 
-// reword retires an entry's current wording into its aliases and gives it the
-// new one — the three steps that must happen together, with the eviction counter
-// the one most easily forgotten. It is package-level and takes the counter by
-// pointer because the two callers count into different places: replayLocked
-// straight into the store's standing health, and a reconcile pass into the
-// counters it applies only if it commits. R6's merge is slated to be the third.
-func reword(e *Entry, text string, evictions *int) {
+// alias keeps prior as one of the entry's wordings and counts what the cap threw
+// out to make room — the pair that must happen together, with the counter the
+// half most easily forgotten. It is what the conductor's MERGE does on its own
+// (a wording is gained, none is retired) and the first half of what a reword
+// does.
+//
+// It is package-level and takes the counter by pointer because its callers count
+// into different places: replayLocked straight into the store's standing health,
+// a reconcile pass into the counters it applies only if it commits, and the two
+// conductor corrections into a local they fold in on the same commit.
+func alias(e *Entry, prior string, evictions *int) {
 	var evicted bool
-	e.Aliases, evicted = appendAlias(e.Aliases, e.Text)
+	e.Aliases, evicted = appendAlias(e.Aliases, prior)
 	if evicted {
 		*evictions++
 	}
+}
+
+// reword retires an entry's current wording into its aliases and gives it the
+// new one — the three steps that must happen together. See alias for the counter.
+func reword(e *Entry, text string, evictions *int) {
+	alias(e, e.Text, evictions)
 	e.setText(text)
 }
 
@@ -3470,6 +3875,14 @@ func (s *Store) writeSnapshotLocked() error {
 // is the CONSEQUENCE of a reinforcement, and counting it as one too would let a
 // single fold that crossed the threshold count twice. A `retired` drops the
 // key, because a retired entry is not ranked and its id is never reissued.
+//
+// The conductor's three records move nothing either, and the SOURCE test above
+// is what holds the reword case: an `edited` stamped sourceConductor falls
+// through, while the operator's own falls in. That is deliberate and it is R4's
+// ruling followed all the way down — a conductor reword counts nothing, so it
+// must not buy the rank a fresh position is worth either, which is the one thing
+// an operator's edit legitimately does buy. `merged` and `lowered` name no case
+// at all, for the same reason.
 func (s *Store) noteEventLocked(ev event) {
 	s.seq++
 	switch {

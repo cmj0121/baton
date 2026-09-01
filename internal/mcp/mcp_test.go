@@ -1,15 +1,12 @@
 package mcp
 
 import (
-	"bytes"
 	"encoding/json"
-	"io"
 	"net"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/cmj0121/baton/internal/control"
 	"github.com/cmj0121/baton/internal/server"
 )
 
@@ -20,30 +17,12 @@ type testResp struct {
 }
 
 // run feeds the newline-joined requests through a server wired to a live baton
-// over sock, and returns the decoded responses in order.
+// over sock, and returns the decoded responses in order. Declaring no panel is
+// what an MCP server started outside one does, which is every test but the
+// conductor's.
 func run(t *testing.T, sock string, reqs ...string) []testResp {
 	t.Helper()
-	s := New("9.9.9")
-	s.dial = func() (*control.Client, error) { return control.DialSocket(sock, "", "") }
-
-	in := strings.NewReader(strings.Join(reqs, "\n"))
-	var out bytes.Buffer
-	if err := s.Serve(in, &out); err != nil {
-		t.Fatalf("serve: %v", err)
-	}
-
-	var resps []testResp
-	dec := json.NewDecoder(&out)
-	for {
-		var r testResp
-		if err := dec.Decode(&r); err == io.EOF {
-			break
-		} else if err != nil {
-			t.Fatalf("decode response: %v", err)
-		}
-		resps = append(resps, r)
-	}
-	return resps
+	return runAs(t, sock, "", reqs...)
 }
 
 func startServer(t *testing.T) string {

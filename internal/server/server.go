@@ -78,11 +78,12 @@ type clientConn struct {
 	// connection under guardConductor; self is the conductor's own panel id, the
 	// panel it is forbidden to close/signal/feed input to. They are written once
 	// in the hello handler and thereafter only read, all on this connection's
-	// single command-loop goroutine, so they need no lock. lastSpawn is the last
-	// time this connection's panel.create was admitted, for the spawn-rate cap.
-	role      string
-	self      string
-	lastSpawn time.Time
+	// single command-loop goroutine, so they need no lock.
+	//
+	// NEITHER RATE CAP KEEPS ITS STATE HERE, and the reason is worth reading
+	// before adding a third: see Server.spawn and Server.refine.
+	role string
+	self string
 
 	// id, source and since are this connection's row in the remote overlay: a
 	// stable id remote.kick names it by, the label it called itself on hello
@@ -470,6 +471,43 @@ type Server struct {
 	// pass the "no conductor exists yet" check. Guarded by mu.
 	conductorPending bool
 
+	// spawn and refine are the two agent-facing rate caps, keyed by the PANEL the
+	// connection DECLARED as its own, not by the connection itself. Guarded by mu.
+	// See minConductorSpawnGap and minRefineGap for what each one is worth, and
+	// the throttle type for why they are shaped alike.
+	//
+	// THE IDENTITY IS THE WHOLE OF IT. Both stamps used to live on the clientConn,
+	// which reads as the obvious place and is wrong for anything an agent drives:
+	// `baton mcp` dials a fresh connection for every tool call and closes it
+	// (internal/mcp's callTool), and `baton ctl` is a whole process per command,
+	// so per-connection state is destroyed between two calls of a loop. Measured
+	// against a four-a-second setting: sixty merges admitted in three seconds
+	// over sixty connections, and twenty fresh connections making one call each
+	// managed fifty a second — while the very same cap throttled a persistent
+	// connection perfectly. The fence held only where nothing walks.
+	//
+	// That was true of the spawn cap from the day it was written: baton_spawn
+	// goes through the same per-call dial, so the limit that exists precisely
+	// because an LLM will loop was inert on the path the LLM uses. Both are fixed
+	// here, by the same change, because they are one bug.
+	//
+	// BE EXACT ABOUT WHAT THE KEY IS, in the voice connProvenance uses. The two
+	// caps do not check the declared panel to the same depth. A refine is gated by
+	// isConductor first, which compares the declared self against the fleet, so
+	// its stamp is keyed on a panel the server agreed the caller is. A spawn is
+	// gated by guardConductor, which reads cc.self and validates it against
+	// nothing — so an agent varying Self per dial still walks through the spawn
+	// cap. That is not a hole worth closing while #38's trust model already
+	// declines to be a boundary against an agent holding the operator's own uid;
+	// it is the difference between an evasion that requires knowing something and
+	// the old bug, which required nothing at all.
+	spawn  throttle
+	refine throttle
+
+	// merges watches for the SLOW collapse of the fleet memory, the one the rate
+	// cap cannot catch. Guarded by mu. See mergeAlarm.
+	merges mergeAlarm
+
 	// globalShellPending reserves the global-shell singleton across the unlocked
 	// spawn in createPanel, the same way conductorPending guards the conductor, so
 	// two near-simultaneous global-shell creates cannot both pass the check.
@@ -744,6 +782,8 @@ func New(ln net.Listener, opts ...Option) *Server {
 		heartbeat:       proto.HeartbeatInterval,
 		cg:              cgroup.New(),
 		containers:      make(map[string]string),
+		spawn:           throttle{gap: minConductorSpawnGap},
+		refine:          throttle{gap: minRefineGap},
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -2077,8 +2117,61 @@ const (
 
 	// minConductorSpawnGap throttles a conductor's panel.create rate: a tight
 	// loop cannot spray panels faster than a person ever would.
+	//
+	// Keyed on the conductor's PANEL and not on its connection — see
+	// Server.spawn, which says what the connection-keyed version failed to
+	// throttle and why baton_spawn walked straight through it.
 	minConductorSpawnGap = 250 * time.Millisecond
 )
+
+// throttle is one rate cap: the shortest gap it admits an action across, the
+// identity it last admitted one for, and when.
+//
+// gap is a FIELD rather than a parameter, so the cap is one thing rather than a
+// stamp plus whatever figure the caller happened to bring. Each throttle has a
+// single call site today, so nothing can drift yet; the moment one has two, a
+// parameter is one throttle checked against two different gaps and neither call
+// site looks wrong on its own. A throttle built without one admits everything,
+// which is why both are set where the Server is (New, and gateServer for the
+// tests that drive them).
+//
+// ONE identity rather than a map, because both of its users are keyed on a
+// singleton — the conductor panel (hasConductorLocked), whose id survives a
+// respawn — so at most one is worth remembering. A caller with a different
+// identity is admitted and takes the slot; if the singleton were ever broken,
+// two conductors would share one stamp and throttle each other, which is a
+// guardrail behaving conservatively rather than a correctness failure.
+type throttle struct {
+	gap time.Duration
+	who string
+	at  time.Time
+}
+
+// tooSoon reports whether id already had an action admitted within the gap, and
+// stamps the attempt when it did not. The duration returned is how long ago that
+// one was, for the log line. The caller holds Server.mu.
+//
+// It stamps only on the ADMITTING branch. A refused attempt must not push the
+// next allowed one further away, or a caller polling faster than the gap would
+// lock itself out for as long as it kept asking — a loop gets exactly one
+// through per gap, which is the whole intent.
+func (t *throttle) tooSoon(id string, now time.Time) (time.Duration, bool) {
+	if t.who == id && !t.at.IsZero() && now.Sub(t.at) < t.gap {
+		return now.Sub(t.at), true
+	}
+	t.who, t.at = id, now
+	return 0, false
+}
+
+// tooSoon takes Server.mu around one throttle check. The two rate caps both run
+// off the command loop, where the lock is not already held — so the name carries
+// no Locked suffix: everywhere else in this package that suffix means the CALLER
+// holds mu, and this takes it.
+func (s *Server) tooSoon(t *throttle, id string, now time.Time) (time.Duration, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return t.tooSoon(id, now)
+}
 
 // guardConductor returns a denial reason when cmd is forbidden for a scoped
 // conductor connection, or "" when it is allowed. A non-conductor connection
@@ -2146,17 +2239,19 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 		// left for exactly that.
 		return "conductor role: the inbox is an operator surface"
 	case "panel.create":
-		now := time.Now()
-		if !cc.lastSpawn.IsZero() && now.Sub(cc.lastSpawn) < minConductorSpawnGap {
-			return "conductor role: spawning too fast, slow down"
-		}
 		s.mu.Lock()
 		n := len(s.panels)
 		s.mu.Unlock()
 		if n >= maxConductorFleet {
 			return fmt.Sprintf("conductor role: fleet at capacity (%d panels)", maxConductorFleet)
 		}
-		cc.lastSpawn = now
+		// Checked LAST, so the capacity refusal above — which is about the fleet
+		// rather than about this caller — does not spend the caller's slot. Keyed
+		// on the conductor's panel rather than on this connection, because
+		// baton_spawn dials per tool call; see Server.spawn.
+		if _, tooSoon := s.tooSoon(&s.spawn, cc.self, time.Now()); tooSoon {
+			return "conductor role: spawning too fast, slow down"
+		}
 	}
 	return ""
 }
@@ -2545,6 +2640,14 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		s.scoreList(cc, cmd)
 	case "score.status":
 		send(cc, proto.ServerMsg{Type: "score", Score: s.scoreStatus()})
+	case "score.merge", "score.reword", "score.lower":
+		// The conductor's three corrections, and the daemon's FIRST surface that
+		// is reserved to it rather than withheld from it. The gate is in
+		// scoreRefine, beside the thing it protects, because it is a different
+		// question from guardConductor's: that one asks what a connection SAYS it
+		// is and takes away, this one asks which panel the server itself marked
+		// and gives.
+		s.scoreRefine(cc, cmd)
 	default:
 		send(cc, proto.ServerMsg{Type: "error", Error: fmt.Sprintf("unknown action %q", cmd.Action)})
 	}
@@ -2720,6 +2823,25 @@ func weakens(have, want string) bool {
 	return have != "" && have != want
 }
 
+// conductorLocked returns the index of the panel this server marked Conductor,
+// and whether there is one at all. It is the ONE scan of the fleet for that flag,
+// and it deliberately says nothing about whether the panel is still alive.
+//
+// Its two callers want opposite answers about a conductor whose process exited,
+// and putting the scan here is what lets both rules sit beside each other rather
+// than one of them living inside the other's function. hasConductorLocked counts
+// the dead slot as a conductor, because that is what makes a respawn keep the id.
+// isConductor counts it as absent, because the write surface must close when the
+// agent behind it is gone. Caller holds s.mu.
+func (s *Server) conductorLocked() (int, bool) {
+	for i, p := range s.panels {
+		if p.Conductor {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
 // hasConductorLocked reports whether a conductor panel already exists or is mid-
 // spawn. It holds the singleton invariant: a second conductor.create is refused
 // while the first is live (running or an exited dead slot) or being created.
@@ -2728,12 +2850,8 @@ func (s *Server) hasConductorLocked() bool {
 	if s.conductorPending {
 		return true
 	}
-	for _, p := range s.panels {
-		if p.Conductor {
-			return true
-		}
-	}
-	return false
+	_, ok := s.conductorLocked()
+	return ok
 }
 
 func (s *Server) clearConductorPending() {
@@ -2987,9 +3105,11 @@ agents. You are the **conductor**: you orchestrate the other panels (agents and
 shells) in the fleet. You have no source code here; this workspace exists only so
 you can drive baton.
 
-If you speak MCP, baton's tools are auto-loaded from .mcp.json: ` +
+If you speak MCP, baton's tools are auto-loaded from .mcp.json. The fleet: ` +
 		"`baton_list`, `baton_spawn`, `baton_send`, `baton_group`, `baton_rename`, " +
-		"`baton_pin`, `baton_unpin`, `baton_signal`, `baton_close`" + `. Prefer them.
+		"`baton_pin`, `baton_unpin`, `baton_signal`, `baton_close`" + `. The fleet's
+memory: ` + "`score_submit`, `score_merge`, `score_reword`, `score_lower`" + ` — see
+below. Prefer them all to shelling out.
 
 Either way, the same verbs are available as the ` + "`baton ctl`" + ` command:
 
@@ -3006,6 +3126,39 @@ Either way, the same verbs are available as the ` + "`baton ctl`" + ` command:
 You may arrange and drive every other panel. You may NOT act on your own panel
 (id ` + id + `), reload the server, or spawn faster than the rate cap — the
 server will refuse these.
+
+## Proofreading the fleet's memory
+
+baton keeps a short memory of how this fleet behaves and prepends the few
+entries that rank highest to every brief it delivers.
+**You do not run that policy.** The server decides it: it records an
+observation the moment it arrives, folds the repeats, counts them, earns the
+tiers and picks which entries each brief carries — in Go, deterministically,
+whether or not you are running. You cannot set an entry's importance, order a
+brief, or exempt an entry from one, and there is no tool here that would let
+you.
+
+You can still **add** to the memory, exactly as any worker agent can:
+` + "`score_submit`" + ` records one short observation, which enters at the lowest
+tier and climbs only by being said again — by anyone, over time. It is not a
+lever, and repeating yourself to move one is the fleet lying to itself.
+
+What is yours ALONE is **proofreading the memory when you have nothing else to
+do**. Three tools, and all three are corrections:
+
+    score_merge   join two entries that say the same thing in different words
+    score_reword  fix an entry's wording — the old one is kept, so repeats of
+                  it still fold into the same entry
+    score_lower   pull an entry down one rung when it was raised in error
+
+None of the three counts as anything. Correcting a statement is not the fleet
+saying it again, so no correction promotes an entry, there is no tool that
+raises one, and the top rung is the operator's to grant and no one else's.
+Corrections are rate-limited to a few a second, and the daemon says so out
+loud when merging has taken more than half of what the fleet remembered — both
+because these change a file a person owns. Read the memory with
+` + "`baton ctl score list`" + ` before you change it, and leave an entry alone rather
+than guess at what it meant.
 
 If an "Operator's brief" section follows below, your operator wrote it to set
 your goal — treat it as your standing instructions.

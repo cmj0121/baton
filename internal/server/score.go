@@ -7,6 +7,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/score"
 )
@@ -170,8 +171,14 @@ func ScoreFolds(folds []score.Fold) {
 // zerolog and score, and internal/score is stdlib-only on purpose.
 //
 // Delta counts what THIS pass did; Health is the store's standing — a gauge
-// (oversized) plus the four counters that each say the store chose to remember
-// less. None of the latter is an error, and none is visible any other way.
+// (oversized) plus the counters that each say the store hit something it had to
+// tolerate: a torn log line, a cache it could not rewrite, a repeat it declined
+// to count, a fold record it dropped, an alias it evicted, a tier record it
+// refused. None of them is an error, and none is visible any other way.
+//
+// It is not the only reporter of the eviction counter any more. A conductor's
+// correction produces no Delta at all, so it never reaches this line; scoreRefine
+// reports its own evictions, on the action that caused them.
 func ScoreCounters(e *zerolog.Event, d score.Delta, h score.Health) *zerolog.Event {
 	return e.Int("admitted", d.Admitted).
 		Int("reattributed", d.Reattributed).
@@ -187,7 +194,7 @@ func ScoreCounters(e *zerolog.Event, d score.Delta, h score.Health) *zerolog.Eve
 		Int("swallowed_repeats", h.SwallowedRepeats).
 		Int("unreported_folds", h.UnreportedFolds).
 		Int("alias_evictions", h.AliasEvictions).
-		Int("rejected_raises", h.RejectedRaises)
+		Int("rejected_tiers", h.RejectedTiers)
 }
 
 // dispatchBrief binds a brief to the panel it is about to be delivered to: the
@@ -482,6 +489,338 @@ func (s *Server) scoreSubmit(cc *clientConn, cmd proto.Command) {
 		Id     string `json:"id"`
 		Folded bool   `json:"folded,omitempty"`
 	}{Id: e.Id, Folded: folded})})
+}
+
+// minRefineGap throttles the conductor's score corrections, the way
+// minConductorSpawnGap throttles its panel.create — and for the same reason,
+// which is that the thing holding these tools is a loop.
+//
+// The measured shape: sixty-one merges in nine tenths of a second collapsed a
+// sixty-two entry store to a single entry, and there is no undo for that beyond
+// reading score-events.jsonl by hand, which is precisely what invariant I8 says
+// an operator must never need. It has a second cost too. A merge is NOT cheap,
+// and what it costs is written down where it is paid rather than copied here to
+// go stale: see score.mergeLocked, which holds the store's mutex for two durable
+// appends and a whole-file rewrite. Store.View shares that mutex, so one merge
+// can stall a brief being assembled for another panel for as long as one takes.
+// Unthrottled, sustained refining pushed dispatch p50 from 2.8 ms to 36 ms for
+// the whole fleet; paced by this cap it sits at 2.8 ms.
+//
+// A quarter second is the same figure the spawn cap uses, chosen the same way:
+// far below anything a person doing this deliberately would notice, far above
+// what a loop needs to do damage at machine speed. It is a separate constant
+// rather than a shared one because the two caps answer to different pressures
+// and a later tuning of one must not silently retune the other.
+//
+// It is a guardrail against agent accidents over a uid-private socket, not a
+// budget: it bounds the RATE, never the total. An operator who wants a hundred
+// merges gets them, over half a minute, with a log line each. What the rate
+// alone cannot see is the patient version of the same accident, which is what
+// noteMergeDrop is for.
+const minRefineGap = 250 * time.Millisecond
+
+// The slow-collapse alarm: a Warn when merges have taken more than
+// mergeAlarmDropPercent of the entries the store held at the start of a
+// mergeAlarmWindow. See mergeAlarm.
+//
+// It is an ALARM and not a budget, deliberately. A cap on the total would refuse
+// a legitimate large tidy-up — an operator who has just noticed forty
+// near-duplicates is exactly the person this verb exists for — and refusing them
+// to catch a loop is the wrong trade. So nothing is blocked; the operator is
+// told, which is all invariant I8 asks and all that is needed once the rate cap
+// has already made the collapse take minutes rather than seconds.
+//
+// Half, within a minute, above a floor the store's own tuning sets. Each figure
+// earns its place:
+//
+//   - HALF, because a proportion is what makes this a statement about the memory
+//     rather than about a number of merges. A tenth would fire on any ordinary
+//     tidy-up of a small store; losing half of what the fleet remembers is not a
+//     tidy-up under any reading.
+//   - A MINUTE, because it has to be long enough that a conductor working
+//     honestly through a list of duplicates at the paced rate does not trip on a
+//     handful, and short enough that the operator hears about a collapse while
+//     it is happening rather than afterwards.
+//
+// THE FLOOR IS NOT A CONSTANT HERE, and that is the third figure's whole story.
+// It is the store's own working set plus one — the smallest store that does NOT
+// fit entirely into a single brief — read off Policy where the alarm is asked
+// (scoreRefine). Below it, everything the fleet remembers is already in front of
+// every agent on every dispatch, and "half of it" is three entries: merging the
+// only pair you have is ordinary, and an alarm that fires on it is one people
+// learn to ignore.
+//
+// It was the literal 8, hand-mirroring internal/score's defaultWorkingSet with a
+// cross-package test to keep the mirror honest. The mirror is only right for a
+// fleet that never touches score.working-set: set it to twelve — it is operator
+// config, and #46 makes it reloadable while the daemon runs — and every store of
+// eight to twelve alarmed while fitting whole into every brief, which is the
+// "alarm people learn to ignore" the paragraph above argues against. A constant
+// that needs a breadcrumb test in another package to stay true is a constant on
+// the wrong side of the boundary. Policy is clamped, so the store answers 7
+// unset and the operator's own figure once they tune it.
+//
+// EVERY ONE OF THESE IS PINNED IN BOTH DIRECTIONS, and that sentence is the
+// point of this comment rather than a footnote to it. A tuned number is the
+// artefact most worth defending, and a test that only proves the mechanism FIRES
+// leaves every loosening free: each figure here was argued at length and
+// asserted only from the tightening side, so raising the window to an hour,
+// dropping the share to a tenth and lowering the floor all passed the suite
+// while contradicting the paragraphs above. An argument for a number is not an
+// argument until it is an assertion, in the direction the prose is about. See
+// TestTheAlarmsFiguresAreWhatTheyClaim for the arithmetic and
+// TestTheAlarmFloorIsTheWorkingSet for the floor — which is an assertion about
+// what a tuned fleet is told, rather than a mirror checked against a default.
+const (
+	mergeAlarmWindow      = time.Minute
+	mergeAlarmDropPercent = 50
+)
+
+// mergeAlarm watches for the patient version of the accident minRefineGap stops:
+// not sixty merges in a second, but a conductor quietly merging its way through
+// the whole memory at the paced rate, where every individual step looks
+// reasonable. Four a second is what the cap allows, so the few hundred entries
+// #38 sizes this store at are gone in a minute or two — slow enough that no
+// single call looks wrong, fast enough that nobody is going to be reading the
+// daemon log while it happens.
+//
+// It has the shape the throttle has, and for the reason the throttle earned it:
+// a small type with a pure, clock-injectable method, so the figures it turns on
+// are asserted as arithmetic rather than reconstructed from a live server, a log
+// capture and a pacing helper.
+//
+// at and from are the current window's start and the entry count it opened on;
+// fired says that window has already alarmed. The zero value opens its first
+// window on the first merge. Guarded by Server.mu.
+type mergeAlarm struct {
+	at    time.Time
+	from  int
+	fired bool
+}
+
+// note takes one merge — the entry count before it and the count after — and
+// answers whether this is the merge that crossed the line, and the count the
+// current window opened on, for the log line. floor is the smallest store worth
+// alarming about; the caller reads it off the store's policy, and the constants
+// above say why it is not one of them.
+//
+// It fires ONCE per window. The point is to tell an operator that their memory
+// is collapsing, and a line per merge after that adds nothing they can act on —
+// the per-merge Info lines are already there for anyone reconstructing it. The
+// window then rolls and can alarm again, so a collapse that outlasts a minute is
+// not reported once and forgotten.
+//
+// Nothing is refused here. See the constants for why an alarm rather than a
+// budget. The caller holds Server.mu.
+func (a *mergeAlarm) note(before, after, floor int, now time.Time) (from int, alarm bool) {
+	if a.at.IsZero() || now.Sub(a.at) > mergeAlarmWindow {
+		// The window opens on the count BEFORE this merge, so the very first merge
+		// of a window is measured against a store that still had its entry.
+		a.at, a.from, a.fired = now, before, false
+	}
+	if a.fired || a.from < floor || (a.from-after)*100 < a.from*mergeAlarmDropPercent {
+		return a.from, false
+	}
+	a.fired = true
+	return a.from, true
+}
+
+// scoreRefine handles the conductor's three corrections — score.merge,
+// score.reword and score.lower — behind the gate below. Everything about WHAT
+// they do is internal/score's; this is the wire, the gate, the rate cap, and the
+// log lines.
+//
+// Every exit logs, and that symmetry is the point rather than a courtesy. A
+// refusal is the interesting event here: fifteen impersonation attempts from a
+// worker panel used to leave no trace at all while the successes logged at Info,
+// so the daemon was quietest about exactly the thing an operator would want to
+// know. Refusals go to Warn — someone is asking for a write surface they do not
+// hold, or a loop is running — and successes to Info.
+//
+// The reply names the entry that was corrected and nothing else. What the
+// correction did to it is a question score.list answers with the whole
+// breakdown, and inventing a second, thinner shape for it here would be a
+// second thing to keep in step with the store.
+func (s *Server) scoreRefine(cc *clientConn, cmd proto.Command) {
+	if !s.isConductor(cc) {
+		// Warn, with what the connection claimed: a panel that declared the
+		// conductor role and is not the conductor is either a broken client or the
+		// thing the gate exists for, and an operator can act on neither if the
+		// refusal is silent. The same reasoning the monotone-hello guard uses.
+		log.Warn().Str("action", cmd.Action).Str("entry", cmd.ID).
+			Str("self", cc.self).Str("declared_role", cc.role).
+			Msg("refused a score correction: this connection is not the conductor panel")
+		send(cc, proto.ServerMsg{Type: "error", Error: "score refine: only the conductor may correct the fleet's memory"})
+		return
+	}
+	// A nil store is not always "switched off" — see scoreSubmit, which says the
+	// same thing for the same reason.
+	if !s.scoreState.available() {
+		log.Warn().Str("action", cmd.Action).Str("entry", cmd.ID).Str("reason", s.scoreState.reason()).
+			Msg("refused a score correction: the store is not available")
+		send(cc, proto.ServerMsg{Type: "error", Error: s.scoreState.reason()})
+		return
+	}
+	// Throttled on the PANEL the gate just identified, not on this connection —
+	// see Server.refine. The check stamps as it admits, so a caller refused
+	// here does not push the next allowed correction further away: a loop gets
+	// exactly one through per gap.
+	if since, tooSoon := s.tooSoon(&s.refine, cc.self, time.Now()); tooSoon {
+		log.Warn().Str("action", cmd.Action).Str("entry", cmd.ID).Str("conductor", cc.self).
+			Dur("since_last", since).Msg("refused a score correction: correcting too fast")
+		send(cc, proto.ServerMsg{Type: "error",
+			Error: "score refine: correcting the memory too fast, slow down"})
+		return
+	}
+	// The operator's own file is folded in FIRST, through the ordinary read path,
+	// and the baseline is then read off THAT view. A correction reconciles on the
+	// way in like every other mutation, so without this pass the operator's
+	// pending edits would be reconciled INSIDE the call and their alias evictions
+	// would be counted against the conductor's correction — the line below would
+	// name the wrong actor. Running the pass here instead puts those evictions on
+	// scoreLook's own reconcile line, beside the Delta that explains them.
+	//
+	// The baseline comes off the view rather than from two further calls, because
+	// it is already there: View.Health is the struct Store.Health returns and
+	// View.Total the len(entries) Store.Len counts, both captured in the single
+	// hold of the store's lock that produced this view. Re-reading them took that
+	// lock twice more on the one path whose own comments measure what holding it
+	// costs, and took the baseline from a moment LATER than the reconcile it is
+	// supposed to be the baseline for.
+	//
+	// It costs a second score.md pass on a verb the cap already limits to four a
+	// second. What it does not close is a save landing in the microseconds
+	// between this pass and the correction's own; that one still lands here, and
+	// is the same window every read-reconcile-write path in the store carries.
+	//
+	// The eviction gauge is read either side of the call, because this is one of
+	// the two paths that generate the most alias evictions and the only pair that
+	// could not report any: ScoreCounters rides a reconcile Delta, and a
+	// conductor's correction produces none. An evicted alias is a wording that
+	// will no longer fold, so the entry it would have joined gains a twin
+	// instead — the operator is entitled to see the store choosing to remember
+	// less, on the action that chose it.
+	//
+	// The entry count is taken from the same view for the same kind of reason:
+	// only a merge can take an entry out, and the alarm needs the count from
+	// before it did.
+	v := s.scoreView(score.Context{})
+	evictions, entries := v.Health.AliasEvictions, v.Total
+	// One switch, and it is the wire's: it maps the three actions onto the three
+	// store methods and names each for the log and the reply. The store takes
+	// three different arguments for the three verbs — a second entry, a wording,
+	// nothing — so there is no shared call to hoist out of here, which is exactly
+	// why internal/score stopped offering one.
+	var op, arg string
+	var err error
+	switch cmd.Action {
+	case "score.merge":
+		op, arg = "merge", cmd.From
+		err = s.scoreState.Store.Merge(cmd.ID, cmd.From)
+	case "score.reword":
+		op, arg = "reword", cmd.Prompt
+		err = s.scoreState.Store.Reword(cmd.ID, cmd.Prompt)
+	case "score.lower":
+		op = "lower"
+		err = s.scoreState.Store.Lower(cmd.ID)
+	}
+	if err != nil {
+		log.Warn().Err(err).Str("op", op).Str("entry", cmd.ID).Str("conductor", cc.self).
+			Msg("the conductor's correction was refused")
+		send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+		return
+	}
+	// Said out loud, because a refine changes what the operator already has on
+	// nobody's initiative but an agent's: a line in their own file now reads
+	// differently, or is gone, or an entry sits a rung lower with nothing in the
+	// file to show for it. Every other mutation announces itself — a submission
+	// is a new line, and a fold gets its own line through logScoreFolds — and
+	// #38's invariant I8 is that they must not have to read the event log to find
+	// out why theirs changed under them.
+	log.Info().Str("op", op).Str("entry", cmd.ID).Str("conductor", cc.self).
+		Str("arg", arg).Int("alias_evictions", s.scoreState.Store.Health().AliasEvictions-evictions).
+		Msg("the conductor corrected the fleet's memory")
+	if op == "merge" {
+		// The floor is the store's OWN working set plus one — the smallest store
+		// that does not fit entirely into one brief — taken from the policy in
+		// force on the view above rather than from a constant mirroring the
+		// package default, so a fleet that tuned score.working-set gets the alarm
+		// its own briefs justify. See mergeAlarmWindow's comment.
+		after := s.scoreState.Store.Len()
+		if from, alarm := s.noteMergeDrop(entries, after, v.Policy.WorkingSet+1, time.Now()); alarm {
+			log.Warn().Str("conductor", cc.self).Int("entries", after).
+				Int("was", from).Dur("within", mergeAlarmWindow).
+				Msg("merging has taken more than half the fleet's memory; check score.md is still what you meant")
+		}
+	}
+	send(cc, proto.ServerMsg{Type: "score", Score: scoreJSON(struct {
+		Id string `json:"id"`
+		Op string `json:"op"`
+	}{Id: cmd.ID, Op: op})})
+}
+
+// noteMergeDrop takes Server.mu around one alarm check, the way tooSoon does
+// around one throttle check and for the same reason: both run off the command
+// loop, where the lock is not already held. See mergeAlarm.note, which is where
+// the rule lives.
+func (s *Server) noteMergeDrop(before, after, floor int, now time.Time) (from int, alarm bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.merges.note(before, after, floor, now)
+}
+
+// isConductor reports whether cc is the connection of the panel THIS SERVER
+// marked Conductor. It is the gate on the refine verbs and the daemon's first
+// conductor-only surface.
+//
+// It compares cc.self against the fleet rather than reading cc.role, and the
+// difference is the whole of the check. #38 §4's rule — identified by the
+// connection, never by a claim — was written about the user's signal, and this
+// is the same rule applied to the second question the daemon now has to answer.
+//
+// guardConductor cannot serve here, and not merely because it is elsewhere: it
+// is a DENY list. It returns "allowed" for every connection that did not declare
+// the role and only refuses specific actions TO one that did, so declaring
+// `role: conductor` has until now only ever ADDED refusals. That is exactly why
+// R4's monotone hello lets a connection declare it from empty. Reserve something
+// FOR the role on top of that reasoning and it inverts: any agent panel could
+// declare itself the conductor and take merge, reword and lower over the whole
+// fleet's memory. So the role is not consulted at all.
+//
+// The server already knows the answer without asking. A conductor panel is
+// created with the Conductor flag and the singleton is maintained
+// (hasConductorLocked), so the question is whether the panel this connection
+// declared as its own is that panel. A connection with no self — the TUI, or
+// `baton ctl` from an ordinary shell — is not a panel and is refused with
+// everything else; the operator's surface on the score is their own editor
+// (#38 §3), not a verb.
+//
+// It also asks whether that panel is still ALIVE. A conductor whose process has
+// exited leaves its row in the fleet until the operator purges it — that is what
+// makes a respawn keep the id — so a flag check alone would leave the write
+// surface open for as long as the dead slot sits there, on a connection whose
+// agent is gone. Nothing in the threat model turns on it, and it is not what a
+// reader of the line above would expect either. panel.Exited is the one state
+// that means the process is not there; every other state is a panel that is
+// starting, working, or waiting, and all of them are the conductor.
+//
+// It is worth being exact about what this is and is not, in the same voice
+// connProvenance is. cc.self is still self-declared and validated against
+// nothing: an agent panel that learns the conductor's id and greets with it
+// passes this gate. What the check removes is the case that needs no knowledge
+// at all — declaring a ROLE, which every panel can do from empty and which no
+// id is required for — and that is the difference between a fence with a latch
+// and a fence with a hole in it. #38's Trust and exposure section already says
+// Score does not claim to be a boundary against a hostile agent with the
+// operator's own uid.
+func (s *Server) isConductor(cc *clientConn) bool {
+	if cc.self == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i, ok := s.conductorLocked()
+	return ok && s.panels[i].ID == cc.self && s.panels[i].State != panel.Exited
 }
 
 // scoreList answers score.list: EVERY entry the store holds, in rank order, each

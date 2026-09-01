@@ -48,8 +48,16 @@ func status(t *testing.T, s *Server) statusReply {
 // ends, so a test that wants one is three words rather than six lines.
 func scoreStore(t *testing.T) (*score.Store, string) {
 	t.Helper()
+	return scoreStoreTuned(t, score.Policy{})
+}
+
+// scoreStoreTuned is scoreStore for a test whose subject IS the tuning. Open
+// clamps a zero policy onto the package defaults, so the two differ only in what
+// the operator is taken to have set.
+func scoreStoreTuned(t *testing.T, p score.Policy) (*score.Store, string) {
+	t.Helper()
 	dir := t.TempDir()
-	st, err := score.Open(dir, score.Policy{})
+	st, err := score.Open(dir, p)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

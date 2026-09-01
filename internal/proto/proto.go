@@ -68,15 +68,15 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | panel.tail | panel.diff | panel.git | panel.log | panel.logview | panel.scratch | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run | remote.status | remote.enable | remote.disable | remote.rotate | remote.kick | score.submit | score.list | score.status
+	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | panel.tail | panel.diff | panel.git | panel.log | panel.logview | panel.scratch | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run | remote.status | remote.enable | remote.disable | remote.rotate | remote.kick | score.submit | score.list | score.status | score.merge | score.reword | score.lower
 	Kind      string   `json:"kind,omitempty"`      // panel kind for "panel.create" (default "shell")
-	ID        string   `json:"id,omitempty"`        // target panel for close/attach/input/resize/diff, the panel to rename, or the panel "score.list" ranks its entries for (empty = rank against no context)
+	ID        string   `json:"id,omitempty"`        // target panel for close/attach/input/resize/diff, the panel to rename, the panel "score.list" ranks its entries for (empty = rank against no context), or the score entry a refine verb corrects
 	Path      string   `json:"path,omitempty"`      // init command (binary path) for "panel.create"; empty = default shell
 	Args      []string `json:"args,omitempty"`      // command arguments for "panel.create" (an agent profile's args)
 	Profile   string   `json:"profile,omitempty"`   // the agent profile the spawn came from; the server resolves THAT profile's resource limits from its own config, so a client never carries a policy it could widen
 	Dir       string   `json:"dir,omitempty"`       // working directory the new panel's process runs in ("panel.create")
 	Data      []byte   `json:"data,omitempty"`      // input bytes for "panel.input"
-	Prompt    string   `json:"prompt,omitempty"`    // the task brief for "panel.dispatch"/"panel.dispatch-group": recorded on the panel(s) and delivered to the process as a unit; the note text for "score.submit"
+	Prompt    string   `json:"prompt,omitempty"`    // the task brief for "panel.dispatch"/"panel.dispatch-group": recorded on the panel(s) and delivered to the process as a unit; the note text for "score.submit"; the new wording for "score.reword"
 	Submit    string   `json:"submit,omitempty"`    // optional submit sequence appended to a dispatched prompt (default newline)
 	Ephemeral bool     `json:"ephemeral,omitempty"` // for "task.enqueue" with a spawn spec (Path/Args/Dir): close the provisioned agent once the task finishes
 	Rows      int      `json:"rows,omitempty"`      // window size for "panel.resize"
@@ -132,6 +132,16 @@ type Command struct {
 	// overlay. It is its own field rather than ID because a connection is not a
 	// panel and must never be resolvable as one.
 	Conn string `json:"conn,omitempty"`
+
+	// From is the score entry "score.merge" folds INTO the entry named by ID:
+	// that one is retired and its wording is kept on the survivor as an alias, so
+	// a later repeat of it still folds. It is its own field for the reason Conn
+	// is: a score entry is not a panel, and IDs already means "several panels".
+	//
+	// Appended and optional, so an old daemon reads a new client's frame with it
+	// zero — and answers the action it does not know with its existing `unknown
+	// action` error, which is why no version moves for this. See ProtocolVersion.
+	From string `json:"from,omitempty"`
 
 	// Conductor marks a "panel.create" as the singleton control agent. The server
 	// enforces at most one, gives it a server-managed ephemeral workspace, and

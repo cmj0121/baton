@@ -404,6 +404,38 @@ func (c *Client) ScoreSubmit(text string) (id string, folded bool, err error) {
 	return out.Id, out.Folded, nil
 }
 
+// ScoreMerge folds entry from into entry id — the first of the conductor's
+// three corrections to the fleet memory (#38 §1), beside ScoreReword and
+// ScoreLower. The absorbed entry is retired and its wording is kept on the
+// survivor, so a later repeat of it still folds.
+//
+// The daemon refuses all three to any connection that is not the conductor
+// panel's, so a cockpit calling one gets an error rather than an effect.
+//
+// Three methods rather than one with an operation string, because the three take
+// three different arguments and the mapping onto the wire is one line each; a
+// shared verb would only have moved the switch here. Each returns the daemon's
+// refusal and discards the reply payload, which names the entry the caller
+// already named — the MCP tools are the presentation.
+func (c *Client) ScoreMerge(id, from string) error {
+	_, err := c.scoreExchange(proto.Command{Action: "score.merge", ID: id, From: from})
+	return err
+}
+
+// ScoreReword replaces the wording of entry id. The prior wording is kept as an
+// alias by the store, so a later repeat of it still folds into the same entry.
+func (c *Client) ScoreReword(id, text string) error {
+	_, err := c.scoreExchange(proto.Command{Action: "score.reword", ID: id, Prompt: text})
+	return err
+}
+
+// ScoreLower pulls entry id down one rung. There is no target tier on the wire
+// because there is none in the store: the verb steps down, and only down.
+func (c *Client) ScoreLower(id string) error {
+	_, err := c.scoreExchange(proto.Command{Action: "score.lower", ID: id})
+	return err
+}
+
 // ScoreList returns every recorded fleet-memory entry as the server's raw JSON,
 // each carrying the rank and the factor breakdown that placed it, whether the
 // working set took it and — when it did not — which cap left it out, beside the
