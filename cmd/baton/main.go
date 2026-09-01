@@ -555,14 +555,49 @@ func openScore(cfg config.ScoreConfig, p score.Policy) (*score.Store, string) {
 		log.Warn().Str("dir", cfg.Directory()).
 			Msg("score directory cannot be locked on this filesystem; a second daemon here would corrupt it")
 	}
-	// #38's lifecycle asks for one line per recovery action, so what the boot
-	// pass did to the operator's files is visible without reading the event log
-	// by hand.
-	if d, h := st.Boot(), st.Health(); d != (score.Delta{}) || h != (score.Health{}) {
-		server.ScoreCounters(log.Info(), d, h).
-			Str("dir", cfg.Directory()).Msg("score recovered")
-	}
+	logScoreBoot(cfg.Directory(), st.Len(), st.Boot(), st.Health())
 	return st, ""
+}
+
+// logScoreBoot says what the boot pass did to the operator's files. It is a
+// function of its arguments and nothing else, which is what lets every branch
+// below be exercised — two of the three need a filesystem failing in a
+// particular way, and neither had ever been reached.
+//
+// THE COUNTERS are #38's lifecycle asking for one line per recovery action, so
+// what the boot did is visible without reading the event log by hand.
+//
+// THE FAILED REWRITE is said separately and at Warn, because the counters carry
+// it as the number 1. A full-disk boot logged `compaction_failures=1` and never
+// "no space left on device" — and the words are the half that says what to do.
+//
+// THE REWRITE THAT SUCCEEDED is said at Warn too, which is the odd one, because
+// what it announces is not a failure but a change nobody asked for. Compaction
+// re-spaces recency: the order of the live entries survives the rewrite and the
+// SPACING does not, so the first brief after a compacting restart can carry a
+// working set ordered differently from the last brief before it with nothing
+// submitted and no config touched. Measured against a non-compacting twin that
+// restarted byte-identical. `compacted=310` alone connects none of that to what
+// the agents then see, and an operator watching their fleet change its mind
+// deserves the one line that explains it. log_before and log_after ride along
+// because nothing else the daemon says names the growth compaction exists to
+// bound; see score.Health.LogBefore for why the record count beside them is not
+// that number.
+func logScoreBoot(dir string, entries int, d score.Delta, h score.Health) {
+	if d != (score.Delta{}) || h != (score.Health{}) {
+		server.ScoreCounters(log.Info(), d, h).
+			Str("dir", dir).Msg("score recovered")
+	}
+	if h.CompactionError != "" {
+		log.Warn().Str("dir", dir).Str("error", h.CompactionError).
+			Msg("score could not rewrite its event log; the old log is intact, but every boot from here is slower than this one")
+	}
+	if h.Compacted > 0 {
+		log.Warn().Str("dir", dir).Int("compacted", h.Compacted).Int("entries", entries).
+			Int64("log_before", h.LogBefore).Int64("log_after", h.LogAfter).
+			Msg("score compaction rewrote the log; entry order is preserved but recency spacing is not, " +
+				"so a panel's working set may be ordered differently than before this restart")
+	}
 }
 
 func runServerOn(ln net.Listener, sock string) error {

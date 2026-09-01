@@ -1204,6 +1204,17 @@ type Store struct {
 // errDisabled is returned by mutations on the disabled (nil) store.
 var errDisabled = errors.New("score is disabled")
 
+// ErrSubmissionText marks the two refusals Submit makes at its own boundary,
+// BEFORE the store touches the disk: text that sanitised away to nothing, and
+// text past maxEntryRunes.
+//
+// It is exported so a caller can tell those apart from a durable write that did
+// not land, because the two have different audiences and only one of them is an
+// operator's problem. The daemon warns about a broken store on the line an
+// operator greps for exactly that; without this an agent sending spaces produces
+// the same line, and a line anyone can manufacture is one nobody can act on.
+var ErrSubmissionText = errors.New("score: submission refused")
+
 // Open opens (or creates) the store in dir under the policy p, clamped as
 // Policy.clamp describes, so a zero field from a config key nobody wrote lands
 // on this package's default. The directory is created 0700 and every file 0600.
@@ -1763,9 +1774,9 @@ func (s *Store) Submit(text string, prov Provenance) (Entry, bool, error) {
 	e := newEntry("", text, prov)
 	switch {
 	case e.Text == "":
-		return Entry{}, false, errors.New("score: empty submission")
+		return Entry{}, false, fmt.Errorf("%w: the text is empty", ErrSubmissionText)
 	case !e.Injectable():
-		return Entry{}, false, fmt.Errorf("score: submission is %d runes, limit is %d", len([]rune(e.Text)), maxEntryRunes)
+		return Entry{}, false, fmt.Errorf("%w: %d runes, limit is %d", ErrSubmissionText, len([]rune(e.Text)), maxEntryRunes)
 	}
 
 	s.mu.Lock()

@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -172,9 +173,19 @@ func ScoreFolds(folds []score.Fold) {
 //
 // Delta counts what THIS pass did; Health is the store's standing — a gauge
 // (oversized) plus the counters that each say the store hit something it had to
-// tolerate: a torn log line, a repeat it declined to count, a fold record it
-// dropped, an alias it evicted, a tier record it refused. None of them is an
-// error, and none is visible any other way.
+// tolerate: a torn log line, a log rewrite it could not make, a repeat it
+// declined to count, a fold record it dropped, an alias it evicted, a tier
+// record it refused. None of them is an error, and none is visible any other
+// way.
+//
+// `compacted` is the odd one and belongs on the boot line above all: it is how
+// many records the LAST compaction rewrote the event log to, and 0 when none has
+// run. Said that way rather than "the boot's", because Health is a package-level
+// type and compaction being boot-only is a restriction it is meant to outlive —
+// the sentence reads identically today and never needs revisiting. A log that
+// shrank by two orders of magnitude between two boots is a thing an operator
+// should read about rather than discover, and the daemon is the only party that
+// can say it happened.
 //
 // It is not the only reporter of the eviction counter any more. A conductor's
 // correction produces no Delta at all, so it never reaches this line; scoreRefine
@@ -190,6 +201,8 @@ func ScoreCounters(e *zerolog.Event, d score.Delta, h score.Health) *zerolog.Eve
 		Int("reprojected", d.Reprojected).
 		Int("oversized", h.Oversized).
 		Int("torn_events", h.TornEvents).
+		Int("compacted", h.Compacted).
+		Int("compaction_failures", h.CompactionFailures).
 		Int("swallowed_repeats", h.SwallowedRepeats).
 		Int("unreported_folds", h.UnreportedFolds).
 		Int("alias_evictions", h.AliasEvictions).
@@ -469,6 +482,36 @@ func (s *Server) scoreSubmit(cc *clientConn, cmd proto.Command) {
 	}
 	e, folded, err := s.scoreState.Store.Submit(cmd.Prompt, prov)
 	if err != nil {
+		// Only the DURABLE WRITE is said out loud, and score.ErrSubmissionText is
+		// what tells the two apart.
+		//
+		// A write that did not land — a full disk, a read-only mount, a directory
+		// that went away under a running daemon — is the operator's problem, and
+		// the agent that hit it is the only party that was ever told, in a reply
+		// it has no reason to keep and every reason to retry past. A fleet can go
+		// on submitting into a broken store for as long as it likes with nothing
+		// in the daemon log to show for it, and invariant I8 says the operator
+		// must not have to read the event log to learn their memory is not
+		// working — which is doubly true when the event log is the thing that
+		// could not be written.
+		//
+		// The store's own refusal of the TEXT is not that. It is the submitter's
+		// to fix, it needs nobody else told, and it is reachable by any agent that
+		// sends spaces — so logging it here would put the operator's broken-disk
+		// line under the control of every panel on the fleet. Two hundred blank
+		// submissions once produced two hundred warnings about a store that was
+		// perfectly healthy.
+		//
+		// Warn rather than Error for the reason the refine refusals are: the
+		// daemon is doing exactly what it should, and the fleet is still running.
+		// It is not throttled, and the refine cap does not cover this door: a
+		// submitting loop against a broken store is noise, and it is noise that
+		// says something true, which is the trade the alternative loses.
+		if !errors.Is(err, score.ErrSubmissionText) {
+			log.Warn().Err(err).Str("dir", s.scoreState.Store.Dir()).
+				Str("source", prov.Source).Str("panel", prov.SourcePanel).
+				Msg("score could not record a submission")
+		}
 		send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 		return
 	}
