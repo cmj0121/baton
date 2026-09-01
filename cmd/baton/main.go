@@ -527,6 +527,29 @@ func warnScorePolicy(cfg config.Config, want score.Policy, st *score.Store) {
 	}
 }
 
+// warnScoreKeysAReloadCannotApply says which score keys the operator has just
+// edited that a reload will not act on. booted is the config the daemon opened
+// its store from; now is the file the reload has read.
+//
+// The reload's own line says `config reloaded on SIGHUP` and nothing else, and
+// every other score key really does take effect — promote-at, working-set,
+// user-signals-at and all four rank weights reload live and announce themselves
+// with `score policy changed`. So an operator who moves score.dir, sends a HUP,
+// sees a success line and no complaint has every reason to believe their edit
+// took. It did not, and there is no other symptom: the fleet goes on using the
+// old directory, and the new one simply stays empty.
+//
+// WHICH keys those are is config.ScoreConfig.UnappliedOnReload's to say, beside
+// the doc that claims everything else reloads. This is only the saying of it,
+// which is where a log line belongs.
+func warnScoreKeysAReloadCannotApply(booted, now config.ScoreConfig) {
+	for _, k := range now.UnappliedOnReload(booted) {
+		log.Warn().Str("key", k.Key).Str("in_force", k.InForce).Str("configured", k.Configured).
+			Msg(k.Key + " changed but a reload cannot apply it; the store opens once at boot, " +
+				"so restart the daemon for it to take effect")
+	}
+}
+
 // scoreOpenTimeout bounds how long the daemon waits for the fleet memory before
 // it gives up and serves the fleet without one.
 //
@@ -756,6 +779,10 @@ func runServerOn(ln net.Listener, sock string) error {
 	// running it on the numbers the daemon can still read.
 	scorePol, _ := scorePolicy(cfg.Score, err)
 	scoreStore, scoreReason := openScore(cfg.Score, scorePol, scoreOpenTimeout)
+	// The two score keys a reload cannot apply, remembered as they were AT BOOT
+	// so a later reload can tell whether the operator has since changed one. See
+	// warnScoreKeysAReloadCannotApply.
+	bootedScore := cfg.Score
 	srv := server.New(ln, append(buildServerOptions(rc, stateF), usageOption(cfg), limitsOption(cfg),
 		// The fan-out's ceiling is the plugin's own per-hook allowance, spent once
 		// for a whole group. It is handed over rather than restated in the server
@@ -821,7 +848,9 @@ func runServerOn(ln net.Listener, sock string) error {
 		// score.dir / score.enabled deliberately do NOT: the store is opened once
 		// at boot (above), because swapping a live store under in-flight
 		// dispatches is R7's lifecycle work (#39). A SIGHUP leaves the fleet
-		// memory itself exactly as booted.
+		// memory itself exactly as booted — and SAYS SO when the file it just read
+		// asks for something else, because the reload's own line says only that a
+		// reload happened.
 		//
 		// A config that would not PARSE is not a config that says "use the
 		// default": `cfg` is the zero value then, and retuning the store from it
@@ -835,8 +864,11 @@ func runServerOn(ln net.Listener, sock string) error {
 		// down and is running on another one, which is the surprise this whole
 		// knob exists to avoid (invariant I8). Warned on the reload as well as at
 		// boot, because retuning the threshold is exactly when the typo is made.
-		if err == nil && cfg.Score.StalePromoteAt {
-			log.Warn().Msg("config key score.promote_at is ignored; the key is score.promote-at")
+		if err == nil {
+			if res.Config.Score.StalePromoteAt {
+				log.Warn().Msg("config key score.promote_at is ignored; the key is score.promote-at")
+			}
+			warnScoreKeysAReloadCannotApply(bootedScore, res.Config.Score)
 		}
 		// The SAME gate boot uses, and the same warnings, so one file cannot
 		// produce one live policy on a restart and another on a reload. This runs
