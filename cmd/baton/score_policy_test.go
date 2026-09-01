@@ -52,7 +52,7 @@ func TestScorePolicyGateReachesTheStore(t *testing.T) {
 	cfg := config.ScoreConfig{PromoteAt: 8, WorkingSet: 9}
 
 	p, _ := scorePolicy(cfg, errors.New("parse config: bad"))
-	st, reason := openScore(cfg, p)
+	st, reason := openScore(cfg, p, scoreOpenTimeout)
 	if st == nil {
 		t.Fatalf("openScore refused: %s", reason)
 	}
@@ -106,7 +106,7 @@ func TestWarnScorePolicySaysWhatWasClamped(t *testing.T) {
 	// The store is what says which numbers are actually in force, so the warning
 	// is driven by a real one rather than by re-deriving internal/score's rules
 	// here — that is the whole reason it takes the store and not a policy.
-	st, reason := openScore(config.ScoreConfig{Dir: t.TempDir()}, want)
+	st, reason := openScore(config.ScoreConfig{Dir: t.TempDir()}, want, scoreOpenTimeout)
 	if st == nil {
 		t.Fatalf("openScore refused: %s", reason)
 	}
@@ -125,7 +125,7 @@ func TestWarnScorePolicySaysWhatWasClamped(t *testing.T) {
 	// store is opened on it so the branch reads an IN-FORCE number, the way the
 	// daemon does, rather than the one the file asked for.
 	big := score.Policy{WorkingSet: score.MaxReachableWorkingSet + 1}
-	dead, reason := openScore(config.ScoreConfig{Dir: t.TempDir()}, big)
+	dead, reason := openScore(config.ScoreConfig{Dir: t.TempDir()}, big, scoreOpenTimeout)
 	if dead == nil {
 		t.Fatalf("openScore refused: %s", reason)
 	}

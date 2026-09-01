@@ -17,6 +17,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -526,6 +527,109 @@ func warnScorePolicy(cfg config.Config, want score.Policy, st *score.Store) {
 	}
 }
 
+// scoreOpenTimeout bounds how long the daemon waits for the fleet memory before
+// it gives up and serves the fleet without one.
+//
+// The listener is BOUND before runServerOn is reached and Serve does not start
+// until the store is open, so every millisecond score.Open spends is a
+// millisecond a client that has already connected sits on an accepted socket
+// with nothing coming back. score.dir is a path the operator chooses and $HOME
+// is where it defaults, so a network home directory whose server has gone away
+// puts a hard-mount stat inside that window — and a hard mount does not fail,
+// it waits. Without a bound the daemon ends up holding a listening socket it
+// will never serve, which is strictly worse than a clean failure: `baton` hangs
+// with no message, and the log says nothing, because the line that would have
+// explained it comes after the call that is stuck.
+//
+// It NARROWS that window rather than closing it. config.Load reads $HOME/.baton
+// on the same post-bind path and is not bounded by anything, so the same dead
+// mount still hangs the same daemon — a few lines earlier, and with the same
+// silence. What this removes is the store's share of it, which is the share that
+// grows with what the fleet remembers.
+//
+// Ten seconds, and the number is chosen from the other side of the trade rather
+// than from this one. A store opening slowly is NORMAL — the boot replays the
+// whole event log, measured at 461-512 ms for a 51.9 MB one — and giving up on a
+// store that was merely slow costs the fleet its memory until someone restarts
+// the daemon. Nothing bounds that log while the daemon runs, either: compaction
+// is a boot operation and what it bounds is the log's SHAPE, so a large one is
+// not a pathology this may fire on. So the bound has to sit far above a healthy
+// boot on a large store, and still short enough that a person waiting on a dead
+// mount gets an answer rather than a hang.
+//
+// It is a WAIT, not a cancellation: nothing in userspace can interrupt a stat
+// inside the kernel. What it buys is that the daemon proceeds. The goroutine
+// holding the open stays where it is until the filesystem answers it, and closes
+// whatever it is handed, so a store that arrives too late does not sit on the
+// directory's single-writer claim where nothing can reach it.
+const scoreOpenTimeout = 10 * time.Second
+
+// errScoreOpenTimeout is what waitForStore returns when the deadline passed
+// before the open answered. It is a sentinel rather than a second result,
+// because "which kind of failure is this" is a question this codebase already
+// answers one way: score.ErrSubmissionText tells the store's refusal of a text
+// apart from a durable write that did not land, and the server reads it with
+// errors.Is. An extra boolean beside the error is a second failure channel for
+// one more case, and it puts the error somewhere other than last.
+//
+// The MESSAGE is deliberately bare. What an operator reads is timedOutReason,
+// which names the directory and the bound; this is the wire between two
+// functions in one file.
+var errScoreOpenTimeout = errors.New("score: the store did not open within the deadline")
+
+// waitForStore runs open in a goroutine of its own and gives up on it after
+// within, returning errScoreOpenTimeout when the deadline passes first.
+//
+// The channel is UNBUFFERED and the abandonment is its own channel, because the
+// two have to be decided together. Buffer the send and BOTH select arms are
+// ready once the caller has gone, and a select over ready arms picks at random:
+// the store would be leaked with the directory's claim still on it about half
+// the time, which is the failure that makes the next restart refuse to open the
+// same directory, arriving as a flake rather than as a bug. Unbuffered, the send
+// cannot complete without a receiver, so once gaveUp is closed the goroutine has
+// exactly one case it can take.
+func waitForStore(within time.Duration, open func() (*score.Store, error)) (*score.Store, error) {
+	type opened struct {
+		store *score.Store
+		err   error
+	}
+	done := make(chan opened)
+	gaveUp := make(chan struct{})
+	go func() {
+		st, err := open()
+		select {
+		case done <- opened{st, err}:
+		case <-gaveUp:
+			// Nobody is waiting any more. Close is nil-safe, and this is the only
+			// place the abandoned store can be reached from.
+			st.Close()
+		}
+	}()
+
+	timer := time.NewTimer(within)
+	defer timer.Stop()
+	select {
+	case got := <-done:
+		return got.store, got.err
+	case <-timer.C:
+		close(gaveUp)
+		return nil, errScoreOpenTimeout
+	}
+}
+
+// timedOutReason is what a store that never opened tells whoever asks — the
+// string score.status reports and a refused score.submit is answered with.
+//
+// It NAMES THE DIRECTORY, which is the whole reason it is a sentence rather than
+// a constant: BATON_SOCK is the documented way to run a second fleet and both
+// fleets default to $HOME/.baton, so an operator reading "the memory is not
+// running" has two daemons and possibly two mounts to guess between. It is its
+// own function so the wording is pinned by a test; the branch that uses it needs
+// a filesystem that hangs, which no test can conjure.
+func timedOutReason(within time.Duration, dir string) string {
+	return fmt.Sprintf("score did not open within %s; %s may be on a filesystem that is not answering", within, dir)
+}
+
 // openScore opens the fleet memory (#39) under the policy p — scorePolicy's, so
 // a file that would not parse hands it the zero policy and the store boots on
 // its own defaults rather than on half a broken file — and reports why no store
@@ -542,20 +646,37 @@ func warnScorePolicy(cfg config.Config, want score.Policy, st *score.Store) {
 // so score.status and score.submit can say WHICH of "switched off",
 // "unavailable", and "running" this daemon is in; a boot log line alone would
 // leave the operator of a second BATON_SOCK fleet guessing.
-func openScore(cfg config.ScoreConfig, p score.Policy) (*score.Store, string) {
+//
+// The open is BOUNDED within, which the daemon passes as scoreOpenTimeout —
+// see there for what a directory that never answers does without one, and why
+// the bound is a parameter: its branch needs a filesystem that hangs, and a
+// deadline a caller chooses is the only way a test reaches it at all. A timeout
+// lands in the same place a failure does — no store, a reason the three score
+// surfaces report — because to whoever asked they are one condition: the memory
+// is not running, and here is why.
+func openScore(cfg config.ScoreConfig, p score.Policy, within time.Duration) (*score.Store, string) {
 	if !cfg.IsEnabled() {
 		return nil, "score is switched off in the config (score.enabled: false)"
 	}
-	st, err := score.Open(cfg.Directory(), p)
-	if err != nil {
-		log.Warn().Err(err).Str("dir", cfg.Directory()).Msg("score store open failed; running without fleet memory")
+	dir := cfg.Directory()
+	st, err := waitForStore(within, func() (*score.Store, error) { return score.Open(dir, p) })
+	switch {
+	case errors.Is(err, errScoreOpenTimeout):
+		// Str rather than Dur, which renders a duration in milliseconds: the line
+		// said `waited=10000` beside a reason string saying `10s`, which is one
+		// number reaching the operator as two.
+		log.Warn().Str("dir", dir).Str("waited", within.String()).
+			Msg("score store did not open in time; serving the fleet without its memory")
+		return nil, timedOutReason(within, dir)
+	case err != nil:
+		log.Warn().Err(err).Str("dir", dir).Msg("score store open failed; running without fleet memory")
 		return nil, err.Error()
 	}
 	if st.Unlocked() {
-		log.Warn().Str("dir", cfg.Directory()).
+		log.Warn().Str("dir", dir).
 			Msg("score directory cannot be locked on this filesystem; a second daemon here would corrupt it")
 	}
-	logScoreBoot(cfg.Directory(), st.Len(), st.Boot(), st.Health())
+	logScoreBoot(dir, st.Len(), st.Boot(), st.Health())
 	return st, ""
 }
 
@@ -634,7 +755,7 @@ func runServerOn(ln net.Listener, sock string) error {
 	// switching the memory off over an unrelated typo is a bigger surprise than
 	// running it on the numbers the daemon can still read.
 	scorePol, _ := scorePolicy(cfg.Score, err)
-	scoreStore, scoreReason := openScore(cfg.Score, scorePol)
+	scoreStore, scoreReason := openScore(cfg.Score, scorePol, scoreOpenTimeout)
 	srv := server.New(ln, append(buildServerOptions(rc, stateF), usageOption(cfg), limitsOption(cfg),
 		// The fan-out's ceiling is the plugin's own per-hook allowance, spent once
 		// for a whole group. It is handed over rather than restated in the server
