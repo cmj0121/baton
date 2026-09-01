@@ -82,8 +82,14 @@ var tierWrites = map[tierWrite]string{
 	{Fn: "newEntry", Type: "Entry"}: "the literal 1 — every entry starts on the bottom rung",
 	{Fn: "reinforceLocked", Expr: "e.Tier"}: "++ past a guard on Policy.ceiling, so it stops at " +
 		"agentEarnedTier until the entry's own UserSignals reach the threshold, and at maxEarnedTier after",
-	{Fn: "replayLocked", Expr: "e.Tier"}: "a tier COPIED from a raised record, guarded to 1..maxEarnedTier; " +
-		"records above the ladder's end are rejected and counted, never clamped down",
+	{Fn: "replayLocked", Expr: "e.Tier"}: "two writes under one key: a tier COPIED from a raised record, guarded " +
+		"to 1..maxEarnedTier, and one copied from a lowered record, guarded to strictly below the rung the entry " +
+		"is already on. Neither is computed, and a record outside its guard is rejected and counted, never clamped",
+
+	{Fn: "lowerLocked", Expr: "e.Tier"}: "-- past a guard on the bottom of the ladder. It is the package's ONE " +
+		"demotion and it takes no target: there is no tier for a caller to name, so the conductor cannot raise " +
+		"through it (invariant I6)",
+	{Fn: "lowerLocked", Type: "event"}: "the lowered record, carrying the rung the guarded -- above just landed on",
 
 	{Fn: "reinforceLocked", Type: "event"}: "the raised record, carrying the tier the guarded ++ above just produced",
 	{Fn: "foldLocked", Type: "Fold"}:       "a report of where the entry stands after the fold",
@@ -97,8 +103,8 @@ var tierWrites = map[tierWrite]string{
 	// for — which is the point: this is the package's only pointer write today,
 	// and a second one would have to be justified on this line before it could
 	// pass. See tierWalker.
-	{Fn: "reword", Expr: "*evictions"}: "the alias-eviction counter, passed by pointer so a reword can " +
-		"report what it pushed out of Entry.Aliases",
+	{Fn: "alias", Expr: "*evictions"}: "the alias-eviction counter, passed by pointer so a merge and a " +
+		"reword can each report what they pushed out of Entry.Aliases into the counters they commit with",
 }
 
 // ceilingCallers is every function allowed to consult Policy.ceiling, and it is
@@ -406,7 +412,33 @@ var agentDoors = map[string]func(t *testing.T, s *Store, id string){
 			t.Fatalf("Signal: %v", err)
 		}
 	},
+	// The conductor IS an agent panel, so the three corrections are doors an
+	// agent's connection can reach. They are the only doors on this list the
+	// caller supplies no source for — the store stamps sourceConductor itself —
+	// which is a difference in who SAYS it, not in who reaches it, and I6 is about
+	// the second.
+	//
+	// Merge is the one driven here: it is the correction that reads TWO entries,
+	// and so the only one that could carry another entry's earned counts across.
+	// The scratch entry it absorbs is created here and retired by the merge, so
+	// the store's shape after the call is the shape before it and the assertions
+	// in the test still read the entry they were handed. Reword and Lower write no
+	// counter and no upward tier at all; TestRefineMovesNoCounterAndNoRank drives
+	// them and checks the same claim, and closedDoors carries their reason.
+	"Merge": func(t *testing.T, s *Store, id string) {
+		t.Helper()
+		refineScratch++
+		other := submitAs(t, s, fmt.Sprintf("a scratch observation %d", refineScratch),
+			Provenance{Source: SourceAgent, SourcePanel: "p1"})
+		if err := s.Merge(id, other.Id); err != nil {
+			t.Fatalf("Merge: %v", err)
+		}
+	},
 }
+
+// refineScratch numbers the throwaway entries the Merge door absorbs, so no two
+// of them share a wording and fold into each other instead.
+var refineScratch int
 
 // closedDoors is every OTHER exported method, with the reason an agent cannot
 // use it to climb. Together with agentDoors it must cover Store's whole exported
@@ -422,9 +454,11 @@ var closedDoors = map[string]string{
 	"Len":         "counts entries",
 	"Policy":      "reports the tuning in force",
 	"Reconcile":   "folds score.md back in; every reinforcement it counts is the USER's, by definition of whose file it is",
-	"Refine":      "the conductor's correction verb — an R6 stub that returns an error and touches nothing",
+	"Lower":       "the package's one demotion: it takes no target tier at all, so there is no rung for a caller to name",
+	"Merge":       "", // in agentDoors
 	"Reinforce":   "", // in agentDoors; listed here only so the two maps can be compared by name
 	"Render":      "a read",
+	"Reword":      "re-spells one statement: the wording changes, and no counter, tier or log position moves with it",
 	"RenderBlock": "a read",
 	"SetPolicy":   "retunes thresholds; #37 demotes nothing and no threshold grants a tier, only earns one",
 	"Signal":      "", // in agentDoors
@@ -505,8 +539,8 @@ func TestNoAgentReachableCallReachesTheTopTier(t *testing.T) {
 			if got := again.Render(Context{})[0].Tier; got > agentEarnedTier {
 				t.Fatalf("replay reached tier %d on a log of agent traffic, want no more than %d", got, agentEarnedTier)
 			}
-			if got := again.Health().RejectedRaises; got != 0 {
-				t.Fatalf("rejected raises = %d, want none: this log was written by this build", got)
+			if got := again.Health().RejectedTiers; got != 0 {
+				t.Fatalf("rejected tier records = %d, want none: this log was written by this build", got)
 			}
 		})
 	}

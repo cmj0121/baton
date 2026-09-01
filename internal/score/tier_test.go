@@ -670,8 +670,8 @@ func TestReplayIsBoundedByTheConstantAndNotByTheCeiling(t *testing.T) {
 	}
 	// Counted rather than passed over in silence: a log asking for a tier this
 	// build will not grant is a fact about the log.
-	if got := again.Health().RejectedRaises; got != 1 {
-		t.Fatalf("rejected raises = %d, want 1", got)
+	if got := again.Health().RejectedTiers; got != 1 {
+		t.Fatalf("rejected tier records = %d, want 1", got)
 	}
 }
 

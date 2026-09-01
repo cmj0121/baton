@@ -547,14 +547,33 @@ func TestReinforce(t *testing.T) {
 	}
 }
 
-func TestRefineIsStubbed(t *testing.T) {
-	s, err := Open(t.TempDir(), Policy{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
+// TestRefineRefusesWhatItDoesNotKnow replaces the S0 stub's test. The stub
+// refused every operation; the three real verbs refuse an entry the store does
+// not hold, in the prologue they share, and say so.
+//
+// There is no unknown-operation case left to assert: the verbs are three methods
+// with three argument lists, so an operation the store has no name for is a
+// compile error rather than a refusal a caller could reach.
+func TestRefineRefusesWhatItDoesNotKnow(t *testing.T) {
+	s := openStore(t, t.TempDir())
+	submit(t, s, "keep the build green")
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"merge", s.Merge("abc123", "def456")},
+		{"reword", s.Reword("abc123", "a better wording")},
+		{"lower", s.Lower("abc123")},
+	} {
+		if tc.err == nil || !strings.Contains(tc.err.Error(), `no entry "abc123"`) {
+			t.Fatalf("%s on an unknown id err = %v, want a no-entry refusal", tc.name, tc.err)
+		}
 	}
-	err = s.Refine("retire", "abc123", "")
-	if err == nil || !strings.Contains(err.Error(), "R6") {
-		t.Fatalf("Refine err = %v, want the R6 stub error", err)
+	// The refusals changed nothing, which is what makes them refusals rather than
+	// half-done work: one entry, still on the rung it started on.
+	if got := s.Render(Context{}); len(got) != 1 || got[0].Text != "keep the build green" || got[0].Tier != 1 {
+		t.Fatalf("store after three refusals = %+v, want the one untouched entry", got)
 	}
 }
 

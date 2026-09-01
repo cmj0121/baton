@@ -187,7 +187,7 @@ func ScoreCounters(e *zerolog.Event, d score.Delta, h score.Health) *zerolog.Eve
 		Int("swallowed_repeats", h.SwallowedRepeats).
 		Int("unreported_folds", h.UnreportedFolds).
 		Int("alias_evictions", h.AliasEvictions).
-		Int("rejected_raises", h.RejectedRaises)
+		Int("rejected_tiers", h.RejectedTiers)
 }
 
 // dispatchBrief binds a brief to the panel it is about to be delivered to: the
