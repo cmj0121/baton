@@ -698,9 +698,10 @@ func (s *Server) scoreRefine(cc *clientConn, cmd proto.Command) {
 	// A nil store is not always "switched off" — see scoreSubmit, which says the
 	// same thing for the same reason.
 	if !s.scoreState.available() {
-		log.Warn().Str("action", cmd.Action).Str("entry", cmd.ID).Str("reason", s.scoreState.reason()).
+		why := s.scoreState.reason()
+		log.Warn().Str("action", cmd.Action).Str("entry", cmd.ID).Str("reason", why).
 			Msg("refused a score correction: the store is not available")
-		send(cc, proto.ServerMsg{Type: "error", Error: s.scoreState.reason()})
+		send(cc, proto.ServerMsg{Type: "error", Error: why})
 		return
 	}
 	// Throttled on the PANEL the gate just identified, not on this connection —

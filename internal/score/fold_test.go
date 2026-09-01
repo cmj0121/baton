@@ -1022,7 +1022,16 @@ func TestARolledBackPassAppliesNoCounters(t *testing.T) {
 	writeMD(t, dir, fmt.Sprintf("- [%s] wording %d\n", e.Id, maxAliases+1))
 	reconcileMustFail(t, s)
 
-	if got := s.Health(); got != before {
+	// WriteFailing is held aside, because it is the ONE field a failed pass is
+	// supposed to move: it reports that the last durable write did not land, which
+	// is the fact this pass just established. Everything else is a counter the
+	// compute phase worked out, and a rolled-back pass applies none of them.
+	got := s.Health()
+	if !got.WriteFailing {
+		t.Error("a pass whose append failed left the store reporting its writes as healthy")
+	}
+	got.WriteFailing = before.WriteFailing
+	if got != before {
 		t.Fatalf("health = %+v after a failed pass, want %+v", got, before)
 	}
 	if got := s.Render(Context{})[0]; got.Text != fmt.Sprintf("wording %d", maxAliases) {
@@ -1035,5 +1044,37 @@ func TestARolledBackPassAppliesNoCounters(t *testing.T) {
 	reconcile(t, s)
 	if got := s.Health().AliasEvictions; got != 1 {
 		t.Fatalf("evictions = %d, want exactly the one the store made", got)
+	}
+	// And the latch un-says itself: a write that landed means the last one landed,
+	// which is what makes it a fact about the store rather than a scar.
+	if s.Health().WriteFailing {
+		t.Error("the store still reports its writes as failing after one landed")
+	}
+}
+
+// TestWriteFailingAnswersWhileTheStoreIsBusy is the property that makes the
+// latch reportable at the moment it matters.
+//
+// Every durable append holds the store mutex across its fsync, so on a mount
+// that has stopped answering, the write that set this bit is STILL HOLDING THE
+// LOCK. A reader that took the same lock to ask "are the writes landing" would
+// queue behind exactly the write it exists to report, and score.status would
+// hang alongside it — which is the state #38's invariant I8 calls the fourth
+// one, arriving through the door built to report it.
+//
+// Health takes the lock and so cannot be that reader; WriteFailing does not.
+// The assertion is that the accessor answers AT ALL with the mutex held, in
+// both directions, which an accessor that ever grows a lock cannot do.
+func TestWriteFailingAnswersWhileTheStoreIsBusy(t *testing.T) {
+	s := openStore(t, t.TempDir())
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.WriteFailing() {
+		t.Error("a store whose every write has landed reports them as failing")
+	}
+	s.writeFailing.Store(true)
+	if !s.WriteFailing() {
+		t.Error("the latch is set and the accessor held under the same lock says otherwise")
 	}
 }

@@ -34,6 +34,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -808,6 +809,28 @@ type Health struct {
 	// swollen to holding it.
 	LogBefore int64
 	LogAfter  int64
+	// WriteFailing is whether the store's LAST durable append did not land. It
+	// latches on a failed append and clears on the next one that succeeds, so it
+	// is a fact about the store rather than a count of episodes.
+	//
+	// It exists because a store on a read-only mount reads perfectly: the boot
+	// replays, every view reconciles, and score.status answers `available: true,
+	// entries: 756` while every submission is refused. #38's invariant I8 names
+	// three states and that is a fourth — the one that lies.
+	//
+	// It is REPORTED rather than probed, which is the whole of why it is here and
+	// not in Open. A probe at open answers a question about the past: a mount that
+	// goes read-only at three in the morning was writable when it was asked, and
+	// the daemon would go on saying so. This says only what happened, and it
+	// un-says it by itself when the mount comes back. The cost is that an idle
+	// fleet on a dead mount reports nothing until something tries to write, which
+	// is honestly "no evidence of a problem" rather than a claim of health.
+	//
+	// It is the one field of this struct that is NOT kept under the store mutex;
+	// see Store.writeFailing and Store.WriteFailing, which is the accessor
+	// anything reporting on a hung write must use. Health fills it in for the
+	// callers that want the whole picture in one value.
+	WriteFailing bool
 	// The four things the store does quietly and correctly, counted because
 	// each is otherwise discoverable only by subtracting one number from
 	// another — and because each of them is the store choosing to remember
@@ -1097,6 +1120,18 @@ type Store struct {
 	burned  map[string]struct{} // every id the log has ever named; never reissued
 	boot    Delta               // what Open's recovery pass did to the operator's files
 	health  Health
+
+	// writeFailing is Health.WriteFailing's home, and it is an atomic rather than
+	// a field of health for one reason: the thing that reads it is reporting on a
+	// write that may be HUNG.
+	//
+	// Every durable append runs with mu held, so on a read-only or dead mount the
+	// fsync that is failing holds the lock for as long as the filesystem takes to
+	// say so. A reader that took the same lock to ask "are the writes landing"
+	// would queue behind exactly the write it exists to report, and score.status
+	// would hang alongside it. It is a single latched bit written in one place —
+	// appendEvents — so an atomic costs nothing and answers immediately.
+	writeFailing atomic.Bool
 
 	// The two files' paths, joined once here because dir is immutable after Open
 	// and both are read or written on the dispatch path.
@@ -1477,13 +1512,30 @@ func (s *Store) Boot() Delta {
 
 // Health is what the store is currently withholding and what has gone wrong
 // since Open. Zero on the disabled (nil) store.
+//
+// It takes the store mutex, so it is not the way to ask about a store whose
+// writes may be hung: see WriteFailing, which is the field that answers that
+// and the one this fills in without the lock.
 func (s *Store) Health() Health {
 	if s == nil {
 		return Health{}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.health
+	h := s.health
+	h.WriteFailing = s.writeFailing.Load()
+	return h
+}
+
+// WriteFailing is whether the store's last durable append did not land, read
+// WITHOUT the store mutex. False on the disabled (nil) store.
+//
+// It is its own accessor because it is the one thing about the store that is
+// worth asking while a write is stuck: every append holds the mutex across its
+// fsync, so a caller that reached this through Health would wait on the very
+// write it is reporting. See Health.WriteFailing for what the bit means.
+func (s *Store) WriteFailing() bool {
+	return s != nil && s.writeFailing.Load()
 }
 
 // Reconcile folds operator edits of score.md back into the store: a reworded
@@ -4291,9 +4343,20 @@ func (s *Store) appendEvents(evs []event) error {
 			return err
 		}
 	}
+	// The one funnel every mutation's durable APPEND goes through, which is why
+	// the latch lives here rather than at each door: one place to set it, one to
+	// clear it, and no door that can be added later without passing it.
+	//
+	// It covers the LOG and nothing else. A rewrite of score.md is a durable write
+	// that does not come through here, so the latch is silent about one whether it
+	// landed or not. Which surface reports that failure depends on which door made
+	// the rewrite — a boot pass and a submission are reported in different places
+	// — and that is those doors' business rather than this one's.
 	if err := appendDurable(s.eventsPath, buf.Bytes()); err != nil {
+		s.writeFailing.Store(true)
 		return err
 	}
+	s.writeFailing.Store(false)
 	// Positions are taken only now, and only here, because appendDurable is
 	// all-or-nothing: a write that landed no bytes must leave the store's idea of
 	// the log's length exactly where a re-Open would find it.

@@ -200,6 +200,74 @@ func TestScoreStatusReportsWithheldLines(t *testing.T) {
 	}
 }
 
+// TestScoreStatusStopsClaimingHealthWhenWritesStopLanding is #38's invariant I8
+// against the fourth state its three do not name.
+//
+// A store on a read-only mount READS perfectly: it opened, the boot replayed,
+// every view reconciles. score.status answered `available: true, entries: N`
+// with an empty reason while every submission was refused — the one reading of
+// this subsystem that is not merely incomplete but false. available still means
+// "a store is running", because it does; the reason field is where the states
+// the enabled/available pair cannot express already live.
+//
+// Both directions, and the second is the reason this is a report rather than a
+// probe: the latch clears itself when writes land again, so a mount that comes
+// back needs no restart to stop being reported as broken.
+func TestScoreStatusStopsClaimingHealthWhenWritesStopLanding(t *testing.T) {
+	st, dir := scoreStore(t)
+	s, _, _ := scoreServer(st)
+	if _, _, err := st.Submit("the fleet keeps the build green", score.Provenance{Source: "user"}); err != nil {
+		t.Fatalf("seed the store: %v", err)
+	}
+	if got := status(t, s); !got.Available || got.Reason != "" {
+		t.Fatalf("status = %+v, want a healthy store reporting nothing wrong", got)
+	}
+
+	// The LOG unwritable, which is what a read-only mount does to it. The
+	// directory's own write bit is not enough: the log already exists, and
+	// appending to an existing file needs no permission on the directory holding
+	// it — which is precisely how a store keeps reading and stops recording.
+	events := filepath.Join(dir, "score-events.jsonl")
+	restore := unwritable(t, events, func() error {
+		f, err := os.OpenFile(events, os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return err
+		}
+		return f.Close()
+	})
+
+	cc := conn("")
+	s.onCommand(cc, proto.Command{Action: "score.submit", Prompt: "and it asks before it force-pushes"})
+	if msg := reply(t, cc); msg.Type != "error" {
+		t.Fatalf("submit into a read-only store answered %+v, want a refusal", msg)
+	}
+	got := status(t, s)
+	// The entries are still there and still served, which is exactly why the
+	// old reply was believable.
+	if !got.Available || got.Entries == 0 {
+		t.Fatalf("status = %+v, want the store still readable and serving what it holds", got)
+	}
+	if got.Reason == "" {
+		t.Errorf("status = %+v: every write is failing and the operator is told nothing, which is "+
+			"the one reading of this subsystem that is false rather than merely partial", got)
+	}
+	if !strings.Contains(got.Reason, "write") {
+		t.Errorf("reason = %q, want it to name what stopped working", got.Reason)
+	}
+
+	// The mount comes back. A probe at open could never learn this, and a latch
+	// that needed a restart to clear would be the next thing lying.
+	restore()
+	cc = conn("")
+	s.onCommand(cc, proto.Command{Action: "score.submit", Prompt: "and it asks before it force-pushes"})
+	if msg := reply(t, cc); msg.Type != "score" {
+		t.Fatalf("submit into a restored store answered %+v", msg)
+	}
+	if got := status(t, s); got.Reason != "" {
+		t.Errorf("status = %+v, want the store to stop reporting a failure it has recovered from", got)
+	}
+}
+
 // readScoreMD returns the current score.md, so a test can append to it the way
 // an operator would rather than replacing what the store wrote.
 func readScoreMD(t *testing.T, dir string) string {

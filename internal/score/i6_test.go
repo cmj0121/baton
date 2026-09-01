@@ -451,26 +451,27 @@ var refineScratch int
 // surface, which is what TestEveryStoreMethodIsClassified checks — a method
 // added later is unclassified until someone decides which of the two it is.
 var closedDoors = map[string]string{
-	"Boot":        "reports what Open's recovery pass did; writes nothing",
-	"Close":       "releases the directory claim",
-	"Dir":         "reports the directory",
-	"DrainFolds":  "hands back fold records already made; changes no entry",
-	"Explain":     "a read; its reconcile pass acts on score.md, which is the user's file",
-	"Health":      "reports counters",
-	"Len":         "counts entries",
-	"Policy":      "reports the tuning in force",
-	"Reconcile":   "folds score.md back in; every reinforcement it counts is the USER's, by definition of whose file it is",
-	"Lower":       "the package's one demotion: it takes no target tier at all, so there is no rung for a caller to name",
-	"Merge":       "", // in agentDoors
-	"Reinforce":   "", // in agentDoors; listed here only so the two maps can be compared by name
-	"Render":      "a read",
-	"Reword":      "re-spells one statement: the wording changes, and no counter, tier or log position moves with it",
-	"RenderBlock": "a read",
-	"SetPolicy":   "retunes thresholds; #37 demotes nothing and no threshold grants a tier, only earns one",
-	"Signal":      "", // in agentDoors
-	"Submit":      "", // in agentDoors
-	"Unlocked":    "reports the single-writer claim",
-	"View":        "a read, like Explain",
+	"Boot":         "reports what Open's recovery pass did; writes nothing",
+	"Close":        "releases the directory claim",
+	"Dir":          "reports the directory",
+	"DrainFolds":   "hands back fold records already made; changes no entry",
+	"Explain":      "a read; its reconcile pass acts on score.md, which is the user's file",
+	"Health":       "reports counters",
+	"Len":          "counts entries",
+	"Policy":       "reports the tuning in force",
+	"Reconcile":    "folds score.md back in; every reinforcement it counts is the USER's, by definition of whose file it is",
+	"Lower":        "the package's one demotion: it takes no target tier at all, so there is no rung for a caller to name",
+	"Merge":        "", // in agentDoors
+	"Reinforce":    "", // in agentDoors; listed here only so the two maps can be compared by name
+	"Render":       "a read",
+	"Reword":       "re-spells one statement: the wording changes, and no counter, tier or log position moves with it",
+	"RenderBlock":  "a read",
+	"SetPolicy":    "retunes thresholds; #37 demotes nothing and no threshold grants a tier, only earns one",
+	"Signal":       "", // in agentDoors
+	"Submit":       "", // in agentDoors
+	"Unlocked":     "reports the single-writer claim",
+	"View":         "a read, like Explain",
+	"WriteFailing": "reports whether the last durable append landed",
 }
 
 // TestEveryStoreMethodIsClassified is what keeps the proof below exhaustive. The
