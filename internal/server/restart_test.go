@@ -20,7 +20,7 @@ func supervisorServer(policy restart.Policy) *Server {
 		clients:         map[*clientConn]struct{}{},
 		mon:             mo,
 		panels:          []panel.Panel{{ID: "p1", Kind: panel.Shell, Title: "shell #1", State: panel.Exited}},
-		pendingDispatch: map[string][]byte{},
+		pendingDispatch: map[string]delivery{},
 		tasks:           map[string]*task.Task{},
 		panelTask:       map[string]string{},
 		spawning:        map[string]bool{},

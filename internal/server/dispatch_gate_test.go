@@ -20,7 +20,7 @@ func gateServer(panels ...panel.Panel) (*Server, *fakeClock, *[]string) {
 		clients:         map[*clientConn]struct{}{},
 		mon:             mo,
 		panels:          panels,
-		pendingDispatch: map[string][]byte{},
+		pendingDispatch: map[string]delivery{},
 		declared:        map[string]*declaration{},
 		taskSettled:     map[string]bool{},
 		exitedAt:        map[string]time.Time{},

@@ -9,7 +9,7 @@ import (
 
 // schedule runs one scheduling pass under the lock, returning the deliveries and
 // spawn requests, so a test can assert what the scheduler decided without a tick.
-func schedule(s *Server) ([]readyDispatch, []spawnRequest) {
+func schedule(s *Server) ([]delivery, []spawnRequest) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.scheduleLocked()

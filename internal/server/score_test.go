@@ -29,7 +29,7 @@ func scoreServer(st *score.Store) (*Server, *[]byte) {
 			Group: "auth", Cwd: "/work/auth",
 		}},
 		specs:           map[string]spawnSpec{"p1": {Profile: "claude"}},
-		pendingDispatch: map[string][]byte{},
+		pendingDispatch: map[string]delivery{},
 		tasks:           map[string]*task.Task{},
 		panelTask:       map[string]string{},
 		spawning:        map[string]bool{},
@@ -152,25 +152,38 @@ func TestGroupDispatchCarriesNoScore(t *testing.T) {
 	}
 }
 
-// TestEnqueueBriefCarriesNoScore checks the queued path: task.enqueue hands the
-// filter an empty-context brief — a queued task carries no score by design (R5).
-func TestEnqueueBriefCarriesNoScore(t *testing.T) {
+// TestEnqueueConsultsNoHook is the score half of the move: task.enqueue reaches
+// the store for nothing at all now, because there is no panel to render against
+// and no hook to hand a block to. The pass happens when the scheduler drains the
+// task; see TestEnqueueDefersTheFilterToDelivery for where it lands.
+func TestEnqueueConsultsNoHook(t *testing.T) {
 	st, _ := scoreStore(t)
 	s, _ := scoreServer(st)
 
-	var seen TaskBrief
-	s.onFilterTask = func(b TaskBrief) (TaskBrief, bool) { seen = b; return b, true }
+	var seen []TaskBrief
+	s.onFilterTask = func(b TaskBrief) (TaskBrief, bool) { seen = append(seen, b); return b, true }
 
 	cc := conn("")
 	s.onCommand(cc, proto.Command{Action: "task.enqueue", Group: "auth", Prompt: "later"})
 	noError(t, cc)
 
-	if seen.Prompt != "later" || seen.Group != "auth" {
-		t.Fatalf("enqueue brief lost its prompt/group: %+v", seen)
+	if len(seen) != 0 {
+		t.Fatalf("task.enqueue handed the filter %+v, want nothing until delivery", seen)
 	}
-	if seen.Score != "" || seen.Panel != "" || seen.Cwd != "" || seen.Profile != "" {
-		t.Fatalf("enqueue brief must ride empty in S0: %+v", seen)
+	if got := taskPrompts(s); len(got) != 1 || got[0] != "later" {
+		t.Fatalf("backlog = %v, want the one queued prompt", got)
 	}
+}
+
+// taskPrompts lists what the backlog is holding, in no particular order.
+func taskPrompts(s *Server) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.tasks))
+	for _, t := range s.tasks {
+		out = append(out, t.Prompt)
+	}
+	return out
 }
 
 // TestScoreSubmitProvenance checks the #38 §4 stamping: a connection that

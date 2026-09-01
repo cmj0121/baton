@@ -375,9 +375,25 @@ type Server struct {
 	reportedCwd map[string]bool
 
 	// pendingDispatch holds a dispatch whose panel was not yet ready to receive it
-	// (still spawning or mid-output): the bytes to write once the panel settles to
+	// (still spawning or mid-output), to be delivered once the panel settles to
 	// idle/attention. Keyed by panel id, guarded by mu; the monitor tick drains it.
-	pendingDispatch map[string][]byte
+	// The key is the at-most-one-per-panel invariant: a fresh dispatch to a panel
+	// replaces whatever was held for it, which is what dispatchScored relies on.
+	pendingDispatch map[string]delivery
+
+	// deferred holds deliveries a tick's budget did not reach. They are carried
+	// out at the head of the next tick, before anything that tick produces, so
+	// order is preserved. Guarded by mu, and written only by the monitor tick,
+	// which empties it into that tick's list before it can add to it.
+	//
+	// It is the OTHER holding area, and it holds a different thing: pendingDispatch
+	// waits on a panel that is not ready, this waits on a tick that ran out of
+	// time. It is bounded by the fleet, not by the backlog: freeIdleAgentLocked passes
+	// over a panel whose task is still live, so an agent with an undelivered
+	// assignment is offered nothing more and at most one delivery per panel can
+	// be waiting here. Nothing prunes it for the rest — a delivery whose panel or
+	// task went away is dropped by claimDelivery when its turn comes.
+	deferred []delivery
 
 	// Tasks. A dispatched prompt is promoted to a task.Task tracked through its
 	// lifecycle; tasks holds them by id and panelTask maps a panel to its current
@@ -690,7 +706,7 @@ func New(ln net.Listener, opts ...Option) *Server {
 		groupShown:      make(map[string]int),
 		groupLayout:     make(map[string]string),
 		groupFavourite:  make(map[string]bool),
-		pendingDispatch: make(map[string][]byte),
+		pendingDispatch: make(map[string]delivery),
 		declared:        make(map[string]*declaration),
 		taskSettled:     make(map[string]bool),
 		acked:           make(map[string]time.Time),
@@ -1494,9 +1510,11 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 	s.mu.Lock()
 
 	changed := false
-	var deliver []readyDispatch // pending dispatches whose panel settled this tick
-	var sampleCwd []cwdSample   // panels that settled and have no directory of their own to report
-	var closeAfter []string     // spawn-on-demand panels to reap now their task is done
+	var deliver []delivery // briefs to deliver once this tick lets go of the lock
+	deliver = append(deliver, s.deferred...)
+	s.deferred = nil
+	var sampleCwd []cwdSample // panels that settled and have no directory of their own to report
+	var closeAfter []string   // spawn-on-demand panels to reap now their task is done
 	for i := range s.panels {
 		p := &s.panels[i]
 		if p.State == panel.Exited {
@@ -1536,9 +1554,9 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 			// move its task to dispatched; otherwise a running task whose agent has
 			// gone quiet is finished — mark it done.
 			if dispatchReady(ns) {
-				if data, held := s.pendingDispatch[p.ID]; held {
+				if held, ok := s.pendingDispatch[p.ID]; ok {
 					delete(s.pendingDispatch, p.ID)
-					deliver = append(deliver, readyDispatch{id: p.ID, data: data})
+					deliver = append(deliver, held)
 					s.advanceTaskLocked(p.ID, task.Dispatched, "")
 				} else {
 					s.advanceTaskLocked(p.ID, task.Done, "")
@@ -1587,10 +1605,46 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 	}
 	s.mu.Unlock()
 
-	// Deliver held dispatches outside the lock — a PTY write must not block under
-	// mu, and a panel that just settled is waiting for input, so the write lands.
+	// Deliver outside the lock — a PTY write must not block under mu, and a panel
+	// that just settled is waiting for input, so the write lands. An unbound brief
+	// also runs the task.pre chain here, which is the whole reason this loop is on
+	// this side of the Unlock above; see deliver.
+	//
+	// Only the unbound ones are budgeted. A bound delivery is a write, which is
+	// what this loop always was; an unbound one can sit on a hook for up to the
+	// task.pre fail-open timeout, and the whole tick is behind it — this tick's
+	// telemetry and its report of what settled, cwd sampling, the CloseOnDone reap
+	// and spawn-on-demand provisioning all wait for this loop to end. (The idle
+	// settling itself already happened under the lock above; what waits is saying
+	// so.) Twenty queued tasks arriving on one tick would freeze every one of
+	// those for as long as twenty hooks take. Past the budget the rest go back for
+	// the next tick, which spreads the same total work across ticks that each
+	// report in between.
+	//
+	// Elapsed comes off the monitor's clock, the same one the lifecycle uses, so
+	// a test drives this ceiling by advancing time inside its hook rather than by
+	// racing a real sleep against a real millisecond.
+	start := s.mon.now()
+	var over []delivery
 	for _, d := range deliver {
-		s.writeInput(d.id, d.data)
+		if d.data == nil && s.mon.now().Sub(start) >= deliveryBudget {
+			over = append(over, d)
+			continue
+		}
+		s.deliver(d)
+	}
+	if len(over) > 0 {
+		s.mu.Lock()
+		s.deferred = over
+		s.mu.Unlock()
+	}
+	// A tick that outran its own interval is a dashboard that has stopped
+	// updating, and nothing else says so: the fail-open timeout logs a hook it
+	// gave up on, but a hook that merely takes half a second every time is silent
+	// and just as visible to an operator watching panels stop moving.
+	if el := s.mon.now().Sub(start); el > deliveryBudget {
+		log.Warn().Dur("took", el).Int("delivered", len(deliver)-len(over)).Int("deferred", len(over)).
+			Msg("delivering briefs outran the monitor tick; the fleet view is behind by that much")
 	}
 
 	// Read the settled panels' directories off the lock: the process table is a
@@ -1621,11 +1675,249 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 	return proto.ServerMsg{Type: "telemetry", Panels: out}, true
 }
 
-// readyDispatch is a held dispatch whose panel settled this tick: the bytes to
-// deliver once the monitor lock is released.
-type readyDispatch struct {
-	id   string
-	data []byte
+// deliveryBudget is how long one monitor tick will spend binding and delivering
+// UNBOUND briefs before leaving the rest for the next tick. It is what bounds the
+// gap between fleet reports when task.pre is slow.
+//
+// It is a DURATION and not a count, and the difference is the whole of it. A
+// count cannot tell a hook that answered in eight microseconds from one that
+// timed out, so it charges the healthy case for the pathological one: forty tasks
+// onto forty idle agents with no plugin loaded finished in half a second before
+// this bound existed and in ten seconds under a count of four, for nothing.
+// Elapsed time costs a fast tick nothing at all and still bounds a slow one,
+// which is the only thing this was ever asked to do.
+//
+// One monitor interval is the value because that is the promise being kept: a
+// tick that has run for longer than the gap between ticks is a fleet view that
+// has stopped updating. The check runs before each delivery rather than during
+// it, so the last one started can overrun by up to the task.pre fail-open
+// timeout — a wedged plugin means a tick of about interval plus 2s, not an
+// unbounded one.
+//
+// It bounds the GAP, never the throughput. A slow hook costs the same total
+// however it is spread; what is left over rides the next tick, and the ticks in
+// between report.
+const deliveryBudget = monitorInterval
+
+// delivery is one brief on its way to a panel, carried out of s.mu so that the
+// write — and, for a brief still to be bound, the task.pre chain as well —
+// happens with the lock released. It sits in pendingDispatch while the panel is
+// not ready, and in the monitor tick's deliver list once it is.
+//
+// EXACTLY ONE OF data AND task/prompt IS FILLED. That is the type's invariant,
+// stated here rather than left to each reader: deliver tests d.data != nil and
+// the monitor tick tests d.data == nil, in opposite polarity, and both are
+// asking this one question. Which half is filled says WHEN the brief was bound
+// to this panel:
+//
+//   - data is a brief that already is what the panel should receive, and only
+//     its write was held. A plugin-originated dispatch bypasses the chain
+//     outright, and the wire's panel.dispatch ran it at the command — against
+//     this same panel, so running it again here would run every hook twice.
+//
+//     Binding at the command is a deliberate exception for a DIRECT dispatch,
+//     not a description of the routes that take it: a direct dispatch owes its
+//     caller a synchronous veto, and the caller is on the socket waiting for one.
+//     A queued task has no such caller — the connection that enqueued it may have
+//     closed hours before the scheduler drained it — so its refusal belongs in
+//     the backlog instead, which is what puts the chain at delivery for that
+//     half. The cost of the exception is that a dispatch to a BUSY panel binds at
+//     command time and its bytes then wait in pendingDispatch, so a hook sees the
+//     panel as it was when the command arrived rather than when it settles.
+//
+//   - task/prompt is a brief still unbound — a queued task the scheduler has just
+//     assigned, or one a provisioned agent is about to receive. Until the
+//     assignment there was no panel to bind against, so the chain belongs at this
+//     delivery (#44) — unless plugin says baton.enqueue queued it, which is the
+//     one unbound brief that is delivered exactly as it was written.
+type delivery struct {
+	panel  string
+	data   []byte
+	task   string
+	prompt string
+	// spawned marks a panel provisioned for this task alone (applyScheduledSpawns),
+	// which is what tells a walk-back that the panel was created FOR the task: a
+	// standing agent goes back to the pool, an ephemeral one is reaped with it.
+	spawned bool
+	// plugin marks a task baton.enqueue queued (task.Task.Plugin). It is carried
+	// here rather than looked up at delivery so that deliver — which runs off
+	// s.mu, and must, because it binds — needs no lock take of its own to know it.
+	// Task.Plugin is written once, under the lock that creates the task, and never
+	// mutated after, so there is no drift for the copy to protect against.
+	plugin bool
+	// attempt is the task's Attempts as the assignment left it — the delivery's
+	// claim on the panel, re-checked before the write. See claimDelivery.
+	attempt int
+}
+
+// deliver carries out one delivery with s.mu RELEASED.
+//
+// A brief already bound to this panel is just the write, and so is one
+// baton.enqueue queued. An unbound one is bound HERE — this is the moment the
+// panel, and with it the cwd, profile and group a brief is shaped by, is finally
+// known (#44) — and binding means the task.pre chain, which goes through the Lua
+// worker's single thread behind a 2s fail-open timeout (see filterBrief).
+// Running it under s.mu would stall every connection for up to two seconds per
+// queued task, so the scheduler assigns under the lock and the binding waits
+// until after the Unlock.
+//
+// BE CLEAR ABOUT WHAT THAT BUYS AND WHAT IT COSTS. Nothing on the socket waits
+// on a hook any more, which is the point. What does wait is this goroutine: the
+// monitor delivers serially, so N queued deliveries in one tick can cost N × the
+// 2s timeout before the tick finishes, and telemetry, idle settling and the
+// ephemeral reap are all behind it fleet-wide until it does. Strictly better than
+// holding s.mu for the same span, since a stalled tick delays reporting while a
+// held lock refuses every command — but not free, and worth knowing before
+// tuning the timeout.
+//
+// The other cost of the ordering is that a veto arrives when the task is already
+// marked dispatched on a panel, and has to be walked back rather than refused;
+// vetoQueuedTask does that.
+func (s *Server) deliver(d delivery) {
+	if d.data != nil {
+		s.writeInput(d.panel, d.data)
+		return
+	}
+	var data []byte
+	if d.plugin {
+		// baton.enqueue is a plugin-originated dispatch like baton.dispatch, and gets
+		// what one gets: the bare prompt. Running the chain over it would re-enter a
+		// task.pre hook that enqueues, once per delivery, with nothing bounding it.
+		data = dispatchData(d.prompt, "")
+	} else {
+		b, ok := s.filterBrief(s.deliveryBrief(d))
+		if !ok {
+			s.vetoQueuedTask(d)
+			return
+		}
+		// The rewrite is delivered and NOT recorded, for the reason dispatchScored
+		// gives: a task that carried its own rewrite would be rewritten again on
+		// every restart, because restoreTasksLocked re-queues an in-flight task and
+		// the chain now runs at delivery.
+		data = dispatchData(b.Prompt, "")
+	}
+	if !s.claimDelivery(d) {
+		return
+	}
+	s.writeInput(d.panel, data)
+}
+
+// claimDelivery re-checks, immediately before the write, that this delivery is
+// still the one the panel is waiting for.
+//
+// The check exists because binding got slow. A delivery used to be assigned and
+// written microseconds apart under one tick; now a hook sits between them for up
+// to two seconds, and a panel.dispatch that lands in that window is delivered,
+// recorded on the card, and then overwritten by the queued brief that was already
+// in flight — the agent gets the stale one and the card agrees with it. Attempts
+// is what makes that visible: upsertTaskLocked bumps it for a re-dispatch onto a
+// panel whose task is still live, so a delivery whose count has moved is one
+// something else has superseded.
+//
+// It also covers the ways a delivery can simply stop being wanted: the task went
+// terminal (its panel closed or exited under it), or it was reassigned. A write
+// to a dead panel is a harmless no-op, but a write to a LIVE panel that has since
+// been given other work is not.
+//
+// It narrows the window rather than closing it: the write itself is off s.mu,
+// because a PTY write must not block under the lock. What is left is the
+// microsecond gap that was the whole of the exposure before this issue.
+func (s *Server) claimDelivery(d delivery) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.claimedLocked(d) != nil
+}
+
+// claimedLocked is the claim itself: the task d is still the delivery for, or nil
+// when something has superseded, ended or reassigned it. Caller holds s.mu.
+//
+// It is ONE predicate because it was two, written in opposite polarity twenty-five
+// lines apart — claimDelivery asking whether to write, vetoQueuedTask asking
+// whether to walk back — and only one of them had a test that failed when it
+// drifted. Both callers need the task on the next line anyway, so the answer is
+// the task rather than a bool.
+func (s *Server) claimedLocked(d delivery) *task.Task {
+	t := s.tasks[d.task]
+	if t == nil || t.Status.Terminal() || t.Panel != d.panel || t.Attempts != d.attempt {
+		return nil
+	}
+	return t
+}
+
+// deliveryBrief is the brief an unbound delivery hands the task.pre chain: the
+// prompt as it was enqueued, plus the context of the panel it is about to land
+// on — read at delivery because that is the first moment there is a panel to
+// read it from. An id the fleet no longer answers to leaves the three context
+// fields empty, which is what an unknown panel has to mean.
+func (s *Server) deliveryBrief(d delivery) TaskBrief {
+	ctx, _ := s.panelContext(d.panel)
+	return TaskBrief{Prompt: d.prompt, Panel: d.panel, Group: ctx.Group, Cwd: ctx.Cwd, Profile: ctx.Profile}
+}
+
+// vetoReason is what a task.pre veto is called, on the wire and in the backlog
+// alike. One string for both, because a veto at delivery has no caller left to
+// answer: the enqueueing connection may have closed hours before the scheduler
+// drained the task, so the refusal is recorded as the task's terminal note and
+// an operator reading `task list` sees the same words a direct dispatch is
+// refused with.
+const vetoReason = "task vetoed by a task.pre hook"
+
+// vetoQueuedTask walks back an assignment a task.pre hook refused at delivery.
+//
+// The task ends terminal in the backlog carrying the reason (#44 decision 2),
+// and the panel goes back to the pool in the same breath. The status alone is
+// what frees the panel for the scheduler — freeIdleAgentLocked passes over an
+// agent only while its task is still live — but the brief on the card and the
+// panel→task mapping would both outlive the task they describe, so both are
+// cleared here.
+//
+// A panel provisioned for this task alone is closed rather than released: it was
+// spawned to run this one task, its owner asked for it to go when the task
+// settled, and no later tick will reap it once the task is terminal with no
+// panel mapping left.
+// The terminal transition goes through advanceTaskLocked, which owns it — this
+// is the panel lifecycle driving the task lifecycle like any other settle or
+// exit. Reproducing the transition here would mean every step later added there
+// (a metric, an event, another taskSettled) is silently missing from a veto, with
+// nothing failing to say so. It runs BEFORE the mapping is cleared, since it
+// resolves the task through that mapping.
+func (s *Server) vetoQueuedTask(d delivery) {
+	s.mu.Lock()
+	t := s.claimedLocked(d)
+	if t == nil {
+		// Cancelled, drained, already failed, or superseded by a fresh dispatch
+		// while the hook ran — see claimDelivery. Failing it here would end work
+		// this veto was never shown.
+		s.mu.Unlock()
+		return
+	}
+	s.advanceTaskLocked(d.panel, task.Failed, vetoReason)
+	// The card and the mapping answer the same question — is this panel still
+	// carrying this task — so they are cleared on the same test. The id is that
+	// test; the brief's text is not, because two panels can be running the same
+	// words.
+	if s.panelTask[d.panel] == t.ID {
+		delete(s.panelTask, d.panel)
+		if idx := s.indexLocked(d.panel); idx >= 0 {
+			s.panels[idx].Task = ""
+		}
+	}
+	ephemeral := d.spawned && t.Spawn != nil && t.Spawn.CloseOnDone
+	s.mu.Unlock()
+
+	// Say it out loud, because the backlog cannot be relied on to. A veto used to
+	// be a synchronous error to whoever asked; now it is a terminal task among at
+	// most maxTaskHistory of them, so a hook that starts refusing everything both
+	// discards the work and evicts the record of having discarded it. This line is
+	// the only account that survives that, so it carries the prompt: the task id
+	// it names may be gone from `task list` by the time anyone looks.
+	log.Warn().Str("task", d.task).Str("panel", d.panel).Str("prompt", d.prompt).
+		Str("reason", vetoReason).Msg("a task.pre hook refused a queued task at delivery")
+
+	if ephemeral {
+		_ = s.closePanel(d.panel)
+	}
+	s.broadcastFleet()
 }
 
 // handle serves one accepted client connection for its lifetime: it runs the
@@ -2128,8 +2420,12 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		// so it reaches every frontend's card and the snapshot. The target panel is
 		// known here, so the brief carries its context and the rendered score block
 		// — the one path that injects fleet memory (#39).
+		//
+		// cmd.Prompt is what the task records and b.Prompt what the panel receives:
+		// a hook's rewrite is delivered, never written back onto the task. See
+		// dispatchScored for why that separation is load-bearing rather than tidy.
 		s.dispatchFiltered(cc, s.dispatchBrief(cmd.ID, cmd.Prompt), func(b TaskBrief) error {
-			if err := s.dispatchScored(cmd.ID, b.Prompt, b.Score, cmd.Submit); err != nil {
+			if err := s.dispatchScored(cmd.ID, cmd.Prompt, b.Prompt, b.Score, cmd.Submit); err != nil {
 				return err
 			}
 			// Only now: a brief the hook chain vetoed or the delivery refused never
@@ -2152,14 +2448,23 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		// the command carries a spawn command (Path), the task provisions its own
 		// agent if none is free — Args/Dir shape it, Ephemeral closes it on done. The
 		// reply error names a full queue.
+		//
+		// The task.pre chain does NOT run here. A queued task has no panel yet — the
+		// group the command named is the only context there is, and a hook deciding
+		// on a working directory or a profile would be deciding on nothing — so the
+		// whole pass runs when the scheduler drains the task onto a panel instead
+		// (#44 decision 1). The visible cost is that the backlog holds the prompt the
+		// operator typed rather than the one a rewriting hook would produce —
+		// `task list` shows the former until delivery.
 		var spawn *task.SpawnSpec
 		if cmd.Path != "" {
 			spawn = &task.SpawnSpec{Command: cmd.Path, Profile: cmd.Profile, Args: cmd.Args, Dir: cmd.Dir, CloseOnDone: cmd.Ephemeral}
 		}
-		s.dispatchFiltered(cc, TaskBrief{Prompt: cmd.Prompt, Group: cmd.Group}, func(b TaskBrief) error {
-			_, err := s.enqueueTask(b.Prompt, cmd.Group, spawn)
-			return err
-		})
+		if _, err := s.enqueueTask(cmd.Prompt, cmd.Group, spawn); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		s.broadcastFleet()
 	case "task.list":
 		send(cc, s.tasksMsg())
 	case "task.cancel":
@@ -2970,24 +3275,33 @@ func dispatchData(prompt, submit string) []byte {
 // monitor tick delivers them once the panel settles to idle/attention. A panel
 // already settled is written immediately. The brief is recorded either way.
 func (s *Server) dispatchPanel(id, prompt, submit string) error {
-	return s.dispatchScored(id, prompt, "", submit)
+	return s.dispatchScored(id, prompt, prompt, "", submit)
 }
 
-// dispatchScored is dispatchPanel with a score block riding the DELIVERED bytes
-// only: the block precedes the prompt in what the process receives, while the
-// recorded brief — the card, the snapshot, a restart's restore — stays the bare
-// prompt, because the block is advice for this one delivery, not part of the
-// objective. An empty scoreBlock is the plain dispatch.
-func (s *Server) dispatchScored(id, prompt, scoreBlock, submit string) error {
+// dispatchScored is dispatchPanel with the DELIVERED brief separated from the
+// RECORDED one. delivered is what the process receives — a task.pre hook's
+// rewrite, behind scoreBlock when there is one — while prompt is what the card,
+// the snapshot and a restart's restore keep.
+//
+// Both differences are delivery-time transformations, and NEITHER may become the
+// task's identity. The score block is advice for one delivery. So is the
+// rewrite, and writing that one back would compound: restoreTasksLocked
+// re-queues an in-flight task on every restart, and the chain now runs at
+// delivery, so a task carrying its own rewrite would be rewritten again — once
+// more per restart, at the same version, with no upgrade and no operator action
+// involved. Keeping the author's text also keeps "what did I actually ask for"
+// answerable afterwards.
+//
+// dispatchPanel passes the same string for both, which is the plain dispatch.
+func (s *Server) dispatchScored(id, prompt, delivered, scoreBlock, submit string) error {
 	if id == "" {
 		return fmt.Errorf("panel.dispatch needs an id")
 	}
 	if prompt == "" {
 		return fmt.Errorf("panel.dispatch needs a prompt")
 	}
-	delivered := prompt
 	if scoreBlock != "" {
-		delivered = scoreBlock + "\n\n" + prompt
+		delivered = scoreBlock + "\n\n" + delivered
 	}
 	data := dispatchData(delivered, submit)
 
@@ -3004,7 +3318,7 @@ func (s *Server) dispatchScored(id, prompt, scoreBlock, submit string) error {
 		delete(s.pendingDispatch, id) // a fresh immediate dispatch supersedes a held one
 		status = task.Dispatched
 	} else {
-		s.pendingDispatch[id] = data // deliver when the panel next settles
+		s.pendingDispatch[id] = delivery{panel: id, data: data} // deliver when the panel next settles
 	}
 	s.upsertTaskLocked(id, prompt, s.panels[idx].Group, status)
 	s.mu.Unlock()
@@ -3275,11 +3589,24 @@ func (s *Server) declaredLocked(id string) bool {
 	return d != nil && d.Reason != ""
 }
 
-// enqueueTask adds an unassigned task to the backlog for the scheduler to drain
-// onto a free agent. It errors when the queued backlog is at queueMax — the cap is
-// backpressure on a runaway producer, counting only unassigned tasks, so a busy
-// fleet never blocks new work from being queued.
+// enqueueTask adds an unassigned task that arrived over the SOCKET to the backlog
+// for the scheduler to drain onto a free agent. It errors when the queued backlog
+// is at queueMax — the cap is backpressure on a runaway producer, counting only
+// unassigned tasks, so a busy fleet never blocks new work from being queued.
 func (s *Server) enqueueTask(prompt, group string, spawn *task.SpawnSpec) (string, error) {
+	return s.enqueueTaskFrom(prompt, group, spawn, false)
+}
+
+// enqueueTaskFrom is enqueueTask with the origin spelled out: plugin marks a task
+// baton.enqueue created, which is delivered bare — no score, no task.pre chain —
+// exactly as baton.dispatch is.
+//
+// The stamp goes on under the SAME lock that creates the task. Setting it
+// afterwards would leave a window in which a monitor tick could drain the task
+// and run the very chain the stamp exists to skip, which is the whole of the
+// guarantee: a task.pre hook that calls baton.enqueue must not re-enter itself
+// when the task it queued is delivered.
+func (s *Server) enqueueTaskFrom(prompt, group string, spawn *task.SpawnSpec, plugin bool) (string, error) {
 	if prompt == "" {
 		return "", fmt.Errorf("task.enqueue needs a prompt")
 	}
@@ -3292,9 +3619,10 @@ func (s *Server) enqueueTask(prompt, group string, spawn *task.SpawnSpec) (strin
 		return "", fmt.Errorf("queue is full (%d queued); raise queue.max or let it drain", s.queueMax)
 	}
 	t := s.upsertTaskLocked("", prompt, group, task.Queued)
-	if spawn != nil {
-		t.Spawn = spawn
-		s.markTaskDirtyLocked(t.ID) // persist the spawn spec alongside the task
+	t.Plugin = plugin
+	t.Spawn = spawn
+	if spawn != nil || plugin {
+		s.markTaskDirtyLocked(t.ID) // persist the spawn spec and the origin alongside the task
 	}
 	return t.ID, nil
 }
@@ -3347,7 +3675,7 @@ type spawnRequest struct {
 // spec and finds no free agent instead yields a spawnRequest: the scheduler
 // provisions a fresh agent for it (below the fleet ceiling) rather than leaving it
 // to wait on the standing fleet. Caller holds s.mu.
-func (s *Server) scheduleLocked() ([]readyDispatch, []spawnRequest) {
+func (s *Server) scheduleLocked() ([]delivery, []spawnRequest) {
 	// One pass over the task table: collect the unassigned backlog and tally each
 	// group's in-flight (dispatched/running) count, so the per-group cap is a map
 	// lookup per candidate rather than a full rescan.
@@ -3371,7 +3699,10 @@ func (s *Server) scheduleLocked() ([]readyDispatch, []spawnRequest) {
 		return queued[i].Created.Before(queued[j].Created) // then oldest-first
 	})
 
-	var deliver []readyDispatch
+	// One assignment per queued task at most, so the backlog's length is the exact
+	// cap: a burst that fills forty agents on one tick regrows the slice seven
+	// times without this, under s.mu.
+	deliver := make([]delivery, 0, len(queued))
 	var spawns []spawnRequest
 	for _, t := range queued {
 		if s.queueConcurrency > 0 && groupRunning[t.Group] >= s.queueConcurrency {
@@ -3400,7 +3731,7 @@ func (s *Server) scheduleLocked() ([]readyDispatch, []spawnRequest) {
 		groupRunning[t.Group]++ // the fresh dispatch counts against the cap for later tasks
 		s.emit("task.change", taskFields(t))
 		s.markTaskDirtyLocked(t.ID)
-		deliver = append(deliver, readyDispatch{id: pid, data: dispatchData(t.Prompt, "")})
+		deliver = append(deliver, delivery{panel: pid, task: t.ID, prompt: t.Prompt, plugin: t.Plugin, attempt: t.Attempts})
 	}
 	return deliver, spawns
 }
@@ -3441,7 +3772,9 @@ func (s *Server) applyScheduledSpawns(spawns []spawnRequest) bool {
 		}
 		t.Panel, t.Status, t.Attempts, t.Updated = pid, task.Dispatched, t.Attempts+1, s.mon.now()
 		s.panelTask[pid] = t.ID
-		s.pendingDispatch[pid] = dispatchData(t.Prompt, "") // deliver when the fresh panel settles
+		// Unbound: the panel was created a moment ago and has not settled, so its
+		// brief is bound when the monitor delivers it rather than here (#44).
+		s.pendingDispatch[pid] = delivery{panel: pid, task: t.ID, prompt: t.Prompt, spawned: true, plugin: t.Plugin, attempt: t.Attempts}
 		s.emit("task.change", taskFields(t))
 		s.markTaskDirtyLocked(t.ID)
 		s.mu.Unlock()

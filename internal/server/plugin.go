@@ -96,19 +96,25 @@ func (s *Server) filterBrief(b TaskBrief) (TaskBrief, bool) {
 	return fn(b)
 }
 
-// dispatchFiltered is the shared body of the panel.dispatch / dispatch-group /
-// task.enqueue commands: run the task.pre filter over the brief, then perform the
-// intake action with the (possibly rewritten) prompt. A veto or a failed action
-// becomes a wire error; a success broadcasts the fleet. Routing all three through
-// here means they honour the filter identically, and the filter runs before action
-// takes s.mu — which is safe because onCommand holds no lock at the call site.
+// dispatchFiltered is the shared body of the panel.dispatch / dispatch-group
+// commands: run the task.pre filter over the brief, then perform the intake
+// action with the (possibly rewritten) prompt. A veto or a failed action becomes
+// a wire error; a success broadcasts the fleet. Routing both through here means
+// they honour the filter identically, and the filter runs before action takes
+// s.mu — which is safe because onCommand holds no lock at the call site.
+//
+// task.enqueue no longer comes through. A queued task has no panel when the
+// command arrives, so there is nothing to bind a brief to and nothing for a hook
+// to decide against; its whole pass runs when the scheduler drains it onto a
+// panel (#44 decision 1).
+//
 // Only the direct panel.dispatch path fills Score/Cwd/Profile/Panel (see
-// dispatchBrief); a queued task or a group fan-out rides an empty brief, because
-// score injection at those deliveries is R5's problem (#39).
+// dispatchBrief); a group fan-out rides an empty brief, because per-member
+// rendering is R5's second half (#39).
 func (s *Server) dispatchFiltered(cc *clientConn, b TaskBrief, action func(b TaskBrief) error) {
 	filtered, ok := s.filterBrief(b)
 	if !ok {
-		send(cc, proto.ServerMsg{Type: "error", Error: "task vetoed by a task.pre hook"})
+		send(cc, proto.ServerMsg{Type: "error", Error: vetoReason})
 		return
 	}
 	if err := action(filtered); err != nil {
@@ -276,8 +282,15 @@ func (s *Server) DispatchGroup(group, prompt string) (int, error) {
 
 // Enqueue adds a task to the backlog and returns its id. It is baton.enqueue; the
 // scheduler drains it onto a free agent on a later tick.
+//
+// The task is stamped plugin-originated, so that later delivery hands the agent
+// the bare prompt and runs no task.pre chain — the same bypass Dispatch takes,
+// arriving at the same place by a different road. Without it a hook that enqueues
+// would be re-entered once per delivery, and each of those deliveries could
+// enqueue again: not a recursion the Lua worker could deadlock on, since the
+// chain runs later on the monitor goroutine, but an unbounded one all the same.
 func (s *Server) Enqueue(prompt, group string) (string, error) {
-	id, err := s.enqueueTask(prompt, group, nil)
+	id, err := s.enqueueTaskFrom(prompt, group, nil, true)
 	if err != nil {
 		return "", err
 	}

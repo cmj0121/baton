@@ -64,6 +64,20 @@ type SpawnSpec struct {
 // and the bookkeeping the queue and retries need. Its identity is the unit of
 // work, not the panel — the same Task id survives a reassign or respawn, with
 // Attempts counting each delivery.
+//
+// Plugin records WHO queued the task, and it is here rather than in the server
+// because it has to survive a restart: a plugin's task.pre filter runs when the
+// task is delivered, so the daemon that delivers it may not be the one that took
+// it in. A plugin-originated task is delivered bare, bypassing that filter, which
+// is what stops a hook that calls baton.enqueue from re-entering itself once per
+// delivery.
+//
+// Absent on a task written by a build that predates the field, so those restore
+// as "not plugin-originated" and are filtered once, at their first delivery after
+// the upgrade — a hook that enqueues would see its own earlier task exactly once.
+// That is a one-shot, bounded by the backlog that survived the restart, and it
+// only ever runs the chain over work the chain was going to see anyway: it is
+// accepted, not covered.
 type Task struct {
 	ID       string     `json:"id"`
 	Prompt   string     `json:"prompt"`
@@ -74,6 +88,7 @@ type Task struct {
 	Priority int        `json:"priority,omitempty"` // scheduler order among queued tasks: higher drains first (default 0, ties break oldest-first)
 	Attempts int        `json:"attempts"`           // how many times its prompt has been delivered
 	Spawn    *SpawnSpec `json:"spawn,omitempty"`    // provision a fresh agent for this task when none is free (nil = existing agents only)
+	Plugin   bool       `json:"plugin,omitempty"`   // queued by a plugin (baton.enqueue) rather than over the socket; see below
 	Created  time.Time  `json:"created"`
 	Updated  time.Time  `json:"updated"`
 }

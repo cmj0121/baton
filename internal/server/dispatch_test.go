@@ -154,8 +154,14 @@ func TestConductorCannotDispatchSelf(t *testing.T) {
 }
 
 // TestDispatchTaskFilter wires the synchronous task.pre filter and checks both of
-// its powers over the panel.dispatch path: a rewrite changes the recorded brief,
-// and a veto turns the dispatch into an error with nothing recorded.
+// its powers over the panel.dispatch path: a rewrite changes what the panel is
+// SENT without changing what the task IS, and a veto turns the dispatch into an
+// error with nothing recorded.
+//
+// The card keeping the operator's own words is #44's doing and is deliberate. A
+// rewrite is a delivery-time transformation, like the score block beside it; a
+// task that carried its own rewrite would be rewritten again every time a restart
+// re-queued it, since the chain now runs at delivery.
 func TestDispatchTaskFilter(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, _ := listen(t)
@@ -178,12 +184,12 @@ func TestDispatchTaskFilter(t *testing.T) {
 	}
 	id := recv(t, c).Panels[0].ID
 
-	// A rewritten brief reaches the panel in its filtered form.
+	// The card keeps what the operator asked for; the rewrite rides the delivery.
 	if err := c.Send(proto.Command{Action: "panel.dispatch", ID: id, Prompt: "tag the release"}); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	if got := recv(t, c); got.Type != "panels" || got.Panels[0].Task != "[build] tag the release" {
-		t.Fatalf("filter rewrite not applied, got %+v", got)
+	if got := recv(t, c); got.Type != "panels" || got.Panels[0].Task != "tag the release" {
+		t.Fatalf("the card should hold the operator's own brief, got %+v", got)
 	}
 
 	// A vetoed brief is refused and never recorded.
