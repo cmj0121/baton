@@ -239,6 +239,8 @@ socket 接上——指令往上、事件往下——所以你卸離再重新接�
 - **[docs/PLUGIN.md](PLUGIN.zh-TW.md)** — Lua 外掛 API:`baton` 物件、事件、指令,以及設定。
 - **[docs/CONTROL.md](CONTROL.zh-TW.md)** — 以 agent 驅動整隊:conductor、`baton ctl` CLI、`baton mcp`
   工具,以及各種護欄。
+- **[docs/SCORE.md](SCORE.zh-TW.md)** — Score,隊伍的記憶:`score.md` 這個檔案與它唯一的復原手段、階梯、
+  排序權重、壓縮,以及它不是什麼邊界。
 
 ## DDD(Dream-Driven Development,夢想驅動開發)
 

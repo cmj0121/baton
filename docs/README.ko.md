@@ -254,6 +254,8 @@ Lua 파일 하나(`$HOME/.baton/plug-in.lua`)면 Baton을 당신의 워크플로
 - **[docs/PLUGIN.md](PLUGIN.md)** — Lua 플러그인 API: `baton` 객체, 이벤트, 명령, 그리고 설정.
 - **[docs/CONTROL.md](CONTROL.md)** — agent로 함대 몰기: conductor, `baton ctl` CLI, `baton mcp` 도구, 그리고
   안전장치들.
+- **[docs/SCORE.md](SCORE.md)** — Score, 함대의 기억:`score.md` 파일과 그 유일한 되돌리기 수단,
+  티어 사다리, 랭킹 가중치, 컴팩션, 그리고 이것이 경계가 아닌 것.
 
 ## DDD (Dream-Driven Development)
 

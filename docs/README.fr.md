@@ -266,6 +266,8 @@ la flotte, ajouter vos propres commandes et définir la config — le tout à tr
 - **[docs/PLUGIN.md](PLUGIN.md)** — l'API des plugins Lua : l'objet `baton`, les événements, les commandes et la config.
 - **[docs/CONTROL.md](CONTROL.md)** — piloter la flotte par agent : le conductor, le CLI `baton ctl`, les outils
   `baton mcp` et les garde-fous.
+- **[docs/SCORE.md](SCORE.md)** — Score, la mémoire de la flotte : le fichier `score.md` et son unique moyen
+  d'annulation, l'échelle de paliers, les poids du classement, le compactage, et ce dont il n'est pas une frontière.
 
 ## DDD (Dream-Driven Development)
 

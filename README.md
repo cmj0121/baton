@@ -254,6 +254,8 @@ through one `baton` object. See **[docs/PLUGIN.md](docs/PLUGIN.md)**.
 - **[docs/PLUGIN.md](docs/PLUGIN.md)** — the Lua plugin API: the `baton` object, events, commands, and config.
 - **[docs/CONTROL.md](docs/CONTROL.md)** — driving the fleet by agent: the conductor, the `baton ctl` CLI, the
   `baton mcp` tools, and the guardrails.
+- **[docs/SCORE.md](docs/SCORE.md)** — Score, the fleet's memory: the `score.md` file and its one undo, the tier
+  ladder, the ranking weights, compaction, and what it is not a boundary for.
 
 ## DDD (Dream-Driven Development)
 
