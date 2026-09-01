@@ -153,6 +153,12 @@ func (s *Server) sampleCwdFromProcess(id string, pid int) {
 // looking at is the cost this project avoids elsewhere. It returns "" when the
 // directory is not known, which callers read as "fall back to where it started"
 // rather than as a directory.
+//
+// The pid is resolved only after the early return, not before it. livePid reads
+// the PTY manager's whole table under that manager's lock to take one entry out
+// of it, and this now runs on every delivery and every fan-out member — the
+// answered-from-the-row case, which is the common one, must not pay for a map
+// sized to the fleet.
 func (s *Server) panelCwd(id string) string {
 	s.mu.Lock()
 	i := s.indexLocked(id)
@@ -162,10 +168,12 @@ func (s *Server) panelCwd(id string) string {
 	}
 	known, track := s.panels[i].Cwd, s.trackCwd
 	s.mu.Unlock()
-	pid := s.livePid(id)
-
-	if known != "" || !track.ReadsProcess() || pid <= 0 {
+	if known != "" || !track.ReadsProcess() {
 		return known
+	}
+	pid := s.livePid(id)
+	if pid <= 0 {
+		return ""
 	}
 	dir, err := proctree.Cwd(pid)
 	if err != nil {

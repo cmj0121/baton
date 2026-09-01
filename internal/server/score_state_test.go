@@ -85,7 +85,7 @@ func TestScoreStatusDistinguishesOffFromUnavailable(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s, _ := scoreServer(tc.store)
+			s, _, _ := scoreServer(tc.store)
 			WithScore(ScoreState{Store: tc.store, Enabled: tc.on, Reason: tc.reason})(s)
 
 			if got := status(t, s); got != tc.want {
@@ -118,7 +118,7 @@ func TestReconcileFailureIsLatched(t *testing.T) {
 	if _, _, err := st.Submit("still readable", score.Provenance{Source: "user"}); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	s, _ := scoreServer(st)
+	s, _, _ := scoreServer(st)
 
 	// score.md as a directory: every read of it fails, for as long as it lasts.
 	path := filepath.Join(dir, "score.md")
@@ -172,7 +172,7 @@ func TestScoreStatusReportsWithheldLines(t *testing.T) {
 	if _, _, err := st.Submit("a normal note", score.Provenance{Source: "user"}); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	s, _ := scoreServer(st)
+	s, _, _ := scoreServer(st)
 
 	if got := status(t, s); got.Entries != 1 || got.Rendered != 1 || got.Oversized != 0 {
 		t.Fatalf("status = %+v, want one entry, injected, nothing withheld", got)

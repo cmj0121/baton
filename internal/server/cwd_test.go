@@ -22,7 +22,7 @@ func cwdServer(track cwd.Track, restore cwd.Restore, panels ...panel.Panel) *Ser
 		clients:         map[*clientConn]struct{}{},
 		mon:             mo,
 		panels:          panels,
-		pendingDispatch: map[string][]byte{},
+		pendingDispatch: map[string]delivery{},
 		tasks:           map[string]*task.Task{},
 		panelTask:       map[string]string{},
 		spawning:        map[string]bool{},

@@ -47,7 +47,7 @@ func TestScoreListIsUncapped(t *testing.T) {
 			t.Fatalf("submit: %v", err)
 		}
 	}
-	s, _ := scoreServer(st)
+	s, _, _ := scoreServer(st)
 
 	got := listed(t, s, "").Entries
 	if len(got) != n {
@@ -96,7 +96,7 @@ func TestScoreListExplainsItsRanking(t *testing.T) {
 			}
 		}
 	}
-	s, _ := scoreServer(st)
+	s, _, _ := scoreServer(st)
 
 	list := listed(t, s, "")
 	if list.Context != (score.Context{}) {
@@ -137,7 +137,7 @@ func TestScoreListRawShapeCarriesTheBreakdown(t *testing.T) {
 	if _, _, err := st.Submit("one real entry", score.Provenance{Source: "user"}); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	s, _ := scoreServer(st)
+	s, _, _ := scoreServer(st)
 
 	cc := conn("")
 	s.onCommand(cc, proto.Command{Action: "score.list"})
@@ -195,7 +195,7 @@ func TestScoreListRanksForANamedPanel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	s, _ := scoreServer(st)
+	s, _, _ := scoreServer(st)
 
 	flat := listed(t, s, "")
 	if flat.Context != (score.Context{}) {
@@ -228,7 +228,7 @@ func TestScoreListRefusesAnUnknownPanel(t *testing.T) {
 	if _, _, err := st.Submit("one real entry", score.Provenance{Source: "user"}); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	s, _ := scoreServer(st)
+	s, _, _ := scoreServer(st)
 
 	cc := conn("")
 	s.onCommand(cc, proto.Command{Action: "score.list", ID: "nosuchpanel"})
@@ -249,7 +249,7 @@ func TestScoreListRefusesAnUnknownPanel(t *testing.T) {
 // is written once, so that entry could never match a cwd again.
 func TestSubmitAndDispatchReadOneContext(t *testing.T) {
 	st, _ := scoreStore(t)
-	s, _ := scoreServer(st)
+	s, _, _ := scoreServer(st)
 
 	cc := conn("p1")
 	s.onCommand(cc, proto.Command{Action: "score.submit", Prompt: "learned right here"})
@@ -299,7 +299,7 @@ func TestScoreStatusNamesTheCapThatBit(t *testing.T) {
 	}
 	editScoreMD(t, dir, md.String())
 	st.SetPolicy(score.Policy{WorkingSet: 1_000_000})
-	s, _ := scoreServer(st)
+	s, _, _ := scoreServer(st)
 
 	got := status(t, s)
 	switch {
@@ -326,7 +326,7 @@ func TestScoreStatusNamesTheCapThatBit(t *testing.T) {
 // force is at least one — so reporting `rank: {0,0,0,0}` for a store that is not
 // running would be the one number on this surface that cannot be true.
 func TestScoreStatusOmitsWeightsWithoutAStore(t *testing.T) {
-	s, _ := scoreServer(nil)
+	s, _, _ := scoreServer(nil)
 
 	cc := conn("")
 	s.onCommand(cc, proto.Command{Action: "score.status"})
@@ -347,7 +347,7 @@ func TestScoreStatusOmitsWeightsWithoutAStore(t *testing.T) {
 	// With a store, they come back — so the omission above is the branch and not
 	// a field that was dropped.
 	st, _ := scoreStore(t)
-	live, _ := scoreServer(st)
+	live, _, _ := scoreServer(st)
 	if got := status(t, live); got.Rank != (score.Rank{Recency: 2, Cwd: 2, Profile: 2, Group: 2}) {
 		t.Fatalf("status = %+v, want the weights in force", got)
 	}
@@ -360,7 +360,7 @@ func TestScoreStatusOmitsWeightsWithoutAStore(t *testing.T) {
 // "no match", and cannot confirm a SIGHUP took their retune at all.
 func TestScoreStatusReportsTheTuningInForce(t *testing.T) {
 	st, _ := scoreStore(t)
-	s, _ := scoreServer(st)
+	s, _, _ := scoreServer(st)
 
 	if got := status(t, s); got.WorkingSet != 7 || got.UserSignalsAt != 2 ||
 		got.Rank != (score.Rank{Recency: 2, Cwd: 2, Profile: 2, Group: 2}) {

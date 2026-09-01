@@ -43,7 +43,7 @@ func TestLiveEditReachesTheNextDispatch(t *testing.T) {
 	if _, _, err := st.Submit("drop this one", score.Provenance{Source: "user"}); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	s, delivered := scoreServer(st)
+	s, _, delivered := scoreServer(st)
 
 	// One save: reword one line, delete another, add a third with no id.
 	editScoreMD(t, dir, "- ["+reworded.Id+"] prefer table-driven tests, always\n- ask before force-pushing\n")
@@ -72,7 +72,7 @@ func TestLiveEditReachesScoreListAndStatus(t *testing.T) {
 	if _, _, err := st.Submit("one real entry", score.Provenance{Source: "user"}); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	s, _ := scoreServer(st)
+	s, _, _ := scoreServer(st)
 
 	editScoreMD(t, dir, "- a line the operator typed\n- and another\n")
 
@@ -95,7 +95,7 @@ func TestLiveEditReachesScoreListAndStatus(t *testing.T) {
 // TestReconcileOnADisabledStoreIsInert keeps the disabled contract on the new
 // read hook: a server holding no store must not error or block on it.
 func TestReconcileOnADisabledStoreIsInert(t *testing.T) {
-	s, _ := scoreServer(nil)
+	s, _, _ := scoreServer(nil)
 	s.scoreView(score.Context{})
 	cc := conn("")
 	s.scoreList(cc, proto.Command{Action: "score.list"})

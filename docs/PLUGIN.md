@@ -76,7 +76,8 @@ baton.close(id)
 
 `baton.spawn` also takes a `prompt =` — spawn an agent and dispatch its first task in one call. Plugin-originated
 dispatches go straight to the core action and **bypass the `task.pre` filter** (see below), so a hook that enqueues can
-never re-enter itself.
+never re-enter itself. That holds for `baton.enqueue` too, whose task is filtered nowhere: the origin is recorded on the
+task, so the bypass survives the wait in the backlog — and a daemon restart with it.
 
 Every write returns `ok, err` (Lua idiom): `nil, "the name \"api\" is already taken"` on the same failures the socket
 reports, so a plugin handles a rejected action instead of crashing.
@@ -178,14 +179,14 @@ end)
 
 The hook receives a `{ prompt, group, score, cwd, profile, panel }` table — the brief plus the context it rides with:
 
-| Field     | Holds                                                                                                           |
-| --------- | --------------------------------------------------------------------------------------------------------------- |
-| `prompt`  | the brief's text — the one field every intake point carries                                                     |
-| `group`   | the group the task targets; empty when it targets none                                                          |
-| `score`   | the rendered score block a dispatch would inject; empty when there is none — a queued task carries no score yet |
-| `cwd`     | the working directory the task will land in; empty at enqueue time                                              |
-| `profile` | the agent profile of the target panel; empty at enqueue time                                                    |
-| `panel`   | the id of the panel the brief will be delivered to; empty at enqueue time                                       |
+| Field     | Holds                                                                                                     |
+| --------- | --------------------------------------------------------------------------------------------------------- |
+| `prompt`  | the brief's text — the one field every intake point carries                                               |
+| `group`   | the group the task targets; empty when it targets none                                                    |
+| `score`   | the score block this delivery will inject, ranked against the panel it lands on; empty when there is none |
+| `cwd`     | the working directory the task will land in                                                               |
+| `profile` | the agent profile of the target panel                                                                     |
+| `panel`   | the id of the panel the brief will be delivered to                                                        |
 
 `prompt` and `score` are the two fields a hook may rewrite; the rest are read-only context. The return contract is
 **backward compatible** — a hook written before `score` existed keeps its exact old meaning:
@@ -195,15 +196,55 @@ The hook receives a `{ prompt, group, score, cwd, profile, panel }` table — th
 | `nil` / nothing / `true`    | pass the brief through unchanged (prompt **and** score)                                                       |
 | a string                    | rewrite the prompt **only**; the score is untouched                                                           |
 | a table                     | may set `prompt`, `drop`, and `score` — `score = ""` drops the score block, an absent key leaves it untouched |
-| `false` / `{ drop = true }` | veto — the task is dropped, the caller gets an error                                                          |
+| `false` / `{ drop = true }` | veto — the task is dropped; a dispatch's caller gets an error, a queued task fails in the backlog             |
 
 A table's `score` value must be a string; any other type is ignored. Hooks **chain over both fields** (a later hook
 sees the earlier one's rewrite of prompt and score alike) and the **first veto stops the chain**. It runs at the
-`dispatch`, `dispatch-group`, and `enqueue` intake points; plugin-originated dispatches bypass it, so it never re-enters
-itself.
+`dispatch` and `dispatch-group` intake points, and — for a **queued** task — at the moment the scheduler drains it onto
+a panel rather than when it is enqueued, because until then there is no panel to shape the brief against.
+Plugin-originated dispatches bypass it, so it never re-enters itself — including a task `baton.enqueue` queued, which
+is delivered bare however long it waited.
+
+Every one of those is a **delivery to one panel**, and the brief is bound to that panel before the chain runs — so a
+fan-out racing three agents runs the chain three times, once per member, each with that member's own `cwd`, `profile`
+and `score`. A veto there drops that member alone: the command fails when it reached **no** panel — every member
+refused, or the refusals and the skips below between them leaving nothing — and otherwise succeeds with a notice saying
+how many of the group it reached and why the rest went without.
+
+A whole fan-out spends at most **two seconds** in `task.pre` — the same allowance one hook gets. The budget is checked
+before each member rather than while one is running, so the last member started can still take its own full timeout: a
+wedged hook makes the worst case about four seconds, not two. Past the budget the remaining members are **not
+dispatched at all**, and the notice **names them** so you can reach them with
+`panel.dispatch` per id, which is not budgeted. Do not simply repeat the fan-out: the group is walked in a stable order
+and every command starts with a fresh budget, so the cut falls in the same place each time — a repeat re-delivers to
+the members that already had it and still never reaches the rest.
+
+Failing closed is deliberate, and unlike the per-hook timeout beside it: there, a hook was asked and did not answer, so
+its brief goes out unfiltered. Here the remaining hooks were never asked, and dispatching work no hook examined would
+defeat the point of being able to refuse — a group with twenty members and a hook answering in a comfortable 100 ms is
+enough to reach the limit. Reaching fewer panels and being told which is recoverable; unexamined work is not.
+
+**A rewrite is delivered, never recorded.** `task list`, the panel card and the fleet snapshot all keep the prompt its
+author wrote; the rewritten text goes to the agent and nowhere else. That is what keeps a rewriting hook idempotent —
+an in-flight task is re-queued on every daemon restart, and the chain runs at delivery, so a task that carried its own
+rewrite would collect another one each time. It also means "what did I actually ask for" still has an answer.
+
+A veto at delivery has no caller left to answer, so the task ends in the backlog as `failed`, carrying the veto as its
+reason, and the daemon logs a warning naming the task, the panel and the prompt. Read the log rather than the backlog
+if hooks are refusing a lot: only the most recent finished tasks are kept, so a hook refusing everything will evict its
+own evidence from `task list`.
+
+Two costs of running at delivery are worth knowing. A hook now sits between the scheduler assigning a task and the
+agent receiving it, so **a slow hook delays the fleet view**: deliveries are carried out on the monitor's own loop, and
+until they finish nothing else that loop does — telemetry, idle settling, closing finished ephemeral workers — reports.
+A tick stops delivering once it has spent a monitor interval on it and leaves the rest for the next one, so the delay
+is bounded per tick rather than by the size of the backlog; a tick that overran logs a warning. A fast hook never
+reaches that limit, so a burst of queued work costs nothing extra when nothing is slow. And a fan-out runs the chain
+once per member, on the caller's connection: keep `task.pre` fast, or a wide group will feel slow to whoever
+dispatched it, and past the fan-out budget above it will reach fewer panels than the group holds.
 
 The `score` field is fed by Score, the fleet-scope memory
-([#37](https://github.com/cmj0121/baton/issues/37), in development) — until it ships, the field simply rides empty.
+([#37](https://github.com/cmj0121/baton/issues/37), in development) — with Score switched off it simply rides empty.
 Stripping the block for one group is a one-line table return:
 
 ```lua

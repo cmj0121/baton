@@ -179,11 +179,17 @@ func (p *Plugin) RunCommand(name string) (err error) {
 	return err
 }
 
-// filterTimeout bounds how long a dispatch waits on the task.pre hooks before it
+// FilterTimeout bounds how long a dispatch waits on the task.pre hooks before it
 // gives up and proceeds with the original brief. The worker is single-threaded, so
 // a wedged hook would otherwise stall every dispatch; past this budget the caller
 // fails open and the (eventually-returning) hook result is discarded.
-const filterTimeout = 2 * time.Second
+//
+// It is exported because a caller that fans one prompt out to a whole group has to
+// bound the WHOLE fan-out, and that ceiling must never be shorter than this one or
+// a perfectly healthy hook is cut off on the second member. A second copy of the
+// number in the package doing the fan-out would leave that coupling defended by
+// nothing but a comment, in the package that does not own the value.
+const FilterTimeout = 2 * time.Second
 
 // Brief is the task brief the task.pre filter carries: the prompt plus the context
 // it rides with. Score is the rendered score block a dispatch would inject (empty
@@ -216,7 +222,7 @@ func (p *Plugin) FilterTask(b Brief) (Brief, bool) {
 		ch <- result{nb, allow}
 	}, done: make(chan struct{})}
 
-	deadline := time.After(filterTimeout)
+	deadline := time.After(FilterTimeout)
 	select {
 	case p.calls <- c:
 	case <-deadline:

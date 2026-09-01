@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -12,8 +13,9 @@ import (
 
 // This file is the server's side of the fleet memory (internal/score, #39): the
 // score.* verb handlers and the brief builder that renders the score block into
-// a direct dispatch. The store itself never logs and never sees the wire — the
-// server owns both ends here, exactly as it does for the plugin subsystem.
+// a brief on its way to a panel. The store itself never logs and never sees the
+// wire — the server owns both ends here, exactly as it does for the plugin
+// subsystem.
 
 // scoreView takes one consistent look at the fleet memory for the given
 // dispatch context, reconciling the operator's score.md edits into the store
@@ -188,20 +190,47 @@ func ScoreCounters(e *zerolog.Event, d score.Delta, h score.Health) *zerolog.Eve
 		Int("rejected_raises", h.RejectedRaises)
 }
 
-// dispatchBrief builds the task.pre brief for a DIRECT dispatch to panel id: the
+// dispatchBrief binds a brief to the panel it is about to be delivered to: the
 // panel's own context (group, cwd, profile) read from its row, and the score
-// block rendered against that context. Only this path fills the context fields —
-// task.enqueue and panel.dispatch-group ride empty briefs, because injecting at
-// a queued or fanned-out delivery is R5's problem (#39). An unknown id yields a
-// bare brief and is left for dispatchScored to report.
+// block rendered against that context.
+//
+// It is the ONE brief builder, and every delivery the WIRE makes comes through
+// it: a direct panel.dispatch, each member of a fan-out, a queued task at the
+// moment the scheduler drains it onto a panel, and a spawn-on-demand task at the
+// held delivery its provisioned panel settles into. That is what makes #44's
+// rule true rather than repeated — a queued task carries the same block a direct
+// dispatch to that same panel would have carried, because it is the same call.
+//
+// A plugin-originated dispatch is the exception it has always been: baton.dispatch,
+// baton.dispatch_group and a task baton.enqueue queued all deliver the bare prompt
+// and never come here.
+//
+// An id the fleet does not have gets NO BLOCK — #38 §2's standing rule that
+// t.score is never rendered for an unknown panel. Every context factor would
+// read 1.0 against a panel that is not there, so the block would be the
+// contextless ranking dressed as that panel's, and there are now two ways to ask
+// for one: a dispatch to an id that never existed, and a delivery whose panel
+// left the fleet between the assignment and the write. The caller reports the
+// unknown id; this only declines to invent a working set for it.
+//
+// KNOWN AND NOT COVERED BY THAT: an EXITED panel is still a row in the fleet
+// until it is pruned, so it is found here and its stale context is ranked
+// against. The write that follows lands on a closed PTY and onPanelExit has
+// already failed the task, so nothing reaches an agent — but the block was
+// rendered and logged for a dead panel, and the log line is the part an operator
+// can see. Narrowing the check to a live panel would be a change to what
+// dispatchScored accepts, which is not this issue's to make.
 //
 // It only READS the memory. A brief the user wrote is one of #38 §4's two
 // sources of the user signal, but that is recorded by scoreSignal after the
 // dispatch has actually landed — a brief a task.pre hook vetoed, or one that
 // failed on an unknown panel id, is not the user telling the fleet anything.
 func (s *Server) dispatchBrief(id, prompt string) TaskBrief {
-	ctx, _ := s.panelContext(id)
+	ctx, found := s.panelContext(id)
 	b := TaskBrief{Prompt: prompt, Panel: id, Group: ctx.Group, Cwd: ctx.Cwd, Profile: ctx.Profile}
+	if !found {
+		return b
+	}
 	// panelContext has let go of s.mu and the store takes its own lock, so this
 	// runs off both; a nil (disabled) store yields the zero view and nothing is
 	// injected.
@@ -209,6 +238,30 @@ func (s *Server) dispatchBrief(id, prompt string) TaskBrief {
 	b.Score = v.Block
 	logScoreInjection(ctx, v)
 	return b
+}
+
+// bindBrief binds prompt to a panel: it builds that panel's brief and runs the
+// task.pre chain over it, returning the (possibly rewritten) brief, whether to
+// proceed, and how long the whole bind took. It must run with s.mu RELEASED —
+// both halves take the lock themselves and the chain blocks on the Lua worker.
+//
+// It exists because the ORDER is the contract and nothing else states it. The
+// brief has to be built first and filtered second: filter-then-bind hands the
+// hook a brief with no score and no panel context, which is exactly what #44
+// stopped doing, and bind-filter-rebind reads the store twice and hands the
+// panel a block the hook has already edited away. Both compile, and both are one
+// plausible line each at a site that only wants "bind this prompt to that
+// panel". Three sites wanted it, so it is one call.
+//
+// The elapsed time is returned rather than measured by each caller because it is
+// what the two budgets charge, and they were charging different things: a
+// monitor tick timed the whole bind while a fan-out timed only the chain. It is
+// read off the monitor's clock, so a test advances time inside the hook instead
+// of sleeping against it.
+func (s *Server) bindBrief(panelID, prompt string) (TaskBrief, bool, time.Duration) {
+	started := s.mon.now()
+	b, ok := s.filterBrief(s.dispatchBrief(panelID, prompt))
+	return b, ok, s.mon.now().Sub(started)
 }
 
 // scoreSignal records a brief the USER dispatched as a reinforcement of whatever
@@ -311,7 +364,9 @@ func (s *Server) connProvenance(cc *clientConn) score.Provenance {
 }
 
 // logScoreInjection names the entries this brief is carrying, and the context
-// that put them there.
+// that put them there. It runs wherever a brief is bound, which is now every
+// delivery the wire makes rather than a direct dispatch alone: a fan-out member
+// and a queued task drained onto a panel leave the same line.
 //
 // Nothing else can answer "why did panel 7 get this entry" after the fact. The
 // factor breakdown answers it for a listing taken NOW, against the store as it
@@ -345,7 +400,7 @@ func logScoreInjection(ctx score.Context, v score.View) {
 	if ctx.Group != "" {
 		e = e.Str("group", ctx.Group)
 	}
-	e.Msg("score injected into a direct dispatch")
+	e.Msg("score injected into a delivered brief")
 }
 
 // panelContext is the ranking context of the panel id: the three properties an
@@ -367,6 +422,12 @@ func logScoreInjection(ctx score.Context, v score.View) {
 // could never match a cwd for the rest of its life. panelCwd samples the process
 // table on demand, which is exactly the moment something is about to use the
 // path. It takes s.mu itself, so it is called after this one has let go.
+//
+// The row's own Cwd is therefore read HERE, in the take this already holds, and
+// panelCwd is asked only for the case it exists for — a row with no directory
+// yet, in a mode that reads the process table. That is the same answer panelCwd
+// gives (it returns a known directory unchanged), one lock take and one fleet
+// scan cheaper, on a path #44 put on every delivery.
 func (s *Server) panelContext(id string) (ctx score.Context, found bool) {
 	ctx.Panel = id
 	s.mu.Lock()
@@ -377,8 +438,12 @@ func (s *Server) panelContext(id string) (ctx score.Context, found bool) {
 	}
 	ctx.Group = s.panels[idx].Group
 	ctx.Profile = s.specs[id].Profile
+	ctx.Cwd = s.panels[idx].Cwd
+	track := s.trackCwd
 	s.mu.Unlock()
-	ctx.Cwd = s.panelCwd(id)
+	if ctx.Cwd == "" && track.ReadsProcess() {
+		ctx.Cwd = s.panelCwd(id)
+	}
 	return ctx, true
 }
 
