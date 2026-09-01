@@ -407,7 +407,7 @@ func TestMergeInheritsNoCountsFromWhatItAbsorbs(t *testing.T) {
 		t.Fatalf("survivor reached tier %d on agent traffic, want %d (invariant I6)", got, agentEarnedTier)
 	}
 	// The same on a restart, since the ceiling is rebuilt from the log's own
-	// records rather than carried in the snapshot.
+	// records and from nothing else.
 	s.Close()
 	if got := entryByID(t, openStore(t, dir), keep.Id); got.UserSignals != 0 || got.Tier != agentEarnedTier {
 		t.Fatalf("replayed survivor = %+v, want %d user signals and tier %d", got, 0, agentEarnedTier)
@@ -486,8 +486,7 @@ func TestRewordMayLandOnItsOwnKey(t *testing.T) {
 // TestRefineReplaysIdentically is invariant I1 over the three corrections: the
 // same log rebuilt on a restart yields the same entries, the same aliases, the
 // same tiers and the same counts. The merge's alias and the lower's rung both
-// live in the log alone — score.json is a cache Open never reads back — so this
-// is what says they are really there.
+// live in the log alone, so this is what says they are really there.
 func TestRefineReplaysIdentically(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, dir)
@@ -504,11 +503,6 @@ func TestRefineReplaysIdentically(t *testing.T) {
 	want := s.Render(Context{})
 	s.Close()
 
-	// score.json goes with it, so the rebuild is from the log and nothing else —
-	// #38's verification check 1.
-	if err := os.Remove(filepath.Join(dir, scoreJSON)); err != nil {
-		t.Fatalf("remove the snapshot: %v", err)
-	}
 	again := openStore(t, dir)
 	got := again.Render(Context{})
 	if len(got) != len(want) {

@@ -172,9 +172,9 @@ func ScoreFolds(folds []score.Fold) {
 //
 // Delta counts what THIS pass did; Health is the store's standing — a gauge
 // (oversized) plus the counters that each say the store hit something it had to
-// tolerate: a torn log line, a cache it could not rewrite, a repeat it declined
-// to count, a fold record it dropped, an alias it evicted, a tier record it
-// refused. None of them is an error, and none is visible any other way.
+// tolerate: a torn log line, a repeat it declined to count, a fold record it
+// dropped, an alias it evicted, a tier record it refused. None of them is an
+// error, and none is visible any other way.
 //
 // It is not the only reporter of the eviction counter any more. A conductor's
 // correction produces no Delta at all, so it never reaches this line; scoreRefine
@@ -190,7 +190,6 @@ func ScoreCounters(e *zerolog.Event, d score.Delta, h score.Health) *zerolog.Eve
 		Int("reprojected", d.Reprojected).
 		Int("oversized", h.Oversized).
 		Int("torn_events", h.TornEvents).
-		Int("cache_write_failures", h.CacheWriteFailures).
 		Int("swallowed_repeats", h.SwallowedRepeats).
 		Int("unreported_folds", h.UnreportedFolds).
 		Int("alias_evictions", h.AliasEvictions).

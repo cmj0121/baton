@@ -142,7 +142,7 @@ func TestTierThreeIsTheUsersToGrant(t *testing.T) {
 
 		// Durable, and replayed: the raise is in the log with the tier it reached,
 		// and the user-signal count is rebuilt from the sources on the log's own
-		// records rather than carried in the snapshot cache.
+		// records and from nothing else.
 		s.Close()
 		again := openStore(t, dir).Render(Context{})[0]
 		if again.Tier != maxEarnedTier || again.UserSignals != defaultUserSignalsAt {
@@ -487,8 +487,8 @@ func TestBootPassObeysTheConfiguredThreshold(t *testing.T) {
 }
 
 // TestStrippingAnIdStartsAnEntryOver is the one undo the store has, and it is
-// here because score.md's seed header now promises it to operators — a promise
-// in a file a person reads should be a test, not a belief.
+// here because docs/SCORE.md promises it to operators — a promise made to
+// someone who cannot read the code should be a test, not a belief.
 //
 // Nothing demotes an entry (#37), so a tier reached in error would look
 // permanent. Deleting a line's id is what takes it back: the pass finds a live

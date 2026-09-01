@@ -4,8 +4,8 @@ import (
 	"github.com/cmj0121/baton/internal/paths"
 )
 
-// ScoreConfig configures the fleet-scope memory (issue #37): where the three
-// score files live, whether the subsystem runs at all, how many times an
+// ScoreConfig configures the fleet-scope memory (issue #37): where the score
+// files live, whether the subsystem runs at all, how many times an
 // observation must recur before it earns a tier, how many entries one brief
 // carries, and what each ranking dimension is worth.
 //
@@ -14,7 +14,7 @@ import (
 // is clamped by the store rather than here; see score.Policy.clamp for the
 // defaults and the floors.
 type ScoreConfig struct {
-	// Dir is the directory holding score.md, score.json, and score-events.jsonl.
+	// Dir is the directory holding score.md and score-events.jsonl.
 	// Empty means $HOME/.baton. Resolved through paths.Expand, so "~" works.
 	Dir string `yaml:"dir,omitempty"`
 

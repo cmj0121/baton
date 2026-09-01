@@ -11,7 +11,7 @@ import (
 
 // TestSingleWriterPerDirectory is scope item 7 (#40, Page's note): two daemons
 // on two sockets both default to $HOME/.baton, and an unenforced "run only one"
-// would let their snapshots clobber each other silently. The claim is taken at
+// would let their rewrites of score.md clobber each other silently. The claim is taken at
 // Open and released at Close, so the second daemon is told plainly instead of
 // corrupting the first one's view.
 func TestSingleWriterPerDirectory(t *testing.T) {

@@ -163,7 +163,7 @@ func TestSubmitFoldsARepeat(t *testing.T) {
 }
 
 // TestFoldKeepsWhoSaidIt guards the provenance a fold could lose. It leaves no
-// trace in score.md and only a count in score.json, so the event log is the only
+// trace in score.md and only a count on the entry, so the event log is the only
 // place the second submitter can survive — and it must, or the store can say how
 // often something was said but never by whom.
 func TestFoldKeepsWhoSaidIt(t *testing.T) {
@@ -446,8 +446,10 @@ func TestFoldsMatchAnAlias(t *testing.T) {
 // owed. ONE mechanism settles that on both sides of a restart, and the subtests
 // below walk it in the same process and across one.
 //
-// It is never written down: score.json, the only place to write it, is the
-// disposable cache Open never reads. It survives a restart by being DERIVED
+// It is never written down: there is no file to write it to that is not the log
+// itself, and a debt is not an event — a record for something that merely has
+// not happened yet would be the operator's own history telling them it did. It
+// survives a restart by being DERIVED
 // instead — the fold event names the wording it removed, and score.md either
 // still shows those exact bytes or does not. What it cannot promise is telling
 // an owed removal from an operator who retyped the same wording verbatim in the
@@ -552,8 +554,8 @@ func TestFoldNeverDeletesWhatTheLogDoesNotHold(t *testing.T) {
 	})
 
 	// The same failure with a RESTART in the middle. What the store owes is not
-	// written down — score.json is a disposable cache and recovery state has no
-	// business in it — so a new process has to reach the same answer from the two
+	// written down — the log records events and a debt is not one — so a new
+	// process has to reach the same answer from the two
 	// things that are true: the fold event names the wording it
 	// removed, and score.md either still shows that wording or does not. If it
 	// does, the removal never landed and is owed: take the line out, count
@@ -673,7 +675,7 @@ func TestASwallowedFoldKeepsItsCounter(t *testing.T) {
 // TestAliasesAreDedupedAndCapped keeps an entry's memory of its own wordings
 // from growing without bound, and keeps it free of distinctions the index cannot
 // act on: two wordings with one folding key can only ever match the same
-// repeats, so storing both costs a line in score.json and every boot's replay to
+// repeats, so storing both costs a slot on the entry and every boot's replay to
 // buy nothing.
 func TestAliasesAreDedupedAndCapped(t *testing.T) {
 	dir := t.TempDir()

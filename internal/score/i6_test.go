@@ -549,7 +549,7 @@ func TestNoAgentReachableCallReachesTheTopTier(t *testing.T) {
 // TestTheLadderIsDeterministic is invariant I1 over the rung R4 added: the same
 // sequence of sources, replayed on a second store, yields the same tiers and the
 // same user-signal counts. The user signal is a COUNT rebuilt from the log's
-// records rather than a flag carried in the snapshot, so this is the assertion
+// records rather than a flag carried anywhere else, so this is the assertion
 // that the two ways of arriving at it agree.
 func TestTheLadderIsDeterministic(t *testing.T) {
 	sources := []string{SourceAgent, SourceUser, SourceAgent, SourceUser, SourceUser, SourceAgent}
