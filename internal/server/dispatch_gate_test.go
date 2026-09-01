@@ -28,6 +28,11 @@ func gateServer(panels ...panel.Panel) (*Server, *fakeClock, *[]string) {
 		panelTask:       map[string]string{},
 		spawning:        map[string]bool{},
 		specs:           map[string]spawnSpec{},
+		// The two rate caps carry their own gap, so a Server built here without
+		// them would admit everything and the tests that drive them would be
+		// testing nothing. Set exactly as New sets them.
+		spawn:  throttle{gap: minConductorSpawnGap},
+		refine: throttle{gap: minRefineGap},
 	}
 	s.writeInput = func(id string, data []byte) { *written = append(*written, id+":"+string(data)) }
 	for _, p := range panels {

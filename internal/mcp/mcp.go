@@ -472,5 +472,76 @@ func defaultTools() []tool {
 				return "recorded as " + id, nil
 			},
 		},
+		// The conductor's three corrections. The daemon refuses them to any
+		// connection that is not the conductor panel's, so on an ordinary agent
+		// panel these tools exist and answer with a refusal.
+		//
+		// They are listed unconditionally rather than filtered, and it is worth
+		// saying that this is a CHOICE and not an inability: control.Dial resolves
+		// the role from paths.EnvRole in this same process, so New could drop the
+		// three from a table built outside a conductor panel. It is not worth the
+		// branch — the .mcp.json that loads this server is written into the
+		// conductor's workspace and nowhere else, so a non-conductor reaching the
+		// table at all is already the unusual case — and one refusal a model can
+		// read beats a tool that is silently absent.
+		//
+		// Each description says what the tool does AND what it is not, because
+		// the boundary is the part an agent can talk itself across. Correcting the
+		// memory is not executing it: the server records, folds, counts, ranks and
+		// injects on its own, in Go, whether or not a conductor is running (#38 §1,
+		// invariant I1). None of these three counts as anything, so none of them
+		// can raise an entry — say so, or a conductor asked to "make sure the fleet
+		// takes this seriously" will reach for reword.
+		{
+			name: "score_merge",
+			desc: "Fleet memory upkeep: join two entries that say the same thing in different words, which baton's folding could not join for itself because it matches on text. Keep the better-worded entry and give this the id of the other; that one is retired and its wording is kept, so a later repeat of it still folds into the survivor. Nothing is counted and no entry is promoted — this tidies the memory, it does not decide what the memory is worth.",
+			schema: obj(map[string]any{
+				"id":   str("the entry to keep"),
+				"from": str("the entry to fold into it; it is retired"),
+			}, "id", "from"),
+			run: func(c *control.Client, a args) (string, error) {
+				id, from := a.str("id"), a.str("from")
+				if id == "" || from == "" {
+					return "", fmt.Errorf("id and from are both required: a merge names the entry to keep and the entry to fold into it")
+				}
+				if err := c.ScoreMerge(id, from); err != nil {
+					return "", err
+				}
+				return "merged " + from + " into " + id, nil
+			},
+		},
+		{
+			name: "score_reword",
+			desc: "Fleet memory upkeep: fix the wording of one entry — a typo, an ambiguity, a sentence that reads as a fact about a codebase rather than about how this fleet behaves. The old wording is kept, so repeats of it still fold into this entry. A reword counts as nothing at all: correcting a statement is not the fleet saying it again, so it cannot make an entry more important. Do not use it to emphasise an entry.",
+			schema: obj(map[string]any{
+				"id":   str("the entry to reword"),
+				"text": str("the corrected wording — one short sentence"),
+			}, "id", "text"),
+			run: func(c *control.Client, a args) (string, error) {
+				id, text := a.str("id"), a.str("text")
+				if id == "" || text == "" {
+					return "", fmt.Errorf("id and text are both required")
+				}
+				if err := c.ScoreReword(id, text); err != nil {
+					return "", err
+				}
+				return "reworded " + id, nil
+			},
+		},
+		{
+			name:   "score_lower",
+			desc:   "Fleet memory upkeep: pull one entry down a single rung when it was raised in error — a brief that coincidentally repeated it, or an observation that turned out to be about one repository rather than about this fleet. It moves DOWN only, one rung per call, and refuses at the bottom; there is no tool that raises an entry, because importance is earned by recurrence and the top rung is the operator's alone. Nothing is destroyed — the entry, its wording and its whole history stay — but a rung is not handed back by editing a file: the entry climbs again only by being said again. Lower an entry you are confident about, not one you are unsure of.",
+			schema: obj(map[string]any{"id": str("the entry to pull down one rung")}, "id"),
+			run: func(c *control.Client, a args) (string, error) {
+				id := a.str("id")
+				if id == "" {
+					return "", fmt.Errorf("id is required")
+				}
+				if err := c.ScoreLower(id); err != nil {
+					return "", err
+				}
+				return "lowered " + id + " by one rung", nil
+			},
+		},
 	}
 }

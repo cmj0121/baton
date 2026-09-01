@@ -11,8 +11,10 @@ import (
 )
 
 // startScoredServer is startServer with a live score store attached, so
-// score_submit lands on a store that accepts instead of refusing.
-func startScoredServer(t *testing.T) string {
+// score_submit lands on a store that accepts instead of refusing. The store comes
+// back with the socket: a test that seeds or reads it needs the same one the
+// daemon was given, and opening a second in the same directory is a lock error.
+func startScoredServer(t *testing.T) (string, *score.Store) {
 	t.Helper()
 	t.Setenv("SHELL", "/bin/sh")
 	st, err := score.Open(t.TempDir(), score.Policy{})
@@ -29,14 +31,14 @@ func startScoredServer(t *testing.T) string {
 	// daemon cannot report a live store as a disabled subsystem.
 	state := server.ScoreState{Store: st, Enabled: true}
 	go func() { _ = server.New(ln, server.WithScore(state)).Serve() }()
-	return sock
+	return sock, st
 }
 
 // TestMCPScoreSubmit covers the one score tool this surface deliberately has:
 // it is listed, a submission calls through to the store and answers with the
 // created id, and an empty text is the handler's own guard, a tool error.
 func TestMCPScoreSubmit(t *testing.T) {
-	sock := startScoredServer(t)
+	sock, _ := startScoredServer(t)
 
 	resps := run(t, sock,
 		`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`,
