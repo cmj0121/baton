@@ -3,6 +3,7 @@ package main
 import (
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/paths"
@@ -407,16 +409,16 @@ func TestRunServerOn(t *testing.T) {
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- runServerOn(ln, sock) }()
+	go func() { done <- runServerOn(ln, sock, loadServerBoot(sock)) }()
 
-	// Wait for the daemon to record its PID file (it is up and serving by then).
-	pidPath := paths.PidFile(sock)
-	if !waitFor(func() bool { _, err := os.Stat(pidPath); return err == nil }, 100, 10*time.Millisecond) {
-		t.Fatal("server did not write its pid file")
-	}
-	if pid, err := readPidFile(pidPath); err != nil || pid != os.Getpid() {
-		t.Fatalf("pid file should hold our pid: pid=%d err=%v", pid, err)
-	}
+	// Wait for the loop to be serving before signalling it. This used to wait on
+	// the PID file, which runServerOn wrote first; the pid is published from above
+	// the bind now, by loadServerBoot, so by the time this test has a boot to hand
+	// runServerOn the file is already there and says nothing about the loop. An
+	// answered hello does: it comes from Serve, which starts after the signal
+	// handlers below are installed, so the SIGHUP cannot arrive while its default
+	// disposition is still "kill this process".
+	waitServing(t, sock)
 
 	// A SIGHUP exercises the reload goroutine (config + plugin re-read).
 	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
@@ -454,7 +456,7 @@ func TestStartStopDaemon(t *testing.T) {
 	t.Setenv("BATON_SOCK", sock)
 	logPath := filepath.Join(home, "baton.log")
 
-	if err := startDaemon(0, logPath, ""); err != nil {
+	if err := startDaemon(0, logPath, "", false); err != nil {
 		t.Fatalf("startDaemon: %v", err)
 	}
 	if !alive(sock) {
@@ -462,7 +464,7 @@ func TestStartStopDaemon(t *testing.T) {
 	}
 
 	// A second startDaemon is a no-op while one is already alive.
-	if err := startDaemon(0, logPath, ""); err != nil {
+	if err := startDaemon(0, logPath, "", false); err != nil {
 		t.Fatalf("startDaemon (already running): %v", err)
 	}
 
@@ -546,6 +548,21 @@ func TestClearStaleSocket(t *testing.T) {
 	// Missing socket: nothing to do.
 	if err := clearStaleSocket(filepath.Join(dir, "missing.sock")); err != nil {
 		t.Fatalf("missing socket: %v", err)
+	}
+
+	// A PID file with NO socket beside it is the shape a daemon that died above
+	// the bind leaves, and it is tidied on its own. Leaving it would leave a pid
+	// nothing runs on for the next force-stop to read, which is how a reused
+	// number gets signalled.
+	unbound := filepath.Join(dir, "unbound.sock")
+	if err := os.WriteFile(paths.PidFile(unbound), []byte("99999"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := clearStaleSocket(unbound); err != nil {
+		t.Fatalf("pid file with no socket: %v", err)
+	}
+	if _, err := os.Stat(paths.PidFile(unbound)); !os.IsNotExist(err) {
+		t.Fatalf("a PID file with no socket should have been removed: %v", err)
 	}
 
 	// A leftover (dead) socket file is removed, along with its orphaned PID file
@@ -670,5 +687,81 @@ func TestReloadableSettingsCarriesLimits(t *testing.T) {
 	}
 	if rc := reloadableSettings(config.Config{}); !rc.settings.Limits.IsZero() || rc.settings.AgentLimits != nil {
 		t.Errorf("an empty config should cap nothing, got %+v", rc.settings)
+	}
+}
+
+// waitServing blocks until the server on sock has answered a hello, and fails
+// the test if it does not. It is the readiness gate for a test that drives
+// runServerOn on a listener it bound itself: the answer comes out of Serve, so
+// it stands for everything runServerOn does before Serve, the signal handlers
+// included.
+func waitServing(t *testing.T, sock string) {
+	t.Helper()
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial %s: %v", sock, err)
+	}
+	defer func() { _ = c.Close() }()
+	if err := c.Wait(5 * time.Second); err != nil {
+		t.Fatalf("the server on %s did not answer a hello: %v", sock, err)
+	}
+}
+
+// TestStopDaemonRefusesAPidNoSessionHolds is the refusing direction of the
+// force-stop that reaches a daemon with no socket. The on-disk state is what a
+// SIGKILLed daemon leaves behind — a PID file, a lock file nobody holds — with
+// the pid pointing at a live process that is not baton, which is what the
+// operating system does with a number soon enough after it frees one.
+//
+// A stop that trusted the file would SIGTERM that process. The session claim is
+// what says otherwise, and it says it without ever looking at what the pid is,
+// so it holds for any program that inherits the number.
+func TestStopDaemonRefusesAPidNoSessionHolds(t *testing.T) {
+	sock := filepath.Join(shortDir(t), "b.sock")
+
+	victim := exec.Command("sleep", "60")
+	if err := victim.Start(); err != nil {
+		t.Fatalf("start the stand-in process: %v", err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- victim.Wait() }()
+	t.Cleanup(func() { _ = victim.Process.Kill() })
+
+	if err := os.WriteFile(paths.PidFile(sock), []byte(strconv.Itoa(victim.Process.Pid)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The lock file a daemon leaves behind: it outlives the claim on purpose, so
+	// its presence says nothing about whether anything holds it.
+	if err := os.WriteFile(paths.LockFile(sock), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := stopDaemon(sock); err != nil {
+		t.Fatalf("stopDaemon on a session nothing holds should tidy quietly: %v", err)
+	}
+	select {
+	case err := <-exited:
+		t.Fatalf("stopDaemon signalled a live process no session claim backed; it exited with %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if _, err := os.Stat(paths.PidFile(sock)); !os.IsNotExist(err) {
+		t.Fatalf("the orphaned PID file should have been tidied rather than left to be read again: %v", err)
+	}
+}
+
+// TestStopDaemonWontGuessAPidForAHeldSession: a daemon owns the session and no
+// PID file names it, so there is nothing to signal. Saying so is the answer —
+// the alternative is reaching for some other pid, which is the mistake the whole
+// session check exists to prevent.
+func TestStopDaemonWontGuessAPidForAHeldSession(t *testing.T) {
+	sock := filepath.Join(shortDir(t), "b.sock")
+	release, held, err := claimSession(paths.LockFile(sock))
+	if err != nil || !held {
+		t.Fatalf("claim = held %v, err %v; want held", held, err)
+	}
+	defer release()
+
+	if err := stopDaemon(sock); err == nil {
+		t.Fatal("stopDaemon should refuse a held session it has no pid for")
 	}
 }

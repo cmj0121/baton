@@ -38,7 +38,7 @@ func TestCtlMainRunError(t *testing.T) {
 // handlers that no success test reaches.
 func TestCtlRunClientErrors(t *testing.T) {
 	sock := ctlTestServer(t)
-	c, err := control.DialSocket(sock, "", "")
+	c, err := control.DialSocket(sock, "", "", "")
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestCtlRunClientErrors(t *testing.T) {
 // end (a queued task is enqueued, bumped to the head, then dropped to the tail).
 func TestCtlQueueReorder(t *testing.T) {
 	sock := ctlTestServer(t)
-	c, err := control.DialSocket(sock, "", "")
+	c, err := control.DialSocket(sock, "", "", "")
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

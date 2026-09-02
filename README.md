@@ -256,6 +256,8 @@ through one `baton` object. See **[docs/PLUGIN.md](docs/PLUGIN.md)**.
   `baton mcp` tools, and the guardrails.
 - **[docs/SCORE.md](docs/SCORE.md)** — Score, the fleet's memory: the `score.md` file and its one undo, the tier
   ladder, the ranking weights, compaction, and what it is not a boundary for.
+- **[docs/DAEMON.md](docs/DAEMON.md)** — the daemon: the order it boots in, readiness probes, and what to do when
+  `baton` says the server did not come up.
 
 ## DDD (Dream-Driven Development)
 

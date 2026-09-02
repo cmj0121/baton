@@ -267,6 +267,8 @@ Siehe **[docs/PLUGIN.md](PLUGIN.md)**.
   `baton mcp`-Tools und die Leitplanken.
 - **[docs/SCORE.md](SCORE.md)** — Score, das Gedächtnis der Flotte: die Datei `score.md` und ihr einziges
   Rückgängigmachen, die Stufenleiter, die Ranking-Gewichte, die Kompaktierung und wofür es keine Grenze ist.
+- **[docs/DAEMON.md](DAEMON.md)** — der Daemon: die Reihenfolge seines Starts, Readiness-Probes und was zu tun ist,
+  wenn `baton` meldet, der Server sei nicht hochgekommen.
 
 ## DDD (Dream-Driven Development)
 

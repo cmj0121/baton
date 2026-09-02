@@ -29,7 +29,7 @@ const protocolVersion = "2024-11-05"
 // Server is an MCP stdio server bound to a set of fleet-control tools.
 type Server struct {
 	version string                          // baton's build version, reported in serverInfo
-	dial    func() (*control.Client, error) // how a tool call reaches the socket; control.Dial by default
+	dial    func() (*control.Client, error) // how a tool call reaches the socket; control.DialAsProcess by default
 	tools   []tool
 }
 
@@ -46,7 +46,11 @@ type tool struct {
 // (so a dropped connection never wedges the long-lived server, and the per-call
 // hello re-reads the injected conductor identity each time).
 func New(version string) *Server {
-	s := &Server{version: version, dial: control.Dial}
+	// DialAsProcess rather than Dial: outside a panel this server is identified
+	// as itself, so a fleet-wide rate cap tells it from the operator's own shell —
+	// which, when an agent runtime was started from that shell, is the same
+	// session. See control.DialAsProcess.
+	s := &Server{version: version, dial: control.DialAsProcess}
 	s.tools = defaultTools()
 	return s
 }

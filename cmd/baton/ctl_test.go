@@ -49,7 +49,7 @@ func TestCtlMain(t *testing.T) {
 // TestCtlRuns exercises every ctl subcommand handler against a live server.
 func TestCtlRuns(t *testing.T) {
 	sock := ctlTestServer(t)
-	c, err := control.DialSocket(sock, "", "")
+	c, err := control.DialSocket(sock, "", "", "")
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

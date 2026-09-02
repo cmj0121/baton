@@ -242,6 +242,66 @@ An entry outside the working set carries **one** of three standings, naming the 
 Off, unavailable and broken are three states, not one. You must never have to read the daemon log to learn that the
 fleet has no memory.
 
+## How fast one actor may submit
+
+`score.submit` — the verb behind both `baton ctl score submit` and the `score_submit` MCP tool — is capped at roughly
+**one a second per actor**, with an allowance of **four spendable at once** that refills one a second.
+
+What the cap bounds is **fold records, not entries**. A repeat folds into the entry that already says it, so an agent
+resubmitting one sentence a million times creates no new entry at all — it creates one `folded` record per attempt, at
+a little over 200 bytes each. A retry loop measured at 73 submissions a second is 1.47 GB of event log in a day; under
+the cap the same loop settles to one a second, because that is what the allowance refills at. Nothing about how _much_
+one actor may say is capped: a single agent can still put forty times a healthy fleet's daily volume into the memory,
+which is why nothing an honest fleet does comes near this.
+
+**A refused submission is refused, not quietly dropped.** The reply is an error — `submitting too fast, slow down` —
+and it is decided before the store is touched at all, so nothing is appended and nothing is folded. An agent told that
+can say the same thing a second later and lose nothing by having tried; a silent success would have made the one thing
+that reply exists to say — new, or folded into what the fleet already knows — a lie.
+
+**The burst is what makes a turn's worth of observations land.** Three or four distinct lessons written as a task
+finishes arrive together by construction, and a plain one-second minimum gap refuses two of every three of them — which
+is not slowing an agent down, it is throwing three lessons away. With four spendable at once, three measured arrival
+patterns are refused 0%, 0.7% and 16% of the time, while the retry loop's refusal rate is unchanged at 98.6%: the
+sustained rate is all the bucket ever admits, and the burst buys at most three extra records each time an actor comes
+back from being idle.
+
+That 16% is the turn shape itself, and it is measured at **216 times** what a healthy fleet writes in a whole day. At a
+healthy fleet's own volume the same shape is refused 0.03%. The burst takes most of a turn back; it does not make a
+fleet whose turns arrive on top of each other free of the cap.
+
+Refusals are visible without being loud: one `WRN` per actor per minute, naming the actor, how long until the
+allowance is back, and the gap and burst it was measured against. It says outright that the store is healthy, because
+"my submissions are failing" has three different answers and this is only one of them.
+
+### Who counts as one actor
+
+| The client                   | Spends the allowance of      |
+| ---------------------------- | ---------------------------- |
+| an agent inside a panel      | that panel                   |
+| `baton ctl`, from your shell | that shell **session**       |
+| `baton mcp`, outside a panel | that `baton mcp` **process** |
+
+Inside a panel the panel id is already an identity. Outside one there was none, so every client outside the fleet —
+your own `baton ctl score submit` and every MCP server started by hand — shared a single allowance between them: three
+different observations back to back reached the store as one record and two refusals, under a log line that named
+nobody. They now declare an identity of their own. `baton ctl` is a whole process per command, so it declares its
+session — which a shell and everything under it share, so two terminals are two actors and a loop inside one of them is
+still one. `baton mcp` outlives its connections and dials afresh per tool call, so it declares itself; declaring its
+session would put it straight back in one slot with the shell that started it.
+
+A session is stable for a shell and not for a launcher above one. cron, `ssh host baton ctl …`, `systemd-run` and agent
+runtimes start each command in a session of their own, so a client arriving that way is a fresh actor on every
+invocation and spends a fresh allowance. Agents inside panels are untouched by that — they carry a panel id — and so is
+`baton mcp`; what it leaves is a shell panel and those launchers, under exactly the limit the next paragraph states.
+
+**It is a cooperative key, not a boundary.** The identity is declared by the client on its handshake and the daemon
+never checks it. It grants nothing and fences nothing — it picks which allowance this client spends and nothing else.
+So every number above holds for a client with a stable identity, which is every real one, and a client that varied it
+would walk straight through the cap, exactly as it could already by varying the panel it claims to be. This bounds a
+loop that is filling your disk by accident; it is not a defence against a client that has decided not to be counted.
+See **[SECURITY.md](../SECURITY.md)**.
+
 ## The conductor's corrections
 
 Where a [conductor](CONTROL.md#the-conductor) is running it gets **correction** rights, not execution rights. The
@@ -352,9 +412,19 @@ Every mutation appends to `score-events.jsonl`, so it grows for as long as the f
 boot rewrites it to one record per id the log has ever named: a state record carrying each live entry's whole current
 standing, and a bare retirement record for every id whose entry is gone. Under the threshold nothing is rewritten.
 
-It is a boot operation and nothing else. **A daemon that is never restarted never compacts**, and its log grows until
-the next start. The rewrite is atomic — a temp file, an fsync, a rename — so a crash at any moment leaves the next boot
-a whole file to replay, and a failure leaves the old log byte-for-byte untouched.
+**It runs at two doors, on the same 8 MiB.** The boot rewrites a log that is already over it. And a daemon that is
+already up rewrites one that has _gained_ another whole 8 MiB since anyone last looked — in the background, taking its
+snapshot under the store's lock and doing the expensive part off it, so no dispatch ever waits on a whole-file
+re-marshal. A daemon that is never restarted no longer grows its log until the next start.
+
+Growth rather than size at the second door is what lets one number serve both. A running daemon's log is therefore
+bounded by **its compacted size plus the threshold** — not by twice the threshold. For an ordinary store those are the
+same statement, because its compacted form is well under 8 MiB. For a store with more ids than that budget covers they
+are not, and it is the first that is true: the rewrite is compared against the log as it stands rather than against
+the constant, so what compaction bounds is the log's shape and not its size.
+
+The rewrite is atomic — a temp file, an fsync, a rename — so a crash at any moment leaves the next boot a whole file to
+replay, and a failure leaves the old log byte-for-byte untouched.
 
 What it costs, stated rather than left to be discovered:
 
@@ -369,19 +439,49 @@ What it costs, stated rather than left to be discovered:
   being on disk.**
 - **Recency spacing moves.** Recency is a position in the log, so rewriting the log rewrites every position. The order
   survives, the spacing does not — entries at positions 10, 5000 and 200000 come back at 1, 2 and 3. What you may see
-  is a working set reordered by some other dimension winning a comparison recency used to decide.
+  is a working set reordered by some other dimension winning a comparison recency used to decide. And because the
+  second door needs no restart, **you may now see it happen while you are watching**: a panel's working set re-ordered
+  with nothing submitted, no config touched and no daemon stopped. The daemon says so when it does — see below.
 
 Compaction declines where it would do harm: on a log at or below the threshold, on one that parsed into no ids at all,
-where the store still owes a duplicate-line removal, and where the rewrite would not actually be smaller.
+where the store still owes a duplicate-line removal, and where the rewrite would not actually be smaller. A store
+running **unlocked** — `status` reports `unlocked: true` — declines the runtime door outright and keeps the boot's
+alone. A rewrite is built from one daemon's memory, so renaming it over a log a second daemon is also appending to
+destroys what that second daemon wrote; doing that once per boot is the bet that has always been there, and doing it
+once per threshold for the life of the process is not the same bet.
 
-The daemon says what happened, on the `score recovered` line it writes at boot: `compacted` is how many records were
-written, and `0` means it did not run. `compaction_failures` is the rewrite failing — which costs no data, since the
-old log is intact, but costs the bound, so the next boot is slower and every one after it slower again. A rewrite that
-failed also logs its own reason at `WRN`: a count on its own does not tell you the disk was full.
+The daemon says what happened. The boot's `score recovered` line carries the counters: `compacted` is how many records
+the last rewrite wrote, and `0` means none has run; `compactions` is how many rewrites have landed over this store's
+life; `compaction_failures` is the rewrite failing — which costs no data, since the old log is intact, but costs the
+bound, so the next boot is slower and every one after it slower again. A rewrite that failed also logs its own reason
+at `WRN`: a count on its own does not tell you the disk was full.
 
-And a rewrite that **succeeded** logs a `WRN` too, because it changed something you did not ask for — the recency
-spacing above. It carries `log_before` and `log_after`, which is the only place the daemon names the log's growth: the
-record count says how much the store remembers, not how large the file holding it had become.
+And a rewrite that **succeeded** logs a `WRN` of its own, because it changed something you did not ask for — the
+recency spacing above. It carries `compacted`, `log_before` and `log_after`, which is the only place the daemon names
+the log's growth: the record count says how much the store remembers, not how large the file holding it had become.
+
+**One line per rewrite, whichever door it came through.** A boot's is written by the boot. A running daemon's is
+written on the **first read that uses the rewritten log** — the next brief, or the next `score.*` command — because
+that read is the first thing to hold the re-spaced memory, and the compactor itself sits on no path the daemon logs
+from. On an idle fleet the line can therefore arrive well after the rewrite it describes. And two rewrites that land
+between two reads produce **one** line rather than two: it describes the log that is on disk, which is the later of
+them, and there is nothing left to say about the earlier one.
+
+### The first boot after upgrading a large store
+
+The daemon opens its store **before** it binds its socket, so a slow open delays the daemon rather than leaving a
+socket that accepts connections and never answers one. On a store that grew large before the runtime door existed,
+that has one visible consequence — exactly once.
+
+`baton` waits five seconds for the socket. Measured by log size, time to a client's first reply: 122 ms at 2.5 MB,
+1.2 s at 81 MB, 3.1 s at 202 MB, **7.1 s at 456 MB**. The crossing is around **320 MB**, roughly 480,000 entries. Past
+it, `baton` reports that the server did not come up — while the daemon behind that message goes on to open, compact,
+and serve normally. Run `baton` again and it attaches to the fleet that is already running.
+
+**It happens once**, and only to a store that grew before this build. That boot compacts it, and the two doors above
+keep it bounded from then on. What it is not is a reason to loop on the message: restarting a daemon in the middle of
+opening a large store means the open never finishes, and the boot that would have shrunk the log is the boot being
+killed. See **[DAEMON.md](DAEMON.md)** for that message in general, and for `baton --force`.
 
 ### Rolling a binary back
 
@@ -418,7 +518,8 @@ fleet-wide. What limits it: it enters at rung 1, rendered as `noted`; it cannot 
 you; and it is one line in a file you edit.
 
 It is **not a boundary against a hostile agent.** An agent that unsets `BATON_PANEL_ID` in its own environment is
-stamped as you, and one with filesystem access can write `score.md` directly. What the connection check removes is the
+stamped as you, and one with filesystem access can write `score.md` directly. The submit cap is the same shape: it is
+keyed on an identity the client declares and nobody verifies. What the connection check removes is the
 case that needs no knowledge at all — declaring a role, which every panel can do. A shell panel gets no identity
 environment either, so an agent CLI you start by hand inside one is stamped as you for as long as it runs. See
 **[SECURITY.md](../SECURITY.md)**.

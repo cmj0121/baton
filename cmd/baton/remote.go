@@ -188,7 +188,7 @@ func bridgeSocket(verbose int, logPath, pluginPath string) (string, error) {
 		return sock, nil
 	}
 	log.Info().Msg("no fleet is running here; starting one for the remote attach")
-	if err := startDaemon(verbose, logPath, pluginPath); err != nil {
+	if err := startDaemon(verbose, logPath, pluginPath, false); err != nil {
 		return "", err
 	}
 	return sock, nil

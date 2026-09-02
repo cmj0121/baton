@@ -92,7 +92,7 @@ func conductorFleet(t *testing.T, n int) (sock string, st *score.Store, conducto
 		ids = append(ids, e.Id)
 	}
 
-	c, err := control.DialSocket(sock, "", "")
+	c, err := control.DialSocket(sock, "", "", "")
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -117,7 +117,7 @@ func conductorFleet(t *testing.T, n int) (sock string, st *score.Store, conducto
 func runAs(t *testing.T, sock, self string, reqs ...string) []testResp {
 	t.Helper()
 	s := New("9.9.9")
-	s.dial = func() (*control.Client, error) { return control.DialSocket(sock, "", self) }
+	s.dial = func() (*control.Client, error) { return control.DialSocket(sock, "", self, "") }
 
 	in := strings.NewReader(strings.Join(reqs, "\n"))
 	var out bytes.Buffer

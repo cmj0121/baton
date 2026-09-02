@@ -52,3 +52,47 @@ func TestClaimSessionLeavesTheLockFile(t *testing.T) {
 		t.Fatalf("the lock file should outlive the claim: %v", err)
 	}
 }
+
+// sessionClaimed is one question asked through a fresh probe — the shape
+// stopUnboundDaemon's opening check has, and the one a test that changes the
+// state between questions needs. The daemon's WAIT holds a single probe across
+// all of its questions instead; see sessionProbe.
+func sessionClaimed(path string) bool {
+	p := openSessionProbe(path)
+	defer p.close()
+	return p.claimed()
+}
+
+// TestSessionClaimedTracksTheHolder pins the probe stopUnboundDaemon trusts a
+// pid on, in both directions: it must answer true for exactly as long as a
+// daemon holds the session, and false the moment one does not.
+//
+// The false direction is the one that matters. A PID file outlives the process
+// it names, and pids get reused, so a check that only asked "is this number a
+// live process" would hand a SIGTERM to whatever unrelated program inherited the
+// number. This is the check that stops that, and the released case below is the
+// same on-disk state as a daemon that crashed: the lock file is still there, and
+// nothing holds it.
+func TestSessionClaimedTracksTheHolder(t *testing.T) {
+	lock := filepath.Join(t.TempDir(), "baton.lock")
+
+	if sessionClaimed(lock) {
+		t.Fatal("a session whose lock file does not exist cannot be claimed")
+	}
+	if _, err := os.Stat(lock); !os.IsNotExist(err) {
+		t.Fatalf("the probe must not create the lock file it asks about: %v", err)
+	}
+
+	release, held, err := claimSession(lock)
+	if err != nil || !held {
+		t.Fatalf("claim = held %v, err %v; want held", held, err)
+	}
+	if !sessionClaimed(lock) {
+		t.Fatal("a session a live daemon holds should read as claimed")
+	}
+
+	release()
+	if sessionClaimed(lock) {
+		t.Fatal("a released session should read as free, with the lock file still on disk")
+	}
+}

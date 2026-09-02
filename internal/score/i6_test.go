@@ -95,7 +95,7 @@ var tierWrites = map[tierWrite]string{
 	{Fn: "lowerLocked", Type: "event"}: "the lowered record, carrying the rung the guarded -- above just landed on",
 
 	{Fn: "reinforceLocked", Type: "event"}: "the raised record, carrying the tier the guarded ++ above just produced",
-	{Fn: "compactLocked", Type: "event"}: "the compacted record, carrying the rung the entry is standing on so " +
+	{Fn: "build", Type: "event"}: "the compacted record, carrying the rung the entry is standing on so " +
 		"the rewrite that drops its raised records does not drop the tier with them. It COPIES Entry.Tier and " +
 		"computes nothing, and replayLocked guards what it reads back exactly as it guards a raised record",
 	{Fn: "foldLocked", Type: "Fold"}:      "a report of where the entry stands after the fold",

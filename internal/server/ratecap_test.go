@@ -1,15 +1,17 @@
 package server
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
-// TestThrottleStampsOnlyWhenItAdmits pins the throttle's stamping rule, which is
-// argued at length on tooSoon and was pinned by nothing: making the REFUSING branch re-stamp — the self-lockout
-// the doc singles out as the mistake to avoid — passed the whole suite, because
-// every test above it either paces itself past the gap or rewinds the stamp.
+// TestThrottleStampsOnlyWhenItAdmits pins the gapStamp's stamping rule, which is
+// argued at length on tooSoon and was pinned by nothing: making the REFUSING
+// branch re-stamp — the self-lockout the doc singles out as the mistake to
+// avoid — passed the whole suite, because every test above it either paces
+// itself past the gap or rewinds the stamp.
 //
 // The clock is a parameter, so the rule is asserted directly rather than through
 // a sleep: a caller polling faster than the gap must not push its own next
@@ -17,10 +19,10 @@ import (
 func TestThrottleStampsOnlyWhenItAdmits(t *testing.T) {
 	const gap = 250 * time.Millisecond
 	t0 := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-	tt := throttle{gap: gap}
+	tt := gapStamp{gap: gap}
 
 	if _, tooSoon := tt.tooSoon("c1", t0); tooSoon {
-		t.Fatal("the first attempt was refused; an unstamped throttle must admit")
+		t.Fatal("the first attempt was refused; an unstamped gapStamp must admit")
 	}
 	// Inside the gap: refused, and the refusal must leave the stamp where it was.
 	// The reported duration is what says so — it is measured from the last
@@ -48,7 +50,69 @@ func TestThrottleStampsOnlyWhenItAdmits(t *testing.T) {
 	}
 	if _, tooSoon := tt.tooSoon("c1", t0.Add(262*time.Millisecond)); tooSoon {
 		t.Fatal("the first identity was refused after the slot moved to another: " +
-			"the throttle holds one identity, so the previous stamp is gone")
+			"the gapStamp holds one identity, so the previous stamp is gone")
+	}
+}
+
+// TestThrottlesHoldsOneStampPerIdentity is the difference between rateBuckets
+// and gapStamp, asserted rather than described: the single-stamp version admits
+// everything the moment two identities interleave, which is the state a busy
+// fleet is always in.
+//
+// The stamping rule is the same one gapStamp carries and is pinned for the same
+// reason — a refusal that re-stamped would lock a polling caller out for as long
+// as it kept asking.
+func TestThrottlesHoldsOneStampPerIdentity(t *testing.T) {
+	const gap = 250 * time.Millisecond
+	t0 := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	tt := rateBuckets{gap: gap}
+
+	if _, tooSoon := tt.tooSoon("p1", t0); tooSoon {
+		t.Fatal("the first attempt was refused; an unstamped cap must admit")
+	}
+	// A second identity takes its own slot and does NOT displace the first —
+	// which one stamp in total cannot do.
+	if _, tooSoon := tt.tooSoon("p2", t0.Add(time.Millisecond)); tooSoon {
+		t.Fatal("a second identity was refused by the first's stamp")
+	}
+	if wait, tooSoon := tt.tooSoon("p1", t0.Add(2*time.Millisecond)); !tooSoon {
+		t.Fatal("the first identity was admitted again after another acted: with one stamp in total " +
+			"two callers alternating are never refused, and the cap is dead exactly when the fleet is busy")
+	} else if wait != gap-2*time.Millisecond {
+		t.Fatalf("the refusal said to retry in %v, want %v: the number on the line is when the "+
+			"allowance comes back, which is the caller's actual question", wait, gap-2*time.Millisecond)
+	}
+	// Refusals do not re-stamp: one gap after the ADMITTED attempt, not after the
+	// last refusal.
+	if _, tooSoon := tt.tooSoon("p1", t0.Add(gap)); tooSoon {
+		t.Fatal("an attempt a full gap after the last ADMITTED one was refused: the refusing branch " +
+			"is stamping, which locks out a caller for as long as it keeps asking")
+	}
+
+	// Stamps that can no longer refuse anything are dropped, so the map does not
+	// grow with every identity the daemon has ever seen. A FEW AT A TIME, and
+	// both halves of that are asserted here: the sweep runs under Server.mu on
+	// the submit path, and the key is a string the client declares, so a walk of
+	// the whole map on every admission is an unbounded scan on the hot path.
+	for i := range 50 {
+		tt.tooSoon(strconv.Itoa(i), t0.Add(2*gap))
+	}
+	before := len(tt.full)
+	tt.tooSoon("p1", t0.Add(10*gap))
+	if n := before - len(tt.full); n > sweepPerAdmit {
+		t.Errorf("one admission dropped %d stamps out of %d, want at most %d: whatever else it is, "+
+			"the sweep is a scan of every identity that has ever acted, holding the daemon's lock, "+
+			"on the path a busy fleet takes", n, before, sweepPerAdmit)
+	}
+	// And it really drains — a bound nothing ever reaches is a leak with a
+	// comment. Every identity that went quiet is gone within a bounded number of
+	// admissions, which is the direction a sweep deleted altogether would fail.
+	for i := range 200 {
+		tt.tooSoon("p1", t0.Add(time.Duration(11+i)*gap))
+	}
+	if n := len(tt.full); n != 1 {
+		t.Errorf("the cap still holds %d stamps after every earlier identity went quiet for longer "+
+			"than the %v gap, want only the one still inside it", n, gap)
 	}
 }
 
@@ -105,12 +169,23 @@ func TestThePrimersRateClaimMatchesTheCap(t *testing.T) {
 	}
 }
 
-// rewind pushes a throttle's stamp into the past, so a test can cross its gap
+// rewind pushes a gapStamp's stamp into the past, so a test can cross its gap
 // without sleeping through it. One helper for both caps rather than one each:
 // they are one type, and a test that reached into the fields itself would keep
 // working after the stamping rule changed under it.
-func rewind(s *Server, t *throttle, by time.Duration) {
+func rewind(s *Server, t *gapStamp, by time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t.at = t.at.Add(-by)
+}
+
+// rewindAll is rewind for the per-actor cap: every stamp it holds moves into the
+// past together, so a test that submits as several panels crosses the gap for
+// all of them in one call.
+func rewindAll(s *Server, t *rateBuckets, by time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for who, at := range t.full {
+		t.full[who] = at.Add(-by)
+	}
 }

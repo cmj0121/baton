@@ -1,10 +1,15 @@
 package control_test
 
 import (
+	"encoding/json"
+	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/cmj0121/baton/internal/control"
@@ -31,7 +36,7 @@ func startServer(t *testing.T) string {
 func TestControlRoundtrips(t *testing.T) {
 	sock := startServer(t)
 
-	c, err := control.DialSocket(sock, "", "")
+	c, err := control.DialSocket(sock, "", "", "")
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -78,7 +83,7 @@ func TestControlRoundtrips(t *testing.T) {
 func TestControlHelpers(t *testing.T) {
 	sock := startServer(t)
 
-	c, err := control.DialSocket(sock, "", "")
+	c, err := control.DialSocket(sock, "", "", "")
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -183,13 +188,13 @@ func TestControlHelpers(t *testing.T) {
 // no server is listening on surfaces a clear error rather than a nil client.
 func TestControlDialErrors(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "absent.sock")
-	if _, err := control.DialSocket(missing, "", ""); err == nil {
+	if _, err := control.DialSocket(missing, "", "", ""); err == nil {
 		t.Fatal("dialling an absent socket should fail")
 	}
 
 	// Cancelling an unknown task id is rejected by the server and surfaced.
 	sock := startServer(t)
-	c, err := control.DialSocket(sock, "", "")
+	c, err := control.DialSocket(sock, "", "", "")
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -217,7 +222,7 @@ func TestControlDialErrors(t *testing.T) {
 func TestControlQueueOps(t *testing.T) {
 	sock := startServer(t)
 
-	c, err := control.DialSocket(sock, "", "")
+	c, err := control.DialSocket(sock, "", "", "")
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -285,7 +290,7 @@ func TestControlQueueOps(t *testing.T) {
 // encode error instead of blocking or panicking.
 func TestControlClosedClient(t *testing.T) {
 	sock := startServer(t)
-	c, err := control.DialSocket(sock, "", "")
+	c, err := control.DialSocket(sock, "", "", "")
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -320,13 +325,7 @@ func TestControlClosedClient(t *testing.T) {
 // the dial succeeds but the peer closes without ever sending the panels
 // snapshot, so readUntilPanels drains to EOF and Dial returns an error.
 func TestControlDialHandshakeFails(t *testing.T) {
-	// A short temp dir keeps the socket path under the unix-domain length limit.
-	dir, err := os.MkdirTemp("", "bs")
-	if err != nil {
-		t.Fatalf("tempdir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	sock := filepath.Join(dir, "s.sock")
+	sock := filepath.Join(shortDir(t), "s.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -341,9 +340,245 @@ func TestControlDialHandshakeFails(t *testing.T) {
 		_ = conn.Close()
 	}()
 
-	if _, err := control.DialSocket(sock, "", ""); err == nil {
+	if _, err := control.DialSocket(sock, "", "", ""); err == nil {
 		t.Fatal("dial against a peer that never sends panels should fail")
 	}
+}
+
+// TestHelloDeclaresAnActorOutsideAPanel is the client half of the daemon's
+// per-actor rate caps: inside a panel the panel id IS the identity, and outside
+// one every client used to declare the empty string and share a single slot with
+// every other client outside a panel.
+//
+// It reads the hello off the wire rather than trusting the Client, because the
+// frame is the whole interface here — the server has nothing else to key on.
+//
+// What it covers is the SECOND rule and the long-lived shape. A client that has
+// a panel must not also declare an actor: two identities for one caller is a
+// second slot it could spend from, and the panel id is the one the daemon can
+// actually account for. A client that outlives its connections declares the
+// process, which is the thing that survives its dials.
+//
+// The per-command shape is not here, and that is deliberate. Asserting it in
+// this process would mean computing the expected value with the same call the
+// code makes, which passes for any rule at all; see
+// TestTheOutOfPanelIdentityHoldsAcrossInvocations, which runs the real client
+// twice instead.
+func TestHelloDeclaresAnActorOutsideAPanel(t *testing.T) {
+	for _, tc := range []struct {
+		name, self, want string
+		dial             func(sock, self string) (*control.Client, error)
+	}{
+		{name: "a per-command client inside panel 7", self: "7", want: "",
+			dial: func(sock, self string) (*control.Client, error) {
+				t.Setenv(paths.EnvSocket, sock)
+				t.Setenv(paths.EnvRole, "")
+				t.Setenv(paths.EnvPanelID, self)
+				return control.Dial()
+			}},
+		// The long-lived shape: `baton mcp` serves many tool calls from one
+		// process, each over a fresh dial, so it is itself rather than the session
+		// that started it — which is usually the operator's own terminal.
+		{name: "a long-lived client outside a panel", want: "pid:" + strconv.Itoa(os.Getpid()),
+			dial: func(sock, self string) (*control.Client, error) {
+				t.Setenv(paths.EnvSocket, sock)
+				t.Setenv(paths.EnvRole, "")
+				t.Setenv(paths.EnvPanelID, self)
+				return control.DialAsProcess()
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sock, actors := helloActors(t, 1)
+
+			c, err := tc.dial(sock, tc.self)
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			defer func() { _ = c.Close() }()
+
+			switch got := <-actors; {
+			case tc.want == "" && got != "":
+				t.Errorf("a client inside panel %q also declared actor %q; the panel id is already "+
+					"the identity, and a second one is just another slot to spend from", tc.self, got)
+			case got != tc.want:
+				t.Errorf("declared actor %q, want %q. A client that outlives its connections is "+
+					"ITSELF: keyed on its session it would share a slot with the shell that started "+
+					"it, which is usually the operator's own terminal", got, tc.want)
+			}
+		})
+	}
+}
+
+// The child process TestTheOutOfPanelIdentityHoldsAcrossInvocations drives:
+// dialHelperMode is what tells it to be a client rather than to skip; the
+// daemon stand-in it dials arrives in BATON_SOCK, which is the variable the
+// real client reads.
+const (
+	dialHelperMode = "BATON_TEST_DIAL_HELPER"
+	dialHelper     = "TestDialHelper"
+)
+
+// TestDialHelper is not a test. It is the client under test, run as a whole
+// process because that is the shape `baton ctl` has — and run twice, from two
+// different parents, because that is the only way to ask whether the identity it
+// declares survives the process that declared it.
+//
+// It prints the parent it ran under, so the test can say the two really were
+// different before it says the two actors were the same.
+func TestDialHelper(t *testing.T) {
+	if os.Getenv(dialHelperMode) == "" {
+		t.Skip("the child half of TestTheOutOfPanelIdentityHoldsAcrossInvocations")
+	}
+	// Through Dial and BATON_SOCK, exactly as `baton ctl` reaches a daemon: the
+	// identity rule under test is Dial's, so a dial that was handed an actor
+	// would assert nothing about it.
+	c, err := control.Dial()
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	_ = c.Close()
+	fmt.Printf("ppid=%d\n", os.Getppid())
+}
+
+// TestTheOutOfPanelIdentityHoldsAcrossInvocations is the property a per-command
+// client's actor has to have, asserted in a way that can fail.
+//
+// The version this replaces computed its expected value with the same
+// syscall.Getsid(0) the code calls, so it passed for ANY identity rule the code
+// might hold — the parent-process one that was falsified on this branch
+// included. Nothing in the suite asserted the property the change was about.
+//
+// The property is that two invocations from ONE session declare the SAME actor.
+// `baton ctl` is a process per command, so the identity has to outlive the
+// process; `out=$(baton ctl …)` forks a subshell, so anything keyed inside the
+// process — its pid, its parent — is fresh on every iteration of a loop written
+// that way, and the cap it selects a slot in would be dead on exactly the shape
+// it exists for. The two clients here really do have different parents, and the
+// test says so before it says their actors match.
+//
+// The second half is the LIMIT, asserted rather than left to prose. A launcher
+// that starts each command in a session of its own — cron, `ssh host baton ctl
+// …`, systemd-run, an agent runtime — rotates the identity exactly as the parent
+// would have. That is the self-rotation this identity is already documented as
+// accepting, not a defect; what would be a defect is claiming a stability the
+// code does not have. See control.sessionActor for who it actually leaves
+// uncovered.
+func TestTheOutOfPanelIdentityHoldsAcrossInvocations(t *testing.T) {
+	run := func(t *testing.T, sock string, ownSession bool) int {
+		t.Helper()
+		// Through a shell that BACKGROUNDS it, and that is what makes the
+		// assertion non-vacuous: `&` forks, so the client's parent is this
+		// invocation's own sh and the next invocation's is a different one —
+		// exactly as `out=$(baton ctl …)` hands a loop a fresh subshell every
+		// iteration. Started straight from the test binary the two clients would
+		// share one parent, and a parent-keyed identity would look stable.
+		cmd := exec.Command("/bin/sh", "-c", `"$0" "$@" & wait`,
+			os.Args[0], "-test.run=^"+dialHelper+"$")
+		// The panel and role are cleared rather than inherited: this test is about a
+		// client OUTSIDE a panel, and a developer running the suite from inside one
+		// of their own baton panels has BATON_PANEL_ID in their shell — which the
+		// child would otherwise declare as its self, and a client with a self
+		// declares no actor at all.
+		cmd.Env = append(os.Environ(), dialHelperMode+"=1", paths.EnvSocket+"="+sock,
+			paths.EnvPanelID+"=", paths.EnvRole+"=")
+		if ownSession {
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("run the client: %v\n%s", err, out)
+		}
+		for line := range strings.SplitSeq(string(out), "\n") {
+			if ppid, ok := strings.CutPrefix(strings.TrimSpace(line), "ppid="); ok {
+				n, err := strconv.Atoi(ppid)
+				if err != nil {
+					t.Fatalf("the client reported parent %q: %v", ppid, err)
+				}
+				return n
+			}
+		}
+		t.Fatalf("the client never reported its parent:\n%s", out)
+		return 0
+	}
+
+	t.Run("two invocations from one session are one actor", func(t *testing.T) {
+		sock, actors := helloActors(t, 2)
+		first, second := run(t, sock, false), run(t, sock, false)
+		if first == second {
+			t.Fatalf("both clients ran under parent %d, so a parent-keyed identity would pass this "+
+				"too and it asserts nothing", first)
+		}
+
+		one, two := <-actors, <-actors
+		if !strings.HasPrefix(one, "sid:") {
+			t.Errorf("a client outside a panel declared actor %q; empty is the shared slot every "+
+				"such client used to spend from, and the prefix is what keeps it out of the bare "+
+				"panel numbers the same caps are keyed on", one)
+		}
+		if one != two {
+			t.Errorf("two invocations from one session declared %q and %q. A per-command client "+
+				"keyed on anything inside its own process is a fresh identity for every "+
+				"`out=$(baton ctl …)`, and the cap would be dead on the loop it exists for", one, two)
+		}
+	})
+
+	t.Run("a launcher with a session per command rotates it", func(t *testing.T) {
+		sock, actors := helloActors(t, 2)
+		run(t, sock, true)
+		run(t, sock, true)
+
+		if one, two := <-actors, <-actors; one == two {
+			t.Errorf("two commands each started in their own session both declared %q. That is more "+
+				"than sessionActor claims, and the docs beside it are written around the limit — if "+
+				"the identity got wider, they are the thing to fix", one)
+		}
+	})
+}
+
+// shortDir is a temp directory with a short path. A unix socket path is capped
+// near 104 bytes, and t.TempDir() puts the test's own name in the path — which
+// on the tests in this file is most of the budget. One helper owns the rule, so
+// the next socket a test binds does not re-derive it in a comment of its own.
+func shortDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "bt")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+// helloActors is a daemon stand-in: it answers just enough handshake for a dial
+// to return, and reports the actor each of the next n clients declared, in the
+// order they arrived.
+func helloActors(t *testing.T, n int) (sock string, actors <-chan string) {
+	t.Helper()
+	ln, err := net.Listen("unix", filepath.Join(shortDir(t), "s.sock"))
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	out := make(chan string, n)
+	go func() {
+		for range n {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			var cmd proto.Command
+			if err := json.NewDecoder(conn).Decode(&cmd); err != nil {
+				_ = conn.Close()
+				return
+			}
+			out <- cmd.Actor
+			// Enough of a handshake for a dial to return.
+			_ = json.NewEncoder(conn).Encode(proto.ServerMsg{Type: "panels"})
+			_ = conn.Close()
+		}
+	}()
+	return ln.Addr().String(), out
 }
 
 // TestControlConductorFenced confirms the env-driven conductor identity reaches
@@ -352,7 +587,7 @@ func TestControlDialHandshakeFails(t *testing.T) {
 func TestControlConductorFenced(t *testing.T) {
 	sock := startServer(t)
 
-	admin, err := control.DialSocket(sock, "", "")
+	admin, err := control.DialSocket(sock, "", "", "")
 	if err != nil {
 		t.Fatalf("dial admin: %v", err)
 	}
@@ -384,7 +619,7 @@ func TestControlConductorFenced(t *testing.T) {
 func TestAttentionRoundtrip(t *testing.T) {
 	sock := startServer(t)
 
-	c, err := control.DialSocket(sock, "", "")
+	c, err := control.DialSocket(sock, "", "", "")
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -432,7 +667,7 @@ func TestAttentionRoundtrip(t *testing.T) {
 func TestAttentionSelf(t *testing.T) {
 	sock := startServer(t)
 
-	admin, err := control.DialSocket(sock, "", "")
+	admin, err := control.DialSocket(sock, "", "", "")
 	if err != nil {
 		t.Fatalf("dial admin: %v", err)
 	}
@@ -466,7 +701,7 @@ func TestAttentionSelf(t *testing.T) {
 
 	// A connection that declared no identity and named no panel is told so,
 	// rather than quietly addressing nothing.
-	anon, err := control.DialSocket(sock, "", "")
+	anon, err := control.DialSocket(sock, "", "", "")
 	if err != nil {
 		t.Fatalf("dial anon: %v", err)
 	}

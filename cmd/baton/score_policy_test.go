@@ -227,6 +227,22 @@ func TestAReloadSaysWhichScoreKeysItCannotApply(t *testing.T) {
 	}
 }
 
+// writeScoreConfig writes $HOME/.baton/config pointing the fleet memory at dir,
+// creating the config directory. It is the one writer of that file in this
+// package's tests, so a test that boots a daemon on a chosen score.dir and one
+// that edits the same key mid-run cannot drift apart on its spelling.
+func writeScoreConfig(t *testing.T, home, dir string) {
+	t.Helper()
+	confDir := filepath.Join(home, ".baton")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(confDir, "config"),
+		[]byte("score:\n  dir: "+dir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestARealSIGHUPSaysTheScoreDirectoryDidNotMove is the wiring, which the
 // function-level test above cannot reach: what it compares the reloaded file
 // against has to be the config the store was OPENED from, and a call site
@@ -241,28 +257,11 @@ func TestARealSIGHUPSaysTheScoreDirectoryDidNotMove(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", home)
 	t.Setenv("BATON_PLUGIN", "")
 
-	confDir := filepath.Join(home, ".baton")
-	if err := os.MkdirAll(confDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	conf := filepath.Join(confDir, "config")
-	write := func(dir string) {
-		t.Helper()
-		if err := os.WriteFile(conf, []byte("score:\n  dir: "+dir+"\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	write := func(dir string) { writeScoreConfig(t, home, dir) }
 	booted := filepath.Join(home, "memory-a")
 	write(booted)
 
-	// NOT t.TempDir: a Unix socket path is capped around 104 bytes and this test's
-	// name alone eats most of it.
-	sockDir, err := os.MkdirTemp("", "bsk")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
-	sock := filepath.Join(sockDir, "b.sock")
+	sock := filepath.Join(shortDir(t), "b.sock")
 	t.Setenv("BATON_SOCK", sock)
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
@@ -271,10 +270,11 @@ func TestARealSIGHUPSaysTheScoreDirectoryDidNotMove(t *testing.T) {
 
 	logged := captureBootLog(t)
 	done := make(chan error, 1)
-	go func() { done <- runServerOn(ln, sock) }()
-	// The LISTENING line, not the pid file: the pid file is written at the top of
-	// runServerOn and signal.Notify comes hundreds of lines later, so a HUP sent on
-	// the pid file racing that window kills the test process outright.
+	go func() { done <- runServerOn(ln, sock, loadServerBoot(sock)) }()
+	// The LISTENING line, not the pid file: the pid file is published above the
+	// bind, by loadServerBoot, and signal.Notify comes hundreds of lines later, so
+	// a HUP sent on the pid file racing that window kills the test process
+	// outright.
 	if !waitFor(func() bool { return strings.Contains(logged(), "listening") }, 300, 10*time.Millisecond) {
 		t.Fatalf("the server never came up:\n%s", logged())
 	}
