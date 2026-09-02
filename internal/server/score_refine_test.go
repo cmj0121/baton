@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -469,25 +472,64 @@ func TestRefineCarriesTheStoresOwnRefusals(t *testing.T) {
 	}
 }
 
-// captureLog redirects the package's global zerolog for the rest of the test and
-// hands back a reader of what was written.
+// testLog is the ONE writer behind the global logger for this whole test binary,
+// installed once by init below and never replaced. Capturing redirects the sink
+// under testLog's own mutex instead of reassigning log.Logger, because that
+// global is read by every goroutine the daemon has running — a swap races them
+// all, and the race detector blames whichever test happened to be holding the
+// buffer rather than whoever left the goroutine behind (#63).
 //
-// IT SWAPS A PACKAGE GLOBAL, so it is safe only while this package's tests run
-// one at a time. Adding t.Parallel() to any test here — not merely to one that
-// captures — would let two tests share log.Logger and race this buffer, and the
-// symptom would be a flaky assertion about a line that went to the other test's
-// buffer rather than anything that looks like a data race. Nothing else in this package needed
-// it: the log is normally the operator's surface and the tests assert on the
-// wire. Refusals have no wire audience beyond the caller being refused, so the
-// log line IS the behaviour here, and prose alone would not have caught its
-// absence.
+// The mutex covers reads of a captured buffer too: bytes.Buffer is not safe for
+// concurrent use, so the reader has to take the same lock the writer does.
+type testLogSink struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *testLogSink) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
+
+// swap points the sink at w and returns what it was pointing at, so captures
+// nest and unwind in the order the tests registered them.
+func (s *testLogSink) swap(w io.Writer) io.Writer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prev := s.w
+	s.w = w
+	return prev
+}
+
+// read returns buf's contents under the write lock.
+func (s *testLogSink) read(buf *bytes.Buffer) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return buf.String()
+}
+
+var testLog = &testLogSink{w: os.Stderr}
+
+func init() { log.Logger = zerolog.New(testLog).With().Timestamp().Logger() }
+
+// captureLog collects the daemon's log lines for the rest of the test and hands
+// back a reader of them.
+//
+// It is safe against a concurrent logger, but its RESULT is still shared: while
+// a capture is open every goroutine in the binary logs into that one buffer, so
+// a line from elsewhere lands in your assertion's input. Adding t.Parallel() to
+// any test in this package — not merely to one that captures — would make that
+// routine. Nothing else in this package needed it: the log is normally the
+// operator's surface and the tests assert on the wire. Refusals have no wire
+// audience beyond the caller being refused, so the log line IS the behaviour
+// here, and prose alone would not have caught its absence.
 func captureLog(t *testing.T) func() string {
 	t.Helper()
-	var buf bytes.Buffer
-	saved := log.Logger
-	log.Logger = zerolog.New(&buf)
-	t.Cleanup(func() { log.Logger = saved })
-	return buf.String
+	buf := &bytes.Buffer{}
+	prev := testLog.swap(buf)
+	t.Cleanup(func() { testLog.swap(prev) })
+	return func() string { return testLog.read(buf) }
 }
 
 // TestEveryRefineOutcomeIsLogged is the symmetry: a refused correction must be
