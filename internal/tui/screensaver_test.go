@@ -203,7 +203,6 @@ func TestCanAutoSaverGuards(t *testing.T) {
 		{"zoom", func(m *model) { m.mode = modeZoom }, false},
 		{"group-split", func(m *model) { m.mode = modeGroupZoom }, false},
 		{"already-saving", func(m *model) { m.mode = modeScreensaver }, false},
-		{"scratch-open", func(m *model) { m.scratchOpen = true }, false},
 		{"input-overlay", func(m *model) { m.input = inputFilter }, false},
 		{"scroll-mode", func(m *model) { m.scrolling = true }, false},
 		{"leader-armed", func(m *model) { m.prefix = true }, false},

@@ -260,9 +260,9 @@ func TestZoomIntoRestores(t *testing.T) {
 	}
 }
 
-// TestScrollLeaderStaysInScroll proves a non-leaving leader command (C-t ~ scratch)
-// is delegated without abandoning scroll mode — the arm→delegate wiring routes the
-// follow-up key and leaves the view scrolling.
+// TestScrollLeaderStaysInScroll proves a non-leaving leader command (C-t l, the
+// logging toggle) is delegated without abandoning scroll mode — the arm→delegate
+// wiring routes the follow-up key, it runs, and the view is still scrolling.
 func TestScrollLeaderStaysInScroll(t *testing.T) {
 	emu := vt.NewSafeEmulator(20, 6)
 	fillLines(emu, 40)
@@ -278,10 +278,15 @@ func TestScrollLeaderStaysInScroll(t *testing.T) {
 	if !m.scrollArmed {
 		t.Fatal("the prefix should arm the leader")
 	}
-	drive(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("~")}) // C-t ~ → toggle scratch
+	drive(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")}) // C-t l → toggle logging
 
 	if m.scrollArmed {
 		t.Fatal("the follow-up key should disarm the leader")
+	}
+	// The zoomed id is in no fleet here, so the toggle has no target and says so —
+	// which is the proof the key was delegated and ran, not merely swallowed.
+	if m.status != "logging: select a panel" {
+		t.Fatalf("the leader command should have run, status = %q", m.status)
 	}
 	if !m.scrolling {
 		t.Fatal("a non-leaving leader command should not abandon scroll mode")

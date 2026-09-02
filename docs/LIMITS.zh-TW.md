@@ -57,7 +57,7 @@ agents.claude:                 memory 8Gi
 實際生效:            cpus 2 · memory 8Gi · pids 512
 ```
 
-Profile 只需要重述它要改的部分。Shell 面板、浮動 scratch shell、以及任何沒帶 profile 產生的 agent,都只吃全隊
+Profile 只需要重述它要改的部分。Shell 面板(包含 global shell)以及任何沒帶 profile 產生的 agent,都只吃全隊
 那一層。
 
 **政策由伺服器解析,絕不由客戶端提供。** `panel.create` 只送出 profile 的**名字**,由常駐程式在自己的設定裡查

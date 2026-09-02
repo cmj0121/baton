@@ -292,15 +292,15 @@ func (m model) exitScreensaver() model {
 
 // canAutoSaver reports whether the idle auto-start may fire from the current view.
 // It refuses whenever keystrokes are (or should be) flowing to a program or an
-// overlay — a zoom, the group split, the scratch pane, a text input, scroll mode,
-// a half-typed leader or rebind, a pending confirm — and while the backend is
-// down, so the saver never buries a live view, a prompt, or an outage alert.
+// overlay — a zoom, the group split, a text input, scroll mode, a half-typed
+// leader or rebind, a pending confirm — and while the backend is down, so the
+// saver never buries a live view, a prompt, or an outage alert.
 func (m model) canAutoSaver() bool {
 	switch m.mode {
 	case modeScreensaver, modeZoom, modeGroupZoom:
 		return false
 	}
-	if m.scratchOpen || m.input != inputNone || m.scrolling || m.editing || m.prefix {
+	if m.input != inputNone || m.scrolling || m.editing || m.prefix {
 		return false
 	}
 	if m.backendDown || m.pendingClose || m.pendingRestart {

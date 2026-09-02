@@ -2,17 +2,18 @@ package server_test
 
 import (
 	"testing"
-	"time"
 
 	"github.com/cmj0121/baton/internal/proto"
 )
 
-// TestScratchSpawnsEphemeral checks the floating scratch pane's server path:
-// panel.scratch spawns a transient PTY, replies "scratch" with its id, tracks it as
-// an ephemeral panel (so it never reaches the fleet snapshot or the persisted
-// state), and reaps it when the client closes the id. It runs "cat", which sits on
-// its PTY reading stdin, so the panel stays alive for the assertions.
-func TestScratchSpawnsEphemeral(t *testing.T) {
+// TestScratchActionIsRefused holds the daemon to the compatibility claim in
+// proto.ProtocolVersion's comment: panel.scratch was removed WITHOUT a version
+// bump, on the grounds that an old cockpit still sending it gets a clean refusal
+// rather than a misread. So the refusal has to be the `unknown action` error, it
+// has to name the action, and — the half that matters — it must spawn nothing:
+// a daemon that quietly opened a PTY for an action it no longer admits to would
+// pass a test that only read the error.
+func TestScratchActionIsRefused(t *testing.T) {
 	srv, sock := startDiffServer(t)
 	c := dialReady(t, sock)
 
@@ -20,35 +21,13 @@ func TestScratchSpawnsEphemeral(t *testing.T) {
 		t.Fatalf("panel.scratch: %v", err)
 	}
 	reply := recvEvent(t, c)
-	if reply.Type != "scratch" || reply.ID == "" {
-		t.Fatalf("expected a scratch reply with an id, got %+v", reply)
+	if reply.Type != "error" {
+		t.Fatalf("panel.scratch should be refused, got %+v", reply)
 	}
-	if got := srv.EphemeralCount(); got != 1 {
-		t.Fatalf("the scratch pane should be one ephemeral panel, got %d", got)
+	if reply.Error != `unknown action "panel.scratch"` {
+		t.Fatalf("unexpected refusal: %q", reply.Error)
 	}
-
-	// It stays off the fleet: a fresh list shows no panels — the whole point of the
-	// ephemeral path is that the scratch never joins the dashboard or the snapshot.
-	if err := c.Send(proto.Command{Action: "panel.list"}); err != nil {
-		t.Fatalf("panel.list: %v", err)
-	}
-	snap := recvEvent(t, c)
-	if snap.Type != "panels" {
-		t.Fatalf("expected a snapshot, got %+v", snap)
-	}
-	if len(snap.Panels) != 0 {
-		t.Fatalf("the scratch must not appear in the fleet snapshot: %d panels", len(snap.Panels))
-	}
-
-	// Closing it by its ephemeral id reaps the PTY and empties the tracked set.
-	if err := c.Send(proto.Command{Action: "panel.close", ID: reply.ID}); err != nil {
-		t.Fatalf("panel.close: %v", err)
-	}
-	deadline := time.Now().Add(time.Second)
-	for srv.EphemeralCount() != 0 {
-		if time.Now().After(deadline) {
-			t.Fatalf("closing the scratch left %d ephemeral panels", srv.EphemeralCount())
-		}
-		time.Sleep(10 * time.Millisecond)
+	if got := srv.EphemeralCount(); got != 0 {
+		t.Fatalf("a refused action must spawn no PTY, but %d ephemeral panels exist", got)
 	}
 }

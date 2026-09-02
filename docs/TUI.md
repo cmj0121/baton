@@ -6,7 +6,10 @@ The cockpit reads its **look** from `$HOME/.baton/TUI.yaml`: the colour **theme*
 separate file from the main `config` so you can reshape the appearance without touching your bindings and behaviour
 settings. The server reads it, merges it into the effective config, and broadcasts it to every frontend, so a `C-t R` (or a
 `SIGHUP` to the daemon) hot-reloads it with no fleet restart. The file is **optional** — an absent or partial `TUI.yaml`
-leaves the built-in look untouched.
+leaves the built-in look untouched. An unrecognised key is ignored rather than refused, so a file that still carries a
+`scratch:` section loads exactly as it stands: nothing reads that section, and there is nothing to edit. The
+same goes for a `keys:` entry named `scratch` in the main config, left by a `C-t k` rebind — bindings are resolved
+by name against the keys that exist, so one naming a key that does not is never looked up.
 
 ```yaml
 # $HOME/.baton/TUI.yaml
@@ -22,11 +25,6 @@ layouts:
     areas:
       - [diff, diff, log]
       - [diff, diff, sh]
-
-scratch: # the floating scratch pane (C-t ~)
-  command: "" # program to run; empty = the default shell
-  width: 0.8 # box size as a fraction of the terminal
-  height: 0.6
 ```
 
 ## Theme
@@ -108,22 +106,6 @@ layout first). A nudge that would shrink any tile too small to render is refused
 grid mid-resize. Resize is **view-local**: it lives in this cockpit only (never sent to the server), holds until you cycle
 the layout or leave the group, and **resets on reattach** — unlike the layout and visible-count, which the server owns.
 
-## Scratch pane
-
-`C-t ~` floats a **scratch pane** — a throwaway shell (or any `command`) — over whatever view you are in, tmux's
-`display-popup` for a quick `git`/`ls`/`htop` without leaving the fleet. It is a server-side **ephemeral** PTY: it never
-joins the fleet, the dashboard, or the persisted state, and it is reaped when you close it or the cockpit disconnects.
-Inside it, every key drives the shell; the leader is the only escape — `C-t ~` **hides** it (the shell keeps running, so
-reopening resumes where you left off), `C-t w` **closes** it for good, and `C-t C-t` sends a literal prefix. The box
-centres on the terminal at the configured `width`/`height` fraction (defaults `0.8`×`0.6`), floored at a legible minimum,
-and reflows when the terminal resizes.
-
-| Field     | Meaning                                              |
-| --------- | ---------------------------------------------------- |
-| `command` | the program the pane runs (empty = the shell)        |
-| `width`   | box width as a fraction of the terminal (0 = `0.8`)  |
-| `height`  | box height as a fraction of the terminal (0 = `0.6`) |
-
 ## Language
 
 The cockpit's **help surfaces** — the `?` key list and the `C-t k` key-bindings screen it shares its descriptions with —
@@ -164,9 +146,9 @@ The leader shows as it is typed: `C-t …` while it waits for the second half, t
 it. Each press stays for three seconds and clears itself, so an idle cockpit is not still advertising the last thing you
 did. When the bar runs out of room the readout is dropped before `? keys` is.
 
-It reads **only baton's own keys**. In a zoom, an interact tile, the scratch pane or a text field the keystrokes belong
-to the program you are driving, and those are never shown — the leader is the one exception, because it is baton's key
-wherever it is pressed. This is a teaching and recording aid, not a keylogger.
+It reads **only baton's own keys**. In a zoom, an interact tile or a text field the keystrokes belong to the program you
+are driving, and those are never shown — the leader is the one exception, because it is baton's key wherever it is
+pressed. This is a teaching and recording aid, not a keylogger.
 
 Off by default. `v k` toggles it live and persists the choice:
 
@@ -182,7 +164,6 @@ These ride alongside the appearance config (full key reference in [SPEC.md](./SP
 
 | Where                  | Key       | Does                                                                           |
 | ---------------------- | --------- | ------------------------------------------------------------------------------ |
-| Any view               | `C-t ~`   | toggle the floating scratch pane (a throwaway shell)                           |
 | Any view               | `C-t o`   | process tree — panel state as a coloured LED, CPU as a load-coloured bar + mem |
 | Any view               | `C-t a`   | the attention inbox — see [ATTENTION.md](./ATTENTION.md#the-inbox--c-t-a)      |
 | Dashboard              | `enter`   | on the `▸ N quiet` fold row: expand it (`esc` folds it again)                  |
@@ -200,8 +181,8 @@ itself programmable from Lua.
 
 Leave the cockpit idle for a few minutes and it slips into a screen protector: a full-screen curtain of digital rain with
 the **BATON** wordmark and a big clock glowing at its centre. Any key or click wakes it — and that keystroke is swallowed,
-so you never nudge the fleet on your way back. It only ever draws over a resting view (never a live zoom, split, scratch
-pane, or an open prompt), and a backend hiccup pulls it aside at once so an outage is never hidden behind the rain.
+so you never nudge the fleet on your way back. It only ever draws over a resting view (never a live zoom, split, or an
+open prompt), and a backend hiccup pulls it aside at once so an outage is never hidden behind the rain.
 
 Impatient? The leader summons it on demand — the key is left off the key map on purpose. It is only rain and a clock; it
 touches nothing on the server. _(Hint: the leader, then the letter this whole feature is named for.)_

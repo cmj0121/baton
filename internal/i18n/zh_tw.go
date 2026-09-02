@@ -136,7 +136,6 @@ var zhTW = map[string]string{
 	"bind.inbox":        "待辦匣 — 逐一處理需要人介入的面板（前綴鍵）",
 	"bind.back":         "回上一層：放大→群組→儀表板（放大檢視中按 C-t b）",
 	"bind.commands":     "開啟外掛指令選單（前綴鍵）",
-	"bind.scratch":      "切換浮動的暫存 shell（前綴鍵）",
 
 	"bind.restart": "強制重啟 server（前綴鍵）",
 	"bind.reload":  "重新載入設定（後端＋操作介面）",

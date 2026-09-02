@@ -126,7 +126,6 @@ dashboard row — the work-item verbs — is refused in a zoom with the way forw
 |                 | C-t    | ·       | `a`                 | the attention inbox                                    |
 |                 | C-t    | ·       | `o`                 | the process tree                                       |
 |                 | C-t    | ·       | `@`                 | remote access                                          |
-|                 | C-t    | ·       | `~`                 | the floating scratch shell                             |
 |                 | C-t    | ·       | `c`                 | the plugin command picker                              |
 |                 | C-t    | ·       | `k`                 | edit the key map                                       |
 |                 | C-t    | ·       | `P`                 | panel defaults                                         |

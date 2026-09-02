@@ -27,11 +27,11 @@ func actionLabel(b binding) string { return strings.ReplaceAll(b.name, "-", " ")
 
 // noteKey records a key press for the footer readout.
 //
-// It deliberately sees only baton's own actions. In a zoom, an interact tile,
-// the scratch shell or a text field the keystrokes belong to the program you
-// are driving, and echoing those to the footer would turn a demo aid into a
-// keylogger — so they are dropped. The leader is the one exception: it is
-// baton's key wherever it is pressed, and so is whatever completes it.
+// It deliberately sees only baton's own actions. In a zoom, an interact tile or
+// a text field the keystrokes belong to the program you are driving, and echoing
+// those to the footer would turn a demo aid into a keylogger — so they are
+// dropped. The leader is the one exception: it is baton's key wherever it is
+// pressed, and so is whatever completes it.
 func (m model) noteKey(key string) model {
 	if !m.keycast {
 		return m
@@ -39,8 +39,8 @@ func (m model) noteKey(key string) model {
 	pfx := m.effPrefix()
 	// Read the armed flags before the mode handlers consume them: if the leader
 	// was pressed last, this key is the one that completes the chord.
-	armed := m.prefix || m.zoomArmed || m.groupArmed || m.scratchArmed || m.scrollArmed
-	ours := m.input == inputNone && !m.scratchOpen && m.mode != modeZoom && m.mode != modeGroupZoom
+	armed := m.prefix || m.zoomArmed || m.groupArmed || m.scrollArmed
+	ours := m.input == inputNone && m.mode != modeZoom && m.mode != modeGroupZoom
 
 	if !ours && !armed && key != pfx {
 		return m

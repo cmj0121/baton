@@ -56,15 +56,14 @@ func TestKeycastShowsTheLeaderChord(t *testing.T) {
 }
 
 func TestKeycastIgnoresKeysThatBelongToTheProgram(t *testing.T) {
-	// A zoom, the scratch shell and a text field all feed the program being
-	// driven — echoing those keys to the footer would make it a keylogger.
+	// A zoom, a split tile and a text field all feed the program being driven —
+	// echoing those keys to the footer would make it a keylogger.
 	cases := []struct {
 		name string
 		m    model
 	}{
 		{"zoom", func() model { m := keycastModel(); m.mode = modeZoom; return m }()},
 		{"group zoom", func() model { m := keycastModel(); m.mode = modeGroupZoom; return m }()},
-		{"scratch", func() model { m := keycastModel(); m.scratchOpen = true; return m }()},
 		{"text field", func() model { m := keycastModel(); m.input = inputRename; return m }()},
 	}
 	for _, c := range cases {

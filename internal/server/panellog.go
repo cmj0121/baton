@@ -279,8 +279,8 @@ func (s *Server) openLogView(cc *clientConn, id string) error {
 	if err != nil {
 		return err
 	}
-	// The viewer belongs to nobody's agent, so it runs under the fleet-wide caps —
-	// the same call the scratch shell makes, and for the same reason.
+	// The viewer belongs to nobody's agent, so it runs under the fleet-wide caps
+	// rather than under a profile's.
 	if err := s.startPanel(ephID, "", ptymgr.Spec{Command: name, Args: args, Dir: dirOf(path)}); err != nil {
 		unwind()
 		return fmt.Errorf("could not open the log: %w", err)

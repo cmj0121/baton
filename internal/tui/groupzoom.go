@@ -122,9 +122,8 @@ func (m *model) attachTile(p panel.Panel, emuCols, emuRows int) {
 
 // attachEmu opens a live, correctly-sized emulator for a panel id: it streams the
 // panel's output and forwards the emulator's input side to the PTY (zoomReader), so
-// keys fed to it reach the program. This is the shared attach handshake behind the
-// split tiles and the floating scratch pane; the caller owns where the returned
-// emulator is stored.
+// keys fed to it reach the program. It is the attach handshake behind the split
+// tiles, and since the floating pane went it has one caller.
 func (m model) attachEmu(id string, emuCols, emuRows int) *vt.SafeEmulator {
 	emu := vt.NewSafeEmulator(emuCols, emuRows)
 	go zoomReader(emu, m.client, id)
@@ -1725,8 +1724,8 @@ func (m model) renderTile(p panel.Panel, focused bool, emuCols, emuRows, marginR
 
 // paneBox is the shared tile/pane chrome: a rounded, padded box emuCols+2 wide
 // (inner content + padding; the border adds the last 2), with the given border
-// colour and right margin. renderTile, renderSummaryTile, and the floating scratch
-// pane all wrap their head + body in it.
+// colour and right margin. renderTile and renderSummaryTile both wrap their head +
+// body in it.
 func paneBox(emuCols, marginRight int, border lipgloss.Color) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Width(emuCols+2).

@@ -11,7 +11,7 @@
 //     emulator makes it re-answer queries answered live long ago. Those late replies are
 //     injected as input to a program now at a prompt, where they echo as literal garbage
 //     (e.g. "62;1;6;22c", "rgb:0000/0000/0000") that lingers even after `clear`.
-//   - LIVE (a zoomed / group-tile / scratch emulator): a running program re-emits its
+//   - LIVE (a zoomed / group-tile emulator): a running program re-emits its
 //     terminal probes — every bubbletea TUI (claude included) does so on /clear — and the
 //     live emulator answers them, injecting the reply back into the program's input line.
 //     The reply arrives late, at the input box, so it lands as typed characters.

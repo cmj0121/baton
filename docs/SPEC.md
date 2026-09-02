@@ -18,7 +18,7 @@ once, or one fully — and the group split sits between them, showing one work i
 - **Zoom** — see one thing fully. Drive a single panel as if it were your only terminal; `C-t [` opens a tmux-style
   scroll mode (`↑`/`↓` a line, `b`/`space` or `PgUp`/`PgDn` a page, `g`/`G` top/bottom, `esc` exits) to read back through
   its history. The `C-t` leader stays live while you scroll — every escape (`C-t d` to the dashboard, `C-t f` to search
-  the scrollback, `C-t /`, `C-t ~`) fires without leaving scroll first — and a panel remembers where you scrolled to, so
+  the scrollback, `C-t /`) fires without leaving scroll first — and a panel remembers where you scrolled to, so
   re-zooming it drops you back at the same offset, still in scroll mode. Every bare key drives the program (vim, a BBS),
   never baton, so the leader works on any terminal — then pop back out to the dashboard. How much history is
   kept and replayed on attach is `panel.replay-kb` in the config (a larger value pages back further; full-screen programs
@@ -42,7 +42,7 @@ Two shell/agent panels are **singletons** the server holds at most one of, each 
 rather than a card. The **conductor** (`n C`) is a control agent that drives the fleet (see [CONTROL.md](./CONTROL.md)). The
 **global shell** (`n h`) is a plain host shell the server opens in `$HOME` — a home base always one keystroke away; unlike
 the conductor it drives nothing (no scoped role, no managed workspace). Both persist across a restart as a dead slot you
-re-run with `r`. Distinct from the floating **scratch** pane (`C-t ~`), which is a transient popup that dies on detach.
+re-run with `r`.
 
 **Agent profiles.** An agent panel is spawned from a named **profile** — a command and its arguments — run in a **working
 directory** you choose, the directory the agent operates on. baton knows a small catalogue of agent CLIs by name
@@ -475,7 +475,6 @@ after `settings.key-timeout` (default `1.2s`).
 |                        | `C-t a`                     | the attention inbox — clear what needs a human  |
 |                        | `C-t o`                     | the process tree (daemon → panels → OS)         |
 |                        | `C-t @`                     | remote access — the passkey and the connections |
-|                        | `C-t ~`                     | toggle the floating scratch pane                |
 |                        | `C-t c`                     | open the plugin command picker                  |
 |                        | `C-t k`                     | edit the key map                                |
 |                        | `C-t P`                     | panel config (shell, agent, replay, limits)     |
