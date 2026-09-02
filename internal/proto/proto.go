@@ -27,6 +27,16 @@ import (
 // not when fields are appended: a version bump forces every frontend to be
 // rebuilt in lockstep, which is the opposite of what a negotiated version is for
 // when the change already degrades correctly on its own.
+//
+// REMOVING an action degrades the same way, in both directions, which is why
+// dropping panel.scratch (#61) did not bump it either. Up: an old cockpit that
+// still sends panel.scratch lands on the same `unknown action` error a new
+// action gets from an old daemon — a refusal the cockpit already surfaces, not a
+// misread. Down: the "scratch" reply is one the new daemon simply never sends,
+// and a message type nobody emits costs an old cockpit nothing. A removal that
+// does NOT degrade this way — a field the peer must read, a type still on the
+// wire under a new meaning — is a bump, like any other change of meaning.
+// TestScratchActionIsRefused in internal/server holds the up direction to that.
 const ProtocolVersion = "baton/1"
 
 // IPC timing for the persistent, legitimately-idle Unix-socket connection. The
@@ -68,7 +78,7 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | panel.tail | panel.diff | panel.git | panel.log | panel.logview | panel.scratch | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run | remote.status | remote.enable | remote.disable | remote.rotate | remote.kick | score.submit | score.list | score.status | score.merge | score.reword | score.lower
+	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | panel.tail | panel.diff | panel.git | panel.log | panel.logview | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run | remote.status | remote.enable | remote.disable | remote.rotate | remote.kick | score.submit | score.list | score.status | score.merge | score.reword | score.lower
 	Kind      string   `json:"kind,omitempty"`      // panel kind for "panel.create" (default "shell")
 	ID        string   `json:"id,omitempty"`        // target panel for close/attach/input/resize/diff, the panel to rename, the panel "score.list" ranks its entries for (empty = rank against no context), or the score entry a refine verb corrects
 	Path      string   `json:"path,omitempty"`      // init command (binary path) for "panel.create"; empty = default shell
@@ -460,7 +470,7 @@ type RemoteInfo struct {
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type       string      `json:"type"`                  // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "scratch" | "diff" | "gitout" | "search" | "notice" | "config" | "footer" | "usage" | "tasks" | "tail" (the pulled trailing output of one panel: ID names it, Data carries the bytes) | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline) | "remote" (the remote-access status and connection list) | "goodbye" (the server is dropping this connection on purpose; Error says why) | "score" (a score.* verb's reply; Score carries the payload)
+	Type       string      `json:"type"`                  // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "diff" | "gitout" | "search" | "notice" | "config" | "footer" | "usage" | "tasks" | "tail" (the pulled trailing output of one panel: ID names it, Data carries the bytes) | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline) | "remote" (the remote-access status and connection list) | "goodbye" (the server is dropping this connection on purpose; Error says why) | "score" (a score.* verb's reply; Score carries the payload)
 	Version    string      `json:"version,omitempty"`     // protocol version, set on "welcome"
 	ServerVer  string      `json:"server_ver,omitempty"`  // the server's build version, set on "welcome"
 	Enforce    string      `json:"enforce,omitempty"`     // the resource-limit backend in force on the host the panels run on ("cgroup", "none"), set on "welcome" and "config" so a frontend offering to edit limits can say whether they bite

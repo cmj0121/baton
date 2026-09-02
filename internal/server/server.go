@@ -959,7 +959,7 @@ func (s *Server) Reload(set Settings) {
 
 // startPanel is the daemon's one fork point: it resolves the caps the panel is
 // to run under, places it inside them, and starts it. Every spawn — a fleet
-// panel, a re-run, a diff pop-up, the scratch shell — goes through here, so a
+// panel, a re-run, a diff pop-up, a git pop-up, a log viewer — goes through here, so a
 // panel cannot be added later that quietly escapes the policy.
 //
 // profile names the agent profile the caps resolve through; empty resolves to
@@ -1123,7 +1123,7 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 		s.emit("panel.exit", fields)
 		stop = s.pruneExitedLocked()
 	} else if _, ok := s.ephemeral[id]; ok {
-		// A diff/scratch ephemeral panel exited on its own (it never lives in
+		// A transient ephemeral panel exited on its own (it never lives in
 		// s.panels). Drop it from the ephemeral set and every conn's, so it stops
 		// counting against maxEphemeralPerConn and its dead pane is freed, rather
 		// than lingering until the client explicitly closes it or disconnects.
@@ -2677,14 +2677,6 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
-	case "panel.scratch":
-		// Spawn the cockpit's floating scratch shell as a transient ephemeral PTY —
-		// off the fleet snapshot and the persisted state, reaped on close/disconnect —
-		// and reply "scratch" with its id so the client attaches and floats it.
-		if err := s.openScratch(cc, cmd.Path, cmd.Dir); err != nil {
-			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
-			return
-		}
 	case "group.show":
 		if err := s.setGroupShown(cmd.Group, cmd.Count); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
@@ -3027,7 +3019,7 @@ func (s *Server) createPanel(kind, path string, args []string, dir, profile stri
 	log.Info().Str("panel", p.Title).Str("profile", profile).Interface("limits", caps).Msg("panel created")
 	// A profile configured to log does so from the moment it spawns. It is done
 	// here rather than in startPanel because startPanel is also the fork point for
-	// the transient panels — a diff pop-up, the scratch shell, a log viewer — and
+	// the transient panels — a diff pop-up, a git commit, a log viewer — and
 	// those are not the fleet, so they are not the transcript either.
 	s.autoLog(id, profile)
 	return id, nil
@@ -4947,11 +4939,11 @@ func (s *Server) openEphemeral(cc *clientConn, targetID, label string, resolve e
 
 // registerEphemeral allocates and registers a transient panel id for a connection,
 // enforcing the per-connection cap — the shared bookkeeping behind openEphemeral and
-// openScratch. It bumps ephSeq and records the id in both s.ephemeral and
+// openLogView. It bumps ephSeq and records the id in both s.ephemeral and
 // cc.ephemeral under one lock, so a concurrent disconnect cleanup sees a consistent
 // set and two opens cannot slip past the cap. It returns the id and an unwind func
 // the caller must invoke if the spawn then fails, to drop the reservation. label
-// prefixes the id ("diff:3", "scratch:7").
+// prefixes the id ("diff:3", "log:7").
 func (s *Server) registerEphemeral(cc *clientConn, label string) (string, func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -4969,33 +4961,6 @@ func (s *Server) registerEphemeral(cc *clientConn, label string) (string, func()
 		delete(cc.ephemeral, ephID)
 	}
 	return ephID, unwind, nil
-}
-
-// openScratch spawns a transient shell PTY for the cockpit's floating scratch pane
-// — the standalone sibling of openEphemeral, with no agent target. Like a diff
-// panel it is registered only in s.ephemeral (and the owning conn), so it never
-// reaches the fleet snapshot (panelsMsg) or the persisted state (snapshotState),
-// and it is reaped when the client closes it (panel.close on an ephemeral id) or
-// disconnects. cmd is the program to run (empty = the default shell) in dir. On
-// success it replies {type:"scratch", id:"scratch:<n>"} so the client attaches and
-// floats it, rather than the auto-zoom an "ephemeral" reply drives.
-func (s *Server) openScratch(cc *clientConn, cmd, dir string) error {
-	dir = ptymgr.PanelDir(dir)
-
-	ephID, unwind, err := s.registerEphemeral(cc, "scratch")
-	if err != nil {
-		return err
-	}
-	// The scratch shell belongs to no agent, so it takes the fleet-wide caps. It is
-	// the panel a user types arbitrary commands into, which makes leaving it
-	// uncapped the least defensible exemption of the four.
-	if err := s.startPanel(ephID, "", ptymgr.Spec{Command: cmd, Dir: dir}); err != nil {
-		unwind()
-		return fmt.Errorf("could not open the scratch shell: %w", err)
-	}
-	log.Info().Str("panel", ephID).Str("dir", dir).Msg("scratch panel opened")
-	send(cc, proto.ServerMsg{Type: "scratch", ID: ephID})
-	return nil
 }
 
 // agentTargetSpec resolves a panel.git / diff target to its spawn spec, enforcing
