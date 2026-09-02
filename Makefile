@@ -31,7 +31,11 @@ test-race:			# run test with the race detector
 cover:				# run race+coverage and gate each package at 80%
 	./scripts/coverage-gate.sh 80
 
-ci: build lint cover	# local mirror of the CI pipeline (build -> lint -> cover)
+ci: build crossbuild lint cover	# local mirror of the CI pipeline (build -> cross -> lint -> cover)
+
+crossbuild:			# GitHub CI builds on Linux; most of us do not
+	@GOOS=linux GOARCH=amd64 go build ./... || \
+		{ echo ">> the Linux build is broken. syscall differs by OS - see internal/control/session_unix.go"; exit 1; }
 
 run:				# run in the local environment
 	go run ./cmd/baton

@@ -16,7 +16,6 @@ import (
 	"net"
 	"os"
 	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/cmj0121/baton/internal/paths"
@@ -142,14 +141,8 @@ func DialSocket(socket, role, self, actor string) (*Client, error) {
 //
 // The prefix keeps both forms out of the panel ids the same caps are keyed on,
 // which are bare numbers.
-func sessionActor() string {
-	sid, err := syscall.Getsid(0)
-	if err != nil {
-		return ""
-	}
-	return "sid:" + strconv.Itoa(sid)
-}
-
+//
+// The body is per-OS: see session_unix.go and session_other.go.
 // processActor is sessionActor for a client that outlives its connections: the
 // process itself, which is exactly the thing a per-command client does not have.
 // See DialAsProcess.
