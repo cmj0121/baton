@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/cmj0121/baton/internal/paths"
@@ -40,20 +42,54 @@ type Client struct {
 // fenced by the server, while an ordinary agent panel — and the same binary run
 // from a plain shell — declares the unscoped, full-power cockpit role.
 func Dial() (*Client, error) {
-	return DialSocket(paths.Socket(), os.Getenv(paths.EnvRole), os.Getenv(paths.EnvPanelID))
+	return dial(sessionActor)
 }
 
-// DialSocket connects to the server at socket and says hello with role and self.
-// An empty role is the unscoped cockpit role; a "conductor" role asks the server
-// to fence the connection (see the server's guardConductor).
-func DialSocket(socket, role, self string) (*Client, error) {
+// DialAsProcess is Dial for a client that OUTLIVES its connections. `baton mcp`
+// is one long-lived process serving many tool calls, each over a fresh dial, so
+// what it should be identified as outside a panel is ITSELF — not the session it
+// happens to have been started in, which is usually the operator's own terminal
+// and would put the two of them back in one rate-cap slot.
+//
+// Every other client is a process per command and has no such identity to offer;
+// see sessionActor for what they declare instead.
+func DialAsProcess() (*Client, error) {
+	return dial(processActor)
+}
+
+// dial is Dial and DialAsProcess with the identity rule as the only difference.
+// The socket comes from BATON_SOCK (else the session default) and the role and
+// panel from the environment baton injects; see Dial.
+func dial(identify func() string) (*Client, error) {
+	return DialSocket(paths.Socket(), os.Getenv(paths.EnvRole), os.Getenv(paths.EnvPanelID), identify())
+}
+
+// DialSocket connects to the server at socket and says hello with role, self and
+// actor. An empty role is the unscoped cockpit role; a "conductor" role asks the
+// server to fence the connection (see the server's guardConductor).
+//
+// IT TAKES THE ACTOR rather than choosing one, and that is the whole difference
+// between it and Dial. There are two identity rules and they are not
+// interchangeable — a per-command client declares its session, a client that
+// outlives its connections declares itself — so an exported dial that silently
+// applied one of them was a third policy site with no way to ask for the other.
+// The two rules live on Dial and DialAsProcess, which is where a caller reading
+// proto.Command.Actor is sent.
+//
+// A client that HAS a panel declares no actor whatever it passed, and that is
+// enforced here rather than in each rule: a panel id is already an identity, and
+// a second one beside it is just another slot the same client could spend from.
+func DialSocket(socket, role, self, actor string) (*Client, error) {
+	if self != "" {
+		actor = ""
+	}
 	conn, err := net.Dial("unix", socket)
 	if err != nil {
 		return nil, fmt.Errorf("connect to baton at %s: %w (is the server running?)", socket, err)
 	}
 	c := &Client{conn: conn, enc: json.NewEncoder(conn), dec: json.NewDecoder(conn)}
 
-	if err := c.send(proto.Command{Action: "hello", Role: role, Self: self}); err != nil {
+	if err := c.send(proto.Command{Action: "hello", Role: role, Self: self, Actor: actor}); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
@@ -64,6 +100,61 @@ func DialSocket(socket, role, self string) (*Client, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+// sessionActor is what a PER-COMMAND client calls itself when it has no panel to
+// be: its session. `baton ctl` is a whole process per command, so nothing about
+// the process itself survives two turns of a loop — the identity has to be
+// something outside it. The parent will not do: `out=$(baton ctl …)` forks a
+// subshell, so a loop written that way would hand out a fresh identity per
+// iteration and walk straight through the cap. Every process a shell spawns,
+// subshells included, shares that shell's session; two terminals are two
+// sessions, which is two operators or two scripts and is the split worth having.
+//
+// WHAT IT COVERS, and it is narrower than "outside a panel". A session is stable
+// for a shell and everything under it — the shape the cap was measured failing
+// on — and it is NOT stable under a launcher that starts each command in a
+// session of its own. cron, `ssh host baton ctl …`, systemd-run, `docker exec
+// -t` and agent runtimes all setsid(2) per invocation, which hands one actor a
+// fresh sid every time, exactly as the parent would have. Reproduced: two
+// invocations under one such runtime reported sid 7019 and then 7074.
+//
+// Who that actually leaves is a smaller set than it sounds. An AGENT panel never
+// reaches here at all: the daemon injects BATON_PANEL_ID into its environment
+// (server.panelEnv), so `baton ctl score submit` from its shell tool declares
+// that panel id as self and returns empty below. `baton mcp` does not reach here
+// either — it is long-lived and declares pid: (processActor). What is left is a
+// SHELL panel, which carries no identity env by deliberate choice (see the
+// argument on the server's spawn path), and a client one of those launchers
+// started.
+//
+// For those, a per-invocation session is the self-rotation this identity is
+// already documented as accepting: nothing here grants anything, so an actor
+// that varies only picks a different rate-cap slot, and a client that wanted to
+// could vary Self just as easily. There is no stable identity to reach for
+// instead, and naming one that does not exist would be worse than saying so.
+//
+// Empty when the session cannot be read, which puts this client back in the
+// shared slot — the safe direction, since a cap that over-groups refuses more
+// rather than less. A client that HAS a panel declares nothing either, and that
+// rule is DialSocket's rather than this function's: it holds for the actor an
+// outside caller supplies as much as for the one computed here.
+//
+// The prefix keeps both forms out of the panel ids the same caps are keyed on,
+// which are bare numbers.
+func sessionActor() string {
+	sid, err := syscall.Getsid(0)
+	if err != nil {
+		return ""
+	}
+	return "sid:" + strconv.Itoa(sid)
+}
+
+// processActor is sessionActor for a client that outlives its connections: the
+// process itself, which is exactly the thing a per-command client does not have.
+// See DialAsProcess.
+func processActor() string {
+	return "pid:" + strconv.Itoa(os.Getpid())
 }
 
 // Close drops the connection. The server keeps running.

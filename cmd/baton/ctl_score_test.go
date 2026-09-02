@@ -41,7 +41,7 @@ func ctlScoredServer(t *testing.T) string {
 // queue handlers are covered for.
 func TestCtlScoreRuns(t *testing.T) {
 	sock := ctlScoredServer(t)
-	c, err := control.DialSocket(sock, "", "")
+	c, err := control.DialSocket(sock, "", "", "")
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -51,10 +51,6 @@ func TestCtlScoreRuns(t *testing.T) {
 		Run(*control.Client) error
 	}{
 		ctlScoreSubmit{Text: "operators drain the queue before lunch"},
-		// The same observation again: the store folds it, and the handler takes
-		// its other branch — the one that tells the operator their note was
-		// counted into an entry rather than added as one.
-		ctlScoreSubmit{Text: "Operators drain the queue before lunch."},
 		ctlScoreList{},
 		ctlScoreStatus{},
 	}
@@ -62,6 +58,13 @@ func TestCtlScoreRuns(t *testing.T) {
 		if err := r.Run(c); err != nil {
 			t.Fatalf("%T.Run: %v", r, err)
 		}
+	}
+
+	// The same observation again: the store folds it, and the handler takes its
+	// other branch — the one that tells the operator their note was counted into
+	// an entry rather than added as one.
+	if err := (ctlScoreSubmit{Text: "Operators drain the queue before lunch."}).Run(c); err != nil {
+		t.Fatalf("ctlScoreSubmit.Run for the repeat: %v", err)
 	}
 
 	// Naming a panel the fleet does not have is REFUSED, not answered with the
@@ -86,7 +89,7 @@ func TestCtlScoreRuns(t *testing.T) {
 // every Run method's error-return branch is exercised.
 func TestCtlScoreClientErrors(t *testing.T) {
 	sock := ctlScoredServer(t)
-	c, err := control.DialSocket(sock, "", "")
+	c, err := control.DialSocket(sock, "", "", "")
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

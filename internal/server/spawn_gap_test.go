@@ -17,7 +17,7 @@ import (
 // nothing at all to `baton_spawn`, which goes through the same dial-per-tool-call
 // MCP path the refine verbs do, or to `baton ctl spawn`, which is a process per
 // command. It was cured by the same change: both caps are keyed on the
-// conductor's PANEL now, through Server.throttle.
+// conductor's PANEL now, through Server.gapStamp.
 //
 // TestConductorGuardrails covers the persistent-connection case and passed
 // throughout, which is exactly why this one has to exist beside it.

@@ -151,7 +151,7 @@ func TestGuardConductorDoesNotFenceTheRefineVerbs(t *testing.T) {
 // the path the conductor uses: `baton mcp` dials per tool call and closes, and
 // `baton ctl` is a process per command. Measured then: sixty-one merges in one
 // and a half seconds, all admitted. A persistent-connection test cannot see that
-// class of bug, so do not reintroduce one — the throttle is keyed by PANEL, the
+// class of bug, so do not reintroduce one — the gapStamp is keyed by PANEL, the
 // identity the gate above it uses, and a test must cross connections to see it.
 func TestRefineIsRateCapped(t *testing.T) {
 	st, _ := scoreStore(t)
@@ -210,14 +210,14 @@ func TestRefineIsRateCapped(t *testing.T) {
 	// only cross the gap by rewinding the stamp, and a rewind makes that
 	// assertion pass whether a refusal stamped or not. It stood here as a comment
 	// over code that ran no refusals at all, which is the shape of claim this
-	// claim this file is about — the throttle takes its clock as a parameter so
+	// claim this file is about — the gapStamp takes its clock as a parameter so
 	// the rule can be asserted rather than described.
 }
 
 // refinePaced is refineReply with the rate cap stepped over, for the tests whose
 // subject is something else. It exists so that a test about the gate or about a
-// store refusal cannot pass or fail for reasons belonging to the throttle — and
-// so that removing the throttle does not quietly make those tests meaningless.
+// store refusal cannot pass or fail for reasons belonging to the gapStamp — and
+// so that removing the gapStamp does not quietly make those tests meaningless.
 // The tests that ARE about the cap call refineReply directly and pace nothing.
 func refinePaced(t *testing.T, s *Server, cc *clientConn, cmd proto.Command) string {
 	t.Helper()
@@ -276,7 +276,7 @@ func TestMergingAwayTheMemoryRaisesAnAlarm(t *testing.T) {
 //
 // It is arithmetic over mergeAlarm and needs no store, no server and no log,
 // because the alarm is a type with a clock-injectable method — the shape the
-// throttle already had, and the reason its own rule was pinnable. The figures
+// gapStamp already had, and the reason its own rule was pinnable. The figures
 // below are LITERALS on purpose: written in terms of the constants they would
 // move with them and could never catch a retuning.
 func TestTheAlarmsFiguresAreWhatTheyClaim(t *testing.T) {
@@ -399,7 +399,7 @@ func alarmFleet(t *testing.T, p score.Policy, n int) (*score.Store, []string, *S
 }
 
 // mergeAway merges ids[from:to] into ids[0], paced past the rate cap so that the
-// subject of these tests is the alarm and never the throttle.
+// subject of these tests is the alarm and never the gapStamp.
 func mergeAway(t *testing.T, s *Server, ids []string, from, to int) {
 	t.Helper()
 	for _, id := range ids[from:to] {
@@ -550,7 +550,7 @@ func TestEveryRefineOutcomeIsLogged(t *testing.T) {
 	}
 }
 
-// TestARateRefusalIsLogged keeps the throttle out of the same blind spot: a
+// TestARateRefusalIsLogged keeps the gapStamp out of the same blind spot: a
 // conductor stuck in a loop is the case the cap exists for, and an operator
 // wondering why their memory stopped changing needs the daemon to say so.
 func TestARateRefusalIsLogged(t *testing.T) {

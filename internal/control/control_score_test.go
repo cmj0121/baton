@@ -43,7 +43,7 @@ func startScoredServer(t *testing.T) string {
 func TestScoreRoundtrip(t *testing.T) {
 	sock := startScoredServer(t)
 
-	c, err := control.DialSocket(sock, "", "")
+	c, err := control.DialSocket(sock, "", "", "")
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -62,7 +62,16 @@ func TestScoreRoundtrip(t *testing.T) {
 	// The same observation again comes back as the same entry, said to have
 	// folded — #38's "new or folded into id", which is what lets the CLI and the
 	// MCP tool tell an agent the fleet already knew this.
-	again, folded, err := c.ScoreSubmit("Agents in this fleet forget to run the linter.")
+	// From a SECOND panel, because the daemon caps submissions per actor and
+	// these two calls are back to back: a fold is a property of the store's
+	// normalisation rather than of one connection, and two agents saying the same
+	// thing is exactly what it is for.
+	c2, err := control.DialSocket(sock, "", "p2", "")
+	if err != nil {
+		t.Fatalf("dial the second panel: %v", err)
+	}
+	defer func() { _ = c2.Close() }()
+	again, folded, err := c2.ScoreSubmit("Agents in this fleet forget to run the linter.")
 	if err != nil {
 		t.Fatalf("submit repeat: %v", err)
 	}
@@ -123,7 +132,7 @@ func TestScoreRoundtrip(t *testing.T) {
 func TestScoreDisabled(t *testing.T) {
 	sock := startServer(t)
 
-	c, err := control.DialSocket(sock, "", "")
+	c, err := control.DialSocket(sock, "", "", "")
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

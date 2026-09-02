@@ -562,13 +562,120 @@ func (s *Server) panelContext(id string) (ctx score.Context, found bool) {
 	return ctx, true
 }
 
+// minSubmitGap caps how often ONE actor may submit to the fleet memory, and
+// saySubmitCappedEvery paces the log line a refusal leaves.
+//
+// WHAT IT BOUNDS IS FOLD RECORDS, not entries, and that is the whole reason it
+// works. Folding is exact after normalisation, so an agent resubmitting the same
+// sentence creates no new entry at all — it creates one `folded` line per
+// attempt, measured at 204 B here and 222 B on the daemons #56 was opened over.
+// A cap that looked at new entries would have stopped nothing: the loop's
+// millionth submission is the same one entry it started with.
+//
+// THE NUMBER. Two rates bracket it, both measured rather than guessed:
+//
+//   - a well-behaved fleet writes ~2000 records a day, ACROSS ALL its agents —
+//     0.023 a second
+//   - the pathology is a retry loop, measured at 73 a second from a single
+//     actor, which is 1.47 GB of log a day and crosses the compaction threshold
+//     in eight and a half minutes
+//
+// Four orders of magnitude apart, so the defensible place to stand is the middle
+// of them on the scale they differ on: the geometric mean of 0.023/s and 73/s is
+// 1.3 a second. One a second is that, rounded to the side that costs less — at
+// 204 B a fold it is 17 MB of log a day from an actor looping at machine speed,
+// against 6.8 GB uncapped on this hardware.
+//
+// It is a rate cap and not a budget, the way minRefineGap is: it bounds how FAST
+// one actor may speak, never how much it may say. A single agent may still put
+// more into the memory in a day than the whole fleet legitimately does — forty
+// times more — so nothing an honest fleet does comes near it.
+//
+// It sits a whole second where the other two caps sit at a quarter of one, and
+// that is deliberate. Those two guard verbs a PERSON drives — an operator
+// spawning panels or tidying duplicates would notice a wait — and their ceiling
+// is drawn there for it. The operator's surface on the score is their own
+// score.md (#38 §3), not this verb; what holds this door is an agent, and no
+// human types two observations in a second.
+//
+// A MINUTE between log lines, for the same reason mergeAlarmWindow is a minute:
+// long enough that the daemon log does not become the thing that grows, short
+// enough that an operator tailing it sees the capping is still happening rather
+// than that it once did.
+//
+// submitBurst is the part of this cap the paragraphs above got wrong, and it is
+// worth saying exactly how. The rate was derived and defended; the SHAPE was
+// not. A hard minimum gap refuses on jitter rather than on rate, so what it
+// costs an honest fleet depends entirely on which arrival process was measured —
+// and the one nobody measured, an agent's turn, is the one this door sees. See
+// rateBuckets, which holds the measurement and the bucket that answers it.
+//
+// FOUR, because the thing arriving together is a turn's worth of DISTINCT
+// observations, and the turns measured on real daemons carry three to four of
+// them. Four covers a turn without needing a fifth to be an accident. It costs a
+// bounded one-off: at most three extra fold records each time an actor comes
+// back from idle, against a retry loop whose sustained refusal rate is untouched,
+// because a bucket that refills once a second still admits one a second. What
+// four buys is most of a turn and not all of it: a fleet whose turns cluster
+// still loses some, and a larger burst is the knob if that is ever measured to
+// matter.
+//
+// A repeat, which is what the loop sends, folds — so refusing it loses the fleet
+// nothing. A handful of distinct observations is the opposite: 60 MCP calls
+// reaching the store as 1 record was 59 lessons lost, not 59 duplicates.
+const (
+	minSubmitGap         = time.Second
+	submitBurst          = 4
+	saySubmitCappedEvery = time.Minute
+)
+
+// submitActor is the identity the submit cap is keyed on: the panel a connection
+// declared, or — for a connection with no panel to declare — whatever it said it
+// was instead.
+//
+// The second half is the whole of it. Outside a panel, self is empty for EVERY
+// client, so a cap keyed on self alone gave the operator's own `baton ctl score
+// submit` and every out-of-panel MCP server one slot between them. Measured:
+// three DIFFERENT observations back to back reached the store as one record and
+// two refusals, and the warning that explained it read `panel= source=user`,
+// naming nobody an operator could go and look at.
+//
+// It resolves to a string and not to a richer thing because that is all a cap
+// key is. What the string means, and why the client is trusted to say it, are
+// proto.Command.Actor's to argue.
+func submitActor(cc *clientConn) string {
+	if cc.self != "" {
+		return cc.self
+	}
+	return cc.actor
+}
+
+// tooSoonToSubmit takes Server.mu around the submit cap, the way Server.tooSoon
+// does around the other two and for the same reason: it runs off the command
+// loop, where the lock is not already held.
+//
+// It answers both of the refusal's questions in ONE hold, because they are one
+// decision: whether this submission is refused, and whether the refusal is the
+// one worth a log line. say is only ever true when refuse is — a submission that
+// was admitted has nothing to say — so the pacing stamp is spent on refusals
+// alone and a fleet under the cap never touches it.
+func (s *Server) tooSoonToSubmit(actor string, now time.Time) (wait time.Duration, refuse, say bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	wait, refuse = s.submits.tooSoon(actor, now)
+	if !refuse {
+		return wait, false, false
+	}
+	_, saidRecently := s.sayCapped.tooSoon(actor, now)
+	return wait, true, !saidRecently
+}
+
 // scoreSubmit handles score.submit: record cmd.Prompt as a new entry, stamped
 // with the provenance of the connection it arrived on — see connProvenance,
 // which is where #38 §4's rule lives and which a dispatched brief now asks the
 // same question of. The store refuses plainly when disabled (nil), and that
 // refusal is the whole disabled story: no flag here.
 func (s *Server) scoreSubmit(cc *clientConn, cmd proto.Command) {
-	prov := s.connProvenance(cc)
 	// A nil store is not always "switched off": it is also a directory another
 	// daemon holds and a set of files that would not open. Say which, so the
 	// answer is actionable rather than merely accurate.
@@ -576,6 +683,66 @@ func (s *Server) scoreSubmit(cc *clientConn, cmd proto.Command) {
 		send(cc, proto.ServerMsg{Type: "error", Error: s.scoreState.reason()})
 		return
 	}
+	// Capped on the PANEL, before the store is touched at all, so a refusal
+	// appends nothing: that is what makes the cap a bound on the log rather than
+	// a bound on how fast the log is allowed to be written. See minSubmitGap.
+	//
+	// Refused, not silently accepted. Every other refusal on this door answers
+	// with an error, and a submission that answered "recorded" without recording
+	// would make the one thing this reply exists to say — new, or folded into
+	// what the fleet already knows — a lie. It is also what makes a refusal
+	// RECOVERABLE: an agent told to slow down can say the thing again a second
+	// later, which a silent drop gives it no way to know it needs to do.
+	actor := submitActor(cc)
+	if wait, refuse, say := s.tooSoonToSubmit(actor, time.Now()); refuse {
+		// PACED, and that is not a detail: a loop at machine speed produces a
+		// refusal per attempt, so a line each would move the growth this cap
+		// removes from score-events.jsonl into baton.log rather than stopping it.
+		// tooSoonToSubmit answers this in the same hold as the refusal, because
+		// they are one decision.
+		//
+		// The provenance is built inside the branch and not at the top of the
+		// function, which is where it used to sit, because a refused submission is
+		// the hot path now: connProvenance takes Server.mu again and walks the
+		// fleet twice, and this branch runs on every attempt of the loop the cap
+		// exists for — 73 a second sustained, which is the rate #56 measured, and
+		// as fast as a client can dial when it is not sustained. It is wanted once
+		// a minute, so it is read once a minute — and the accepted path below pays
+		// for it as it always did.
+		if say {
+			// It says the store is HEALTHY, because the operator's question on
+			// seeing submissions fail is which of the two doors is shut. R7
+			// separated those on this same path for the write failure (see the
+			// branch below); this is the third answer and it needs telling apart
+			// from both.
+			//
+			// It NAMES THE ACTOR, which is the field the cap is keyed on rather
+			// than the panel field it used to carry. Every client outside a panel
+			// logged `panel=` — an empty string beside `source=user` — so the one
+			// line an operator has for "who is filling my log" identified nobody,
+			// on exactly the clients that are not a panel and cannot be looked up
+			// as one.
+			//
+			// retry_in and not since_last: under a bucket, how long ago the last
+			// admitted submission was is no longer the reason this one is refused —
+			// the allowance being spent is — and the operator's and the agent's
+			// question is when it comes back.
+			//
+			// Str rather than Dur for all three durations, which is openScore's fix
+			// (see the `waited` field there) applied to the line that repeated the
+			// defect: Dur renders a duration as bare milliseconds, so this line
+			// reached the operator as `gap=1000 every=60000 since_last=33.801334`
+			// beside a constant documented as one second and a window documented as
+			// a minute — one number arriving as two, three times over.
+			log.Warn().Str("actor", actor).Str("source", s.connProvenance(cc).Source).
+				Str("retry_in", wait.String()).Str("gap", minSubmitGap.String()).
+				Int("burst", submitBurst).Str("every", saySubmitCappedEvery.String()).
+				Msg("score submissions from this actor are being rate-capped; the store itself is healthy")
+		}
+		send(cc, proto.ServerMsg{Type: "error", Error: "score submit: submitting too fast, slow down"})
+		return
+	}
+	prov := s.connProvenance(cc)
 	e, folded, err := s.scoreState.Store.Submit(cmd.Prompt, prov)
 	if err != nil {
 		// Only the DURABLE WRITE is said out loud, and score.ErrSubmissionText is
@@ -600,9 +767,9 @@ func (s *Server) scoreSubmit(cc *clientConn, cmd proto.Command) {
 		//
 		// Warn rather than Error for the reason the refine refusals are: the
 		// daemon is doing exactly what it should, and the fleet is still running.
-		// It is not throttled, and the refine cap does not cover this door: a
-		// submitting loop against a broken store is noise, and it is noise that
-		// says something true, which is the trade the alternative loses.
+		// The line itself is unpaced, and it no longer has to be: minSubmitGap
+		// stands in front of this branch, so a submitting loop against a broken
+		// store reaches it once a second per actor rather than at machine speed.
 		if !errors.Is(err, score.ErrSubmissionText) {
 			log.Warn().Err(err).Str("dir", s.scoreState.Store.Dir()).
 				Str("source", prov.Source).Str("panel", prov.SourcePanel).
@@ -741,7 +908,7 @@ const (
 // single call looks wrong, fast enough that nobody is going to be reading the
 // daemon log while it happens.
 //
-// It has the shape the throttle has, and for the reason the throttle earned it:
+// It has the shape the gapStamp has, and for the reason the gapStamp earned it:
 // a small type with a pure, clock-injectable method, so the figures it turns on
 // are asserted as arithmetic rather than reconstructed from a live server, a log
 // capture and a pacing helper.
@@ -918,7 +1085,7 @@ func (s *Server) scoreRefine(cc *clientConn, cmd proto.Command) {
 }
 
 // noteMergeDrop takes Server.mu around one alarm check, the way tooSoon does
-// around one throttle check and for the same reason: both run off the command
+// around one gapStamp check and for the same reason: both run off the command
 // loop, where the lock is not already held. See mergeAlarm.note, which is where
 // the rule lives.
 func (s *Server) noteMergeDrop(before, after, floor int, now time.Time) (from int, alarm bool) {

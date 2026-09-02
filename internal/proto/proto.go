@@ -114,6 +114,51 @@ type Command struct {
 	Role string `json:"role,omitempty"`
 	Self string `json:"self,omitempty"`
 
+	// Actor is who a client OUTSIDE a panel is, declared on "hello" alongside the
+	// two above. Inside a panel, Self already answers it — the daemon injects the
+	// panel id and the client passes it back. Outside one, Self is empty for
+	// everybody: the operator's own `baton ctl score submit` and every MCP server
+	// started outside the fleet arrive indistinguishable, and the server's
+	// per-actor rate caps then hand a single slot round between them, refusing one
+	// client's work because another was busy.
+	//
+	// WHY THE CLIENT SAYS IT AT ALL, which is the question every comment around
+	// this field answers a different half of. The server cannot work it out. The
+	// connection is not the caller: `baton ctl` is a whole process per command and
+	// `baton mcp` dials once per tool call, so cc.id is fresh every time and a cap
+	// keyed on it fences nothing an agent drives — measured at fifty admitted
+	// calls a second through twenty one-shot connections against a cap of four.
+	// The peer credentials on the unix socket do not close it either: SO_PEERCRED
+	// gives a pid, a uid and a session id on Linux and LOCAL_PEERPID gives a pid
+	// and nothing else on darwin, so the identity the cap wants — one that
+	// outlives the process for a per-command client, and does not for a
+	// long-lived one — exists on one of baton's two platforms and cannot be asked
+	// for on the other. Every party on this socket already runs as the fleet
+	// owner's uid, so nothing is being defended here that a self-declared string
+	// weakens.
+	//
+	// WHAT it is depends on how long the client lives, and that is not a hedge —
+	// the two shapes have genuinely different stable identities. `baton ctl` is a
+	// whole process per command, so nothing about the process survives two turns
+	// of a loop and it declares its SESSION, which a shell and everything under
+	// it share. `baton mcp` is one long-lived process dialling per tool call, so
+	// it declares ITSELF; declaring the session would put it back in one slot with
+	// the operator's own shell, which is usually the session that started the
+	// agent runtime. See control.Dial and control.DialAsProcess.
+	//
+	// The session is stable for a shell and not for a launcher above one: cron,
+	// ssh, systemd-run and agent runtimes start each command in a session of
+	// their own, so an actor arriving that way is fresh every invocation.
+	// control.sessionActor is where that is argued — including who it leaves
+	// uncovered, which is a shell panel and those launchers, and not the agent
+	// panels that carry a panel id nor `baton mcp`.
+	//
+	// Self-declared, exactly as Role and Self are, and for once that is not even a
+	// weakening: it grants nothing, names no fence, and picks only which rate-cap
+	// slot this client spends. A client that varied it would be evading a cap it
+	// could already evade by varying Self.
+	Actor string `json:"actor,omitempty"`
+
 	// Passkey and Source are declared on "hello" by a REMOTE cockpit — one that
 	// reached this daemon through `ssh <host> baton --stdio` rather than through
 	// the session's own socket. Passkey is the 8-character code the fleet owner

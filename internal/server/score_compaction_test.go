@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/score"
 )
 
@@ -122,17 +121,6 @@ func TestARuntimeCompactionIsAnnouncedExactlyOnce(t *testing.T) {
 	})
 }
 
-// submitAs sends one score.submit from a FRESH connection declaring self, and
-// returns the daemon's reply. A new connection each time is the shape that
-// matters here: baton mcp dials per tool call and baton ctl is a process per
-// command, so a submit-only daemon is one that never holds a connection open.
-func submitAs(t *testing.T, s *Server, self, text string) proto.ServerMsg {
-	t.Helper()
-	cc := conn(self)
-	s.onCommand(cc, proto.Command{Action: "score.submit", Prompt: text})
-	return reply(t, cc)
-}
-
 // TestASubmitOnlyDaemonStillHearsAboutARewrite is the shape the read-path
 // announcement cannot cover, and it is the shape that CAUSES the rewrite.
 //
@@ -175,7 +163,7 @@ func TestASubmitOnlyDaemonStillHearsAboutARewrite(t *testing.T) {
 		submitAs(t, s, "p1", note)
 
 		logged := captureLog(t)
-		for i := range 3 {
+		for i := range submitBurst - 1 {
 			submitAs(t, s, "p1", fmt.Sprintf("the fleet names its worktrees %d", i))
 		}
 		if got := logged(); strings.Contains(got, compactionNotice) {

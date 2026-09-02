@@ -80,10 +80,22 @@ type clientConn struct {
 	// in the hello handler and thereafter only read, all on this connection's
 	// single command-loop goroutine, so they need no lock.
 	//
-	// NEITHER RATE CAP KEEPS ITS STATE HERE, and the reason is worth reading
-	// before adding a third: see Server.spawn and Server.refine.
+	// NO RATE CAP KEEPS ITS STATE HERE, and the reason is worth reading before
+	// adding a fourth: see Server.spawn, Server.refine and Server.submits.
 	role string
 	self string
+
+	// actor is who this connection is when it has no panel to be — see
+	// proto.Command.Actor, and submitActor, which is the one place the two are
+	// resolved into the identity a cap is keyed on. Written and read exactly as
+	// role and self are.
+	//
+	// It is NOT part of the monotone hello rule those two are under, and that is
+	// deliberate rather than an omission: the rule guards fences, and this is not
+	// one. It grants nothing and restricts nothing; it selects a rate-cap slot.
+	// Putting it under the rule would say a cap keyed on a self-declared string is
+	// a boundary, which #38's trust model already declines to claim.
+	actor string
 
 	// id, source and since are this connection's row in the remote overlay: a
 	// stable id remote.kick names it by, the label it called itself on hello
@@ -474,7 +486,7 @@ type Server struct {
 	// spawn and refine are the two agent-facing rate caps, keyed by the PANEL the
 	// connection DECLARED as its own, not by the connection itself. Guarded by mu.
 	// See minConductorSpawnGap and minRefineGap for what each one is worth, and
-	// the throttle type for why they are shaped alike.
+	// the gapStamp type for why they are shaped alike.
 	//
 	// THE IDENTITY IS THE WHOLE OF IT. Both stamps used to live on the clientConn,
 	// which reads as the obvious place and is wrong for anything an agent drives:
@@ -501,8 +513,32 @@ type Server struct {
 	// declines to be a boundary against an agent holding the operator's own uid;
 	// it is the difference between an evasion that requires knowing something and
 	// the old bug, which required nothing at all.
-	spawn  throttle
-	refine throttle
+	spawn  gapStamp
+	refine gapStamp
+
+	// submits is the third agent-facing rate cap, on score.submit, and sayCapped
+	// paces the one log line its refusals leave. Both are keyed by the panel the
+	// connection declared as its own — the paragraphs above are the whole reason
+	// they are, and apply here unchanged — and both are guarded by mu. See
+	// minSubmitGap and saySubmitCappedEvery.
+	//
+	// They are rateBuckets rather than gapStamp because submission is open to every
+	// panel rather than reserved to the conductor; see the type, which is where
+	// that difference is argued.
+	//
+	// TWO MAPS ON ONE KEY, deliberately, and it was looked at. Folding the pacing
+	// stamp into submits as a value struct is one map, one lookup on the refusing
+	// branch, and one sweep — and it changes EVICTION TIMING, which is a measured
+	// property here. An entry is swept once its allowance is full, which for
+	// submits is at most burst gaps, about four seconds; a folded entry could not
+	// be dropped until its say-window had also passed, which is a minute. Every
+	// actor that was ever refused would then sit in the map sixty times longer,
+	// against a key the CLIENT declares and nothing the daemon controls bounds.
+	// The tidiness is one map; the cost is the sweep's own claim that it drains
+	// faster than it fills. tooSoonToSubmit already treats the two as one
+	// decision, in one hold, which is where that mattered.
+	submits   rateBuckets
+	sayCapped rateBuckets
 
 	// merges watches for the SLOW collapse of the fleet memory, the one the rate
 	// cap cannot catch. Guarded by mu. See mergeAlarm.
@@ -813,8 +849,10 @@ func New(ln net.Listener, opts ...Option) *Server {
 		heartbeat:       proto.HeartbeatInterval,
 		cg:              cgroup.New(),
 		containers:      make(map[string]string),
-		spawn:           throttle{gap: minConductorSpawnGap},
-		refine:          throttle{gap: minRefineGap},
+		spawn:           gapStamp{gap: minConductorSpawnGap},
+		refine:          gapStamp{gap: minRefineGap},
+		submits:         rateBuckets{gap: minSubmitGap, burst: submitBurst},
+		sayCapped:       rateBuckets{gap: saySubmitCappedEvery},
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -2151,42 +2189,47 @@ const (
 	//
 	// Keyed on the conductor's PANEL and not on its connection — see
 	// Server.spawn, which says what the connection-keyed version failed to
-	// throttle and why baton_spawn walked straight through it.
+	// gapStamp and why baton_spawn walked straight through it.
 	minConductorSpawnGap = 250 * time.Millisecond
 )
 
-// throttle is one rate cap: the shortest gap it admits an action across, the
+// gapStamp is one rate cap: the shortest gap it admits an action across, the
 // identity it last admitted one for, and when.
 //
 // gap is a FIELD rather than a parameter, so the cap is one thing rather than a
-// stamp plus whatever figure the caller happened to bring. Each throttle has a
+// stamp plus whatever figure the caller happened to bring. Each gapStamp has a
 // single call site today, so nothing can drift yet; the moment one has two, a
-// parameter is one throttle checked against two different gaps and neither call
-// site looks wrong on its own. A throttle built without one admits everything,
+// parameter is one gapStamp checked against two different gaps and neither call
+// site looks wrong on its own. A gapStamp built without one admits everything,
 // which is why both are set where the Server is (New, and gateServer for the
 // tests that drive them).
 //
 // ONE identity rather than a map, because both of its users are keyed on a
 // singleton — the conductor panel (hasConductorLocked), whose id survives a
 // respawn — so at most one is worth remembering. A caller with a different
-// identity is admitted and takes the slot; if the singleton were ever broken,
-// two conductors would share one stamp and throttle each other, which is a
-// guardrail behaving conservatively rather than a correctness failure.
-type throttle struct {
+// identity is admitted and takes the slot, which is exactly why this shape
+// cannot serve a door the whole fleet holds: two identities alternating would
+// each take the slot from the other and NEITHER would be refused. If the
+// singleton were ever broken, that is what two conductors would get — the cap
+// going quiet rather than clamping. See rateBuckets, which is the map version and
+// the reason score.submit does not use this one.
+type gapStamp struct {
 	gap time.Duration
 	who string
 	at  time.Time
 }
 
 // tooSoon reports whether id already had an action admitted within the gap, and
-// stamps the attempt when it did not. The duration returned is how long ago that
-// one was, for the log line. The caller holds Server.mu.
+// stamps the attempt when it did not. SINCE LAST is the duration it hands back —
+// how long ago the admitted one was — and it is named in the signature because
+// rateBuckets.tooSoon returns the opposite quantity from the same method name.
+// The caller holds Server.mu.
 //
 // It stamps only on the ADMITTING branch. A refused attempt must not push the
 // next allowed one further away, or a caller polling faster than the gap would
 // lock itself out for as long as it kept asking — a loop gets exactly one
 // through per gap, which is the whole intent.
-func (t *throttle) tooSoon(id string, now time.Time) (time.Duration, bool) {
+func (t *gapStamp) tooSoon(id string, now time.Time) (sinceLast time.Duration, refuse bool) {
 	if t.who == id && !t.at.IsZero() && now.Sub(t.at) < t.gap {
 		return now.Sub(t.at), true
 	}
@@ -2194,14 +2237,156 @@ func (t *throttle) tooSoon(id string, now time.Time) (time.Duration, bool) {
 	return 0, false
 }
 
-// tooSoon takes Server.mu around one throttle check. The two rate caps both run
+// tooSoon takes Server.mu around one gapStamp check. The two rate caps both run
 // off the command loop, where the lock is not already held — so the name carries
 // no Locked suffix: everywhere else in this package that suffix means the CALLER
 // holds mu, and this takes it.
-func (s *Server) tooSoon(t *throttle, id string, now time.Time) (time.Duration, bool) {
+func (s *Server) tooSoon(t *gapStamp, id string, now time.Time) (sinceLast time.Duration, refuse bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return t.tooSoon(id, now)
+}
+
+// rateBuckets is the same rate cap over a door the WHOLE FLEET holds: one stamp
+// per identity rather than one stamp in total. Same gap-is-a-field rule, same
+// stamp-only-when-admitting rule; see gapStamp, which is where both are argued.
+//
+// It is a second type rather than a widening of the first, because the single
+// stamp is not gapStamp's limitation — it is a fact about its two users. Both
+// are keyed on a SINGLETON, the conductor panel, so there is only ever one
+// identity worth remembering and a second one arriving means the singleton
+// broke.
+//
+// Score submission is the opposite: every panel on the fleet may submit (#38),
+// and a single stamp would then be handed from actor to actor. Two panels
+// submitting alternately would each find the slot held by the other, each be
+// admitted, and the cap would be dead exactly when the fleet is busy — which is
+// the only time it is needed. That is a second version of the bug the identity
+// comment on Server.spawn describes, reached by a different route.
+//
+// IT IS A BUCKET AND NOT A MINIMUM GAP, which is the difference between the two
+// types that actually costs something. gapStamp refuses whenever two admitted
+// actions would fall inside gap of each other; this one lets an identity spend
+// burst of them at once and then refills one allowance per gap.
+//
+// A minimum gap is refused BY JITTER RATHER THAN BY RATE, and that is not a
+// nuance — it is most of what it does. THE MEASUREMENT LIVES HERE, on the
+// mechanism, because it is a fact about bucket-versus-gap and not about either
+// constant's value; minSubmitGap and submitBurst each keep only their own
+// derivation and point at this.
+//
+// Ten agents each submitting at 0.5/s, which is 216 times a healthy fleet's
+// whole-day rate — the load #56's review measured, chosen so this is not a claim
+// about a quiet fleet:
+//
+//	arrival process        minimum gap    burst of four
+//	evenly spaced                   0%               0%
+//	exponential                    33%             0.7%
+//	an agent's turn                71%              16%
+//
+// Evenly spaced is the one distribution a minimum gap cannot fail, which is why
+// the version of this that measured only that shape said the cap refused nothing
+// and would have said it for any tuning at all. Exponential is the shape real
+// traffic has, and 33% is P(gap < 1s) at λ=0.5 — that is the entire mechanism. A
+// turn is three observations written as one task finishes, so two of every three
+// arrive together by construction. At the volume a healthy fleet actually writes,
+// rather than 216 times it, the turn shape refuses 0.03%.
+//
+// WHAT IS PINNED IS NOT THIS TABLE. TestTheSubmitCapIsSilentForRealisticTraffic
+// drives the three processes rather than quoting them, and asserts BANDS — under
+// 5% for exponential with the burst, over 90% for the retry loop, under 25% for a
+// turn with the burst and over 60% without it. Those are the numbers a change has
+// to keep; the figures above are what one seeded run of it produced, and a reader
+// retuning either constant should re-measure rather than trust them.
+//
+// What is refused there is not repetition. A repeat FOLDS, and the fold is the
+// growth this cap exists to stop; a handful of observations arriving together
+// are distinct lessons, and a cap that keeps one of them has not slowed the
+// fleet down, it has thrown three away.
+//
+// The sustained rate is untouched: an actor looping at machine speed still
+// settles to one admitted submission per gap, because the bucket refills at
+// exactly that. The burst buys a bounded one-off — at most burst-1 extra records
+// each time an identity comes back from being idle.
+//
+// The map is SWEPT rather than bounded, and the difference is worth stating
+// because the earlier wording claimed the second. An allowance that is already
+// full admits whatever it is compared against, so it is dropped when the sweep
+// reaches it — but the sweep runs on the admitting branch and looks at
+// sweepPerAdmit entries at a time, so what the map holds is the identities that
+// have acted since the sweep last came round to them, not the ones inside the
+// last burst gaps. 50,000 distinct actors submitting once at one instant leave
+// 50,000 entries, a later refusal shrinks nothing, and the admissions that
+// follow take them out a few at a time.
+//
+// A few at a time is the whole point. The key is a string the CLIENT declares,
+// so nothing the daemon controls bounds how many there are, and a full walk on
+// every admission would be an O(n) scan holding Server.mu on the submit path —
+// the shape #56 spent a round taking out of the store. One admission adds at
+// most one entry and drops up to sweepPerAdmit, so the map drains faster than it
+// fills without any single caller paying for the whole of it.
+type rateBuckets struct {
+	gap   time.Duration
+	burst int
+	full  map[string]time.Time
+}
+
+// sweepPerAdmit is how many entries one admission looks at. Eight, because it
+// has to be more than the one the admission itself puts back for the map to
+// drain at all, and small enough to be a constant rather than a scan; Go starts
+// a range at a random position, so successive admissions see different entries
+// rather than the same eight.
+const sweepPerAdmit = 8
+
+// tolerance is how far ahead of now an identity's allowance may run: a burst of
+// b spends b at once, which is b-1 gaps of credit. Zero — the value an
+// unconfigured rateBuckets carries — is the plain minimum gap, which is what
+// sayCapped wants and what this type did before it had a bucket.
+func (t *rateBuckets) tolerance() time.Duration {
+	if t.burst < 2 {
+		return 0
+	}
+	return time.Duration(t.burst-1) * t.gap
+}
+
+// tooSoon reports whether id has spent its allowance, and spends one when it has
+// not. RETRY IN is the duration it hands back — how long until the next one is
+// back — which is not what gapStamp.tooSoon returns from the same method name,
+// so both signatures name theirs. The caller holds Server.mu.
+//
+// The stamp-only-when-admitting rule gapStamp argues survives the change in the
+// form that matters: a refusal spends nothing, so a caller polling faster than
+// the gap does not push its own next admission away.
+func (t *rateBuckets) tooSoon(id string, now time.Time) (retryIn time.Duration, refuse bool) {
+	// full is the instant this identity's allowance is back to full. Behind now
+	// means it is full already — and an identity with no entry at all is the same
+	// state, which is why both arrive here as `now`.
+	full, ok := t.full[id]
+	if !ok || full.Before(now) {
+		full = now
+	}
+	if wait := full.Sub(now) - t.tolerance(); wait > 0 {
+		return wait, true
+	}
+	if t.full == nil {
+		t.full = make(map[string]time.Time)
+	}
+	// Swept on the admitting branch alone, which is at most once per gap per
+	// identity — the refusing branch is the hot one under exactly the loop this
+	// exists to stop, and it must stay a single map read. And swept a bounded
+	// number of entries at a time, because "once per gap per identity" says
+	// nothing about how many identities there are; see rateBuckets.
+	swept := 0
+	for who, at := range t.full {
+		if !at.After(now) {
+			delete(t.full, who)
+		}
+		if swept++; swept == sweepPerAdmit {
+			break
+		}
+	}
+	t.full[id] = full.Add(t.gap)
+	return 0, false
 }
 
 // guardConductor returns a denial reason when cmd is forbidden for a scoped
@@ -2351,7 +2536,8 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		// goroutine (the pushing one). Every other read is on this command loop, so
 		// the lock is held for exactly as long as the assignment.
 		s.mu.Lock()
-		cc.role, cc.self, cc.source, cc.greeted = cmd.Role, cmd.Self, cmd.Source, true
+		cc.role, cc.self, cc.source, cc.actor, cc.greeted =
+			cmd.Role, cmd.Self, cmd.Source, cmd.Actor, true
 		s.mu.Unlock()
 		send(cc, proto.ServerMsg{Type: "welcome", Version: proto.ProtocolVersion, ServerVer: s.version,
 			Enforce: string(s.cg.Mode()), EnforceWhy: s.cg.Reason()})
