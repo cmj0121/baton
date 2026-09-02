@@ -878,18 +878,15 @@ func openScore(cfg config.ScoreConfig, p score.Policy, within time.Duration) (*s
 // it as the number 1. A full-disk boot logged `compaction_failures=1` and never
 // "no space left on device" — and the words are the half that says what to do.
 //
-// THE REWRITE THAT SUCCEEDED is said at Warn too, which is the odd one, because
-// what it announces is not a failure but a change nobody asked for. Compaction
-// re-spaces recency: the order of the live entries survives the rewrite and the
-// SPACING does not, so the first brief after a compacting restart can carry a
-// working set ordered differently from the last brief before it with nothing
-// submitted and no config touched. Measured against a non-compacting twin that
-// restarted byte-identical. `compacted=310` alone connects none of that to what
-// the agents then see, and an operator watching their fleet change its mind
-// deserves the one line that explains it. log_before and log_after ride along
-// because nothing else the daemon says names the growth compaction exists to
-// bound; see score.Health.LogBefore for why the record count beside them is not
-// that number.
+// THE REWRITE THAT SUCCEEDED is said at Warn too, and its sentence is no longer
+// written here: #56 gave the store a compactor that runs while the daemon is up,
+// so the same warning now has a second site, and two copies of a warning this
+// specific drift. server.ScoreCompaction is the one producer for both, and why a
+// rewrite nobody asked for is worth a Warn at all is stated there.
+//
+// The condition asks Compactions rather than Compacted so that this door and the
+// running daemon's ask the same question — "has a rewrite happened" — of the
+// same field, instead of two sites each inferring it from a size.
 func logScoreBoot(dir string, entries int, d score.Delta, h score.Health) {
 	if d != (score.Delta{}) || h != (score.Health{}) {
 		server.ScoreCounters(log.Info(), d, h).
@@ -899,11 +896,8 @@ func logScoreBoot(dir string, entries int, d score.Delta, h score.Health) {
 		log.Warn().Str("dir", dir).Str("error", h.CompactionError).
 			Msg("score could not rewrite its event log; the old log is intact, but every boot from here is slower than this one")
 	}
-	if h.Compacted > 0 {
-		log.Warn().Str("dir", dir).Int("compacted", h.Compacted).Int("entries", entries).
-			Int64("log_before", h.LogBefore).Int64("log_after", h.LogAfter).
-			Msg("score compaction rewrote the log; entry order is preserved but recency spacing is not, " +
-				"so a panel's working set may be ordered differently than before this restart")
+	if h.Compactions > 0 {
+		server.ScoreCompaction(dir, entries, h)
 	}
 }
 

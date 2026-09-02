@@ -96,7 +96,100 @@ func (s *Server) scoreLook(v score.View, err error) score.View {
 	if v.Delta != (score.Delta{}) {
 		ScoreCounters(log.Info(), v.Delta, v.Health).Msg("score reconciled the operator's edits")
 	}
+	// A RUNTIME compaction is announced from here, on the read that is about to
+	// USE the re-spaced memory. #56 gave the store a compactor of its own, so the
+	// re-spacing the boot line has always warned about now happens with no restart
+	// — and said nothing anywhere, because internal/score does not log and nothing
+	// outside it was watching. The store cannot announce it and the compactor is
+	// not on any path the daemon logs from, so it is said by whoever is holding
+	// the result: here that is every brief and every score.list / score.status,
+	// each holding the very view the new spacing produced.
+	//
+	// It is NOT the only door, and saying so here was wrong for the one shape that
+	// matters most: a daemon whose traffic is submissions and nothing else takes
+	// neither of these, and submissions are what grow the log the compactor is
+	// woken by. scoreSubmit says it too; see noteScoreCompaction, which holds the
+	// latch that keeps the three doors to one line per rewrite.
+	//
+	// The view is the store's own single hold of its lock, so the numbers on the
+	// line describe one reading and not three.
+	s.noteScoreCompaction(v.Health, v.Total)
 	return v
+}
+
+// noteScoreCompaction writes the compaction line ONCE for each rewrite that has
+// landed since the last time anything looked, and nothing at all otherwise.
+//
+// THREE DOORS REACH IT, and they are not interchangeable: scoreView and
+// scoreExplain, which is every brief and every score.list / score.status, and
+// scoreSubmit. The last is not a read at all and is there because the compactor
+// is woken by growth: the only verb that grows the log is the one that must be
+// able to say so, or a daemon that submits and never reads compacts in silence.
+//
+// Once per COMPACTION rather than once per changed number, which is why it
+// watches score.Health.Compactions and not Compacted. Compacted is a description
+// of the last rewrite, so watching it for a change asks the wrong question twice
+// over: two rewrites that left the store the same shape carry the same count and
+// the second would go unannounced, and a store that never compacts again holds a
+// number that stopped changing rather than one that says it is spent.
+//
+// The latch starts at whatever the store had already done when the server was
+// handed it (WithScore), which is what keeps a BOOT compaction to exactly one
+// line: cmd/baton has already written it from the same producer by the time any
+// connection exists, and the first read must not write it again.
+//
+// It is an atomic because every connection's command loop reaches this, and the
+// swap is a compare so two callers racing across one rewrite produce one line
+// rather than two — which is what lets the write path share the latch with the
+// two reads instead of needing one of its own. Two rewrites landing between two
+// calls produce one line as well, and that is honest rather than a gap: the line
+// describes the log that is on disk, which is the later of them, and there is
+// nothing left to say about the earlier one.
+func (s *Server) noteScoreCompaction(h score.Health, entries int) {
+	landed := int64(h.Compactions)
+	for {
+		seen := s.scoreState.compactions.Load()
+		if landed <= seen {
+			return
+		}
+		if s.scoreState.compactions.CompareAndSwap(seen, landed) {
+			break
+		}
+	}
+	ScoreCompaction(s.scoreState.Store.Dir(), entries, h)
+}
+
+// ScoreCompaction writes the one line that says a compaction happened, for both
+// the boots that run one (cmd/baton) and the running daemon that now does too.
+//
+// It is the SINGLE producer, for the reason ScoreCounters and ScoreFolds are:
+// the boot had this sentence hand-rolled inside logScoreBoot, and #56's runtime
+// rewrite needed the same one said at a second site. Two copies of a warning
+// this specific drift, and the operator then meets one concept under two
+// wordings — the failure logScoreFolds was written to stop.
+//
+// IT IS A WARNING, which is the odd part, because what it announces is not a
+// failure but a change nobody asked for. Compaction re-spaces recency: the ORDER
+// of the live entries survives the rewrite and the SPACING does not, so a
+// panel's working set can come back ordered differently with nothing submitted
+// and no config touched — measured at boot against a non-compacting twin that
+// restarted byte-identical, and the same re-spacing is what the store's own
+// compactor now does with no restart at all. `compacted=310` alone connects none
+// of that to what the agents then see, and an operator watching their fleet
+// change its mind deserves the one line that explains it. log_before and
+// log_after ride along because nothing else the
+// daemon says names the growth compaction exists to bound; see
+// score.Health.LogBefore for why the record count beside them is not that
+// number.
+//
+// The wording says "than before" rather than "than before this restart" because
+// there may not have been one. The re-spacing is the same event either way, and
+// a boot's line has the boot's own counters beside it to place it.
+func ScoreCompaction(dir string, entries int, h score.Health) {
+	log.Warn().Str("dir", dir).Int("compacted", h.Compacted).Int("entries", entries).
+		Int64("log_before", h.LogBefore).Int64("log_after", h.LogAfter).
+		Msg("score compaction rewrote the log; entry order is preserved but recency spacing is not, " +
+			"so a panel's working set may be ordered differently than before")
 }
 
 // logScoreFolds writes the one line per fold #38's lifecycle asks for. It is the
@@ -181,11 +274,13 @@ func ScoreFolds(folds []score.Fold) {
 // `compacted` is the odd one and belongs on the boot line above all: it is how
 // many records the LAST compaction rewrote the event log to, and 0 when none has
 // run. Said that way rather than "the boot's", because Health is a package-level
-// type and compaction being boot-only is a restriction it is meant to outlive —
-// the sentence reads identically today and never needs revisiting. A log that
-// shrank by two orders of magnitude between two boots is a thing an operator
-// should read about rather than discover, and the daemon is the only party that
-// can say it happened.
+// type and compaction being boot-only is a restriction it is meant to outlive,
+// which under #56 it now has. `compactions` beside it is how many rewrites there
+// have BEEN, which is the half that says whether the one described here is the
+// boot's or something the daemon has done since. A log that shrank by two
+// orders of magnitude between two boots is a thing an operator should read about
+// rather than discover, and the daemon is the only party that can say it
+// happened.
 //
 // It is not the only reporter of the eviction counter any more. A conductor's
 // correction produces no Delta at all, so it never reaches this line; scoreRefine
@@ -202,6 +297,7 @@ func ScoreCounters(e *zerolog.Event, d score.Delta, h score.Health) *zerolog.Eve
 		Int("oversized", h.Oversized).
 		Int("torn_events", h.TornEvents).
 		Int("compacted", h.Compacted).
+		Int("compactions", h.Compactions).
 		Int("compaction_failures", h.CompactionFailures).
 		Int("swallowed_repeats", h.SwallowedRepeats).
 		Int("unreported_folds", h.UnreportedFolds).
@@ -531,6 +627,25 @@ func (s *Server) scoreSubmit(cc *clientConn, cmd proto.Command) {
 		Id     string `json:"id"`
 		Folded bool   `json:"folded,omitempty"`
 	}{Id: e.Id, Folded: folded})})
+	// A RUNTIME compaction is announced from here as well as from the read path,
+	// and this is the case the read path cannot cover. The compactor is woken by
+	// GROWTH, and what grows the log is this verb — so a daemon whose traffic is
+	// submissions and nothing else is exactly the daemon that compacts, and it
+	// takes neither of scoreLook's two doors. Announced from the reads alone, the
+	// rewrite that the submit-only shape drives is the one that says nothing.
+	//
+	// AFTER the reply, because the reply is what the agent is waiting on and the
+	// line is for an operator reading the log afterwards. The rewrite this
+	// announces is not the one this submission caused: the compactor runs on its
+	// own goroutine, so what is being reported is a rewrite that has already
+	// landed, and once per rewrite is what the latch in noteScoreCompaction keeps
+	// true across both doors.
+	//
+	// The two numbers come from two holds of the store's lock here, where
+	// scoreLook's come from one. What that costs is that entries may count a
+	// submission that landed between them; the line is about the rewrite, and the
+	// count beside it is a gauge rather than part of the claim.
+	s.noteScoreCompaction(s.scoreState.Store.Health(), s.scoreState.Store.Len())
 }
 
 // minRefineGap throttles the conductor's score corrections, the way

@@ -814,9 +814,9 @@ type Health struct {
 	// two rewrites of one store can describe themselves identically — same record
 	// count, and sizes that need not differ — so a caller watching for "a
 	// compaction has happened since I last looked" cannot get the answer out of
-	// them. cmd/baton's boot line is one such caller, and it is not the last: a
-	// compactor that runs while the daemon does gives a rewrite no restart to be
-	// noticed by, so whatever comes to announce one needs this rather than a size.
+	// them. cmd/baton's boot line and internal/server's runtime one are both that
+	// caller; see server.ScoreCompaction, which is the single producer of the
+	// sentence they share.
 	LogBefore   int64
 	LogAfter    int64
 	Compactions int

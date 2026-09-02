@@ -790,7 +790,7 @@ func TestTwoCompactionsCannotOverlap(t *testing.T) {
 		// The counter that tells two rewrites apart, on the one fixture that makes
 		// two. Compacted describes the LAST one and reads 1 after either, which is
 		// why anything watching for "a compaction happened" watches this instead;
-		// see Health.Compactions.
+		// see Health.Compactions and server.ScoreCompaction.
 		if got := s.Health().Compactions; got != 2 {
 			t.Errorf("Compactions = %d after two rewrites that both landed, want 2", got)
 		}

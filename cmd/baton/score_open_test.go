@@ -264,7 +264,8 @@ func TestTheBootSaysWhatCompactionDidToTheStore(t *testing.T) {
 	// none of that to what the agents see.
 	t.Run("a rewrite that ran warns that recency was re-spaced", func(t *testing.T) {
 		logged := captureBootLog(t)
-		logScoreBoot(dir, 10, score.Delta{}, score.Health{Compacted: 310, LogBefore: 8668049, LogAfter: 24865})
+		logScoreBoot(dir, 10, score.Delta{},
+			score.Health{Compacted: 310, Compactions: 1, LogBefore: 8668049, LogAfter: 24865})
 		got := logged()
 		for _, want := range []string{
 			`"level":"warn"`, "recency spacing is not", `"compacted":310`, `"entries":10`,

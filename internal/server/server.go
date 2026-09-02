@@ -674,6 +674,12 @@ type ScoreState struct {
 type scoreState struct {
 	ScoreState
 	failing atomic.Bool // score.md could not be read on the last attempt
+	// compactions is the last score.Health.Compactions this server has already
+	// said a line about, so a rewrite is announced once however many reads
+	// straddle it. Seeded by WithScore from whatever the store had done before
+	// the server existed — the boot's own, which cmd/baton has already reported.
+	// See noteScoreCompaction.
+	compactions atomic.Int64
 }
 
 // available reports that a store is running. It is not the same question as
@@ -718,9 +724,19 @@ func (st *scoreState) reason() string {
 // Enabled and Reason are what let score.status and score.submit tell "switched
 // off" apart from "unavailable" instead of answering both with a bare
 // "disabled". The server never re-asks the config.
+//
+// It also takes the store's compaction count as its BASELINE, and that is what
+// makes a boot compaction one log line rather than two: the boot's own rewrite
+// happened inside score.Open, before any of this existed, and cmd/baton wrote
+// the line for it there. Everything past this point is a rewrite the running
+// daemon did, which is the one nobody was saying anything about (#56). See
+// noteScoreCompaction.
 func WithScore(st ScoreState) Option {
 	return func(s *Server) {
 		s.scoreState.ScoreState = st
+		if st.Store != nil {
+			s.scoreState.compactions.Store(int64(st.Store.Health().Compactions))
+		}
 	}
 }
 
