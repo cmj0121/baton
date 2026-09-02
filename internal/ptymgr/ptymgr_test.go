@@ -1,10 +1,12 @@
 package ptymgr
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -516,5 +518,65 @@ func TestForceRepaintSafeWhenUnsizedOrUnknown(t *testing.T) {
 	time.Sleep(400 * time.Millisecond)
 	if winchFired(m) {
 		t.Fatalf("ForceRepaint signalled an unsized panel; snapshot=%q", m.Snapshot("1"))
+	}
+}
+
+// TestWaitJoinsThePumpItStarted pins the join in the direction that matters for
+// correctness: Wait must not return until the pump has finished ALL of its work,
+// including the OnClose callback. The callback sleeps before it records, so a
+// Wait that merely returned quickly — the behaviour before pumps were counted
+// — leaves both assertions below false.
+func TestWaitJoinsThePumpItStarted(t *testing.T) {
+	m := New()
+	if err := m.Wait(time.Second); err != nil {
+		t.Fatalf("Wait on a manager that never started a pump: %v", err)
+	}
+
+	var joined atomic.Bool
+	var code atomic.Int64
+	m.OnClose(func(_ string, exitCode int) {
+		time.Sleep(50 * time.Millisecond) // work a premature Wait would step over
+		code.Store(int64(exitCode))
+		joined.Store(true)
+	})
+	if err := m.StartCmd("1", Spec{Command: "/bin/sh", Args: []string{"-c", "exit 3"}}); err != nil {
+		t.Fatalf("StartCmd: %v", err)
+	}
+	defer m.Stop("1")
+
+	if err := m.Wait(3 * time.Second); err != nil {
+		t.Fatalf("a pump that is about to finish must be joined, got %v", err)
+	}
+	if !joined.Load() {
+		t.Fatal("Wait returned while its pump was still running")
+	}
+	if got := code.Load(); got != 3 {
+		t.Fatalf("the joined pump should have reported exit code 3, got %d", got)
+	}
+}
+
+// TestWaitGivesUpOnAPumpThatNeverEnds pins the other direction, and it is the one
+// that keeps the bound honest: a pump whose PTY never reaches EOF must NOT hang
+// the caller. Wait gives up and says so by name, and the same manager still joins
+// cleanly once the process is actually killed — so the timeout is a report, not
+// a one-way door.
+func TestWaitGivesUpOnAPumpThatNeverEnds(t *testing.T) {
+	m := New()
+	if err := m.StartCmd("1", Spec{Command: "/bin/sh", Args: []string{"-c", "sleep 30"}}); err != nil {
+		t.Fatalf("StartCmd: %v", err)
+	}
+	defer m.Stop("1")
+
+	start := time.Now()
+	if err := m.Wait(50 * time.Millisecond); !errors.Is(err, ErrPumpsRunning) {
+		t.Fatalf("a pump that never ends must exceed the bound with ErrPumpsRunning, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("Wait should give up at its bound, not %v later", elapsed)
+	}
+
+	m.KillAll(syscall.SIGKILL)
+	if err := m.Wait(3 * time.Second); err != nil {
+		t.Fatalf("after the kill the same manager must join: %v", err)
 	}
 }

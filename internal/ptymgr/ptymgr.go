@@ -3,6 +3,7 @@
 package ptymgr
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"sync"
@@ -51,7 +52,21 @@ type Manager struct {
 	closed   bool // a KillAll shutdown sweep has run; new spawns must not outlive it
 	onOutput func(id string, data []byte)
 	onClose  func(id string, exitCode int)
+
+	// pumps counts the pump goroutines that have not returned, and drained is the
+	// channel Wait blocks on — created by the first waiter, closed and dropped the
+	// moment the count reaches zero. A counter rather than a sync.WaitGroup because
+	// StartCmd can register a pump while Wait is already blocked (a spawn landing
+	// mid-shutdown, the case the closed flag exists for), which is exactly the Add
+	// a WaitGroup forbids.
+	pumps   int
+	drained chan struct{}
 }
+
+// ErrPumpsRunning is returned by Wait when the bound elapsed with at least one
+// PTY pump still running. It names the failure so a caller reports a shutdown
+// that did not finish rather than reading a plain timeout as success.
+var ErrPumpsRunning = errors.New("ptymgr: PTY pumps still running")
 
 // Option tunes a Manager at construction.
 type Option func(*Manager)
@@ -172,6 +187,7 @@ func (m *Manager) StartCmd(id string, spec Spec) error {
 	p := &pane{f: f, pid: cmd.Process.Pid}
 	m.mu.Lock()
 	m.ptys[id] = p
+	m.pumps++                // registered before the goroutine runs, so Wait can never miss it
 	shuttingDown := m.closed // a KillAll may have swept just before this fork landed in the map
 	m.mu.Unlock()
 
@@ -188,6 +204,7 @@ func (m *Manager) StartCmd(id string, spec Spec) error {
 
 // pump streams the PTY's output to the sink and the ring until it closes.
 func (m *Manager) pump(id string, p *pane, cmd *exec.Cmd) {
+	defer m.pumpDone() // the pane is only fully finished once onClose has returned
 	buf := make([]byte, 4096)
 	for {
 		n, err := p.f.Read(buf)
@@ -227,6 +244,50 @@ func (m *Manager) pump(id string, p *pane, cmd *exec.Cmd) {
 	}
 	if m.onClose != nil {
 		m.onClose(id, exitCode)
+	}
+}
+
+// pumpDone retires one pump goroutine and releases anyone waiting on the last of
+// them.
+func (m *Manager) pumpDone() {
+	m.mu.Lock()
+	m.pumps--
+	if m.pumps == 0 && m.drained != nil {
+		close(m.drained)
+		m.drained = nil
+	}
+	m.mu.Unlock()
+}
+
+// Wait blocks until every pump goroutine has returned — its PTY drained, its
+// child reaped, its OnClose delivered — or timeout elapses, whichever comes
+// first. KillAll only asks the children to die; this is what makes a caller's
+// shutdown a fact rather than a request, so nothing keeps streaming output or
+// firing callbacks after it returns.
+//
+// The bound is the point: a pump whose PTY never reaches EOF (a grandchild that
+// inherited the slave and outlived its group) would otherwise hang the caller
+// forever, which is worse than the leak. Exceeding it returns ErrPumpsRunning
+// rather than nil, so "we gave up" is never mistaken for "they finished".
+func (m *Manager) Wait(timeout time.Duration) error {
+	m.mu.Lock()
+	if m.pumps == 0 {
+		m.mu.Unlock()
+		return nil
+	}
+	if m.drained == nil {
+		m.drained = make(chan struct{})
+	}
+	drained := m.drained
+	m.mu.Unlock()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-drained:
+		return nil
+	case <-timer.C:
+		return ErrPumpsRunning
 	}
 }
 
