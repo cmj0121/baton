@@ -271,9 +271,10 @@ func TestARealSIGHUPSaysTheScoreDirectoryDidNotMove(t *testing.T) {
 	logged := captureBootLog(t)
 	done := make(chan error, 1)
 	go func() { done <- runServerOn(ln, sock, loadServerBoot(sock)) }()
-	// The LISTENING line, not the pid file: the pid file is written at the top of
-	// runServerOn and signal.Notify comes hundreds of lines later, so a HUP sent on
-	// the pid file racing that window kills the test process outright.
+	// The LISTENING line, not the pid file: the pid file is published above the
+	// bind, by loadServerBoot, and signal.Notify comes hundreds of lines later, so
+	// a HUP sent on the pid file racing that window kills the test process
+	// outright.
 	if !waitFor(func() bool { return strings.Contains(logged(), "listening") }, 300, 10*time.Millisecond) {
 		t.Fatalf("the server never came up:\n%s", logged())
 	}

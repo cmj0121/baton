@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/cmj0121/baton/internal/paths"
 )
 
 // This file asserts the ONE thing #60 changed: the daemon reads the operator's
@@ -184,6 +186,43 @@ func TestABootSaysWhatItIsAboutToRead(t *testing.T) {
 	}
 }
 
+// TestTheNoShowMessageCarriesItsRecovery pins the sentence an operator is left
+// holding when the daemon never binds. It is the only place either the state or
+// the way out is written down: a grep over docs/ and the README finds neither.
+func TestTheNoShowMessageCarriesItsRecovery(t *testing.T) {
+	got := didNotComeUpReason("/tmp/somewhere/baton.log", false)
+	for _, want := range []string{"/tmp/somewhere/baton.log", "--force"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the message %q does not name %q. An operator holding it has a daemon that is "+
+				"still alive, still holding the session claim, and refusing every later `baton` — and "+
+				"nothing else anywhere tells them how to clear it", got, want)
+		}
+	}
+}
+
+// TestTheForcedNoShowMessageDoesNotSendThemBackRoundAgain is the other direction,
+// and it exists because the un-forced sentence read as advice when it was reached
+// from --force itself: the operator was told to run the flag they had just run.
+//
+// The flag had worked. It stopped the old daemon and started a fresh one, which
+// walked into the same read — so the message has to say that repeating it will
+// not help, and name what will.
+func TestTheForcedNoShowMessageDoesNotSendThemBackRoundAgain(t *testing.T) {
+	got := didNotComeUpReason("/tmp/somewhere/baton.log", true)
+	if !strings.Contains(got, "/tmp/somewhere/baton.log") {
+		t.Errorf("the message %q does not name the log, which is where the wedged path is written", got)
+	}
+	if strings.Contains(got, "`baton --force`") {
+		t.Errorf("the message %q tells an operator who just ran --force to run --force. It worked: "+
+			"the old daemon was stopped and a fresh one started, and that one stopped in the same "+
+			"place, so the path is what is left to fix", got)
+	}
+	if !strings.Contains(got, "same place") {
+		t.Errorf("the message %q does not say the fresh daemon stopped where the old one did, which "+
+			"is the fact that makes repeating the flag pointless", got)
+	}
+}
+
 // bootFixture builds a private $HOME and a socket path for a forked daemon. The
 // socket goes in a shortDir rather than under t.TempDir, for the socket-path cap
 // shortDir documents.
@@ -194,9 +233,9 @@ func bootFixture(t *testing.T) (home, sock string) {
 
 // deadScoreDir is bootFixture with the score directory pointed at a path that
 // never answers: a FIFO standing where score-events.jsonl belongs, which blocks
-// in the kernel forever with no writer. It is the instrument the dead case here
-// is measured with, and it keeps the config key, the file name and the
-// permissions in one place rather than spread through the test that uses them.
+// in the kernel forever with no writer. It is the instrument both of the wedged
+// cases here use, and building it twice by hand meant two places to keep the
+// config key, the file name and the permissions in step.
 func deadScoreDir(t *testing.T) (home, sock, scoreDir string) {
 	t.Helper()
 	home, sock = bootFixture(t)
@@ -258,4 +297,70 @@ func forkDaemon(t *testing.T, home, sock string) *exec.Cmd {
 // existence check: it validates the target and delivers nothing.
 func childRunning(child *exec.Cmd) bool {
 	return child.Process.Signal(syscall.Signal(0)) == nil
+}
+
+// TestForceStopsADaemonStuckAboveTheBind is the other half of what moving the
+// filesystem reads above net.Listen did. A daemon hung there is holding the
+// session claim it took a few lines earlier, so every later baton loses
+// claimSession to it and exits quietly; with no socket to dial, the force-stop
+// that is supposed to clear it used to find nothing alive and signal nobody.
+//
+// It is asserted end to end on a real forked daemon rather than in-process,
+// because the property is about a process that cannot exist in-process: one
+// stuck in a syscall it will not return from, with no socket, no signal handler
+// of its own, and nothing to reach it by but the pid it published on the way
+// past. The three things measured are the three that failed:
+//
+//	stopDaemon      -> the stuck daemon is gone, rather than a quiet return
+//	                   from a stop that signalled nothing
+//	the PID file    -> tidied, so no later stop can read it again
+//	the next daemon -> starts, which none could while the claim was held
+func TestForceStopsADaemonStuckAboveTheBind(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping daemon fork-exec in -short")
+	}
+	home, sock, scoreDir := deadScoreDir(t)
+	fifo := filepath.Join(scoreDir, "score-events.jsonl")
+
+	child := forkDaemon(t, home, sock)
+	// Reaped here rather than only in forkDaemon's cleanup, so the test can tell
+	// "still stuck" from "already gone" without asking signal 0: a killed child
+	// nothing has waited on is a zombie, and signal 0 calls a zombie alive.
+	exited := make(chan error, 1)
+	go func() { exited <- child.Wait() }()
+
+	waitForScoreOpen(t, child, scoreDir)
+	select {
+	case err := <-exited:
+		t.Fatalf("the daemon exited on its own (%v); nothing was stuck for the stop to prove anything about", err)
+	default:
+	}
+	if alive(sock) {
+		t.Fatal("the daemon bound its socket; this test is about the case where it never gets that far")
+	}
+
+	start := time.Now()
+	if err := stopDaemon(sock); err != nil {
+		t.Fatalf("stopDaemon on a daemon stuck above the bind: %v", err)
+	}
+	select {
+	case <-exited:
+		t.Logf("the stuck daemon was stopped in %s", time.Since(start))
+	case <-time.After(2 * time.Second):
+		t.Fatal("stopDaemon returned, but the daemon it was meant to stop is still running")
+	}
+	if _, err := os.Stat(paths.PidFile(sock)); !os.IsNotExist(err) {
+		t.Fatalf("the stopped daemon's PID file should be gone, not left for a later stop to read: %v", err)
+	}
+
+	// And the fleet is usable again: with the dead path out of the way, a fresh
+	// daemon takes the session the stuck one was holding and serves. This is the
+	// half that stays broken when a force-stop only appears to work.
+	if err := os.Remove(fifo); err != nil {
+		t.Fatal(err)
+	}
+	next := forkDaemon(t, home, sock)
+	if !waitFor(func() bool { return alive(sock) }, daemonPollTries, daemonPollGap) {
+		t.Fatalf("no daemon could start after the stuck one was stopped; child alive=%v", childRunning(next))
+	}
 }

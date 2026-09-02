@@ -155,33 +155,124 @@ func attach(verbose int, logPath, pluginPath string, force bool) error {
 			return err
 		}
 	}
-	if err := startDaemon(verbose, logPath, pluginPath); err != nil {
+	if err := startDaemon(verbose, logPath, pluginPath, force); err != nil {
 		return err
 	}
 	return runClient(verbose, logPath, pluginPath)
 }
 
 // stopDaemon force-stops the running daemon, if any, and waits for it to release
-// the socket. It is a no-op (bar tidying a stale socket) when no
-// server is alive.
+// the socket. A daemon that never got as far as a socket is stopped by
+// stopUnboundDaemon instead; when nothing is running at all this is a no-op, bar
+// tidying what a crash left behind.
+//
+// WHY THERE ARE TWO, since a predicate on the session claim alone would answer
+// for both cases and would be the better oracle in each: sessionClaimed is
+// hardcoded false on non-unix (see session_other.go, where claimSession grants
+// every claim without recording one). A single claim-based stop would leave
+// those platforms unable to stop a daemon that HAD bound its socket, which is
+// every ordinary stop. The socket is the thing every build can ask about; the
+// claim is the sharper question only some can. That portability stub is the
+// whole reason, and the two paths must not be merged on the strength of the unix
+// build alone.
 func stopDaemon(sock string) error {
 	if !alive(sock) {
-		return clearStaleSocket(sock)
+		return stopUnboundDaemon(sock)
 	}
 
-	pidPath := paths.PidFile(sock)
-	pid, err := readPidFile(pidPath)
+	pid, err := readPidFile(paths.PidFile(sock))
 	if err != nil {
 		return err
 	}
-	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
-		return fmt.Errorf("signal daemon %d: %w", pid, err)
-	}
-	if !waitFor(func() bool { return !alive(sock) }, daemonPollTries, daemonPollGap) {
-		return fmt.Errorf("daemon %d did not stop in time", pid)
+	if err := signalAndWait(pid, func() bool { return !alive(sock) }); err != nil {
+		return err
 	}
 	log.Info().Int("pid", pid).Msg("daemon stopped")
 	return nil
+}
+
+// signalAndWait asks pid to stop and waits until gone says it has, within the
+// same budget startDaemon gives a daemon to come up.
+//
+// gone is the caller's, because the two stops watch different things: a daemon
+// that was serving is gone when its socket stops answering, and one that never
+// bound has no socket to watch, only the session claim the kernel drops as it
+// dies.
+func signalAndWait(pid int, gone func() bool) error {
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		return fmt.Errorf("signal daemon %d: %w", pid, err)
+	}
+	if !waitFor(gone, daemonPollTries, daemonPollGap) {
+		return fmt.Errorf("daemon %d did not stop in time", pid)
+	}
+	return nil
+}
+
+// stopUnboundDaemon is stopDaemon for the case where dialling the socket found
+// nothing: either nothing is running, or a daemon is alive and has not bound yet
+// — stuck in the filesystem reads that now happen above net.Listen. That daemon
+// holds the session claim, so every `baton` after it loses claimSession and
+// exits, and until this existed the only way out was finding its pid by hand.
+//
+// The session claim, not the PID file, is what decides. A PID file is a number
+// on disk that outlives the process it named — a SIGKILLed daemon leaves one —
+// and the operating system reuses pids, so signalling one on the strength of the
+// file alone can deliver a SIGTERM to whatever unrelated program now holds that
+// number. That is a worse failure than the wedge this fixes. sessionClaimed
+// answers a different question: is a daemon for THIS socket alive right now. The
+// kernel drops the flock when its holder dies, so a false there means the pid
+// file is garbage no matter how live the process it names is, and the file is
+// tidied rather than signalled.
+//
+// WHAT IS STILL OPEN, because the claim is one file and the pid is another. A
+// daemon takes the claim and then tidies a predecessor's PID file (runServer,
+// through clearStaleSocket); in between, this can see the claim held and a pid
+// that is not the holder's. Only the kernel knows who holds an flock and it will
+// not say, so no ordering of two files closes that — what the ordering does buy
+// is that the gap is a stat and an unlink rather than the daemon's whole life,
+// and that the state a --force is most likely to land in is "claim held, no PID
+// file", which is refused below rather than guessed at.
+//
+// The probe has a cost of its own: it decides by taking the flock, so it
+// conflicts with a claimSession running at that instant, and the daemon making
+// that claim will read the conflict as another daemon owning the session and
+// leave quietly. Its launcher then spends daemonPollTries waiting for a socket
+// nothing is bringing up and reports that the server did not come up. It needs
+// two batons inside the same few microseconds, and the next one run succeeds.
+//
+// POLLING DOES NOT MULTIPLY THAT, which is worth saying because the wait below
+// asks the same question up to daemonPollTries times over five seconds and the
+// arithmetic looks like a hundred of these windows. It is not, and the reason is
+// which branch of the probe touches the lock. A claim somebody holds is answered
+// by the FAILURE to take it, so every question asked while the target daemon is
+// still alive costs one failed flock and opens nothing. The probe takes the lock
+// only when the session is already free — and that answer is what ENDS the wait,
+// so it happens once. Two instants per stop, not a hundred: the opening check,
+// and the question that finds the daemon gone.
+//
+// So no backoff is owed here. What a backoff would buy is fewer conflicting
+// instants, and the count is already two; what it would cost is a slower stop on
+// the path an operator is running because their fleet is wedged.
+func stopUnboundDaemon(sock string) error {
+	probe := openSessionProbe(paths.LockFile(sock))
+	defer probe.close()
+	if !probe.claimed() {
+		return clearStaleSocket(sock)
+	}
+
+	pid, err := readPidFile(paths.PidFile(sock))
+	if err != nil {
+		return fmt.Errorf("a daemon holds the session for %s but named no pid to stop it with: %w", sock, err)
+	}
+	// The claim is what is watched, not the socket: there is no socket, which is
+	// the whole shape of this case. The daemon is stuck in a call it will not
+	// return from, so nothing of its own runs on the way out; what ends the wait is
+	// the kernel dropping the flock as the process dies.
+	if err := signalAndWait(pid, func() bool { return !probe.claimed() }); err != nil {
+		return err
+	}
+	log.Info().Int("pid", pid).Msg("stopped a daemon that had not bound its socket")
+	return clearStaleSocket(sock)
 }
 
 // setupLogger points the global zerolog logger at the log file, creating it (and
@@ -210,7 +301,7 @@ func setupLogger(verbosity int, logPath string) error {
 
 // startDaemon ensures this user's server is running, launching it in the
 // background if not. Exactly one server runs per user (one socket).
-func startDaemon(verbose int, logPath, pluginPath string) error {
+func startDaemon(verbose int, logPath, pluginPath string, forced bool) error {
 	sock := paths.Socket()
 	if alive(sock) {
 		log.Debug().Str("socket", sock).Msg("daemon already running")
@@ -245,10 +336,42 @@ func startDaemon(verbose int, logPath, pluginPath string) error {
 	}
 
 	if !waitFor(func() bool { return alive(sock) }, daemonPollTries, daemonPollGap) {
-		return fmt.Errorf("baton server did not come up; see %s", logPath)
+		return errors.New(didNotComeUpReason(logPath, forced))
 	}
 	log.Debug().Str("socket", sock).Msg("daemon started")
 	return nil
+}
+
+// didNotComeUpReason is what an operator is told when the daemon they just
+// started never bound its socket. It is its own function for the reason
+// timedOutReason is: the wording is the whole of it, so a test pins it.
+//
+// IT CARRIES THE RECOVERY, because nothing else does — a grep over docs/ and the
+// README finds neither this sentence nor the flag that clears it. And the state
+// it names does not clear by itself: a daemon wedged in a filesystem read above
+// the bind is still alive and still holding the session claim, so every later
+// `baton` loses claimSession to it and exits quietly. Without the flag an
+// operator's only route out is finding a pid by hand.
+//
+// It points at the LAST LINE rather than at the log, because the log now has a
+// last line worth reading: the boot says which file it is about to read before
+// it reads it (see loadServerBoot), so the answer is the thing the operator's eye
+// lands on first.
+//
+// FORCED changes the advice, because the advice is otherwise circular. Reached
+// from a plain `baton`, "try --force" is new information. Reached from --force
+// ITSELF it is the operator being told to do the thing they just did — and the
+// flag had worked: it stopped the old daemon and started a fresh one, which then
+// walked into the same read. What is left at that point is not another --force,
+// it is the path.
+func didNotComeUpReason(logPath string, forced bool) string {
+	advice := "If it is still wedged there, `baton --force` stops it and starts again"
+	if forced {
+		advice = "--force stopped the old server and started a fresh one, and it stopped in the " +
+			"same place, so repeating it will not help: restore or unmount that path first"
+	}
+	return fmt.Sprintf("baton server did not come up; see %s — its last line names what the daemon "+
+		"was reading. %s", logPath, advice)
 }
 
 // runServer is the long-lived server loop (the daemon child).
@@ -793,26 +916,33 @@ type serverBoot struct {
 	cfg         config.Config
 	scoreStore  *score.Store // nil when score is switched off, or did not open
 	scoreReason string       // why no store is running; empty when one is
-	// release gives back what the boot took: the score directory's single-writer
-	// claim, with the folds the store is still holding said on the way past.
+	// release gives back everything the boot took: the PID file this daemon is
+	// reachable through and the score directory's single-writer claim, with the
+	// folds the store is still holding said on the way past.
 	//
 	// It exists because acquisition and release had drifted to different depths.
-	// The store is opened here and was closed at two sites, safe only because
-	// Close happens to be idempotent. claimSession already owns the shape this
-	// borrows: whoever takes a thing hands back the one function that gives it up.
+	// The PID file was written in runServer and removed at four sites — two bind
+	// failures, runServerOn's cleanup, and clearStaleSocket — one of which
+	// recomputed its path in a function that had been told it publishes nothing;
+	// the store was closed at two, safe only because Close happens to be
+	// idempotent. claimSession already owns the shape this borrows: whoever takes
+	// a thing hands back the one function that gives it up.
 	//
 	// It is idempotent, because two callers must both be able to reach for it:
 	// runServer defers it for the paths that never get as far as serving, and
 	// runServerOn's cleanup calls it on the way out — including from the signal
 	// handler, which os.Exits and runs no defer at all.
+	//
+	// clearStaleSocket's own removal of the PID file is NOT this and must not be
+	// folded into it: that one tidies a PREDECESSOR's file, before this daemon
+	// has published anything of its own.
 	release func()
 }
 
-// loadServerBoot is everything the daemon reads off the operator's filesystem
-// above the bind: the user's config, and the fleet memory — plus the one
-// function that gives the store's claim back. runServer calls it BEFORE
-// net.Listen — see there for what these used to do on the other side of the
-// bind.
+// loadServerBoot is everything the daemon acquires above the bind: the PID file
+// it can be stopped through, the user's config, and the fleet memory — plus the
+// one function that gives all of it back. runServer calls it BEFORE net.Listen
+// — see there for what these used to do on the other side of the bind.
 //
 // NOTHING ELSE BELONGS HERE unless the fleet cannot be served without it. What
 // this side of the bind buys is that a dead path is a daemon that never comes
@@ -828,6 +958,31 @@ type serverBoot struct {
 // defaults, and a store that did not open is a first-class answer the three
 // score surfaces already report.
 func loadServerBoot(sock string) serverBoot {
+	// The pid goes on disk HERE, above the bind, and no longer where the daemon
+	// starts serving. Everything below this line can hang forever on a filesystem
+	// that does not answer, and a daemon hung there is holding the session claim
+	// runServer took a few lines up: every later `baton` loses claimSession to it
+	// and exits quietly, so the wedge does not clear by itself. Without a pid file
+	// above the bind there is nothing to stop it WITH — `baton --force` dials a
+	// socket that was never created, finds nothing alive, and signals nobody.
+	//
+	// The cost is real and is the reason this used to sit below the listener: a
+	// bind that then fails leaves the file behind. release covers those paths.
+	// What that tidying does NOT cover is a SIGKILL, which leaves a PID file no
+	// code runs to remove — so the file is never trusted on its own:
+	// stopUnboundDaemon signals what it names only while the session claim is
+	// still held, and the kernel drops that claim when its holder dies.
+	//
+	// It matters that clearStaleSocket ran first and that it removes the PID file
+	// unconditionally. A failed write here is only a warning, so without that a
+	// predecessor's pid would stay readable for this daemon's whole life, under a
+	// claim this process holds — the one state where a stale pid gets signalled.
+	// The write cannot leave a wrong pid behind; at worst it leaves none.
+	pidPath := paths.PidFile(sock)
+	if err := writePidFile(pidPath, os.Getpid()); err != nil {
+		log.Warn().Err(err).Str("pid_file", pidPath).Msg("could not write pid file")
+	}
+
 	// SAID BEFORE THE READ, and the ordering is the whole of what this line is
 	// worth. Every read below can hang forever on a filesystem that does not
 	// answer, and a daemon hung there holds the session claim: `baton` waits out
@@ -871,6 +1026,7 @@ func loadServerBoot(sock string) serverBoot {
 	var once sync.Once
 	return serverBoot{cfg: cfg, scoreStore: store, scoreReason: reason, release: func() {
 		once.Do(func() {
+			_ = os.Remove(pidPath)
 			// Any fold the store is still holding gets said before the daemon
 			// stops. Records are buffered for the next read to drain, and on the
 			// way out there is no next read — so a repeat counted seconds before a
@@ -888,35 +1044,22 @@ func loadServerBoot(sock string) serverBoot {
 // runServerOn runs the long-lived server loop on an already-bound listener for
 // the given socket path, on the config and store loadServerBoot already read. It
 // is the body of runServer, split out so the loop can be driven without
-// re-binding the socket: it records the PID, builds the server, wires the plugin
-// and the signal-driven shutdown/reload, and serves until the listener closes.
-// It returns when Serve returns on its own; a SIGINT/SIGTERM instead tidies up
-// and exits the process.
+// re-binding the socket: it builds the server, wires the plugin and the
+// signal-driven shutdown/reload, and serves until the listener closes. It
+// returns when Serve returns on its own; a SIGINT/SIGTERM instead tidies up and
+// exits the process.
 //
-// It loads nothing of its OWN: the config and the store arrive already read,
-// from above the bind (see runServer, #60), and it gives the store's claim back
-// through the one function that took it (serverBoot.release). The reads still
-// below the bind belong to applyConfig — the same config file again, the TUI
-// theme, and the Lua plugin — which need the server they configure and so could
-// not move with the rest.
+// It acquires nothing of its OWN: the config, the store and the PID file all
+// arrive already taken, and it gives them back through the one function that
+// took them (serverBoot.release) rather than by naming any of them again. The
+// reads still below the bind belong to applyConfig — the same config file again,
+// the TUI theme, and the Lua plugin — which need the server they configure and
+// so could not move with the rest.
 func runServerOn(ln net.Listener, sock string, boot serverBoot) error {
 	// Here rather than beside the config and the store, on this side of the bind:
 	// see sweepLegacyConductorWorkspaces for why the one unbounded walk left over
 	// from older versions is the one that did not move.
 	sweepLegacyConductorWorkspaces(sock)
-
-	// Record the PID so clients can force-stop this daemon (baton --force / the
-	// in-TUI restart). Non-fatal if it cannot be written.
-	//
-	// This one stays BELOW the bind while loadServerBoot's reads moved above it,
-	// because it is not the same hazard: the path is the socket's own path with
-	// .pid, in a directory paths.EnsureDir, claimSession and net.Listen have each
-	// already been answered by. Hoisting it would remove no hang and would leave a
-	// stale PID file behind every bind that then fails.
-	pidPath := paths.PidFile(sock)
-	if err := writePidFile(pidPath, os.Getpid()); err != nil {
-		log.Warn().Err(err).Str("pid_file", pidPath).Msg("could not write pid file")
-	}
 
 	// Build the server before the cleanup/signal wiring, so the shutdown handler
 	// can flush the final fleet/layout snapshot through it.
@@ -1067,7 +1210,6 @@ func runServerOn(ln net.Listener, sock string, boot serverBoot) error {
 	// daemon's ordinary exit — calls os.Exit and runs no defer at all.
 	cleanup := func() {
 		_ = os.Remove(sock)
-		_ = os.Remove(pidPath)
 		boot.release()
 		_ = ln.Close()
 	}
@@ -1343,7 +1485,7 @@ func runClient(verbose int, logPath, pluginPath string) error {
 		if err := stopDaemon(sock); err != nil {
 			return err
 		}
-		if err := startDaemon(verbose, logPath, pluginPath); err != nil {
+		if err := startDaemon(verbose, logPath, pluginPath, false); err != nil {
 			return err
 		}
 	}
@@ -1359,19 +1501,29 @@ func alive(sock string) bool {
 	return true
 }
 
-// clearStaleSocket removes a leftover socket (and its orphaned PID file) from a
-// crashed server, but refuses to clobber a live one — enforcing one server per
-// socket. A SIGKILLed daemon never runs its own cleanup, so we tidy both files
-// here before a fresh daemon takes the session.
+// clearStaleSocket removes what a crashed server left behind — a leftover socket
+// and an orphaned PID file — but refuses to clobber a live one, enforcing one
+// server per socket. A SIGKILLed daemon never runs its own cleanup, so nothing
+// of its own removes either file.
+//
+// The PID file goes whether or not there was a socket to remove, and this is the
+// one place that tidies it. Since the pid is published from above the bind, a
+// daemon that died up there leaves a PID file and no socket at all — and a
+// leftover pid outlives the process it named, so leaving one for the next reader
+// to find is how a stale number gets signalled. The socket is what is guarded
+// here, not the pid: a live one means a running daemon owns both files, so that
+// case returns before anything is unlinked.
 func clearStaleSocket(sock string) error {
-	if _, err := os.Stat(sock); err != nil {
-		return nil
-	}
-	if alive(sock) {
-		return fmt.Errorf("baton server already running on %s", sock)
+	if _, err := os.Stat(sock); err == nil {
+		if alive(sock) {
+			return fmt.Errorf("baton server already running on %s", sock)
+		}
+		if err := os.Remove(sock); err != nil {
+			return err
+		}
 	}
 	_ = os.Remove(paths.PidFile(sock))
-	return os.Remove(sock)
+	return nil
 }
 
 // daemonPollTries and daemonPollGap bound how long start/stop waits for the

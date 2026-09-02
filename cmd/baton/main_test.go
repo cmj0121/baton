@@ -3,6 +3,7 @@ package main
 import (
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -455,7 +456,7 @@ func TestStartStopDaemon(t *testing.T) {
 	t.Setenv("BATON_SOCK", sock)
 	logPath := filepath.Join(home, "baton.log")
 
-	if err := startDaemon(0, logPath, ""); err != nil {
+	if err := startDaemon(0, logPath, "", false); err != nil {
 		t.Fatalf("startDaemon: %v", err)
 	}
 	if !alive(sock) {
@@ -463,7 +464,7 @@ func TestStartStopDaemon(t *testing.T) {
 	}
 
 	// A second startDaemon is a no-op while one is already alive.
-	if err := startDaemon(0, logPath, ""); err != nil {
+	if err := startDaemon(0, logPath, "", false); err != nil {
 		t.Fatalf("startDaemon (already running): %v", err)
 	}
 
@@ -547,6 +548,21 @@ func TestClearStaleSocket(t *testing.T) {
 	// Missing socket: nothing to do.
 	if err := clearStaleSocket(filepath.Join(dir, "missing.sock")); err != nil {
 		t.Fatalf("missing socket: %v", err)
+	}
+
+	// A PID file with NO socket beside it is the shape a daemon that died above
+	// the bind leaves, and it is tidied on its own. Leaving it would leave a pid
+	// nothing runs on for the next force-stop to read, which is how a reused
+	// number gets signalled.
+	unbound := filepath.Join(dir, "unbound.sock")
+	if err := os.WriteFile(paths.PidFile(unbound), []byte("99999"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := clearStaleSocket(unbound); err != nil {
+		t.Fatalf("pid file with no socket: %v", err)
+	}
+	if _, err := os.Stat(paths.PidFile(unbound)); !os.IsNotExist(err) {
+		t.Fatalf("a PID file with no socket should have been removed: %v", err)
 	}
 
 	// A leftover (dead) socket file is removed, along with its orphaned PID file
@@ -688,5 +704,64 @@ func waitServing(t *testing.T, sock string) {
 	defer func() { _ = c.Close() }()
 	if err := c.Wait(5 * time.Second); err != nil {
 		t.Fatalf("the server on %s did not answer a hello: %v", sock, err)
+	}
+}
+
+// TestStopDaemonRefusesAPidNoSessionHolds is the refusing direction of the
+// force-stop that reaches a daemon with no socket. The on-disk state is what a
+// SIGKILLed daemon leaves behind — a PID file, a lock file nobody holds — with
+// the pid pointing at a live process that is not baton, which is what the
+// operating system does with a number soon enough after it frees one.
+//
+// A stop that trusted the file would SIGTERM that process. The session claim is
+// what says otherwise, and it says it without ever looking at what the pid is,
+// so it holds for any program that inherits the number.
+func TestStopDaemonRefusesAPidNoSessionHolds(t *testing.T) {
+	sock := filepath.Join(shortDir(t), "b.sock")
+
+	victim := exec.Command("sleep", "60")
+	if err := victim.Start(); err != nil {
+		t.Fatalf("start the stand-in process: %v", err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- victim.Wait() }()
+	t.Cleanup(func() { _ = victim.Process.Kill() })
+
+	if err := os.WriteFile(paths.PidFile(sock), []byte(strconv.Itoa(victim.Process.Pid)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The lock file a daemon leaves behind: it outlives the claim on purpose, so
+	// its presence says nothing about whether anything holds it.
+	if err := os.WriteFile(paths.LockFile(sock), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := stopDaemon(sock); err != nil {
+		t.Fatalf("stopDaemon on a session nothing holds should tidy quietly: %v", err)
+	}
+	select {
+	case err := <-exited:
+		t.Fatalf("stopDaemon signalled a live process no session claim backed; it exited with %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if _, err := os.Stat(paths.PidFile(sock)); !os.IsNotExist(err) {
+		t.Fatalf("the orphaned PID file should have been tidied rather than left to be read again: %v", err)
+	}
+}
+
+// TestStopDaemonWontGuessAPidForAHeldSession: a daemon owns the session and no
+// PID file names it, so there is nothing to signal. Saying so is the answer —
+// the alternative is reaching for some other pid, which is the mistake the whole
+// session check exists to prevent.
+func TestStopDaemonWontGuessAPidForAHeldSession(t *testing.T) {
+	sock := filepath.Join(shortDir(t), "b.sock")
+	release, held, err := claimSession(paths.LockFile(sock))
+	if err != nil || !held {
+		t.Fatalf("claim = held %v, err %v; want held", held, err)
+	}
+	defer release()
+
+	if err := stopDaemon(sock); err == nil {
+		t.Fatal("stopDaemon should refuse a held session it has no pid for")
 	}
 }
