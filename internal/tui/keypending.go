@@ -81,17 +81,16 @@ func (m model) armPending(tokens []string, hit binding) (model, tea.Cmd) {
 	return m, seqTick(m.pendingGen, m.effKeyTimeout())
 }
 
-// leaderArmed reports whether any view is holding the leader down. The five
-// flags are one concept wearing five names — each view arms its own — so every
+// leaderArmed reports whether any view is holding the leader down. The four
+// flags are one concept wearing four names — each view arms its own — so every
 // question about "is the leader down" has to ask all of them.
 func (m model) leaderArmed() bool {
-	return m.prefix || m.zoomArmed || m.groupArmed || m.scratchArmed || m.scrollArmed
+	return m.prefix || m.zoomArmed || m.groupArmed || m.scrollArmed
 }
 
 // disarmLeader drops the leader wherever it is held.
 func (m model) disarmLeader() model {
-	m.prefix, m.zoomArmed, m.groupArmed = false, false, false
-	m.scratchArmed, m.scrollArmed = false, false
+	m.prefix, m.zoomArmed, m.groupArmed, m.scrollArmed = false, false, false, false
 	return m
 }
 

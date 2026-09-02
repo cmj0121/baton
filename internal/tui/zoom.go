@@ -28,7 +28,7 @@ import (
 // panel.input. On live output that means a program re-emitting its probes (every
 // bubbletea TUI does so on /clear) gets its own reply injected into its input line as
 // garbage. Stripping the queries here — the single choke point every emulator-bound
-// byte passes through (zoom, group tile, scratch; replay too, idempotently) — stops the
+// byte passes through (zoom, group tile; replay too, idempotently) — stops the
 // reply at the source. Queries draw nothing, so the reconstructed screen is unchanged.
 //
 // The same choke point is where insert mode is honoured: irm rewrites a shell's IRM

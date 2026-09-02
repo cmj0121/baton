@@ -87,7 +87,6 @@ const (
 	// Prefix-reached escapes, bound to the leader in every mode.
 	keyDashboard = "d" // C-t d → the dashboard
 	keyCommands  = "c" // C-t c → the plugin command picker
-	keyScratch   = "~" // C-t ~ → toggle the floating scratch shell (any view)
 	keyProcTree  = "o" // C-t o → the process-tree overlay (daemon → panels → OS descendants)
 	keyInbox     = "a" // C-t a → the attention inbox (the queue of panels wanting a human)
 	keyRemote    = "@" // C-t @ → the remote overlay: "user@host" is what its connection list is made of
@@ -170,7 +169,6 @@ const (
 	actEditMap
 	actScroll
 	actCommands
-	actScratch
 	actProcTree
 	actUsageView
 	actInbox
@@ -202,7 +200,7 @@ const (
 // keystroke away from that in another view.
 func isEscape(a action) bool {
 	return a == actDashboard || a == actEditMap || a == actPanelConfig || a == actScroll || a == actCommands ||
-		a == actScratch || a == actProcTree || a == actInbox || a == actRemote || a == actLogToggle ||
+		a == actProcTree || a == actInbox || a == actRemote || a == actLogToggle ||
 		a == actLogView || a == actRestart
 }
 
@@ -274,7 +272,6 @@ var bindings = []binding{
 	{"remote", keyRemote, "remote access — the passkey and the live connections (prefix)", actRemote, "View", "remote"},
 	{"back", keyBack, "back one level: zoom→group→dashboard (C-t b in a zoom)", actBack, "View", "back"},
 	{"commands", keyCommands, "open the plugin command picker (prefix)", actCommands, "View", "commands"},
-	{"scratch", keyScratch, "toggle a floating scratch shell (prefix)", actScratch, "View", "scratch"},
 
 	{"restart", keyRestart, "force-restart the server (prefix)", actRestart, "Session", "restart"},
 	{"reload", keyReload, "reload config (backend + cockpit)", actReload, "Session", "reload"},
