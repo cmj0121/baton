@@ -483,7 +483,7 @@ const (
 	// by a build that knows this name, and an operator who may roll a binary back
 	// should copy score.dir before the first boot that compacts. docs/SCORE.md
 	// says so in the operator's words.
-	EventCompacted = "compacted" // a compaction carried this entry's whole current state forward; see compactLocked
+	EventCompacted = "compacted" // a compaction carried this entry's whole current state forward; see compact
 )
 
 // SourceUser and SourceAgent are the two sources a reinforcement can carry, and
@@ -782,7 +782,7 @@ type Health struct {
 	// LAST rewrite failed. A rewrite that lands clears it and the words below, one
 	// that fails sets both, and a pass that declined before reaching the write
 	// leaves the last answer standing. Compacted, LogBefore and LogAfter say
-	// something else — see there — and compactLocked writes all five, which is
+	// something else — see there — and compact writes all six, which is
 	// what keeps the two rules in one place instead of one here and one in a
 	// caller.
 	//
@@ -807,8 +807,19 @@ type Health struct {
 	// the only place an operator can see the growth this exists to bound — the
 	// record count says how much the store remembers, not how much the file had
 	// swollen to holding it.
-	LogBefore int64
-	LogAfter  int64
+	//
+	// Compactions is how many rewrites have LANDED over this store's life, the
+	// boot's included, and it is the only compaction field that is a running
+	// total. It exists because the other five all describe THE LAST rewrite, and
+	// two rewrites of one store can describe themselves identically — same record
+	// count, and sizes that need not differ — so a caller watching for "a
+	// compaction has happened since I last looked" cannot get the answer out of
+	// them. cmd/baton's boot line is one such caller, and it is not the last: a
+	// compactor that runs while the daemon does gives a rewrite no restart to be
+	// noticed by, so whatever comes to announce one needs this rather than a size.
+	LogBefore   int64
+	LogAfter    int64
+	Compactions int
 	// WriteFailing is whether the store's LAST durable append did not land. It
 	// latches on a failed append and clears on the next one that succeeds, so it
 	// is a fact about the store rather than a count of episodes.
@@ -847,7 +858,7 @@ type Health struct {
 	// rewrite that LANDED wrote, and 0 when none has — the same rule as
 	// LogBefore. A store whose log went from two
 	// hundred thousand records to four hundred has forgotten who said what and
-	// when, and kept every entry and every id; see compactLocked for exactly
+	// when, and kept every entry and every id; see compact for exactly
 	// which of those is which.
 	SwallowedRepeats int
 	UnreportedFolds  int
@@ -1230,6 +1241,60 @@ type Store struct {
 	folds []Fold
 	owed  map[string][]string
 
+	// grown is how many bytes the log has gained since the compactor was last
+	// woken, and it is the whole of the runtime trigger: past compactAtBytes the
+	// compactor is woken and this is zeroed, in one step under one lock. It is
+	// maintained in appendEvents — the one funnel every durable append passes.
+	//
+	// Zeroing on the CROSSING rather than in the compaction it wakes is what backs
+	// the trigger off after a rewrite that declines: a store whose log cannot be
+	// made smaller refuses once and is not asked again until the log has gained
+	// another whole threshold, instead of marshalling its whole entry set on every
+	// append for the rest of the daemon's life. See noteGrowthLocked.
+	//
+	// COUNTED rather than stat'ed, because os.Stat per append is I/O on the
+	// dispatch path for a number appendEvents already holds: the batch it just
+	// wrote is exactly what the log gained.
+	//
+	// GROWTH rather than size, and that is the only thing this field decides: the
+	// boot asks "is this file too big to replay" and this asks "has it gained a
+	// whole one of those since anyone looked". What the pair of them then bounds
+	// is derived once, on compactAtBytes, rather than a second time here.
+	//
+	// What neither bounds is the WRITE a threshold causes. A store whose compacted
+	// form is already larger than the threshold rewrites that whole form for every
+	// threshold appended, and worse in proportion for a store larger again; the
+	// boot-only rewrite paid that once per process and this pays it per threshold.
+	// A trigger relative to the last rewrite's own size is the one-line
+	// generalization if a store ever gets there.
+	grown int64
+	// compacting is whether a rewrite is in flight, and it is the mutual exclusion
+	// two of them must not have. claimCompaction takes it and releaseCompaction
+	// gives it back; compact is the only caller of either, and nothing else in
+	// the package reads it.
+	//
+	// It is a FLAG rather than an argument about callers, and that is the whole
+	// point. compact RELEASES the mutex across its marshal, so between the
+	// snapshot and the commit the store is unlocked and a second call can walk
+	// into the same temp file — the two rewrites then race for one name and the
+	// log comes back half of each. What used to stop that was the shape of the
+	// code: one goroutine, and Open's own rewrite finishing before it is started.
+	// TestCompactIsReachedFromTwoPlacesOnly keeps that shape, and it reads the
+	// package's NON-TEST files, so it says nothing about the package's own tests
+	// — several of which call compact directly on a store whose compactor is
+	// live. Those cannot race today only because a wake needs a whole
+	// compactAtBytes through appendEvents, which is an accident of the threshold
+	// rather than a guarantee. An AST walk is a lint; this is the exclusion.
+	compacting bool
+	// wake carries the trigger to the compactor; done stops it, and bg is what
+	// Close waits on. The channels are made in newStore and the goroutine is
+	// started by Open, so a store that failed to boot fills the buffer at most
+	// once and nothing reads it.
+	wake     chan struct{}
+	done     chan struct{}
+	bg       sync.WaitGroup
+	stopOnce sync.Once
+
 	// release drops the directory lock, and unlocked records that the filesystem
 	// could not provide one. See Open.
 	release  func()
@@ -1296,7 +1361,7 @@ var ErrSubmissionText = errors.New("score: submission refused")
 // Boot is also where the log is BOUNDED. Past compactAtBytes the recovery pass
 // is followed by a rewrite to one record per id, which is why a long-lived
 // store's boot cost tracks what it remembers rather than everything it has ever
-// been told; see compactLocked, including what that rewrite destroys.
+// been told; see compact, including what that rewrite destroys.
 //
 // Open calls the *Locked helpers without holding the mutex — the store is not
 // published to any other goroutine until Open returns, so their "caller holds
@@ -1343,12 +1408,50 @@ func Open(dir string, p Policy) (s *Store, err error) {
 	//
 	// Its failure is RECORDED rather than returned — the store is fully open and
 	// correct either way, and refusing a fleet its memory because a file could not
-	// be shrunk is the wrong trade. Recorded by compactLocked, which keeps all
-	// five of its own Health fields, including the error's own words; the boot
-	// adds nothing to what it reports, so a caller that is not a boot does not
-	// have to know to.
-	_, _ = s.compactLocked(compactAtBytes)
+	// be shrunk is the wrong trade. Recorded by compact, which keeps all six of
+	// its own Health fields, including the error's own words; the boot adds
+	// nothing to what it reports, so a caller that is not a boot does not have to
+	// know to.
+	_, _ = s.compact(compactAtBytes)
+	// And keep it bounded while the daemon RUNS, which the boot alone cannot: a
+	// daemon that is never restarted would otherwise grow its log until the next
+	// start, and past a point that start is the one that gives up on it. Started
+	// last, so nothing overlaps the boot's own rewrite.
+	//
+	// A store without the CLAIM starts it too, and never wakes it; the rule lives
+	// in noteGrowthLocked, which is where it can be asked of a state rather than of
+	// a filesystem no test can conjure.
+	s.bg.Add(1)
+	go s.compactLoop()
 	return s, nil
+}
+
+// compactLoop is the runtime half of the bound: one goroutine per store, started
+// by Open and stopped by Close, that rewrites the log whenever it has gained a
+// whole compactAtBytes since anyone last looked (see Store.grown).
+//
+// THE STORE OWNS IT rather than a server tick calling in, because the store is
+// what knows its own size and the invariant is the store's. The alternative
+// considered was a method the monitor tick calls: it was rejected because phase 2
+// is the slow one by design and a tick that blocked on it would stop doing
+// everything else it does.
+//
+// TWO COMPACTIONS CANNOT OVERLAP, and what makes that true is Store.compacting
+// rather than this goroutine being alone; see there.
+//
+// A failure is neither raised nor logged: this package never logs, compact keeps
+// its own Health fields including the failure's own words, and the store is fully
+// open and correct either way. The next threshold's worth of growth tries again.
+func (s *Store) compactLoop() {
+	defer s.bg.Done()
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-s.wake:
+			_, _ = s.compact(compactAtBytes)
+		}
+	}
 }
 
 // sweepTempLocked removes the sibling temp files writeFileAtomic works through,
@@ -1393,16 +1496,35 @@ func newStore(dir string, p Policy) *Store {
 		lastAt:     map[string]int{},
 		mdPath:     filepath.Join(dir, scoreMD),
 		eventsPath: filepath.Join(dir, scoreEvents),
+		wake:       make(chan struct{}, 1),
+		done:       make(chan struct{}),
 	}
 }
 
-// Close releases the directory lock. It is safe on a nil store and on a store
-// already closed; the daemon holds one store for its whole life, so this is for
-// shutdown and for a process that reopens the same directory.
+// Close stops the compactor and releases the directory lock. It is safe on a nil
+// store and on a store already closed; the daemon holds one store for its whole
+// life, so this is for shutdown and for a process that reopens the same
+// directory.
+//
+// It WAITS for a rewrite in flight, and the reason is the CLAIM rather than the
+// temp file — sweepTempLocked already removes whatever a killed process leaves.
+// Releasing the directory while a rewrite is still going would let a second
+// daemon open it and have this one's rename land on the log that daemon is now
+// writing. So the release happens strictly after the compactor has stopped.
+//
+// That makes Close as slow as one marshal, and on a mount that has stopped
+// answering it does not return at all — which is not new: every durable append
+// holds the store mutex across its fsync, and Close takes that mutex, so this
+// was already unbounded there. See Store.writeFailing.
 func (s *Store) Close() {
 	if s == nil {
 		return
 	}
+	s.stopOnce.Do(func() { close(s.done) })
+	// Outside the mutex, and it has to be: a rewrite in flight takes that mutex
+	// for its first and last phases, so waiting under it would deadlock against
+	// the goroutine being waited for.
+	s.bg.Wait()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.release != nil {
@@ -3146,6 +3268,50 @@ func (s *Store) submitLocked(text string, prov Provenance) (Entry, error) {
 // Every id the log has ever named is burned, live or retired. An id must never
 // be reissued: the log is keyed by id, so a reissued id would silently graft a
 // retired entry's history onto a new one.
+// scanRecords calls note for every RECORD in data, under the one rule that
+// decides what a record is — a non-blank line that decodes into an event
+// carrying both a name and an id — and reports how many lines failed it.
+//
+// It is a function rather than a loop at each site because its two callers must
+// agree EXACTLY. replayLocked builds the whole store from the whole log; a
+// compaction's third phase re-derives its positions over the tail it has just
+// copied onto the rewrite, and the claim that phase leaves behind is that the
+// store's positions match what its own next boot will read out of those same
+// bytes. Two spellings of "what counts as a record" is that claim resting on a
+// coincidence: a schema gate, a new required field, a different blank-line test
+// added to one of them and the daemon ranks one way now and another after a
+// restart, off one unchanged file, with no error anywhere. It is exactly the
+// hazard logWriter is a type for, read from the other end.
+//
+// Split and decode over the caller's own bytes, and reuse one event across the
+// loop: a string split copies the whole log a second time and every line a
+// third, which on a 200k-event boot is most of the garbage the daemon makes
+// before it serves anything.
+//
+// BY POINTER, and the reason is the reuse rather than the copy. The event handed
+// to note is the LOOP'S OWN and is overwritten by the next record, so note may
+// read it and copy out of it and must not keep it — a pointer says that in the
+// type, where a value silently made every callee a safe one and left the next
+// callee free to be wrong. The 160 bytes an indirect call no longer copies per
+// record — 32 MB across a 200k-record boot — are real but are NOT a measured
+// win: replayLocked over 200k records runs at 274 ms either way, because
+// json.Unmarshal is 100% of what moves.
+func scanRecords(data []byte, note func(ev *event)) (torn int) {
+	var ev event
+	for _, line := range bytes.Split(data, newline) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		ev = event{} // reused, so a field this record omits must not carry over
+		if json.Unmarshal(line, &ev) != nil || ev.Id == "" || ev.Event == "" {
+			torn++
+			continue
+		}
+		note(&ev)
+	}
+	return torn
+}
+
 func (s *Store) replayLocked() error {
 	data, err := os.ReadFile(s.eventsPath)
 	if err != nil {
@@ -3158,20 +3324,7 @@ func (s *Store) replayLocked() error {
 	live := map[string]*Entry{}
 	placed := map[string]bool{} // ids already in order; a retire-then-restore must not re-add
 	var order []string
-	// Split and decode over the file's own bytes, and reuse one event across the
-	// loop: a string split copies the whole log a second time and every line a
-	// third, which on a 200k-event boot is most of the garbage the daemon makes
-	// before it serves anything.
-	var ev event
-	for _, line := range bytes.Split(data, newline) {
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-		ev = event{} // reused, so a field this record omits must not carry over
-		if json.Unmarshal(line, &ev) != nil || ev.Id == "" || ev.Event == "" {
-			s.health.TornEvents++
-			continue
-		}
+	s.health.TornEvents += scanRecords(data, func(ev *event) {
 		s.burned[ev.Id] = struct{}{}
 		s.noteEventLocked(ev)
 		switch ev.Event {
@@ -3297,7 +3450,7 @@ func (s *Store) replayLocked() error {
 		case EventRetired:
 			delete(live, ev.Id)
 		}
-	}
+	})
 
 	s.entries = s.entries[:0]
 	for _, id := range order {
@@ -3326,12 +3479,36 @@ func (s *Store) replayLocked() error {
 }
 
 // compactAtBytes is the size score-events.jsonl must EXCEED at Open before the
-// boot rewrites it.
+// boot rewrites it, and — through Store.grown — how much it must GAIN while the
+// daemon runs before the compactor rewrites it again.
+//
+// ONE CONSTANT FOR BOTH DOORS, and that is a decision rather than a reuse. The
+// two ask different questions of different quantities: a boot asks whether this
+// file is too big to replay, and the runtime trigger asks whether it has gained a
+// whole one of those since anyone looked. What makes one number right for both is
+// that the second is measured in units of the first, so both of this constant's
+// bounds carry over unchanged — too small still destroys an ordinary store's
+// history, and too large still costs the boot.
+// TestTheRuntimeTriggerFiresPastAThresholdOfGrowth pins the runtime door in both
+// directions, as the test below pins this one.
+//
+// THE BOUND, stated exactly and stated HERE, because it is a fact about this
+// number and both doors are described in terms of it. An ordinary store's log
+// while the daemon runs is bounded by what it weighed at boot, plus this
+// constant, plus what one marshal's worth of dispatch traffic appends — and what
+// it weighed at boot is bounded by this same constant, because anything larger is
+// what the boot rewrites. So the ceiling is two of these added together, which is
+// what the too-large bound below is already chosen against. Store.grown is the
+// counter the second half is measured on, and points here rather than deriving
+// it again.
 //
 // The number is chosen from the BOOT it buys, because the file's size is only a
-// proxy for the thing that hurts. cmd/baton binds the daemon's listener before
-// it opens the store, so every millisecond the replay spends is a millisecond a
-// cockpit that has already connected sits with nothing to read.
+// proxy for the thing that hurts. What that thing IS changed with #60: cmd/baton
+// opens the store above net.Listen now, so a slow replay is a daemon that has
+// not come up yet rather than a listener bound with nothing behind it. Nobody is
+// sitting on an accepted connection reading nothing; what waits is the PERSON
+// who typed `baton`, and their launcher gives up after five seconds (see
+// cmd/baton's scoreOpenTimeout for that arithmetic and the test under it).
 //
 // Measured on this store's own records — a submission plus its repeats, which
 // average 197 bytes a record: a submission carrying text and full provenance
@@ -3339,8 +3516,18 @@ func (s *Store) replayLocked() error {
 // replay costs about 9 ms and 3 MB of transient heap per megabyte of log, and it
 // is linear: 51.9 MB booted in 461-512 ms allocating ~148 MB, 13.0 MB in 115-134
 // ms, 2.6 MB in ~24 ms. Eight mebibytes is therefore around 75 ms and 24 MB,
-// which is the budget this picks — measurable on a stopwatch, invisible to a
-// person starting a daemon.
+// which is the budget this picks — invisible to a person starting a daemon, and
+// well inside the five seconds their launcher will wait.
+//
+// So TIME is no longer the binding half, and the HEAP is: 3 MB per megabyte of
+// log against a daemon whose whole baseline is 17.8 MB, on a boot that runs
+// before anything is reachable. #56 measured where that ends — a 1.217 GB log
+// peaked at 2373 MB and was OOM-killed inside Open on a box that could not spare
+// it, which is the one boot failure that cannot heal, because the process that
+// dies is the process that would have shrunk the file. Every later start repeats
+// it. That failure sits on the same side of the bind it always did, so #60 made
+// it no milder, and it is what the ceiling in
+// TestCompactAtBytesIsBoundedBothWays is really against.
 //
 // This is the derivation's one home: it is what the next person tuning the
 // number reads. TestCompactAtBytesIsBoundedBothWays, which pins the constant
@@ -3355,25 +3542,45 @@ func (s *Store) replayLocked() error {
 // What compaction then delivers is not a bound on the log's size but a bound on
 // its SHAPE: one record per id the log has ever named, so a fleet's boot cost
 // stops tracking how much it has said and starts tracking how much it remembers.
-// A store that has issued more ids than this budget covers is not bounded by it
-// at all — see compactLocked, which declines a rewrite that would not shrink the
-// file rather than repeating it at every boot.
+// A store that has issued more ids than this budget covers is not bounded by this
+// NUMBER at all — see compact, which declines a rewrite that would not shrink the
+// file rather than repeating it at every boot. It is still bounded, and by the
+// same shape: its compacted form plus one threshold of growth, because the
+// refusal compares the rewrite against the log as it stands rather than against
+// this constant. See Store.grown.
 const compactAtBytes = 8 << 20
 
-// compactLocked rewrites the event log to one record per id the log has ever
-// named, and reports how many records it wrote; zero means it did not run. The
-// caller holds the lock.
+// compact rewrites the event log to one record per id the log has ever named,
+// and reports how many records that rewrite holds; zero means it did not run. It
+// takes the store's lock itself, for two of its three phases.
 //
-// It is one callable unit, which is why it keeps its OWN bookkeeping: all five
-// of Health's compaction fields — Compacted, LogBefore, LogAfter,
+// It is one callable unit, which is why it keeps its OWN bookkeeping: all six
+// of Health's compaction fields — Compacted, Compactions, LogBefore, LogAfter,
 // CompactionFailures and CompactionError — are written here, so a caller that is
 // not Open needs no knowledge of a half of the reporting that used to sit in
-// Open. What each of the five means across more than one call is settled on the
+// Open. What each of the six means across more than one call is settled on the
 // fields themselves; see Health.CompactionFailures.
 //
-// It runs at boot, past maxBytes, and nowhere else. It is the one operation that
-// rewrites the file every other operation appends to, and the boot is the only
-// moment at which nothing else in this process can be reading it.
+// THREE PHASES, and the middle one is the reason for the other two.
+//
+//  1. under the lock — the four refusals, and a copy of everything the rewrite
+//     is built from, plus the log's size as a WATERMARK (snapshotCompactionLocked)
+//  2. off the lock — the marshal, the temp file, the fsync. A CPU profile put
+//     encoding/json at 93% of this, and the fleet goes on appending past the
+//     watermark throughout (compaction.build)
+//  3. under the lock — the appended TAIL copied onto the rewrite, the rename,
+//     and the log positions re-derived (commitCompactionLocked)
+//
+// R7 left the middle phase out of the running daemon altogether rather than put
+// a whole-file re-marshal back under the store mutex on the dispatch path, and
+// that reasoning stands. What changed is only that the growth has to be bounded
+// anyway, so the marshal runs OFF the mutex rather than not at all.
+//
+// It runs at boot past maxBytes, and from compactLoop whenever the log has grown
+// by a whole compactAtBytes since anyone last looked. TWO OF THEM CANNOT
+// OVERLAP: a second caller arriving while a rewrite is between its snapshot and
+// its rename is refused and reports nothing written. Store.compacting is what
+// says so, and is where that is argued.
 //
 // WHAT IT KEEPS. One EventCompacted record per live entry, carrying that entry's
 // whole current state, and one bare `retired` record per id that is burned but
@@ -3425,8 +3632,9 @@ const compactAtBytes = 8 << 20
 //     whoever reads this next: Open returns early on a reconcile error, and every
 //     nil-error return of reconcileLocked clears s.owed first, so the debt is
 //     always empty by the time the boot reaches here. What this guards is a
-//     DIRECT call — the only kind that can arrive holding one — which is exactly
-//     what its test makes.
+//     RUNTIME call — the only kind that can arrive holding one — and it is the
+//     ONE refusal phase 3 asks again, because it is the only one a fold landing
+//     during the marshal can make true.
 //   - the log named no ids at all. A file over the threshold that parsed into
 //     nothing is not a log this store wrote, and replacing it with an empty one
 //     would destroy the only copy of whatever it is.
@@ -3434,64 +3642,229 @@ const compactAtBytes = 8 << 20
 //     holding more burned ids than the threshold covers is as compact as this
 //     can make it, and without the check it would rewrite the same file at every
 //     boot for the rest of its life. The comparison is on BYTES, which is why the
-//     timestamp below is truncated to the second: time.Time marshals RFC 3339
+//     timestamp is truncated to the second: time.Time marshals RFC 3339
 //     with its trailing zeros trimmed, so an untruncated stamp makes a record's
 //     width depend on the nanosecond it was written at, and two compactions of
 //     one unchanged store then differ in length by a few bytes in whichever
 //     direction the clock happened to fall.
 //
-// CRASH SAFETY. The rewrite goes through writeFileAtomic: a sibling temp file,
+// CRASH SAFETY. The rewrite goes through an atomicFile: a sibling temp file,
 // fsync, rename, then a parent-directory fsync. rename(2) is atomic, so at every
 // instant score-events.jsonl is either the whole old log or the whole new one,
-// and a crash at any point leaves the next Open a complete file to replay. A
-// failure before the rename leaves the old log byte-for-byte untouched, and is
-// reported rather than raised: a boot that refused to serve a fleet because it
-// could not shrink a file would be the worse outcome by far.
-func (s *Store) compactLocked(maxBytes int64) (int, error) {
+// and a crash at any point leaves the next Open a complete file to replay. That
+// holds for a kill during the marshal too, which is the window three phases add:
+// nothing has been renamed, the live log is byte-for-byte what it was, and the
+// temp file the kill left behind is what sweepTempLocked removes at the next
+// boot. A failure before the rename is reported rather than raised: a daemon that
+// refused to serve a fleet because it could not shrink a file would be the worse
+// outcome by far.
+func (s *Store) compact(maxBytes int64) (written int, err error) {
+	// The exclusion, and it is the FIRST thing under the lock rather than a fifth
+	// refusal inside the snapshot: what it turns away is a caller, not a rewrite
+	// that would be pointless, and the tests that drive the three phases by hand
+	// must go on reaching the snapshot. Held across all three phases and cleared
+	// on every exit, so the second caller is refused for exactly as long as the
+	// first is between the snapshot and the rename. See Store.compacting.
+	//
+	// EVERY exit, and that is why each phase below takes the lock through a
+	// method that defers its own unlock rather than through a Lock/Unlock pair.
+	// A phase that panicked between the two would leave the mutex held, and the
+	// deferred release would then block on it forever: the flag stuck true is
+	// #56 undone, and the mutex stuck held is every reader of the store with it.
+	if !s.claimCompaction() {
+		return 0, nil
+	}
+	defer s.releaseCompaction()
+
+	// ONE PLACE records the outcome, because a compaction is one operation and
+	// its outcome is one fact. The three phases each fail in their own way — a
+	// stat, a marshal that could not land in its temp file, a rename — and each
+	// used to be someone else's to note or not: build's was noted here, phase 3's
+	// twice inside itself, and phase 1's nowhere at all, so what
+	// Health.CompactionFailures counted depended on which phase you were in.
+	//
+	// Registered AFTER the release above, so it runs before it and the flag is
+	// still held while the failure is written.
+	defer func() {
+		if err != nil {
+			s.noteCompactionFailure(err)
+		}
+	}()
+
+	c, err := s.snapshotCompaction(maxBytes)
+	if c == nil {
+		return 0, err
+	}
+
+	ok, err := c.build(s.eventsPath)
+	if err != nil || !ok {
+		return 0, err
+	}
+	return s.commitCompaction(c)
+}
+
+// claimCompaction takes the exclusion for this caller, reporting false when
+// another rewrite already holds it. Split from the snapshot so compact can
+// register the release BEFORE anything that could panic runs; see compact.
+func (s *Store) claimCompaction() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.compacting {
+		return false
+	}
+	s.compacting = true
+	return true
+}
+
+// releaseCompaction gives the exclusion back.
+func (s *Store) releaseCompaction() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.compacting = false
+}
+
+// snapshotCompaction is phase 1 under the store's lock.
+func (s *Store) snapshotCompaction(maxBytes int64) (*compaction, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.snapshotCompactionLocked(maxBytes)
+}
+
+// commitCompaction is phase 3 under the store's lock.
+func (s *Store) commitCompaction(c *compaction) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.commitCompactionLocked(c)
+}
+
+// compaction is one rewrite in flight: the store as it stood at the watermark,
+// and the sibling file being built from it.
+//
+// The snapshot is the PRICE of the marshal being off the store mutex, and it is
+// paid deliberately. The rewrite used to build each record as it wrote it,
+// holding the entry set once rather than twice; it cannot any more, because the
+// marshal no longer runs under the lock that keeps s.entries still. So the live
+// entries are copied and held alongside the serialized buffer until the commit:
+// one rewrite's worth of memory, against a re-marshal on every submission. The
+// copies are safe to hold for the reason orderRanked's already are — an Entry's
+// Text is a string and its Aliases are only ever REPLACED with a fresh slice,
+// never written through spare capacity, which appendAlias does deliberately.
+//
+// What phase 1 does NOT do is put the entries in order. Deriving the order is
+// O(n log n) over data that is private to the compaction the moment the copy is
+// taken, and this whole shape exists to keep work like that off the store mutex;
+// see build.
+type compaction struct {
+	// at is the WATERMARK: the log's size when the snapshot was taken. Everything
+	// below it is what these records replace; everything the fleet appends past it
+	// while the marshal runs is the TAIL, copied onto the rewrite at commit and
+	// never re-applied to the entries — see commitCompactionLocked.
+	at  int64
+	now time.Time
+	// dead is EVERY burned id when phase 1 hands it over, and the retired ones
+	// alone once build has filtered the live entries back out of it and sorted
+	// what is left.
+	//
+	// Filtered off the lock, deliberately. The filter needs a set of the live
+	// ids, which is 10,000 string hashes on a store that size, and phase 1 held
+	// the store mutex across all of it to produce a slice nothing else read.
+	// Copying the map's keys is the part that has to be under the lock — s.burned
+	// is the fleet's — and building the set from c.live is the part that does not.
+	dead []string
+	live []Entry // the live entries, copied in the entry set's own order
+	// pos is each live entry's last-movement position in the log, read out of
+	// s.lastAt once under the lock, and order is the permutation of live that
+	// sorts by it — built and applied by build, off the lock.
+	//
+	// Read once because the sort used to read s.lastAt inside the comparator,
+	// which is two map lookups and two string hashes per comparison — about 1.2
+	// million of them on a 39,500-entry store, and the bulk of what the rewrite
+	// cost. order is INDICES for the same reason: permuting the entry set only so
+	// the sort cannot disturb it is 176 bytes an entry where an index is 8.
+	pos   []int
+	order []int
+	// lastAt is where the rewrite's own records leave every live entry, and
+	// records is how many records it holds — which is also the log position of
+	// the last of them, since one record advances the position once.
+	//
+	// Both are derived by build, off the lock, because they are a function of the
+	// bytes it has just written and of nothing the fleet can touch. Phase 3 used
+	// to re-derive them by replaying the rewrite through noteEventLocked under
+	// the store mutex: 10,000 map inserts plus one ~160-byte event copied by
+	// value per record, to arrive at a map that was already implied by c.order.
+	lastAt  map[string]int
+	records int
+	tmp     *atomicFile
+	size    int64 // what the marshal weighed, without the tail
+}
+
+// snapshotCompactionLocked is phase 1: the four refusals, and a copy of
+// everything the rewrite is built from. A nil compaction means the rewrite must
+// not run, and the error beside it is a stat that failed rather than a refusal.
+// The caller holds the lock.
+func (s *Store) snapshotCompactionLocked(maxBytes int64) (*compaction, error) {
 	fi, err := os.Stat(s.eventsPath)
 	switch {
 	case os.IsNotExist(err):
-		return 0, nil
+		return nil, nil
 	case err != nil:
-		return 0, err
+		return nil, err
 	case fi.Size() <= maxBytes, len(s.owed) > 0, len(s.burned) == 0:
-		return 0, nil
+		return nil, nil
 	}
 
 	// Truncated to the second, so every record this writes is exactly as wide as
-	// the same record written a moment later; see the last refusal above, which
-	// compares the rewrite's size against the file's. Nothing reads a compaction
-	// stamp for anything finer — it is bookkeeping, not a moment in the fleet's
-	// history, and the records it replaces are the ones that carried those.
-	now := time.Now().UTC().Truncate(time.Second)
-	// One pass over the entry set for both things the rewrite needs from it: the
-	// live-id set the burned ids are filtered against, and each entry's log
-	// position, read out of s.lastAt ONCE.
-	//
-	// Read once because the sort below used to read it inside the comparator,
-	// which is two map lookups and two string hashes per comparison — about 1.2
-	// million of them on a 39,500-entry store, and the bulk of what the rewrite
-	// cost. It sorts INDICES into s.entries for the same reason: copying the
-	// entry set only so the sort cannot disturb it is 176 bytes an entry where an
-	// index is 8.
-	live := make(map[string]struct{}, len(s.entries))
-	at := make([]int, len(s.entries))
-	order := make([]int, len(s.entries))
+	// the same record written a moment later; see the size refusal above, which
+	// compares the marshal against the watermark. Nothing reads a compaction stamp
+	// for anything finer — it is bookkeeping, not a moment in the fleet's history,
+	// and the records it replaces are the ones that carried those.
+	c := &compaction{at: fi.Size(), now: time.Now().UTC().Truncate(time.Second)}
+	// COPIES, and nothing derived from them. Everything here reads a field the
+	// fleet owns — s.entries, s.lastAt, s.burned — so it has to be under the
+	// lock; everything that is a function of those copies alone is build's, off
+	// it. The one map lookup left is s.lastAt's, which cannot move: the position
+	// belongs to the store and not to the copy.
+	c.live = make([]Entry, len(s.entries))
+	c.pos = make([]int, len(s.entries))
+	copy(c.live, s.entries)
 	for i, e := range s.entries {
-		live[e.Id] = struct{}{}
-		at[i], order[i] = s.lastAt[e.Id], i
+		c.pos[i] = s.lastAt[e.Id]
 	}
-	// The retired ids go first, and SORTED, because they are read out of a map
-	// and map order reaching the file would give one store two logs on two
-	// machines (invariant I1). They take no ranking position, so their order
-	// costs nothing else either way.
-	dead := make([]string, 0, len(s.burned))
+	c.dead = make([]string, 0, len(s.burned))
 	for id := range s.burned {
-		if _, ok := live[id]; !ok {
-			dead = append(dead, id)
-		}
+		c.dead = append(c.dead, id)
 	}
-	slices.Sort(dead)
+	return c, nil
+}
+
+// build is phase 2, and the whole reason the other two exist: the snapshot is
+// marshalled and landed in the sibling temp file with NO LOCK HELD. It reports
+// false for the one refusal that cannot be made until the records exist — a
+// rewrite that would not be smaller than the log it replaces.
+//
+// It touches no field of the store, which is what makes that safe to say rather
+// than to hope: everything it reads is the copy phase 1 took. Both ORDERINGS are
+// derived here for the same reason — they are O(n log n) over that copy, and the
+// store mutex has no business being held across them.
+func (c *compaction) build(path string) (bool, error) {
+	// The RETIRED ids, which is every burned id phase 1 handed over minus the
+	// ones a live entry still holds. The set is built here rather than there
+	// because it is a function of c.live alone, and hashing an id per live entry
+	// is exactly the kind of work the store's mutex has no business being held
+	// across.
+	live := make(map[string]struct{}, len(c.live))
+	for i := range c.live {
+		live[c.live[i].Id] = struct{}{}
+	}
+	c.dead = slices.DeleteFunc(c.dead, func(id string) bool {
+		_, ok := live[id]
+		return ok
+	})
+	// They go first, and SORTED, because they are read out of a map and map order
+	// reaching the file would give one store two logs on two machines (invariant
+	// I1). They take no ranking position, so their order costs nothing else
+	// either way.
+	slices.Sort(c.dead)
 	// The live entries in last-movement order, which is what carries recency
 	// across the rewrite.
 	//
@@ -3499,69 +3872,163 @@ func (s *Store) compactLocked(maxBytes int64) (int, error) {
 	// position is the index of the record that moved the entry, one record names
 	// one id, and seq advances once per record. TestNoTwoLiveEntriesShareALogPosition
 	// asserts it on the side this reads — the positions BEFORE the rewrite.
-	slices.SortFunc(order, func(a, b int) int { return at[a] - at[b] })
+	c.order = make([]int, len(c.live))
+	for i := range c.order {
+		c.order[i] = i
+	}
+	slices.SortFunc(c.order, func(a, b int) int { return c.pos[a] - c.pos[b] })
 
 	var buf bytes.Buffer
-	// Bounded by the file it has to beat, since anything larger is a rewrite the
+	// Bounded by the bytes it has to beat, since anything larger is a rewrite the
 	// size refusal below throws away anyway; 512 bytes a record is comfortably
 	// above the widest one this writes.
-	buf.Grow(int(min(fi.Size(), int64(len(dead)+len(order))*512)))
+	buf.Grow(int(min(c.at, int64(len(c.dead)+len(c.live))*512)))
 	w := newLogWriter(&buf)
-	// Each record is built as it is written rather than collected first. Holding
-	// them all would hold the whole entry set a second time, plus a heap-escaping
-	// Provenance per entry, alongside the fully serialized buffer — and the only
-	// thing the collection ever bought was a second walk, which the positions
-	// below now take over `dead` and `order` instead.
-	for _, id := range dead {
-		if werr := w.write(event{Schema: Schema, Event: EventRetired, Id: id, At: now}); werr != nil {
-			return 0, werr
+	for _, id := range c.dead {
+		if err := w.write(event{Schema: Schema, Event: EventRetired, Id: id, At: c.now}); err != nil {
+			return false, err
 		}
 	}
-	for _, i := range order {
-		e := &s.entries[i]
-		if werr := w.write(event{
-			Schema: Schema, Event: EventCompacted, Id: e.Id, At: now,
+	for _, i := range c.order {
+		e := &c.live[i]
+		if err := w.write(event{
+			Schema: Schema, Event: EventCompacted, Id: e.Id, At: c.now,
 			Text: e.Text, Prov: &e.Provenance, Tier: e.Tier,
 			Reinforcements: e.Reinforcements, UserSignals: e.UserSignals, Aliases: e.Aliases,
-		}); werr != nil {
-			return 0, werr
+		}); err != nil {
+			return false, err
 		}
 	}
-	if int64(buf.Len()) >= fi.Size() {
+	c.size = int64(buf.Len())
+	// Against the WATERMARK rather than the log's size today. The tail sits on
+	// both sides of the comparison — it is in the log now and it is copied onto
+	// the rewrite at commit — so what the marshal has to beat is what it replaces.
+	if c.size >= c.at {
+		return false, nil
+	}
+	// Where the records just written leave every live entry, derived from the
+	// bytes rather than from a replay of them. A record advances the position by
+	// one, the retired ones are written first and hold no position of their own,
+	// so the k'th live entry in c.order sits at len(dead)+k+1 — which is the same
+	// arithmetic noteEventLocked would do, without the map insert and the
+	// event-by-value copy landing under the store mutex. See compaction.lastAt.
+	c.lastAt = make(map[string]int, len(c.order))
+	for k, i := range c.order {
+		c.lastAt[c.live[i].Id] = len(c.dead) + k + 1
+	}
+	c.records = len(c.dead) + len(c.live)
+
+	tmp, err := createAtomic(path, 0o600, buf.Bytes())
+	if err != nil {
+		return false, err
+	}
+	c.tmp = tmp
+	return true, nil
+}
+
+// commitCompactionLocked is phase 3: the tail copied onto the rewrite, the
+// rename, and the log positions re-derived. It reports how many records the
+// rewrite holds below the tail, and zero where it was discarded. The caller
+// holds the lock.
+func (s *Store) commitCompactionLocked(c *compaction) (int, error) {
+	// The one refusal a phase-2 fold can make true; see compact's list. Nothing
+	// else can have changed: the watermark and the marshal's size are both fixed,
+	// and neither the burned set nor the log can shrink under a running store.
+	if len(s.owed) > 0 {
+		c.tmp.discard()
 		return 0, nil
 	}
-	if err := writeFileAtomic(s.eventsPath, buf.Bytes(), 0o600); err != nil {
-		// The words as well as the count, for the reason Health.CompactionError
-		// gives, and reported here rather than by the caller because a compaction
-		// is one operation and its outcome is one fact.
-		s.health.CompactionFailures, s.health.CompactionError = 1, err.Error()
+	tail, err := readFrom(s.eventsPath, c.at)
+	if err != nil {
+		c.tmp.discard()
+		return 0, err
+	}
+	if err := c.tmp.commit(tail); err != nil {
 		return 0, err
 	}
 	s.health.CompactionFailures, s.health.CompactionError = 0, ""
-	s.health.Compacted = len(dead) + len(order)
-	s.health.LogBefore, s.health.LogAfter = fi.Size(), int64(buf.Len())
+	s.health.Compacted = c.records
+	// Past the rename, so what it counts is rewrites that are on disk. It is the
+	// signal anything outside this package watches to learn a compaction happened
+	// at all; see Health.Compactions.
+	s.health.Compactions++
+	// The FILE on either side, tail included: it was in the log before the rewrite
+	// and it is in the log after it, and these two numbers are an operator's only
+	// view of the growth compaction exists to bound.
+	s.health.LogBefore, s.health.LogAfter = c.at+int64(len(tail)), c.size+int64(len(tail))
 
-	// The store believes in the log that is on disk. The positions are re-derived
-	// through the same function replayLocked uses, over the records in the order
-	// they were just written, so what the store thinks the log says and what its
-	// own next boot will read out of it cannot disagree.
+	// The store believes in the log that is on disk, so its positions become the
+	// ones the rewrite's own records imply — handed over whole, because build
+	// derived them from the very bytes it wrote and nothing since has touched
+	// them. What the store thinks the log says and what its own next boot will
+	// read out of it therefore cannot disagree.
 	//
-	// The records are re-stated rather than kept: noteEventLocked reads an
-	// event's name, its id and its source, and all three are known from which
-	// loop the id came out of — everything in dead is a `retired` and everything
-	// in order a `compacted`, neither of which the source arm can match.
+	// It used to REPLAY the rewrite here, through noteEventLocked, and that loop
+	// was a no-op dressed as a derivation: s.lastAt had just been cleared and
+	// every id in dead is absent from the live set by construction, so all it did
+	// was advance s.seq — one ~160-byte event copied by value per retired id, and
+	// one map insert per live entry, all under the store mutex, to arrive at a map
+	// c.order already described. See compaction.lastAt.
+	s.seq = c.records
+	s.lastAt = c.lastAt
+	// The TAIL still goes through noteEventLocked, and that is the half where one
+	// function deciding what a record does actually matters. It is read under the
+	// BOOT's own rule, which is why scanRecords is one function: a line the next
+	// boot skips has to be skipped here too, or the store sits a position ahead of
+	// the file it just wrote.
 	//
-	// clear rather than a fresh map: the buckets are the right size already, and
-	// the one being replaced was just read for the sort keys above.
-	s.seq = 0
-	clear(s.lastAt)
-	for _, id := range dead {
-		s.noteEventLocked(event{Event: EventRetired, Id: id})
+	// POSITIONS ONLY, and that is the trap the three phases have to walk past. A
+	// fold that landed while the marshal ran is not in the snapshot — the snapshot
+	// was taken at the watermark — and IS in the tail, so a replay counts it
+	// exactly once. But s.entries ALREADY HAS IT APPLIED, because it happened
+	// live. Re-applying the tail's effects here would count it a second time in
+	// memory, and the entry would read correctly until the next restart doubled
+	// it. What scanRecords is handed is noteEventLocked ITSELF, which states that
+	// in the type rather than in this comment: it reads an event's name, id and
+	// source and writes s.seq and s.lastAt and nothing else, so nothing reachable
+	// from here can touch an entry.
+	s.health.TornEvents += scanRecords(tail, s.noteEventLocked)
+	return c.records, nil
+}
+
+// noteCompactionFailure records a rewrite that did not land, with the failure's
+// own words as well as the count — for the reason Health.CompactionError gives.
+//
+// Its one caller is compact's deferred record, which is where the argument for
+// counting a compaction's outcome exactly once lives. No phase notes its own,
+// which is why this takes the lock rather than asking to be called under it.
+func (s *Store) noteCompactionFailure(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.health.CompactionFailures, s.health.CompactionError = 1, err.Error()
+}
+
+// readFrom is the bytes of path from off to its end — a compaction's TAIL, which
+// is everything the fleet appended while the marshal ran. Nil where nothing was.
+//
+// It is read with the store's lock held, and that is what makes the commit one
+// instant: nothing can be appended between the tail being read and the rewrite
+// being renamed over it. The read is bounded by what one marshal's worth of
+// dispatch traffic wrote, not by the log.
+func readFrom(path string, off int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
 	}
-	for _, i := range order {
-		s.noteEventLocked(event{Event: EventCompacted, Id: s.entries[i].Id})
+	defer func() { _ = f.Close() }()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
 	}
-	return len(dead) + len(order), nil
+	if fi.Size() <= off {
+		return nil, nil
+	}
+	tail := make([]byte, fi.Size()-off)
+	if _, err := f.ReadAt(tail, off); err != nil {
+		return nil, err
+	}
+	return tail, nil
 }
 
 // reconcileLocked is #38 §3's table — the boot recovery one and the live-editor
@@ -4249,6 +4716,10 @@ func grantTier(e *Entry, tier, upper int, rejected *int) {
 // noteEventLocked gives one log record its position and records what that
 // position means for the ranking. The caller holds the lock.
 //
+// BY POINTER, and it neither keeps ev nor writes through it: scanRecords hands
+// it the one event it reuses across the whole log, so keeping one would be a
+// record that changes under its holder. See scanRecords.
+//
 // It is the ONE place recency is derived, called by replayLocked for every
 // record it parses out of the log and by appendEvents for every record it lands
 // in it. The two must produce identical positions or a restart would reorder
@@ -4284,7 +4755,7 @@ func grantTier(e *Entry, tier, upper int, rejected *int) {
 // must not buy the rank a fresh position is worth either, which is the one thing
 // an operator's edit legitimately does buy. `merged` and `lowered` name no case
 // at all, for the same reason.
-func (s *Store) noteEventLocked(ev event) {
+func (s *Store) noteEventLocked(ev *event) {
 	s.seq++
 	switch {
 	case ev.Event == EventSubmitted, ev.Event == EventFolded, ev.Event == EventUserSignal,
@@ -4292,10 +4763,9 @@ func (s *Store) noteEventLocked(ev event) {
 		// A `compacted` record stands in for the submission and every reinforcement
 		// compaction replaced, so it takes the position those records would have
 		// left the entry on — which is why it sits in this arm rather than one of
-		// its own. compactLocked writes the live entries in their existing
-		// last-movement ORDER, which is what carries recency across a compaction;
-		// the SPACING between positions does not survive, and cannot — see
-		// compactLocked.
+		// its own. A compaction writes the live entries in their existing
+		// last-movement ORDER, which is what carries recency across it; the SPACING
+		// between positions does not survive, and cannot — see compact.
 		s.lastAt[ev.Id] = s.seq
 	case ev.Event == EventEdited && ev.Source == SourceUser:
 		// Deliberate, and deliberately unlike reconcileLocked's reword branch,
@@ -4312,8 +4782,8 @@ func (s *Store) noteEventLocked(ev event) {
 // per line — into a buffer the caller owns.
 //
 // It is a type rather than a loop over a slice because the two writers of the
-// file have different sources: appendEvents holds the whole batch, while
-// compactLocked builds each record as it goes and never holds them all. What
+// file have different sources: appendEvents holds a batch of events, while a
+// compaction builds each record from an entry as it goes. What
 // must not have two spellings is the FRAMING, and it had: a compaction that
 // framed a record differently from an append leaves a log whose next boot reads
 // fewer records than were written, and under-claims silently.
@@ -4360,10 +4830,48 @@ func (s *Store) appendEvents(evs []event) error {
 	// Positions are taken only now, and only here, because appendDurable is
 	// all-or-nothing: a write that landed no bytes must leave the store's idea of
 	// the log's length exactly where a re-Open would find it.
-	for _, ev := range evs {
-		s.noteEventLocked(ev)
+	for i := range evs {
+		s.noteEventLocked(&evs[i])
 	}
+	s.noteGrowthLocked(int64(buf.Len()))
 	return nil
+}
+
+// noteGrowthLocked counts what one append added to the log and wakes the
+// compactor once the log has gained a whole compactAtBytes since anyone last
+// looked at it. See Store.grown for why the count rather than a stat, and why
+// growth rather than size. The caller holds the lock.
+//
+// The send is non-blocking over a buffer of one, so an append never waits on the
+// compactor and a burst that crosses the threshold many times over wakes it once.
+//
+// The counter is zeroed HERE, on the crossing, rather than by the compaction it
+// wakes — which is what makes the count and the token one fact rather than two
+// that can disagree. Zeroed at the far end, an append landing between the
+// compactor's receive and its snapshot would find the counter still over the
+// threshold and queue a second token, and that one buys a whole entry-set copy
+// and a whole marshal before the size refusal throws it away.
+//
+// A store running WITHOUT its single-writer claim never arms it, and that is the
+// one rule here that is not about size. Two daemons appending to one log
+// interleave harmlessly — O_APPEND, whole records — but a RENAME does not: the
+// rewrite is built from THIS store's memory, which has never seen the other's
+// mutations, so everything the other daemon recorded below the watermark is
+// destroyed. That hazard has always existed at boot, where a compaction runs
+// once; repeating it every threshold for the life of the process, on exactly the
+// configuration Open warns about, is a different thing. An unlocked store stays
+// bounded by its next boot, which is where it was before the runtime trigger
+// existed.
+func (s *Store) noteGrowthLocked(n int64) {
+	s.grown += n
+	if s.unlocked || s.grown <= compactAtBytes {
+		return
+	}
+	s.grown = 0
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
 }
 
 // appendDurable appends rec to the file at path, ALL OF IT OR NONE OF IT. rec
@@ -4511,47 +5019,106 @@ func parseBullet(line string) (text string, ok bool) {
 	return rest, true
 }
 
-// writeFileAtomic writes data to path atomically and durably: a sibling temp
-// file, fsync, rename into place, then a parent-directory fsync so the rename
-// survives a crash. Same idiom as internal/state's state file — copied, not
-// imported, to keep this package stdlib-only. The fixed ".tmp" name is safe
-// because Open holds the directory's single-writer lock.
-func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
+// atomicFile is one file being replaced through a sibling temp file: create,
+// write, fsync, rename into place, then a parent-directory fsync so the rename
+// survives a crash. rename(2) is atomic, so at every instant the destination
+// holds either the whole old file or the whole new one. The same steps live in
+// paths.WriteFileAtomic, which is what every other package in the tree writes
+// through; they are spelled again here rather than imported, to keep this
+// package stdlib-only. The fixed ".tmp" name is safe because Open holds the directory's
+// single-writer lock.
+//
+// It is a TYPE rather than the one function it used to be because a compaction
+// writes its bulk and commits it at two different moments — the marshal off the
+// store mutex, the commit back under it — so the temp file has to stay open
+// across the gap. writeFileAtomic is the same steps taken together, which is
+// what every other writer needs.
+type atomicFile struct {
+	f    *os.File
+	path string // the DESTINATION
+	tmp  string // the sibling it is renamed from, derived once so it cannot diverge
+}
+
+// createAtomic opens path's sibling temp file and lands data in it, durably. The
+// file is left OPEN: commit is what puts it in place and discard is what undoes
+// it, and nothing is visible at path until one of them runs.
+func createAtomic(path string, perm os.FileMode, data []byte) (*atomicFile, error) {
 	tmp := path + tempSuffix
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
 	if err != nil {
+		return nil, err
+	}
+	a := &atomicFile{f: f, path: path, tmp: tmp}
+	if err := a.writeSync(data); err != nil {
+		a.discard()
+		return nil, err
+	}
+	return a, nil
+}
+
+// writeSync appends data and flushes it to the disk, which is the pair of calls
+// both writers of this file make.
+func (a *atomicFile) writeSync(data []byte) error {
+	if _, err := a.f.Write(data); err != nil {
 		return err
 	}
-	// Any failure from here on leaves a stale temp file behind; drop it on the
-	// way out, so a half-written ".tmp" never lingers.
+	return a.f.Sync()
+}
+
+// commit appends tail — which may be empty — and renames the file into place.
+// On nil the destination holds createAtomic's data followed by tail and no temp
+// file is left; on an error the destination is byte-for-byte what it was and the
+// temp file has been removed.
+//
+// ONE DEFER discards it, on a named error return, rather than a call at each of
+// the four exits that can reach one: an exit added later gets the tidying by
+// construction, which is the idiom compact takes the exclusion's release through
+// for the same reason.
+func (a *atomicFile) commit(tail []byte) (err error) {
 	defer func() {
 		if err != nil {
-			_ = os.Remove(tmp)
+			a.discard()
 		}
 	}()
-
-	if _, err = f.Write(data); err != nil {
-		_ = f.Close()
+	if len(tail) > 0 {
+		if err = a.writeSync(tail); err != nil {
+			return err
+		}
+	}
+	if err = a.f.Close(); err != nil {
 		return err
 	}
-	if err = f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	if err = os.Rename(tmp, path); err != nil {
+	if err = os.Rename(a.tmp, a.path); err != nil {
 		return err
 	}
 
 	// Fsync the parent directory so the rename is durable. Not every platform
 	// can open a directory for sync; that is not fatal to the write.
-	if dir, derr := os.Open(filepath.Dir(path)); derr == nil {
+	if dir, derr := os.Open(filepath.Dir(a.path)); derr == nil {
 		_ = dir.Sync()
 		_ = dir.Close()
 	}
 	return nil
+}
+
+// discard drops a temp file nothing is going to commit, so a half-written ".tmp"
+// never lingers. Best effort, and idempotent about the close, so commit can reach
+// for it after a Close that failed as readily as before one that never ran:
+// whoever calls it is already returning the failure that got them here, and Open
+// sweeps what a signal leaves behind.
+func (a *atomicFile) discard() {
+	_ = a.f.Close()
+	_ = os.Remove(a.tmp)
+}
+
+// writeFileAtomic writes data to path atomically and durably — createAtomic and
+// commit taken together, with no gap for anything to be appended in.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	a, err := createAtomic(path, perm, data)
+	if err != nil {
+		return err
+	}
+	return a.commit(nil)
 }
 
 // Dir is the directory the store's files live in — what score.status reports.

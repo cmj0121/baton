@@ -719,11 +719,13 @@ func warnScoreKeysAReloadCannotApply(booted, now config.ScoreConfig) {
 // than from this one. A store opening slowly is NORMAL — the boot replays the
 // whole event log, measured at 461-512 ms for a 51.9 MB one — and giving up on a
 // store that was merely slow costs the fleet its memory until someone restarts
-// the daemon. Nothing bounds that log while the daemon runs, either: compaction
-// is a boot operation and what it bounds is the log's SHAPE, so a large one is
-// not a pathology this may fire on. So the bound has to sit far above a healthy
-// boot on a large store, and still short enough that a person waiting on a dead
-// mount gets an answer rather than a hang.
+// the daemon. The log IS bounded while the daemon runs now (#56), so it no
+// longer grows without limit between restarts — but what that bounds is GROWTH,
+// not size: a store whose compacted form is already large stays large, and its
+// replay stays as slow as it was. A big log is still not a pathology this may
+// fire on. So the bound has to sit far above a healthy boot on a large store,
+// and still short enough that a person waiting on a dead mount gets an answer
+// rather than a hang.
 //
 // A boot that spends the WHOLE bound now outlasts startDaemon's own patience —
 // daemonPollTries × daemonPollGap, five seconds — because the socket is not

@@ -35,12 +35,10 @@ func padLog(t *testing.T, dir, id, text string, want int64) int64 {
 	}
 	defer func() { _ = f.Close() }()
 
-	prov := Provenance{Source: SourceAgent, SourcePanel: "p1", SourceProfile: "claude", SourceCwd: "/work/repo"}
-	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	// One record, marshalled once. Every iteration writes the same bytes — the id,
 	// the text and the stamp are all loop-invariant — so marshalling inside the
 	// loop re-encoded one identical record about 87,000 times to reach 8 MiB.
-	rec, err := json.Marshal(foldEvent(id, text, prov, at, false, false))
+	rec, err := json.Marshal(paddingRecord(id, text))
 	if err != nil {
 		t.Fatalf("marshal the padding record: %v", err)
 	}
@@ -60,20 +58,26 @@ func padLog(t *testing.T, dir, id, text string, want int64) int64 {
 	return size + int64(buf.Len())
 }
 
-// compactNow runs one compaction under the store's own lock and returns how many
-// records it wrote, failing the test on error. maxBytes is zero, so every log is
-// over the threshold and the refusal under test is whichever other one the case
-// is about.
+// paddingRecord is the one fold record both padders repeat — padLog, which
+// writes it straight to the file, and growLog, which puts it through the store's
+// own append path. Every field is loop-invariant, and RemovedLine is false so
+// the padding owes no removal; see padLog for why that matters.
+func paddingRecord(id, text string) event {
+	prov := Provenance{Source: SourceAgent, SourcePanel: "p1", SourceProfile: "claude", SourceCwd: "/work/repo"}
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	return foldEvent(id, text, prov, at, false, false)
+}
+
+// compactNow runs one compaction and returns how many records it wrote, failing
+// the test on error. maxBytes is zero, so every log is over the threshold and the
+// refusal under test is whichever other one the case is about.
 //
-// The three sites that do NOT use it are the ones it cannot serve: two want the
-// error itself, and two read s.burned or s.seq under the SAME hold as the
-// compaction, which is the point of those tests. Every caller keeps its own
-// count check — the helper removes the locking, not the assertion.
+// The sites that do NOT use it are the ones it cannot serve: they want the error
+// itself. Every caller keeps its own count check — the helper removes the
+// plumbing, not the assertion.
 func compactNow(t *testing.T, s *Store) int {
 	t.Helper()
-	s.mu.Lock()
-	written, err := s.compactLocked(0)
-	s.mu.Unlock()
+	written, err := s.compact(0)
 	if err != nil {
 		t.Fatalf("compact: %v", err)
 	}
@@ -187,11 +191,8 @@ func TestCompactionKeepsEveryIdItHasEverNamed(t *testing.T) {
 	}
 	s.mu.Lock()
 	before := len(s.burned)
-	written, err := s.compactLocked(0) // every log is over a threshold of zero
 	s.mu.Unlock()
-	if err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	written := compactNow(t, s) // every log is over a threshold of zero
 	if written != 3 {
 		t.Fatalf("compaction wrote %d records, want one per id it has ever named (3)", written)
 	}
@@ -263,7 +264,7 @@ func TestCompactionKeepsALiveEntryWhole(t *testing.T) {
 // them. What must survive is the ORDER — the entry that last moved most recently
 // still outranks the one that moved before it — and the compaction writes the
 // live entries in that order to make it so. The SPACING does not survive and no
-// test claims it does; see compactLocked.
+// test claims it does; see compact.
 func TestCompactionKeepsTheRecencyOrder(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, dir)
@@ -315,11 +316,8 @@ func TestCompactionDeclinesWhatItMustDecline(t *testing.T) {
 
 		s.mu.Lock()
 		owed := len(s.owed)
-		written, err := s.compactLocked(0)
 		s.mu.Unlock()
-		if err != nil {
-			t.Fatalf("compact: %v", err)
-		}
+		written := compactNow(t, s)
 		if owed == 0 {
 			t.Fatal("the fixture left no debt, so this asserts nothing")
 		}
@@ -385,9 +383,7 @@ func TestCompactionDeclinesWhatItMustDecline(t *testing.T) {
 	t.Run("a log that is not there", func(t *testing.T) {
 		dir := t.TempDir()
 		s := openStore(t, dir)
-		s.mu.Lock()
-		written, err := s.compactLocked(0)
-		s.mu.Unlock()
+		written, err := s.compact(0)
 		if err != nil || written != 0 {
 			t.Errorf("compact on a store with no log = (%d, %v), want (0, nil)", written, err)
 		}
@@ -418,9 +414,7 @@ func TestCompactionSurvivesACrashMidRewrite(t *testing.T) {
 	if err := os.Mkdir(tmp, 0o700); err != nil {
 		t.Fatalf("mkdir over the temp path: %v", err)
 	}
-	s.mu.Lock()
-	written, err := s.compactLocked(0)
-	s.mu.Unlock()
+	written, err := s.compact(0)
 	if err == nil {
 		t.Fatalf("compaction reported success (%d records) with its temp path blocked", written)
 	}
@@ -551,10 +545,18 @@ func TestCompactionIsDeterministic(t *testing.T) {
 // — one submission, on disk, at the size this store actually writes — and
 // multiplied out to the store a busy year produces.
 //
-// TOO LARGE costs the boot, which is what the number is for: the listener is
-// already bound while the replay runs. What a megabyte of log costs that replay
-// is derived once, on compactAtBytes itself, which is what the next person
-// tuning the number reads; the ceiling below is that cost multiplied out.
+// TOO LARGE costs the boot, which is what the number is for — and #60 changed
+// WHICH cost, so the ceiling is re-derived rather than reworded. The store is
+// opened above net.Listen now, so a long replay is a daemon that has not come up
+// yet and not a listener bound with nothing behind it; that harm is the milder
+// of the two, and against the launcher's five seconds the time this ceiling buys
+// is not the binding half any more. The HEAP is: 3 MB of transient allocation
+// per megabyte of log, on a daemon whose baseline is 17.8 MB, in the one boot
+// phase whose failure cannot heal — an Open killed for memory is an Open that
+// never shrank the file, so every start after it does the same thing again
+// (#56). What a megabyte costs either way is derived once, on compactAtBytes
+// itself, which is what the next person tuning the number reads; the ceiling
+// below is that cost multiplied out.
 func TestCompactAtBytesIsBoundedBothWays(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, dir)
@@ -580,13 +582,14 @@ func TestCompactAtBytesIsBoundedBothWays(t *testing.T) {
 	}
 	if compactAtBytes > 16<<20 {
 		t.Errorf("compactAtBytes is %d bytes; at the ~9 ms and 3 MB of transient heap a megabyte of "+
-			"log costs the replay, past 16 MiB the boot is over 145 ms and 48 MB with the listener "+
-			"already bound and Serve not started", compactAtBytes)
+			"log costs the replay, past 16 MiB the boot allocates over 48 MB — near three times the "+
+			"daemon's whole baseline — before it has bound anything, and an Open killed for memory "+
+			"is one that never shrank the file", compactAtBytes)
 	}
 }
 
 // TestCompactionLeavesTheStoreAgreeingWithTheFileItWrote is the assertion behind
-// compactLocked's last four lines, and it exists because the claim survived a
+// compact's last four lines, and it exists because the claim survived a
 // mutation that removed them.
 //
 // Recency is a POSITION in the log, and compaction replaces the log. If the
@@ -617,13 +620,10 @@ func TestCompactionLeavesTheStoreAgreeingWithTheFileItWrote(t *testing.T) {
 	writeMD(t, dir, live)
 	reconcile(t, s)
 
+	compactNow(t, s)
 	s.mu.Lock()
-	_, err := s.compactLocked(0)
 	seq, lastAt := s.seq, maps.Clone(s.lastAt)
 	s.mu.Unlock()
-	if err != nil {
-		t.Fatalf("compact: %v", err)
-	}
 	s.Close()
 
 	re := openStore(t, dir)
@@ -634,11 +634,11 @@ func TestCompactionLeavesTheStoreAgreeingWithTheFileItWrote(t *testing.T) {
 	if seq != reSeq {
 		t.Errorf("the compacted store counts %d records and its own reboot counts %d", seq, reSeq)
 	}
-	// Every position is distinct, which is what makes the order compactLocked
+	// Every position is distinct, which is what makes the order compact
 	// writes the live entries in a total one rather than something a sort's
 	// internals get to decide. One record names one id and seq advances once per
 	// record, so this holds by construction — and it is asserted because
-	// compactLocked's ordering leans on it.
+	// compact's ordering leans on it.
 	seen := map[int]string{}
 	for id, at := range reLastAt {
 		if other, dup := seen[at]; dup {
@@ -715,7 +715,7 @@ func TestARecordThisBuildDoesNotKnowStillBurnsItsId(t *testing.T) {
 	}
 }
 
-// TestNoTwoLiveEntriesShareALogPosition asserts the premise compactLocked's
+// TestNoTwoLiveEntriesShareALogPosition asserts the premise compact's
 // sort rests on, on the side the sort actually reads.
 //
 // The sort keys on s.lastAt as it stands BEFORE the rewrite, and the comment
@@ -985,7 +985,7 @@ func TestCompactionReportsWhatTheLogWeighedOnEitherSide(t *testing.T) {
 // does the work rather than half by it and half by Open.
 //
 // Open used to set Compacted, CompactionFailures and CompactionError while
-// compactLocked set LogBefore and LogAfter, so a caller that was not a boot —
+// compact set LogBefore and LogAfter, so a caller that was not a boot —
 // the runtime trigger this is already filed for — would have had to know to
 // replicate Open's half, and nothing said so. Both directions, because a
 // success that left a stale error behind and a failure that left a stale record
@@ -1026,9 +1026,7 @@ func TestCompactionReportsItselfWithoutABoot(t *testing.T) {
 		t.Fatalf("mkdir over the temp path: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Remove(tmp) })
-	s.mu.Lock()
-	written, err := s.compactLocked(0)
-	s.mu.Unlock()
+	written, err := s.compact(0)
 	if err == nil {
 		t.Fatalf("compaction reported success (%d records) with its temp path blocked", written)
 	}
