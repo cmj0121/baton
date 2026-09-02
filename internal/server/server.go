@@ -5715,12 +5715,34 @@ func (s *Server) panelsMsg() proto.ServerMsg {
 }
 
 // addClient registers an attached client connection so it receives broadcasts.
+//
+// DEBUG, NOT INFO, AND THE REASON IS THE TRANSPORT. A line per connection is
+// defensible for a cockpit, which attaches once and stays; it is indefensible
+// for `baton mcp`, which dials a fresh connection for every tool call. The two
+// lines are ~104 B together, so an agent loop against this daemon wrote them
+// faster than it wrote anything else: measured on a live daemon, an MCP-shaped
+// loop put 19.6 MB a day into score-events.jsonl and 40 GB a day into baton.log,
+// and the same pathology over ONE persistent connection wrote 2.5 MB a day in
+// total. The rate cap made this worse rather than better — a refusal is cheap,
+// so the loop reconnects faster — which is how a cap that removed 6.7 GB of
+// event log a day still raised the daemon's total writes.
+//
+// What an operator loses at the default level is a line for a cockpit attaching,
+// and they do not lose the fact: every connection is a row in the remote overlay
+// and in `remote.status`, live, with the id remote.kick names it by. What they
+// gain is a daemon log whose size is set by what the fleet DOES rather than by
+// how a client's transport is shaped.
+//
+// At -v the transport writes these again, at the volume above. That is the
+// ordinary contract of a debug level and the reason the pacing this cap's own
+// warning uses (saySubmitCappedEvery) is not copied here: an operator who asked
+// for every connection should get every connection.
 func (s *Server) addClient(cc *clientConn) {
 	s.mu.Lock()
 	s.clients[cc] = struct{}{}
 	n := len(s.clients)
 	s.mu.Unlock()
-	log.Info().Int("clients", n).Msg("client attached")
+	log.Debug().Int("clients", n).Msg("client attached")
 }
 
 // removeClient detaches a client and closes its outbound queue. It is idempotent:
@@ -5733,7 +5755,8 @@ func (s *Server) removeClient(cc *clientConn) {
 	}
 	n := len(s.clients)
 	s.mu.Unlock()
-	log.Info().Int("clients", n).Msg("client detached")
+	// The level is addClient's, and for its reasons.
+	log.Debug().Int("clients", n).Msg("client detached")
 	s.pushRemote() // the connection list lost a row; refresh any open overlay
 }
 

@@ -449,6 +449,40 @@ func TestClientsOutsideAPanelDoNotShareOneSlot(t *testing.T) {
 	}
 }
 
+// TestAConnectionIsNotAnInfoLine is the half of #56 the rate cap made WORSE.
+//
+// A refusal is cheap, so a capped loop reconnects faster than an uncapped one —
+// and `baton mcp` dials a fresh connection per tool call. Every one of those
+// wrote two ~52 B Info lines, so the cap that removed 6.7 GB a day from
+// score-events.jsonl raised the daemon's TOTAL writes: measured on a live daemon,
+// 19.6 MB/day of event log against 40 GB/day of baton.log.
+//
+// The assertion is the level and not the absence, because the lines are still
+// worth having for an operator who asked for them. What must not happen is a
+// transport deciding how big the daemon log is at the DEFAULT level.
+func TestAConnectionIsNotAnInfoLine(t *testing.T) {
+	s := New(nil)
+	logged := captureLog(t)
+
+	for range 3 {
+		cc := conn("")
+		s.addClient(cc)
+		s.removeClient(cc)
+	}
+
+	line := logged()
+	for _, what := range []string{"client attached", "client detached"} {
+		if !strings.Contains(line, what) {
+			t.Fatalf("nothing logged %q at all:\n%s", what, line)
+		}
+		if strings.Contains(line, `"level":"info","clients"`) {
+			t.Errorf("%q is still an Info line:\n%s\nAt one connection per MCP tool call these are "+
+				"the largest writer in the daemon log — 40 GB a day measured against 19.6 MB of the "+
+				"event log the cap bounded", what, line)
+		}
+	}
+}
+
 // TestACappedSubmissionIsToldApartFromABrokenStore is invariant I8 for the third
 // thing that can go wrong on this door. #46 spent a commit separating the other
 // two — a store that will not take the write, and text the store itself refused
