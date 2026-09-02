@@ -59,8 +59,8 @@ agents.claude:                 memory 8Gi
 effective:           cpus 2 · memory 8Gi · pids 512
 ```
 
-A profile restates only what it changes. A shell panel, the scratch shell, and any agent spawned without a profile get
-the fleet-wide caps alone.
+A profile restates only what it changes. A shell panel — the global shell included — and any agent spawned without a
+profile get the fleet-wide caps alone.
 
 **The server resolves the policy, never the client.** A `panel.create` names its profile; the daemon looks that name up
 in its own config. This matters because one of baton's clients _is an agent_ — the conductor drives the fleet over the
