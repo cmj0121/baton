@@ -111,12 +111,9 @@ func TestRunServerOnBadConfigFiles(t *testing.T) {
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- runServerOn(ln, sock) }()
+	go func() { done <- runServerOn(ln, sock, loadServerBoot(sock)) }()
 
-	pidPath := paths.PidFile(sock)
-	if !waitFor(func() bool { _, err := os.Stat(pidPath); return err == nil }, 100, 10*time.Millisecond) {
-		t.Fatal("server did not write its pid file")
-	}
+	waitServing(t, sock)
 
 	_ = ln.Close()
 	select {

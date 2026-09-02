@@ -19,11 +19,14 @@ import (
 	"github.com/cmj0121/baton/internal/score"
 )
 
-// This file is the boot bound on the fleet memory (#46 R7). The listener is
-// already bound when openScore runs and Serve has not started, so a score.dir
-// that does not answer leaves the daemon holding a listening socket it will
-// never serve — clients connect and hang, with nothing in the log, because the
-// line that would explain it comes after the call that is stuck.
+// This file is the boot bound on the fleet memory (#46 R7). openScore runs
+// BEFORE the listener is bound (#60), so a score.dir that does not answer costs
+// the daemon its socket rather than leaving one bound and never served; what the
+// bound decides is whether the fleet then runs without its memory or does not
+// run at all. See scoreOpenTimeout.
+//
+// The ordering itself — that no socket exists while the load hangs — is asserted
+// in boot_order_unix_test.go, against a real forked daemon on a real dead path.
 
 // TestWaitForStoreGivesUpAndTakesTheClaimBackWithIt is the firing direction, and
 // the half of it that is easy to get wrong: the store the daemon abandoned must
@@ -224,6 +227,27 @@ func TestScoreOpenTimeoutIsBoundedBothWays(t *testing.T) {
 	if scoreOpenTimeout > 30*time.Second {
 		t.Errorf("scoreOpenTimeout is %s; past half a minute the daemon is indistinguishable from hung "+
 			"to whoever is waiting on it, which is the failure the bound exists to remove", scoreOpenTimeout)
+	}
+}
+
+// TestABootThatSpendsTheWholeBoundOutlastsTheLauncher pins the arithmetic
+// scoreOpenTimeout's doc states, so the sentence cannot outlive it. With the
+// load above the bind, a daemon waiting the full bound out has no socket for
+// longer than startDaemon is willing to poll for one — so `baton` reports that
+// the server did not come up, and the daemon comes up behind it.
+//
+// ONE assertion, on the margin, because the two ways of being wrong are not
+// independent: a launcher that outlasts the bound has a negative margin, so a
+// check for that fires here too and would only say the same failure twice. What
+// the margin adds over a bare inequality is the near-tie, where the launcher
+// gives up at about the instant the daemon would have bound and whether a slow
+// store is reported as a failure becomes a coin toss on scheduling.
+func TestABootThatSpendsTheWholeBoundOutlastsTheLauncher(t *testing.T) {
+	patience := time.Duration(daemonPollTries) * daemonPollGap
+	if scoreOpenTimeout-patience < time.Second {
+		t.Errorf("startDaemon polls for %s and the store may take %s: with less than a second between "+
+			"them, scoreOpenTimeout's doc is either wrong about what an operator sees or right only "+
+			"by a scheduling accident", patience, scoreOpenTimeout)
 	}
 }
 

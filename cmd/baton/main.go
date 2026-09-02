@@ -276,6 +276,33 @@ func runServer() error {
 		return err
 	}
 
+	// The daemon's own reading of the operator's filesystem happens here, on this
+	// side of the bind. It used to happen on the other one: config.Load, the
+	// legacy sweep and score.Open all ran after net.Listen and before Serve, so a
+	// score.dir or a $HOME that does not answer left a socket bound and never
+	// served — a client connects, is accepted, and waits forever, with nothing in
+	// the log because the line that would explain it comes after the call that is
+	// stuck. Above the bind the same hang leaves no socket at all: the client gets
+	// a connection error and `baton` reports that the server did not come up (#60).
+	//
+	// It is NOT yet every read below Serve, and saying otherwise here would be the
+	// defect this fix is about. applyConfig's first pass still runs after the bind
+	// and re-reads this same config file, plus $HOME/.baton/TUI.yaml and the Lua
+	// plugin — which the daemon EXECUTES, bounded by nothing. All three need the
+	// server that does not exist until the listener does, so hoisting them is its
+	// own change. What is closed here is the steady state: a path that is already
+	// dead when the daemon starts, which is every case #60 was filed on.
+	boot := loadServerBoot(sock)
+	// The boot's own acquisitions come back through the one function that made
+	// them, on every path out of this one — including the TWO WAYS THE BIND CAN
+	// FAIL below, which are why the defer is here rather than only in runServerOn.
+	// A store exists before either of them and it holds the score directory's
+	// single-writer claim; returning without giving that back would leave it held
+	// by a process nothing can reach it through, which is the failure that makes
+	// the NEXT daemon refuse the same directory. See serverBoot.release, which is
+	// idempotent, so runServerOn's cleanup calling it first costs nothing here.
+	defer boot.release()
+
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", sock, err)
@@ -286,7 +313,7 @@ func runServer() error {
 		_ = ln.Close()
 		return fmt.Errorf("secure socket %s: %w", sock, err)
 	}
-	return runServerOn(ln, sock)
+	return runServerOn(ln, sock, boot)
 }
 
 // buildServerOptions projects the hot-reloadable settings and the persisted
@@ -358,12 +385,6 @@ func limitsOption(cfg config.Config) server.Option {
 	}
 }
 
-// runServerOn runs the long-lived server loop on an already-bound listener for
-// the given socket path. It is the body of runServer, split out so the loop can
-// be driven without re-binding the socket: it records the PID, builds the server
-// from the effective config, wires the plugin and the signal-driven
-// shutdown/reload, and serves until the listener closes. It returns when Serve
-// returns on its own; a SIGINT/SIGTERM instead tidies up and exits the process.
 // sweepLegacyConductorWorkspaces drops the throwaway conductor directories older
 // versions of baton left behind. Each open used to make a fresh MkdirTemp
 // workspace and delete it on close, so every crash or hard kill leaked one, and
@@ -374,6 +395,13 @@ func limitsOption(cfg config.Config) server.Option {
 // that builds a Server can reach a real user's runtime directory. Each removal is
 // logged: this is the user's disk, and a directory disappearing silently is worse
 // than the clutter.
+//
+// BELOW THE BIND, deliberately, and it is the one boot-time filesystem walk that
+// stayed there when #60 hoisted the rest. What it does is two globs, a stat per
+// match and a recursive RemoveAll per leak — unbounded in the number of leaks and
+// in the size of each — and nothing between net.Listen and Serve reads a legacy
+// workspace, so putting it in front of the socket would have bought a slower
+// start for no answer anybody waits on.
 func sweepLegacyConductorWorkspaces(sock string) {
 	current, err := paths.ConductorWorkspace(sock)
 	if err != nil {
@@ -553,22 +581,16 @@ func warnScoreKeysAReloadCannotApply(booted, now config.ScoreConfig) {
 // scoreOpenTimeout bounds how long the daemon waits for the fleet memory before
 // it gives up and serves the fleet without one.
 //
-// The listener is BOUND before runServerOn is reached and Serve does not start
-// until the store is open, so every millisecond score.Open spends is a
-// millisecond a client that has already connected sits on an accepted socket
-// with nothing coming back. score.dir is a path the operator chooses and $HOME
-// is where it defaults, so a network home directory whose server has gone away
-// puts a hard-mount stat inside that window — and a hard mount does not fail,
-// it waits. Without a bound the daemon ends up holding a listening socket it
-// will never serve, which is strictly worse than a clean failure: `baton` hangs
-// with no message, and the log says nothing, because the line that would have
-// explained it comes after the call that is stuck.
+// It is NOT what keeps the daemon reachable, and it has not been since the open
+// moved above net.Listen — runServer says what that ordering buys (#60).
 //
-// It NARROWS that window rather than closing it. config.Load reads $HOME/.baton
-// on the same post-bind path and is not bounded by anything, so the same dead
-// mount still hangs the same daemon — a few lines earlier, and with the same
-// silence. What this removes is the store's share of it, which is the share that
-// grows with what the fleet remembers.
+// What the bound still buys is the difference between "the daemon starts
+// without its memory" and "the daemon never starts". score.dir is a path the
+// operator chooses and $HOME is where it defaults, so a network home directory
+// whose server has gone away puts a hard-mount stat inside score.Open — and a
+// hard mount does not fail, it waits. Unbounded, one directory that stopped
+// answering is the whole fleet, indefinitely. Bounded, the fleet runs and the
+// three score surfaces say why it has no memory (see timedOutReason).
 //
 // Ten seconds, and the number is chosen from the other side of the trade rather
 // than from this one. A store opening slowly is NORMAL — the boot replays the
@@ -579,6 +601,15 @@ func warnScoreKeysAReloadCannotApply(booted, now config.ScoreConfig) {
 // not a pathology this may fire on. So the bound has to sit far above a healthy
 // boot on a large store, and still short enough that a person waiting on a dead
 // mount gets an answer rather than a hang.
+//
+// A boot that spends the WHOLE bound now outlasts startDaemon's own patience —
+// daemonPollTries × daemonPollGap, five seconds — because the socket is not
+// bound until this returns. `baton` says the server did not come up, and the
+// daemon comes up behind it, memoryless; the next invocation attaches to a
+// running fleet. That is the ordering fix working, not a defect: a wrong answer
+// in five seconds beats an accepted socket that never replies. The two numbers
+// are independent of each other, so the arithmetic in this paragraph is a test
+// rather than a sentence: TestABootThatSpendsTheWholeBoundOutlastsTheLauncher.
 //
 // It is a WAIT, not a cancellation: nothing in userspace can interrupt a stat
 // inside the kernel. What it buys is that the daemon proceeds. The goroutine
@@ -682,6 +713,13 @@ func openScore(cfg config.ScoreConfig, p score.Policy, within time.Duration) (*s
 		return nil, "score is switched off in the config (score.enabled: false)"
 	}
 	dir := cfg.Directory()
+	// The same before-the-read line loadServerBoot writes for the config, for the
+	// same reason. This branch DID name its directory — in the reason string, and
+	// in the warning the timeout leaves — but both of those arrive when the wait
+	// gives up, which is five seconds after `baton` has stopped waiting and told the
+	// operator to read this file. A store that is merely slow, or one that never
+	// answers, is the same line here either way.
+	log.Info().Str("dir", dir).Str("within", within.String()).Msg("boot: opening the fleet memory")
 	st, err := waitForStore(within, func() (*score.Store, error) { return score.Open(dir, p) })
 	switch {
 	case errors.Is(err, errScoreOpenTimeout):
@@ -744,25 +782,75 @@ func logScoreBoot(dir string, entries int, d score.Delta, h score.Health) {
 	}
 }
 
-func runServerOn(ln net.Listener, sock string) error {
-	// Record the PID so clients can force-stop this daemon (baton --force / the
-	// in-TUI restart). Non-fatal if it cannot be written.
-	pidPath := paths.PidFile(sock)
-	if err := writePidFile(pidPath, os.Getpid()); err != nil {
-		log.Warn().Err(err).Str("pid_file", pidPath).Msg("could not write pid file")
-	}
+// serverBoot is what the daemon read off the operator's filesystem BEFORE it
+// bound its socket: the effective config, and the fleet memory opened from it.
+//
+// It is a struct rather than three more parameters because its whole reason to
+// exist is that these travel together — one boot's reading of one filesystem —
+// so the next thing hoisted above the bind belongs beside them rather than in a
+// fourth argument.
+type serverBoot struct {
+	cfg         config.Config
+	scoreStore  *score.Store // nil when score is switched off, or did not open
+	scoreReason string       // why no store is running; empty when one is
+	// release gives back what the boot took: the score directory's single-writer
+	// claim, with the folds the store is still holding said on the way past.
+	//
+	// It exists because acquisition and release had drifted to different depths.
+	// The store is opened here and was closed at two sites, safe only because
+	// Close happens to be idempotent. claimSession already owns the shape this
+	// borrows: whoever takes a thing hands back the one function that gives it up.
+	//
+	// It is idempotent, because two callers must both be able to reach for it:
+	// runServer defers it for the paths that never get as far as serving, and
+	// runServerOn's cleanup calls it on the way out — including from the signal
+	// handler, which os.Exits and runs no defer at all.
+	release func()
+}
 
+// loadServerBoot is everything the daemon reads off the operator's filesystem
+// above the bind: the user's config, and the fleet memory — plus the one
+// function that gives the store's claim back. runServer calls it BEFORE
+// net.Listen — see there for what these used to do on the other side of the
+// bind.
+//
+// NOTHING ELSE BELONGS HERE unless the fleet cannot be served without it. What
+// this side of the bind buys is that a dead path is a daemon that never comes
+// up rather than a socket nobody answers on; what it costs is that every
+// millisecond spent here is a millisecond `baton` spends waiting, against a
+// budget of five seconds. The legacy conductor sweep was hoisted here with the
+// config and the store and has since gone back down: it is a recursive
+// RemoveAll per leaked directory, of directories that pile up for as long as
+// baton has been installed, and nothing between the bind and Serve reads one.
+//
+// It cannot fail. Every read here degrades to a warning and a default, because
+// neither is a reason to refuse the fleet: the config falls back to the strict
+// defaults, and a store that did not open is a first-class answer the three
+// score surfaces already report.
+func loadServerBoot(sock string) serverBoot {
+	// SAID BEFORE THE READ, and the ordering is the whole of what this line is
+	// worth. Every read below can hang forever on a filesystem that does not
+	// answer, and a daemon hung there holds the session claim: `baton` waits out
+	// its budget, reports that the server did not come up and points at this log
+	// — which, until this line, was ZERO BYTES, at the default level and at -vv
+	// alike. Nothing at all was logged between claiming the session and the first
+	// unbounded read, so the operator was sent to a file that named neither the
+	// file the daemon stopped on nor the fact that it had started at all.
+	//
+	// Info, not Debug, because the reader is an operator holding an error message
+	// rather than someone debugging baton, and they will not have set a flag
+	// before the boot that failed. It costs two lines per daemon start.
+	//
+	// It names the PATH rather than saying "the config": there are two ways to
+	// point a daemon at a different one ($HOME and BATON_SOCK's second fleet), and
+	// "which file" is the entire question this answers.
+	log.Info().Str("path", paths.ConfigFile()).Msg("boot: reading the config")
 	// Honour the user's settings from the shared config file; a missing or
 	// unreadable config keeps the strict defaults (unique names, home workdir).
-	// Build the server before the cleanup/signal wiring, so the shutdown handler
-	// can flush the final fleet/layout snapshot through it.
 	cfg, err := config.Load()
 	if err != nil {
 		log.Warn().Err(err).Msg("config load failed, building the server on defaults")
 	}
-	rc := reloadableSettings(cfg)
-	stateF := paths.StateFile(sock)
-	sweepLegacyConductorWorkspaces(sock)
 	// Note what is NOT gated on the load error: score.dir and score.enabled are
 	// taken from cfg whatever it says, while the policy is not. That asymmetry is
 	// deliberate, and it is the safe direction of each.
@@ -778,7 +866,64 @@ func runServerOn(ln net.Listener, sock string) error {
 	// switching the memory off over an unrelated typo is a bigger surprise than
 	// running it on the numbers the daemon can still read.
 	scorePol, _ := scorePolicy(cfg.Score, err)
-	scoreStore, scoreReason := openScore(cfg.Score, scorePol, scoreOpenTimeout)
+	store, reason := openScore(cfg.Score, scorePol, scoreOpenTimeout)
+
+	var once sync.Once
+	return serverBoot{cfg: cfg, scoreStore: store, scoreReason: reason, release: func() {
+		once.Do(func() {
+			// Any fold the store is still holding gets said before the daemon
+			// stops. Records are buffered for the next read to drain, and on the
+			// way out there is no next read — so a repeat counted seconds before a
+			// SIGTERM was durable in the log and named in no line anywhere, which
+			// is #38's one-line-per-fold quietly not happening in the case an
+			// operator is most likely to be investigating. Each record carries its
+			// own timestamp, so these are stamped when they happened.
+			server.ScoreFolds(store.DrainFolds())
+			// Nil-safe and idempotent, so the no-store cases cost nothing here.
+			store.Close()
+		})
+	}}
+}
+
+// runServerOn runs the long-lived server loop on an already-bound listener for
+// the given socket path, on the config and store loadServerBoot already read. It
+// is the body of runServer, split out so the loop can be driven without
+// re-binding the socket: it records the PID, builds the server, wires the plugin
+// and the signal-driven shutdown/reload, and serves until the listener closes.
+// It returns when Serve returns on its own; a SIGINT/SIGTERM instead tidies up
+// and exits the process.
+//
+// It loads nothing of its OWN: the config and the store arrive already read,
+// from above the bind (see runServer, #60), and it gives the store's claim back
+// through the one function that took it (serverBoot.release). The reads still
+// below the bind belong to applyConfig — the same config file again, the TUI
+// theme, and the Lua plugin — which need the server they configure and so could
+// not move with the rest.
+func runServerOn(ln net.Listener, sock string, boot serverBoot) error {
+	// Here rather than beside the config and the store, on this side of the bind:
+	// see sweepLegacyConductorWorkspaces for why the one unbounded walk left over
+	// from older versions is the one that did not move.
+	sweepLegacyConductorWorkspaces(sock)
+
+	// Record the PID so clients can force-stop this daemon (baton --force / the
+	// in-TUI restart). Non-fatal if it cannot be written.
+	//
+	// This one stays BELOW the bind while loadServerBoot's reads moved above it,
+	// because it is not the same hazard: the path is the socket's own path with
+	// .pid, in a directory paths.EnsureDir, claimSession and net.Listen have each
+	// already been answered by. Hoisting it would remove no hang and would leave a
+	// stale PID file behind every bind that then fails.
+	pidPath := paths.PidFile(sock)
+	if err := writePidFile(pidPath, os.Getpid()); err != nil {
+		log.Warn().Err(err).Str("pid_file", pidPath).Msg("could not write pid file")
+	}
+
+	// Build the server before the cleanup/signal wiring, so the shutdown handler
+	// can flush the final fleet/layout snapshot through it.
+	cfg := boot.cfg
+	rc := reloadableSettings(cfg)
+	stateF := paths.StateFile(sock)
+	scoreStore := boot.scoreStore
 	// The two score keys a reload cannot apply, remembered as they were AT BOOT
 	// so a later reload can tell whether the operator has since changed one. See
 	// warnScoreKeysAReloadCannotApply.
@@ -789,7 +934,9 @@ func runServerOn(ln net.Listener, sock string) error {
 		// because this is the only place both numbers are visible, and the server's
 		// must never be the shorter of the two.
 		server.WithFanoutFilterBudget(plugin.FilterTimeout),
-		server.WithScore(server.ScoreState{Store: scoreStore, Enabled: cfg.Score.IsEnabled(), Reason: scoreReason}))...)
+		server.WithScore(server.ScoreState{
+			Store: scoreStore, Enabled: cfg.Score.IsEnabled(), Reason: boot.scoreReason,
+		}))...)
 	srv.Restore() // seed the fleet from the last snapshot (all as exited dead slots) before serving
 
 	// The Lua plugin subsystem (docs/PLUGIN.md). Wire the server's event sink and
@@ -905,34 +1052,24 @@ func runServerOn(ln net.Listener, sock string) error {
 	}
 	applyConfig(false) // before Serve: settle settings, config, and commands from the plugin
 
-	// Tidy the socket and PID file on the way out, whichever path gets us there:
+	// Tidy the socket and everything the boot took, whichever path gets us out:
 	// a SIGINT/SIGTERM (the usual stop, and what baton --force / restart send) or
-	// the server loop returning on its own. sync.Once keeps it to exactly one run
-	// so the signal handler and the defer can both call it safely.
+	// the server loop returning on its own. Both halves are idempotent — the once
+	// in serverBoot.release, and os.Remove on a file that is already gone — so the
+	// signal handler and the defer can both call this safely.
 	//
 	// Remove the files *before* closing the listener. A force-restart waits only
-	// for the socket to become unreachable, so unlinking it first guarantees both
-	// files are gone before this daemon returns — otherwise a lagging removal here
+	// for the socket to become unreachable, so unlinking them first guarantees
+	// both are gone before this daemon returns — otherwise a lagging removal here
 	// could race a replacement daemon and delete its fresh socket/PID.
-	var once sync.Once
+	//
+	// The release runs HERE rather than on a defer, because the signal path — the
+	// daemon's ordinary exit — calls os.Exit and runs no defer at all.
 	cleanup := func() {
-		once.Do(func() {
-			_ = os.Remove(sock)
-			_ = os.Remove(pidPath)
-			_ = ln.Close()
-			// Any fold the store is still holding gets said before the daemon
-			// stops. Records are buffered for the next read to drain, and on the
-			// way out there is no next read — so a repeat counted seconds before a
-			// SIGTERM was durable in the log and named in no line anywhere, which
-			// is #38's one-line-per-fold quietly not happening in the case an
-			// operator is most likely to be investigating. Each record carries its
-			// own timestamp, so these are stamped when they happened.
-			server.ScoreFolds(scoreStore.DrainFolds())
-			// The score directory's single-writer claim goes back here rather than
-			// on a defer, because the signal path — the daemon's ordinary exit —
-			// calls os.Exit and runs no defer at all.
-			scoreStore.Close()
-		})
+		_ = os.Remove(sock)
+		_ = os.Remove(pidPath)
+		boot.release()
+		_ = ln.Close()
 	}
 	defer cleanup()
 

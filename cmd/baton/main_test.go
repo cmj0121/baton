@@ -12,6 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/paths"
@@ -407,16 +408,16 @@ func TestRunServerOn(t *testing.T) {
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- runServerOn(ln, sock) }()
+	go func() { done <- runServerOn(ln, sock, loadServerBoot(sock)) }()
 
-	// Wait for the daemon to record its PID file (it is up and serving by then).
-	pidPath := paths.PidFile(sock)
-	if !waitFor(func() bool { _, err := os.Stat(pidPath); return err == nil }, 100, 10*time.Millisecond) {
-		t.Fatal("server did not write its pid file")
-	}
-	if pid, err := readPidFile(pidPath); err != nil || pid != os.Getpid() {
-		t.Fatalf("pid file should hold our pid: pid=%d err=%v", pid, err)
-	}
+	// Wait for the loop to be serving before signalling it. This used to wait on
+	// the PID file, which runServerOn wrote first; the pid is published from above
+	// the bind now, by loadServerBoot, so by the time this test has a boot to hand
+	// runServerOn the file is already there and says nothing about the loop. An
+	// answered hello does: it comes from Serve, which starts after the signal
+	// handlers below are installed, so the SIGHUP cannot arrive while its default
+	// disposition is still "kill this process".
+	waitServing(t, sock)
 
 	// A SIGHUP exercises the reload goroutine (config + plugin re-read).
 	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
@@ -670,5 +671,22 @@ func TestReloadableSettingsCarriesLimits(t *testing.T) {
 	}
 	if rc := reloadableSettings(config.Config{}); !rc.settings.Limits.IsZero() || rc.settings.AgentLimits != nil {
 		t.Errorf("an empty config should cap nothing, got %+v", rc.settings)
+	}
+}
+
+// waitServing blocks until the server on sock has answered a hello, and fails
+// the test if it does not. It is the readiness gate for a test that drives
+// runServerOn on a listener it bound itself: the answer comes out of Serve, so
+// it stands for everything runServerOn does before Serve, the signal handlers
+// included.
+func waitServing(t *testing.T, sock string) {
+	t.Helper()
+	c, err := client.Dial(sock)
+	if err != nil {
+		t.Fatalf("dial %s: %v", sock, err)
+	}
+	defer func() { _ = c.Close() }()
+	if err := c.Wait(5 * time.Second); err != nil {
+		t.Fatalf("the server on %s did not answer a hello: %v", sock, err)
 	}
 }
