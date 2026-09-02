@@ -74,3 +74,33 @@ func TestLoadTUIMalformed(t *testing.T) {
 		t.Fatal("malformed TUI.yaml should error")
 	}
 }
+
+// TestLoadTUIIgnoresTheRetiredScratchSection: the scratch pane was removed (#61)
+// and its `scratch:` section retired with it, with no migration written. This is
+// what makes that decision safe rather than merely hoped for: LoadTUI decodes
+// non-strictly, so a file still carrying the dead section loads without error and
+// the keys around it still arrive. The malformed test above is what proves this
+// one is not vacuous — LoadTUI does reject YAML it cannot read; it just does not
+// reject a key it no longer has a field for.
+func TestLoadTUIIgnoresTheRetiredScratchSection(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := paths.EnsureDir(paths.TUIConfigFile()); err != nil {
+		t.Fatal(err)
+	}
+	yaml := `
+scratch:
+  command: btop
+  width: 0.5
+default-layout: review
+`
+	if err := os.WriteFile(paths.TUIConfigFile(), []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadTUI()
+	if err != nil {
+		t.Fatalf("a dead scratch: section must not fail the load: %v", err)
+	}
+	if got.DefaultLayout != "review" {
+		t.Fatalf("the keys beside it must still parse, default-layout = %q", got.DefaultLayout)
+	}
+}
