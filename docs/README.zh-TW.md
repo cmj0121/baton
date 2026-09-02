@@ -241,6 +241,8 @@ socket 接上——指令往上、事件往下——所以你卸離再重新接�
   工具,以及各種護欄。
 - **[docs/SCORE.md](SCORE.zh-TW.md)** — Score,隊伍的記憶:`score.md` 這個檔案與它唯一的復原手段、階梯、
   排序權重、壓縮,以及它不是什麼邊界。
+- **[docs/DAEMON.md](DAEMON.zh-TW.md)** — Daemon:它照什麼順序開機、readiness 探測,以及 `baton` 說伺服器
+  沒起來的時候該怎麼辦。
 
 ## DDD(Dream-Driven Development,夢想驅動開發)
 

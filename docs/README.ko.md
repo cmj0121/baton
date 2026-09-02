@@ -256,6 +256,8 @@ Lua 파일 하나(`$HOME/.baton/plug-in.lua`)면 Baton을 당신의 워크플로
   안전장치들.
 - **[docs/SCORE.md](SCORE.md)** — Score, 함대의 기억:`score.md` 파일과 그 유일한 되돌리기 수단,
   티어 사다리, 랭킹 가중치, 컴팩션, 그리고 이것이 경계가 아닌 것.
+- **[docs/DAEMON.md](DAEMON.md)** — 데몬: 부팅 순서, 준비 상태 프로브, 그리고 `baton`이 서버가 뜨지 않았다고
+  말할 때 할 일.
 
 ## DDD (Dream-Driven Development)
 

@@ -268,6 +268,8 @@ la flotte, ajouter vos propres commandes et définir la config — le tout à tr
   `baton mcp` et les garde-fous.
 - **[docs/SCORE.md](SCORE.md)** — Score, la mémoire de la flotte : le fichier `score.md` et son unique moyen
   d'annulation, l'échelle de paliers, les poids du classement, le compactage, et ce dont il n'est pas une frontière.
+- **[docs/DAEMON.md](DAEMON.md)** — le daemon : l'ordre dans lequel il démarre, les sondes de readiness, et quoi faire
+  quand `baton` annonce que le serveur n'est pas monté.
 
 ## DDD (Dream-Driven Development)
 

@@ -267,6 +267,8 @@ tus propios comandos y define configuración, todo a través de un único objeto
   herramientas de `baton mcp` y las barreras de seguridad.
 - **[docs/SCORE.md](SCORE.md)** — Score, la memoria de la flota: el archivo `score.md` y su única forma de
   deshacer, la escalera de niveles, los pesos del ranking, la compactación y para qué no es una frontera.
+- **[docs/DAEMON.md](DAEMON.md)** — el daemon: el orden en que arranca, las sondas de readiness y qué hacer cuando
+  `baton` dice que el servidor no llegó a levantarse.
 
 ## DDD (Dream-Driven Development, desarrollo guiado por sueños)
 
