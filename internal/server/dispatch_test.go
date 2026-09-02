@@ -16,7 +16,7 @@ func TestDispatchRecordsAndPersistsTask(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
@@ -54,7 +54,7 @@ func TestDispatchRecordsAndPersistsTask(t *testing.T) {
 func TestDispatchRejectsBadInput(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, _ := listen(t)
-	go func() { _ = server.New(ln).Serve() }()
+	serve(t, server.New(ln))
 
 	c := dial(t, sock)
 	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
@@ -99,7 +99,7 @@ func TestDispatchRestoresTask(t *testing.T) {
 
 	srv := server.New(ln, server.WithStateFile(stateF))
 	srv.Restore()
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	if err := c.Send(proto.Command{Action: "panel.list"}); err != nil {
@@ -117,7 +117,7 @@ func TestDispatchRestoresTask(t *testing.T) {
 func TestConductorCannotDispatchSelf(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, _ := listen(t)
-	go func() { _ = server.New(ln).Serve() }()
+	serve(t, server.New(ln))
 
 	c := dial(t, sock)
 
@@ -176,7 +176,7 @@ func TestDispatchTaskFilter(t *testing.T) {
 		}
 		return b, true
 	})
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {

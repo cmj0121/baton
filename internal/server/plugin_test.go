@@ -69,7 +69,7 @@ func TestExportedHostMethods(t *testing.T) {
 func TestNoticeReachesClient(t *testing.T) {
 	ln, sock, _ := listen(t)
 	srv := server.New(ln)
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 
@@ -99,7 +99,7 @@ func TestConfigGetServesMergedConfig(t *testing.T) {
 	srv := server.New(ln)
 	srv.SetClientConfig([]byte(`{"prefix":"ctrl+a"}`))
 	srv.SetPluginCommands([]proto.PluginCommand{{Name: "hi", Desc: "say hi"}})
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c, err := client.Dial(sock)
 	if err != nil {

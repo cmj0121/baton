@@ -19,7 +19,7 @@ func TestConfigGetServesDetectedAgents(t *testing.T) {
 		{Name: "claude", Command: "claude"},
 		{Name: "codex", Command: "codex", Args: []string{"--full-auto"}},
 	})
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c, err := client.Dial(sock)
 	if err != nil {
@@ -45,7 +45,7 @@ func TestConfigGetServesDetectedAgents(t *testing.T) {
 func TestPushConfigCarriesDetectedAgents(t *testing.T) {
 	ln, sock, _ := listen(t)
 	srv := server.New(ln)
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c, err := client.Dial(sock)
 	if err != nil {

@@ -20,7 +20,7 @@ func TestHeartbeatPing(t *testing.T) {
 	ln, sock, _ := listen(t)
 	srv := server.New(ln)
 	srv.SetHeartbeat(20 * time.Millisecond) // fire fast for the test
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	conn, err := net.Dial("unix", sock)
 	if err != nil {
@@ -54,7 +54,7 @@ func TestIdleClientStaysConnected(t *testing.T) {
 	ln, sock, _ := listen(t)
 	srv := server.New(ln)
 	srv.SetHeartbeat(20 * time.Millisecond)
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock) // drains welcome + initial panels, never sends again
 
@@ -78,7 +78,7 @@ func TestHandshakeTimeoutDropsSilentConn(t *testing.T) {
 	}
 	ln, sock, _ := listen(t)
 	srv := server.New(ln)
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	conn, err := net.Dial("unix", sock)
 	if err != nil {
@@ -189,7 +189,7 @@ func TestTeardownClosesConnOnce(t *testing.T) {
 	ln, sock, _ := listen(t)
 	srv := server.New(ln)
 	srv.SetHeartbeat(5 * time.Millisecond)
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	conn, err := net.Dial("unix", sock)
 	if err != nil {
@@ -227,7 +227,7 @@ func TestShutdownPersistsLatestState(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	// A burst of mutations to load the 1-deep dirty channel, then a final mutation

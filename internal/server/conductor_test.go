@@ -26,7 +26,7 @@ func TestConductorGuardrails(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	defer func() { _ = ln.Close() }()
-	go func() { _ = server.New(ln).Serve() }()
+	serve(t, server.New(ln))
 
 	c, err := client.Dial(sock)
 	if err != nil {
@@ -114,7 +114,7 @@ func TestConductorPanelSpawn(t *testing.T) {
 	}
 	defer func() { _ = ln.Close() }()
 	srv := server.New(ln)
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c, err := client.Dial(sock)
 	if err != nil {
@@ -241,7 +241,7 @@ func TestConductorOperatorBrief(t *testing.T) {
 	}
 	defer func() { _ = ln.Close() }()
 	srv := server.New(ln)
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c, err := client.Dial(sock)
 	if err != nil {
@@ -298,7 +298,7 @@ func TestConductorResetWorkspace(t *testing.T) {
 	}
 	defer func() { _ = ln.Close() }()
 	srv := server.New(ln)
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c, err := client.Dial(sock)
 	if err != nil {
@@ -363,7 +363,7 @@ func TestConductorResetFenced(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	defer func() { _ = ln.Close() }()
-	go func() { _ = server.New(ln).Serve() }()
+	serve(t, server.New(ln))
 
 	c, err := client.Dial(sock)
 	if err != nil {
@@ -411,7 +411,7 @@ func TestConductorBriefReloads(t *testing.T) {
 	}
 	defer func() { _ = ln.Close() }()
 	srv := server.New(ln)
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c, err := client.Dial(sock)
 	if err != nil {

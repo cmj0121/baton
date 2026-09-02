@@ -1,12 +1,15 @@
 package server
 
 import (
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/cmj0121/baton/internal/panel"
+	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/ptymgr"
 )
 
 // newHostServer builds a bare Server on a private unix socket for exercising the
@@ -28,7 +31,13 @@ func newHostServer(t *testing.T, opts ...Option) *Server {
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 	t.Setenv("BATON_TEST_DIR", dir) // the temp dir, for a test that needs a workdir too
-	return New(ln, opts...)
+	s := New(ln, opts...)
+	// Registered here rather than left to each caller: Shutdown kills the panels a
+	// test spawned AND joins their output pumps, so no pump outlives the test that
+	// started it. A test that forgets leaks a goroutine into whatever runs next,
+	// which is how #63 turned into a data race in an unrelated test's log buffer.
+	t.Cleanup(func() { s.Shutdown() })
+	return s
 }
 
 // TestHostSettersToggle covers the wiring setters that only store or push state:
@@ -267,5 +276,30 @@ func TestHostRespawnAndPurge(t *testing.T) {
 	s.mu.Unlock()
 	if n := s.Purge(); n < 1 {
 		t.Fatalf("purge should drop the exited panel, got %d", n)
+	}
+}
+
+// TestShutdownJoinsItsPanelPumps is the daemon-level half of the bounded join:
+// when Shutdown returns, the output pumps behind its panels have already
+// finished. It asserts the same question either side of the call, so the "after"
+// answer cannot be read as one the manager would have given all along — before,
+// a live panel's pump is running; after, none is.
+//
+// Nothing here polls, deliberately. A retry loop would pass whether or not
+// Shutdown joined, since a killed pump finishes on its own within milliseconds;
+// asking with a zero bound is what makes the claim about Shutdown rather than
+// about patience.
+func TestShutdownJoinsItsPanelPumps(t *testing.T) {
+	s := newHostServer(t)
+	if _, err := s.createPanel(proto.KindShell, "", nil, os.Getenv("BATON_TEST_DIR"), "", false, false); err != nil {
+		t.Fatalf("create shell panel: %v", err)
+	}
+
+	if err := s.pty.Wait(0); !errors.Is(err, ptymgr.ErrPumpsRunning) {
+		t.Fatalf("precondition: a live panel should have a running pump, got %v", err)
+	}
+	s.Shutdown()
+	if err := s.pty.Wait(0); err != nil {
+		t.Fatalf("Shutdown must return with every pump already finished: %v", err)
 	}
 }

@@ -17,7 +17,6 @@ import (
 func identityServer(t *testing.T, opts ...Option) (*Server, string) {
 	t.Helper()
 	s := newHostServer(t, opts...)
-	t.Cleanup(func() { s.Shutdown() })
 	dir := os.Getenv("BATON_TEST_DIR")
 	t.Setenv("XDG_RUNTIME_DIR", dir)
 	t.Setenv("HOME", dir)
@@ -33,7 +32,6 @@ func restartDaemon(t *testing.T, s *Server, stateF string) *Server {
 	s.SaveNow()
 	s.Shutdown()
 	next := newHostServer(t, WithStateFile(stateF))
-	t.Cleanup(func() { next.Shutdown() })
 	next.Restore()
 	return next
 }

@@ -33,6 +33,20 @@ func listen(t *testing.T) (ln net.Listener, sock, stateF string) {
 	return ln, sock, stateF
 }
 
+// serve runs srv for the rest of the test and stops it — killing the panels it
+// spawned and joining their output pumps — when the test ends.
+//
+// Every wire test goes through this rather than starting Serve on a bare
+// goroutine, because a test that never stops its server leaves its PTY pumps
+// running into whatever test comes next; #63 is what that looks like from the
+// outside, a data race between a stale pump's log line and an unrelated later
+// test's log buffer. A helper cannot be forgotten the way a teardown line can.
+func serve(t *testing.T, srv *server.Server) {
+	t.Helper()
+	go func() { _ = srv.Serve() }()
+	t.Cleanup(func() { srv.Shutdown() })
+}
+
 // dial attaches a client and drains the handshake (welcome + initial panels).
 func dial(t *testing.T, sock string) *client.Client {
 	t.Helper()
@@ -52,7 +66,7 @@ func TestSnapshotCapturesSpec(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	dir := t.TempDir()
@@ -85,7 +99,7 @@ func TestShutdownKillsLivePanels(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	for i := 0; i < 2; i++ {
@@ -121,7 +135,7 @@ func TestSaveOnMutation(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
@@ -177,7 +191,7 @@ func TestRestoreDeadSlotsAndRespawn(t *testing.T) {
 
 	srv := server.New(ln, server.WithStateFile(stateF))
 	srv.Restore()
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	// The initial snapshot the handshake already drained should carry both panels;
@@ -254,7 +268,7 @@ func TestRestoreSeqGuardBumpsPastHigherIDs(t *testing.T) {
 
 	srv := server.New(ln, server.WithStateFile(stateF))
 	srv.Restore()
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
@@ -272,7 +286,7 @@ func TestRespawnRefusesLivePanel(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {

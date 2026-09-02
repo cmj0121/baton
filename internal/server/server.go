@@ -3403,11 +3403,25 @@ func (s *Server) broadcastFleet() {
 	s.markDirty()
 }
 
+// shutdownJoinTimeout bounds how long Shutdown waits for the PTY pumps to notice
+// the kill it just delivered. A SIGKILL reaches the whole process group and the
+// master hits EOF at once, so the join normally costs microseconds; the bound is
+// there for the one pump that never drains — a grandchild that inherited the PTY
+// slave and outlived its group — because a shutdown that can block forever is
+// worse than the goroutine it was meant to collect. Exceeding it is logged, not
+// swallowed.
+const shutdownJoinTimeout = 2 * time.Second
+
 // Shutdown sends SIGKILL to every live panel's process group, so no child
-// process outlives the daemon when it stops. The signal handler calls this on the
-// way out (after SaveNow has flushed the layout); a process group escapes only if
-// a child daemonised into its own session, the same caveat panel signals carry.
-// Returns the number of panels killed.
+// process outlives the daemon when it stops, then waits for their output pumps
+// to finish. The signal handler calls this on the way out (after SaveNow has
+// flushed the layout); a process group escapes only if a child daemonised into
+// its own session, the same caveat panel signals carry.
+//
+// The wait is what makes the stop a fact rather than a request: a pump still
+// running after Shutdown returns would go on firing onPanelExit — logging,
+// broadcasting, touching the transcripts closed below — against a daemon that
+// believes it is already down. Returns the number of panels killed.
 func (s *Server) Shutdown() int {
 	// Mark the intent before the kills land, so the exits they cause are read as
 	// the daemon going down rather than as a fleet-wide crash to be undone.
@@ -3423,6 +3437,11 @@ func (s *Server) Shutdown() int {
 	n := s.pty.KillAll(syscall.SIGKILL)
 	if n > 0 {
 		log.Info().Int("panels", n).Msg("killed live panels on shutdown")
+	}
+	// Before the transcripts are closed: a pump that is still draining calls
+	// onPanelExit, which writes to the very sinks closeAllLogs is about to finish.
+	if err := s.pty.Wait(shutdownJoinTimeout); err != nil {
+		log.Warn().Dur("waited", shutdownJoinTimeout).Err(err).Msg("gave up waiting for panel output pumps")
 	}
 	// The kills above ended the runtime CLIENTS of any isolated panels; the
 	// containers they were attached to are the daemon's children, not ours, and
