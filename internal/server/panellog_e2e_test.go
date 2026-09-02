@@ -32,8 +32,7 @@ func TestPanelLoggingEndToEnd(t *testing.T) {
 	}
 	defer func() { _ = ln.Close() }()
 	srv := server.New(ln, server.WithLogging(logs, nil, nil, 0))
-	go func() { _ = srv.Serve() }()
-	defer srv.Shutdown()
+	serve(t, srv)
 
 	c, err := client.Dial(sock)
 	if err != nil {
@@ -115,8 +114,7 @@ func TestPanelLoggingRefusedWithoutADir(t *testing.T) {
 	}
 	defer func() { _ = ln.Close() }()
 	srv := server.New(ln) // no WithLogging: the default
-	go func() { _ = srv.Serve() }()
-	defer srv.Shutdown()
+	serve(t, srv)
 
 	c, err := client.Dial(sock)
 	if err != nil {

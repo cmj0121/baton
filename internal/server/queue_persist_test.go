@@ -23,7 +23,7 @@ func queueDirFor(stateF string) string {
 func TestEnqueuePersistsAndLists(t *testing.T) {
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	if err := c.Send(proto.Command{Action: "task.enqueue", Prompt: "ship it", Group: "api"}); err != nil {
@@ -83,7 +83,7 @@ func TestRestoreReQueuesOrphans(t *testing.T) {
 
 	srv := server.New(ln, server.WithStateFile(stateF))
 	srv.Restore()
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 	_ = dial(t, sock)
 
 	if srv.TaskCount() != 2 {
@@ -101,7 +101,7 @@ func TestRestoreReQueuesOrphans(t *testing.T) {
 // the backlog is an operator-only action.
 func TestConductorCannotDrain(t *testing.T) {
 	ln, sock, _ := listen(t)
-	go func() { _ = server.New(ln).Serve() }()
+	serve(t, server.New(ln))
 
 	c := dial(t, sock)
 	if err := c.Send(proto.Command{Action: "hello", Role: "conductor", Self: ""}); err != nil {

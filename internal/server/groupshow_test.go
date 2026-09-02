@@ -25,7 +25,7 @@ func TestGroupShowSetsCount(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	if err := c.Send(proto.Command{Action: "group.show", Group: "work", Count: 3}); err != nil {
@@ -48,7 +48,7 @@ func TestGroupShowClampsRange(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 
@@ -80,7 +80,7 @@ func TestGroupShowEmptyGroupErrors(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	if err := c.Send(proto.Command{Action: "group.show", Group: "  ", Count: 2}); err != nil {
@@ -97,7 +97,7 @@ func TestGroupShowPersistRoundTrip(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	if err := c.Send(proto.Command{Action: "group.show", Group: "work", Count: 5}); err != nil {
@@ -124,7 +124,7 @@ func TestGroupShowPersistRoundTrip(t *testing.T) {
 	ln2, sock2, _ := listen(t)
 	srv2 := server.New(ln2, server.WithStateFile(stateF))
 	srv2.Restore()
-	go func() { _ = srv2.Serve() }()
+	serve(t, srv2)
 
 	c2 := dial(t, sock2)
 	if err := c2.Send(proto.Command{Action: "panel.list"}); err != nil {
@@ -142,7 +142,7 @@ func TestGroupShowRenameMovesCount(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	// A member is needed: renameGroup errors if no panel sits under the old name.
@@ -182,7 +182,7 @@ func TestGroupShowDissolveDropsCount(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {

@@ -18,7 +18,6 @@ func limitsServer(t *testing.T) (*Server, string) {
 		limits.Limits{CPUs: "2", Memory: "4Gi", Pids: "512"},
 		map[string]limits.Limits{"heavy": {Memory: "16Gi"}},
 	))
-	t.Cleanup(func() { s.Shutdown() })
 	return s, os.Getenv("BATON_TEST_DIR")
 }
 

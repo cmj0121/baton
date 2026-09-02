@@ -31,7 +31,13 @@ func newHostServer(t *testing.T, opts ...Option) *Server {
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 	t.Setenv("BATON_TEST_DIR", dir) // the temp dir, for a test that needs a workdir too
-	return New(ln, opts...)
+	s := New(ln, opts...)
+	// Registered here rather than left to each caller: Shutdown kills the panels a
+	// test spawned AND joins their output pumps, so no pump outlives the test that
+	// started it. A test that forgets leaks a goroutine into whatever runs next,
+	// which is how #63 turned into a data race in an unrelated test's log buffer.
+	t.Cleanup(func() { s.Shutdown() })
+	return s
 }
 
 // TestHostSettersToggle covers the wiring setters that only store or push state:

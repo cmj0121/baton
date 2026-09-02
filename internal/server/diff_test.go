@@ -29,7 +29,7 @@ func startDiffServer(t *testing.T, opts ...server.Option) (*server.Server, strin
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 	srv := server.New(ln, opts...)
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 	return srv, sock
 }
 

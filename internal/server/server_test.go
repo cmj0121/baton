@@ -38,7 +38,7 @@ func TestAttachAndCreateShellPanel(t *testing.T) {
 	defer func() { _ = ln.Close() }()
 
 	srv := server.New(ln)
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	// Attach: handshake yields a welcome and an (empty) panel snapshot.
 	c, err := client.Dial(sock)
@@ -119,7 +119,7 @@ func TestExitMarks(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	defer func() { _ = ln.Close() }()
-	go func() { _ = server.New(ln).Serve() }()
+	serve(t, server.New(ln))
 
 	c, err := client.Dial(sock)
 	if err != nil {
@@ -164,7 +164,7 @@ func TestStatsOnAttach(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	defer func() { _ = ln.Close() }()
-	go func() { _ = server.New(ln).Serve() }()
+	serve(t, server.New(ln))
 
 	c, err := client.Dial(sock)
 	if err != nil {
@@ -198,7 +198,7 @@ func TestPurgeExited(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	defer func() { _ = ln.Close() }()
-	go func() { _ = server.New(ln).Serve() }()
+	serve(t, server.New(ln))
 
 	c, err := client.Dial(sock)
 	if err != nil {
@@ -272,7 +272,7 @@ func TestAttachIO(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	defer func() { _ = ln.Close() }()
-	go func() { _ = server.New(ln).Serve() }()
+	serve(t, server.New(ln))
 
 	c, err := client.Dial(sock)
 	if err != nil {
@@ -326,7 +326,7 @@ func TestGroupAndRename(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	defer func() { _ = ln.Close() }()
-	go func() { _ = server.New(ln).Serve() }()
+	serve(t, server.New(ln))
 
 	c, err := client.Dial(sock)
 	if err != nil {
@@ -498,7 +498,7 @@ func TestNameConflictPolicy(t *testing.T) {
 			t.Fatalf("listen: %v", err)
 		}
 		t.Cleanup(func() { _ = ln.Close() })
-		go func() { _ = server.New(ln, opts...).Serve() }()
+		serve(t, server.New(ln, opts...))
 
 		c, err := client.Dial(sock)
 		if err != nil {
@@ -594,7 +594,7 @@ func startServer(t *testing.T, opts ...server.Option) *client.Client {
 		t.Fatalf("listen: %v", err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
-	go func() { _ = server.New(ln, opts...).Serve() }()
+	serve(t, server.New(ln, opts...))
 
 	c, err := client.Dial(sock)
 	if err != nil {
@@ -763,7 +763,7 @@ func TestMultiAttach(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	defer func() { _ = ln.Close() }()
-	go func() { _ = server.New(ln).Serve() }()
+	serve(t, server.New(ln))
 
 	c, err := client.Dial(sock)
 	if err != nil {
@@ -879,7 +879,7 @@ func TestMovePanels(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	defer func() { _ = ln.Close() }()
-	go func() { _ = server.New(ln).Serve() }()
+	serve(t, server.New(ln))
 
 	c, err := client.Dial(sock)
 	if err != nil {
@@ -949,7 +949,7 @@ func TestPinPanels(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	defer func() { _ = ln.Close() }()
-	go func() { _ = server.New(ln).Serve() }()
+	serve(t, server.New(ln))
 
 	c, err := client.Dial(sock)
 	if err != nil {
@@ -1005,7 +1005,7 @@ func TestReloadAppliesSettings(t *testing.T) {
 	}
 	defer func() { _ = ln.Close() }()
 	srv := server.New(ln) // strict names by default
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c, err := client.Dial(sock)
 	if err != nil {
@@ -1062,7 +1062,7 @@ func TestReloadCmdHook(t *testing.T) {
 	srv := server.New(ln)
 	reloaded := make(chan struct{}, 1)
 	srv.OnReload(func() { reloaded <- struct{}{} })
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c, err := client.Dial(sock)
 	if err != nil {
@@ -1103,7 +1103,7 @@ func TestSignalPanel(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	defer func() { _ = ln.Close() }()
-	go func() { _ = server.New(ln).Serve() }()
+	serve(t, server.New(ln))
 
 	c, err := client.Dial(sock)
 	if err != nil {

@@ -32,7 +32,7 @@ func remoteServer(t *testing.T) (*server.Server, string) {
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 	srv := server.New(ln)
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 	return srv, sock
 }
 

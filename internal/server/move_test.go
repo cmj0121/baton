@@ -14,7 +14,7 @@ func TestMovePanelsErrors(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	// Seed one panel so the fleet is non-empty but the bogus id still won't match.

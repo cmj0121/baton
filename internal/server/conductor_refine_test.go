@@ -247,7 +247,7 @@ func scoredFleet(t *testing.T, n int) fleet {
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 	f.srv = server.New(ln, server.WithScore(server.ScoreState{Store: st, Enabled: true}))
-	go func() { _ = f.srv.Serve() }()
+	serve(t, f.srv)
 
 	f.cockpit = dial(t, f.sock)
 	if err := f.cockpit.Send(proto.Command{

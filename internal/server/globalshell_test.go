@@ -26,7 +26,7 @@ func TestGlobalShellPanelSpawn(t *testing.T) {
 	}
 	defer func() { _ = ln.Close() }()
 	srv := server.New(ln)
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c, err := client.Dial(sock)
 	if err != nil {

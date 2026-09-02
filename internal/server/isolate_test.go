@@ -25,7 +25,6 @@ func isolatedServer(t *testing.T, pol isolate.Policy) (*Server, string) {
 	t.Helper()
 	s := newHostServer(t)
 	s.Reload(Settings{AgentIsolate: map[string]isolate.Policy{"walled": pol}})
-	t.Cleanup(func() { s.Shutdown() })
 	return s, os.Getenv("BATON_TEST_DIR")
 }
 

@@ -34,7 +34,7 @@ func TestFavouritePanels(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 
@@ -83,7 +83,7 @@ func TestGroupFavourite(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 
@@ -124,7 +124,7 @@ func TestFavouritePersistsAndRestores(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	if err := c.Send(proto.Command{Action: "panel.create", Kind: "shell"}); err != nil {
@@ -164,7 +164,7 @@ func TestFavouritePersistsAndRestores(t *testing.T) {
 	ln2, sock2, _ := listen(t)
 	srv2 := server.New(ln2, server.WithStateFile(stateF))
 	srv2.Restore()
-	go func() { _ = srv2.Serve() }()
+	serve(t, srv2)
 
 	c2 := dial(t, sock2)
 	if err := c2.Send(proto.Command{Action: "panel.list"}); err != nil {

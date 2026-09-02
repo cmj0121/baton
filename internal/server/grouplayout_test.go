@@ -24,7 +24,7 @@ func TestGroupLayoutSetsName(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	if err := c.Send(proto.Command{Action: "group.layout", Group: "work", Layout: "main-vertical"}); err != nil {
@@ -53,7 +53,7 @@ func TestGroupLayoutClears(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	if err := c.Send(proto.Command{Action: "group.layout", Group: "g", Layout: "stack"}); err != nil {
@@ -79,7 +79,7 @@ func TestGroupLayoutNeedsGroup(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, stateF := listen(t)
 	srv := server.New(ln, server.WithStateFile(stateF))
-	go func() { _ = srv.Serve() }()
+	serve(t, srv)
 
 	c := dial(t, sock)
 	if err := c.Send(proto.Command{Action: "group.layout", Group: "", Layout: "stack"}); err != nil {
