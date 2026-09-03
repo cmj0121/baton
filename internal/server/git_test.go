@@ -325,46 +325,106 @@ func TestWTAddNoDir(t *testing.T) {
 	}
 }
 
-// TestWTAddConductor keeps the targetless form off the conductor's side of the
-// fence. panel.git reaches neither the fleet ceiling nor the spawn rate cap, so a
-// form that also lets the caller NAME the command it spawns would hand a scoped
-// agent panel.create's power with none of panel.create's limits. The form that
-// names a panel copies that panel's spec and is still allowed.
+// conductorOn dials the server, spawns an idle agent in dir, and upgrades the
+// connection to the conductor role declaring that agent as its own panel — the
+// starting position for every worktree-spawn fence test below. The panel is
+// created BEFORE the hello, so it is a plain cockpit spawn and leaves the
+// conductor's own rate stamp unspent.
+func conductorOn(t *testing.T, sock, dir string) (*client.Client, string) {
+	t.Helper()
+	c := dialReady(t, sock)
+	agentID := createAgentIn(t, c, dir)
+	if err := c.Send(proto.Command{Action: "hello", Role: "conductor", Self: agentID}); err != nil {
+		t.Fatalf("hello conductor: %v", err)
+	}
+	recvUntil(t, c, "welcome")
+	recvUntil(t, c, "panels")
+	return c, agentID
+}
+
+// TestWTAddConductor is #66's fence after #67 turned it into the caps. The
+// targetless form — the one that lets the caller NAME the command it spawns — is
+// now ADMITTED for a conductor, and the tree, the agent and the group all appear.
+//
+// The refusal it replaces was never really about naming a command: a conductor's
+// panel.create names one too, and always could. It was about the missing half —
+// panel.git reached neither the fleet ceiling nor the rate cap — so supplying
+// that half (TestWorktreeAddPaysTheSpawnCaps, TestWTAddConductorReachesTheCap)
+// retires the refusal rather than working around it.
 func TestWTAddConductor(t *testing.T) {
+	requireGitDiff(t)
+	repo := gitRepoWithChange(t)
+
+	_, sock := startDiffServer(t)
+	c, _ := conductorOn(t, sock, repo)
+
+	if err := c.Send(proto.Command{
+		Action: "panel.git", Git: "worktree-add",
+		Dir: repo, Name: "feature/own",
+		Path: "/bin/sh", Args: []string{"-c", "sleep 30"},
+	}); err != nil {
+		t.Fatalf("panel.git worktree-add: %v", err)
+	}
+	snap := recvUntil(t, c, "panels")
+	if len(snap.Panels) != 2 {
+		t.Fatalf("a conductor's worktree spawn should add a panel, got %+v", snap.Panels)
+	}
+	tree := filepath.Join(repo+"-worktrees", "feature-own")
+	if _, err := os.Stat(filepath.Join(tree, ".git")); err != nil {
+		t.Fatalf("the worktree should exist at %s: %v", tree, err)
+	}
+	if got := snap.Panels[1].Group; got != "feature/own" {
+		t.Fatalf("the new agent should be filed under the branch, got group %q", got)
+	}
+}
+
+// TestWTAddNoBranch: a worktree spawn with no branch is refused before any git
+// runs. Not merely before `git worktree add` — before the rev-parse that decides
+// whether the directory is a repository at all, which is why the check sits ahead
+// of it in worktreeSpawn. A repo path that does not exist is the assertion: git
+// would fail on it, so a refusal naming the BRANCH proves nothing ran.
+func TestWTAddNoBranch(t *testing.T) {
+	_, sock := startDiffServer(t)
+	c := dialReady(t, sock)
+
+	if err := c.Send(proto.Command{
+		Action: "panel.git", Git: "worktree-add",
+		Dir:  filepath.Join(t.TempDir(), "no-such-repo"),
+		Path: "/bin/sh", Args: []string{"-c", "sleep 30"},
+	}); err != nil {
+		t.Fatalf("panel.git worktree-add: %v", err)
+	}
+	msg := recvUntil(t, c, "error")
+	if !strings.Contains(msg.Error, "branch") {
+		t.Fatalf("a worktree spawn with no branch should be refused for the branch, got %q", msg.Error)
+	}
+}
+
+// TestWTAddNoAgentLeavesNoTree: the server refuses a targetless add that names no
+// command, and refuses it BEFORE the tree exists. Every client resolves its own
+// command and refuses locally first, so this is the promise for the client that
+// does not — and the alternative is not a refusal but a real worktree on disk,
+// recorded as baton's, with nothing running in it and an operator left to retire
+// it by hand. That is what createPanel's own "an agent panel needs a command"
+// gives you, since it only fires after gitops.WorktreeAdd has run.
+func TestWTAddNoAgentLeavesNoTree(t *testing.T) {
 	requireGitDiff(t)
 	repo := gitRepoWithChange(t)
 
 	_, sock := startDiffServer(t)
 	c := dialReady(t, sock)
 
-	agentID := createAgentIn(t, c, repo)
-	if err := c.Send(proto.Command{Action: "hello", Role: "conductor", Self: agentID}); err != nil {
-		t.Fatalf("hello conductor: %v", err)
-	}
-	recvUntil(t, c, "welcome")
-	recvUntil(t, c, "panels")
-
 	if err := c.Send(proto.Command{
 		Action: "panel.git", Git: "worktree-add",
-		Dir: repo, Name: "feature/sneaky",
-		Path: "/bin/sh", Args: []string{"-c", "sleep 30"},
+		Dir: repo, Name: "feature/agentless",
 	}); err != nil {
 		t.Fatalf("panel.git worktree-add: %v", err)
 	}
 	msg := recvUntil(t, c, "error")
-	if !strings.Contains(msg.Error, "conductor role") {
-		t.Fatalf("a conductor's targetless worktree spawn should be fenced, got %q", msg.Error)
+	if !strings.Contains(msg.Error, "agent command") {
+		t.Fatalf("a worktree spawn with no command should be refused for the command, got %q", msg.Error)
 	}
 	if _, err := os.Stat(repo + "-worktrees"); !os.IsNotExist(err) {
-		t.Fatalf("a fenced spawn must create no tree, stat err = %v", err)
-	}
-
-	// The other half, and the reason this is a narrow fence rather than a ban: the
-	// form that names a panel chooses no command, so it stays open.
-	if err := c.Send(proto.Command{Action: "panel.git", Git: "worktree-add", ID: agentID, Name: "feature/fanout"}); err != nil {
-		t.Fatalf("panel.git worktree-add: %v", err)
-	}
-	if snap := recvUntil(t, c, "panels"); len(snap.Panels) != 2 {
-		t.Fatalf("a conductor may still fan an existing agent out, got %+v", snap.Panels)
+		t.Fatalf("the refusal must land before the tree is built, stat err = %v", err)
 	}
 }
