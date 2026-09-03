@@ -58,18 +58,55 @@ already opens the editor you want at the command line, baton needs no extra conf
 
 ## Worktrees — isolation for parallel agents
 
-- **`w` (worktree + agent)** asks for a branch name, then `git worktree add -b
-<branch>` a fresh tree and **spawns an agent rooted in it**, reusing the source
-  agent's command, **grouped under the branch** so it lands as a work item at once.
-  This is how you fan an agent out onto an isolated branch without it stepping on
-  the tree you are in. The tree goes under **`panel.worktree-dir`** when set, else a
-  sibling `"<repo>-worktrees/<branch>"` (the branch's slashes become dashes).
+Underneath the menu there is **one server path**, and it takes three things: a
+**repo**, a **branch**, and an **agent spec** (command, args, profile).
+
+```text
+repo + branch + spec → git worktree add -b → spawn an agent in the tree → group it under the branch
+```
+
+`C-t G` `w` is **one caller** of that path, not the path itself. It resolves the
+repo and the spec from the agent you are zoomed into and hands both over; nothing
+in the sequence after that needs a live agent sitting in the repo. A path that is
+not a git repository is refused with `not a git repository: …`, and there is no
+fallback onto a plain spawn.
+
+- **`w` (worktree + agent)** asks for a branch name, then runs that path with the
+  zoomed agent's repo and its command, args and profile — so the new tree gets the
+  same kind of agent under the same resource caps, **grouped under the branch** so
+  it lands as a work item at once. This is how you fan an agent out onto an
+  isolated branch without it stepping on the tree you are in. The tree goes under
+  **`panel.worktree-dir`** when set, else a sibling `"<repo>-worktrees/<branch>"`
+  (the branch's slashes become dashes).
 - **`W` (worktrees)** lists the repo's worktrees in a text pop-up.
 - **`x` (rm worktree)** asks for a path, confirms, then `git worktree remove` it. It
   runs **without `--force`**, so git refuses a worktree with uncommitted changes or
   a lock — the safe default, surfaced as the error. It targets a typed path, never
   the live agent's own workdir, so you cannot pull a tree out from under a running
   agent by accident.
+
+### Trees baton opened, and trees you did
+
+If the tree is created but the **agent fails to start**, the tree is **left in
+place** — retire it with `x` rather than have baton guess.
+
+So that baton can tell such a tree from one you made yourself, every tree this path
+opens is recorded in a file beside the fleet snapshot: `<socket>.worktrees.json`,
+derived from the control socket, machine-written and never hand-edited, exactly as
+`<socket>.state.json` is. **Nothing is written into the worktree itself** — a marker
+file there would sit in front of the agent working in that tree, which might well
+commit it. A tree you made with plain `git worktree add` is never in the record.
+
+It is a separate file from the fleet snapshot because the lifetimes differ: closing
+the agent, purging, and restarting the daemon all leave the tree standing, so the
+record outlives the fleet the snapshot describes. It is written only when the
+snapshot is, and removing a tree remains `x` alone, still without `--force`.
+
+Retiring a tree with `x` also takes it back **out** of the record, so the file names
+the trees baton owns now rather than every tree it ever opened. That is housekeeping,
+not a guarantee: removing a tree with `git worktree remove` in your own terminal, or
+deleting the directory outright, never reaches baton, so a recorded path can still
+name a tree that is gone.
 
 ## Safety
 
@@ -104,8 +141,10 @@ server resolves the op to a concrete command in [`internal/gitops`](../internal/
   pop-up — no PTY, nothing persisted;
 - **commit** keeps the transient PTY panel (it drives `$EDITOR`), replying so the
   cockpit auto-zooms it (the `openEphemeral` engine the explicit `diff-command` uses);
-- **worktree-add** creates the tree, spawns + groups the agent, and broadcasts the
-  fleet;
+- **worktree-add** resolves the repo and the spec from the target panel and calls
+  the shared repo + branch + spec path, which creates the tree, records it, spawns +
+  groups the agent, and broadcasts the fleet — the menu keeps no private copy of
+  that sequence;
 - **worktree-remove** runs synchronously and confirms with a notice.
 
 The agent-only and git-work-tree gates are enforced server-side — the cockpit gates
