@@ -11,6 +11,7 @@
 package control
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/worktree"
 )
 
 // ioTimeout bounds every read/write so a wedged server can never hang the CLI.
@@ -402,6 +404,56 @@ func (c *Client) TasksJSON() (string, error) {
 	return string(out), nil
 }
 
+// Worktrees returns every tree baton opened, each classified against the fleet
+// as it stands: live (a running panel works there), dead-slot (only an exited
+// panel names it), or orphan (nothing does). Only the trees baton opened are
+// ever in it — one made with plain `git worktree add` is in no record, so it is
+// in no answer.
+func (c *Client) Worktrees() ([]worktree.Entry, error) {
+	payload, err := c.worktreeExchange(proto.Command{Action: "worktree.list"})
+	if err != nil {
+		return nil, err
+	}
+	var out []worktree.Entry
+	if err := json.Unmarshal(payload, &out); err != nil {
+		return nil, fmt.Errorf("malformed worktree.list reply: %s", payload)
+	}
+	return out, nil
+}
+
+// WorktreesJSON returns the same as indented JSON, the shared presentation for
+// `baton ctl worktree list` and the MCP worktree tool.
+func (c *Client) WorktreesJSON() (string, error) {
+	trees, err := c.Worktrees()
+	if err != nil {
+		return "", err
+	}
+	out, err := json.MarshalIndent(trees, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// SweepWorktrees retires the orphans among the trees baton opened and returns the
+// server's own account of what it did — what was removed, what was already gone
+// and only un-recorded, and what git refused, with its reason.
+//
+// There is no MCP tool for this and there is not meant to be: the daemon refuses
+// it to a conductor connection, so the caller here is the operator's own ctl. The
+// confirmation that guards it lives in the CLI, not on the wire.
+func (c *Client) SweepWorktrees() (string, error) {
+	payload, err := c.worktreeExchange(proto.Command{Action: "worktree.sweep"})
+	if err != nil {
+		return "", err
+	}
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, payload, "", "  "); err != nil {
+		return string(payload), nil //nolint:nilerr // the server's own JSON, unindented, is still the answer
+	}
+	return pretty.String(), nil
+}
+
 // exchange sends cmd followed by a config.get as a sync barrier, and reads up to
 // and including the barrier's "config" reply — so the connection buffer is left
 // clean for the next exchange. It returns the latest fleet snapshot seen before
@@ -474,6 +526,22 @@ func (c *Client) readUntilPanels() error {
 // pushes ("panels", "stats", …) the server broadcasts in between — a score reply
 // is a new message type, but the connection it arrives on is as chatty as ever.
 func (c *Client) scoreExchange(cmd proto.Command) (json.RawMessage, error) {
+	return c.rawExchange(cmd, "score", func(m proto.ServerMsg) json.RawMessage { return m.Score })
+}
+
+// worktreeExchange is the same for the worktree.* verbs, whose payload rides on
+// its own field for the same reason score's does.
+func (c *Client) worktreeExchange(cmd proto.Command) (json.RawMessage, error) {
+	return c.rawExchange(cmd, "worktree", func(m proto.ServerMsg) json.RawMessage { return m.Worktree })
+}
+
+// rawExchange issues cmd and returns the raw payload of the first reply of type
+// replyType, pulled out by payload. Like Tasks it trails the request with a
+// config.get barrier and drains up to the "config" answer, tolerating any
+// interleaved pushes ("panels", "stats", …) the server broadcasts in between —
+// a subsystem's reply is a new message type, but the connection it arrives on is
+// as chatty as ever.
+func (c *Client) rawExchange(cmd proto.Command, replyType string, payload func(proto.ServerMsg) json.RawMessage) (json.RawMessage, error) {
 	if err := c.send(cmd); err != nil {
 		return nil, err
 	}
@@ -481,7 +549,7 @@ func (c *Client) scoreExchange(cmd proto.Command) (json.RawMessage, error) {
 		return nil, err
 	}
 	deadline := time.Now().Add(ioTimeout)
-	var payload json.RawMessage
+	var out json.RawMessage
 	var firstErr error
 	for {
 		_ = c.conn.SetReadDeadline(deadline)
@@ -494,13 +562,13 @@ func (c *Client) scoreExchange(cmd proto.Command) (json.RawMessage, error) {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("%s", msg.Error)
 			}
-		case "score":
-			payload = msg.Score
+		case replyType:
+			out = payload(msg)
 		case "config":
 			if firstErr != nil {
 				return nil, firstErr
 			}
-			return payload, nil
+			return out, nil
 		}
 	}
 }

@@ -183,7 +183,14 @@ func WorktreeAdd(dir, branch, path string) error {
 // A path that is not a worktree is refused here whatever dir says, because git
 // resolves the repository from dir and then checks that path is one of ITS
 // worktrees: a plain directory inside a repository comes back "is not a working
-// tree" rather than being deleted.
+// tree" rather than being deleted. A dirty or locked tree is refused from inside
+// itself exactly as it is from the repo, so the no-force default survives the
+// shorter call.
+//
+// Deleting the directory a process is standing in is legal but strange, and it
+// costs the CALLER nothing here: dir is applied by the fork/exec to the child
+// alone, and nothing in baton chdir()s, so the daemon is never left holding an
+// unlinked working directory.
 func WorktreeRemove(dir, path string) error {
 	if strings.TrimSpace(path) == "" {
 		return fmt.Errorf("worktree remove needs a path")

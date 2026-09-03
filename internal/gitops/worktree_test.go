@@ -86,3 +86,64 @@ func TestWorktreeRemoveRefusesADirtyTree(t *testing.T) {
 		t.Fatalf("a refused worktree must be left in place: %v", err)
 	}
 }
+
+// TestWorktreeRemoveRefusesALockedTree is the second half of "refused cleanly
+// from inside the tree", beside the dirty case. A lock is deliberate — someone
+// said do not remove this — and git declines it without -f -f. The combination
+// that matters is the refusal arriving with dir set to the very tree git is
+// declining to remove, since that is the only shape the sweep ever calls.
+func TestWorktreeRemoveRefusesALockedTree(t *testing.T) {
+	repo := initRepo(t)
+	wt := filepath.Join(t.TempDir(), "wt")
+	if err := WorktreeAdd(repo, "feature/locked", wt); err != nil {
+		t.Fatalf("WorktreeAdd: %v", err)
+	}
+	if out, err := runGit(repo, "worktree", "lock", wt); err != nil {
+		t.Fatalf("worktree lock: %v\n%s", err, out)
+	}
+
+	if err := WorktreeRemove(wt, wt); err == nil {
+		t.Fatal("a locked worktree should be refused without -f -f")
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Fatalf("a refused worktree must be left in place: %v", err)
+	}
+}
+
+// TestWorktreeRemoveLeavesOurOwnCwdAlone is the other thing worth checking about
+// running git in the tree it is deleting: removing the directory a process is
+// standing in is legal but strange, and the daemon must not end up holding a
+// deleted working directory.
+//
+// It does not, and the reason is structural rather than lucky: runGit sets
+// cmd.Dir, which is the CHILD's working directory, applied by the fork/exec in
+// the child alone. baton never chdir()s. Asserted rather than argued, because
+// "the parent is unaffected" is exactly the kind of claim that reads as obvious
+// and is worth one call to prove.
+func TestWorktreeRemoveLeavesOurOwnCwdAlone(t *testing.T) {
+	before, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	repo := initRepo(t)
+	wt := filepath.Join(t.TempDir(), "wt")
+	if err := WorktreeAdd(repo, "feature/cwd", wt); err != nil {
+		t.Fatalf("WorktreeAdd: %v", err)
+	}
+	if err := WorktreeRemove(wt, wt); err != nil {
+		t.Fatalf("WorktreeRemove: %v", err)
+	}
+
+	after, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("our working directory should still resolve after the removal: %v", err)
+	}
+	if after != before {
+		t.Fatalf("removing a worktree must not move us: was %q, now %q", before, after)
+	}
+	// …and it is a real directory, not an unlinked one we merely still name.
+	if _, err := os.Stat("."); err != nil {
+		t.Fatalf("our working directory should still exist: %v", err)
+	}
+}
