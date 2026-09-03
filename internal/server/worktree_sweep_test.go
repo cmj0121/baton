@@ -187,58 +187,35 @@ func spawnWorktreePanel(t *testing.T, c *client.Client, repo, branch string) (st
 
 	leaf := strings.ReplaceAll(branch, "/", "-")
 	tree := filepath.Join(repo+"-worktrees", leaf)
+	// ONE loop, not two. The agent is `sh -c 'exit 0'`, so the broadcast saying it
+	// exited can arrive while a first loop is still waiting for the tree — and a
+	// first loop that drained c.Events to pass the time threw that broadcast away,
+	// leaving the second waiting forever for news that had already come. That is
+	// what failed on CI and never here: two loops raced for one channel and the
+	// machine decided who won.
+	var id string
 	deadline := time.After(15 * time.Second)
-	for {
-		if _, err := os.Stat(filepath.Join(tree, ".git")); err == nil {
-			break
-		}
-		select {
-		case <-c.Events:
-		case <-deadline:
-			t.Fatalf("the worktree should have been created at %s", tree)
-		}
-	}
-
-	id := waitPanelExited(t, c, tree)
-	return id, resolved(t, tree)
-}
-
-// waitPanelExited drains events until a panel whose spec dir is tree shows as
-// exited, and returns its id.
-func waitPanelExited(t *testing.T, c *client.Client, tree string) string {
-	t.Helper()
-	deadline := time.After(15 * time.Second)
-	for {
+	for id == "" {
 		select {
 		case msg, ok := <-c.Events:
 			if !ok {
 				t.Fatal("event channel closed unexpectedly")
 			}
 			for _, p := range msg.Panels {
-				if p.State == "exited" && p.Group != "" {
-					return p.ID
+				if p.State == "exited" && p.Group == branch {
+					id = p.ID
 				}
 			}
 		case <-deadline:
-			t.Fatalf("the worktree agent in %s never exited", tree)
-			return ""
+			t.Fatalf("the worktree agent for %s never exited; tree expected at %s", branch, tree)
 		}
 	}
+	if _, err := os.Stat(filepath.Join(tree, ".git")); err != nil {
+		t.Fatalf("the worktree should have been created at %s: %v", tree, err)
+	}
+	return id, resolved(t, tree)
 }
 
-// TestWorktreeListAndSweepAcceptance is #68's acceptance run end to end against a
-// real git repository and a real fleet.
-//
-// It covers the whole progression in one run because the states only mean
-// anything relative to each other: the same tree is a dead slot, then an orphan,
-// and the sweep's answer must change with it. Split into separate tests, each
-// half would pass against a classifier that always said the same thing.
-//
-// NOTE on "close": the issue's wording is "open a worktree panel and close it,
-// and list shows a dead slot". panel.close does not leave a slot — it deletes the
-// panel and its spawn spec outright (closePanel), so the tree becomes an ORPHAN
-// immediately. A dead slot is what a panel whose PROCESS exited leaves, which is
-// what this test builds and what TestWorktreeCloseSkipsTheDeadSlotStage pins.
 func TestWorktreeListAndSweepAcceptance(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	repo, env := wtRepo(t)
