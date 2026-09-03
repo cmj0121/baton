@@ -222,6 +222,43 @@ func (c *Client) SpawnPanel(agent string, args []string, dir string) (string, er
 	return c.Spawn(cmd)
 }
 
+// SpawnWorktree branches repo at branch, opens a git worktree for it, and starts
+// agent in THAT tree, filed under the branch as a work item. It returns the new
+// panel's id, like SpawnPanel.
+//
+// repo is the REPOSITORY, not the directory the process runs in — the workdir is
+// the tree the server makes. That inversion is why this is a second method rather
+// than a flag on SpawnPanel: the same argument names two different places in the
+// two calls, and a reader of one call site should not have to know which.
+//
+// The wire op is panel.git worktree-add in its targetless form — the one the
+// dashboard's `n w` already sends — rather than panel.create with an extra field.
+// panel.create's Dir means the workdir, so an older daemon handed a repo there
+// would ignore the unknown flag and spawn straight INTO the repo: a misread, and
+// the exact thing a worktree spawn exists to prevent. An older daemon handed this
+// command finds an empty id and answers `no panel with id ""`, which is a refusal.
+//
+// All three arguments are required, and refused HERE, before the socket is dialled
+// and long before git runs. agent is required because there is no default to fall
+// back on: the server holds no agent commands, each client resolves what to run
+// (the dashboard resolves the fleet default and refuses when it cannot), and an
+// empty command would build the tree and then fail to fill it.
+func (c *Client) SpawnWorktree(agent string, args []string, repo, branch string) (string, error) {
+	switch {
+	case repo == "":
+		return "", fmt.Errorf("a worktree spawn needs the repository to branch from")
+	case branch == "":
+		return "", fmt.Errorf("a worktree spawn needs a branch name")
+	case agent == "":
+		return "", fmt.Errorf("a worktree spawn needs an agent command to run in the tree")
+	}
+	return c.Spawn(proto.Command{
+		Action: "panel.git", Git: "worktree-add",
+		Dir: repo, Name: branch,
+		Path: agent, Args: args,
+	})
+}
+
 // SendText types text into panel id, appending a newline to submit it unless
 // submit is false. It is the one place the submit-newline rule lives, shared by
 // the CLI and the MCP tool.

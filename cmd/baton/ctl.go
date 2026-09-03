@@ -79,13 +79,31 @@ func (ctlList) Run(c *control.Client) error {
 }
 
 type ctlSpawn struct {
-	Agent string   `help:"Agent profile command to run, e.g. claude. Omit for a shell panel."`
-	Arg   []string `help:"Argument passed to the agent command (repeatable)."`
-	Dir   string   `help:"Working directory the panel runs in."`
+	Agent    string   `help:"Agent profile command to run, e.g. claude. Omit for a shell panel."`
+	Arg      []string `help:"Argument passed to the agent command (repeatable)."`
+	Dir      string   `help:"Working directory the panel runs in; with --worktree, the repository to branch from."`
+	Worktree bool     `help:"Spawn into a fresh git worktree of --dir on --branch, instead of into --dir itself."`
+	Branch   string   `help:"Branch the new worktree is created on. Required with --worktree."`
 }
 
+// Run spawns a panel and prints its id. Without --worktree it is the command it
+// has always been; --worktree swaps in the worktree spawn, where --dir stops
+// meaning the workdir and starts meaning the repository.
+//
+// --branch without --worktree is refused rather than ignored. A silently dropped
+// branch would spawn into the repository — the one outcome the worktree spawn
+// exists to prevent, and a misread rather than a refusal.
 func (s ctlSpawn) Run(c *control.Client) error {
-	id, err := c.SpawnPanel(s.Agent, s.Arg, s.Dir)
+	if s.Branch != "" && !s.Worktree {
+		return fmt.Errorf("--branch names the worktree to spawn into; add --worktree")
+	}
+	var id string
+	var err error
+	if s.Worktree {
+		id, err = c.SpawnWorktree(s.Agent, s.Arg, s.Dir, s.Branch)
+	} else {
+		id, err = c.SpawnPanel(s.Agent, s.Arg, s.Dir)
+	}
 	if err != nil {
 		return err
 	}

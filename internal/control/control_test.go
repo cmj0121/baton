@@ -21,7 +21,10 @@ import (
 func startServer(t *testing.T) string {
 	t.Helper()
 	t.Setenv("SHELL", "/bin/sh")
-	sock := filepath.Join(t.TempDir(), "baton.sock")
+	// shortDir, not t.TempDir(): the socket path is capped near 104 bytes and
+	// t.TempDir() spells the test's own name into it, so a descriptively named test
+	// on this helper gets `bind: invalid argument` instead of a server.
+	sock := filepath.Join(shortDir(t), "baton.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
