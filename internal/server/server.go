@@ -2422,6 +2422,14 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 		return "conductor role: remote access is an operator surface"
 	case "task.drain":
 		return "conductor role: draining the backlog is an operator action"
+	case "worktree.sweep":
+		// The mass-delete, and the one verb here that removes work from DISK
+		// rather than from the fleet's own bookkeeping. A conductor is what opens
+		// worktrees in the first place, so it is also what would have the most to
+		// tidy — and an agent tidying up after itself by deleting directories is
+		// the accident this whole surface is shaped to prevent. worktree.list is
+		// deliberately left open beside it: seeing the residue is not removing it.
+		return "conductor role: sweeping worktrees is an operator action"
 	case "conductor.reset":
 		// Resetting the workspace deletes the conductor's own accumulated state
 		// while it is the thing running in it. It is an operator's escape hatch for
@@ -2904,6 +2912,13 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		// is and takes away, this one asks which panel the server itself marked
 		// and gives.
 		s.scoreRefine(cc, cmd)
+	case "worktree.list":
+		// Read-only, and open to a conductor: seeing the residue its own spawns
+		// left is exactly the thing an agent driving the fleet should be able to
+		// check. Only worktree.sweep is fenced.
+		send(cc, proto.ServerMsg{Type: "worktree", Worktree: worktreeJSON(s.worktreeEntries())})
+	case "worktree.sweep":
+		send(cc, proto.ServerMsg{Type: "worktree", Worktree: worktreeJSON(s.sweepWorktrees())})
 	default:
 		send(cc, proto.ServerMsg{Type: "error", Error: fmt.Sprintf("unknown action %q", cmd.Action)})
 	}
