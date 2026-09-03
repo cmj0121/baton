@@ -296,6 +296,15 @@ reset / clean / discard / `--force`);`push` 與 `worktree-remove` 會先確認�
 worktree 基準目錄是 `panel.editor` / `panel.worktree-dir`,和其餘設定一樣可熱重載。完整的操作表與設定見
 [GIT.md](./GIT.zh-TW.md)。
 
+**隔離橋有兩個呼叫者。** 伺服器那條路徑是一個只收 repo、分支與 agent spec 的函式,**不收面板 id**——解析完成之後,
+整段程序都不需要活著的面板。`C-t G` `w` 從放大的 agent 解析出這兩樣,所以它是把一個 agent 展開到自己的分支上,
+用同一份 profile 與同一組上限。主控台上的 `n w` 兩樣都不從面板解析,因為它根本沒有面板:它先問版本庫(用 `A` 的
+欄位——可輸入路徑、`tab` 補完、`C-o` 選擇器),再問分支(用 git 選單自己的欄位),生出來的是**艦隊預設**的 profile。
+不是版本庫的目錄會在任何東西被建立之前就被拒絕——不生成、不建目錄,也不會退回成 `A`。兩個動詞送的是同一個
+`panel.git` `worktree-add`;主控台那一式把 `id` 留**空**,用 `dir` 帶 repo、用 `path`/`args`/`profile` 帶 spec,
+這也正是它沒有新增第二個 wire action、`ProtocolVersion` 也沒有動的原因——舊的常駐程式讀到空的 id,會以
+`no panel with id ""` 拒絕,而不是誤讀它。
+
 **持久化與重生。** 常駐程式能撐過自己的重啟。在每次結構性變更時,它會把整隊寫進一個**狀態檔**
 (`internal/state`,像 pid 檔一樣從 socket 路徑推導出來,一隊一份)——每個面板不可變的產生規格
 (指令、引數、workdir)、群組成員關係、釘選、順序、id 計數器,以及每個群組的可見磚數。寫入會透過一個一格深的髒
@@ -440,6 +449,7 @@ close-on-done 旗標。當排程器找不到空閒 agent 時,它會替這樣的�
 |                         | `p`／`A`                   | 開新的 shell 面板／agent 面板                   |
 |                         | `n c`／`n .`               | 開新面板(自己挑指令)／在焦點目錄開 shell        |
 |                         | `n C`／`n h`               | 指揮者／全域 shell                              |
+|                         | `n w`                      | 在新分支開 worktree,並在裡面開一個 agent        |
 |                         | `w`／`r`                   | 關閉選取項／重跑它底下已結束的面板              |
 |                         | `x x`                      | 清掉所有已結束的面板                            |
 |                         | `s`                        | 對選取項送出訊號                                |
