@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -459,12 +460,25 @@ func TestRotationsDoNotAccumulateDescriptors(t *testing.T) {
 // at 141 of 683 — the daemon reaches one rotation per cap of bytes, so between
 // two of them it has allocated its way through many collections.
 func descriptorsAfterCollection(target int) int {
-	var open int
-	for range 20 {
+	// A dropped generation's descriptor is closed by os.File's FINALIZER, and a
+	// finalizer needs two collections — one to find the file unreachable and queue
+	// it, one after it has run — and runtime.GC does not wait for the queue to
+	// drain, since finalizers run on a goroutine of their own.
+	//
+	// So this yields between collections rather than spinning on GC. Twenty tight
+	// GCs queued the finalizers and outran them, which is why this test used to
+	// pass only where the runtime was slow enough: under -race on darwin, and not
+	// at all on Linux (#74).
+	//
+	// The budget is generous on purpose. What it separates is not fast from slow
+	// but reclaimed from LEAKED: a generation that is still reachable never comes
+	// back, however long this waits.
+	deadline := time.Now().Add(10 * time.Second)
+	open := openDescriptors()
+	for open > target && time.Now().Before(deadline) {
 		runtime.GC()
-		if open = openDescriptors(); open <= target {
-			break
-		}
+		time.Sleep(5 * time.Millisecond)
+		open = openDescriptors()
 	}
 	return open
 }
