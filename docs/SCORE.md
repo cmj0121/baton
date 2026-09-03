@@ -62,6 +62,11 @@ Rules 3 and 4 are the one trap. "Not an entry" means **not a line beginning with
 paragraph, a `#` comment and a numbered list are prose; a markdown bullet is memory. Write your own notes as anything
 but a bullet.
 
+Because that is the one rule you cannot infer from looking at the file, a fresh `score.md` **opens with it**, as `#`
+comment lines above the first entry. They are prose by rule 3 and so can never become memory themselves; they are also
+yours, like every other byte — delete them and they stay deleted. If you would rather see how many of your own lines
+have already been taken this way, `baton ctl score status` counts them under `bare_admits`.
+
 A line longer than 300 runes is kept exactly as you wrote it and simply **not injected** — refusing it would mean
 rewriting your file, and truncating it would silently rewrite what you meant. `baton ctl score status` counts what is
 being withheld under `oversized`.
@@ -235,6 +240,7 @@ An entry outside the working set carries **one** of three standings, naming the 
 | `reason`                   | why not, when it did not — or that reads or writes have stopped working |
 | `entries` / `rendered`     | what the store holds, and what a dispatch would carry                   |
 | `oversized` / `block_full` | which cap made those two disagree                                       |
+| `bare_admits`              | how many of your lines became entries on a bare bullet alone            |
 | `promote_at`, `rank`, …    | the tuning **in force**, which is not always what the file says         |
 | `unlocked`                 | the store is running without its single-writer claim                    |
 | `dir`                      | where the files are                                                     |

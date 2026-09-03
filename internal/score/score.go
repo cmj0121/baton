@@ -864,6 +864,27 @@ type Health struct {
 	UnreportedFolds  int
 	AliasEvictions   int
 	Compacted        int
+	// BareAdmits is how many score.md lines this store has taken in as entries
+	// on the strength of a "- " and nothing else — no id, no marker, no
+	// submission. It is the counter for #57: parseBullet admits ANY bullet, so
+	// an operator's own markdown notes become fleet memory and are injected
+	// verbatim into every panel's prompt, and until now the only place that was
+	// visible was a daemon log line nobody reads until something is wrong.
+	//
+	// It counts BARE bullets specifically, and Delta.Admitted does not — that
+	// figure also covers a line whose [id] names no live entry, which is a
+	// re-admission of something the store already knew about rather than a note
+	// the file just swallowed. Reporting the broader number as this one would
+	// answer "did baton eat my notes" with yes on a pass that ate nothing.
+	//
+	// It is CUMULATIVE over the store's life, like SwallowedRepeats beside it,
+	// and deliberately not "what the last pass did". score.status is answered off
+	// a View, and a View's pass is gated on score.md having moved — so by the
+	// time the operator who has just been bitten runs `baton ctl score status`,
+	// the pass that admitted their lines is over and the status call's own pass
+	// is a no-op. A per-pass figure would read 0 at exactly the moment it is
+	// asked. See TestBareAdmitsSurvivesTheNextStatusCall.
+	BareAdmits int
 	// RejectedTiers is how many tier records the replay refused: a `raised`
 	// naming a tier this build will not grant, and a `lowered` naming one that is
 	// not strictly below the rung the entry is already on. Two records, one
@@ -4189,7 +4210,7 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 			// depends on lines this pass has not read yet, so the line is kept as
 			// the operator wrote it and the decision is taken below.
 			out = append(out, line)
-			bullets = append(bullets, bullet{at: len(out) - 1, text: text})
+			bullets = append(bullets, bullet{at: len(out) - 1, text: text, bare: id == ""})
 		case live:
 			e := s.entries[idx]
 			resolved[id] = true
@@ -4319,6 +4340,9 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 					return Delta{}, ierr
 				}
 				next = append(next, admit(id, b.text))
+				if b.bare {
+					pass.BareAdmits++
+				}
 				out[b.at] = formatLine(id, b.text)
 				// The entry just appended already holds this wording's key: the
 				// bullet's text was normalised for the lookup above and again by
@@ -4446,6 +4470,7 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 	s.entries = next
 	s.health.SwallowedRepeats += pass.SwallowedRepeats
 	s.health.AliasEvictions += pass.AliasEvictions
+	s.health.BareAdmits += pass.BareAdmits
 
 	if len(dropped) > 0 {
 		// Drop the folded lines from the file the pass is about to write. They
@@ -4544,9 +4569,16 @@ func addOwed(owed []string, text string) []string {
 // bullet is a score.md line that named no live entry, held with the position it
 // occupies in the pass's output so the pass can decide later whether the line
 // becomes an entry or is folded away. See reconcileLocked.
+//
+// bare says the line carried no id AT ALL — a plain "- text" the operator typed,
+// rather than a line repeating an id the pass had already placed. Both arrive
+// here and both can end as a new entry, so Delta.Admitted cannot tell them
+// apart; Health.BareAdmits counts only the first, because it is the only one
+// that answers "did baton just take my notes".
 type bullet struct {
 	at   int
 	text string
+	bare bool
 }
 
 // noteFoldsLocked keeps this pass's fold records for the next View to report.
@@ -4587,11 +4619,11 @@ func (s *Store) drainFoldsLocked() []Fold {
 // file. Nothing is destroyed either way. The caller holds the lock.
 //
 // With no entries this is the first run, and what it writes is an EMPTY file.
-// The store seeds nothing: what a fresh install shows is what the fleet has
-// earned, which on a fresh install is nothing at all. The format the file's
-// header used to teach is docs/SCORE.md's to teach now.
+// What a fresh install shows is what the fleet has earned, which on a fresh
+// install is nothing at all — plus mdHeader, which is not memory and cannot
+// become any.
 func (s *Store) projectLocked() (Delta, error) {
-	var out []string
+	out := append([]string(nil), mdHeader...)
 	for _, e := range s.entries {
 		out = append(out, formatLine(e.Id, e.Text))
 	}
@@ -5002,6 +5034,48 @@ func parseLine(line string) (id, text string, ok bool) {
 		return "", "", false
 	}
 	return id, strings.TrimSpace(text), true
+}
+
+// mdHeader is what an ABSENT score.md is written back as: comment lines that
+// teach the entry format and, above all, the one rule about this file an
+// operator cannot infer from reading it — a bullet with no id is memory.
+//
+// R7 removed the header these lines restore, so that a fresh install would show
+// what the fleet had earned and nothing else. What that left is a file whose
+// only dangerous rule is taught exclusively in docs/SCORE.md, which an operator
+// editing their own notes has no reason to open: parseBullet admits ANY "- "
+// line, so four TODO lines typed into score.md are injected verbatim into every
+// agent's prompt. The rule is not narrowed to a marker — a bare bullet is the
+// only way to add an entry by hand, and requiring one would regress the single
+// authoring path there is — so it is made visible where the typing happens
+// instead.
+//
+// They are deliberately NOT entries, and they need no rule of their own to stay
+// that way: parseLine wants "- [", parseBullet wants "- ", and a "#" line is
+// neither. An earlier shape seeded real entries flagged as demo data and
+// filtered them at render time, but the flag lived in a cache this package's own
+// doctrine calls disposable, so deleting the cache put "demo: ..." back into
+// every brief. A line that cannot parse needs no flag, no cache and no rebuild
+// rule for a later issue to remember.
+//
+// Written once, at creation, rather than re-emitted every pass — which is sound
+// only because the reconcile pass that rewrites score.md FILTERS the lines it
+// read rather than regenerating them (see reconcileLocked, where every line that
+// is not an entry is appended to `out` as it was found). A header the operator
+// deletes stays deleted, which is the same contract every other byte of this
+// file has.
+var mdHeader = []string{
+	"# baton's fleet memory — one entry per line:",
+	"#",
+	"#   - [e7f3a2] the agent was asked to gain permission it already had",
+	"#",
+	"# ANY line beginning \"- \" is an entry, id or not. Type \"- call dana back\"",
+	"# and the next dispatch admits it, writes an id into the line, and injects it",
+	"# into every agent's prompt. Write notes to yourself as anything but a bullet",
+	"# — a heading, a paragraph, a \"#\" comment and a numbered list are prose,",
+	"# and baton keeps them byte for byte.",
+	"#",
+	"# Edit or delete lines freely — your text wins, and a deleted line retires.",
 }
 
 // parseBullet decodes a line the operator wrote as an entry but gave no id: a

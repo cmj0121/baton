@@ -56,6 +56,10 @@ review the diff on feat/api and tell me what is missing
 段落、`#` 註解、編號清單都是散文;markdown 的項目符號是記憶。你自己的筆記,寫成除了項目符號以外的任何
 東西都好。
 
+正因為這一條是你光看檔案推不出來的,全新的 `score.md` 會把它寫在最上面,以 `#` 註解的形式擺在第一則之前。
+依第 3 條,那幾行本身是散文,永遠不會變成記憶;它們也跟其他每一個位元組一樣是你的——刪掉就是刪掉了。
+想知道自己已經有幾行被這樣收走,`baton ctl score status` 會在 `bare_admits` 底下數給你看。
+
 超過 300 個字元的一行,會照你寫的樣子完整留著,只是不會被注入——拒絕它等於改寫你的檔案,截斷它等於偷偷
 改寫你的原意。`baton ctl score status` 會在 `oversized` 底下數出正在被扣住的有幾則。
 
@@ -219,6 +223,7 @@ baton ctl score list   | jq '.entries[] | select(.tier > 1)'                   #
 | `reason`                   | 沒開起來的話是為什麼——或者讀取或寫入已經失效了 |
 | `entries` / `rendered`     | store 握著多少、一次派送會帶多少               |
 | `oversized` / `block_full` | 是哪一個上限讓上面兩個數字對不起來             |
+| `bare_admits`              | 你有幾行光憑一個項目符號就變成了一則           |
 | `promote_at`、`rank`、…    | 實際生效的調校,不見得等於檔案上寫的            |
 | `unlocked`                 | store 正在沒有單一寫入者宣告的情況下跑         |
 | `dir`                      | 檔案在哪裡                                     |
