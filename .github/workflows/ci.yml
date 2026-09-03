@@ -34,6 +34,16 @@ jobs:
           # golangci-lint rejects ("Go version used to build golangci-lint is
           # lower than the targeted Go version").
           install-mode: goinstall
+          # Do not fetch the JSONSchema to validate .golangci.yaml. That step
+          # reaches golangci-lint.run over the network, and when the runner
+          # cannot get there CI goes red for a reason that has nothing to do
+          # with the code — which it did on 1d2d56d, twice, while the same URL
+          # answered 200 in under a second from a developer's machine.
+          #
+          # Nothing is lost that the repo does not already have: golangci-lint
+          # still rejects a config it cannot parse, and pre-commit runs the same
+          # binary with the same file before anything reaches CI.
+          verify: false
 
       - name: Coverage gate (race + per-package 80%)
         # run the exact same gate the Makefile uses, so CI == local.
