@@ -715,6 +715,16 @@ type ScoreState struct {
 type scoreState struct {
 	ScoreState
 	failing atomic.Bool // score.md could not be read on the last attempt
+	// wrote is the last score.Store.WriteFailing this server has already said a
+	// line about, and it exists because that one is the STORE's latch rather than
+	// this server's: the store sets and clears it inside appendEvents and logs
+	// nothing either way, so the daemon needs its own mark of what it has already
+	// reported to turn a state into the two transitions an operator can act on.
+	//
+	// It is not a second copy of the condition and must never be read as one —
+	// scoreState.reason asks the store, not this. This says only whether the line
+	// has been said. See noteScoreWrites.
+	wrote atomic.Bool
 	// compactions is the last score.Health.Compactions this server has already
 	// said a line about, so a rewrite is announced once however many reads
 	// straddle it. Seeded by WithScore from whatever the store had done before

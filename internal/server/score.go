@@ -68,6 +68,12 @@ func (s *Server) scoreLook(v score.View, err error) score.View {
 	// would be left with a tier they cannot account for. Returning early dropped
 	// these records on the floor, since View drains them either way.
 	logScoreFolds(v.Folds)
+	// The WRITE latch's transitions, said here beside the read latch's because
+	// the two are one question to an operator and every read path passes through
+	// this function. A read is also the only thing that can notice the recovery
+	// on a fleet whose writing has stopped, which is the direction the store
+	// cannot report on its own.
+	s.noteScoreWrites()
 
 	if err != nil {
 		// Latch the failure. A score.md the store cannot read stays unreadable,
@@ -115,6 +121,44 @@ func (s *Server) scoreLook(v score.View, err error) score.View {
 	// line describe one reading and not three.
 	s.noteScoreCompaction(v.Health, v.Total)
 	return v
+}
+
+// noteScoreWrites is the write latch's home on this side, and the exact shape
+// scoreLook's failing.Swap above is: the transition INTO failure gets one line,
+// the recovery out of it gets one, and the hundred attempts in between get
+// none.
+//
+// R7 (#46) put the latch itself in the right place — score.Store sets and
+// clears it inside appendEvents, the one funnel every durable append passes, so
+// no door added later can bypass it — but nothing turned it into a line. Its
+// only voice was an unpaced warn on the submit door, which is per-ATTEMPT
+// discipline over a LATCHED state: a mount that died at 03:00 produced one line
+// per submission for as long as it stayed dead, and not one line when it came
+// back. That is the reverse of what the read path two hundred lines above has
+// always done, on the same condition, for the same operator.
+//
+// It asks Store.WriteFailing rather than Health for the reason that accessor
+// exists: every append holds the store mutex across its fsync, so a read
+// through Health would queue behind the very write that is hung.
+//
+// REPORTED, NOT PROBED, and that is R7's choice rather than an omission. A
+// probe answers a question about the past — it writes somewhere else, at
+// another moment, possibly on another filesystem — while the latch answers
+// about the write the fleet actually made. The residual is stated and stays: an
+// idle fleet on a dead mount says nothing until something tries to write. That
+// is "no evidence of a problem" rather than a claim of health, and the recovery
+// line makes the eventual transition legible whenever it arrives.
+func (s *Server) noteScoreWrites() {
+	if s.scoreState.Store.WriteFailing() {
+		if !s.scoreState.wrote.Swap(true) {
+			log.Warn().Str("dir", s.scoreState.Store.Dir()).
+				Msg("score writes are not landing; the fleet's memory is readable but nothing new is being recorded")
+		}
+		return
+	}
+	if s.scoreState.wrote.Swap(false) {
+		log.Info().Str("dir", s.scoreState.Store.Dir()).Msg("score writes recovered")
+	}
 }
 
 // noteScoreCompaction writes the compaction line ONCE for each rewrite that has
