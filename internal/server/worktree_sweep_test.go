@@ -333,8 +333,12 @@ func TestWorktreeSweepSkipsADirtyOrphan(t *testing.T) {
 	serve(t, srv)
 	c := dial(t, sock)
 
-	_, dirtyTree := spawnWorktreePanel(t, c, repo, "feat/dirty")
-	_, cleanTree := spawnWorktreePanel(t, c, repo, "feat/clean")
+	// The branch names are chosen so the DIRTY tree sorts before the clean one.
+	// The record is stored sorted, so the sweep walks it in path order — with the
+	// clean tree first, git's refusal would be the last thing that happened and a
+	// sweep that aborted on the first error would pass this test unchanged.
+	_, dirtyTree := spawnWorktreePanel(t, c, repo, "feat/a-dirty")
+	_, cleanTree := spawnWorktreePanel(t, c, repo, "feat/z-clean")
 
 	// Uncommitted work in one of them. git refuses to remove it without --force,
 	// and no --force is ever passed.
@@ -346,7 +350,7 @@ func TestWorktreeSweepSkipsADirtyOrphan(t *testing.T) {
 		t.Fatalf("purge: %v", err)
 	}
 	deadline := time.After(10 * time.Second)
-	for statusOfPath(t, listTrees(t, c), dirtyTree) != worktree.StatusOrphan {
+	for statusOfPath(t, listTrees(t, c), cleanTree) != worktree.StatusOrphan {
 		select {
 		case <-deadline:
 			t.Fatal("purging the slots should have left orphans")
@@ -364,8 +368,10 @@ func TestWorktreeSweepSkipsADirtyOrphan(t *testing.T) {
 	if _, err := os.Stat(dirtyTree); err != nil {
 		t.Fatalf("a skipped orphan must be left in place: %v", err)
 	}
+	// The clean tree is swept AFTER the refusal, so this is the assertion that the
+	// sweep carried on rather than stopping at the first thing git said no to.
 	if len(got.Removed) != 1 || got.Removed[0] != cleanTree {
-		t.Fatalf("the clean orphan beside it should still have been removed, got %+v", got)
+		t.Fatalf("the sweep must go on past a refusal and still remove %q, got %+v", cleanTree, got)
 	}
 
 	// The skipped tree stays STAMPED, so the operator can still see it and a later
@@ -570,9 +576,12 @@ func TestWorktreeSweepSkipsALockedOrphanToo(t *testing.T) {
 	serve(t, srv)
 	c := dial(t, sock)
 
-	_, lockedTree := spawnWorktreePanel(t, c, repo, "feat/locked")
-	_, dirtyTree := spawnWorktreePanel(t, c, repo, "feat/dirty")
-	_, cleanTree := spawnWorktreePanel(t, c, repo, "feat/clean")
+	// Both refusals sort BEFORE the clean tree, since the record is walked in path
+	// order: the clean one is what the sweep only reaches by carrying on past two
+	// different refusals in a row.
+	_, lockedTree := spawnWorktreePanel(t, c, repo, "feat/a-locked")
+	_, dirtyTree := spawnWorktreePanel(t, c, repo, "feat/b-dirty")
+	_, cleanTree := spawnWorktreePanel(t, c, repo, "feat/z-clean")
 
 	gitIn(t, env, repo, "worktree", "lock", lockedTree)
 	if err := os.WriteFile(filepath.Join(dirtyTree, "wip.txt"), []byte("unsaved\n"), 0o600); err != nil {
@@ -606,7 +615,7 @@ func TestWorktreeSweepSkipsALockedOrphanToo(t *testing.T) {
 		}
 	}
 	if len(got.Removed) != 1 || got.Removed[0] != cleanTree {
-		t.Fatalf("the clean orphan should still have been removed, got %+v", got)
+		t.Fatalf("the sweep must reach %q past both refusals, got %+v", cleanTree, got)
 	}
 	for _, kept := range []string{lockedTree, dirtyTree} {
 		if _, err := os.Stat(kept); err != nil {

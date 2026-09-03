@@ -75,6 +75,18 @@ func (s *Server) worktreeEntries() []worktree.Entry {
 // The record is retired only AFTER git says the tree is gone. A skip therefore
 // leaves the path stamped, so the next `list` still shows it and a later sweep
 // can finish the job once the operator has dealt with what git objected to.
+//
+// GIT'S OUTPUT IS NEVER PARSED to decide any of this. Any error on one path is
+// that path skipped and the loop goes on, because the alternative does not work:
+// git's refusals are LOCALISED (a zh-TW host answers a dirty tree with 包含修改
+// 或未追蹤的檔案), so a test on the message would misread every refusal on a
+// non-English git — and the two refusals do not resemble each other even in
+// English, so recognising one would let the other through as a hard failure.
+//
+// The path in a skip is OURS, not read back out of git's message. git's locked
+// refusal names no path at all ("cannot remove a locked working tree, use
+// 'remove -f -f' to override or unlock first"), so an operator handed only that
+// text could not tell which tree it was about.
 func (s *Server) sweepWorktrees() sweepOutcome {
 	out := sweepOutcome{Removed: []string{}, Dropped: []string{}, Skipped: []sweepSkip{}}
 
