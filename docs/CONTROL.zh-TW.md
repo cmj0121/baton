@@ -58,28 +58,29 @@ named "report" and pause for me.
 `baton ctl` 是一個架在 session socket 之上、輕薄的同步客戶端。從一般 shell 執行,它以全權座艙角色行動;
 在 conductor 面板內執行,它繼承 conductor 身分並被圍上柵欄。每道指令都是連上、動作、然後退出。
 
-| 指令                                                               | 作用                                                       |
-| ------------------------------------------------------------------ | ---------------------------------------------------------- |
-| `baton ctl list`                                                   | 以 JSON 印出隊伍(id、title、state、group、…)               |
-| `baton ctl tree [--json]`                                          | 畫出行程樹(group → panel → OS 子行程),附 CPU%/RSS          |
-| `baton ctl spawn [--agent CMD] [--arg A] [--dir D]`                | 開一個面板(有 `--agent` 就是 agent,否則是 shell);印出新 id |
-| `baton ctl send <id> <text> [--no-enter]`                          | 把文字打進某個面板;除非 `--no-enter`,否則以換行送出        |
-| `baton ctl attention --why <text> [--id ID]`                       | 說這個面板需要人,以及為什麼——見 [舉手](#舉手)              |
-| `baton ctl resolve [--id ID]`                                      | 說那個理由已經過去了;面板離開待辦                          |
-| `baton ctl group <name> <id>...`                                   | 把面板歸入一個工作項目(斜線 `path` 可巢狀:`backend/api`)   |
-| `baton ctl rename [--id ID \| --group G] <name>`                   | 重新命名面板或群組(把群組改名成路徑即可重新掛父層)         |
-| `baton ctl pin <id>...` / `unpin <id>...`                          | 把面板釘上 / 取消釘於即時磚                                |
-| `baton ctl signal <signal> <id>...`                                | 送出訊號,例如 `SIGINT`                                     |
-| `baton ctl close <id>...`                                          | 關閉面板                                                   |
-| `baton ctl dispatch <id> <prompt>`                                 | 指派一份任務簡報給某個面板,並整批送達                      |
-| `baton ctl dispatch-group <group> <prompt>`                        | 把一份簡報散發給一個工作項目的整棵子樹(含巢狀群組)         |
-| `baton ctl queue add <prompt> [--group G]`                         | 把一項任務排入佇列,交由排程器抽取分派給空閒的 agent        |
-| `baton ctl queue add <prompt> --command <cmd> [--dir D] [--close]` | 隨需開新(spawn-on-demand):沒人空閒時就備一個 agent         |
-| `baton ctl queue list`                                             | 以 JSON 印出待辦(id、prompt、status、panel、group、…)      |
-| `baton ctl queue cancel <id>`                                      | 依 id 取消一項已排入的任務                                 |
-| `baton ctl queue promote <id>` / `demote <id>`                     | 把一項已排入的任務移到待辦的最前 / 最後                    |
-| `baton ctl queue drain`                                            | 清空每一項已排入的任務                                     |
-| `baton ctl conductor reset`                                        | 刪掉 conductor 的工作區,讓下一個從乾淨狀態開始             |
+| 指令                                                                  | 作用                                                                    |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `baton ctl list`                                                      | 以 JSON 印出隊伍(id、title、state、group、…)                            |
+| `baton ctl tree [--json]`                                             | 畫出行程樹(group → panel → OS 子行程),附 CPU%/RSS                       |
+| `baton ctl spawn [--agent CMD] [--arg A] [--dir D]`                   | 開一個面板(有 `--agent` 就是 agent,否則是 shell);印出新 id              |
+| `baton ctl spawn --worktree --dir <repo> --branch <name> --agent CMD` | 從 `<repo>` 開一條分支、替它開一個 git worktree,並把 agent 開在那棵樹裡 |
+| `baton ctl send <id> <text> [--no-enter]`                             | 把文字打進某個面板;除非 `--no-enter`,否則以換行送出                     |
+| `baton ctl attention --why <text> [--id ID]`                          | 說這個面板需要人,以及為什麼——見 [舉手](#舉手)                           |
+| `baton ctl resolve [--id ID]`                                         | 說那個理由已經過去了;面板離開待辦                                       |
+| `baton ctl group <name> <id>...`                                      | 把面板歸入一個工作項目(斜線 `path` 可巢狀:`backend/api`)                |
+| `baton ctl rename [--id ID \| --group G] <name>`                      | 重新命名面板或群組(把群組改名成路徑即可重新掛父層)                      |
+| `baton ctl pin <id>...` / `unpin <id>...`                             | 把面板釘上 / 取消釘於即時磚                                             |
+| `baton ctl signal <signal> <id>...`                                   | 送出訊號,例如 `SIGINT`                                                  |
+| `baton ctl close <id>...`                                             | 關閉面板                                                                |
+| `baton ctl dispatch <id> <prompt>`                                    | 指派一份任務簡報給某個面板,並整批送達                                   |
+| `baton ctl dispatch-group <group> <prompt>`                           | 把一份簡報散發給一個工作項目的整棵子樹(含巢狀群組)                      |
+| `baton ctl queue add <prompt> [--group G]`                            | 把一項任務排入佇列,交由排程器抽取分派給空閒的 agent                     |
+| `baton ctl queue add <prompt> --command <cmd> [--dir D] [--close]`    | 隨需開新(spawn-on-demand):沒人空閒時就備一個 agent                      |
+| `baton ctl queue list`                                                | 以 JSON 印出待辦(id、prompt、status、panel、group、…)                   |
+| `baton ctl queue cancel <id>`                                         | 依 id 取消一項已排入的任務                                              |
+| `baton ctl queue promote <id>` / `demote <id>`                        | 把一項已排入的任務移到待辦的最前 / 最後                                 |
+| `baton ctl queue drain`                                               | 清空每一項已排入的任務                                                  |
+| `baton ctl conductor reset`                                           | 刪掉 conductor 的工作區,讓下一個從乾淨狀態開始                          |
 
 ```sh
 # Stand up a reviewer next to a worker and hand it the task.
@@ -97,10 +98,19 @@ baton ctl queue list
 baton ctl queue add "port module A" --command claude --dir ~/src --close
 baton ctl queue add "port module B" --command claude --dir ~/src --close
 
+# 讓每個 worker 有自己的 checkout,而不是共用一個。這裡的 --dir 是「儲存庫」,
+# 不是工作目錄:工作目錄是 baton 開出來的那棵樹,而新面板會以分支名歸入工作項目。
+baton ctl spawn --worktree --dir ~/src/api --branch feat/login --agent claude
+
 # 看看 daemon 實際在跑什麼:把隊伍接上每個面板真正開出的 OS 行程。--json 餵給
 # 監看程式或腳本。
 baton ctl tree
 ```
+
+加上 `--worktree` 之後,`--dir` 的意思就變了:它指的是要開分支的儲存庫,而面板的工作目錄是 baton 替它開的那個
+worktree。`--branch` 是必填的,而少了分支、或 `--dir` 根本不是儲存庫,都會在造出任何樹之前就被拒絕。沒有
+`--worktree` 時,`spawn` 一切照舊——`--dir` 就是工作目錄,而且不會跑任何 git。只要 conductor 的 worker
+原本得共用同一個 checkout,它就該優先用這個:多個 agent 平行改同一棵樹,會互相蓋掉彼此的成果。
 
 **行程樹。** `tree` 以 daemon 為根,鋪出隊伍裡巢狀的工作項目群組,把每個面板依群組歸位並標上它 process group
 leader 的 pid,再把該面板底下即時的 OS 子孫行程掛上去——這是 `ps`/`pstree` 給不了的畫面,因為只有 baton 知道哪個
@@ -177,6 +187,10 @@ baton ctl resolve
 `baton_dispatch_group` · `baton_enqueue` · `baton_queue` · `baton_reorder` · `baton_group` · `baton_rename` ·
 `baton_pin` · `baton_unpin` · `baton_signal` · `baton_close`
 
+`baton_spawn` 收 `{agent, args, dir}`,再加上 `{worktree: true, branch}` 就會開進一個新的 git worktree,而不是開在
+`dir` 裡——用同一個動詞而不是另開一個工具,所以已經會開面板的 conductor 不必再去認識新東西。有 `worktree` 時,
+`dir` 指的是要開分支的儲存庫;`worktree` 少了 `branch`、或 `dir` 不是儲存庫,都是工具錯誤,而隊伍原封不動。
+
 `baton_dispatch` / `baton_dispatch_group` 把一份任務簡報指派給某個面板或整個工作項目;`baton_enqueue`
 把一項加入待辦(可選隨需開新,附一個 `command` 以便沒人空閒時備一個 worker),`baton_queue` 讀回它,
 而 `baton_reorder` 把一項等待中的任務移到最前或最後。這些正是 conductor 用來跑那條招牌
@@ -244,6 +258,9 @@ conductor 角色由伺服器端強制執行,早在任何指令生效之前。它
 | 關閉其他面板、清除已結束               | 重載或停掉伺服器                          |
 |                                        | 開新的速度超過速率上限,或超過隊伍上限(64) |
 |                                        | 在產生面板時**指名 agent profile**——見下  |
+
+worktree spawn 也是 spawn,所以它動用的是同一個錢包裡的同兩道上限:隊伍上限與速率上限計算 `spawn --worktree`
+的方式和計算 `spawn` 完全一樣,conductor 沒辦法靠換一個動詞繞過另一個。
 
 所以 conductor 能填滿待辦並從中 dispatch,卻無法把它抹除;而佇列也給不了它繞過自我柵欄的路子:它排入的一份簡報,
 會被排程器抽取分派給 _其他_ 空閒的 agent,絕不會回到它自己身上。
