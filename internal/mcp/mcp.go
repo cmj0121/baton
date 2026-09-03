@@ -220,14 +220,34 @@ func defaultTools() []tool {
 		},
 		{
 			name: "baton_spawn",
-			desc: "Spawn a panel and return its id. Give 'agent' to run an agent CLI (e.g. claude); omit it for a shell.",
+			desc: "Spawn a panel and return its id. Give 'agent' to run an agent CLI (e.g. claude); omit it for a shell. Set 'worktree' with a 'branch' to spawn into a fresh git worktree of 'dir' instead — prefer that when the workers would otherwise share one checkout.",
+			// worktree/branch are extra fields on this tool rather than a sibling
+			// tool, so a conductor that already knows how to spawn does not have to
+			// discover a second one. They also re-point 'dir': with worktree it names
+			// the repository to branch from, not the directory the process runs in.
 			schema: obj(map[string]any{
-				"agent": str("agent CLI command to run; omit for a shell panel"),
-				"args":  strList("arguments passed to the agent command"),
-				"dir":   str("working directory the panel runs in"),
+				"agent":    str("agent CLI command to run; omit for a shell panel"),
+				"args":     strList("arguments passed to the agent command"),
+				"dir":      str("working directory the panel runs in; with worktree, the repository to branch from"),
+				"worktree": map[string]any{"type": "boolean", "description": "spawn into a fresh git worktree of dir; requires branch and agent"},
+				"branch":   str("branch the new worktree is created on; required with worktree"),
 			}),
 			run: func(c *control.Client, a args) (string, error) {
-				id, err := c.SpawnPanel(a.str("agent"), a.strSlice("args"), a.str("dir"))
+				var id string
+				var err error
+				switch worktree := a.boolDefault("worktree", false); {
+				case worktree:
+					id, err = c.SpawnWorktree(a.str("agent"), a.strSlice("args"), a.str("dir"), a.str("branch"))
+				case a.str("branch") != "":
+					// A branch with no worktree is refused rather than dropped, the same as
+					// `ctl spawn --branch` without `--worktree`. Silently ignoring it would
+					// spawn into `dir` itself — for a conductor, the shared checkout this
+					// whole verb exists to get its workers out of — and setting one field
+					// of a pair is exactly the slip a model makes.
+					return "", fmt.Errorf("branch names the worktree to spawn into; set worktree: true")
+				default:
+					id, err = c.SpawnPanel(a.str("agent"), a.strSlice("args"), a.str("dir"))
+				}
 				if err != nil {
 					return "", err
 				}

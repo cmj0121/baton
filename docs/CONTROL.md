@@ -65,28 +65,29 @@ named "report" and pause for me.
 cockpit role; run inside the conductor panel it inherits the conductor identity and is fenced. Each command connects,
 acts, and exits.
 
-| Command                                                            | Does                                                                          |
-| ------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
-| `baton ctl list`                                                   | print the fleet as JSON (id, title, state, group, …)                          |
-| `baton ctl tree [--json]`                                          | draw the process tree (groups → panels → OS children), with CPU%/RSS          |
-| `baton ctl spawn [--agent CMD] [--arg A] [--dir D]`                | spawn a panel (agent if `--agent`, else a shell); prints the new id           |
-| `baton ctl send <id> <text> [--no-enter]`                          | type text into a panel; submits with a newline unless `--no-enter`            |
-| `baton ctl attention --why <text> [--id ID]`                       | say this panel needs a human, and why — see [Raising a hand](#raising-a-hand) |
-| `baton ctl resolve [--id ID]`                                      | say the reason has passed; the panel leaves the queue                         |
-| `baton ctl group <name> <id>...`                                   | file panels under a work item (a slash-`path` nests: `backend/api`)           |
-| `baton ctl rename [--id ID \| --group G] <name>`                   | rename a panel or a group (rename a group to a path to re-parent it)          |
-| `baton ctl pin <id>...` / `unpin <id>...`                          | pin/unpin panels to live tiles                                                |
-| `baton ctl signal <signal> <id>...`                                | send a signal, e.g. `SIGINT`                                                  |
-| `baton ctl close <id>...`                                          | close panels                                                                  |
-| `baton ctl dispatch <id> <prompt>`                                 | assign a task brief to a panel and deliver it as a unit                       |
-| `baton ctl dispatch-group <group> <prompt>`                        | fan one brief to a work item's whole subtree (nested groups too)              |
-| `baton ctl queue add <prompt> [--group G]`                         | enqueue a task for the scheduler to drain onto a free agent                   |
-| `baton ctl queue add <prompt> --command <cmd> [--dir D] [--close]` | spawn-on-demand: provision an agent when none is free                         |
-| `baton ctl queue list`                                             | print the backlog as JSON (id, prompt, status, panel, group, …)               |
-| `baton ctl queue cancel <id>`                                      | cancel a queued task by id                                                    |
-| `baton ctl queue promote <id>` / `demote <id>`                     | move a queued task to the head / tail of the backlog                          |
-| `baton ctl queue drain`                                            | clear every queued task                                                       |
-| `baton ctl conductor reset`                                        | delete the conductor's workspace so the next one starts clean                 |
+| Command                                                               | Does                                                                             |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `baton ctl list`                                                      | print the fleet as JSON (id, title, state, group, …)                             |
+| `baton ctl tree [--json]`                                             | draw the process tree (groups → panels → OS children), with CPU%/RSS             |
+| `baton ctl spawn [--agent CMD] [--arg A] [--dir D]`                   | spawn a panel (agent if `--agent`, else a shell); prints the new id              |
+| `baton ctl spawn --worktree --dir <repo> --branch <name> --agent CMD` | branch `<repo>`, open a git worktree for it, and spawn the agent **in the tree** |
+| `baton ctl send <id> <text> [--no-enter]`                             | type text into a panel; submits with a newline unless `--no-enter`               |
+| `baton ctl attention --why <text> [--id ID]`                          | say this panel needs a human, and why — see [Raising a hand](#raising-a-hand)    |
+| `baton ctl resolve [--id ID]`                                         | say the reason has passed; the panel leaves the queue                            |
+| `baton ctl group <name> <id>...`                                      | file panels under a work item (a slash-`path` nests: `backend/api`)              |
+| `baton ctl rename [--id ID \| --group G] <name>`                      | rename a panel or a group (rename a group to a path to re-parent it)             |
+| `baton ctl pin <id>...` / `unpin <id>...`                             | pin/unpin panels to live tiles                                                   |
+| `baton ctl signal <signal> <id>...`                                   | send a signal, e.g. `SIGINT`                                                     |
+| `baton ctl close <id>...`                                             | close panels                                                                     |
+| `baton ctl dispatch <id> <prompt>`                                    | assign a task brief to a panel and deliver it as a unit                          |
+| `baton ctl dispatch-group <group> <prompt>`                           | fan one brief to a work item's whole subtree (nested groups too)                 |
+| `baton ctl queue add <prompt> [--group G]`                            | enqueue a task for the scheduler to drain onto a free agent                      |
+| `baton ctl queue add <prompt> --command <cmd> [--dir D] [--close]`    | spawn-on-demand: provision an agent when none is free                            |
+| `baton ctl queue list`                                                | print the backlog as JSON (id, prompt, status, panel, group, …)                  |
+| `baton ctl queue cancel <id>`                                         | cancel a queued task by id                                                       |
+| `baton ctl queue promote <id>` / `demote <id>`                        | move a queued task to the head / tail of the backlog                             |
+| `baton ctl queue drain`                                               | clear every queued task                                                          |
+| `baton ctl conductor reset`                                           | delete the conductor's workspace so the next one starts clean                    |
 
 ```sh
 # Stand up a reviewer next to a worker and hand it the task.
@@ -104,10 +105,21 @@ baton ctl queue list
 baton ctl queue add "port module A" --command claude --dir ~/src --close
 baton ctl queue add "port module B" --command claude --dir ~/src --close
 
+# Give each worker its own checkout instead of sharing one. --dir is the
+# REPOSITORY here, not the workdir: the workdir is the tree baton creates, and
+# the new panel is filed under the branch as a work item.
+baton ctl spawn --worktree --dir ~/src/api --branch feat/login --agent claude
+
 # Inspect what the daemon is actually running: the fleet joined to the real OS
 # processes each panel spawned. --json feeds a monitor or a script.
 baton ctl tree
 ```
+
+With `--worktree`, `--dir` changes meaning: it names the repository to branch from, and the panel's working directory is
+the worktree baton opens for it. `--branch` is required, and both a missing branch and a `--dir` that is not a
+repository are refused before any tree is made. Without `--worktree`, `spawn` is unchanged — `--dir` is the working
+directory and no git runs. A conductor should prefer this whenever its workers would otherwise share a single checkout,
+since agents editing one tree in parallel overwrite each other's work.
 
 **The process tree.** `tree` roots at the daemon, scaffolds the fleet's nested work-item groups, files each panel under
 its group with its process-group-leader pid, and hangs the panel's live OS descendant processes beneath it — the picture
@@ -193,6 +205,11 @@ instead of shelling out:
 `baton_dispatch_group` · `baton_enqueue` · `baton_queue` · `baton_reorder` · `baton_group` · `baton_rename` ·
 `baton_pin` · `baton_unpin` · `baton_signal` · `baton_close`
 
+`baton_spawn` takes `{agent, args, dir}`, and `{worktree: true, branch}` alongside them to spawn into a fresh git
+worktree instead of into `dir` — the same verb rather than a second tool, so a conductor that can already spawn needs to
+discover nothing new. With `worktree`, `dir` is the repository to branch from; `worktree` without `branch`, or a `dir`
+that is not a repository, is a tool error and the fleet is unchanged.
+
 `baton_dispatch` / `baton_dispatch_group` assign a task brief to a panel or a whole work item; `baton_enqueue` adds one
 to the backlog (optionally spawn-on-demand, with a `command` to provision a worker when none is free), `baton_queue`
 reads it back, and `baton_reorder` moves a waiting task to the head or tail. These are the verbs a conductor uses to run
@@ -262,6 +279,9 @@ always speak the socket directly).
 | close other panels, purge exited          | reload or stop the server                                      |
 |                                           | spawn faster than the rate cap, or past the fleet ceiling (64) |
 |                                           | **name an agent profile** on a spawn — see below               |
+
+A worktree spawn is a spawn, so it draws on the same two limits from the same purse: the fleet ceiling and the rate cap
+count `spawn --worktree` exactly as they count `spawn`, and a conductor cannot dodge one by switching to the other.
 
 So a conductor can fill and dispatch from the backlog but cannot wipe it, and the queue gives it no way around the
 self-fence: a brief it enqueues is drained by the scheduler onto _other_ idle agents, never back onto itself.

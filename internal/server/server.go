@@ -2402,10 +2402,11 @@ func (t *rateBuckets) tooSoon(id string, now time.Time) (retryIn time.Duration, 
 // (the full-power cockpit) is never fenced. The conductor may arrange and drive
 // the rest of the fleet, but not: stop the server; close, signal, or feed input
 // to its OWN panel (the self id it declared on hello — closing it would kill the
-// agent mid-command, an input loop would feed itself); spawn faster than the
-// rate cap / past the fleet ceiling; or reach the one spawn that would let it
-// name its own command without either (panel.git worktree-add with no target). The fence is a guardrail against agent
-// accidents over a uid-private socket, not a security boundary.
+// agent mid-command, an input loop would feed itself); or spawn faster than the
+// rate cap / past the fleet ceiling, on either verb that spawns SYNCHRONOUSLY on
+// the conductor's own command — panel.create and panel.git worktree-add (see
+// spawnCapsReason). The fence is a guardrail against agent accidents over a
+// uid-private socket, not a security boundary.
 func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 	if cc.role != roleConductor {
 		return ""
@@ -2464,32 +2465,56 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 		// left for exactly that.
 		return "conductor role: the inbox is an operator surface"
 	case "panel.git":
-		// worktree-add spawns, and its targetless form (empty id) lets the caller
-		// NAME the command it spawns — panel.create's power without panel.create's
-		// ceiling and rate cap, neither of which reaches this action. Refusing that
-		// one form keeps a conductor exactly where it was: it may still fan an
-		// existing agent out onto a branch, which copies that panel's spec and
-		// chooses nothing, and it still has panel.create, fenced, for anything else.
+		// worktree-add is a spawn wearing a git op's name, so it is charged the
+		// spawn caps rather than refused. Naming its own command is not the hazard
+		// on its own — a conductor's panel.create names one too, and always could;
+		// the hazard was that this verb reached neither cap.
 		//
-		// That panel.git skips the ceiling and the cap AT ALL is older than this
-		// form and is left alone here; widening it was not this fence's to do.
-		if gitops.Op(cmd.Git) == gitops.OpWorktreeAdd && cmd.ID == "" {
-			return "conductor role: a worktree spawn must name the agent it copies"
+		// BOTH forms are charged, not just the targetless one. The reason is the
+		// verb, not the shape of the call: each form ends in createPanel, so a
+		// conductor refused at the ceiling could otherwise walk through the other
+		// door and fan an existing agent onto branch after branch, unmetered.
+		if gitops.Op(cmd.Git) == gitops.OpWorktreeAdd {
+			return s.spawnCapsReason(cc)
 		}
 	case "panel.create":
-		s.mu.Lock()
-		n := len(s.panels)
-		s.mu.Unlock()
-		if n >= maxConductorFleet {
-			return fmt.Sprintf("conductor role: fleet at capacity (%d panels)", maxConductorFleet)
-		}
-		// Checked LAST, so the capacity refusal above — which is about the fleet
-		// rather than about this caller — does not spend the caller's slot. Keyed
-		// on the conductor's panel rather than on this connection, because
-		// baton_spawn dials per tool call; see Server.spawn.
-		if _, tooSoon := s.tooSoon(&s.spawn, cc.self, time.Now()); tooSoon {
-			return "conductor role: spawning too fast, slow down"
-		}
+		return s.spawnCapsReason(cc)
+	}
+	return ""
+}
+
+// spawnCapsReason is the conductor's spawn budget: the fleet ceiling and the rate
+// gap, returned as a denial reason or "" to admit. It is shared by the two verbs
+// that spawn synchronously on a conductor's command — panel.create and panel.git
+// worktree-add — so the budget is spent from one purse however the spawn is
+// spelled.
+//
+// SYNCHRONOUSLY is the word doing the work, and the scope of this budget is
+// narrower than "every panel a conductor can cause to exist". A spawn-on-demand
+// task.enqueue also ends in createPanel, by way of the scheduler; it pays the
+// fleet ceiling, but spelled separately at its own site (see scheduleLocked), and
+// it pays NO rate gap. Charging it here would be wrong — the conductor's command
+// only queues, and the scheduler decides later whether to spawn at all — but that
+// leaves the ceiling with two enforcement sites and the gap with one. Anyone
+// adding a third spawn path must charge it deliberately; nothing here does it by
+// construction.
+//
+// It has a SIDE EFFECT on the admitting path: tooSoon stamps the clock, so a call
+// that returns "" has spent the caller's slot. Call it once per command, from the
+// guard, and never to merely ask.
+func (s *Server) spawnCapsReason(cc *clientConn) string {
+	s.mu.Lock()
+	n := len(s.panels)
+	s.mu.Unlock()
+	if n >= maxConductorFleet {
+		return fmt.Sprintf("conductor role: fleet at capacity (%d panels)", maxConductorFleet)
+	}
+	// Checked LAST, so the capacity refusal above — which is about the fleet
+	// rather than about this caller — does not spend the caller's slot. Keyed
+	// on the conductor's panel rather than on this connection, because
+	// baton_spawn dials per tool call; see Server.spawn.
+	if _, tooSoon := s.tooSoon(&s.spawn, cc.self, time.Now()); tooSoon {
+		return "conductor role: spawning too fast, slow down"
 	}
 	return ""
 }
@@ -5044,6 +5069,23 @@ func (s *Server) worktreeSpawn(repo, branch string, spec spawnSpec) error {
 	base := s.worktreeDir
 	s.mu.Unlock()
 
+	// The branch is checked FIRST, ahead of the repository, so a call that names no
+	// branch is refused before any git runs at all — gitops.WorktreeAdd validates
+	// the same name, but only after IsWorkTree has already shelled out. Nothing
+	// downstream depends on the order; what depends on it is the promise a caller
+	// can make about a missing branch.
+	if err := gitops.ValidateBranch(strings.TrimSpace(branch)); err != nil {
+		return err
+	}
+	// The command is checked here for the same reason, and it is the one that costs
+	// something to get wrong. createPanel refuses an agent panel with no command —
+	// but only AFTER the tree is built and recorded, leaving a real worktree on disk
+	// that the operator must retire by hand. The clients each resolve what to run
+	// (the dashboard from the fleet default, ctl and MCP from --agent), so an empty
+	// one is a caller that had nothing to resolve; refuse it while refusing is free.
+	if strings.TrimSpace(spec.Command) == "" {
+		return fmt.Errorf("worktree: an agent command is required")
+	}
 	if !gitdiff.IsWorkTree(repo) {
 		return fmt.Errorf("not a git repository: %s", repo)
 	}
