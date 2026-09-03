@@ -39,7 +39,7 @@ func TestMain(m *testing.M) {
 		// The child logs to a file beside its socket; the global logger must be
 		// initialised before runServer uses it.
 		logPath := filepath.Join(filepath.Dir(os.Getenv("BATON_SOCK")), "daemon.log")
-		_ = setupLogger(0, logPath)
+		_, _ = setupLogger(0, logPath)
 		if err := runServer(); err != nil {
 			os.Exit(1)
 		}
@@ -517,7 +517,7 @@ func TestSetupLogger(t *testing.T) {
 
 	logPath := filepath.Join(t.TempDir(), "logs", "baton.log")
 	for _, v := range []int{0, 1, 2} {
-		if err := setupLogger(v, logPath); err != nil {
+		if _, err := setupLogger(v, logPath); err != nil {
 			t.Fatalf("setupLogger(%d): %v", v, err)
 		}
 	}
@@ -530,7 +530,7 @@ func TestSetupLogger(t *testing.T) {
 	if err := os.WriteFile(bad, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := setupLogger(0, filepath.Join(bad, "nested.log")); err == nil {
+	if _, err := setupLogger(0, filepath.Join(bad, "nested.log")); err == nil {
 		t.Fatal("setupLogger should fail when the log dir cannot be created")
 	}
 }
