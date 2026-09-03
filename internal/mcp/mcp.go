@@ -353,18 +353,6 @@ func defaultTools() []tool {
 			},
 		},
 		{
-			name: "baton_worktrees",
-			desc: "List the git worktrees baton opened for you, each with what became of it: 'live' (a running panel works there), 'dead-slot' (only an exited panel names it) or 'orphan' (nothing does, so it is residue). Trees made outside baton are never listed. Use it to see what your worktree spawns have left behind — then ask the operator to clear the orphans, which is theirs to do, not yours.",
-			// LIST ONLY, and there is no sweeping sibling on purpose. Removing
-			// worktrees deletes work from disk, so it stays with the operator's own
-			// ctl; the daemon refuses worktree.sweep to a conductor connection as
-			// well, so the fence does not depend on this tool simply not existing.
-			schema: obj(map[string]any{}),
-			run: func(c *control.Client, _ args) (string, error) {
-				return c.WorktreesJSON()
-			},
-		},
-		{
 			name: "baton_reorder",
 			desc: "Reorder a queued task in the backlog: 'head' drains it next, 'tail' drains it last. Only a task still waiting (not yet on an agent) can be reordered.",
 			schema: obj(map[string]any{

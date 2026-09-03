@@ -187,16 +187,17 @@ baton ctl resolve
 
 `baton_list` · `baton_spawn` · `baton_send` · `baton_attention` · `baton_resolve` · `baton_dispatch` ·
 `baton_dispatch_group` · `baton_enqueue` · `baton_queue` · `baton_reorder` · `baton_group` · `baton_rename` ·
-`baton_pin` · `baton_unpin` · `baton_signal` · `baton_close` · `baton_worktrees`
+`baton_pin` · `baton_unpin` · `baton_signal` · `baton_close`
 
 `baton_spawn` 收 `{agent, args, dir}`,再加上 `{worktree: true, branch}` 就會開進一個新的 git worktree,而不是開在
 `dir` 裡——用同一個動詞而不是另開一個工具,所以已經會開面板的 conductor 不必再去認識新東西。有 `worktree` 時,
 `dir` 指的是要開分支的儲存庫;`worktree` 少了 `branch`、或 `dir` 不是儲存庫,都是工具錯誤,而隊伍原封不動。
 
-`baton_worktrees` 列出 baton 開過的每一棵樹,以及各自的下場:`live`、`dead-slot` 或 `orphan`。它只能讀,
-而且刻意沒有一個對應的清掃工具:移除 worktree 會從磁碟上刪掉成果,所以那件事留給操作者自己的
-`baton ctl worktree sweep`。不過真正把它圍住的並不是「這個工具不存在」——daemon 對任何 conductor 連線
-都會拒絕 `worktree.sweep`,所以 conductor 就算改去呼叫 `baton ctl` 一樣會被擋下。
+這裡完全沒有 worktree 工具——既不能列出,也不能清掃。conductor 負責開 worktree(透過 `baton_spawn`),
+而讓它們退場是操作者的事;一個讓 agent 看得到、卻不准它清掉的工具,只會讓它一直來催。不過光是「工具不
+存在」還不是完整的圍欄:conductor 面板會被注入 `BATON_ROLE`,所以一個改去呼叫 `baton ctl worktree sweep`
+的 agent,到了 daemon 一樣是一條 conductor 連線——而 daemon 會拒絕它的 `worktree.sweep`。少掉的工具擋住
+MCP 那條路,這道拒絕擋住 `ctl` 那條路。
 
 `baton_dispatch` / `baton_dispatch_group` 把一份任務簡報指派給某個面板或整個工作項目;`baton_enqueue`
 把一項加入待辦(可選隨需開新,附一個 `command` 以便沒人空閒時備一個 worker),`baton_queue` 讀回它,

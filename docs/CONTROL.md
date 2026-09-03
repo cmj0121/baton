@@ -205,17 +205,18 @@ instead of shelling out:
 
 `baton_list` · `baton_spawn` · `baton_send` · `baton_attention` · `baton_resolve` · `baton_dispatch` ·
 `baton_dispatch_group` · `baton_enqueue` · `baton_queue` · `baton_reorder` · `baton_group` · `baton_rename` ·
-`baton_pin` · `baton_unpin` · `baton_signal` · `baton_close` · `baton_worktrees`
+`baton_pin` · `baton_unpin` · `baton_signal` · `baton_close`
 
 `baton_spawn` takes `{agent, args, dir}`, and `{worktree: true, branch}` alongside them to spawn into a fresh git
 worktree instead of into `dir` — the same verb rather than a second tool, so a conductor that can already spawn needs to
 discover nothing new. With `worktree`, `dir` is the repository to branch from; `worktree` without `branch`, or a `dir`
 that is not a repository, is a tool error and the fleet is unchanged.
 
-`baton_worktrees` lists the trees baton opened with what became of each — `live`, `dead-slot` or `orphan`. It is
-**list-only, and has no sweeping sibling**: removing a worktree deletes work from disk, so it stays with the operator's
-own `baton ctl worktree sweep`. The tool simply not existing is not what makes that a fence, though — the daemon refuses
-`worktree.sweep` to any conductor connection, so a conductor that shells out to `baton ctl` is refused too.
+**There is no worktree tool here at all** — neither listing nor sweeping. A conductor opens worktrees (through
+`baton_spawn`) and the operator retires them, and a tool that showed an agent residue it is not allowed to clear could
+only prompt it to nag. That absence is not the whole fence, though: a conductor panel has `BATON_ROLE` injected, so an
+agent that shells out to `baton ctl worktree sweep` reaches the daemon as a conductor connection — and the daemon
+refuses `worktree.sweep` to one. The missing tool closes the MCP route; the refusal closes the `ctl` route.
 
 `baton_dispatch` / `baton_dispatch_group` assign a task brief to a panel or a whole work item; `baton_enqueue` adds one
 to the backlog (optionally spawn-on-demand, with a `command` to provision a worker when none is free), `baton_queue`

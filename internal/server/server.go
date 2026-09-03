@@ -2429,6 +2429,13 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 		// tidy — and an agent tidying up after itself by deleting directories is
 		// the accident this whole surface is shaped to prevent. worktree.list is
 		// deliberately left open beside it: seeing the residue is not removing it.
+		//
+		// THIS IS NOT MADE REDUNDANT by there being no worktree tool on MCP. A
+		// conductor panel has BATON_ROLE injected, so an agent that shells out to
+		// `baton ctl worktree sweep --yes` arrives here as a conductor connection
+		// — a surface that exists and cannot be un-built by declining to add one.
+		// The absent MCP tool closes the MCP route; this closes the ctl route,
+		// and the ctl route is the one an agent already knows how to reach.
 		return "conductor role: sweeping worktrees is an operator action"
 	case "conductor.reset":
 		// Resetting the workspace deletes the conductor's own accumulated state
