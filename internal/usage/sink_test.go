@@ -122,6 +122,75 @@ func TestWriteLimitsConcurrent(t *testing.T) {
 	}
 }
 
+// durableReplaceFile is replaceFile with the two syncs paths.WriteFileAtomic
+// does — the design replaceFile's doc rules out. It is here so the number that
+// doc quotes is one a reader can re-derive rather than one they have to believe:
+//
+//	go test ./internal/usage -run XXX -bench WriteSink -benchtime 300x -count 6
+//
+// On an Apple M2 Pro SSD: 164-192 µs plain against 5.6-6.6 ms synced, more than
+// thirty times the cost, paid on the path Claude Code re-runs to render a
+// panel's status line.
+func durableReplaceFile(path string, data []byte) (err error) {
+	if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".usage-limits-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, err = f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	// Kept so the pair differs by the two syncs and nothing else.
+	if err = os.Chmod(tmp, 0o600); err != nil {
+		return err
+	}
+	if err = os.Rename(tmp, path); err != nil {
+		return err
+	}
+	if dir, derr := os.Open(filepath.Dir(path)); derr == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
+	return nil
+}
+
+// benchReading is one encoded sink file, the size a real one is.
+var benchReading, _ = MarshalLimits(sample(limitsNow, 62.4, 34.1))
+
+func BenchmarkWriteSinkPlain(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "usage-limits.json")
+	for b.Loop() {
+		if err := replaceFile(path, benchReading); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkWriteSinkDurable(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "usage-limits.json")
+	for b.Loop() {
+		if err := durableReplaceFile(path, benchReading); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // A missing file is the ordinary state of a fleet that has not run a Claude Code
 // turn yet, not an error to report.
 func TestReadLimitsAbsentOrJunk(t *testing.T) {
