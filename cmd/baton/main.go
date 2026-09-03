@@ -95,10 +95,17 @@ func main() {
 	)
 
 	logPath := resolveLogPath(cli.Log)
-	kctx.FatalIfErrorf(setupLogger(cli.Verbose, logPath))
+	sink, err := setupLogger(cli.Verbose, logPath)
+	kctx.FatalIfErrorf(err)
 
 	// The daemon child re-executes this same binary with daemonEnv set.
 	if claimDaemonRole() {
+		// Its std streams are the log file its parent opened for it, and that
+		// descriptor is never reopened; re-point them through the sink so a panic
+		// follows the rotations instead of landing in an unlinked inode. Done here
+		// and not in runServer because runServer is called in-process by tests,
+		// whose stdout is the test report.
+		kctx.FatalIfErrorf(sink.mirrorStdio())
 		kctx.FatalIfErrorf(runServer())
 		return
 	}
@@ -276,8 +283,14 @@ func stopUnboundDaemon(sock string) error {
 }
 
 // setupLogger points the global zerolog logger at the log file, creating it (and
-// its directory) as needed.
-func setupLogger(verbosity int, logPath string) error {
+// its directory) as needed, and returns the sink underneath it.
+//
+// The sink is returned rather than kept here because the daemon has one more
+// thing to do with it (mirrorStdio) and no other caller does. It sits UNDER
+// zerolog.ConsoleWriter — the console writer formats a line and hands it on as
+// one Write — which is what lets a rotation reach the file every process is
+// really writing to without the logger above knowing anything happened.
+func setupLogger(verbosity int, logPath string) (*logRotator, error) {
 	level := zerolog.InfoLevel
 	switch {
 	case verbosity >= 2:
@@ -288,15 +301,15 @@ func setupLogger(verbosity int, logPath string) error {
 	zerolog.SetGlobalLevel(level)
 
 	if err := paths.EnsureDir(logPath); err != nil {
-		return fmt.Errorf("prepare log dir: %w", err)
+		return nil, fmt.Errorf("prepare log dir: %w", err)
 	}
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	sink, err := openLogRotator(logPath, logRotateAtBytes)
 	if err != nil {
-		return fmt.Errorf("open log file %s: %w", logPath, err)
+		return nil, err
 	}
-	writer := zerolog.ConsoleWriter{Out: f, NoColor: true, TimeFormat: "2006-01-02 15:04:05"}
+	writer := zerolog.ConsoleWriter{Out: sink, NoColor: true, TimeFormat: "2006-01-02 15:04:05"}
 	log.Logger = zerolog.New(writer).With().Timestamp().Logger()
-	return nil
+	return sink, nil
 }
 
 // startDaemon ensures this user's server is running, launching it in the

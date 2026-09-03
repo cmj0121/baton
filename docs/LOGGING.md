@@ -104,6 +104,26 @@ generations** and no more. A runaway build can produce gigabytes in minutes, and
 
 There is no retention sweeper. Old logs are yours to keep or delete.
 
+### The daemon's own log
+
+`$HOME/.baton/baton.log` is a different file with the same bound: what every `baton` process writes about itself rather
+than what a panel printed. It rolls to `baton.log.1` at **8 MiB**, keeps those two generations, and so costs at most
+16 MiB however long the installation has been running.
+
+Eight is an eighth of `log-max-mb`'s default because the two caps answer different questions. A transcript carries a
+child process's output, so its cap is there to stop a runaway build taking the machine; `baton.log` carries only lines
+baton's own code writes, at a rate baton's own code sets, so its cap is a question of how much history is worth keeping.
+There is one of it per installation, against one transcript per panel.
+
+Unlike `log-max-mb` it is **not configurable**, deliberately. The logger is set up before anything reads your config — a
+config that cannot be loaded is reported _into this file_ — so a cap taken from the config would not exist yet at the
+moment it is needed. And nothing you configure changes what the daemon writes about itself, which is the thing
+`log-max-mb` exists to track.
+
+More than one process appends to this file at once, so the rotation is a **rename**: a `baton` that was already writing
+when one happened keeps writing into `baton.log.1` — nothing is lost — and picks up the new file the next time it opens
+one. Two processes rotating in the same instant produce one rotation, not two.
+
 ## Reading it back
 
 `C-t L` opens the log in a **temporary panel** — the same ephemeral mechanism the git menu uses. It closes on exit and
