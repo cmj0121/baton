@@ -26,6 +26,7 @@ import (
 	"github.com/cmj0121/baton/internal/i18n"
 	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/panel"
+	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/vtirm"
 )
@@ -482,11 +483,18 @@ type model struct {
 	// three work items is the one layout that cannot show nesting, which is the
 	// worst possible place to hide it.
 	//
-	// Nobody sets it directly: opening a work item from the cards turns it on,
-	// because "show me what is inside this" can only be answered by the tree, and
-	// ← out of a shut top-level row turns it off again. A view state, session-lived
-	// like every other one here.
+	// One key sets it and nothing else does: toggleLayout, bound to `v l`. The
+	// arrows walk the tree and space opens a row; neither reaches this flag, and
+	// treeIsChosen only clears it on a copy to ask what the fleet would look like
+	// without it. That is what makes it a PREFERENCE rather than navigation, and
+	// so what makes it worth remembering across sessions (see viewStatePath).
 	showTree bool
+
+	// viewStatePath is where the remembered view preferences live — the file
+	// paths.TUIStateFile names. New sets it; a model built without one (every test
+	// that does not ask for persistence) leaves it empty, which makes both the load
+	// and the save inert rather than writing into the real $HOME.
+	viewStatePath string
 
 	// collapsed records the group rows a person has explicitly SHUT, keyed by group
 	// path. Groups are expanded by default — a tree that opened closed would show
@@ -574,8 +582,22 @@ func New(c *client.Client, appVersion string) tea.Model {
 		endpoint:   c.Endpoint(),
 		now:        time.Now(),
 		scrollMem:  map[string]scrollState{},
+
+		viewStatePath: paths.TUIStateFile(),
 	}
-	return m.applyPrefs(loadPrefs())
+	m = m.applyPrefs(loadPrefs())
+
+	// Remembered preferences go on LAST, and that is the precedence rule: the
+	// built-in default is the floor, the config layers over it, and a key the
+	// operator actually pressed beats both. Only fields the file has an opinion
+	// about are touched, so a config that gains a key for either setting still
+	// speaks for everyone who has never pressed it.
+	//
+	// It is applied here rather than in applyPrefs because applyPrefs is also the
+	// SIGHUP reload, and it deliberately leaves live view state alone. Reading the
+	// file there would yank the dashboard back to the remembered layout every time
+	// the operator edited an unrelated setting.
+	return m.applyViewState(loadViewState(m.viewStatePath))
 }
 
 // applyPrefs overlays a freshly loaded prefs onto the model — the in-place client

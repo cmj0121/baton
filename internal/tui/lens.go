@@ -51,6 +51,27 @@ func (l lens) String() string {
 	}
 }
 
+// parseLens maps a persisted name back to a lens, defaulting to the work items —
+// the fleet's own structure, and the one place a person must always end up when
+// nothing else is known.
+//
+// It is the inverse of String, so the remembered value is the lens's NAME rather
+// than its integer. lensOrder is a cycle somebody will reorder one day, and an
+// index persisted across that change would silently reopen the cockpit under a
+// different lens than the one it was left in.
+func parseLens(s string) lens {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "directory":
+		return lensDir
+	case "profile":
+		return lensProfile
+	case "state":
+		return lensState
+	default:
+		return lensWork
+	}
+}
+
 // real reports whether this lens shows the fleet's own structure — the work items
 // the server holds — rather than a projection over it. Only the real tree can be
 // reorganised: the rest have no parents anybody can move a panel between.
@@ -239,6 +260,7 @@ func (m model) cycleLens(delta int) model {
 	}
 	m.restoreCursor(kind, id, "", had && kind == itemPanel)
 	m.status = "group by: " + m.lens.String()
+	m.rememberView() // on change, not on exit: a cockpit is usually killed, not closed
 	return m
 }
 
