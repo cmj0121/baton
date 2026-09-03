@@ -281,10 +281,11 @@ func TestWriteResizeSnapshotUnknownIDSafe(t *testing.T) {
 
 // TestWriteResizeStopOnClosedFDSafe drives the error branches now that the
 // manager logs instead of discarding: a pane whose master fd is already closed
-// makes Write/Resize/Stop's Close fail, yet each must still return normally and
-// stay a no-op for the caller (best-effort, logged-only). We register the pane on
-// a live (not dead) manager so livePane lets Write/Resize through to the closed
-// fd, which is exactly the failure they must swallow.
+// makes Write and Resize fail, yet each must still return normally and stay a
+// no-op for the caller (best-effort, logged-only). We register the pane on a
+// live (not dead) manager so livePane lets Write/Resize through to the closed
+// fd, which is exactly the failure they must swallow. Stop is here for the same
+// reason: pid 0 leaves it nothing to hang up, and it must still drop the pane.
 func TestWriteResizeStopOnClosedFDSafe(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -302,10 +303,10 @@ func TestWriteResizeStopOnClosedFDSafe(t *testing.T) {
 
 	m.Write("x", []byte("data")) // Write on closed fd → logged, no panic
 	m.Resize("x", 24, 80)        // Setsize on closed fd → logged, no panic
-	m.Stop("x")                  // remove's Close on closed fd → logged, no panic
+	m.Stop("x")                  // no pid to hang up → no panic
 
 	if _, ok := m.livePane("x"); ok {
-		t.Fatal("Stop should have removed the pane even when Close failed")
+		t.Fatal("Stop should have removed the pane even with nothing to hang up")
 	}
 }
 
@@ -322,8 +323,9 @@ func TestMarkDeadCloseErrorSafe(t *testing.T) {
 	}
 
 	m := New()
-	m.ptys["x"] = &pane{f: w, pid: 0}
-	m.markDead("x") // Close on closed fd → logged, pane marked dead
+	p := &pane{f: w, pid: 0}
+	m.ptys["x"] = p
+	m.markDead("x", p) // Close on closed fd → logged, pane marked dead
 
 	m.mu.Lock()
 	dead := m.ptys["x"].dead
@@ -578,5 +580,102 @@ func TestWaitGivesUpOnAPumpThatNeverEnds(t *testing.T) {
 	m.KillAll(syscall.SIGKILL)
 	if err := m.Wait(3 * time.Second); err != nil {
 		t.Fatalf("after the kill the same manager must join: %v", err)
+	}
+}
+
+// TestStopEndsThePumpItRemoves pins the failure behind #73. Stop closes the PTY
+// master, which is documented to hang the child up — but the master is a
+// BLOCKING file descriptor, and the pump spends effectively all its time inside
+// read(2) on it. Go cannot issue the real close(2) while that read holds a
+// reference, so the close is deferred until the read returns, and only the slave
+// side closing ever makes it return. Nothing else can: Stop has already dropped
+// the pane from the map, so KillAll no longer sees the pid.
+//
+// The child here exits on a hangup, so after Stop the pump must end on its own.
+// Without the explicit signal it never did, and Wait burned its whole bound.
+func TestStopEndsThePumpItRemoves(t *testing.T) {
+	m := New()
+	// sleep never writes, so after the settle below the pump is provably parked
+	// in read(2) — the state in which a bare master close does nothing.
+	if err := m.StartCmd("1", Spec{Command: "/bin/sh", Args: []string{"-c", "exec sleep 30"}}); err != nil {
+		t.Fatalf("StartCmd: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	m.Stop("1")
+	if err := m.Wait(3 * time.Second); err != nil {
+		t.Fatalf("Stop must end the pump it orphans, got %v", err)
+	}
+}
+
+// TestStopLeavesNoChildBehind reads the same defect from the OS side rather than
+// from the pump's: a stopped panel's process must be gone, not merely forgotten.
+// Signal 0 is the probe — it reports whether the process group still exists — so
+// this fails if Stop ever goes back to closing the master and hoping.
+func TestStopLeavesNoChildBehind(t *testing.T) {
+	m := New()
+	if err := m.StartCmd("1", Spec{Command: "/bin/sh", Args: []string{"-c", "exec sleep 30"}}); err != nil {
+		t.Fatalf("StartCmd: %v", err)
+	}
+	pid := m.Pids()["1"]
+	if pid <= 0 {
+		t.Fatalf("no pid recorded for the started panel: %v", m.Pids())
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	m.Stop("1")
+	if err := m.Wait(3 * time.Second); err != nil {
+		t.Fatalf("Wait after Stop: %v", err)
+	}
+	// The pump has reaped the child, so the group must no longer exist. Had Stop
+	// only closed the master, the sleep would still be running here.
+	if err := syscall.Kill(-pid, 0); err == nil {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		t.Fatalf("process group %d survived Stop", pid)
+	}
+}
+
+// TestStopKeepsThePanelsLastWords pins the reason Stop hangs the child up
+// instead of closing the master: a panel's final output must reach the sink even
+// when Stop lands before the pump has drained it. The sink parks the pump
+// OUTSIDE read(2) on the first chunk, which is the one moment a close would take
+// effect immediately — so with Stop closing the master, everything the child
+// wrote after that point went in the bin. Now the pump owns the close and only
+// makes it once the PTY has reached EOF.
+func TestStopKeepsThePanelsLastWords(t *testing.T) {
+	m := New()
+	var mu sync.Mutex
+	var got strings.Builder
+	release, first := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	m.OnOutput(func(_ string, data []byte) {
+		mu.Lock()
+		got.Write(data)
+		mu.Unlock()
+		once.Do(func() {
+			close(first)
+			<-release
+		})
+	})
+
+	// FIRST parks the pump in the sink; LAST is written while it is parked, so it
+	// is sitting unread in the PTY when Stop lands.
+	script := "printf FIRST; sleep 0.5; printf LAST; exec sleep 30"
+	if err := m.StartCmd("1", Spec{Command: "/bin/sh", Args: []string{"-c", script}}); err != nil {
+		t.Fatalf("StartCmd: %v", err)
+	}
+	<-first
+	time.Sleep(1500 * time.Millisecond) // ample room for LAST to be written
+	m.Stop("1")
+	close(release)
+
+	if err := m.Wait(3 * time.Second); err != nil {
+		t.Fatalf("Wait after Stop: %v", err)
+	}
+	mu.Lock()
+	out := got.String()
+	mu.Unlock()
+	if !strings.Contains(out, "LAST") {
+		t.Fatalf("Stop dropped the output the panel had already written; sink saw %q", out)
 	}
 }

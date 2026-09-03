@@ -233,7 +233,7 @@ func (m *Manager) pump(id string, p *pane, cmd *exec.Cmd) {
 	// Signal/KillAll that read the pane as live in the window between the reap and
 	// the dead flag could otherwise deliver a signal to a reused pid's group. With
 	// the flag set first, livePane rejects the signal before Wait ever runs.
-	m.markDead(id)
+	m.markDead(id, p)
 	exitCode := 0
 	if err := cmd.Wait(); err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
@@ -265,10 +265,14 @@ func (m *Manager) pumpDone() {
 // shutdown a fact rather than a request, so nothing keeps streaming output or
 // firing callbacks after it returns.
 //
-// The bound is the point: a pump whose PTY never reaches EOF (a grandchild that
-// inherited the slave and outlived its group) would otherwise hang the caller
-// forever, which is worse than the leak. Exceeding it returns ErrPumpsRunning
-// rather than nil, so "we gave up" is never mistaken for "they finished".
+// The bound is the point: a pump whose PTY never reaches EOF would otherwise
+// hang the caller forever, which is worse than the leak. The read it is parked
+// in is a blocking one that nothing on this side can interrupt — only the last
+// holder of the slave closing it ends the read — so a child that ignores the
+// hangup, or a grandchild that inherited the slave and outlived its group, is
+// beyond the manager's reach by construction. Exceeding the bound returns
+// ErrPumpsRunning rather than nil, so "we gave up" is never mistaken for "they
+// finished".
 func (m *Manager) Wait(timeout time.Duration) error {
 	m.mu.Lock()
 	if m.pumps == 0 {
@@ -293,14 +297,17 @@ func (m *Manager) Wait(timeout time.Duration) error {
 
 // markDead closes a panel's PTY but keeps its pane so the retained output ring
 // can still be replayed. The pane is freed for real by Stop (close/purge).
-func (m *Manager) markDead(id string) {
+//
+// It takes the pane the pump already holds rather than looking it up, because
+// the pump is the master's owner and must close it whether or not the pane is
+// still in the map: a Stop that happened while the pump was draining has already
+// deleted the entry, and a lookup would silently leak the descriptor.
+func (m *Manager) markDead(id string, p *pane) {
 	m.mu.Lock()
-	if p, ok := m.ptys[id]; ok {
-		if err := p.f.Close(); err != nil {
-			log.Warn().Str("id", id).Err(err).Msg("ptymgr: closing PTY on exit failed")
-		}
-		p.dead = true
+	if err := p.f.Close(); err != nil {
+		log.Warn().Str("id", id).Err(err).Msg("ptymgr: closing PTY on exit failed")
 	}
+	p.dead = true
 	m.mu.Unlock()
 }
 
@@ -495,20 +502,37 @@ func (m *Manager) nudgeRows(id string, deltaRows int) bool {
 // StartShell launches the user's default shell. Equivalent to Start(id, "").
 func (m *Manager) StartShell(id string) error { return m.Start(id, "") }
 
-// Stop terminates the PTY backing the given panel id, if any. Closing the
-// master hangs up the child; the pump then reaps it. Safe to call for an unknown
-// id (a panel with no live process).
+// Stop terminates the PTY backing the given panel id, if any: the child's
+// process group is hung up, and its pump then drains the last output, closes the
+// master and reaps it. Safe to call for an unknown id (a panel with no live
+// process).
 func (m *Manager) Stop(id string) { m.remove(id) }
 
 func (m *Manager) remove(id string) {
 	m.mu.Lock()
 	if p, ok := m.ptys[id]; ok {
-		// A live pane still holds an open master; closing it hangs up the child. A
-		// dead pane's master was already closed by markDead when the process exited,
-		// so closing again would just log a spurious "file already closed".
-		if !p.dead {
-			if err := p.f.Close(); err != nil {
-				log.Warn().Str("id", id).Err(err).Msg("ptymgr: closing PTY on remove failed")
+		// Hang the child up EXPLICITLY, rather than by closing the master. The
+		// master is a BLOCKING descriptor — creack/pty hands os.NewFile a plain
+		// /dev/ptmx fd, which the runtime poller does not take — and the pump spends
+		// effectively all its time inside read(2) on it. Go cannot issue the real
+		// close(2) while that read holds a reference to the fd, so a close is
+		// deferred until the read returns, and only the slave side closing ever
+		// makes it return. Closing here therefore hangs up nothing: the child keeps
+		// running, its pump stays parked forever, and the delete below has just put
+		// the pane beyond KillAll's reach. The signal is what actually ends the read
+		// (#73). A dead pane has already exited and been closed by markDead.
+		//
+		// Signalled under the lock on purpose: !dead means the pump has not reached
+		// cmd.Wait yet, because it sets dead first and under this same lock, so the
+		// pid cannot already have been reaped and reused by the OS.
+		//
+		// The master is left for the pump to close once it has drained the child's
+		// last output and seen EOF. Closing it here would cut that drain short and
+		// throw away whatever the panel had already written but not yet handed over —
+		// the final words an operator reads after a panel dies.
+		if !p.dead && p.pid > 0 {
+			if err := syscall.Kill(-p.pid, syscall.SIGHUP); err != nil {
+				log.Warn().Str("id", id).Int("pid", p.pid).Err(err).Msg("ptymgr: hanging up panel process group on remove failed")
 			}
 		}
 		delete(m.ptys, id)
