@@ -30,7 +30,7 @@ import (
 // nothing on their own and open a family — which is what keeps the everyday
 // verbs on one key while the long tail stays reachable and discoverable:
 //
-//	n  new     n c form · n . here · n C conductor · n h global shell
+//	n  new     n c form · n . here · n C conductor · n h global shell · n w worktree
 //	v  view    v u usage · v U usage detail · v k keycast · v p preview · v l layout · v g lens
 //	g  group   g g mark · g c create · g a add · g u ungroup
 //	x  purge   x x — the second tap is the confirmation
@@ -45,6 +45,7 @@ const (
 	keyNewAgent    = "A"   // spawn an agent panel (shift+a) — one of the two spawns that keep a bare key
 	keyConductor   = "n C" // find-or-create the singleton conductor agent
 	keyGlobalShell = "n h" // find-or-create the singleton global shell
+	keyNewWorktree = "n w" // pick a repo, name a branch: a worktree and an agent isolated in it, from the dashboard
 	keyClose       = "w"
 	keyRespawn     = "r"   // re-run the exited panel(s) under the focus — a lone dead slot, or every exited member of the focused group
 	keyPurge       = "x x" // purge every exited panel — a double tap, because the second one is the confirmation
@@ -130,6 +131,7 @@ const (
 	actNewAgent
 	actConductor
 	actGlobalShell
+	actNewWorktree
 	actClose
 	actRespawn
 	actPurge
@@ -234,6 +236,7 @@ var bindings = []binding{
 	{"new-agent", keyNewAgent, "spawn an agent panel in a workdir", actNewAgent, "Panels", "agent"},
 	{"conductor", keyConductor, "open the conductor — an agent that drives the fleet", actConductor, "Panels", "conductor"},
 	{"global-shell", keyGlobalShell, "open the global shell — a host shell always one key away", actGlobalShell, "Panels", "global shell"},
+	{"new-worktree", keyNewWorktree, "spawn an agent isolated in a new worktree on a new branch", actNewWorktree, "Panels", "worktree"},
 	{"close", keyClose, "close the selected panel", actClose, "Panels", "close"},
 	{"respawn", keyRespawn, "re-run exited panel(s) in the selection", actRespawn, "Panels", "re-run"},
 	{"purge-exited", keyPurge, "purge all exited panels", actPurge, "Panels", "purge"},

@@ -297,6 +297,13 @@ type model struct {
 	gitConfirmOp  string // "push" | "remove" — the op awaiting a y/n, "" when none is pending
 	gitRemovePath string // the worktree path a confirmed remove targets
 
+	// wtRepo is the repository the DASHBOARD's n w picked, carried from its own
+	// prompt to the branch prompt that follows. Payload, not a discriminator: which
+	// form goes on the wire is decided by the input purpose (inputWorktreeBranch vs
+	// inputGitWorktree), which esc already resets, so a stale value here can never
+	// reach the git menu's verb.
+	wtRepo string
+
 	// The diff popup (modeDiff): a master-detail overlay fed by the server's
 	// structured "diff" reply. diffFiles is the changed-file set; diffCursor selects
 	// one; diffScroll offsets the detail pane; diffOnDetail routes j/k to the detail
@@ -529,23 +536,25 @@ type model struct {
 type inputPurpose int
 
 const (
-	inputNone        inputPurpose = iota
-	inputShellPath                // editing the default shell in panel config
-	inputReplayKB                 // editing the per-panel replay buffer (KiB) in panel config
-	inputLimit                    // editing one resource-limit row in panel config (which one: model.limitRow)
-	inputNewPanelCmd              // the prefix+n new-panel command popup
-	inputAgentDir                 // the workdir for a new agent panel
-	inputGroupName                // naming a new group from the marked panels
-	inputRename                   // renaming the selected panel or group
-	inputDispatch                 // assigning a task brief to the selected agent panel
-	inputEnqueue                  // enqueuing a task brief for the scheduler to drain onto a free agent
-	inputSignalName               // free-form signal name/number for the picker's "other…"
-	inputFilter                   // live dashboard panel filter (f)
-	inputSearch                   // scrollback search term in a zoom / group tile (C-t f)
-	inputFleetSearch              // fleet-wide search term: grep every panel's output (/)
-	inputGitBranch                // new branch name for the git menu (b)
-	inputGitWorktree              // new-worktree branch name for the git menu (w)
-	inputGitRemove                // worktree path to remove for the git menu (x)
+	inputNone           inputPurpose = iota
+	inputShellPath                   // editing the default shell in panel config
+	inputReplayKB                    // editing the per-panel replay buffer (KiB) in panel config
+	inputLimit                       // editing one resource-limit row in panel config (which one: model.limitRow)
+	inputNewPanelCmd                 // the prefix+n new-panel command popup
+	inputAgentDir                    // the workdir for a new agent panel
+	inputGroupName                   // naming a new group from the marked panels
+	inputRename                      // renaming the selected panel or group
+	inputDispatch                    // assigning a task brief to the selected agent panel
+	inputEnqueue                     // enqueuing a task brief for the scheduler to drain onto a free agent
+	inputSignalName                  // free-form signal name/number for the picker's "other…"
+	inputFilter                      // live dashboard panel filter (f)
+	inputSearch                      // scrollback search term in a zoom / group tile (C-t f)
+	inputFleetSearch                 // fleet-wide search term: grep every panel's output (/)
+	inputGitBranch                   // new branch name for the git menu (b)
+	inputGitWorktree                 // new-worktree branch name for the git menu (w)
+	inputGitRemove                   // worktree path to remove for the git menu (x)
+	inputWorktreeRepo                // the repository the dashboard's n w opens a worktree on, asked before the branch
+	inputWorktreeBranch              // the branch for that repository — the git menu's field, committing to the targetless form
 )
 
 // RestartRequested reports whether the cockpit exited because the user asked to
@@ -1873,7 +1882,7 @@ func (m model) openFilter() model {
 // default shell are all paths; group and rename names are not.
 func inputIsPath(p inputPurpose) bool {
 	switch p {
-	case inputAgentDir, inputNewPanelCmd, inputShellPath:
+	case inputAgentDir, inputWorktreeRepo, inputNewPanelCmd, inputShellPath:
 		return true
 	}
 	return false
@@ -1884,7 +1893,7 @@ func inputIsPath(p inputPurpose) bool {
 // and the default shell are paths to executables, and a picker that lists only
 // directories cannot offer either — tab completion still walks them.
 func inputIsDir(p inputPurpose) bool {
-	return p == inputAgentDir
+	return p == inputAgentDir || p == inputWorktreeRepo
 }
 
 // deleteLastWord trims trailing spaces, then one trailing path separator, then
@@ -2025,6 +2034,10 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		return m.commitGitWorktree(buf)
 	case inputGitRemove:
 		return m.commitGitRemove(buf)
+	case inputWorktreeRepo:
+		return m.commitWorktreeRepo(buf)
+	case inputWorktreeBranch:
+		return m.commitWorktreeBranch(buf)
 	}
 	return m, nil
 }
@@ -2470,6 +2483,18 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		}
 		m.pendingGlobalShell = true // zoom it the moment the spawn lands in the fleet
 		return m.spawnGlobalShell(), nil
+	case actNewWorktree:
+		// Ask where first, then which branch. The backend is NOT asked for: this
+		// verb has no source agent to copy, so it runs the fleet default — the same
+		// profile A would land on when nothing is picked — and asking about it would
+		// put a third question in front of a two-question verb.
+		if _, name, ok := m.resolveAgentNamed(m.effDefaultAgent()); !ok {
+			m.status = m.agentUnavailable(name)
+			return m, nil
+		}
+		m.input = inputWorktreeRepo
+		m.inputBuf = m.defaultWorkdir()
+		m.status = "new worktree · type the repository, enter, then a branch"
 	case actClose:
 		it, ok := m.selectedItem()
 		switch {
@@ -4555,10 +4580,14 @@ func (m model) inputView() string {
 		title, prompt, action = "FLEET SEARCH", "grep every panel's output  (regexp)", "search"
 	case inputGitBranch:
 		title, prompt, action = "NEW BRANCH", "branch name  (git checkout -b)", "create"
-	case inputGitWorktree:
+	case inputGitWorktree, inputWorktreeBranch:
+		// One field, two verbs: the reader sees the same prompt either way, and
+		// which command it commits to is the purpose's business, not the label's.
 		title, prompt, action = "NEW WORKTREE", "branch name  (worktree + agent)", "create"
 	case inputGitRemove:
 		title, prompt, action = "REMOVE WORKTREE", "worktree path  (then confirm)", "next"
+	case inputWorktreeRepo:
+		title, prompt, action = "NEW WORKTREE", "the git repository to branch from", "next"
 	}
 
 	field := lipgloss.NewStyle().Width(46).Padding(0, 1).Foreground(colInk).Background(colSurface).Render("› " + m.inputBuf + "▌")

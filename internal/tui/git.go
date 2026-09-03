@@ -172,6 +172,50 @@ func (m model) commitGitBranch(name string) (tea.Model, tea.Cmd) {
 	return m.sendGitEphemeral("branch", "branch "+name, name)
 }
 
+// commitWorktreeRepo is the dashboard verb's first step: the repository typed (or
+// browsed to) after n w. It only parks the answer and asks for the branch — the
+// SECOND question is the prompt the git menu already owns, and sharing it is what
+// keeps the two verbs one flow rather than two.
+//
+// Whether the directory is a git repository is not asked here. The fleet may be
+// on another machine, so the cockpit's filesystem is the wrong one to consult;
+// the server refuses a non-repo before it creates anything, and that refusal
+// arrives as an error the status bar shows.
+func (m model) commitWorktreeRepo(repo string) (tea.Model, tea.Cmd) {
+	if repo == "" {
+		m.input, m.status = inputWorktreeRepo, "new worktree · a repository is required"
+		return m, nil
+	}
+	m.wtRepo = expandDir(repo)
+	m.input, m.inputBuf = inputWorktreeBranch, ""
+	m.status = "new worktree in " + dirLabel(m.wtRepo) + " · type a branch, enter creates"
+	return m, nil
+}
+
+// commitWorktreeBranch is the dashboard verb's second step, and the sibling of
+// commitGitWorktree below: the same wire op, the same field on screen, resolved
+// the other way. Server.gitWorktreeAdd owns the field mapping; what is decided
+// HERE is the profile. n w has no source panel, so it carries the FLEET DEFAULT —
+// what A spawns when nothing is picked — rather than a copy of anything.
+func (m model) commitWorktreeBranch(branch string) (tea.Model, tea.Cmd) {
+	if branch == "" {
+		m.input, m.status = inputWorktreeBranch, "new worktree · a branch name is required"
+		return m, nil
+	}
+	prof, name, ok := m.resolveAgentNamed(m.effDefaultAgent())
+	if !ok {
+		m.status = m.agentUnavailable(name)
+		return m, nil
+	}
+	m.sendf(proto.Command{
+		Action: "panel.git", Git: "worktree-add",
+		Dir: m.wtRepo, Name: branch,
+		Path: prof.Command, Args: prof.Args, Profile: name,
+	})
+	m.status = "worktree + " + name + " on " + branch
+	return m, nil
+}
+
 // commitGitWorktree creates a worktree on the typed branch and spawns an agent in
 // it. It is a fleet change (no auto-zoom): the new agent appears on the dashboard,
 // grouped under the branch.
