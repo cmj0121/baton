@@ -552,3 +552,65 @@ func TestWorktreeSweepIsFencedFromTheConductor(t *testing.T) {
 		t.Fatalf("the refused sweep must have removed nothing: %v", err)
 	}
 }
+
+// TestWorktreeSweepSkipsALockedOrphanToo covers git's OTHER refusal beside the
+// dirty one, and it is here because the two are different messages.
+//
+// The sweep must treat both the same way — skipped, named, sweep goes on — and
+// the way to get that wrong is to recognise one refusal and let the other
+// through as a hard failure. The sweep matches on nothing at all: any error from
+// WorktreeRemove is a skip. This test is what keeps it that way, and it runs a
+// locked orphan, a dirty one and a clean one together so the answer has to be
+// "two named, one removed" rather than anything simpler.
+func TestWorktreeSweepSkipsALockedOrphanToo(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	repo, env := wtRepo(t)
+	ln, sock, stateF := listen(t)
+	srv := server.New(ln, server.WithStateFile(stateF))
+	serve(t, srv)
+	c := dial(t, sock)
+
+	_, lockedTree := spawnWorktreePanel(t, c, repo, "feat/locked")
+	_, dirtyTree := spawnWorktreePanel(t, c, repo, "feat/dirty")
+	_, cleanTree := spawnWorktreePanel(t, c, repo, "feat/clean")
+
+	gitIn(t, env, repo, "worktree", "lock", lockedTree)
+	if err := os.WriteFile(filepath.Join(dirtyTree, "wip.txt"), []byte("unsaved\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Send(proto.Command{Action: "panel.purge"}); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	deadline := time.After(10 * time.Second)
+	for statusOfPath(t, listTrees(t, c), cleanTree) != worktree.StatusOrphan {
+		select {
+		case <-deadline:
+			t.Fatal("purging the slots should have left orphans")
+		default:
+		}
+	}
+
+	got := sweepTrees(t, c)
+	skipped := map[string]string{}
+	for _, s := range got.Skipped {
+		skipped[s.Path] = s.Reason
+	}
+	for _, want := range []string{lockedTree, dirtyTree} {
+		reason, ok := skipped[want]
+		if !ok {
+			t.Fatalf("git refuses %q, so it must be skipped and named, got %+v", want, got)
+		}
+		if reason == "" {
+			t.Fatalf("the skip of %q must say why", want)
+		}
+	}
+	if len(got.Removed) != 1 || got.Removed[0] != cleanTree {
+		t.Fatalf("the clean orphan should still have been removed, got %+v", got)
+	}
+	for _, kept := range []string{lockedTree, dirtyTree} {
+		if _, err := os.Stat(kept); err != nil {
+			t.Fatalf("a skipped orphan must be left in place: %v", err)
+		}
+	}
+}
