@@ -88,6 +88,8 @@ acts, and exits.
 | `baton ctl queue promote <id>` / `demote <id>`                        | move a queued task to the head / tail of the backlog                             |
 | `baton ctl queue drain`                                               | clear every queued task                                                          |
 | `baton ctl conductor reset`                                           | delete the conductor's workspace so the next one starts clean                    |
+| `baton ctl worktree list`                                             | print the worktrees baton opened as JSON, each `live` / `dead-slot` / `orphan`   |
+| `baton ctl worktree sweep [--yes]`                                    | remove the **orphaned** ones; confirms on a terminal, needs `--yes` in a script  |
 
 ```sh
 # Stand up a reviewer next to a worker and hand it the task.
@@ -203,12 +205,17 @@ instead of shelling out:
 
 `baton_list` · `baton_spawn` · `baton_send` · `baton_attention` · `baton_resolve` · `baton_dispatch` ·
 `baton_dispatch_group` · `baton_enqueue` · `baton_queue` · `baton_reorder` · `baton_group` · `baton_rename` ·
-`baton_pin` · `baton_unpin` · `baton_signal` · `baton_close`
+`baton_pin` · `baton_unpin` · `baton_signal` · `baton_close` · `baton_worktrees`
 
 `baton_spawn` takes `{agent, args, dir}`, and `{worktree: true, branch}` alongside them to spawn into a fresh git
 worktree instead of into `dir` — the same verb rather than a second tool, so a conductor that can already spawn needs to
 discover nothing new. With `worktree`, `dir` is the repository to branch from; `worktree` without `branch`, or a `dir`
 that is not a repository, is a tool error and the fleet is unchanged.
+
+`baton_worktrees` lists the trees baton opened with what became of each — `live`, `dead-slot` or `orphan`. It is
+**list-only, and has no sweeping sibling**: removing a worktree deletes work from disk, so it stays with the operator's
+own `baton ctl worktree sweep`. The tool simply not existing is not what makes that a fence, though — the daemon refuses
+`worktree.sweep` to any conductor connection, so a conductor that shells out to `baton ctl` is refused too.
 
 `baton_dispatch` / `baton_dispatch_group` assign a task brief to a panel or a whole work item; `baton_enqueue` adds one
 to the backlog (optionally spawn-on-demand, with a `command` to provision a worker when none is free), `baton_queue`
@@ -273,6 +280,7 @@ always speak the socket directly).
 | list, spawn, group, rename, pin, move     | close, signal, or send input to **its own** panel              |
 | signal and send input to **other** panels | **dispatch a task to its own** panel                           |
 | dispatch to other panels, enqueue tasks   | **drain the queue** — clearing the backlog is operator-only    |
+| **list** the worktrees baton opened       | **sweep** them — removing trees from disk is operator-only     |
 | read a panel's title, state and telemetry | **log a panel to a file**, or read a log back — see below      |
 | reorder queued tasks (promote / demote)   |                                                                |
 | **raise its own hand** and stand down     | raise or lower **another panel's** hand                        |
@@ -282,6 +290,10 @@ always speak the socket directly).
 
 A worktree spawn is a spawn, so it draws on the same two limits from the same purse: the fleet ceiling and the rate cap
 count `spawn --worktree` exactly as they count `spawn`, and a conductor cannot dodge one by switching to the other.
+
+Opening a worktree and **retiring** one are fenced differently on purpose. A conductor may open them, under those caps,
+and may see what its spawns have left behind — reading the residue is not removing it. Clearing it is the operator's,
+because a sweep is the one verb in this surface that deletes work from a disk rather than bookkeeping from a fleet.
 
 So a conductor can fill and dispatch from the backlog but cannot wipe it, and the queue gives it no way around the
 self-fence: a brief it enqueues is drained by the scheduler onto _other_ idle agents, never back onto itself.
