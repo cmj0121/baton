@@ -223,6 +223,112 @@ func TestTheForcedNoShowMessageDoesNotSendThemBackRoundAgain(t *testing.T) {
 	}
 }
 
+// TestAStillStartingDaemonIsNotReportedAsGone is #69's firing direction: a
+// daemon that is alive and has not bound yet must be described as that, not as
+// one that did not come up.
+//
+// The instrument is the same wedged daemon the rest of this file uses, and it
+// stands in for the case the issue was filed on for a reason no test can
+// otherwise reach: the two states are the same picture on disk. A daemon 6.5
+// seconds into opening a 456 MB score log and a daemon hung forever on a dead
+// mount both hold the session claim, both have no socket, and both leave `baton`
+// at the end of its five seconds with nothing to tell them apart. What the
+// message may therefore claim is only what is true of both — alive, working, and
+// here is the line it is on — which is exactly what stopped being said when the
+// launcher concluded "did not come up" from "no socket yet".
+func TestAStillStartingDaemonIsNotReportedAsGone(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping daemon fork-exec in -short")
+	}
+	home, sock, scoreDir := deadScoreDir(t)
+	child := forkDaemon(t, home, sock)
+	waitForScoreOpen(t, child, scoreDir)
+
+	daemonLog := filepath.Join(filepath.Dir(sock), "daemon.log")
+	got := startFailureReason(sock, daemonLog, false)
+	t.Logf("what an operator gets, daemon alive:\n\t%s", got)
+
+	if strings.Contains(got, "did not come up") {
+		t.Errorf("the message %q says the server did not come up about a daemon that is holding the "+
+			"session claim and reading a file. It is starting, and a `baton` a moment later may well "+
+			"attach to it", got)
+	}
+	if !strings.Contains(got, "still starting") {
+		t.Errorf("the message %q does not say the daemon is still starting, which is the one fact "+
+			"that distinguishes it from nothing running", got)
+	}
+	// The line, not the log: it names what the daemon is on, and pointing at a
+	// file is what the old message already did.
+	if !strings.Contains(got, "boot: opening the fleet memory") {
+		t.Errorf("the message %q does not quote the log line naming what the daemon is working on, "+
+			"which is the whole of what it can offer over `see the log`", got)
+	}
+	if !childRunning(child) {
+		t.Fatal("the daemon exited during the check; it was meant to be alive, so this proved nothing")
+	}
+}
+
+// TestNothingRunningStillReportsThatItDidNotComeUp is the silent direction, and
+// the one that makes the firing direction mean anything: a launcher that called
+// every failure "still starting" would pass the test above while telling an
+// operator whose daemon died on startup to sit and wait for it.
+//
+// The socket path is one nothing has ever run on, which is the same on-disk
+// state as a daemon that exited: nothing holds the claim.
+func TestNothingRunningStillReportsThatItDidNotComeUp(t *testing.T) {
+	sock := filepath.Join(shortDir(t), "b.sock")
+	got := startFailureReason(sock, "/tmp/somewhere/baton.log", false)
+	t.Logf("what an operator gets, nothing running:\n\t%s", got)
+
+	if want := didNotComeUpReason("/tmp/somewhere/baton.log", false); got != want {
+		t.Errorf("with no daemon holding the session the message should be the unchanged one.\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestStillStartingFallsBackToTheLogPath covers the daemon that is alive with a
+// log nothing can read: the sentence must still arrive, naming the file the way
+// didNotComeUpReason does, rather than quoting an empty string at the operator.
+func TestStillStartingFallsBackToTheLogPath(t *testing.T) {
+	got := stillStartingReason("/tmp/somewhere/baton.log", "")
+	if !strings.Contains(got, "/tmp/somewhere/baton.log") {
+		t.Errorf("with no line to quote the message %q must name the log instead", got)
+	}
+	if strings.Contains(got, `""`) {
+		t.Errorf("the message %q quotes an empty line at the operator", got)
+	}
+}
+
+// TestLastLogLineReadsTheEndOfALargeLog pins the reader stillStartingReason
+// quotes from, on a log longer than the window it reads: the line wanted is the
+// last one, and a window that starts mid-line must not hand back the fragment it
+// opens in.
+func TestLastLogLineReadsTheEndOfALargeLog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "baton.log")
+	var b strings.Builder
+	for b.Len() < 4*logTailBytes {
+		b.WriteString("2026-09-03 00:00:00 INF boot: reading the config path=/home/x/.baton/config\n")
+	}
+	want := "2026-09-03 00:00:01 INF boot: opening the fleet memory dir=/home/x/.baton within=10s"
+	b.WriteString(want + "\n")
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := lastLogLine(path); got != want {
+		t.Errorf("lastLogLine = %q, want %q", got, want)
+	}
+
+	if got := lastLogLine(filepath.Join(t.TempDir(), "no-such.log")); got != "" {
+		t.Errorf("a log that cannot be read should answer an empty line, got %q", got)
+	}
+	empty := filepath.Join(t.TempDir(), "empty.log")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := lastLogLine(empty); got != "" {
+		t.Errorf("an empty log should answer an empty line, got %q", got)
+	}
+}
+
 // bootFixture builds a private $HOME and a socket path for a forked daemon. The
 // socket goes in a shortDir rather than under t.TempDir, for the socket-path cap
 // shortDir documents.

@@ -19,10 +19,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,6 +35,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/shirou/gopsutil/v4/process"
 
 	"github.com/cmj0121/baton/internal/attn"
 	"github.com/cmj0121/baton/internal/client"
@@ -231,14 +234,21 @@ func signalAndWait(pid int, gone func() bool) error {
 // file is garbage no matter how live the process it names is, and the file is
 // tidied rather than signalled.
 //
-// WHAT IS STILL OPEN, because the claim is one file and the pid is another. A
-// daemon takes the claim and then tidies a predecessor's PID file (runServer,
-// through clearStaleSocket); in between, this can see the claim held and a pid
-// that is not the holder's. Only the kernel knows who holds an flock and it will
-// not say, so no ordering of two files closes that — what the ordering does buy
-// is that the gap is a stat and an unlink rather than the daemon's whole life,
-// and that the state a --force is most likely to land in is "claim held, no PID
-// file", which is refused below rather than guessed at.
+// THE RESIDUAL THE CLAIM LEAVES, because the claim is one file and the pid is
+// another. A daemon takes the claim and then tidies a predecessor's PID file
+// (runServer, through clearStaleSocket); in between, this can see the claim held
+// and a pid that is not the holder's — measured at 154-690 µs, median 230 µs,
+// which is 0 hits in 60 random-timing trials and about 5% with a spin loop. Only
+// the kernel knows who holds an flock and it will not say, so no ordering of two
+// files closes that — what the ordering does buy is that the gap is a stat and an
+// unlink rather than the daemon's whole life, and that the state a --force is
+// most likely to land in is "claim held, no PID file", which is refused below
+// rather than guessed at.
+//
+// What closes the rest is not another file but the PROCESS: confirmBatonPid asks
+// the pid what it is running before anything is signalled, which turns "SIGTERM
+// an innocent process" into "refuse, and say why". It needs nothing from the
+// kernel about who holds the lock — only the process to identify itself.
 //
 // The probe has a cost of its own: it decides by taking the flock, so it
 // conflicts with a claimSession running at that instant, and the daemon making
@@ -271,6 +281,13 @@ func stopUnboundDaemon(sock string) error {
 	if err != nil {
 		return fmt.Errorf("a daemon holds the session for %s but named no pid to stop it with: %w", sock, err)
 	}
+	if err := confirmBatonPid(pid); err != nil {
+		return fmt.Errorf("not stopping the daemon for %s: %w. Signalling a pid that is not the "+
+			"daemon's is worse than a stop that did not happen; the likeliest reason is that a new "+
+			"daemon has taken the session claim and not yet tidied its predecessor out of %s, which "+
+			"clears in well under a millisecond, so run the stop again",
+			sock, err, paths.PidFile(sock))
+	}
 	// The claim is what is watched, not the socket: there is no socket, which is
 	// the whole shape of this case. The daemon is stuck in a call it will not
 	// return from, so nothing of its own runs on the way out; what ends the wait is
@@ -280,6 +297,62 @@ func stopUnboundDaemon(sock string) error {
 	}
 	log.Info().Int("pid", pid).Msg("stopped a daemon that had not bound its socket")
 	return clearStaleSocket(sock)
+}
+
+// confirmBatonPid returns nil when pid is running this same baton, and an error
+// naming what it found when it is not. It is the second gate stopUnboundDaemon
+// passes before it signals, and the one that closes what the session claim
+// cannot: the claim says a daemon is alive, not that the PID file beside it has
+// caught up with WHICH one.
+//
+// IT FAILS CLOSED — every error refuses the stop — and that is cheap here rather
+// than reckless, because the two errors that can actually arrive are the two
+// where signalling would have failed anyway. A pid that has exited answers
+// "process does not exist", and Kill would answer ESRCH; a pid belonging to
+// another user answers a permission error on Linux, and Kill would answer EPERM.
+// The daemon this is meant to stop is neither: it is our own uid and alive, so
+// /proc/<pid>/exe and proc_pidpath both read it. What fails closed costs is a
+// stop an operator must then do by hand, and the message names the pid to do it
+// with.
+//
+// gopsutil rather than a build-tagged pair of our own, which is what the shape
+// beside this (claimSession, sessionProbe) would suggest. It is already a direct
+// dependency doing exactly this job in three packages — proctree's Cwd says the
+// quiet part, "/proc/<pid>/cwd on Linux, proc_pidinfo on darwin, both behind
+// gopsutil" — and Exe is the same field read the same way. The neighbouring
+// split exists because syscall.Flock has no portable form; this has one.
+func confirmBatonPid(pid int) error {
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("cannot name this baton's own binary to compare pid %d against: %w", pid, err)
+	}
+	p, err := process.NewProcess(int32(pid))
+	if err != nil {
+		return fmt.Errorf("pid %d cannot be identified: %w", pid, err)
+	}
+	exe, err := p.Exe()
+	if err != nil {
+		return fmt.Errorf("cannot read what pid %d is running: %w", pid, err)
+	}
+	if programName(exe) != programName(self) {
+		return fmt.Errorf("pid %d is running %s, which is not %s", pid, exe, programName(self))
+	}
+	return nil
+}
+
+// programName is the comparable half of an executable path: its base name, with
+// the marker Linux appends once the file is gone taken off.
+//
+// THE PATHS THEMSELVES DO NOT COMPARE, on either platform. On darwin
+// os.Executable answers /var/folders/… where proc_pidpath answers
+// /private/var/folders/… for the same binary — one resolves the symlink and the
+// other does not — so full-path equality would refuse every stop. On Linux the
+// two agree until `make install` lands a new binary over a running daemon, after
+// which readlink on /proc/<pid>/exe answers "/usr/local/bin/baton (deleted)";
+// that is the daemon an operator is most likely to be force-stopping, so the
+// suffix comes off rather than costing them the recovery.
+func programName(path string) string {
+	return strings.TrimSuffix(filepath.Base(path), " (deleted)")
 }
 
 // setupLogger points the global zerolog logger at the log file, creating it (and
@@ -349,10 +422,45 @@ func startDaemon(verbose int, logPath, pluginPath string, forced bool) error {
 	}
 
 	if !waitFor(func() bool { return alive(sock) }, daemonPollTries, daemonPollGap) {
-		return errors.New(didNotComeUpReason(logPath, forced))
+		return errors.New(startFailureReason(sock, logPath, forced))
 	}
 	log.Debug().Str("socket", sock).Msg("daemon started")
 	return nil
+}
+
+// startFailureReason is what an operator is told when the daemon `baton` just
+// started has not opened its socket within daemonPollTries × daemonPollGap.
+//
+// IT ASKS WHICH STATE THIS IS, because "no socket yet" is a true observation
+// that used to arrive wearing a false conclusion. Two unlike things end that
+// wait: nothing is running, or a daemon is alive and has not finished the reads
+// loadServerBoot does above the bind. The second is measured, not hypothetical —
+// time to a client's first reply was 483 ms on a 30 MB score log, 3.1 s on
+// 202 MB and 7.1 s on 456 MB, against a budget of five seconds — and #56's
+// runtime compaction bounds the store from the FIRST BOOT THAT SEES IT, so what
+// is left is the one boot after upgrading a store that grew before it. Once per
+// installation, and exactly when the operator is least expecting to be told
+// their server did not come up.
+//
+// THE SESSION CLAIM tells the two apart, not the pid. A PID file outlives the
+// process it named and the operating system reuses pids, so "is that number a
+// live process" answers about whatever program inherited it; the claim is an
+// flock the kernel drops when its holder dies, and it is already this codebase's
+// oracle for exactly this question — stopUnboundDaemon signals on the strength
+// of it. Asked ONCE, at the end of a wait that has already failed, so the
+// conflict sessionProbe.claimed costs a claimSession running in the same instant
+// is one instant here rather than one per poll.
+//
+// Raising the patience instead was the other way out and is not this one: it
+// makes every genuine failure slower to report, for a case that now happens once
+// per installation.
+func startFailureReason(sock, logPath string, forced bool) string {
+	probe := openSessionProbe(paths.LockFile(sock))
+	defer probe.close()
+	if probe.claimed() {
+		return stillStartingReason(logPath, lastLogLine(logPath))
+	}
+	return didNotComeUpReason(logPath, forced)
 }
 
 // didNotComeUpReason is what an operator is told when the daemon they just
@@ -385,6 +493,68 @@ func didNotComeUpReason(logPath string, forced bool) string {
 	}
 	return fmt.Sprintf("baton server did not come up; see %s — its last line names what the daemon "+
 		"was reading. %s", logPath, advice)
+}
+
+// stillStartingReason is the other half of startFailureReason's question: the
+// daemon has not bound its socket and IS ALIVE, so it is inside the reads
+// loadServerBoot does above the bind rather than gone.
+//
+// It is a SIBLING of didNotComeUpReason rather than a second `forced` branch of
+// it, because forced does not divide this case. That flag exists there to keep
+// the advice from being circular — an operator who reached "did not come up"
+// through --force is otherwise told to run --force. Here the first advice is not
+// --force at all, it is to run `baton` again, because the daemon is working; and
+// the escalation past that names both remaining steps in one sentence, so it
+// reads the same whichever flag got the operator here.
+//
+// It QUOTES THE LAST LOG LINE rather than pointing at the log, because that line
+// already names what the daemon is on: loadServerBoot says which config file it
+// is about to read before it reads it, and openScore does the same for the store.
+// An unreadable log leaves the path, which is what didNotComeUpReason gives.
+func stillStartingReason(logPath, doing string) string {
+	on := fmt.Sprintf("see %s for what it is on", logPath)
+	if doing != "" {
+		on = fmt.Sprintf("its log's last line is %q", doing)
+	}
+	return fmt.Sprintf("baton server is still starting: it holds this fleet's session, so it is alive "+
+		"and working rather than gone, and it has not opened its socket in %s — %s. Run `baton` again "+
+		"in a moment. If the next one is still on that line it is wedged there rather than slow: "+
+		"`baton --force` stops it, and a fresh one that stops in the same place means the path itself "+
+		"is what needs restoring or unmounting.",
+		time.Duration(daemonPollTries)*daemonPollGap, on)
+}
+
+// logTailBytes is how much of the log's end lastLogLine reads. The file is
+// capped at logRotateAtBytes (8 MiB) and the line wanted is the final one, so
+// reading the whole of it to find that line would be eight megabytes for a
+// couple of hundred bytes. A window that starts mid-line truncates only the
+// FIRST line in it, which is never the one taken.
+const logTailBytes = 8 << 10
+
+// lastLogLine is the last line the log at path holds, or "" when there is none
+// to read. Every failure — no file, no permission, a short read — answers "",
+// which stillStartingReason renders as the log's path instead of a quotation.
+func lastLogLine(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+	if from := fi.Size() - logTailBytes; from > 0 {
+		if _, err := f.Seek(from, io.SeekStart); err != nil {
+			return ""
+		}
+	}
+	tail, err := io.ReadAll(f)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(string(tail), "\n"), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
 }
 
 // runServer is the long-lived server loop (the daemon child).

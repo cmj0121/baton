@@ -180,7 +180,7 @@ func WriteLimitsIfChanged(path string, l Limits) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return true, writeAtomic(path, b)
+	return true, replaceFile(path, b)
 }
 
 // sameReading reports whether two readings carry the same numbers, ignoring when
@@ -205,15 +205,31 @@ func sameWindow(a, b *Window) bool {
 	return math.Abs(a.UsedPercent-b.UsedPercent) < 0.01 && a.ResetsAt.Equal(b.ResetsAt)
 }
 
-// writeAtomic writes data to path through a temporary of its own, so two sinks
-// racing from two panels cannot interleave into one torn file.
+// replaceFile writes data to path through a temporary of its own and renames it
+// into place, so two sinks racing from two panels cannot interleave into one
+// torn file: a reader sees the old file whole or the new one whole.
 //
-// paths.WriteFileAtomic is the house helper for this and is not used here for
-// exactly that reason: it names its temporary after the target, which is safe for
-// its callers — one daemon writing its own state — and is not safe for a writer
-// that runs once per panel per render. os.CreateTemp gives each writer a name
-// nobody else can be holding.
-func writeAtomic(path string, data []byte) (err error) {
+// IT IS NOT paths.WriteFileAtomic, the house helper, and it diverges in TWO
+// ways, which is why it no longer carries a name one letter away from that one.
+//
+// THE TEMPORARY'S NAME is the first, and is why this exists at all. The helper
+// names its temp after the target, which is safe for its callers — one daemon
+// writing its own state — and is not safe for a writer that runs once per panel
+// per render. os.CreateTemp gives each writer a name nobody else can be holding.
+//
+// NO FSYNC is the second, and it is deliberate rather than forgotten. The helper
+// fsyncs the file and then the parent directory, so its writes survive a power
+// loss; rename(2) alone is all this one promises — one visible step, not a
+// durable one. The two syncs are measured, not guessed at — 164-192 µs per write
+// without them against 5.6-6.6 ms with, on an Apple M2 Pro SSD, by the benchmark
+// pair beside the sink's tests — and they would be paid on the path Claude Code
+// re-runs to render a panel's status line, ahead of the wrapped status line the
+// user actually sees. What they would buy is a
+// reading that is restamped every RefreshAfter, discarded as stale after
+// StaleAfter and produced again by the next render — usagesink.go's own rules
+// say a lost one "will be along again in a second". The state file the helper
+// writes is a user's layout, which will not.
+func replaceFile(path string, data []byte) (err error) {
 	if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
