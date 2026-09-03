@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -355,10 +356,45 @@ func realisticStore(t *testing.T) string {
 	return dir
 }
 
-// captureBootLog redirects the package's global zerolog for the rest of the test
-// and hands back a reader of what was written. It swaps a package global, so it
-// is safe only while this package's tests run one at a time — no test here calls
-// t.Parallel().
+// testLog is the ONE writer behind the global logger for this test binary,
+// installed once by init below and never replaced. Capturing redirects the sink
+// under testLog's own mutex instead of reassigning log.Logger, because that
+// global is read by every goroutine the servers this package starts have
+// running — a swap races them all, and the race detector blames whichever test
+// happened to be holding the buffer rather than whoever left the goroutine
+// behind (#63). A goroutine-safe buffer alone did not silence it there; the
+// global swap was the other half.
+type testLogSink struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *testLogSink) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
+
+// swap points the sink at w and returns what it was pointing at, so captures
+// nest and unwind in the order the tests registered them.
+func (s *testLogSink) swap(w io.Writer) io.Writer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prev := s.w
+	s.w = w
+	return prev
+}
+
+var testLog = &testLogSink{w: os.Stderr}
+
+func init() { log.Logger = zerolog.New(testLog) }
+
+// captureBootLog collects this package's log lines for the rest of the test and
+// hands back a reader of them.
+//
+// Its RESULT is still shared: while a capture is open every goroutine in the
+// binary logs into that one buffer, so it is safe only while these tests run one
+// at a time — no test here calls t.Parallel().
 //
 // The buffer is LOCKED, because a test here reads it while a daemon goroutine is
 // still logging into it, and a bare bytes.Buffer between the two is a real data
@@ -366,9 +402,8 @@ func realisticStore(t *testing.T) string {
 func captureBootLog(t *testing.T) func() string {
 	t.Helper()
 	buf := &lockedBuffer{}
-	saved := log.Logger
-	log.Logger = zerolog.New(buf)
-	t.Cleanup(func() { log.Logger = saved })
+	prev := testLog.swap(buf)
+	t.Cleanup(func() { testLog.swap(prev) })
 	return buf.String
 }
 

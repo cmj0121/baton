@@ -12,6 +12,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/rs/zerolog/log"
 
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/config"
@@ -507,6 +508,13 @@ func TestAttachStartFailure(t *testing.T) {
 }
 
 func TestSetupLogger(t *testing.T) {
+	// setupLogger replaces the global logger for real — that is the whole of what
+	// it does. Put the test binary's own sink back afterwards, or every capture in
+	// this package that runs after this file reads an empty buffer while the lines
+	// it wanted go to a deleted temp file. See testLog in score_open_test.go.
+	saved := log.Logger
+	t.Cleanup(func() { log.Logger = saved })
+
 	logPath := filepath.Join(t.TempDir(), "logs", "baton.log")
 	for _, v := range []int{0, 1, 2} {
 		if err := setupLogger(v, logPath); err != nil {
