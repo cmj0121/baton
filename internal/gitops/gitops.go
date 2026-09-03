@@ -170,6 +170,27 @@ func WorktreeAdd(dir, branch, path string) error {
 // WorktreeRemove removes the worktree at path. It runs plain (no --force), so git
 // refuses a worktree with uncommitted changes or a locked one — the safe default,
 // surfaced to the caller as the error.
+//
+// dir may be the worktree ITSELF, which is what the orphan sweep passes: git is
+// content to run with its cwd inside the tree it is removing, and exits 0 with
+// the directory gone (checked against git 2.55.0 rather than reasoned about). A
+// caller holding only a path therefore needs no repository beside it — and asking
+// git for one, via `rev-parse --git-common-dir`, buys nothing: the derivation
+// succeeds in exactly the cases where the tree can be its own dir, and fails in
+// exactly the cases where it cannot (a path that is no longer a git worktree
+// fails both ways, and is refused rather than mis-removed).
+//
+// A path that is not a worktree is refused here whatever dir says, because git
+// resolves the repository from dir and then checks that path is one of ITS
+// worktrees: a plain directory inside a repository comes back "is not a working
+// tree" rather than being deleted. A dirty or locked tree is refused from inside
+// itself exactly as it is from the repo, so the no-force default survives the
+// shorter call.
+//
+// Deleting the directory a process is standing in is legal but strange, and it
+// costs the CALLER nothing here: dir is applied by the fork/exec to the child
+// alone, and nothing in baton chdir()s, so the daemon is never left holding an
+// unlinked working directory.
 func WorktreeRemove(dir, path string) error {
 	if strings.TrimSpace(path) == "" {
 		return fmt.Errorf("worktree remove needs a path")

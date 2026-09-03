@@ -90,7 +90,7 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | panel.tail | panel.diff | panel.git | panel.log | panel.logview | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run | remote.status | remote.enable | remote.disable | remote.rotate | remote.kick | score.submit | score.list | score.status | score.merge | score.reword | score.lower
+	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | panel.tail | panel.diff | panel.git | panel.log | panel.logview | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run | remote.status | remote.enable | remote.disable | remote.rotate | remote.kick | score.submit | score.list | score.status | score.merge | score.reword | score.lower | worktree.list | worktree.sweep
 	Kind      string   `json:"kind,omitempty"`      // panel kind for "panel.create" (default "shell")
 	ID        string   `json:"id,omitempty"`        // target panel for close/attach/input/resize/diff, the panel to rename, the panel "score.list" ranks its entries for (empty = rank against no context), the score entry a refine verb corrects, or — empty on "panel.git" worktree-add — the spawn that has no source panel at all
 	Path      string   `json:"path,omitempty"`      // init command (binary path) for "panel.create"; empty = default shell. Also the agent command for a targetless "panel.git" worktree-add, which spawns one
@@ -482,7 +482,7 @@ type RemoteInfo struct {
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type       string      `json:"type"`                  // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "diff" | "gitout" | "search" | "notice" | "config" | "footer" | "usage" | "tasks" | "tail" (the pulled trailing output of one panel: ID names it, Data carries the bytes) | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline) | "remote" (the remote-access status and connection list) | "goodbye" (the server is dropping this connection on purpose; Error says why) | "score" (a score.* verb's reply; Score carries the payload)
+	Type       string      `json:"type"`                  // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "diff" | "gitout" | "search" | "notice" | "config" | "footer" | "usage" | "tasks" | "tail" (the pulled trailing output of one panel: ID names it, Data carries the bytes) | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline) | "remote" (the remote-access status and connection list) | "goodbye" (the server is dropping this connection on purpose; Error says why) | "score" (a score.* verb's reply; Score carries the payload) | "worktree" (a worktree.* verb's reply; Worktree carries the payload)
 	Version    string      `json:"version,omitempty"`     // protocol version, set on "welcome"
 	ServerVer  string      `json:"server_ver,omitempty"`  // the server's build version, set on "welcome"
 	Enforce    string      `json:"enforce,omitempty"`     // the resource-limit backend in force on the host the panels run on ("cgroup", "none"), set on "welcome" and "config" so a frontend offering to edit limits can say whether they bite
@@ -545,4 +545,11 @@ type ServerMsg struct {
 	CPU      float64 `json:"cpu,omitempty"`       // system-wide CPU load %
 	MemUsed  uint64  `json:"mem_used,omitempty"`  // system memory in use, bytes
 	MemTotal uint64  `json:"mem_total,omitempty"` // total system memory, bytes
+
+	// Worktree is a worktree.* verb's reply payload, set on "worktree": the
+	// classified list of the trees baton opened for worktree.list, and what a
+	// sweep removed, dropped and skipped for worktree.sweep. It rides as raw JSON
+	// for the same reason Score does — one field carrying two additive shapes,
+	// which old clients ignore whole rather than mis-reading.
+	Worktree json.RawMessage `json:"worktree,omitempty"`
 }

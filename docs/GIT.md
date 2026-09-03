@@ -133,13 +133,58 @@ commit it. A tree you made with plain `git worktree add` is never in the record.
 It is a separate file from the fleet snapshot because the lifetimes differ: closing
 the agent, purging, and restarting the daemon all leave the tree standing, so the
 record outlives the fleet the snapshot describes. It is written only when the
-snapshot is, and removing a tree remains `x` alone, still without `--force`.
+snapshot is. A tree goes only through `x` here or through
+[`baton ctl worktree sweep`](#seeing-the-residue-and-clearing-it) — both still
+without `--force`.
 
 Retiring a tree with `x` also takes it back **out** of the record, so the file names
 the trees baton owns now rather than every tree it ever opened. That is housekeeping,
 not a guarantee: removing a tree with `git worktree remove` in your own terminal, or
 deleting the directory outright, never reaches baton, so a recorded path can still
 name a tree that is gone.
+
+### Seeing the residue, and clearing it
+
+Closing panels leaves trees standing, which is the right default and also an
+accumulating one. Two commands read that record back:
+
+```sh
+baton ctl worktree list          # every tree baton opened, and what became of it
+baton ctl worktree sweep         # remove the orphans among them; asks first
+```
+
+`list` classifies each stamped path against the fleet as it stands:
+
+| Status      | Means                                                      |
+| ----------- | ---------------------------------------------------------- |
+| `live`      | a running panel is working in it — leave it alone          |
+| `dead-slot` | only an **exited** panel names it; the slot is still there |
+| `orphan`    | nothing in the fleet names it — this is the residue        |
+
+A **dead slot is not an orphan.** The panel is gone but its card is not: it still
+carries the agent's transcript and a respawn still points at the tree. Purge the
+slot (`x x` in the cockpit, or `panel.purge`) and the tree becomes an orphan. Note
+that `close` skips that stage — closing a panel drops its spawn spec outright, so
+the tree is unclaimed immediately.
+
+`sweep` acts on **orphans only**, through the same `git worktree remove` the `x` key
+uses and with the same **no `--force`**: a tree holding uncommitted work, or a locked
+one, is **skipped and named** rather than failing the sweep around it, and stays in
+the record so a later sweep can finish once you have dealt with it. An orphan whose
+directory is already gone has nothing left to remove, so only its record is dropped —
+git's own stale entry is what `git worktree prune` is for.
+
+It confirms on a terminal and needs an explicit `--yes` from a script, so a command
+discovered by accident cannot empty a disk. It is **not** offered over MCP, and the
+daemon refuses it to a conductor connection either way: opening worktrees is an
+agent's to do, retiring them is yours.
+
+**Nothing outside the record is ever touched.** A tree you made with plain
+`git worktree add` is in no record, so it is in no listing, and a sweep that reads
+that listing cannot reach it — not even one sitting under `panel.worktree-dir` or in
+`<repo>-worktrees` beside baton's own. And with persistence off there is no record at
+all, which means **sweep nothing**: no state file is read as "baton opened none of
+these", never as "none of these are accounted for".
 
 ## Safety
 

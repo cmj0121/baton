@@ -32,6 +32,7 @@ type ctlCLI struct {
 	Queue         ctlQueue         `cmd:"" help:"Manage the task backlog (add/list/cancel/drain)."`
 	Score         ctlScore         `cmd:"" help:"Manage the fleet memory (submit/list/status)."`
 	Conductor     ctlConductor     `cmd:"" help:"Manage the conductor (reset its workspace)."`
+	Worktree      ctlWorktree      `cmd:"" help:"Manage the git worktrees baton opened (list/sweep)."`
 }
 
 // ctlMain parses and runs `baton ctl <command>`. It is kept separate from the

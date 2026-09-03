@@ -88,6 +88,8 @@ acts, and exits.
 | `baton ctl queue promote <id>` / `demote <id>`                        | move a queued task to the head / tail of the backlog                             |
 | `baton ctl queue drain`                                               | clear every queued task                                                          |
 | `baton ctl conductor reset`                                           | delete the conductor's workspace so the next one starts clean                    |
+| `baton ctl worktree list`                                             | print the worktrees baton opened as JSON, each `live` / `dead-slot` / `orphan`   |
+| `baton ctl worktree sweep [--yes]`                                    | remove the **orphaned** ones; confirms on a terminal, needs `--yes` in a script  |
 
 ```sh
 # Stand up a reviewer next to a worker and hand it the task.
@@ -210,6 +212,12 @@ worktree instead of into `dir` — the same verb rather than a second tool, so a
 discover nothing new. With `worktree`, `dir` is the repository to branch from; `worktree` without `branch`, or a `dir`
 that is not a repository, is a tool error and the fleet is unchanged.
 
+**There is no worktree tool here at all** — neither listing nor sweeping. A conductor opens worktrees (through
+`baton_spawn`) and the operator retires them, and a tool that showed an agent residue it is not allowed to clear could
+only prompt it to nag. That absence is not the whole fence, though: a conductor panel has `BATON_ROLE` injected, so an
+agent that shells out to `baton ctl worktree sweep` reaches the daemon as a conductor connection — and the daemon
+refuses `worktree.sweep` to one. The missing tool closes the MCP route; the refusal closes the `ctl` route.
+
 `baton_dispatch` / `baton_dispatch_group` assign a task brief to a panel or a whole work item; `baton_enqueue` adds one
 to the backlog (optionally spawn-on-demand, with a `command` to provision a worker when none is free), `baton_queue`
 reads it back, and `baton_reorder` moves a waiting task to the head or tail. These are the verbs a conductor uses to run
@@ -273,6 +281,7 @@ always speak the socket directly).
 | list, spawn, group, rename, pin, move     | close, signal, or send input to **its own** panel              |
 | signal and send input to **other** panels | **dispatch a task to its own** panel                           |
 | dispatch to other panels, enqueue tasks   | **drain the queue** — clearing the backlog is operator-only    |
+| **list** the worktrees baton opened       | **sweep** them — removing trees from disk is operator-only     |
 | read a panel's title, state and telemetry | **log a panel to a file**, or read a log back — see below      |
 | reorder queued tasks (promote / demote)   |                                                                |
 | **raise its own hand** and stand down     | raise or lower **another panel's** hand                        |
@@ -282,6 +291,10 @@ always speak the socket directly).
 
 A worktree spawn is a spawn, so it draws on the same two limits from the same purse: the fleet ceiling and the rate cap
 count `spawn --worktree` exactly as they count `spawn`, and a conductor cannot dodge one by switching to the other.
+
+Opening a worktree and **retiring** one are fenced differently on purpose. A conductor may open them, under those caps,
+and may see what its spawns have left behind — reading the residue is not removing it. Clearing it is the operator's,
+because a sweep is the one verb in this surface that deletes work from a disk rather than bookkeeping from a fleet.
 
 So a conductor can fill and dispatch from the backlog but cannot wipe it, and the queue gives it no way around the
 self-fence: a brief it enqueues is drained by the scheduler onto _other_ idle agents, never back onto itself.
