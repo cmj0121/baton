@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
@@ -301,5 +302,33 @@ func TestShutdownJoinsItsPanelPumps(t *testing.T) {
 	s.Shutdown()
 	if err := s.pty.Wait(0); err != nil {
 		t.Fatalf("Shutdown must return with every pump already finished: %v", err)
+	}
+}
+
+// TestShutdownJoinsAClosedPanelsPump covers the half the test above cannot see:
+// the panel that was closed BEFORE shutdown. KillAll only reaches panes still in
+// the manager's books, and closing a panel takes it out of them, so a pump the
+// close failed to end is one Shutdown can no longer ask to stop — it waited out
+// its whole bound and gave up (#73).
+//
+// `cat` is what makes this deterministic. It never writes unprompted, so its
+// pump is parked in read(2) on the PTY master, and while that read is in flight
+// Go defers the real close(2) — the close the panel's teardown was relying on to
+// hang the child up. The zero bound below asks about Shutdown rather than about
+// patience, exactly as the test above does.
+func TestShutdownJoinsAClosedPanelsPump(t *testing.T) {
+	s := newHostServer(t)
+	id, err := s.createPanel(proto.KindAgent, "/bin/cat", []string{"-u"}, os.Getenv("BATON_TEST_DIR"), "", false, false)
+	if err != nil {
+		t.Fatalf("create cat panel: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond) // the pump settles into read(2)
+
+	if err := s.closePanel(id); err != nil {
+		t.Fatalf("closePanel: %v", err)
+	}
+	s.Shutdown()
+	if err := s.pty.Wait(0); err != nil {
+		t.Fatalf("a panel closed before shutdown left its pump running: %v", err)
 	}
 }
