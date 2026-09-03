@@ -302,7 +302,8 @@ func ScoreCounters(e *zerolog.Event, d score.Delta, h score.Health) *zerolog.Eve
 		Int("swallowed_repeats", h.SwallowedRepeats).
 		Int("unreported_folds", h.UnreportedFolds).
 		Int("alias_evictions", h.AliasEvictions).
-		Int("rejected_tiers", h.RejectedTiers)
+		Int("rejected_tiers", h.RejectedTiers).
+		Int("bare_admits", h.BareAdmits)
 }
 
 // dispatchBrief binds a brief to the panel it is about to be delivered to: the
@@ -1237,6 +1238,17 @@ func (s *Server) scoreList(cc *clientConn, cmd proto.Command) {
 // the entry and the policy. Whichever it was, score.list carries the same answer
 // per entry as a Standing.
 //
+// bare_admits is the fourth cap-shaped number and the only one that is not
+// about withholding: it is how many of the store's entries arrived as a "- "
+// line in score.md and nothing else — no id, no marker, no submission. Any
+// bullet is an entry (see score.parseBullet, deliberately not narrowed), so an
+// operator's own markdown TODO notes become fleet memory and ride into every
+// panel's prompt. That was reported on a daemon log line and nowhere else,
+// which is precisely the shape invariant I8 exists to refuse. It is cumulative
+// rather than "what the last pass did", because a status call's own pass is
+// gated on score.md having moved: the pass that ate the notes is over by the
+// time the operator asks, and a per-pass figure would answer 0.
+//
 // promote_at, user_signals_at, working_set and rank are the tuning actually in
 // force, which is not the same as what the config file says: all of them reload
 // on SIGHUP, all of them are clamped, and a config that failed to parse leaves
@@ -1277,6 +1289,7 @@ func (s *Server) scoreStatus() json.RawMessage {
 		Entries       int         `json:"entries"`
 		Rendered      int         `json:"rendered"`
 		Oversized     int         `json:"oversized"`
+		BareAdmits    int         `json:"bare_admits"`
 		BlockFull     bool        `json:"block_full,omitempty"`
 		PromoteAt     int         `json:"promote_at,omitempty"`
 		UserSignalsAt int         `json:"user_signals_at,omitempty"`
@@ -1291,6 +1304,7 @@ func (s *Server) scoreStatus() json.RawMessage {
 		Entries:       v.Total,
 		Rendered:      len(v.Entries),
 		Oversized:     v.Health.Oversized,
+		BareAdmits:    v.Health.BareAdmits,
 		BlockFull:     v.BlockFull,
 		PromoteAt:     v.Policy.PromoteAt,
 		UserSignalsAt: v.Policy.UserSignalsAt,

@@ -864,6 +864,27 @@ type Health struct {
 	UnreportedFolds  int
 	AliasEvictions   int
 	Compacted        int
+	// BareAdmits is how many score.md lines this store has taken in as entries
+	// on the strength of a "- " and nothing else — no id, no marker, no
+	// submission. It is the counter for #57: parseBullet admits ANY bullet, so
+	// an operator's own markdown notes become fleet memory and are injected
+	// verbatim into every panel's prompt, and until now the only place that was
+	// visible was a daemon log line nobody reads until something is wrong.
+	//
+	// It counts BARE bullets specifically, and Delta.Admitted does not — that
+	// figure also covers a line whose [id] names no live entry, which is a
+	// re-admission of something the store already knew about rather than a note
+	// the file just swallowed. Reporting the broader number as this one would
+	// answer "did baton eat my notes" with yes on a pass that ate nothing.
+	//
+	// It is CUMULATIVE over the store's life, like SwallowedRepeats beside it,
+	// and deliberately not "what the last pass did". score.status is answered off
+	// a View, and a View's pass is gated on score.md having moved — so by the
+	// time the operator who has just been bitten runs `baton ctl score status`,
+	// the pass that admitted their lines is over and the status call's own pass
+	// is a no-op. A per-pass figure would read 0 at exactly the moment it is
+	// asked. See TestBareAdmitsSurvivesTheNextStatusCall.
+	BareAdmits int
 	// RejectedTiers is how many tier records the replay refused: a `raised`
 	// naming a tier this build will not grant, and a `lowered` naming one that is
 	// not strictly below the rung the entry is already on. Two records, one
@@ -4189,7 +4210,7 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 			// depends on lines this pass has not read yet, so the line is kept as
 			// the operator wrote it and the decision is taken below.
 			out = append(out, line)
-			bullets = append(bullets, bullet{at: len(out) - 1, text: text})
+			bullets = append(bullets, bullet{at: len(out) - 1, text: text, bare: id == ""})
 		case live:
 			e := s.entries[idx]
 			resolved[id] = true
@@ -4319,6 +4340,9 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 					return Delta{}, ierr
 				}
 				next = append(next, admit(id, b.text))
+				if b.bare {
+					pass.BareAdmits++
+				}
 				out[b.at] = formatLine(id, b.text)
 				// The entry just appended already holds this wording's key: the
 				// bullet's text was normalised for the lookup above and again by
@@ -4446,6 +4470,7 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 	s.entries = next
 	s.health.SwallowedRepeats += pass.SwallowedRepeats
 	s.health.AliasEvictions += pass.AliasEvictions
+	s.health.BareAdmits += pass.BareAdmits
 
 	if len(dropped) > 0 {
 		// Drop the folded lines from the file the pass is about to write. They
@@ -4544,9 +4569,16 @@ func addOwed(owed []string, text string) []string {
 // bullet is a score.md line that named no live entry, held with the position it
 // occupies in the pass's output so the pass can decide later whether the line
 // becomes an entry or is folded away. See reconcileLocked.
+//
+// bare says the line carried no id AT ALL — a plain "- text" the operator typed,
+// rather than a line repeating an id the pass had already placed. Both arrive
+// here and both can end as a new entry, so Delta.Admitted cannot tell them
+// apart; Health.BareAdmits counts only the first, because it is the only one
+// that answers "did baton just take my notes".
 type bullet struct {
 	at   int
 	text string
+	bare bool
 }
 
 // noteFoldsLocked keeps this pass's fold records for the next View to report.

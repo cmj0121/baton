@@ -23,6 +23,7 @@ type statusReply struct {
 	Entries       int        `json:"entries"`
 	Rendered      int        `json:"rendered"`
 	Oversized     int        `json:"oversized"`
+	BareAdmits    int        `json:"bare_admits"`
 	BlockFull     bool       `json:"block_full"`
 	PromoteAt     int        `json:"promote_at"`
 	UserSignalsAt int        `json:"user_signals_at"`
