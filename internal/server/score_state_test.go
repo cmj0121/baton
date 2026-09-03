@@ -294,27 +294,21 @@ func readScoreMD(t *testing.T, dir string) string {
 // to find out their memory is not working — which is doubly true when the event
 // log is what could not be written.
 //
-// THREE directions, because the line has two silent halves and only one
-// speaking one. A durable write that did not land logs; a submission that lands
-// logs no warning, because a Warn on every accepted note would bury the one that
+// FOUR directions, because the line has two silent halves and the speaking one
+// has since been split in two. A durable write that did not land logs — through
+// the write latch, once, rather than once per attempt (#59); a store failure no
+// latch covers logs on the door itself; a submission that lands logs no
+// warning, because a Warn on every accepted note would bury the one that
 // matters; and a submission the store refused for its own TEXT logs nothing
 // either, because that refusal is the submitter's and every panel on the fleet
 // can produce it on demand.
 func TestASubmissionTheStoreCouldNotRecordIsLogged(t *testing.T) {
-	t.Run("a failed submission is logged", func(t *testing.T) {
+	t.Run("a failed durable write is logged", func(t *testing.T) {
 		st, dir := scoreStore(t)
 		s, _, _ := scoreServer(st)
 		// The DIRECTORY unwritable, so the log's first durable append cannot even
 		// create the file — which is where a full or read-only disk leaves it.
-		unwritable(t, dir, func() error {
-			probe := filepath.Join(dir, "probe")
-			f, err := os.Create(probe)
-			if err != nil {
-				return err
-			}
-			_ = f.Close()
-			return os.Remove(probe)
-		})
+		deadMount(t, dir)
 
 		logged := captureLog(t)
 		cc := conn("")
@@ -323,11 +317,50 @@ func TestASubmissionTheStoreCouldNotRecordIsLogged(t *testing.T) {
 			t.Fatalf("submit into an unwritable directory answered %+v, want the store's refusal", msg)
 		}
 		got := logged()
-		if !strings.Contains(got, "score could not record a submission") {
+		// The WRITE LATCH's line, not the door's. It is the same fact reaching the
+		// same operator, said by the thing that can also say when it stops — the
+		// door's own line could only ever repeat it, once per submission, forever.
+		if !strings.Contains(got, "score writes are not landing") {
 			t.Errorf("the daemon said nothing about a submission it could not store:\n%s", got)
 		}
 		if !strings.Contains(got, dir) {
 			t.Errorf("the log line does not name the directory that failed:\n%s", got)
+		}
+	})
+
+	// The store failure that has no latch to hold it, which is why the door keeps
+	// a line at all. appendEvents' comment reserves the write latch for the LOG,
+	// so a score.md rewrite that fails after its append landed sets nothing: the
+	// operator's own file stops matching a log that says the entry is there, and
+	// nothing else in the daemon would ever mention it.
+	//
+	// It is SCORE.MD that is unwritable here and not the directory, which is what
+	// separates this from the case above: a submission appends to both files, so
+	// taking the write bit off the operator's file alone lets the log's append
+	// land and stops only the line the operator was meant to read. The latch is
+	// clear throughout and the door is the only thing that can speak.
+	t.Run("a store failure no latch covers is logged on the door", func(t *testing.T) {
+		st, dir := scoreStore(t)
+		s, _, _ := scoreServer(st)
+		seed(t, st, "the agent asks before it deletes")
+		// The literal is the operator-facing filename rather than a mirror of the
+		// store's constant: it cannot move without a migration, and if it ever did
+		// the chmod below would fail on a missing file rather than pass vacuously.
+		md := filepath.Join(dir, "score.md")
+		unwritable(t, md, func() error { return os.WriteFile(md, []byte("probe\n"), 0o600) })
+
+		logged := captureLog(t)
+		cc := conn("")
+		s.onCommand(cc, proto.Command{Action: "score.submit", Prompt: "the fleet keeps the build green"})
+		if msg := reply(t, cc); msg.Type != "error" {
+			t.Fatalf("submit with an unwritable score.md answered %+v, want the store's refusal", msg)
+		}
+		got := logged()
+		if !strings.Contains(got, "score could not record a submission") {
+			t.Errorf("a store failure no latch holds went unsaid:\n%s", got)
+		}
+		if strings.Contains(got, "score writes are not landing") {
+			t.Errorf("the write latch claimed a failure it does not cover; it is the LOG's:\n%s", got)
 		}
 	})
 
@@ -354,8 +387,20 @@ func TestASubmissionTheStoreCouldNotRecordIsLogged(t *testing.T) {
 				if msg := reply(t, cc); msg.Type != "error" {
 					t.Fatalf("the store accepted %q: %+v", tc.name, msg)
 				}
-				if got := logged(); strings.Contains(got, "score could not record a submission") {
-					t.Errorf("a healthy store was reported broken because a submitter sent bad text:\n%s", got)
+				// BOTH of the operator's broken-store lines, because the door now has
+				// two ways to reach one. Removing the per-attempt warn and adding the
+				// latch's voice are two changes at one site, and the classification
+				// has to survive both: a submitter sending spaces must not arrive at
+				// a door that reads it as a dead mount, by either route.
+				got := logged()
+				for _, claim := range []string{
+					"score could not record a submission",
+					"score writes are not landing",
+				} {
+					if strings.Contains(got, claim) {
+						t.Errorf("a healthy store was reported broken (%q) because a submitter sent bad text:\n%s",
+							claim, got)
+					}
 				}
 			})
 		}

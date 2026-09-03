@@ -68,6 +68,12 @@ func (s *Server) scoreLook(v score.View, err error) score.View {
 	// would be left with a tier they cannot account for. Returning early dropped
 	// these records on the floor, since View drains them either way.
 	logScoreFolds(v.Folds)
+	// The WRITE latch's transitions, said here beside the read latch's because
+	// the two are one question to an operator and every read path passes through
+	// this function. A read is also the only thing that can notice the recovery
+	// on a fleet whose writing has stopped, which is the direction the store
+	// cannot report on its own.
+	s.noteScoreWrites()
 
 	if err != nil {
 		// Latch the failure. A score.md the store cannot read stays unreadable,
@@ -115,6 +121,98 @@ func (s *Server) scoreLook(v score.View, err error) score.View {
 	// line describe one reading and not three.
 	s.noteScoreCompaction(v.Health, v.Total)
 	return v
+}
+
+// noteScoreWrites is the write latch's home on this side, and the exact shape
+// scoreLook's failing.Swap above is: the transition INTO failure gets one line,
+// the recovery out of it gets one, and the hundred attempts in between get
+// none.
+//
+// R7 (#46) put the latch itself in the right place — score.Store sets and
+// clears it inside appendEvents, the one funnel every durable append passes, so
+// no door added later can bypass it — but nothing turned it into a line. Its
+// only voice was an unpaced warn on the submit door, which is per-ATTEMPT
+// discipline over a LATCHED state: a mount that died at 03:00 produced one line
+// per submission for as long as it stayed dead, and not one line when it came
+// back. That is the reverse of what the read path two hundred lines above has
+// always done, on the same condition, for the same operator.
+//
+// It asks Store.WriteFailing rather than Health for the reason that accessor
+// exists: every append holds the store mutex across its fsync, so a read
+// through Health would queue behind the very write that is hung.
+//
+// REPORTED, NOT PROBED, and that is R7's choice rather than an omission. A
+// probe answers a question about the past — it writes somewhere else, at
+// another moment, possibly on another filesystem — while the latch answers
+// about the write the fleet actually made. The residual is stated and stays: an
+// idle fleet on a dead mount says nothing until something tries to write. That
+// is "no evidence of a problem" rather than a claim of health, and the recovery
+// line makes the eventual transition legible whenever it arrives.
+func (s *Server) noteScoreWrites() {
+	if s.scoreState.Store.WriteFailing() {
+		if !s.scoreState.wrote.Swap(true) {
+			log.Warn().Str("dir", s.scoreState.Store.Dir()).
+				Msg("score writes are not landing; the fleet's memory is readable but nothing new is being recorded")
+		}
+		return
+	}
+	if s.scoreState.wrote.Swap(false) {
+		log.Info().Str("dir", s.scoreState.Store.Dir()).Msg("score writes recovered")
+	}
+}
+
+// noteScoreTrouble is the ONE gate on the daemon's "your fleet memory is not
+// working" line, and every mutation door asks it rather than deciding for
+// itself. It answers whether THIS door still owes the operator a line for err,
+// and it reports the write latch on the way past — which is why it is called on
+// success as well as on failure.
+//
+// #58's real finding was not the missing gate on any one door; it was that one
+// file spread FOUR answers across what are really TWO orthogonal questions, so
+// no door asked both and a fifth door would have invented a fifth answer:
+//
+//   - Is this worth saying at all? — the sentinel on the submit door answered
+//     it; the refine door did not ask, and warned unconditionally.
+//   - Has it already been said? — scoreLook's latch answered it for the read
+//     path and scoreSignal borrowed that latch; neither mutation door asked,
+//     and the write latch had no voice to borrow (#59).
+//
+// The order is the whole of the composition and it only works one way round:
+// CLASSIFY first, then DE-DUPLICATE. Asking "has it been said" about a
+// caller's own refusal would suppress the wrong thing, and the two latches
+// hold conditions rather than errors, so they cannot answer the first question
+// at all. Both live here rather than at the doors because the alternative is
+// three copies of that ordering — which is the defect, not the fix.
+//
+// The three things it weighs, in order:
+//
+//   - The CALLER's own refusal is not the store failing. score.ErrSubmissionText
+//     and score.ErrRefine are the store saying so at its own boundary, before it
+//     touches the disk, and both are reachable by any agent that sends spaces or
+//     any conductor that mistypes an id. Logging those here would put the line an
+//     operator greps for a dead mount under the control of every panel on the
+//     fleet — R7's argument on the submit door, now applied to all of them.
+//   - A condition a LATCH is already holding has been said. The read latch was
+//     said by scoreLook, and the write latch by noteScoreWrites a moment ago:
+//     the doors share a reconcile pass and a durable funnel with those, so their
+//     failure is the same failure, and repeating it once per attempt is exactly
+//     the per-attempt discipline over a latched state that #59 is about.
+//   - What is left is a store failure NO latch covers, and it still speaks. It
+//     is not a hypothetical: appendEvents' own comment reserves the write latch
+//     for the LOG, so a score.md rewrite that fails after its append landed sets
+//     nothing — the operator's file silently stops matching a log that says the
+//     change happened. That one has always needed the door to say it, and the
+//     doors are capped, so it cannot run away.
+func (s *Server) noteScoreTrouble(err error) bool {
+	s.noteScoreWrites()
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, score.ErrSubmissionText), errors.Is(err, score.ErrRefine):
+		return false
+	default:
+		return !s.scoreState.failing.Load() && !s.scoreState.wrote.Load()
+	}
 }
 
 // noteScoreCompaction writes the compaction line ONCE for each rewrite that has
@@ -425,11 +523,17 @@ func (s *Server) scoreSignal(cc *clientConn, prompt string) {
 	}
 	rec, hit, err := s.scoreState.Store.Signal(prompt, prov)
 	switch {
-	case err != nil && !s.scoreState.failing.Load():
-		// Only when the dispatch's own view has not already said it. The two calls
-		// share a reconcile pass and therefore share their failure, and scoreLook's
-		// latch exists precisely so an unreadable score.md is reported on the
-		// dispatch it started on rather than on every dispatch after it.
+	// The gate is asked FIRST and on every outcome, hit or miss or failure,
+	// because it is also what reports the write latch — a reinforcement is a
+	// durable append, so this door is one of the places a dead mount is first
+	// met and one of the places its recovery is first provable.
+	//
+	// What it decides here is what the hand-rolled `!failing.Load()` decided
+	// before it: only when the dispatch's own view has not already said it. The
+	// two calls share a reconcile pass and therefore share their failure, and
+	// scoreLook's latch exists precisely so an unreadable score.md is reported on
+	// the dispatch it started on rather than on every dispatch after it.
+	case s.noteScoreTrouble(err):
 		log.Warn().Err(err).Str("dir", s.scoreState.Store.Dir()).
 			Msg("score could not count the user's brief as a reinforcement")
 	case hit:
@@ -745,37 +849,42 @@ func (s *Server) scoreSubmit(cc *clientConn, cmd proto.Command) {
 	}
 	prov := s.connProvenance(cc)
 	e, folded, err := s.scoreState.Store.Submit(cmd.Prompt, prov)
+	// Asked on every outcome, because this door is where a dead mount is most
+	// often first met AND where its recovery is first provable: a submission is
+	// the verb that writes, so a daemon whose traffic is submissions and nothing
+	// else would otherwise learn of neither transition. noteScoreTrouble reports
+	// the latch itself; what is left for this line is below.
+	//
+	// A write that did not land — a full disk, a read-only mount, a directory
+	// that went away under a running daemon — is the operator's problem, and the
+	// agent that hit it is the only party that was ever told, in a reply it has
+	// no reason to keep and every reason to retry past. A fleet can go on
+	// submitting into a broken store for as long as it likes with nothing in the
+	// daemon log to show for it, and invariant I8 says the operator must not have
+	// to learn their memory is not working by reading the event log — which is
+	// doubly true when the event log is the thing that could not be written.
+	//
+	// The store's own refusal of the TEXT is not that. It is the submitter's to
+	// fix, it needs nobody else told, and it is reachable by any agent that sends
+	// spaces — so logging it here would put the operator's broken-disk line under
+	// the control of every panel on the fleet. Two hundred blank submissions once
+	// produced two hundred warnings about a store that was perfectly healthy.
+	//
+	// What reaches the line now is NARROWER than the sentinel check it replaces,
+	// and deliberately: a failed durable append is the write latch's to announce,
+	// once, so the two hundred warnings that shape produced for a dead mount are
+	// gone the same way the two hundred for blank text were. What is left is the
+	// store failure no latch holds — a score.md rewrite that failed after its
+	// append landed — which nothing else in the daemon would ever say.
+	//
+	// Warn rather than Error for the reason the refine refusals are: the daemon is
+	// doing exactly what it should, and the fleet is still running.
+	if s.noteScoreTrouble(err) {
+		log.Warn().Err(err).Str("dir", s.scoreState.Store.Dir()).
+			Str("source", prov.Source).Str("panel", prov.SourcePanel).
+			Msg("score could not record a submission")
+	}
 	if err != nil {
-		// Only the DURABLE WRITE is said out loud, and score.ErrSubmissionText is
-		// what tells the two apart.
-		//
-		// A write that did not land — a full disk, a read-only mount, a directory
-		// that went away under a running daemon — is the operator's problem, and
-		// the agent that hit it is the only party that was ever told, in a reply
-		// it has no reason to keep and every reason to retry past. A fleet can go
-		// on submitting into a broken store for as long as it likes with nothing
-		// in the daemon log to show for it, and invariant I8 says the operator
-		// must not have to read the event log to learn their memory is not
-		// working — which is doubly true when the event log is the thing that
-		// could not be written.
-		//
-		// The store's own refusal of the TEXT is not that. It is the submitter's
-		// to fix, it needs nobody else told, and it is reachable by any agent that
-		// sends spaces — so logging it here would put the operator's broken-disk
-		// line under the control of every panel on the fleet. Two hundred blank
-		// submissions once produced two hundred warnings about a store that was
-		// perfectly healthy.
-		//
-		// Warn rather than Error for the reason the refine refusals are: the
-		// daemon is doing exactly what it should, and the fleet is still running.
-		// The line itself is unpaced, and it no longer has to be: minSubmitGap
-		// stands in front of this branch, so a submitting loop against a broken
-		// store reaches it once a second per actor rather than at machine speed.
-		if !errors.Is(err, score.ErrSubmissionText) {
-			log.Warn().Err(err).Str("dir", s.scoreState.Store.Dir()).
-				Str("source", prov.Source).Str("panel", prov.SourcePanel).
-				Msg("score could not record a submission")
-		}
 		send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 		return
 	}
@@ -1050,9 +1159,31 @@ func (s *Server) scoreRefine(cc *clientConn, cmd proto.Command) {
 		op = "lower"
 		err = s.scoreState.Store.Lower(cmd.ID)
 	}
-	if err != nil {
+	// TWO lines, told apart, where there was one that could not be.
+	//
+	// A refused correction still gets said — that is #45's symmetry, and a
+	// conductor's refusal is worth more than a submitter's because a correction
+	// is the one mutation an operator did not ask for and cannot see coming. But
+	// the line it used to get claimed nothing and everything at once: a mistyped
+	// id and a mount that died produced the same words, so the sentence an
+	// operator greps for a broken store was one any conductor could manufacture
+	// with a typo, and a genuine disk failure was indistinguishable from one.
+	//
+	// So the store's failure takes the store's line, said once by the latch or
+	// here when no latch holds it, and the caller's refusal keeps the audit line
+	// that names the correction that did not happen. On a mount the latch is
+	// already holding, the audit line is what a refused correction gets: the
+	// store's trouble has been said, and the conductor still needs the operator
+	// to be able to see which corrections were lost to it.
+	if s.noteScoreTrouble(err) {
+		log.Warn().Err(err).Str("dir", s.scoreState.Store.Dir()).
+			Str("op", op).Str("entry", cmd.ID).Str("conductor", cc.self).
+			Msg("score could not record the conductor's correction")
+	} else if err != nil {
 		log.Warn().Err(err).Str("op", op).Str("entry", cmd.ID).Str("conductor", cc.self).
 			Msg("the conductor's correction was refused")
+	}
+	if err != nil {
 		send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 		return
 	}

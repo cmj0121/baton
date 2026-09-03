@@ -1336,6 +1336,25 @@ var errDisabled = errors.New("score is disabled")
 // the same line, and a line anyone can manufacture is one nobody can act on.
 var ErrSubmissionText = errors.New("score: submission refused")
 
+// ErrRefine is ErrSubmissionText's twin one door over: it marks every refusal
+// the three corrections make on the CALLER's request — an id naming no entry, a
+// merge of an entry into itself, a wording that is empty, over the cap,
+// unchanged, or already another entry's, and a lower on the bottom rung.
+//
+// Refine mixes four classes of failure through one return: this one, a
+// reconcile that could not read the operator's file, a durable append that did
+// not land, and the disabled store. Only the last three are the operator's, and
+// only they belong on the line an operator greps for a store that has stopped
+// working. Without this the daemon said `the conductor's correction was
+// refused` for a dead mount and for a mistyped id alike, so the line could be
+// manufactured by any conductor with a typo — which is what R7 (#46) had just
+// finished arguing on the submit door.
+//
+// Its text is the prefix the eight refusals already carried, so wrapping them
+// left every message the conductor is answered with byte-identical: the change
+// is what the daemon can ASK about the error, not what anyone is told.
+var ErrRefine = errors.New("score refine")
+
 // Open opens (or creates) the store in dir under the policy p, clamped as
 // Policy.clamp describes, so a zero field from a config key nobody wrote lands
 // on this package's default. The directory is created 0700 and every file 0600.
@@ -2572,7 +2591,7 @@ func (s *Store) refine(id string, apply func(i int) error) error {
 	}
 	i := s.indexLocked(id)
 	if i < 0 {
-		return fmt.Errorf("score refine: no entry %q", id)
+		return fmt.Errorf("%w: no entry %q", ErrRefine, id)
 	}
 	return apply(i)
 }
@@ -2634,9 +2653,9 @@ func (s *Store) mergeLocked(keep int, other string) error {
 	j := s.indexLocked(other)
 	switch {
 	case j < 0:
-		return fmt.Errorf("score refine: no entry %q", other)
+		return fmt.Errorf("%w: no entry %q", ErrRefine, other)
 	case keep == j:
-		return errors.New("score refine: an entry cannot be merged into itself")
+		return fmt.Errorf("%w: an entry cannot be merged into itself", ErrRefine)
 	}
 	now := time.Now().UTC()
 	survivor, absorbed := s.entries[keep], s.entries[j]
@@ -2711,14 +2730,14 @@ func (s *Store) rewordLocked(i int, raw string) error {
 	text := cand.Text
 	switch {
 	case text == "":
-		return errors.New("score refine: reword needs the new wording")
+		return fmt.Errorf("%w: reword needs the new wording", ErrRefine)
 	case !cand.Injectable():
-		return fmt.Errorf("score refine: wording is %d runes, limit is %d", len([]rune(text)), maxEntryRunes)
+		return fmt.Errorf("%w: wording is %d runes, limit is %d", ErrRefine, len([]rune(text)), maxEntryRunes)
 	case text == e.Text:
 		// Refused rather than accepted as a no-op, because it is not one: the
 		// entry would take its own current wording as an alias and spend a slot of
 		// maxAliases on a phrasing already covered by Entry.Text.
-		return errors.New("score refine: the wording is unchanged")
+		return fmt.Errorf("%w: the wording is unchanged", ErrRefine)
 	}
 	// A reword must not MANUFACTURE the split that merge exists to cure. Every
 	// other admission path asks foldTargetLocked whether the store already says
@@ -2742,7 +2761,7 @@ func (s *Store) rewordLocked(i int, raw string) error {
 	// allowed: it is every reword that only changes case or trailing punctuation,
 	// and every reword back to one of this entry's own prior wordings.
 	if j := s.foldTargetLocked(text); j >= 0 && j != i {
-		return fmt.Errorf("score refine: entry %s already says that; merge them rather than rewording one into the other", s.entries[j].Id)
+		return fmt.Errorf("%w: entry %s already says that; merge them rather than rewording one into the other", ErrRefine, s.entries[j].Id)
 	}
 	now := time.Now().UTC()
 	evs := []event{{Schema: Schema, Event: EventEdited, Id: e.Id, At: now, Source: sourceConductor, Text: text}}
@@ -2775,7 +2794,7 @@ func (s *Store) rewordLocked(i int, raw string) error {
 func (s *Store) lowerLocked(i int) error {
 	e := s.entries[i]
 	if e.Tier <= 1 {
-		return fmt.Errorf("score refine: entry %s is already on the bottom rung", e.Id)
+		return fmt.Errorf("%w: entry %s is already on the bottom rung", ErrRefine, e.Id)
 	}
 	now := time.Now().UTC()
 	e.Tier--
