@@ -332,7 +332,11 @@ func TestModelWithLiveServer(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	defer func() { _ = ln.Close() }()
-	go func() { _ = server.New(ln).Serve() }()
+	srv := server.New(ln)
+	go func() { _ = srv.Serve() }()
+	// This test spawns a real panel; stopping the server joins that panel's
+	// output pump instead of leaking it into the next test (#63).
+	defer srv.Shutdown()
 
 	c, err := client.Dial(sock)
 	if err != nil {

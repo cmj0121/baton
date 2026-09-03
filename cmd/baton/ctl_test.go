@@ -25,7 +25,12 @@ func ctlTestServer(t *testing.T) string {
 		t.Fatalf("listen: %v", err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
-	go func() { _ = server.New(ln).Serve() }()
+	srv := server.New(ln)
+	go func() { _ = srv.Serve() }()
+	// `ctl spawn` and the ctlSpawn handler put real panels on this server.
+	// Stopping it kills them and joins their output pumps, so no pump outlives
+	// the test that started it and logs into a later one (#63).
+	t.Cleanup(func() { srv.Shutdown() })
 	return sock
 }
 

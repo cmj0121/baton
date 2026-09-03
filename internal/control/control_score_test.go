@@ -31,7 +31,9 @@ func startScoredServer(t *testing.T) string {
 	// The store and the config knob are separate states on the wire (score.status
 	// reports both), so a server standing in for a healthy daemon declares both.
 	state := server.ScoreState{Store: st, Enabled: true}
-	go func() { _ = server.New(ln, server.WithScore(state)).Serve() }()
+	srv := server.New(ln, server.WithScore(state))
+	go func() { _ = srv.Serve() }()
+	t.Cleanup(func() { srv.Shutdown() })
 	return sock
 }
 
