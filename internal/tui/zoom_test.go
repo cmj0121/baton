@@ -99,7 +99,13 @@ func zoomServer(t *testing.T) (*client.Client, string) {
 		t.Fatalf("listen: %v", err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
-	go func() { _ = server.New(ln).Serve() }()
+	srv := server.New(ln)
+	go func() { _ = srv.Serve() }()
+	// Stopping the server kills the shell panel below and joins its output
+	// pump. A pump left running outlives the test and writes into whatever runs
+	// next; #63 is what that looks like from the outside, a race between a stale
+	// pump's log line and an unrelated later test's log buffer.
+	t.Cleanup(func() { srv.Shutdown() })
 
 	c, err := client.Dial(sock)
 	if err != nil {

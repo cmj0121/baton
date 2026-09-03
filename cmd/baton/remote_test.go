@@ -40,7 +40,13 @@ func liveFleet(t *testing.T, dir, name string) string {
 		t.Fatalf("listen: %v", err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
-	go func() { _ = server.New(ln).Serve() }()
+	srv := server.New(ln)
+	go func() { _ = srv.Serve() }()
+	// No test here spawns a panel, so this join has nothing to wait for today —
+	// Wait returns at once with no pumps registered. It is here because the
+	// sibling helpers in this package do spawn, and a server this one hands out
+	// is the same server: the pairing is the helper's, not the caller's.
+	t.Cleanup(func() { srv.Shutdown() })
 	return sock
 }
 

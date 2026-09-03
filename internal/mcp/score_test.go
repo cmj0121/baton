@@ -32,7 +32,9 @@ func startScoredServer(t *testing.T) (string, *score.Store) {
 	// One option carries the store and the config knob together, so a stand-in
 	// daemon cannot report a live store as a disabled subsystem.
 	state := server.ScoreState{Store: st, Enabled: true}
-	go func() { _ = server.New(ln, server.WithScore(state)).Serve() }()
+	srv := server.New(ln, server.WithScore(state))
+	go func() { _ = srv.Serve() }()
+	t.Cleanup(func() { srv.Shutdown() })
 	return sock, st
 }
 
