@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +35,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/shirou/gopsutil/v4/process"
 
 	"github.com/cmj0121/baton/internal/attn"
 	"github.com/cmj0121/baton/internal/client"
@@ -232,14 +234,21 @@ func signalAndWait(pid int, gone func() bool) error {
 // file is garbage no matter how live the process it names is, and the file is
 // tidied rather than signalled.
 //
-// WHAT IS STILL OPEN, because the claim is one file and the pid is another. A
-// daemon takes the claim and then tidies a predecessor's PID file (runServer,
-// through clearStaleSocket); in between, this can see the claim held and a pid
-// that is not the holder's. Only the kernel knows who holds an flock and it will
-// not say, so no ordering of two files closes that — what the ordering does buy
-// is that the gap is a stat and an unlink rather than the daemon's whole life,
-// and that the state a --force is most likely to land in is "claim held, no PID
-// file", which is refused below rather than guessed at.
+// THE RESIDUAL THE CLAIM LEAVES, because the claim is one file and the pid is
+// another. A daemon takes the claim and then tidies a predecessor's PID file
+// (runServer, through clearStaleSocket); in between, this can see the claim held
+// and a pid that is not the holder's — measured at 154-690 µs, median 230 µs,
+// which is 0 hits in 60 random-timing trials and about 5% with a spin loop. Only
+// the kernel knows who holds an flock and it will not say, so no ordering of two
+// files closes that — what the ordering does buy is that the gap is a stat and an
+// unlink rather than the daemon's whole life, and that the state a --force is
+// most likely to land in is "claim held, no PID file", which is refused below
+// rather than guessed at.
+//
+// What closes the rest is not another file but the PROCESS: confirmBatonPid asks
+// the pid what it is running before anything is signalled, which turns "SIGTERM
+// an innocent process" into "refuse, and say why". It needs nothing from the
+// kernel about who holds the lock — only the process to identify itself.
 //
 // The probe has a cost of its own: it decides by taking the flock, so it
 // conflicts with a claimSession running at that instant, and the daemon making
@@ -272,6 +281,13 @@ func stopUnboundDaemon(sock string) error {
 	if err != nil {
 		return fmt.Errorf("a daemon holds the session for %s but named no pid to stop it with: %w", sock, err)
 	}
+	if err := confirmBatonPid(pid); err != nil {
+		return fmt.Errorf("not stopping the daemon for %s: %w. Signalling a pid that is not the "+
+			"daemon's is worse than a stop that did not happen; the likeliest reason is that a new "+
+			"daemon has taken the session claim and not yet tidied its predecessor out of %s, which "+
+			"clears in well under a millisecond, so run the stop again",
+			sock, err, paths.PidFile(sock))
+	}
 	// The claim is what is watched, not the socket: there is no socket, which is
 	// the whole shape of this case. The daemon is stuck in a call it will not
 	// return from, so nothing of its own runs on the way out; what ends the wait is
@@ -281,6 +297,62 @@ func stopUnboundDaemon(sock string) error {
 	}
 	log.Info().Int("pid", pid).Msg("stopped a daemon that had not bound its socket")
 	return clearStaleSocket(sock)
+}
+
+// confirmBatonPid returns nil when pid is running this same baton, and an error
+// naming what it found when it is not. It is the second gate stopUnboundDaemon
+// passes before it signals, and the one that closes what the session claim
+// cannot: the claim says a daemon is alive, not that the PID file beside it has
+// caught up with WHICH one.
+//
+// IT FAILS CLOSED — every error refuses the stop — and that is cheap here rather
+// than reckless, because the two errors that can actually arrive are the two
+// where signalling would have failed anyway. A pid that has exited answers
+// "process does not exist", and Kill would answer ESRCH; a pid belonging to
+// another user answers a permission error on Linux, and Kill would answer EPERM.
+// The daemon this is meant to stop is neither: it is our own uid and alive, so
+// /proc/<pid>/exe and proc_pidpath both read it. What fails closed costs is a
+// stop an operator must then do by hand, and the message names the pid to do it
+// with.
+//
+// gopsutil rather than a build-tagged pair of our own, which is what the shape
+// beside this (claimSession, sessionProbe) would suggest. It is already a direct
+// dependency doing exactly this job in three packages — proctree's Cwd says the
+// quiet part, "/proc/<pid>/cwd on Linux, proc_pidinfo on darwin, both behind
+// gopsutil" — and Exe is the same field read the same way. The neighbouring
+// split exists because syscall.Flock has no portable form; this has one.
+func confirmBatonPid(pid int) error {
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("cannot name this baton's own binary to compare pid %d against: %w", pid, err)
+	}
+	p, err := process.NewProcess(int32(pid))
+	if err != nil {
+		return fmt.Errorf("pid %d cannot be identified: %w", pid, err)
+	}
+	exe, err := p.Exe()
+	if err != nil {
+		return fmt.Errorf("cannot read what pid %d is running: %w", pid, err)
+	}
+	if programName(exe) != programName(self) {
+		return fmt.Errorf("pid %d is running %s, which is not %s", pid, exe, programName(self))
+	}
+	return nil
+}
+
+// programName is the comparable half of an executable path: its base name, with
+// the marker Linux appends once the file is gone taken off.
+//
+// THE PATHS THEMSELVES DO NOT COMPARE, on either platform. On darwin
+// os.Executable answers /var/folders/… where proc_pidpath answers
+// /private/var/folders/… for the same binary — one resolves the symlink and the
+// other does not — so full-path equality would refuse every stop. On Linux the
+// two agree until `make install` lands a new binary over a running daemon, after
+// which readlink on /proc/<pid>/exe answers "/usr/local/bin/baton (deleted)";
+// that is the daemon an operator is most likely to be force-stopping, so the
+// suffix comes off rather than costing them the recovery.
+func programName(path string) string {
+	return strings.TrimSuffix(filepath.Base(path), " (deleted)")
 }
 
 // setupLogger points the global zerolog logger at the log file, creating it (and
