@@ -168,6 +168,49 @@ func TestHeaderSurvivesReconcileThatAdmitsFoldsAndRetires(t *testing.T) {
 	}
 }
 
+// TestHeaderSurvivesRefine covers the FOURTH writer of score.md, which #57's
+// acceptance criteria do not name and which could break the header just as
+// completely: replaceMDLineLocked, behind Reword, Merge and Lower.
+//
+// Its doc says every other byte is written back as it was read. That was read
+// rather than proved, and the whole design rests on exactly this class of claim
+// — a header written once at creation is only safe while every later writer of
+// the file preserves what it did not put there.
+func TestHeaderSurvivesRefine(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "score")
+	s := openStore(t, dir)
+
+	keep := submit(t, s, "run the linter before claiming a task is done")
+	drop := submit(t, s, "never force-push a shared branch")
+
+	if err := s.Reword(keep.Id, "run the linter first"); err != nil {
+		t.Fatalf("Reword: %v", err)
+	}
+	// Merge takes the OTHER branch of replaceMDLineLocked: the one that deletes a
+	// line outright rather than replacing it, which is where a writer that
+	// mishandled offsets would take a header line with it.
+	if err := s.Merge(keep.Id, drop.Id); err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+
+	md := readFile(t, dir, scoreMD)
+	got := headerLines(md)
+	if len(got) != len(mdHeader) {
+		t.Fatalf("after a refine score.md opens with %d comment lines, want %d:\n%s", len(got), len(mdHeader), md)
+	}
+	for i, want := range mdHeader {
+		if got[i] != want {
+			t.Fatalf("a refine rewrote header line %d to %q, want %q", i, got[i], want)
+		}
+	}
+	if !strings.Contains(md, "run the linter first") {
+		t.Errorf("the reword did not reach the file:\n%s", md)
+	}
+	if strings.Contains(md, drop.Text) {
+		t.Errorf("the merge did not remove the merged-away line:\n%s", md)
+	}
+}
+
 // TestOperatorProseStillBecomesAnEntry is #57's fourth acceptance criterion,
 // stated as its own test because it is the one thing the fix must NOT change.
 // Narrowing parseBullet to require a marker would regress the only way an entry
