@@ -445,15 +445,19 @@ func (m *Manager) KillAll(sig syscall.Signal) int {
 // for an unknown or exited (dead) panel.
 func (m *Manager) Resize(id string, rows, cols int) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	p, ok := m.ptys[id]
 	if !ok || p.dead {
-		m.mu.Unlock()
 		return
 	}
 	p.rows, p.cols = rows, cols
-	f := p.f
-	m.mu.Unlock()
-	if err := pty.Setsize(f, &pty.Winsize{Rows: clampCell(rows), Cols: clampCell(cols)}); err != nil {
+	// The lock spans the ioctl, as it does in nudgeRows, because pty.Setsize
+	// reaches for the RAW descriptor: it takes f.Fd(), which reads the same field
+	// os.File.Close writes. Copying f out and resizing after the unlock leaves a
+	// window in which the pump's markDead closes underneath — a window a Linux
+	// runner found and this machine did not. Setsize is one ioctl and calls
+	// nothing back into the Manager, so holding across it costs a syscall.
+	if err := pty.Setsize(p.f, &pty.Winsize{Rows: clampCell(rows), Cols: clampCell(cols)}); err != nil {
 		log.Warn().Str("id", id).Int("rows", rows).Int("cols", cols).Err(err).Msg("ptymgr: resizing PTY failed")
 	}
 }
