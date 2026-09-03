@@ -37,6 +37,18 @@ import (
 // does NOT degrade this way — a field the peer must read, a type still on the
 // wire under a new meaning — is a bump, like any other change of meaning.
 // TestScratchActionIsRefused in internal/server holds the up direction to that.
+//
+// GIVING A FIELD A MEANING IT DID NOT HAVE for one op is the third shape, and
+// the dashboard's worktree verb (#66) is the case that settled it. `panel.git`
+// with git "worktree-add" grew a second form: an EMPTY ID, a Dir naming the
+// repo, and the Path/Args/Profile triple panel.create already carries. None of
+// those four fields meant anything for this op before, so none of them changed
+// meaning; ID went from required to optional, which is a widening rather than a
+// new requirement. Both directions still degrade. Up: an old daemon ignores the
+// four unknown-to-it fields, finds ID empty, and answers `no panel with id ""` —
+// a refusal the cockpit surfaces, not a misread; TestWTAddNoDir is the same
+// shape of refusal held on the current daemon. Down: an old cockpit only ever
+// sends worktree-add with a real id, which is the form that did not change.
 const ProtocolVersion = "baton/1"
 
 // IPC timing for the persistent, legitimately-idle Unix-socket connection. The
@@ -80,11 +92,11 @@ const EventBufferSize = 256
 type Command struct {
 	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | panel.tail | panel.diff | panel.git | panel.log | panel.logview | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run | remote.status | remote.enable | remote.disable | remote.rotate | remote.kick | score.submit | score.list | score.status | score.merge | score.reword | score.lower
 	Kind      string   `json:"kind,omitempty"`      // panel kind for "panel.create" (default "shell")
-	ID        string   `json:"id,omitempty"`        // target panel for close/attach/input/resize/diff, the panel to rename, the panel "score.list" ranks its entries for (empty = rank against no context), or the score entry a refine verb corrects
-	Path      string   `json:"path,omitempty"`      // init command (binary path) for "panel.create"; empty = default shell
-	Args      []string `json:"args,omitempty"`      // command arguments for "panel.create" (an agent profile's args)
-	Profile   string   `json:"profile,omitempty"`   // the agent profile the spawn came from; the server resolves THAT profile's resource limits from its own config, so a client never carries a policy it could widen
-	Dir       string   `json:"dir,omitempty"`       // working directory the new panel's process runs in ("panel.create")
+	ID        string   `json:"id,omitempty"`        // target panel for close/attach/input/resize/diff, the panel to rename, the panel "score.list" ranks its entries for (empty = rank against no context), the score entry a refine verb corrects, or — empty on "panel.git" worktree-add — the spawn that has no source panel at all
+	Path      string   `json:"path,omitempty"`      // init command (binary path) for "panel.create"; empty = default shell. Also the agent command for a targetless "panel.git" worktree-add, which spawns one
+	Args      []string `json:"args,omitempty"`      // command arguments for "panel.create" (an agent profile's args), and for a targetless "panel.git" worktree-add
+	Profile   string   `json:"profile,omitempty"`   // the agent profile the spawn came from; the server resolves THAT profile's resource limits from its own config, so a client never carries a policy it could widen. Same for a targetless "panel.git" worktree-add
+	Dir       string   `json:"dir,omitempty"`       // working directory the new panel's process runs in ("panel.create"); the worktree path for "panel.git" worktree-remove, and the repo a targetless worktree-add branches from
 	Data      []byte   `json:"data,omitempty"`      // input bytes for "panel.input"
 	Prompt    string   `json:"prompt,omitempty"`    // the task brief for "panel.dispatch"/"panel.dispatch-group": recorded on the panel(s) and delivered to the process as a unit; the note text for "score.submit"; the new wording for "score.reword"
 	Submit    string   `json:"submit,omitempty"`    // optional submit sequence appended to a dispatched prompt (default newline)
@@ -97,7 +109,7 @@ type Command struct {
 	Index     int      `json:"index,omitempty"`  // destination index among the remaining panels for "panel.move"
 	Signal    string   `json:"signal,omitempty"` // signal name to deliver for "panel.signal", e.g. "SIGINT"
 	Count     int      `json:"count,omitempty"`  // absolute visible count for "group.show"; also how many trailing bytes "panel.tail" returns (0 = the Monitor's own attention-sniff window)
-	Git       string   `json:"git,omitempty"`    // git op for "panel.git", e.g. "log", "commit", "worktree-add"; Name carries a branch, Dir a worktree path
+	Git       string   `json:"git,omitempty"`    // git op for "panel.git", e.g. "log", "commit", "worktree-add"; Name carries a branch, Dir a worktree path — or, for a targetless "worktree-add" (empty ID), the repo to branch from, with Path/Args/Profile carrying the agent spec
 	Layout    string   `json:"layout,omitempty"` // layout name for "group.layout": the named split arrangement the group opens with
 	Query     string   `json:"query,omitempty"`  // the search term for "fleet.search": a case-insensitive regexp matched against every panel's retained output
 

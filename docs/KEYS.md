@@ -96,6 +96,7 @@ dashboard row — the work-item verbs — is refused in a zoom with the way forw
 |                 | (C-t)  | `n`     | `.`                 | new shell in the focused panel's directory             |
 |                 | (C-t)  | `n`     | `C`                 | the conductor, found or created                        |
 |                 | (C-t)  | `n`     | `h`                 | the global shell, found or created                     |
+|                 | (C-t)  | `n`     | `w`                 | a worktree on a new branch + an agent in it            |
 |                 | (C-t)  | ·       | `w`                 | close the selection                                    |
 |                 | (C-t)  | ·       | `r`                 | re-run the exited panels under the focus               |
 |                 | (C-t)  | `x`     | `x`                 | purge every exited panel                               |
@@ -174,7 +175,7 @@ dashboard row — the work-item verbs — is refused in a zoom with the way forw
 |                 | ·      | ·       | `n`                 | rotate the passkey                                     |
 | **Prompts**     | ·      | ·       | `tab`               | complete a path toward what is on disk                 |
 |                 | ·      | ·       | `C-b`               | delete the path segment before the cursor              |
-|                 | ·      | ·       | `C-o`               | browse for the directory (the workdir prompt)          |
+|                 | ·      | ·       | `C-o`               | browse for the directory (workdir, repo prompts)       |
 | **Workdir**     | ·      | ·       | `→` / `l`           | enter the directory under the cursor                   |
 |                 | ·      | ·       | `←` / `h`           | up one level                                           |
 |                 | ·      | ·       | `enter`             | pick it — the path lands in the prompt, still editable |
@@ -183,6 +184,12 @@ dashboard row — the work-item verbs — is refused in a zoom with the way forw
 | **Git menu**    | ·      | ·       | `d` `l` `s`         | diff · log · status                                    |
 |                 | ·      | ·       | `a` `c` `p`         | stage all · commit · push                              |
 |                 | ·      | ·       | `b` `w` `W` `x`     | branch · worktree · worktrees · remove worktree        |
+
+Two keys open a worktree and an agent in it, and they differ in what they resolve from. `n w` works on the
+**dashboard**, asks for a repository and then a branch, and spawns the **fleet default** agent — it has no source panel,
+so there is nothing to copy. `C-t G` `w` works on a **zoomed agent**, asks only for a branch, and copies that agent's
+own profile. A directory that is not a git repository is refused by both, and by `n w` before anything is created. See
+[GIT.md](./GIT.md).
 
 Everything from **Panels** through **Session** is rebindable. Navigation and the per-view keys below it are fixed: they
 are what the view _is_, and a movable `enter` would leave a view with no way in.

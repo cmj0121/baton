@@ -98,6 +98,7 @@ var zhTW = map[string]string{
 	"bind.new-agent":      "在指定工作目錄開一個 agent 面板",
 	"bind.conductor":      "開啟 conductor — 指揮整群面板的 agent",
 	"bind.global-shell":   "開啟全域 shell — 一個按鍵就到的主機 shell",
+	"bind.new-worktree":   "在新分支的新 worktree 裡開一個隔離的 agent",
 	"bind.close":          "關閉選取的面板",
 	"bind.respawn":        "重新執行選取範圍內已結束的面板",
 	"bind.purge-exited":   "清除所有已結束的面板",

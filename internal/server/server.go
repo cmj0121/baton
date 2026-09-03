@@ -2402,8 +2402,9 @@ func (t *rateBuckets) tooSoon(id string, now time.Time) (retryIn time.Duration, 
 // (the full-power cockpit) is never fenced. The conductor may arrange and drive
 // the rest of the fleet, but not: stop the server; close, signal, or feed input
 // to its OWN panel (the self id it declared on hello — closing it would kill the
-// agent mid-command, an input loop would feed itself); or spawn faster than the
-// rate cap / past the fleet ceiling. The fence is a guardrail against agent
+// agent mid-command, an input loop would feed itself); spawn faster than the
+// rate cap / past the fleet ceiling; or reach the one spawn that would let it
+// name its own command without either (panel.git worktree-add with no target). The fence is a guardrail against agent
 // accidents over a uid-private socket, not a security boundary.
 func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 	if cc.role != roleConductor {
@@ -2462,6 +2463,19 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 		// guardrail; opening it later is deleting one line, and interface room is
 		// left for exactly that.
 		return "conductor role: the inbox is an operator surface"
+	case "panel.git":
+		// worktree-add spawns, and its targetless form (empty id) lets the caller
+		// NAME the command it spawns — panel.create's power without panel.create's
+		// ceiling and rate cap, neither of which reaches this action. Refusing that
+		// one form keeps a conductor exactly where it was: it may still fan an
+		// existing agent out onto a branch, which copies that panel's spec and
+		// chooses nothing, and it still has panel.create, fenced, for anything else.
+		//
+		// That panel.git skips the ceiling and the cap AT ALL is older than this
+		// form and is left alone here; widening it was not this fence's to do.
+		if gitops.Op(cmd.Git) == gitops.OpWorktreeAdd && cmd.ID == "" {
+			return "conductor role: a worktree spawn must name the agent it copies"
+		}
 	case "panel.create":
 		s.mu.Lock()
 		n := len(s.panels)
@@ -4858,11 +4872,12 @@ func (s *Server) sendDiff(cc *clientConn, targetID string) error {
 // "gitout" with their captured text, which the cockpit shows in a scrollable popup;
 // commit needs an editor, so it alone keeps the transient-PTY path via openGit;
 // worktree-add creates a tree and spawns an agent in it (a fleet change, so it
-// broadcasts); worktree-remove runs synchronously and confirms with a notice.
+// broadcasts) and is the one op that also answers with NO target — see
+// gitWorktreeAdd; worktree-remove runs synchronously and confirms with a notice.
 func (s *Server) runGit(cc *clientConn, cmd proto.Command) error {
 	switch op := gitops.Op(cmd.Git); op {
 	case gitops.OpWorktreeAdd:
-		if err := s.gitWorktreeAdd(cmd.ID, cmd.Name); err != nil {
+		if err := s.gitWorktreeAdd(cmd); err != nil {
 			return err
 		}
 		s.broadcastFleet()
@@ -5080,16 +5095,42 @@ func (s *Server) forgetWorktree(path string) {
 	}
 }
 
-// gitWorktreeAdd is the git menu's `w`. It resolves the repo and the spawn spec
-// from the zoomed agent — the only two things that need a live panel — and hands
-// them to worktreeSpawn, which owns the rest. The menu keeps no private copy of
-// the add/spawn/group sequence.
-func (s *Server) gitWorktreeAdd(targetID, branch string) error {
+// gitWorktreeAdd resolves the two things worktreeSpawn needs — a repo and an
+// agent spec — from whichever of the two spawn verbs sent the command, then
+// hands them over. One wire op with two resolves, not two ops: the git menu's
+// `w` has a zoomed panel and no directory, the dashboard's `n w` has a directory
+// and no panel, and everything after the resolve is the same sequence.
+//
+// A non-empty ID is the menu's form: repo and spec both come from that panel, so
+// fanning out from the agent you are watching copies the agent you are watching.
+//
+// An empty ID is the dashboard's: Dir names the repo, and Path/Args/Profile
+// carry the spec the cockpit resolved from the FLEET DEFAULT — the same triple
+// panel.create carries, and for the same reason. The server resolves policy, the
+// client resolves what to run (see Settings), so there is no fleet default spec
+// here to resolve against.
+//
+// Dir is required in that form. An empty one would leave git to run in the
+// DAEMON's own working directory and branch whatever repo it happened to be
+// started in — a misread rather than a refusal, and the one outcome this seam
+// must not have.
+func (s *Server) gitWorktreeAdd(cmd proto.Command) error {
+	if cmd.ID == "" {
+		if cmd.Dir == "" {
+			return fmt.Errorf("worktree: a repository directory is required")
+		}
+		spec := spawnSpec{Spec: ptymgr.Spec{Command: cmd.Path, Args: cmd.Args}, Profile: cmd.Profile}
+		return s.worktreeSpawn(cmd.Dir, cmd.Name, spec)
+	}
+	// Named rather than used inline: TestEveryGitTargetFollowsTheAgent counts the
+	// git targets that resolve through targetDir by reading this file's source, so
+	// spelling the call any other way silently drops this one out of that count.
+	targetID := cmd.ID
 	spec, err := s.agentTargetSpec(targetID, "git")
 	if err != nil {
 		return err
 	}
-	return s.worktreeSpawn(s.targetDir(targetID, spec.Spec), branch, spec)
+	return s.worktreeSpawn(s.targetDir(targetID, spec.Spec), cmd.Name, spec)
 }
 
 // gitWorktreeRemove removes the worktree at path from the target agent's repo. It

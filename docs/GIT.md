@@ -71,6 +71,10 @@ in the sequence after that needs a live agent sitting in the repo. A path that i
 not a git repository is refused with `not a git repository: …`, and there is no
 fallback onto a plain spawn.
 
+There is a **second caller**, and it is the reason the path takes no panel id.
+`n w` on the **dashboard** starts the same sequence from a directory instead of
+from an agent — see [two ways in](#two-ways-in) below.
+
 - **`w` (worktree + agent)** asks for a branch name, then runs that path with the
   zoomed agent's repo and its command, args and profile — so the new tree gets the
   same kind of agent under the same resource caps, **grouped under the branch** so
@@ -84,6 +88,35 @@ fallback onto a plain spawn.
   a lock — the safe default, surfaced as the error. It targets a typed path, never
   the live agent's own workdir, so you cannot pull a tree out from under a running
   agent by accident.
+
+### Two ways in
+
+The same tree, agent and group are reached by two verbs, and which one you want is
+decided by whether you are already watching an agent.
+
+| Verb        | Where          | Repo comes from      | Agent profile         |
+| ----------- | -------------- | -------------------- | --------------------- |
+| `n w`       | the dashboard  | a directory you pick | the **fleet default** |
+| `C-t G` `w` | a zoomed agent | that agent's workdir | **that agent's** spec |
+
+**`n w`** is how you start isolated when there is nothing to fan out from. It asks
+for the repository first — a typed path with `tab` completion, `C-b` to delete a
+segment, and `C-o` for the directory picker, exactly the prompt `A` uses — and then
+for the branch, in the same field `C-t G` `w` opens. It has no source panel, so the
+new agent is the **fleet default** profile (what `A` spawns when you pick nothing),
+never a copy of whatever the dashboard cursor happened to be on.
+
+A directory that is not a git repository is **refused**: nothing spawns, no
+directory is created, and there is no fallback onto a plain `A`. `A` in that same
+directory still does what it always did — it lands an agent **in** the repo and
+grows no tree.
+
+**`C-t G` `w`** is the other end: you are watching an agent, and you want another
+one like it on a branch of its own. It copies that agent's command, args and
+profile, so the new tree gets the same kind of agent under the same resource caps.
+
+Closing the new panel leaves the tree standing, whichever verb opened it. Neither
+verb removes anything; `x` in the git menu is the only way a tree goes.
 
 ### Trees baton opened, and trees you did
 
@@ -141,10 +174,19 @@ server resolves the op to a concrete command in [`internal/gitops`](../internal/
   pop-up — no PTY, nothing persisted;
 - **commit** keeps the transient PTY panel (it drives `$EDITOR`), replying so the
   cockpit auto-zooms it (the `openEphemeral` engine the explicit `diff-command` uses);
-- **worktree-add** resolves the repo and the spec from the target panel and calls
-  the shared repo + branch + spec path, which creates the tree, records it, spawns +
-  groups the agent, and broadcasts the fleet — the menu keeps no private copy of
-  that sequence;
+- **worktree-add** resolves the repo and the spec, then calls the shared
+  repo + branch + spec path, which creates the tree, records it, spawns + groups the
+  agent, and broadcasts the fleet — neither verb keeps a private copy of that
+  sequence. **How** it resolves is the only difference between the two: an `id`
+  names a panel and both come from it, while an **empty `id`** is the dashboard's
+  form, where `dir` names the repo and `path`/`args`/`profile` carry the spec the
+  cockpit resolved from the fleet default. Both verbs send the same command, so no
+  second wire action was added and the protocol version did not move; an older
+  daemon, which knows only the first form, answers the second with `no panel with
+id ""` — a refusal, not a misread. The targetless form is refused for a
+  **conductor** connection: naming its own command would be `panel.create`'s power
+  without `panel.create`'s fleet ceiling and rate cap, so a conductor keeps the
+  form that copies an existing agent;
 - **worktree-remove** runs synchronously and confirms with a notice.
 
 The agent-only and git-work-tree gates are enforced server-side — the cockpit gates

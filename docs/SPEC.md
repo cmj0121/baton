@@ -330,6 +330,16 @@ the target id, and a branch or worktree path; the agent-only and work-tree gates
 commit editor and the worktree base directory are `panel.editor` / `panel.worktree-dir`, hot-reloaded like the rest. See
 [GIT.md](./GIT.md) for the full op table and the config.
 
+**The isolation bridge has two callers.** The server path is one function taking a repo, a branch and an agent spec, and
+**no panel id** — nothing after the resolve needs a live panel. `C-t G` `w` resolves both from the zoomed agent, so it
+fans an agent out onto a branch of its own under the same profile and caps. `n w` on the **dashboard** resolves neither
+from a panel, because it has none: it asks for the repository (`A`'s prompt — typed path, `tab` completion, `C-o`
+picker), then for the branch (the git menu's own field), and spawns the **fleet default** profile. A directory that is
+not a repository is refused before anything is made — no spawn, no directory, no fallback onto `A`. Both verbs send the
+same `panel.git` `worktree-add`; the dashboard's form leaves `id` **empty** and puts the repo in `dir` with the spec in
+`path`/`args`/`profile`, which is why this added no second wire action and did not move `ProtocolVersion` — an older
+daemon reads the empty id and refuses with `no panel with id ""` rather than misreading it.
+
 **Persistence and respawn.** The daemon survives its own restart. On every structural change it writes the fleet to a
 **state file** (`internal/state`, derived from the socket path like the pid file, one per fleet) —
 each panel's immutable spawn spec (command, args, workdir), group membership, pins, order, the id counter, and each
@@ -490,6 +500,7 @@ after `settings.key-timeout` (default `1.2s`).
 |                        | `p` / `A`                   | new shell panel / new agent panel               |
 |                        | `n c` / `n .`               | new panel (pick the command) / new shell here   |
 |                        | `n C` / `n h`               | the conductor / the global shell                |
+|                        | `n w`                       | a worktree on a new branch + an agent in it     |
 |                        | `w` / `r`                   | close the selection / re-run its exited panels  |
 |                        | `x x`                       | purge every exited panel                        |
 |                        | `s`                         | send a signal to the selection                  |
