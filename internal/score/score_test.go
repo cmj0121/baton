@@ -38,15 +38,18 @@ func readFile(t *testing.T, dir, name string) string {
 	return string(data)
 }
 
-// TestOpenStartsEmptyOnFirstRun pins what a fresh install shows: score.md is
-// CREATED (so the operator has a file to open and an absent one still means the
-// file was lost, not emptied — see projectLocked) and it is EMPTY.
+// TestOpenStartsEmptyWithNoEntriesOnFirstRun pins what a fresh install shows:
+// score.md is CREATED (so the operator has a file to open and an absent one
+// still means the file was lost, not emptied — see projectLocked) and it holds
+// no ENTRIES — only mdHeader, which cannot become one.
 //
-// The store used to write four comment lines teaching the entry format. They
-// could never become entries, but they were still baton speaking in a file whose
-// whole contract is that its contents are the fleet's own memory. What they
-// taught is docs/SCORE.md's now.
-func TestOpenStartsEmptyOnFirstRun(t *testing.T) {
+// R7 removed that header on the grounds that a fresh install should show what
+// the fleet has earned and nothing else, and #57 put it back: the file's one
+// rule an operator cannot infer from reading it is that a bare "- " line is
+// memory, and docs/SCORE.md is not where they are typing. What the "empty" in
+// this test's name means is therefore emptiness of MEMORY, which is the property
+// R7 actually wanted; mdheader_test.go pins the header itself.
+func TestOpenStartsEmptyWithNoEntriesOnFirstRun(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "score")
 
 	s, err := Open(dir, Policy{})
@@ -57,8 +60,11 @@ func TestOpenStartsEmptyOnFirstRun(t *testing.T) {
 	if s.Len() != 0 {
 		t.Fatalf("a fresh store holds %d entries, want 0", s.Len())
 	}
-	if md := readFile(t, dir, scoreMD); md != "" {
-		t.Errorf("a fresh score.md should be empty, got %q", md)
+	for _, line := range strings.Split(readFile(t, dir, scoreMD), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		t.Errorf("a fresh score.md carries a non-comment line %q", line)
 	}
 
 	// The projected file is 0600 in a 0700 directory; the log is written by the
@@ -324,18 +330,18 @@ func TestSubmitRejectsEmpty(t *testing.T) {
 // It is worth its own test because it has been wrong twice. S0 seeded two demo
 // entries and filtered them at render time; the filter's flag lived in a file
 // the package called disposable, so deleting that file put "demo: …" into every
-// brief. The comment header that replaced them could not become an entry, but it
-// was still baton writing into the fleet's own memory. Nothing seeds anything
-// now, and this asserts the whole path — file, Render, and the block a dispatch
-// actually writes to a pty.
+// brief. What #57 restored is a comment header, and this is the test that says
+// the two are not the same mistake: a "#" line cannot be admitted by any path,
+// so it seeds nothing here even though it is bytes in the file. This asserts the
+// whole path — file, Render, and the block a dispatch actually writes to a pty.
 func TestAFreshInstallInjectsNothing(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(dir, Policy{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if md := readFile(t, dir, scoreMD); md != "" {
-		t.Errorf("a fresh score.md = %q, want empty", md)
+	if got := memoryLines(readFile(t, dir, scoreMD)); got != nil {
+		t.Errorf("a fresh score.md carries %d lines that are memory, want none: %q", len(got), got)
 	}
 	if got := s.Render(Context{}); got != nil {
 		t.Errorf("Render = %+v, want nil — nothing has been earned yet", got)

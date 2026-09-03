@@ -4587,11 +4587,11 @@ func (s *Store) drainFoldsLocked() []Fold {
 // file. Nothing is destroyed either way. The caller holds the lock.
 //
 // With no entries this is the first run, and what it writes is an EMPTY file.
-// The store seeds nothing: what a fresh install shows is what the fleet has
-// earned, which on a fresh install is nothing at all. The format the file's
-// header used to teach is docs/SCORE.md's to teach now.
+// What a fresh install shows is what the fleet has earned, which on a fresh
+// install is nothing at all — plus mdHeader, which is not memory and cannot
+// become any.
 func (s *Store) projectLocked() (Delta, error) {
-	var out []string
+	out := append([]string(nil), mdHeader...)
 	for _, e := range s.entries {
 		out = append(out, formatLine(e.Id, e.Text))
 	}
@@ -5002,6 +5002,48 @@ func parseLine(line string) (id, text string, ok bool) {
 		return "", "", false
 	}
 	return id, strings.TrimSpace(text), true
+}
+
+// mdHeader is what an ABSENT score.md is written back as: comment lines that
+// teach the entry format and, above all, the one rule about this file an
+// operator cannot infer from reading it — a bullet with no id is memory.
+//
+// R7 removed the header these lines restore, so that a fresh install would show
+// what the fleet had earned and nothing else. What that left is a file whose
+// only dangerous rule is taught exclusively in docs/SCORE.md, which an operator
+// editing their own notes has no reason to open: parseBullet admits ANY "- "
+// line, so four TODO lines typed into score.md are injected verbatim into every
+// agent's prompt. The rule is not narrowed to a marker — a bare bullet is the
+// only way to add an entry by hand, and requiring one would regress the single
+// authoring path there is — so it is made visible where the typing happens
+// instead.
+//
+// They are deliberately NOT entries, and they need no rule of their own to stay
+// that way: parseLine wants "- [", parseBullet wants "- ", and a "#" line is
+// neither. An earlier shape seeded real entries flagged as demo data and
+// filtered them at render time, but the flag lived in a cache this package's own
+// doctrine calls disposable, so deleting the cache put "demo: ..." back into
+// every brief. A line that cannot parse needs no flag, no cache and no rebuild
+// rule for a later issue to remember.
+//
+// Written once, at creation, rather than re-emitted every pass — which is sound
+// only because the reconcile pass that rewrites score.md FILTERS the lines it
+// read rather than regenerating them (see reconcileLocked, where every line that
+// is not an entry is appended to `out` as it was found). A header the operator
+// deletes stays deleted, which is the same contract every other byte of this
+// file has.
+var mdHeader = []string{
+	"# baton's fleet memory — one entry per line:",
+	"#",
+	"#   - [e7f3a2] the agent was asked to gain permission it already had",
+	"#",
+	"# ANY line beginning \"- \" is an entry, id or not. Type \"- call dana back\"",
+	"# and the next dispatch admits it, writes an id into the line, and injects it",
+	"# into every agent's prompt. Write notes to yourself as anything but a bullet",
+	"# — a heading, a paragraph, a \"#\" comment and a numbered list are prose,",
+	"# and baton keeps them byte for byte.",
+	"#",
+	"# Edit or delete lines freely — your text wins, and a deleted line retires.",
 }
 
 // parseBullet decodes a line the operator wrote as an entry but gave no id: a

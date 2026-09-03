@@ -115,12 +115,15 @@ func TestMissingScoreMDIsReprojected(t *testing.T) {
 	if !strings.Contains(md, "- ["+first.Id+"] keep the build green") {
 		t.Fatalf("score.md was not re-projected:\n%s", md)
 	}
-	// The re-projection is the entries and NOTHING else: one line per entry, and
-	// no line baton wrote on its own behalf.
-	for _, line := range strings.Split(strings.TrimSuffix(md, "\n"), "\n") {
-		if _, _, ok := parseLine(line); !ok {
-			t.Fatalf("the re-projection wrote a line that is not an entry: %q", line)
-		}
+	// The re-projection is the entries and NOTHING else — no line baton entered
+	// into the fleet's memory on its own behalf. mdHeader is the exception that
+	// is not one: a rebuilt file is a file the operator will open, so it gets the
+	// rule back with it, and a "#" line is memory to nobody (see #57).
+	if got, want := len(memoryLines(md)), 2; got != want {
+		t.Fatalf("the re-projection wrote %d lines that are memory, want %d:\n%s", got, want, md)
+	}
+	if !strings.HasPrefix(md, mdHeader[0]) {
+		t.Fatalf("the re-projection dropped the header the operator needs:\n%s", md)
 	}
 	if d.Reprojected != 2 || d.Retired != 0 {
 		t.Fatalf("pass = %+v, want two re-projections and no retirement", d)
@@ -142,11 +145,14 @@ func TestMissingScoreMDIsReprojected(t *testing.T) {
 	}
 }
 
-// TestMissingScoreMDOnAFreshStoreCreatesAnEmptyFile keeps the first-run path
-// honest: no entries means nothing to re-project, and the file is still CREATED,
-// because an absent score.md is what the recovery table reads as "the file was
-// lost" rather than as "the operator emptied it".
-func TestMissingScoreMDOnAFreshStoreCreatesAnEmptyFile(t *testing.T) {
+// TestMissingScoreMDOnAFreshStoreCreatesAFileWithNoEntries keeps the first-run
+// path honest: no entries means nothing to re-project, and the file is still
+// CREATED, because an absent score.md is what the recovery table reads as "the
+// file was lost" rather than as "the operator emptied it".
+//
+// What it carries is mdHeader and no memory at all — see #57, and
+// TestFreshMDTeachesTheBareBulletRule for the header's own contract.
+func TestMissingScoreMDOnAFreshStoreCreatesAFileWithNoEntries(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, dir)
 	if s.Len() != 0 {
@@ -155,8 +161,12 @@ func TestMissingScoreMDOnAFreshStoreCreatesAnEmptyFile(t *testing.T) {
 	if d := s.Boot(); d.Reprojected != 0 {
 		t.Fatalf("boot recovery = %+v, want a first run to re-project nothing", d)
 	}
-	if md := readFile(t, dir, scoreMD); md != "" {
-		t.Fatalf("a first run should write an empty score.md, got %q", md)
+	md := readFile(t, dir, scoreMD)
+	if got := memoryLines(md); got != nil {
+		t.Fatalf("a first run wrote %d lines that are memory, want none: %q", len(got), got)
+	}
+	if !strings.HasPrefix(md, mdHeader[0]) {
+		t.Fatalf("a first run should still write the rule into the file, got %q", md)
 	}
 }
 
