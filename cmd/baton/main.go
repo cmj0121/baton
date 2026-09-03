@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -349,10 +350,45 @@ func startDaemon(verbose int, logPath, pluginPath string, forced bool) error {
 	}
 
 	if !waitFor(func() bool { return alive(sock) }, daemonPollTries, daemonPollGap) {
-		return errors.New(didNotComeUpReason(logPath, forced))
+		return errors.New(startFailureReason(sock, logPath, forced))
 	}
 	log.Debug().Str("socket", sock).Msg("daemon started")
 	return nil
+}
+
+// startFailureReason is what an operator is told when the daemon `baton` just
+// started has not opened its socket within daemonPollTries × daemonPollGap.
+//
+// IT ASKS WHICH STATE THIS IS, because "no socket yet" is a true observation
+// that used to arrive wearing a false conclusion. Two unlike things end that
+// wait: nothing is running, or a daemon is alive and has not finished the reads
+// loadServerBoot does above the bind. The second is measured, not hypothetical —
+// time to a client's first reply was 483 ms on a 30 MB score log, 3.1 s on
+// 202 MB and 7.1 s on 456 MB, against a budget of five seconds — and #56's
+// runtime compaction bounds the store from the FIRST BOOT THAT SEES IT, so what
+// is left is the one boot after upgrading a store that grew before it. Once per
+// installation, and exactly when the operator is least expecting to be told
+// their server did not come up.
+//
+// THE SESSION CLAIM tells the two apart, not the pid. A PID file outlives the
+// process it named and the operating system reuses pids, so "is that number a
+// live process" answers about whatever program inherited it; the claim is an
+// flock the kernel drops when its holder dies, and it is already this codebase's
+// oracle for exactly this question — stopUnboundDaemon signals on the strength
+// of it. Asked ONCE, at the end of a wait that has already failed, so the
+// conflict sessionProbe.claimed costs a claimSession running in the same instant
+// is one instant here rather than one per poll.
+//
+// Raising the patience instead was the other way out and is not this one: it
+// makes every genuine failure slower to report, for a case that now happens once
+// per installation.
+func startFailureReason(sock, logPath string, forced bool) string {
+	probe := openSessionProbe(paths.LockFile(sock))
+	defer probe.close()
+	if probe.claimed() {
+		return stillStartingReason(logPath, lastLogLine(logPath))
+	}
+	return didNotComeUpReason(logPath, forced)
 }
 
 // didNotComeUpReason is what an operator is told when the daemon they just
@@ -385,6 +421,68 @@ func didNotComeUpReason(logPath string, forced bool) string {
 	}
 	return fmt.Sprintf("baton server did not come up; see %s — its last line names what the daemon "+
 		"was reading. %s", logPath, advice)
+}
+
+// stillStartingReason is the other half of startFailureReason's question: the
+// daemon has not bound its socket and IS ALIVE, so it is inside the reads
+// loadServerBoot does above the bind rather than gone.
+//
+// It is a SIBLING of didNotComeUpReason rather than a second `forced` branch of
+// it, because forced does not divide this case. That flag exists there to keep
+// the advice from being circular — an operator who reached "did not come up"
+// through --force is otherwise told to run --force. Here the first advice is not
+// --force at all, it is to run `baton` again, because the daemon is working; and
+// the escalation past that names both remaining steps in one sentence, so it
+// reads the same whichever flag got the operator here.
+//
+// It QUOTES THE LAST LOG LINE rather than pointing at the log, because that line
+// already names what the daemon is on: loadServerBoot says which config file it
+// is about to read before it reads it, and openScore does the same for the store.
+// An unreadable log leaves the path, which is what didNotComeUpReason gives.
+func stillStartingReason(logPath, doing string) string {
+	on := fmt.Sprintf("see %s for what it is on", logPath)
+	if doing != "" {
+		on = fmt.Sprintf("its log's last line is %q", doing)
+	}
+	return fmt.Sprintf("baton server is still starting: it holds this fleet's session, so it is alive "+
+		"and working rather than gone, and it has not opened its socket in %s — %s. Run `baton` again "+
+		"in a moment. If the next one is still on that line it is wedged there rather than slow: "+
+		"`baton --force` stops it, and a fresh one that stops in the same place means the path itself "+
+		"is what needs restoring or unmounting.",
+		time.Duration(daemonPollTries)*daemonPollGap, on)
+}
+
+// logTailBytes is how much of the log's end lastLogLine reads. The file is
+// capped at logRotateAtBytes (8 MiB) and the line wanted is the final one, so
+// reading the whole of it to find that line would be eight megabytes for a
+// couple of hundred bytes. A window that starts mid-line truncates only the
+// FIRST line in it, which is never the one taken.
+const logTailBytes = 8 << 10
+
+// lastLogLine is the last line the log at path holds, or "" when there is none
+// to read. Every failure — no file, no permission, a short read — answers "",
+// which stillStartingReason renders as the log's path instead of a quotation.
+func lastLogLine(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+	if from := fi.Size() - logTailBytes; from > 0 {
+		if _, err := f.Seek(from, io.SeekStart); err != nil {
+			return ""
+		}
+	}
+	tail, err := io.ReadAll(f)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(string(tail), "\n"), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
 }
 
 // runServer is the long-lived server loop (the daemon child).
