@@ -43,6 +43,7 @@ import (
 	"github.com/cmj0121/baton/internal/state"
 	"github.com/cmj0121/baton/internal/task"
 	"github.com/cmj0121/baton/internal/usage"
+	"github.com/cmj0121/baton/internal/worktree"
 )
 
 // statsInterval is how often the server samples host CPU/memory for the footer.
@@ -553,10 +554,14 @@ type Server struct {
 	// Persistence. stateF is the snapshot path ("" disables persistence); dirty is
 	// a 1-deep "save pending" nudge the saverLoop drains; saveMu serializes the
 	// disk writes; bootTime is when this server (re)booted, persisted as LastBoot.
+	// wtrees is the record of worktrees baton opened — a sibling of the snapshot
+	// rather than a field in it, because a tree outlives the fleet that made it
+	// (see internal/worktree); nil when persistence is off.
 	stateF   string
 	dirty    chan struct{}
 	saveMu   sync.Mutex
 	bootTime time.Time
+	wtrees   *worktree.Store
 
 	// heartbeat is the server→client ping cadence for each connection's keepalive
 	// ticker. It defaults to proto.HeartbeatInterval; tests set it to milliseconds
@@ -859,10 +864,13 @@ func New(ln net.Listener, opts ...Option) *Server {
 	}
 	s.probeEnforcement()
 
-	// The task backlog mirrors to disk alongside the fleet snapshot, so it shares
-	// the same on/off switch: a state file implies a sibling queue directory.
+	// The task backlog and the record of worktrees baton opened both mirror to disk
+	// alongside the fleet snapshot, so they share its on/off switch: a state file
+	// implies a sibling queue directory and a sibling worktree record.
 	if s.stateF != "" {
-		s.qstore = queue.New(strings.TrimSuffix(s.stateF, ".state.json")+".queue", time.Now)
+		base := strings.TrimSuffix(s.stateF, ".state.json")
+		s.qstore = queue.New(base+".queue", time.Now)
+		s.wtrees = worktree.New(base + ".worktrees.json")
 	}
 
 	var pmOpts []ptymgr.Option
@@ -5005,20 +5013,22 @@ func (s *Server) agentTargetSpec(targetID, label string) (spawnSpec, error) {
 	return spec, nil
 }
 
-// gitWorktreeAdd creates a worktree on a new branch off the target agent's repo and
-// spawns an agent panel rooted in it, grouped under the branch name — the isolation
-// bridge. It reuses the source agent's command and args, so the new tree gets the
-// same kind of agent. A real fleet change, so the caller broadcasts.
-func (s *Server) gitWorktreeAdd(targetID, branch string) error {
-	spec, err := s.agentTargetSpec(targetID, "git")
-	if err != nil {
-		return err
-	}
+// worktreeSpawn is the one path from a repo, a branch, and an agent spec to a
+// worktree, an agent rooted in it, and a group under the branch name — the
+// isolation bridge. It takes no panel id: nothing in the sequence needs a live
+// panel, and the callers that follow the git menu have none to give.
+//
+// The tree is recorded as baton's own (internal/worktree) the moment git makes
+// it, BEFORE the spawn. A spawn that fails leaves the tree standing — the user
+// retires it with worktree-remove rather than us guessing — and an unrecorded
+// tree is one a later sweep would have to leave alone.
+//
+// A real fleet change, so the caller broadcasts.
+func (s *Server) worktreeSpawn(repo, branch string, spec spawnSpec) error {
 	s.mu.Lock()
 	base := s.worktreeDir
 	s.mu.Unlock()
 
-	repo := s.targetDir(targetID, spec.Spec)
 	if !gitdiff.IsWorkTree(repo) {
 		return fmt.Errorf("not a git repository: %s", repo)
 	}
@@ -5027,10 +5037,10 @@ func (s *Server) gitWorktreeAdd(targetID, branch string) error {
 	if err := gitops.WorktreeAdd(repo, branch, path); err != nil {
 		return err
 	}
+	s.recordWorktree(path)
 
 	// Spawn the agent in the new worktree and file it under the branch, so it lands
-	// as a work item immediately. A spawn failure leaves the worktree in place — the
-	// user can retire it with worktree-remove rather than us guessing.
+	// as a work item immediately.
 	id, err := s.createPanel(proto.KindAgent, spec.Command, spec.Args, path, spec.Profile, false, false)
 	if err != nil {
 		return fmt.Errorf("worktree created at %s, but the agent did not start: %w", path, err)
@@ -5042,10 +5052,53 @@ func (s *Server) gitWorktreeAdd(targetID, branch string) error {
 	return nil
 }
 
+// recordWorktree files a freshly created tree in the set of trees baton opened,
+// so an orphan sweep can tell them from the operator's own. A nil store is
+// persistence being off; a write failure is a Warn, not a failed add, because the
+// tree and its agent are real either way.
+func (s *Server) recordWorktree(path string) {
+	if s.wtrees == nil {
+		return
+	}
+	if err := s.wtrees.Add(path); err != nil {
+		log.Warn().Str("path", path).Err(err).Msg("worktree created but not recorded as baton's")
+	}
+}
+
+// forgetWorktree drops a tree from that set once git has removed it, so the
+// record names the trees baton owns NOW rather than every tree it ever opened.
+//
+// Housekeeping, not safety: an operator can run `git worktree remove` in a
+// terminal or delete the directory outright, and neither reaches this server, so
+// a sweep must tolerate an entry naming a tree that is gone whatever this does.
+func (s *Server) forgetWorktree(path string) {
+	if s.wtrees == nil {
+		return
+	}
+	if err := s.wtrees.Remove(path); err != nil {
+		log.Warn().Str("path", path).Err(err).Msg("worktree removed but still recorded as baton's")
+	}
+}
+
+// gitWorktreeAdd is the git menu's `w`. It resolves the repo and the spawn spec
+// from the zoomed agent — the only two things that need a live panel — and hands
+// them to worktreeSpawn, which owns the rest. The menu keeps no private copy of
+// the add/spawn/group sequence.
+func (s *Server) gitWorktreeAdd(targetID, branch string) error {
+	spec, err := s.agentTargetSpec(targetID, "git")
+	if err != nil {
+		return err
+	}
+	return s.worktreeSpawn(s.targetDir(targetID, spec.Spec), branch, spec)
+}
+
 // gitWorktreeRemove removes the worktree at path from the target agent's repo. It
 // runs plain (no --force), so git refuses a dirty or locked tree — surfaced as the
 // error. It does not touch any panel; a removed tree's agent, if still open, is the
 // user's to close.
+//
+// A tree that goes this way is also un-recorded, so the set of trees baton opened
+// does not accumulate paths naming trees that no longer exist (see forgetWorktree).
 func (s *Server) gitWorktreeRemove(targetID, path string) error {
 	spec, err := s.agentTargetSpec(targetID, "git")
 	if err != nil {
@@ -5055,6 +5108,7 @@ func (s *Server) gitWorktreeRemove(targetID, path string) error {
 	if err := gitops.WorktreeRemove(repo, path); err != nil {
 		return err
 	}
+	s.forgetWorktree(path)
 	log.Info().Str("repo", repo).Str("path", path).Msg("worktree removed")
 	return nil
 }

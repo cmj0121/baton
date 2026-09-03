@@ -174,6 +174,35 @@ func TestGitWorktreeAdd(t *testing.T) {
 	}
 }
 
+// TestPlainCreateGrowsNoWorktree is the other side of the isolation bridge: an
+// ordinary `A` (panel.create) in a git repo lands the agent IN the repo, and grows
+// no tree. Only the worktree op does that, so a repo with agents in it does not
+// accumulate trees nobody asked for.
+func TestPlainCreateGrowsNoWorktree(t *testing.T) {
+	requireGitDiff(t)
+	repo := gitRepoWithChange(t)
+
+	srv, sock := startDiffServer(t)
+	c := dialReady(t, sock)
+
+	id := createAgentIn(t, c, repo)
+	if got := srv.PanelDir(id); got != repo {
+		t.Fatalf("a plain create should land in the repo %q, got %q", repo, got)
+	}
+	if _, err := os.Stat(repo + "-worktrees"); !os.IsNotExist(err) {
+		t.Fatalf("a plain create must not grow a worktree beside the repo, stat err = %v", err)
+	}
+	entries, err := os.ReadDir(repo)
+	if err != nil {
+		t.Fatalf("read repo: %v", err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), "worktree") {
+			t.Fatalf("a plain create left %q in the repo", e.Name())
+		}
+	}
+}
+
 // TestGitWorktreeRmShell checks the agent-only gate reaches worktree-remove too
 // (it routes through agentTargetSpec like every other op), so a shell is refused.
 func TestGitWorktreeRmShell(t *testing.T) {
