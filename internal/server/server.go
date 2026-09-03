@@ -4750,11 +4750,11 @@ func (s *Server) closePanel(id string) error {
 				delete(cc.ephemeral, id)
 			}
 			s.mu.Unlock()
-			// A plain Stop only closes the PTY master (SIGHUP); a GUI difftool or a
-			// backgrounded child can survive that. An ephemeral panel is transient and
-			// safe to hard-kill, so SIGKILL its whole process group first, then stop —
-			// nothing the diff launched lingers. Scoped strictly to ephemeral ids;
-			// normal panel close keeps its SIGHUP-via-close semantics.
+			// Stop hangs the panel's process group up with SIGHUP, and a GUI difftool
+			// or a backgrounded child can ignore that and outlive the pop-up. An
+			// ephemeral panel is transient and safe to hard-kill, so SIGKILL its whole
+			// process group first, then stop — nothing the diff launched lingers.
+			// Scoped strictly to ephemeral ids; a normal panel close stays at SIGHUP.
 			s.pty.Signal(id, syscall.SIGKILL)
 			s.pty.Stop(id)
 			s.cg.Release(id)       // the ephemeral is gone; drop its cgroup with it
