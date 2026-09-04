@@ -148,7 +148,7 @@ func TestADeliveredBriefIsNotCountedAgainAfterARestart(t *testing.T) {
 	stopSaver := runSaver(t, first)
 	first.onCommand(conn(""), proto.Command{Action: "task.enqueue", Prompt: "Keep the build green."})
 	first.monitorTick() // delivered here, and counted here
-	waitForBacklog(t, first.qstore, 1)
+	waitForBacklogInFlight(t, first.qstore)
 	stopSaver()
 	if len(*firstBytes) == 0 {
 		t.Fatal("the first daemon delivered nothing, so this is the other test")
@@ -404,6 +404,41 @@ func waitForBacklog(t *testing.T, qs *queue.Store, n int) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("the backlog at %s loaded %d tasks (bad=%v, err=%v), want %d", qs.Dir(), len(tasks), bad, err, n)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// waitForBacklogInFlight blocks until the backlog file shows a task ASSIGNED to a
+// panel — the disk's record that a daemon delivered it.
+//
+// waitForBacklog is the wrong wait for that, and getting it wrong is not a slower
+// test but a different one. A task is saved twice on the way to a panel, once
+// when it is enqueued and once when it is assigned, and the saver is a goroutine
+// draining a channel: the first file lands while the second nudge is still
+// queued. A test that waited only for a file to EXIST would restart, at random,
+// onto the shape the task had before it was delivered — a backlog that genuinely
+// holds an undelivered brief, which is the other restart test's case and counts
+// once by design. Measured at two runs in twenty before this wait existed.
+//
+// It is the assignment rather than the stamp that is waited on, because the
+// assignment is the fact: one save carries Panel, Status and the spent stamp
+// together, since scheduleLocked sets all three under one hold of s.mu and the
+// saver snapshots under that same lock.
+func waitForBacklogInFlight(t *testing.T, qs *queue.Store) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		tasks, bad, err := qs.LoadAll()
+		if err == nil && len(bad) == 0 {
+			for _, tk := range tasks {
+				if tk.Panel != "" {
+					return
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the backlog at %s never recorded a delivery (tasks=%+v, bad=%v, err=%v)", qs.Dir(), tasks, bad, err)
 		}
 		time.Sleep(2 * time.Millisecond)
 	}

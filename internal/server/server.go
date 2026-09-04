@@ -4492,10 +4492,25 @@ func (s *Server) enqueueTaskFrom(prompt, group string, spawn *task.SpawnSpec, au
 //
 // The spend is nudged to disk here rather than left to the caller's own
 // markTaskDirtyLocked, so that it cannot be reordered out of the file by an edit
-// to either call site. Persistence is still the saver's best effort, exactly as
-// it is for the stamp going on — a nudge dropped under a full channel is
-// re-sent by the task's next change, and the same window that could lose the
-// stamp could keep it.
+// to either call site.
+//
+// WHAT IS LEFT IS A DURABILITY WINDOW, and it is worth stating exactly, because
+// it is easy to read this as closing more than it does. The saver is a goroutine
+// draining a channel, so the spend is durable a moment AFTER the count, not
+// before it. A daemon killed inside that moment leaves a backlog file still
+// saying the stamp is unspent — and the file is then indistinguishable from a
+// brief that was never delivered, which is a case that must count. The next
+// daemon counts it a second time.
+//
+// That is narrower than what it replaces by the whole difference between an
+// invariant and an accident: the replay was systematic, on EVERY restart that
+// caught a user task in flight and again on the one after that, and it is now
+// reachable only by dying inside one saver hop. It is the same class of cost
+// task.Task.Plugin already carries and states — a stamp the saver has not
+// written yet is a stamp a reboot reads as absent — and it is accepted here on
+// the same terms rather than paid for with a synchronous write on the delivery
+// path. The tests wait for the assignment to reach the file for this reason; see
+// waitForBacklogInFlight, which is where the window is visible.
 func (s *Server) takeUserSignalLocked(t *task.Task) bool {
 	if !t.User {
 		return false
