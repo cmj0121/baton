@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -14,71 +13,75 @@ import (
 	"github.com/cmj0121/baton/internal/score"
 )
 
-// TestScorePolicyGate pins the rule S1 was filed for: boot and reload decide
-// what tunes the score store the SAME way.
+// TestScorePolicyTranslatesTheFileAndNothingElse: scorePolicy is the one
+// translation between the config's shape and the store's, so boot and reload
+// cannot spell the same file into two different live policies.
 //
-// They did not. Boot handed openScore the config struct whatever config.Load's
-// error said, while the reload path gated SetPolicy on that error being nil, so
-// one mistyped weight was enough for a restart to apply the half-parsed file
-// while a SIGHUP applied nothing — two live policies from one file, chosen by
-// whether the operator reloaded or restarted. The gate is one function now, and
-// this is what keeps it one.
-func TestScorePolicyGate(t *testing.T) {
+// It used to be the GATE as well, taking config.Load's error and choosing
+// nothing when it was set — a correct rule, installed for one knob on
+// infrastructure every other knob shares (#48). The gate now lives at the two
+// seams that actually have to answer it, and what is left here has no opinion
+// about whether the file parsed, because neither caller reaches it with a file
+// that did not.
+func TestScorePolicyTranslatesTheFileAndNothingElse(t *testing.T) {
 	cfg := config.ScoreConfig{
 		PromoteAt: 8, UserSignalsAt: 4, WorkingSet: 9,
 		Rank: config.RankConfig{Recency: 2, Cwd: 3, Profile: 3, Group: 3},
-	}
-
-	got, ok := scorePolicy(cfg, nil)
-	if !ok {
-		t.Fatal("a config that parsed should choose the policy")
 	}
 	want := score.Policy{
 		PromoteAt: 8, UserSignalsAt: 4, WorkingSet: 9,
 		Rank: score.Rank{Recency: 2, Cwd: 3, Profile: 3, Group: 3},
 	}
-	if got != want {
+	if got := scorePolicy(cfg); got != want {
 		t.Fatalf("policy = %+v, want %+v", got, want)
 	}
-
-	// The same struct, reached through a file that would not parse: config.Load
-	// returns its partially-populated value ALONGSIDE the error, and taking it
-	// would be a policy the operator's file never actually asked for.
-	if got, ok := scorePolicy(cfg, errors.New("parse config: bad")); ok || got != (score.Policy{}) {
-		t.Fatalf("a failed load chose %+v (ok=%v), want no policy at all", got, ok)
+	if got := scorePolicy(config.ScoreConfig{}); got != (score.Policy{}) {
+		t.Fatalf("a file that set nothing chose %+v, want nothing at all", got)
 	}
 }
 
-// TestScorePolicyGateReachesTheStore closes the loop the gate exists for: the
-// zero policy a failed load produces is the store's own defaults, not a
-// half-parsed file's numbers. At boot there is nothing to keep, so the defaults
-// are the fallback; on a reload the running policy stands untouched. Both are
-// the one rule — a broken file never chooses.
-func TestScorePolicyGateReachesTheStore(t *testing.T) {
-	cfg := config.ScoreConfig{PromoteAt: 8, WorkingSet: 9}
+// TestBootOnAFileThatWillNotParseTakesTheDefaultPolicy is the NEVER-HAD-ONE half
+// of the failed-load rule, at the seam that holds it.
+//
+// A file that will not parse chooses no policy anywhere. At boot there is no
+// running policy to keep, so the store is built on the package's own defaults —
+// which is the one place the daemon still starts on defaults after #48, and the
+// reason applyConfig's half is written differently rather than shared.
+//
+// The file matters: config.Load hands back what it decoded BEFORE it gave up,
+// so `promote-at: 8` and `working-set: 9` are sitting in the struct it returns
+// alongside the error. Deleting the boot gate makes the store come up on them.
+func TestBootOnAFileThatWillNotParseTakesTheDefaultPolicy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_RUNTIME_DIR", home)
 
-	p, _ := scorePolicy(cfg, errors.New("parse config: bad"))
-	st, reason := openScore(cfg, p, scoreOpenTimeout)
+	writeConfig(t, home, "score:\n  promote-at: 8\n  working-set: 9\n  rank:\n    cwd: fast\n")
+
+	sock := filepath.Join(shortDir(t), "b.sock")
+	t.Setenv("BATON_SOCK", sock)
+	boot := loadServerBoot(sock)
+	t.Cleanup(boot.release)
+	if boot.scoreStore == nil {
+		t.Fatalf("the store did not open: %s", boot.scoreReason)
+	}
+	if got := boot.scoreStore.Policy(); got.PromoteAt == 8 || got.WorkingSet == 9 {
+		t.Fatalf("the store booted on %+v, want the package defaults over a file that would not parse", got)
+	}
+}
+
+// TestWarnScorePolicySurvivesTheShapesAFailedLoadProduces: the warnings run on
+// every path and must not panic on the zero policy, or on a config with no
+// store behind it.
+func TestWarnScorePolicySurvivesTheShapesAFailedLoadProduces(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // an unset score.dir resolves under $HOME; never the real one
+	cfg := config.ScoreConfig{PromoteAt: 8, WorkingSet: 9}
+	st, reason := openScore(cfg, scorePolicy(cfg), scoreOpenTimeout)
 	if st == nil {
 		t.Fatalf("openScore refused: %s", reason)
 	}
 	t.Cleanup(st.Close)
-	if got := st.Policy(); got.PromoteAt == 8 || got.WorkingSet == 9 {
-		t.Fatalf("the store booted on %+v, want the package defaults over a file that would not parse", got)
-	}
 
-	// And a store already running keeps what it has: SetPolicy is never reached
-	// on that branch, which is what the reload path's `ok` guard does.
-	before := st.Policy()
-	if _, ok := scorePolicy(cfg, errors.New("parse config: bad")); ok {
-		t.Fatal("a failed load must not reach SetPolicy")
-	}
-	if st.Policy() != before {
-		t.Fatalf("the running policy moved to %+v, want %+v", st.Policy(), before)
-	}
-
-	// The warnings run on both paths and must not panic on the zero policy the
-	// gate hands them, which is the shape a failed load always produces.
 	warnScorePolicy(config.Config{Score: config.ScoreConfig{
 		BadNumbers: []string{"score.rank.cwd"},
 	}}, score.Policy{}, st)
@@ -86,10 +89,12 @@ func TestScorePolicyGateReachesTheStore(t *testing.T) {
 	// And with NO store — switched off, or a directory another daemon holds —
 	// there is no in-force policy to compare against, so the clamp half must say
 	// nothing rather than report every key the operator set as clamped to zero.
-	// The key that is not a number is still named: that is a fact about the file.
+	// The key that is not a number is still named: that is a fact about the file,
+	// which is why applyConfig can say it on a load that applied nothing at all.
 	warnScorePolicy(config.Config{Score: config.ScoreConfig{
 		PromoteAt: 1, BadNumbers: []string{"score.rank.cwd"},
 	}}, score.Policy{PromoteAt: 1}, nil)
+	warnBadScoreNumbers(config.ScoreConfig{BadNumbers: []string{"score.working-set"}})
 }
 
 // TestWarnScorePolicySaysWhatWasClamped covers the other half of the same
@@ -227,20 +232,30 @@ func TestAReloadSaysWhichScoreKeysItCannotApply(t *testing.T) {
 	}
 }
 
+// writeConfig writes $HOME/.baton/config, creating the directory. It is the one
+// writer of that file in this package's tests.
+func writeConfig(t *testing.T, home, body string) {
+	t.Helper()
+	dir := filepath.Join(home, ".baton")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // writeScoreConfig writes $HOME/.baton/config pointing the fleet memory at dir,
-// creating the config directory. It is the one writer of that file in this
-// package's tests, so a test that boots a daemon on a chosen score.dir and one
-// that edits the same key mid-run cannot drift apart on its spelling.
+// creating the config directory. It is the one place this package's tests spell
+// the score.dir key, so a test that boots a daemon on a chosen directory and one
+// that edits the same key mid-run cannot drift apart on it.
+//
+// The file itself is written by writeConfig, which is the one writer of
+// $HOME/.baton/config: two functions independently spelling the directory, the
+// filename and the mode is the drift this comment used to claim was impossible.
 func writeScoreConfig(t *testing.T, home, dir string) {
 	t.Helper()
-	confDir := filepath.Join(home, ".baton")
-	if err := os.MkdirAll(confDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(confDir, "config"),
-		[]byte("score:\n  dir: "+dir+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeConfig(t, home, "score:\n  dir: "+dir+"\n")
 }
 
 // TestARealSIGHUPSaysTheScoreDirectoryDidNotMove is the wiring, which the

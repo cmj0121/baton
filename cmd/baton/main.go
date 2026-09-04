@@ -724,33 +724,23 @@ func sweepLegacyConductorWorkspaces(sock string) {
 }
 
 // scorePolicy is the store's tuning as the config file spells it — the
-// recurrence threshold, the working-set budget, and the ranking weights — and
-// the GATE on a file that would not parse. ok false means this file chooses no
-// policy at all.
+// recurrence threshold, the working-set budget, and the ranking weights. It is
+// the one translation between the two shapes, so boot and reload cannot spell
+// the same file into two different live policies.
 //
-// It is the one translation between the two shapes AND the one gate, because
-// both halves have to be the same at boot and on reload or one file produces two
-// live policies. They did not used to be: boot handed openScore the config
-// struct whatever config.Load's error said, while the reload path gated
-// SetPolicy on that error being nil. One mistyped weight was then enough for a
-// restart to apply `working-set: 9` while a SIGHUP applied nothing — two
-// policies from one file, chosen by whether the operator reloaded or restarted,
-// with nothing said about either. A mistyped number fails the whole decode (see
-// config.badNumbers, which is how the key gets named), so this is not a corner.
-//
-// A failed load is not a file saying "use the defaults". At boot there is no
-// running policy to keep, so the store is built on its own defaults; on a reload
-// the running one stands. Both are the same rule — a broken file never chooses —
-// and the difference is only in what there is to fall back to.
+// It used to be the gate as well, taking config.Load's error and choosing
+// nothing when it was set. That gate has moved to the two callers, because it
+// was never really about the score: a file that would not parse chooses nothing
+// ANYWHERE, and the two callers are the two answers to what stands instead —
+// boot has no last-good and falls back to the store's defaults, applyConfig has
+// one and applies nothing at all. Neither ever reaches this function with a file
+// it could not read.
 //
 // Nothing is clamped here. The store clamps every field on the way in (see
 // score.Policy.clamp), so the defaults and the floors are stated once, in the
 // package that acts on them; warnScorePolicy is what says when a clamp moved a
 // number the operator wrote.
-func scorePolicy(cfg config.ScoreConfig, err error) (p score.Policy, ok bool) {
-	if err != nil {
-		return score.Policy{}, false
-	}
+func scorePolicy(cfg config.ScoreConfig) score.Policy {
 	return score.Policy{
 		PromoteAt:     cfg.PromoteAt,
 		UserSignalsAt: cfg.UserSignalsAt,
@@ -761,7 +751,7 @@ func scorePolicy(cfg config.ScoreConfig, err error) (p score.Policy, ok bool) {
 			Profile: cfg.Rank.Profile,
 			Group:   cfg.Rank.Group,
 		},
-	}, true
+	}
 }
 
 // implausibleUserSignalsAt is where a user-signal threshold stops looking like a
@@ -781,6 +771,21 @@ func scorePolicy(cfg config.ScoreConfig, err error) (p score.Policy, ok bool) {
 // in silence, which is the failure invariant I8 exists to prevent.
 const implausibleUserSignalsAt = 20
 
+// warnBadScoreNumbers names the score keys whose value is present but is not a
+// number. Those are exactly the values that fail the strict decode and take the
+// whole file down with them, so it is the one warning that has to be said on a
+// load that FAILED as well as on one that succeeded — the decoder's own error
+// names a line and a type, and this names the key the operator has to fix.
+//
+// It reports on the file; it applies nothing from it. That is why applyConfig
+// can call it after deciding to apply nothing at all.
+func warnBadScoreNumbers(cfg config.ScoreConfig) {
+	for _, key := range cfg.BadNumbers {
+		log.Warn().Str("key", key).
+			Msg("config value is not a number; no score policy from this file is in force")
+	}
+}
+
 // warnScorePolicy says what the file asked for that the daemon is not doing. It
 // runs at boot and on every reload, like the stale-key warning it sits beside,
 // because a config mistake persists until it is fixed and the reload is exactly
@@ -788,10 +793,11 @@ const implausibleUserSignalsAt = 20
 //
 // Three things, each invisible otherwise (invariant I8):
 //
-//   - a key whose value is not a number. That failed the whole decode, so NO
-//     part of this file's score policy is in force — including the keys that
-//     were fine — and the generic load warning names the plugin rather than the
-//     section. Named per key, so the operator has something to fix.
+//   - a key whose value is not a number (warnBadScoreNumbers). That failed the
+//     whole decode, so NO part of this file is in force — including the keys
+//     that were fine. Said from here on a load that succeeded and from
+//     applyConfig on one that did not, which is the only warning both branches
+//     share: it reports the file rather than applying it.
 //   - a value the store CLAMPED. `rank.cwd: 0.5` runs as 1.0, which switches the
 //     dimension off rather than penalising a miss, and `1e300` runs as 1e6.
 //     Reported whether or not the reload changed anything, since a clamp that
@@ -802,10 +808,7 @@ const implausibleUserSignalsAt = 20
 //     weight is then dead config: no panel reports a directory, so no entry
 //     records one and no dispatch has one to compare.
 func warnScorePolicy(cfg config.Config, want score.Policy, st *score.Store) {
-	for _, key := range cfg.Score.BadNumbers {
-		log.Warn().Str("key", key).
-			Msg("config value is not a number; no score policy from this file is in force")
-	}
+	warnBadScoreNumbers(cfg.Score)
 	// The rest compares what was asked against what is IN FORCE, so it needs a
 	// store to ask. With none — switched off, or a directory another daemon holds
 	// — there is no in-force policy, and comparing against the zero one would
@@ -1199,7 +1202,19 @@ func loadServerBoot(sock string) serverBoot {
 	// operator cannot see and the log cannot undo. The same holds for enabled:
 	// switching the memory off over an unrelated typo is a bigger surprise than
 	// running it on the numbers the daemon can still read.
-	scorePol, _ := scorePolicy(cfg.Score, err)
+	//
+	// The policy half is the NEVER-HAD-ONE case of the failed-load rule (#48). A
+	// file that would not parse chooses no policy anywhere; here there is no
+	// running policy to keep, so the store builds on the package's own defaults.
+	// applyConfig answers the same question for everything else, and carries both
+	// cases: its first pass has nothing to keep either and comes up on the
+	// defaults, and every pass after it keeps what is running. The rule is one
+	// rule and the fallback is what differs, so each side says which case it is
+	// in rather than hiding it in a shared helper that would have to guess.
+	var scorePol score.Policy
+	if err == nil {
+		scorePol = scorePolicy(cfg.Score)
+	}
 	store, reason := openScore(cfg.Score, scorePol, scoreOpenTimeout)
 
 	var once sync.Once
@@ -1284,13 +1299,67 @@ func runServerOn(ln net.Listener, sock string, boot serverBoot) error {
 
 	// applyConfig re-reads the YAML config, (re)runs the plugin on top of it, and
 	// applies the merged effective config: the hot-reloadable server settings, the
-	// output-event gate, the config/commands served to frontends. broadcast pushes
-	// the refreshed config to open cockpits — set on a reload, skipped on first boot
-	// when no client is attached yet.
-	applyConfig := func(broadcast bool) {
+	// output-event gate, the config/commands served to frontends.
+	//
+	// reload is false on the one pass that runs before Serve and true on every
+	// pass after it, and it answers three questions that are all the same
+	// question. Whether there are cockpits to push the refreshed config to (none
+	// are attached before Serve). Whether "restart the daemon" is sensible advice
+	// (it is not, on the pass that IS the daemon starting). And the one #48 turns
+	// on: whether there is a last-good config to keep when this load fails —
+	// NEVER HAD ONE versus HAD ONE AND CANNOT READ THE NEW ONE. A file that will
+	// not parse chooses nothing either way; what differs is what is left standing.
+	//
+	// It is a parameter rather than a flag the function keeps for itself, because
+	// the caller is the only thing that knows: the boot pass and the reload are
+	// two call sites eight lines apart, and a bit derived from history would have
+	// to be right about a past this function cannot see.
+	applyConfig := func(reload bool) {
 		cfg, err := config.Load()
 		if err != nil {
-			log.Warn().Err(err).Msg("config load failed, using defaults as the plugin base")
+			// Named first, and on both branches: a value that is not a number is
+			// what took the whole file down, and the decoder's error names a line
+			// rather than the key. This reports the file; it does not apply it.
+			//
+			// BEFORE the never-had-one branch below zeroes cfg, which is where
+			// BadNumbers lives — Load's second, loose pass is the only reason the
+			// key can be named at all once the strict one has failed.
+			warnBadScoreNumbers(cfg.Score)
+			if reload {
+				// HAD ONE. A file that will not parse is not a file asking for the
+				// defaults — it is a file nobody could read, and the honest answer is
+				// to keep running what the operator last successfully gave us. ALL of
+				// it, not the one knob that remembered to defend itself.
+				//
+				// This used to carry on with what Load returned alongside the error,
+				// which is not even the zero Config: yaml.Unmarshal fills what it
+				// decoded before it gave up, and normalize never runs. So one typo
+				// handed every subsystem below a half-decoded struct — the workdir,
+				// the name-conflict rule, the caps, the agent list, the config served
+				// to every open cockpit — under a single warning line that said "using
+				// defaults" and meant "your settings are gone".
+				//
+				// The last-good config is not held in a variable, because it is
+				// already held in the only places that can act on it: the settings
+				// inside srv, the policy inside the store, the blob SetClientConfig
+				// published. A copy here could only drift from them. Applying nothing
+				// IS keeping them, so this returns.
+				log.Warn().Err(err).Msg("config load failed, nothing applied; the running configuration stands")
+				return
+			}
+			// NEVER HAD ONE. This is the first pass, before Serve, and there is no
+			// running configuration to keep — so something has to be applied, and the
+			// defaults are the only config anybody can name. Not the half-decoded
+			// struct: that is neither the defaults nor what the operator wrote, and
+			// serving it would offer a config nobody chose to every cockpit that
+			// attaches.
+			//
+			// Zeroing it here is what lets every subsystem below run ungated. The
+			// store already answers the same way for the same reason (loadServerBoot),
+			// and it used to be the ONLY one that did.
+			log.Warn().Err(err).
+				Msg("config load failed and there is no running configuration to keep; the fleet comes up on the defaults")
+			cfg = config.Config{}
 		}
 		res, perr := plug.Load(pluginPath, cfg)
 		if perr != nil {
@@ -1321,42 +1390,49 @@ func runServerOn(ln net.Listener, sock string, boot serverBoot) error {
 		// asks for something else, because the reload's own line says only that a
 		// reload happened.
 		//
-		// A config that would not PARSE is not a config that says "use the
-		// default": `cfg` is the zero value then, and retuning the store from it
-		// would quietly undo an operator's whole policy on the reload that told
-		// them their file has a typo in it. The running values stand until a file
-		// the daemon could actually read asks for others — and the load failure is
-		// already warned about above, so this branch stays silent.
+		// Everything from here on runs UNGATED on the load error, because no
+		// half-decoded struct reaches it any more: a file that would not parse
+		// either returned above or was replaced by the defaults. The gate that used
+		// to stand here — `if err == nil`, and a scorePolicy that took the error as
+		// an argument — protected the score policy alone while srv.Reload,
+		// SetOutputEvents, SetAgents and SetClientConfig on the same reload were
+		// handed that struct. One knob defended on shared infrastructure is worse
+		// than the seam being right, so the seam is right and the special case is
+		// gone.
+		//
 		// A file still spelling the key `promote_at` is not a parse error — the
 		// YAML decoder is not strict, so the key is dropped and the threshold
 		// silently falls back to the default. Say so: the operator wrote a number
 		// down and is running on another one, which is the surprise this whole
 		// knob exists to avoid (invariant I8). Warned on the reload as well as at
 		// boot, because retuning the threshold is exactly when the typo is made.
-		if err == nil {
-			if res.Config.Score.StalePromoteAt {
-				log.Warn().Msg("config key score.promote_at is ignored; the key is score.promote-at")
-			}
+		if res.Config.Score.StalePromoteAt {
+			log.Warn().Msg("config key score.promote_at is ignored; the key is score.promote-at")
+		}
+		// A RELOAD's warning: its remedy is "restart the daemon", which on the pass
+		// that IS the daemon starting is advice to restart what is starting. It has
+		// nothing to say there anyway — bootedScore is that very config — except
+		// after a failed first load, where bootedScore is the half-decoded file the
+		// store was opened on while this pass is running the defaults, so it would
+		// report a directory that never moved.
+		if reload {
 			warnScoreKeysAReloadCannotApply(bootedScore, res.Config.Score)
 		}
-		// The SAME gate boot uses, and the same warnings, so one file cannot
-		// produce one live policy on a restart and another on a reload. This runs
-		// on the first pass too — applyConfig(false), before Serve — which is why
-		// the boot path above only OPENS the store and says nothing about it: two
-		// call sites logged the same clamp twice on every start.
-		if want, ok := scorePolicy(res.Config.Score, err); ok {
-			if scoreStore.SetPolicy(want) {
-				p := scoreStore.Policy()
-				log.Info().Int("promote_at", p.PromoteAt).Int("user_signals_at", p.UserSignalsAt).
-					Int("working_set", p.WorkingSet).
-					Float64("rank_recency", p.Rank.Recency).Float64("rank_cwd", p.Rank.Cwd).
-					Float64("rank_profile", p.Rank.Profile).Float64("rank_group", p.Rank.Group).
-					Msg("score policy changed")
-			}
-			warnScorePolicy(res.Config, want, scoreStore)
-		} else {
-			warnScorePolicy(cfg, score.Policy{}, scoreStore)
+		// The SAME translation boot uses, so one file cannot produce one live
+		// policy on a restart and another on a reload. This runs on the first pass
+		// too — applyConfig(false), before Serve — which is why the boot path above
+		// only OPENS the store and says nothing about it: two call sites logged the
+		// same clamp twice on every start.
+		want := scorePolicy(res.Config.Score)
+		if scoreStore.SetPolicy(want) {
+			p := scoreStore.Policy()
+			log.Info().Int("promote_at", p.PromoteAt).Int("user_signals_at", p.UserSignalsAt).
+				Int("working_set", p.WorkingSet).
+				Float64("rank_recency", p.Rank.Recency).Float64("rank_cwd", p.Rank.Cwd).
+				Float64("rank_profile", p.Rank.Profile).Float64("rank_group", p.Rank.Group).
+				Msg("score policy changed")
 		}
+		warnScorePolicy(res.Config, want, scoreStore)
 		srv.SetOutputEvents(res.WantOutput)
 		srv.SetTitleHook(res.WantTitle)
 		if data, mErr := json.Marshal(res.Config); mErr == nil {
@@ -1368,7 +1444,7 @@ func runServerOn(ln net.Listener, sock string, boot serverBoot) error {
 		// command, and the same action that already means "re-read what you were
 		// configured with, the fleet keeps running".
 		srv.SetAgents(detectAgents(res.Config))
-		if broadcast {
+		if reload {
 			srv.PushConfig()
 		}
 	}
