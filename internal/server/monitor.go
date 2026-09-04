@@ -370,7 +370,22 @@ func looksLikeAttention(tail []byte) bool {
 }
 
 // activityText is the live status line for a state and how long it has held —
-// "running · 12s", "needs you · 1m". Exited keeps its own terminal note.
+// "running · 12s", "needs you · 1m".
+//
+// EXITED DOES NOT REACH IT, and its arm below is here to say so rather than to
+// serve anyone. The monitor tick skips exited panels before it asks (monitorTick),
+// the two spawn paths pass Spawning, and rederiveLocked's callers both refuse an
+// exited panel before they get as far as the ladder — so every live status line
+// belongs to a panel with a process still on the other end. What an exited panel
+// shows is written once, by onPanelExit, from exitActivity.
+//
+// Which means the "exited" here is NOT exitActivity's answer arriving by another
+// route, and must not be read as one: exitActivity knows the panel's kind and
+// says "finished · code 1" for a command, and this arm cannot, because kind is
+// not one of its arguments. Two functions answering the same question two ways is
+// only harmless while one of them is unreachable. If a future state change lets
+// Exited through here, this is the line to delete, not the line to teach about
+// kinds.
 func activityText(state panel.State, since time.Duration) string {
 	switch state {
 	case panel.Spawning:
@@ -385,14 +400,24 @@ func activityText(state panel.State, since time.Duration) string {
 		return "done · " + compactDur(since)
 	case panel.Stuck:
 		return "stuck · " + compactDur(since)
-	default:
+	case panel.Exited:
 		return "exited"
+	default:
+		// A state added and not given a line here. Its own name is a poor status
+		// line but a true one; the "exited" this used to return was a lie about a
+		// live panel, and the kind of lie an operator acts on.
+		return state.String()
 	}
 }
 
-// exitActivity is the terminal note activityText defers to — the status line on a
-// panel whose process is gone, written once by onPanelExit and never ticked again
-// (the monitor loop skips exited panels).
+// exitActivity is the terminal note on a panel whose process is gone: written
+// once by onPanelExit, from the exit code, and never ticked again, because the
+// monitor loop skips exited panels.
+//
+// It is the ONLY writer of that line. activityText does not defer to it — that is
+// what this comment used to claim, and activityText has no kind argument to defer
+// with — the two simply never answer for the same panel. See activityText for why
+// its Exited arm is unreachable and what to do if that ever stops being true.
 //
 // A command panel FINISHED. That is the whole difference the third kind buys at
 // the end of a life: a shell that exits is gone and an agent that exits left a
