@@ -444,7 +444,7 @@ const (
 	EventUserSignal = "user-signal" // the operator reinforced an entry (emitted now, by Reinforce)
 	EventEdited     = "edited"      // an entry's text changed — via score.md, or the conductor's reword
 	EventRetired    = "retired"     // an entry left the store
-	EventMerged     = "merged"      // the conductor gave an entry another's wording to fold on; Text is that wording
+	EventMerged     = "merged"      // an entry was given another's wording to fold on; Text is that wording. Written by the conductor's merge and by an operator's edit that landed on what another entry already said
 	EventLowered    = "lowered"     // the conductor pulled an entry down a rung; Tier is the rung it landed on
 
 	// EventCompacted is the only record that is a STATE rather than an action, and
@@ -673,10 +673,17 @@ type Delta struct {
 	Reattributed int // of those, ones whose id the log already knew: the original provenance is lost
 	Adopted      int // entries whose wording the log never carried, taken from the file
 	Superseded   int // entries whose text the operator changed
-	Folded       int // entries a duplicate line was counted into — at most one per entry; see View.Folds for the lines removed
-	Raised       int // entries this pass's reinforcements earned a tier
-	Retired      int // entries score.md no longer carries
-	Reprojected  int // entries written back into a score.md that had gone missing
+	// Merged is entries whose line the operator edited into what another entry
+	// already said, so the two became one — the conductor's `score_merge`
+	// reached through the file instead. It is counted beside Superseded rather
+	// than folded into it because a superseded entry is still standing and a
+	// merged one is gone; Retired counts it a second time, as the retirement it
+	// also is, and this is the only field that says WHY.
+	Merged      int
+	Folded      int // entries a duplicate line was counted into — at most one per entry; see View.Folds for the lines removed
+	Raised      int // entries this pass's reinforcements earned a tier
+	Retired     int // entries score.md no longer carries
+	Reprojected int // entries written back into a score.md that had gone missing
 }
 
 // Fold is one repeat counted into an entry that already said it: what survived,
@@ -3429,10 +3436,13 @@ func (s *Store) replayLocked() error {
 				reword(e, ev.Text, &s.health.AliasEvictions)
 			}
 		case EventMerged:
-			// The conductor gave this entry another's wording to fold on. Only the
-			// alias is replayed: the merge changed no count and no tier when it
-			// happened (see Refine), so there is nothing else of it to rebuild, and
-			// the entry it absorbed is retired by its own record below.
+			// This entry was given another's wording to fold on — by the conductor,
+			// or by an operator's edit that landed on what this entry already said.
+			// Only the alias is replayed: a merge changed no count and no tier when
+			// it happened, through either door (see mergeLocked and
+			// reconcileLocked's convergence block), so there is nothing else of it
+			// to rebuild, and the entry it absorbed is retired by its own record
+			// below.
 			if e := live[ev.Id]; e != nil {
 				alias(e, ev.Text, &s.health.AliasEvictions)
 			}
@@ -4041,6 +4051,12 @@ func readFrom(path string, off int64) ([]byte, error) {
 //   - a line whose id is live and whose text changed → superseded: the old
 //     wording becomes an alias, and NOTHING is counted — a correction is not a
 //     repetition
+//   - …and where that edit landed on a wording ANOTHER live entry already said,
+//     the two are merged: the survivor keeps the edited-away wording as an
+//     alias, this entry retires, and its line leaves the file. Same outcome as
+//     R6's conductor `merge`, reached by the gesture the operator already has;
+//     see the convergence block below for the narrowing that keeps it clear of
+//     the unknown-id row two rows down
 //   - a line whose id is live but whose text the log never carried → the text is
 //     adopted silently: unknown is not "was empty", so it is not an edit and
 //     must not manufacture the user signal I6 rests on
@@ -4149,6 +4165,16 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 		// folds is what the pass folded, one record per entry: for the server to
 		// log, and — if the rewrite fails — for the removals the store still owes.
 		folds []Fold
+		// converged are the lines whose text the operator edited into a wording
+		// some other entry may already say. Like a bullet, the decision needs the
+		// whole file — the entry that already says it has to still be there when
+		// the pass ends — so it is taken below.
+		converged []converge
+		// dropped are positions in out to remove: the duplicate lines folded away
+		// and the merged-away lines. Two producers, one list, so the filter below
+		// is one loop; it is sorted before that loop rather than kept sorted,
+		// since the two run in sequence and each is already in file order.
+		dropped []int
 	)
 	// admit takes a line into the store as the operator's, under the id the line
 	// already carries.
@@ -4194,6 +4220,10 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 		case live:
 			e := s.entries[idx]
 			resolved[id] = true
+			// The wording this edit retired, when the edit could have merged the
+			// entry away. Empty on every other line, which is every line of a file
+			// nobody is editing.
+			var joined string
 			switch {
 			case e.Text == "":
 				// The log recorded this entry before events carried their text, so
@@ -4244,11 +4274,25 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 					Schema: Schema, Event: EventEdited, Id: id, At: now,
 					Source: SourceUser, Text: text,
 				})
+				prior := e.Text
 				reword(&e, text, &pass.AliasEvictions)
 				delta.Superseded++
+				// …and the edit may have said, in the file, the thing only R6's
+				// conductor could say before: that this entry and another are one.
+				// Offered to the convergence block only when the edit CREATED the
+				// collision — a wording this entry's own key already covered is a
+				// cosmetic fix to a pair that could not fold anyway, and merging on
+				// it would retire an entry for a corrected full stop and buy an
+				// alias that normalises to the survivor's own wording.
+				if s.entries[idx].norm != e.norm {
+					joined = prior
+				}
 			}
 			next = append(next, e)
 			out = append(out, line)
+			if joined != "" {
+				converged = append(converged, converge{at: len(next) - 1, line: len(out) - 1, prior: joined})
+			}
 		default:
 			if _, seen := s.burned[id]; seen {
 				// The log knows this id but has no live entry for it: its
@@ -4259,6 +4303,102 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 			}
 			next = append(next, admit(id, text))
 			out = append(out, line)
+		}
+	}
+
+	// The operator's own merge (#52). R6 gave the conductor `score_merge` and
+	// gated it on the panel the SERVER marked Conductor — which the operator's
+	// cockpit is not, and #52 settles that the gate stays as it is: the
+	// self-declaration #38 §4 openly calls no boundary must not become the test a
+	// write surface hangs on. So the operator gets a path that does not run
+	// through the gate at all, in the file that is already their whole interface
+	// (#38 §3): a line edited into what another entry already says merges the two.
+	//
+	// It buys exactly what merge buys and nothing else — the ALIAS. Deleting the
+	// duplicate line, which is what an operator does today, retires an entry and
+	// teaches the survivor nothing, so a later repeat of the deleted wording
+	// starts a third entry. Here the survivor keeps the edited-away wording, and
+	// that repeat folds.
+	//
+	// Three rules hold it inside the rulings it has to live with:
+	//
+	//   - R4: it COUNTS NOTHING. No reinforcement, no user signal, no tier, and
+	//     `merged` moves no recency (see noteEventLocked). A reword counts
+	//     nothing, so a fold reached BY rewording must not move a counter a
+	//     reword cannot, or it is the same back door in a different coat. The
+	//     absorbed entry's counts are left with it exactly as mergeLocked leaves
+	//     them — carrying them across is the one arithmetic that would let an
+	//     agent panel assemble the rung I6 reserves for the user.
+	//   - R2: it never enters the table's unknown-id row, where a line whose id
+	//     the log does not know, or has retired, admits as its own entry even when
+	//     its wording duplicates a live one. That row is about the operator's decision that a restored line IS
+	//     that entry; this is about an edit they just made. The survivor is
+	//     required to have ALREADY said the wording at the start of this pass,
+	//     which no line admitted by this pass can have done — so a pair that was
+	//     already sitting there identical stays as R2 ruled, and only a
+	//     convergence the edit created folds.
+	//   - The retiring-entry rule the duplicate bullet already keeps: a survivor
+	//     must still be in next, so an operator who converges one line and deletes
+	//     the other in one save merges nothing. Resolved BEFORE the bullets below
+	//     for the same reason, so a bullet cannot fold into an entry this block
+	//     has just merged away.
+	//
+	// The window it accepts: the retire is in the pass's ONE append, which lands
+	// before score.md is rewritten. A rewrite that fails therefore leaves the
+	// absorbed entry's line in the file under a retired id, and the next pass
+	// re-admits it as the operator's — the re-attribution mergeLocked spends two
+	// durable steps to avoid. It is a narrower cost here than there: the alias is
+	// already durable, the absorbed entry was leaving either way, and the pass
+	// reports it as `reattributed` rather than absorbing it silently. Buying the
+	// same guarantee would mean a second append inside a pass whose single append
+	// is the thing that keeps a thousand-entry file off a thousand fsyncs.
+	if len(converged) > 0 {
+		absorbed := make(map[int]bool, len(converged))
+		for _, c := range converged {
+			// The survivor: an entry that already said this wording before the
+			// pass began and still carries a line. Scanned rather than indexed —
+			// the index would be built for one lookup and thrown away, which is
+			// foldTargetLocked's reasoning, and this block is skipped entirely on
+			// every pass over a file nobody has edited.
+			j := -1
+			for i := range next {
+				if i == c.at || next[i].norm != next[c.at].norm {
+					continue
+				}
+				if k, was := known[next[i].Id]; was && s.entries[k].norm == next[i].norm {
+					j = i
+					break
+				}
+			}
+			if j < 0 {
+				continue
+			}
+			alias(&next[j], c.prior, &pass.AliasEvictions)
+			pending = append(pending, event{
+				Schema: Schema, Event: EventMerged, Id: next[j].Id, At: now,
+				Source: SourceUser, Text: c.prior,
+			})
+			// Retired by the loop below rather than here: the line is going, so
+			// this is the table's own "a live entry no line carries" row and there
+			// is no second rule to keep in step with it.
+			delete(resolved, next[c.at].Id)
+			absorbed[c.at] = true
+			dropped = append(dropped, c.line)
+			rewrite = true
+			delta.Merged++
+		}
+		if len(absorbed) > 0 {
+			// Filtered in place, like out below: next was made by this pass and
+			// every element only ever moves leftward. It happens before the fold
+			// index is built, which is what keeps a bullet from folding into an
+			// entry that is on its way out.
+			kept := next[:0]
+			for i := range next {
+				if !absorbed[i] {
+					kept = append(kept, next[i])
+				}
+			}
+			next = kept
 		}
 	}
 
@@ -4282,8 +4422,7 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 	// line already carries an id — the overwhelmingly common one, re-read on every
 	// dispatch while the operator has it open — allocates nothing here at all.
 	var (
-		folded  map[int]int // fold record index by position in next
-		dropped []int       // positions in out to remove
+		folded map[int]int // fold record index by position in next
 		// owing is what the pass will owe if its rewrite fails: entry id → every
 		// wording it folded out of the file, since a failed rewrite leaves all of
 		// them on their lines. Collected where the line is dropped rather than
@@ -4453,11 +4592,16 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 	s.health.BareAdmits += pass.BareAdmits
 
 	if len(dropped) > 0 {
-		// Drop the folded lines from the file the pass is about to write. They
-		// were kept in place until now so that a pass failing anywhere above
-		// leaves the operator's file exactly as they wrote it. Filtered in place:
-		// out was made by this pass, nothing else holds it, and every element only
-		// ever moves leftward.
+		// Drop the folded and merged-away lines from the file the pass is about to
+		// write. They were kept in place until now so that a pass failing anywhere
+		// above leaves the operator's file exactly as they wrote it. Filtered in
+		// place: out was made by this pass, nothing else holds it, and every
+		// element only ever moves leftward.
+		//
+		// Sorted because the list has two producers whose runs interleave: a
+		// merged line carries a live id and a folded one does not, so no position
+		// can come from both and the sort needs no dedup.
+		slices.Sort(dropped)
 		kept, d := out[:0], 0
 		for i, line := range out {
 			if d < len(dropped) && dropped[d] == i {
@@ -4559,6 +4703,22 @@ type bullet struct {
 	at   int
 	text string
 	bare bool
+}
+
+// converge is a score.md line whose text the operator edited into a wording some
+// OTHER entry may already say, held until the whole file has been read — the
+// entry that already says it has to still carry a line when the pass ends. See
+// the convergence block in reconcileLocked.
+//
+// at is the entry's position in the pass's surviving set and line its position
+// in the pass's output, because the block needs both: it reads the entry to
+// compare folding keys and drops the line from the file. prior is the wording the
+// edit retired, which is the whole of what a merge carries across — it is read
+// from the entry rather than from the file, because the file no longer shows it.
+type converge struct {
+	at    int
+	line  int
+	prior string
 }
 
 // noteFoldsLocked keeps this pass's fold records for the next View to report.

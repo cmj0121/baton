@@ -388,6 +388,7 @@ func ScoreCounters(e *zerolog.Event, d score.Delta, h score.Health) *zerolog.Eve
 		Int("reattributed", d.Reattributed).
 		Int("adopted", d.Adopted).
 		Int("superseded", d.Superseded).
+		Int("merged", d.Merged).
 		Int("folded", d.Folded).
 		Int("raised", d.Raised).
 		Int("retired", d.Retired).
