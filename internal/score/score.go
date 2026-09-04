@@ -17,8 +17,11 @@
 // reconcileLocked — implements both the boot recovery table and the live-editor
 // table, because they are the same table read at different moments.
 //
-// The package is stdlib-only and never logs; errors and counters are returned
-// for the server to log.
+// The package never logs; errors and counters are returned for the server to
+// log. Its only import outside the standard library is internal/scrub, which is
+// itself stdlib-only — that is what the rule has always meant, and what lets
+// the store share one control-character filter with the daemon and the cockpit
+// instead of carrying a copy (#47).
 package score
 
 import (
@@ -38,6 +41,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/cmj0121/baton/internal/scrub"
 )
 
 // Schema is the current on-disk schema version, stamped on every record of the
@@ -2030,68 +2035,23 @@ func (s *Store) Submit(text string, prov Provenance) (Entry, bool, error) {
 //
 // strings.Fields alone does not stop this: it splits on unicode.IsSpace, and
 // ESC (0x1b) is not whitespace, so an escape sequence survives flattening
-// intact. The filter therefore drops the same three classes sanitizeReason
-// does, and for the same reasons:
+// intact. internal/scrub is the filter, and it is the same one the daemon and
+// the cockpit apply at their own boundaries — which is the point of it being
+// a package rather than a third copy (#47). Its whitespace fold happens to be
+// this store's line discipline too: the files are line-oriented, one entry per
+// line, so an entry is one line by construction.
 //
-//   - Control characters (Cc — C0 and C1). A sequence loses its ESC and its
-//     parameters stay behind as plain text ("[1;31m", not a colour). That is
-//     deliberate: an entry that tried to carry an escape should look wrong to
-//     whoever reads score.md, not quietly become clean prose.
-//   - Format characters (Cf), which IsControl does not see: U+202E and the bidi
-//     isolates render a line backwards, U+200B is invisible.
-//   - The replacement character, what invalid UTF-8 decodes to.
-//
-// On top of that it keeps the store's own line discipline: the files are
-// line-oriented, one entry per line, so every run of whitespace folds into a
-// single space and the result is one line by construction.
+// Note what this function does NOT do: it does not cap. maxEntryRunes is
+// enforced elsewhere and asymmetrically — a submission over it is REFUSED and
+// an operator's line is kept and merely withheld from injection — so a
+// truncating scrub here would manufacture an instruction nobody wrote. That is
+// why scrub.Text is called and not scrub.Capped.
 //
 // It is applied to submissions, to replayed log records, to score.md's lines
 // and bullets, and to the ids on them — every channel text reaches an Entry on.
 // newEntry and setText are what make that exhaustive rather than remembered.
 func sanitize(text string) string {
-	if !needsScrub(text) {
-		return text
-	}
-	var b strings.Builder
-	b.Grow(len(text))
-	pendingSpace := false
-	for _, r := range text {
-		switch {
-		case unicode.IsSpace(r):
-			pendingSpace = true
-		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == unicode.ReplacementChar:
-			continue
-		default:
-			if pendingSpace && b.Len() > 0 {
-				b.WriteRune(' ')
-			}
-			pendingSpace = false
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
-// needsScrub reports whether text needs the builder above at all. It says no
-// only for plain, single-spaced, printable ASCII, which is what nearly every
-// entry is — and every line of score.md is scrubbed twice on every dispatch
-// while the file is being edited, so the common case must not rebuild the
-// string. Anything else falls through and sanitize itself decides.
-//
-// The three rejected classes mirror sanitize's own: a byte outside printable
-// ASCII (which is every control byte, and every rune sanitize might drop as Cf,
-// C1, or the replacement character), and a space that is leading, trailing, or
-// repeated (which is the whitespace folding).
-func needsScrub(text string) bool {
-	for i := 0; i < len(text); i++ {
-		switch c := text[i]; {
-		case c < 0x20, c >= 0x7f:
-			return true
-		case c == ' ' && (i == 0 || i == len(text)-1 || text[i-1] == ' '):
-			return true
-		}
-	}
-	return false
+	return scrub.Text(text)
 }
 
 // normalize is the folding key. Two wordings fold into one entry when, and only
@@ -2134,7 +2094,8 @@ func needsScrub(text string) bool {
 // so the whitespace half of the contract was being implemented twice. Composing
 // them keeps the "an editor re-wrapped it and it still folds" promise true for a
 // caller that has NOT scrubbed, and costs nothing in the common case: sanitize
-// returns its argument untouched for plain ASCII (needsScrub), strings.ToLower
+// returns its argument untouched for plain ASCII (scrub.Text's own fast path,
+// which moved into that package with the filter), strings.ToLower
 // does the same when there is nothing to lower, and the trim is a reslice.
 func normalize(text string) string {
 	return strings.TrimRightFunc(strings.ToLower(sanitize(text)), trimmable)
@@ -2191,7 +2152,7 @@ func normEq(text, key string) bool {
 		case unicode.IsSpace(r):
 			pending = true
 			continue
-		case unicode.IsControl(r), unicode.Is(unicode.Cf, r), r == unicode.ReplacementChar:
+		case scrub.Drop(r):
 			continue
 		}
 		if pending && emitted && !match(' ') {
@@ -5118,8 +5079,11 @@ func parseBullet(line string) (text string, ok bool) {
 // holds either the whole old file or the whole new one. The same steps live in
 // paths.WriteFileAtomic, which is what every other package in the tree writes
 // through; they are spelled again here rather than imported, to keep this
-// package stdlib-only. The fixed ".tmp" name is safe because Open holds the directory's
-// single-writer lock.
+// package free of the heavy half of the tree. internal/paths reaches config,
+// the environment and the daemon's socket; internal/scrub, the one baton import
+// this package does have, is a pure stdlib filter and pulls in nothing. The
+// fixed ".tmp" name is safe because Open holds the directory's single-writer
+// lock.
 //
 // It is a TYPE rather than the one function it used to be because a compaction
 // writes its bulk and commits it at two different moments — the marshal off the
