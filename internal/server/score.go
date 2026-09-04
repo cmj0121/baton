@@ -513,11 +513,25 @@ func (s *Server) bindBrief(panelID, prompt string) (TaskBrief, bool, time.Durati
 // back rather than buffering it for the next read, because #38 §4's accepted
 // cost is only bearable while it is visible and a line that arrives on the next
 // dispatch — or not at all, if the daemon stops first — is not that.
+//
+// It has TWO callers and one body. panel.dispatch asks it with the connection in
+// hand, which is the direct door; a delivery drained from the backlog asks
+// scoreSignalFrom with the provenance the server concluded at enqueue and
+// persisted on the task (#50), because by then the connection is gone. The
+// discrimination is made in one place either way — connProvenance's — and only
+// the moment it is made differs.
 func (s *Server) scoreSignal(cc *clientConn, prompt string) {
+	s.scoreSignalFrom(prompt, s.connProvenance(cc))
+}
+
+// scoreSignalFrom is scoreSignal with the provenance already decided. It is the
+// whole body, and the split exists so that a caller with no live connection —
+// Server.signalDelivered, replaying a stamp the enqueue recorded — cannot reach a
+// second, subtly different copy of the SourceUser test.
+func (s *Server) scoreSignalFrom(prompt string, prov score.Provenance) {
 	if !s.scoreState.available() {
 		return
 	}
-	prov := s.connProvenance(cc)
 	if prov.Source != score.SourceUser {
 		return
 	}

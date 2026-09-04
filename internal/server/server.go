@@ -1902,6 +1902,16 @@ type delivery struct {
 	// Task.Plugin is written once, under the lock that creates the task, and never
 	// mutated after, so there is no drift for the copy to protect against.
 	plugin bool
+	// user marks a task the OPERATOR enqueued (task.Task.User), carried for the
+	// same reason and on the same terms as plugin. It is what makes an enqueued
+	// brief reinforce what it repeats once the delivery lands (#50); the two are
+	// mutually exclusive, since baton.enqueue is not the user.
+	//
+	// It is set on the UNBOUND variant only. A bound delivery is a direct dispatch
+	// whose bytes were merely held, and the panel.dispatch case has already
+	// recorded that signal against the connection it arrived on — stamping it here
+	// as well would count one brief twice.
+	user bool
 	// attempt is the task's Attempts as the assignment left it — the delivery's
 	// claim on the panel, re-checked before the write. See claimDelivery.
 	attempt int
@@ -1959,6 +1969,40 @@ func (s *Server) deliver(d delivery) {
 		return
 	}
 	s.writeInput(d.panel, data)
+	s.signalDelivered(d)
+}
+
+// signalDelivered records an ENQUEUED brief as the user's reinforcement of
+// whatever entry it repeats — #50, closing the asymmetry that let a dispatched
+// brief reach the top tier while the same words through `queue add` reached
+// nothing.
+//
+// It is HERE, after the write, because R4's two rules have to survive the gap
+// between enqueue and delivery and this is the only point at which both hold:
+//
+//   - the signal counts what the USER typed. d.prompt is the task's own text —
+//     what `task list` shows and what a restart restores — never bindBrief's
+//     output, so a task.pre rewrite cannot reach the tier #37 reserves for the
+//     operator. The bound bytes are already gone from this scope by design.
+//   - it counts only once delivery ACTUALLY succeeded. A veto returns before this
+//     line, a superseded or ended delivery is refused by claimDelivery before it,
+//     and either way nothing reached an agent.
+//
+// The provenance is rebuilt rather than carried because there is nothing to
+// carry: connProvenance yields exactly {Source: SourceUser} for a cockpit
+// connection — no panel, no cwd, no profile, no group, because a cockpit has no
+// panel row — so the persisted bool is the whole of the conclusion and this is
+// its only reading. An agent's enqueue never sets d.user and never gets here.
+//
+// The cost is one store round trip per user-enqueued delivery, exactly the one
+// R4 added to a dispatch (Store.Signal re-reads score.md unconditionally). It
+// lands inside the monitor tick's delivery budget, which already charges the
+// bind, so a backlog of the operator's own briefs is paced by the same ceiling.
+func (s *Server) signalDelivered(d delivery) {
+	if !d.user {
+		return
+	}
+	s.scoreSignalFrom(d.prompt, score.Provenance{Source: score.SourceUser})
 }
 
 // claimDelivery re-checks, immediately before the write, that this delivery is
@@ -2935,7 +2979,7 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		if cmd.Path != "" {
 			spawn = &task.SpawnSpec{Command: cmd.Path, Profile: cmd.Profile, Args: cmd.Args, Dir: cmd.Dir, CloseOnDone: cmd.Ephemeral}
 		}
-		if _, err := s.enqueueTask(cmd.Prompt, cmd.Group, spawn); err != nil {
+		if _, err := s.enqueueTask(cc, cmd.Prompt, cmd.Group, spawn); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
@@ -4181,24 +4225,61 @@ func (s *Server) declaredLocked(id string) bool {
 	return d != nil && d.Reason != ""
 }
 
+// taskAuthor is the server's conclusion about WHO put a task in the backlog. It
+// is one value rather than a pair of bools because the three states are mutually
+// exclusive and two adjacent bools at a call site can be swapped without breaking
+// a build — the same hazard dispatchScored takes its brief whole to avoid, and
+// here the swap would silently let a plugin's own enqueue reach the tier #37
+// reserves for the operator.
+//
+// It is decided from the CONNECTION and from nothing else (#38 §4). No enqueue
+// command carries an author field, so there is nothing for a client to assert.
+type taskAuthor int
+
+const (
+	// authorAgent is a connection that declared a self on hello: an agent inside a
+	// panel driving the backlog. The default, and the safe one — a stamp that goes
+	// wrong in this direction only loses a reinforcement.
+	authorAgent taskAuthor = iota
+	// authorUser is a connection that declared no self: the TUI, or `baton ctl`
+	// from the operator's own shell. See connProvenance for what that rests on.
+	authorUser
+	// authorPlugin is baton.enqueue, called from inside the Lua worker. There is no
+	// connection at all, and it is emphatically not the user.
+	authorPlugin
+)
+
 // enqueueTask adds an unassigned task that arrived over the SOCKET to the backlog
 // for the scheduler to drain onto a free agent. It errors when the queued backlog
 // is at queueMax — the cap is backpressure on a runaway producer, counting only
 // unassigned tasks, so a busy fleet never blocks new work from being queued.
-func (s *Server) enqueueTask(prompt, group string, spawn *task.SpawnSpec) (string, error) {
-	return s.enqueueTaskFrom(prompt, group, spawn, false)
+//
+// cc is the enqueueing connection, and it is a parameter rather than something the
+// backlog looks up later because by delivery time it is gone: connProvenance can
+// only be asked while the socket is still open, so #38 §4's discrimination has to
+// be made HERE and recorded (#50). It is read through connProvenance rather than
+// tested for cc.self == "" inline, so the fleet keeps one discrimination.
+func (s *Server) enqueueTask(cc *clientConn, prompt, group string, spawn *task.SpawnSpec) (string, error) {
+	author := authorAgent
+	if s.connProvenance(cc).Source == score.SourceUser {
+		author = authorUser
+	}
+	return s.enqueueTaskFrom(prompt, group, spawn, author)
 }
 
-// enqueueTaskFrom is enqueueTask with the origin spelled out: plugin marks a task
-// baton.enqueue created, which is delivered bare — no score, no task.pre chain —
-// exactly as baton.dispatch is.
+// enqueueTaskFrom is enqueueTask with the origin spelled out: authorPlugin marks a
+// task baton.enqueue created, which is delivered bare — no score, no task.pre
+// chain — exactly as baton.dispatch is, and authorUser marks one the operator
+// typed, whose delivery reinforces what it repeats (#50).
 //
 // The stamp goes on under the SAME lock that creates the task. Setting it
 // afterwards would leave a window in which a monitor tick could drain the task
 // and run the very chain the stamp exists to skip, which is the whole of the
-// guarantee: a task.pre hook that calls baton.enqueue must not re-enter itself
-// when the task it queued is delivered.
-func (s *Server) enqueueTaskFrom(prompt, group string, spawn *task.SpawnSpec, plugin bool) (string, error) {
+// plugin guarantee: a task.pre hook that calls baton.enqueue must not re-enter
+// itself when the task it queued is delivered. The user stamp needs the same
+// window closed for the mirror-image reason — a task drained before it was
+// stamped would deliver, and the operator's brief would count for nothing.
+func (s *Server) enqueueTaskFrom(prompt, group string, spawn *task.SpawnSpec, author taskAuthor) (string, error) {
 	if prompt == "" {
 		return "", fmt.Errorf("task.enqueue needs a prompt")
 	}
@@ -4211,9 +4292,10 @@ func (s *Server) enqueueTaskFrom(prompt, group string, spawn *task.SpawnSpec, pl
 		return "", fmt.Errorf("queue is full (%d queued); raise queue.max or let it drain", s.queueMax)
 	}
 	t := s.upsertTaskLocked("", prompt, group, task.Queued)
-	t.Plugin = plugin
+	t.Plugin = author == authorPlugin
+	t.User = author == authorUser
 	t.Spawn = spawn
-	if spawn != nil || plugin {
+	if spawn != nil || author != authorAgent {
 		s.markTaskDirtyLocked(t.ID) // persist the spawn spec and the origin alongside the task
 	}
 	return t.ID, nil
@@ -4353,7 +4435,7 @@ func (s *Server) scheduleLocked() ([]delivery, []spawnRequest) {
 		groupRunning[t.Group]++ // the fresh dispatch counts against the cap for later tasks
 		s.emit("task.change", taskFields(t))
 		s.markTaskDirtyLocked(t.ID)
-		deliver = append(deliver, delivery{panel: pid, task: t.ID, prompt: t.Prompt, plugin: t.Plugin, attempt: t.Attempts})
+		deliver = append(deliver, delivery{panel: pid, task: t.ID, prompt: t.Prompt, plugin: t.Plugin, user: t.User, attempt: t.Attempts})
 	}
 	return deliver, spawns
 }
@@ -4396,7 +4478,7 @@ func (s *Server) applyScheduledSpawns(spawns []spawnRequest) bool {
 		s.panelTask[pid] = t.ID
 		// Unbound: the panel was created a moment ago and has not settled, so its
 		// brief is bound when the monitor delivers it rather than here (#44).
-		s.pendingDispatch[pid] = delivery{panel: pid, task: t.ID, prompt: t.Prompt, spawned: true, plugin: t.Plugin, attempt: t.Attempts}
+		s.pendingDispatch[pid] = delivery{panel: pid, task: t.ID, prompt: t.Prompt, spawned: true, plugin: t.Plugin, user: t.User, attempt: t.Attempts}
 		s.emit("task.change", taskFields(t))
 		s.markTaskDirtyLocked(t.ID)
 		s.mu.Unlock()

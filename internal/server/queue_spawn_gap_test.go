@@ -113,7 +113,7 @@ func TestTheBacklogProvisionsOneAgentPerGap(t *testing.T) {
 	s, _, _ := gateServer() // no standing agents, so every task provisions its own
 	var ids []string
 	for range 5 {
-		id, err := s.enqueueTask("build it", "", &task.SpawnSpec{Command: "claude"})
+		id, err := s.enqueueTask(conn(""), "build it", "", &task.SpawnSpec{Command: "claude"})
 		if err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
@@ -157,7 +157,7 @@ func TestTheBacklogProvisionsOneAgentPerGap(t *testing.T) {
 // the assertion that notices if they are ever pulled apart again.
 func TestTheFleetCeilingIsTheSameRuleOnBothRoads(t *testing.T) {
 	s, _, _ := gateServer(fullFleet()...)
-	if _, err := s.enqueueTask("build it", "", &task.SpawnSpec{Command: "claude"}); err != nil {
+	if _, err := s.enqueueTask(conn(""), "build it", "", &task.SpawnSpec{Command: "claude"}); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	if _, spawns := schedule(s); len(spawns) != 0 {

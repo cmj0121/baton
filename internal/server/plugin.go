@@ -262,7 +262,7 @@ func (s *Server) DispatchGroup(group, prompt string) (int, error) {
 // enqueue again: not a recursion the Lua worker could deadlock on, since the
 // chain runs later on the monitor goroutine, but an unbounded one all the same.
 func (s *Server) Enqueue(prompt, group string) (string, error) {
-	id, err := s.enqueueTaskFrom(prompt, group, nil, true)
+	id, err := s.enqueueTaskFrom(prompt, group, nil, authorPlugin)
 	if err != nil {
 		return "", err
 	}

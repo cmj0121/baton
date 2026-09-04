@@ -393,7 +393,7 @@ func TestASpawnOnDemandTaskScoresAtItsHeldDelivery(t *testing.T) {
 	var seen TaskBrief
 	s.onFilterTask = func(b TaskBrief) (TaskBrief, bool) { seen = b; return b, true }
 
-	if _, err := s.enqueueTask("hi", "", &task.SpawnSpec{Command: "cat"}); err != nil {
+	if _, err := s.enqueueTask(conn(""), "hi", "", &task.SpawnSpec{Command: "cat"}); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	_, spawns := schedule(s)

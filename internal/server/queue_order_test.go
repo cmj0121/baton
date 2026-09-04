@@ -13,9 +13,9 @@ import (
 func TestReprioritizeOrdersScheduler(t *testing.T) {
 	s, _, _ := gateServer(panel.Panel{ID: "a1", Kind: panel.Agent, State: panel.Idle})
 
-	id1, _ := s.enqueueTask("first", "", nil)
-	_, _ = s.enqueueTask("second", "", nil)
-	id3, _ := s.enqueueTask("third", "", nil)
+	id1, _ := s.enqueueTask(conn(""), "first", "", nil)
+	_, _ = s.enqueueTask(conn(""), "second", "", nil)
+	id3, _ := s.enqueueTask(conn(""), "third", "", nil)
 
 	if err := s.reprioritizeTask(id3, true); err != nil { // third → head
 		t.Fatalf("promote: %v", err)

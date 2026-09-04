@@ -78,6 +78,31 @@ type SpawnSpec struct {
 // That is a one-shot, bounded by the backlog that survived the restart, and it
 // only ever runs the chain over work the chain was going to see anyway: it is
 // accepted, not covered.
+//
+// User is the same kind of record for the same kind of reason, and it is here for
+// #50: a brief the operator ENQUEUED reinforces what it repeats exactly as one
+// they dispatched does, but the connection that enqueued it is long gone by the
+// time the scheduler drains the task onto a panel. The stamp is what carries the
+// server's reading of that connection across the gap — and across a restart,
+// since a queued task routinely outlives the daemon that took it in.
+//
+// IT IS THE SERVER'S CONCLUSION, NOT A CLAIM. Nothing on the wire can set it: the
+// enqueue command carries no such field, and the value is decided at enqueue from
+// Server.connProvenance — the one discrimination #38 §4 allows — under the lock
+// that creates the task. That a user connection's provenance has exactly ONE
+// value ({Source: SourceUser}, with no panel, cwd, profile or group, because a
+// cockpit has no panel row) is what lets a single bool carry the whole of it
+// without loss. An agent's enqueue is stamped false and stays false.
+//
+// It is a claim to anyone who can write the backlog files directly — which is the
+// same exposure #38's Trust and exposure section already accepts for score.md
+// itself, and no worse: an agent that can edit this file can edit that one.
+//
+// Absent on a task from an older build for the same reason Plugin is, and the
+// absence means the same thing it means for a connection that never declared
+// itself the user: no signal. A backlog that survived the upgrade counts nothing,
+// which is the safe direction — invariant I6 is about entries climbing on
+// something that was not the user, so the failure to fold is the tolerable half.
 type Task struct {
 	ID       string     `json:"id"`
 	Prompt   string     `json:"prompt"`
@@ -89,6 +114,7 @@ type Task struct {
 	Attempts int        `json:"attempts"`           // how many times its prompt has been delivered
 	Spawn    *SpawnSpec `json:"spawn,omitempty"`    // provision a fresh agent for this task when none is free (nil = existing agents only)
 	Plugin   bool       `json:"plugin,omitempty"`   // queued by a plugin (baton.enqueue) rather than over the socket; see below
+	User     bool       `json:"user,omitempty"`     // the server read the enqueueing connection as the operator's, not an agent's; see below
 	Created  time.Time  `json:"created"`
 	Updated  time.Time  `json:"updated"`
 }

@@ -74,7 +74,7 @@ func TestTheDeliveryFilterRunsOffTheLock(t *testing.T) {
 		}
 		return b, true
 	}
-	if _, err := s.enqueueTask("later", "auth", nil); err != nil {
+	if _, err := s.enqueueTask(conn(""), "later", "auth", nil); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 
@@ -103,7 +103,7 @@ func TestAVetoAtDeliveryEndsTheTaskInTheBacklog(t *testing.T) {
 	s.queueConcurrency = 1
 	s.onFilterTask = func(TaskBrief) (TaskBrief, bool) { return TaskBrief{}, false }
 
-	id, err := s.enqueueTask("later", "auth", nil)
+	id, err := s.enqueueTask(conn(""), "later", "auth", nil)
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestAVetoAtDeliveryEndsTheTaskInTheBacklog(t *testing.T) {
 	// The slot is the other half: with the cap at one, a leaked in-flight task
 	// would keep the group full for ever and the next task would never drain.
 	s.onFilterTask = nil
-	if _, err := s.enqueueTask("next", "auth", nil); err != nil {
+	if _, err := s.enqueueTask(conn(""), "next", "auth", nil); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	s.monitorTick()
@@ -149,7 +149,7 @@ func TestARewriteIsDeliveredButNeverRecorded(t *testing.T) {
 	s, written := deliveryServer()
 	s.onFilterTask = func(b TaskBrief) (TaskBrief, bool) { b.Prompt = "[R] " + b.Prompt; return b, true }
 
-	id, err := s.enqueueTask("later", "auth", nil)
+	id, err := s.enqueueTask(conn(""), "later", "auth", nil)
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestASupersededQueuedDeliveryIsDropped(t *testing.T) {
 		return b, true
 	}
 
-	if _, err := s.enqueueTask("later", "auth", nil); err != nil {
+	if _, err := s.enqueueTask(conn(""), "later", "auth", nil); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	s.monitorTick()
@@ -260,7 +260,7 @@ func TestASupersededVetoLeavesTheNewTaskAlone(t *testing.T) {
 		return TaskBrief{}, false
 	}
 
-	if _, err := s.enqueueTask("later", "auth", nil); err != nil {
+	if _, err := s.enqueueTask(conn(""), "later", "auth", nil); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	s.monitorTick()
@@ -289,7 +289,7 @@ func deliveryFleet(t *testing.T, n int) (*Server, *fakeClock, *[]string) {
 	}
 	s, clk, written := gateServer(panels...)
 	for i := range n {
-		if _, err := s.enqueueTask(fmt.Sprintf("task %d", i), "auth", nil); err != nil {
+		if _, err := s.enqueueTask(conn(""), fmt.Sprintf("task %d", i), "auth", nil); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 	}
@@ -380,7 +380,7 @@ func TestAPluginQueuedTaskIsDeliveredBare(t *testing.T) {
 	// wired. It needs its own server because a1 is still holding the first task.
 	other, _ := deliveryServer()
 	other.onFilterTask = s.onFilterTask
-	if _, err := other.enqueueTask("next", "auth", nil); err != nil {
+	if _, err := other.enqueueTask(conn(""), "next", "auth", nil); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	other.monitorTick()
