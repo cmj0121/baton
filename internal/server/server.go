@@ -1941,6 +1941,34 @@ type delivery struct {
 	attempt int
 }
 
+// bindDelivery renders d into the bytes the panel receives, running the bind
+// unless plugin marks it. It must be called with s.mu RELEASED, because the
+// bind blocks on the Lua worker for up to its fail-open timeout.
+//
+// ok=false is a task.pre veto, and the two callers answer it differently — the
+// tick walks the task back (vetoQueuedTask), the command refuses synchronously
+// (errVetoed) — so the answer stays at the caller and only the rendering lives
+// here. took is what the fan-out's budget charges; a plugin brief binds nothing
+// and costs nothing.
+func (s *Server) bindDelivery(d delivery) (data []byte, ok bool, took time.Duration) {
+	if d.plugin {
+		// baton.enqueue and baton.dispatch get what a plugin-originated dispatch
+		// gets: the bare prompt, no block. Running the chain over one would re-enter
+		// a task.pre hook that dispatches, once per delivery, unbounded.
+		return dispatchData(d.prompt, d.submit), true, 0
+	}
+	b, ok, took := s.bindBrief(d.panel, d.prompt)
+	if !ok {
+		return nil, false, took
+	}
+	// Neither the block nor the rewrite is recorded. The block is advice for this
+	// one delivery; the rewrite is the plugin's edit of it, and a task that carried
+	// its own rewrite would be rewritten again on every restart, because
+	// restoreTasksLocked re-queues an in-flight task and the chain now runs at
+	// delivery. See dispatchScored.
+	return briefBytes(b.Score, b.Prompt, d.submit), true, took
+}
+
 // deliver carries out one delivery with s.mu RELEASED.
 //
 // A plugin-originated brief is just the write. Every other one is bound HERE —
@@ -1965,24 +1993,10 @@ type delivery struct {
 // marked dispatched on a panel, and has to be walked back rather than refused;
 // vetoQueuedTask does that.
 func (s *Server) deliver(d delivery) {
-	var data []byte
-	if d.plugin {
-		// baton.enqueue and baton.dispatch get what a plugin-originated dispatch
-		// gets: the bare prompt, no block. Running the chain over one would re-enter
-		// a task.pre hook that dispatches, once per delivery, unbounded.
-		data = dispatchData(d.prompt, d.submit)
-	} else {
-		b, ok, _ := s.bindBrief(d.panel, d.prompt)
-		if !ok {
-			s.vetoQueuedTask(d)
-			return
-		}
-		// Neither the block nor the rewrite is recorded. The block is advice for
-		// this one delivery; the rewrite is the plugin's edit of it, and a task
-		// that carried its own rewrite would be rewritten again on every restart,
-		// because restoreTasksLocked re-queues an in-flight task and the chain now
-		// runs at delivery. See dispatchScored.
-		data = briefBytes(b.Score, b.Prompt, d.submit)
+	data, ok, _ := s.bindDelivery(d)
+	if !ok {
+		s.vetoQueuedTask(d)
+		return
 	}
 	if !s.claimDelivery(d) {
 		return
@@ -4056,19 +4070,11 @@ func (s *Server) dispatchScored(id, prompt, submit string, author taskAuthor) (t
 	// for the same reason the monitor tick's does: the chain blocks on the Lua
 	// worker for up to its fail-open timeout, and holding the lock across that
 	// would refuse every other command for as long.
-	var data []byte
-	var took time.Duration
-	if d.plugin {
-		data = dispatchData(prompt, submit)
-	} else {
-		b, ok, elapsed := s.bindBrief(id, prompt)
-		took = elapsed
-		if !ok {
-			// Nothing is recorded: no task, no brief on the card. A veto here is the
-			// answer to a caller who is still on the socket waiting for one.
-			return took, errVetoed
-		}
-		data = briefBytes(b.Score, b.Prompt, submit)
+	data, ok, took := s.bindDelivery(d)
+	if !ok {
+		// Nothing is recorded: no task, no brief on the card. A veto here is the
+		// answer to a caller who is still on the socket waiting for one.
+		return took, errVetoed
 	}
 
 	s.mu.Lock()
