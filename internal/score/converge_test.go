@@ -148,6 +148,106 @@ func TestConvergenceNeedsTheEditToCreateTheCollision(t *testing.T) {
 	}
 }
 
+// TestConvergenceNeedsASurvivorThatAlreadySaidIt is the OTHER half of the
+// narrowing above, and it is the half that is catastrophic when it goes. There
+// the collision pre-existed the edit; here the operator edits BOTH lines, in one
+// save, into a wording neither entry has ever carried.
+//
+// A merge needs an entry to merge INTO — one that already said the wording when
+// the pass began — and neither of these is it. Without that requirement each line
+// finds the other as its survivor and absorbs it: both entries retire, and the
+// wording the operator just typed twice is gone from score.md and from the table,
+// leaving the file emptier than the save that was meant to fill it.
+//
+// The whole file is read back for that reason. `Merged` and `Retired` say the
+// merge did not happen; only the file says the operator's words are still there.
+func TestConvergenceNeedsASurvivorThatAlreadySaidIt(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, dir)
+	a := submit(t, s, "run the linter")
+	b := submit(t, s, "read the diff")
+
+	// One save, two rewords, and the wording is new to both.
+	writeMD(t, dir, "- ["+a.Id+"] check the work before handing it over\n"+
+		"- ["+b.Id+"] check the work before handing it over\n")
+	d := reconcile(t, s)
+
+	switch {
+	case d.Merged != 0:
+		t.Fatalf("pass = %+v, want no merge: neither entry had said it before the pass", d)
+	case d.Retired != 0:
+		t.Fatalf("pass = %+v, want nothing retired", d)
+	case d.Superseded != 2:
+		t.Fatalf("pass = %+v, want both rewords recorded", d)
+	case s.Len() != 2:
+		t.Fatalf("entries = %d, want both entries standing", s.Len())
+	}
+	md := readFile(t, dir, scoreMD)
+	if n := strings.Count(md, "check the work before handing it over"); n != 2 {
+		t.Fatalf("score.md carries the wording %d times, want the operator's two lines:\n%s", n, md)
+	}
+	for _, id := range []string{a.Id, b.Id} {
+		if !strings.Contains(md, "["+id+"]") {
+			t.Fatalf("entry %s is gone from score.md:\n%s", id, md)
+		}
+	}
+}
+
+// TestAMergeAndAPasteInOneSaveBothLeaveTheFile is about the removal list the two
+// gestures SHARE. A merged-away line and a folded-away bullet are dropped by one
+// filter over one sorted list of positions, and the two producers run in block
+// order rather than file order: the merge appends first, so a save whose pasted
+// bullet sits ABOVE the line it merges hands that filter its positions
+// descending.
+//
+// The filter walks the file once and advances through the list in step, so an
+// unsorted list makes it walk past a position it will never come back to. The
+// bullet survives the rewrite — with no id, exactly the shape the fold block
+// warns about: it folds again on every pass, counting one paste forever.
+//
+// The second pass is the assertion that names that cost. One paste, one
+// reinforcement, however many times the file is read.
+func TestAMergeAndAPasteInOneSaveBothLeaveTheFile(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, dir)
+	keep := submit(t, s, "keep the build green")
+	gone := submit(t, s, "do not break the build")
+
+	// The paste is above the merge, which is what puts the two removals out of
+	// order: the merged line is position 2, the pasted bullet position 1.
+	writeMD(t, dir, "- ["+keep.Id+"] keep the build green\n"+
+		"- Keep the build green.\n"+
+		"- ["+gone.Id+"] keep the build green\n")
+	d := reconcile(t, s)
+
+	switch {
+	case d.Merged != 1:
+		t.Fatalf("pass = %+v, want the operator's merge", d)
+	case d.Folded != 1:
+		t.Fatalf("pass = %+v, want the pasted bullet folded", d)
+	case s.Len() != 1:
+		t.Fatalf("entries = %d, want the one survivor", s.Len())
+	}
+
+	md := readFile(t, dir, scoreMD)
+	if strings.Contains(md, "Keep the build green.") {
+		t.Fatalf("score.md still carries the pasted line the fold removed:\n%s", md)
+	}
+	if lines := strings.Count(strings.TrimSpace(md), "\n") + 1; lines != 1 {
+		t.Fatalf("score.md holds %d lines, want only the survivor's:\n%s", lines, md)
+	}
+
+	// The paste is counted once, not once per pass — which is only true if its
+	// line actually left the file.
+	writeMD(t, dir, md)
+	if d := reconcile(t, s); d.Folded != 0 {
+		t.Fatalf("second pass = %+v, want nothing left to fold", d)
+	}
+	if got := s.Render(Context{})[0].Reinforcements; got != 1 {
+		t.Fatalf("reinforcements = %d, want the one paste counted exactly once", got)
+	}
+}
+
 // TestConvergenceWillNotFoldIntoARetiringEntry is the same rule the duplicate
 // bullet already keeps: an entry the pass is about to remove is not something to
 // fold into. The operator here retyped one line to say what the other said AND
