@@ -5028,9 +5028,15 @@ func (s *Server) dispatchGroupBound(group, prompt, submit string) (fanout, error
 		// a direct dispatch record one. That asymmetry is #50's family and neither
 		// #50 nor #51 rules on it — closing it means deciding whether one command
 		// fanned to ten panels is one reinforcement or ten, and the per-member
-		// reading inflates a single brief the operator typed once into ten. It is
-		// left exactly where it was; authorUser here is the one-line change that
-		// closes it, once that decision is made.
+		// reading inflates a single brief the operator typed once into ten.
+		//
+		// THE HOLD IS HELD BY A TEST, not by this paragraph. It said authorUser was
+		// the one-line change that closes it and nothing stopped that line being
+		// written: made, it counted N reinforcements for one command and the suite
+		// stayed green. TestAFanoutCountsNoUserSignal is the assertion now — a
+		// cockpit fan-out counts zero, and the same words dispatched directly still
+		// count one, so the decision has to be taken deliberately, against a test
+		// that names both sides of it, rather than by editing a token here.
 		took, err := s.dispatchScored(id, prompt, submit, authorAgent)
 		spent += took
 		switch {

@@ -181,6 +181,46 @@ func TestGroupDispatchBindsEachMember(t *testing.T) {
 	}
 }
 
+// TestAFanoutCountsNoUserSignal pins #51's marked hold, which was a comment and
+// nothing else. dispatchGroupBound passes authorAgent with a paragraph above it
+// saying so, and that authorUser is the one-line change that would close the
+// asymmetry — so the paragraph names the exact edit and nothing stopped anyone
+// making it. Made, it turned one command the operator typed once into N user
+// reinforcements of whatever entry it repeated, and the suite stayed green.
+//
+// The hold is not that a fan-out SHOULD count nothing. It is that #50 and #51
+// both declined to rule on whether one command fanned to ten panels is one
+// reinforcement or ten, and the per-member reading — the only one this loop can
+// reach — is the answer nobody chose. So the number to hold at is zero, and the
+// second half is what makes zero legible: the same words, same connection, sent
+// as a direct dispatch, still count exactly one. The asymmetry is deliberate,
+// and this is where it is written down in a form that can fail.
+func TestAFanoutCountsNoUserSignal(t *testing.T) {
+	st, _ := scoreStore(t)
+	e := seedEntry(t, st, "keep the build green")
+	s, _, got := scoreFleet(st)
+
+	cc := conn("")
+	s.onCommand(cc, proto.Command{Action: "panel.dispatch-group", Group: "auth", Prompt: "Keep the build green."})
+	noError(t, cc)
+
+	for _, id := range []string{"p1", "p2"} {
+		if !strings.Contains(got[id], "Keep the build green.") {
+			t.Fatalf("%s received %q; the fan-out never landed, so the count below is vacuous", id, got[id])
+		}
+	}
+	if e := entryNow(t, st, e.Id); e.UserSignals != 0 || e.Reinforcements != 0 {
+		t.Fatalf("entry = %+v, want a fan-out to count nothing at all", e)
+	}
+
+	// The asymmetry itself: one direct dispatch, one signal, on the same words
+	// from the same connection.
+	s.onCommand(conn(""), proto.Command{Action: "panel.dispatch", ID: "p1", Prompt: "Keep the build green."})
+	if e := entryNow(t, st, e.Id); e.UserSignals != 1 {
+		t.Fatalf("entry = %+v, want the direct dispatch to have counted exactly one", e)
+	}
+}
+
 // TestGroupDispatchDropsOnlyTheVetoedMember pins the veto's reach. A fan-out is
 // N deliveries, so a hook that refuses one panel refuses that panel — the rest
 // of the race still runs. Only a hook that refuses every member fails the
