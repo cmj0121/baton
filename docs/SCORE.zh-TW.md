@@ -29,8 +29,10 @@ review the diff on feat/api and tell me what is missing
 最低的整則丟掉,絕不會把一則截半。
 
 線路上的每一次派送都會帶著這個區塊:直接的 `panel.dispatch`、群組扇出的每一個成員,以及排程器把佇列中的
-工作排到某個面板上的那一刻。外掛發起的派送是例外——`baton.dispatch`、`baton.dispatch_group`,以及
-`baton.enqueue` 排進去的工作,送出的都是原始 prompt,完全不經過 Score。
+工作排到某個面板上的那一刻。它是**以簡報落腳的那個面板、在它落腳的那一刻**排名的——所以派送到忙碌面板的
+簡報,是等那個面板安定下來才排名,用的是它那時的目錄與工作項目,而不是你打字當下的那一組。外掛發起的派送
+是例外——`baton.dispatch`、`baton.dispatch_group`,以及 `baton.enqueue` 排進去的工作,送出的都是原始
+prompt,完全不經過 Score。
 
 ## 那個檔案
 
@@ -131,8 +133,9 @@ conductor 的 `score_merge`。
   不是五百次回來)
 - 從你自己的 shell 下 `baton ctl score submit`
 - 派送或排入一份對得上既有項目的簡報——你打的 prompt 就是你在說那件事,不管是用 `baton ctl dispatch` 送出去,
-  還是用 `baton ctl queue add` 留在待辦裡。排入的簡報要等排程器真的把它送達才算,而那有可能是在一次重啟之後;
-  被 `task.pre` hook 在送達時擋掉的不算,`baton.enqueue` 排進來的工作也不算。
+  還是用 `baton ctl queue add` 留在待辦裡。**簡報是在送達時才算**,而不是在你打下去的時候:排入的要等排程器
+  真的把它送出去,那有可能是在一次重啟之後;派送到忙碌面板的則要等那個面板安定下來。被 `task.pre` hook 在
+  送達時擋掉的不算,停在一個始終沒有安定下來的面板上的也不算,`baton.enqueue` 排進來的工作同樣不算。
 
 使用者訊號抬高的是天花板,不是跳過一階。那則仍然要照一般的階梯爬上去。
 

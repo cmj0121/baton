@@ -191,19 +191,26 @@ The hook receives a `{ prompt, group, score, cwd, profile, panel }` table — th
 `prompt` and `score` are the two fields a hook may rewrite; the rest are read-only context. The return contract is
 **backward compatible** — a hook written before `score` existed keeps its exact old meaning:
 
-| Return                      | Effect                                                                                                        |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `nil` / nothing / `true`    | pass the brief through unchanged (prompt **and** score)                                                       |
-| a string                    | rewrite the prompt **only**; the score is untouched                                                           |
-| a table                     | may set `prompt`, `drop`, and `score` — `score = ""` drops the score block, an absent key leaves it untouched |
-| `false` / `{ drop = true }` | veto — the task is dropped; a dispatch's caller gets an error, a queued task fails in the backlog             |
+| Return                      | Effect                                                                                                         |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `nil` / nothing / `true`    | pass the brief through unchanged (prompt **and** score)                                                        |
+| a string                    | rewrite the prompt **only**; the score is untouched                                                            |
+| a table                     | may set `prompt`, `drop`, and `score` — `score = ""` drops the score block, an absent key leaves it untouched  |
+| `false` / `{ drop = true }` | veto — the task is dropped; a caller still waiting gets an error, and every other refusal fails in the backlog |
 
 A table's `score` value must be a string; any other type is ignored. Hooks **chain over both fields** (a later hook
-sees the earlier one's rewrite of prompt and score alike) and the **first veto stops the chain**. It runs at the
-`dispatch` and `dispatch-group` intake points, and — for a **queued** task — at the moment the scheduler drains it onto
-a panel rather than when it is enqueued, because until then there is no panel to shape the brief against.
+sees the earlier one's rewrite of prompt and score alike) and the **first veto stops the chain**. It runs **at the
+moment a brief is delivered to a panel, never before** — which is at the command for a `dispatch` or a
+`dispatch-group` member that lands on a panel ready to take it, and at the moment the panel settles or the scheduler
+drains the backlog for one that does not. Until a brief has a panel there is nothing to shape it against.
 Plugin-originated dispatches bypass it, so it never re-enters itself — including a task `baton.enqueue` queued, which
 is delivered bare however long it waited.
+
+**A dispatch to a busy panel is answered before the hook has seen it.** The panel is still spawning or mid-output, so
+the brief waits, and `baton ctl dispatch` returns success while the chain has not run. If the hook then refuses, the
+refusal arrives the way a queued task's does — the task ends `failed` in the backlog carrying the reason, and there is
+a line in the daemon log — rather than as an error on a connection that has already been answered. Dispatch to a
+settled panel, and the veto is still synchronous.
 
 Every one of those is a **delivery to one panel**, and the brief is bound to that panel before the chain runs — so a
 fan-out racing three agents runs the chain three times, once per member, each with that member's own `cwd`, `profile`

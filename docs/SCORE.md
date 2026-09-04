@@ -32,9 +32,11 @@ The trailing word is the entry's rung. Seven entries by default (`score.working-
 capped at 8000 runes — past that the lowest-ranked entries are dropped whole, never truncated mid-entry.
 
 Every delivery the wire makes carries the block: a direct `panel.dispatch`, each member of a group fan-out, and a
-queued task at the moment the scheduler drains it onto a panel. **Plugin-originated dispatches are the exception** —
-`baton.dispatch`, `baton.dispatch_group` and a task `baton.enqueue` queued deliver the bare prompt, and never come near
-the score.
+queued task at the moment the scheduler drains it onto a panel. It is **ranked against the panel the brief lands on,
+at the moment it lands** — so a dispatch to a panel that is busy is ranked when that panel settles, against the
+directory and the work item it has then, not the ones it had when you typed. **Plugin-originated dispatches are the
+exception** — `baton.dispatch`, `baton.dispatch_group` and a task `baton.enqueue` queued deliver the bare prompt, and
+never come near the score.
 
 ## The file
 
@@ -145,9 +147,10 @@ arrived on, never by anyone's claim about it. Three things count as you saying i
   one paste is one action, not five hundred returns)
 - `baton ctl score submit` from your own shell
 - **dispatching or queuing a brief that matches an existing entry** — a prompt you type is you saying the thing,
-  whether you sent it with `baton ctl dispatch` or left it in the backlog with `baton ctl queue add`. A queued brief
-  counts when the scheduler actually delivers it, which may be after a restart; one a `task.pre` hook refuses at
-  delivery counts nothing, and neither does a task `baton.enqueue` queued.
+  whether you sent it with `baton ctl dispatch` or left it in the backlog with `baton ctl queue add`. **A brief
+  counts when it is delivered**, never when it is typed: a queued one when the scheduler drains it, which may be after
+  a restart, and a dispatch to a busy panel when that panel settles. One a `task.pre` hook refuses at delivery counts
+  nothing, one parked for a panel that never settles counts nothing, and neither does a task `baton.enqueue` queued.
 
 A user signal lifts the ceiling; it does not skip a rung. The entry still climbs the ordinary ladder to get there.
 
