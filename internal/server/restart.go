@@ -99,13 +99,27 @@ func (s *Server) forgetRestartLocked(id string) {
 // The order of the checks is the policy, written out:
 //
 //   - a daemon shutting down is killing everything on purpose
+//   - a command panel's exit is its result, not a fault to undo
 //   - a panel with no recorded spec has nothing to re-run
 //   - an exit the user asked for is not a failure
 //   - a clean exit is a finished job, not a crash
 //   - a run that lasted long enough earns its failure budget back
 //   - and giving up is loud, carrying the reason
+//
+// The command-panel rung is the one exclusion the policy makes by KIND, and it is
+// the only agent surface #54 had to gate by hand rather than get for free from
+// IsAgent — because supervision was never agent-only. on-failure asks "did this
+// exit abnormally", and for a plain binary the answer is a RESULT: a test run
+// that failed, a build that did not compile, a grep that found nothing. Re-running
+// it re-runs the failure, five times, on a backoff, and then announces that it
+// gave up — a crash loop assembled out of a program working correctly. A shell
+// keeps the policy because a shell that died did die; only a command panel is
+// spawned to reach an exit code and stop.
 func (s *Server) superviseExitLocked(id string, exitCode int, now time.Time) string {
 	if s.shuttingDown {
+		return ""
+	}
+	if i := s.indexLocked(id); i >= 0 && s.panels[i].IsCommand() {
 		return ""
 	}
 	spec, ok := s.specs[id]

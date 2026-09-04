@@ -390,6 +390,32 @@ func activityText(state panel.State, since time.Duration) string {
 	}
 }
 
+// exitActivity is the terminal note activityText defers to — the status line on a
+// panel whose process is gone, written once by onPanelExit and never ticked again
+// (the monitor loop skips exited panels).
+//
+// A command panel FINISHED. That is the whole difference the third kind buys at
+// the end of a life: a shell that exits is gone and an agent that exits left a
+// dead slot to inspect and maybe respawn into, so "exited" reads correctly for
+// both, while a `time` that has printed its numbers and stopped is at its most
+// useful in exactly that moment. The panel still holds — nothing closes it, and
+// the operator dismisses it when they have read it — but the word on the card is
+// not one that means death.
+//
+// A non-zero code rides along because for a command it is the ANSWER: a test run
+// that failed is not a panel that broke. The card still renders ExitCode for
+// itself; this line only saves the second glance.
+func exitActivity(kind panel.Kind, code int) string {
+	switch {
+	case kind != panel.Command:
+		return "exited"
+	case code == 0:
+		return "finished"
+	default:
+		return fmt.Sprintf("finished · code %d", code)
+	}
+}
+
 // compactDur renders a short, single-unit age: seconds under a minute, then
 // minutes, then hours.
 func compactDur(d time.Duration) string {

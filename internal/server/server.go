@@ -1110,7 +1110,7 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 			s.panels[i].State = panel.Exited
 			s.panels[i].ExitCode = exitCode // the daemon reports it; the cockpit renders a non-zero one as failed
 			s.panels[i].Reason = ""         // a dead process is not asking for anything
-			s.panels[i].Activity = "exited"
+			s.panels[i].Activity = exitActivity(s.panels[i].Kind, exitCode)
 			s.exitedAt[id] = time.Now()   // the Monitor is about to forget it; keep the instant the queue sorts on
 			s.mon.forget(id)              // a dead panel no longer ticks
 			delete(s.declared, id)        // …and its raised hand goes with it
@@ -3052,9 +3052,11 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 
 // createPanel is a core action: it spawns the backing process and records the new
 // panel in the fleet. A shell panel runs path (or the default shell when empty);
-// an agent panel runs its profile command with args. Both run in dir, the working
-// directory; an empty dir falls back to the configured default (then the user's
-// home), so a panel never inherits the directory the daemon was launched from.
+// an agent panel runs its profile command with args; a command panel runs a plain
+// binary with args, the same spawn shape as an agent and none of its standing.
+// All three run in dir, the working directory; an empty dir falls back to the
+// configured default (then the user's home), so a panel never inherits the
+// directory the daemon was launched from.
 //
 // profile names the agent profile the spawn came from. It is recorded with the
 // panel and is what its resource limits resolve through, so the caps follow the
@@ -3154,6 +3156,18 @@ func (s *Server) createPanel(kind, path string, args []string, dir, profile stri
 			return "", fmt.Errorf("an agent panel needs a command")
 		}
 		spec = ptymgr.Spec{Command: path, Args: args, Dir: dir, Env: env}
+	case proto.KindCommand:
+		if path == "" {
+			return "", fmt.Errorf("a command panel needs a command")
+		}
+		// No identity env, for the reason the shell case spells out at length and one
+		// of its own: BATON_PANEL_ID is how a process that can see neither the
+		// cockpit nor `ctl list` learns which panel it is, and it is told so it can
+		// drive the fleet from inside. A plain binary drives nothing — it is being
+		// watched, not conducted — so the variable would name a panel to a process
+		// with no use for the name and no way to act on it. env is deliberately not
+		// read here; the switch above never fills it for this kind.
+		spec = ptymgr.Spec{Command: path, Args: args, Dir: dir}
 	default:
 		return "", fmt.Errorf("unknown panel kind %q", kind)
 	}
@@ -3565,8 +3579,13 @@ your goal — treat it as your standing instructions.
 // panelTitle is the human label for a new panel. An agent reads as
 // "<command> · <workdir>", e.g. "claude · baton", so its task and where it runs
 // are visible at a glance; a shell falls back to "<name> #<id>".
+//
+// A command panel takes the agent's form — "go · baton", "make · api" — because
+// it was spawned the same way and the same two facts identify it: what is
+// running and where. The id form is what a SHELL needs, since every shell runs
+// the same binary and only the number tells them apart.
 func panelTitle(kind, path, dir, id string) string {
-	if kind == proto.KindAgent {
+	if kind == proto.KindAgent || kind == proto.KindCommand {
 		name := filepath.Base(path)
 		if dir != "" {
 			return fmt.Sprintf("%s · %s", name, filepath.Base(dir))
