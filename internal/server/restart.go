@@ -115,11 +115,17 @@ func (s *Server) forgetRestartLocked(id string) {
 // gave up — a crash loop assembled out of a program working correctly. A shell
 // keeps the policy because a shell that died did die; only a command panel is
 // spawned to reach an exit code and stop.
-func (s *Server) superviseExitLocked(id string, exitCode int, now time.Time) string {
+// kind is taken rather than looked up: both callers are holding the panel when
+// they call, and one of them is already walking s.panels with the matching index
+// in hand. Passing the KIND rather than that index is what makes it safe for the
+// other caller, restartPanel, which reads it before an unlock and uses it after —
+// a panel's kind is fixed at creation and never mutated, where an index a close
+// could shift means a different panel by the time it is spent.
+func (s *Server) superviseExitLocked(id string, kind panel.Kind, exitCode int, now time.Time) string {
 	if s.shuttingDown {
 		return ""
 	}
-	if i := s.indexLocked(id); i >= 0 && s.panels[i].IsCommand() {
+	if kind == panel.Command {
 		return ""
 	}
 	spec, ok := s.specs[id]
@@ -174,6 +180,14 @@ func (s *Server) restartPanel(id string) {
 	}
 	idx := s.indexLocked(id)
 	stale := s.shuttingDown || idx < 0 || s.panels[idx].State != panel.Exited
+	var kind panel.Kind
+	if !stale {
+		// Read here, under the lock that made idx meaningful, and spent after the
+		// respawn. The index could not make that trip — a close in between shifts it
+		// onto somebody else's panel — but a kind is decided at creation and never
+		// changes, so the answer it gives on the far side is still this panel's.
+		kind = s.panels[idx].Kind
+	}
 	s.mu.Unlock()
 	if stale {
 		return
@@ -182,7 +196,7 @@ func (s *Server) restartPanel(id string) {
 	if err := s.respawnPanel(id); err != nil {
 		log.Warn().Err(err).Str("panel", id).Msg("restart failed")
 		s.mu.Lock()
-		activity := s.superviseExitLocked(id, -1, time.Now())
+		activity := s.superviseExitLocked(id, kind, -1, time.Now())
 		if i := s.indexLocked(id); i >= 0 && activity != "" {
 			s.panels[i].Activity = activity
 		}

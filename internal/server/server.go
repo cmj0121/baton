@@ -1128,7 +1128,7 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 			s.advanceTaskLocked(id, task.Failed, fmt.Sprintf("panel exited (code %d)", exitCode))
 			// The restart policy decides whether this is the end of the panel or a
 			// pause in it, and says which on the card.
-			if notice = s.superviseExitLocked(id, exitCode, time.Now()); notice != "" {
+			if notice = s.superviseExitLocked(id, s.panels[i].Kind, exitCode, time.Now()); notice != "" {
 				s.panels[i].Activity = notice
 			}
 			fields = panelFields(s.panels[i])
