@@ -313,3 +313,60 @@ func TestAParkedDispatchIsClaimedBeforeItIsWritten(t *testing.T) {
 		t.Fatalf("delivered %v, want only the brief that superseded the one in flight", *written)
 	}
 }
+
+// TestAPanelThatGoesBusyMidBindDiscardsTheBoundBytes is the race #51 said it
+// absorbed, and it is absorbed by ONE line: the readiness re-check dispatchScored
+// makes after the bind, before the write.
+//
+// The panel is settled when the command arrives, so this command IS the delivery
+// and the bind happens here. The bind is where the exposure lives — the chain sits
+// on the Lua worker for up to two seconds with s.mu released — and the agent can
+// start working inside it. The bytes in hand are then bound to a panel that no
+// longer exists in that shape: the stale write #51 closed.
+//
+// Without the re-check they are written anyway, on top of an agent mid-turn, and
+// nothing says so — no veto, no error, no second chain run. That silence is why
+// this needs an assertion rather than a comment. The hook re-homes the panel as
+// it flips it, so the second bind's view is what names the difference between the
+// two writes rather than merely counting them.
+func TestAPanelThatGoesBusyMidBindDiscardsTheBoundBytes(t *testing.T) {
+	s, clk, written := gateServer(panel.Panel{
+		ID: "p1", Kind: panel.Agent, State: panel.Idle, Cwd: "/work/auth", Group: "auth",
+	})
+
+	var saw []TaskBrief
+	s.onFilterTask = func(b TaskBrief) (TaskBrief, bool) {
+		saw = append(saw, b)
+		if len(saw) == 1 {
+			// The agent picks up work while the chain is still running, and is
+			// re-homed with it, so the bytes in hand are stale in a way the second
+			// bind can be asked about.
+			s.mu.Lock()
+			s.panels[0].State = panel.Running
+			s.panels[0].Cwd, s.panels[0].Group = "/work/billing", "billing"
+			s.mu.Unlock()
+		}
+		return b, true
+	}
+
+	s.onCommand(conn(""), proto.Command{Action: "panel.dispatch", ID: "p1", Prompt: "run the migration"})
+
+	if len(*written) != 0 {
+		t.Fatalf("delivered %v at the command, want the bytes discarded and the brief held", *written)
+	}
+	if len(saw) != 1 {
+		t.Fatalf("the chain ran %d times before the panel settled, want once", len(saw))
+	}
+
+	settle(s, clk)
+
+	if len(saw) != 2 {
+		t.Fatalf("the chain ran %d times, want it asked again about the panel it writes to", len(saw))
+	}
+	if saw[1].Cwd != "/work/billing" || saw[1].Group != "billing" {
+		t.Fatalf("the second bind saw %+v, want the panel as it is at the write", saw[1])
+	}
+	if len(*written) != 1 || (*written)[0] != "p1:run the migration\n" {
+		t.Fatalf("delivered %v, want exactly one write, at settle", *written)
+	}
+}
