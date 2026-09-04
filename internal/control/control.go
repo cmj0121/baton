@@ -210,6 +210,11 @@ func (c *Client) ListJSON() (string, error) {
 // (empty falls back to the server default). It is the one place the agent-vs-shell
 // spawn shape lives, shared by the CLI and the MCP tool.
 //
+// It is deliberately still only those two. A plain binary goes through
+// SpawnCommand: the caller has to say which it meant, because this function
+// deciding for them — non-empty command means agent — is exactly the inference
+// that ran `time` as an agent panel (#54).
+//
 // agent is a binary, not a profile name, so these spawns carry no profile and
 // resolve to the fleet-wide resource limits alone. That is deliberate: this path
 // is what the conductor drives, and an agent must not be able to name its way
@@ -222,6 +227,29 @@ func (c *Client) SpawnPanel(agent string, args []string, dir string) (string, er
 		cmd.Args = args
 	}
 	return c.Spawn(cmd)
+}
+
+// SpawnCommand spawns a COMMAND panel — a plain binary run as the panel's
+// process, watched like an agent and treated as one nowhere — and returns its id.
+// dir is the working directory, as for SpawnPanel.
+//
+// It is a second method rather than a kind argument on SpawnPanel because the
+// two calls take the same three arguments and mean different things by the first,
+// and the caller that gets it wrong gets no error: it gets a working panel with
+// the wrong standing, which is #54 exactly. Naming the verb makes the choice
+// unskippable at the call site.
+//
+// An empty command is refused here, before the socket is dialled. The server
+// refuses one too, but this is the client that HAS the answer — an empty command
+// means the caller resolved nothing — and refusing early costs nothing.
+func (c *Client) SpawnCommand(command string, args []string, dir string) (string, error) {
+	if command == "" {
+		return "", fmt.Errorf("a command panel needs a command to run")
+	}
+	return c.Spawn(proto.Command{
+		Action: "panel.create", Kind: proto.KindCommand,
+		Path: command, Args: args, Dir: dir,
+	})
 }
 
 // SpawnWorktree branches repo at branch, opens a git worktree for it, and starts
