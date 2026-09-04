@@ -106,7 +106,9 @@ trap 'rm -rf "${WORK}"' EXIT
 # state across lines -- inside a /* */ block, and inside a `` raw string ``,
 # the only two Go constructs that span one.
 #
-# Emits one "<line>\tC\t<code>" and one "<line>\tM\t<comment>" per input line.
+# Emits one "<file>\t<line>\tC\t<code>" and one "<file>\t<line>\tM\t<comment>"
+# per input line. Naming the file is what lets both callers hand it every file
+# at once instead of once per file.
 # String literals stay in the code stream on purpose: a name that appears only
 # in a string still exists in the file, and calling it stale would be a lie.
 # ---------------------------------------------------------------------------
@@ -122,6 +124,11 @@ cat >"${WORK}/split.awk" <<'AWK'
 # literal, so that the bare "/" inside it cannot be mistaken for the regex
 # terminator by a stricter awk.
 BEGIN { st = 0; OPEN = "[/`\"']" }   # 0 = code, 1 = block comment, 2 = raw string
+# A block comment or a raw string cannot span two files, so the state does not
+# either. Nothing in this tree ends a file mid-construct -- it would not
+# compile -- but that made the result depend on how the files were grouped into
+# runs, and they are grouped differently by each of the two callers.
+FNR == 1 { st = 0 }
 {
 	s = $0; n = length(s); code = ""; com = ""; i = 1
 	while (i <= n) {
@@ -166,8 +173,8 @@ BEGIN { st = 0; OPEN = "[/`\"']" }   # 0 = code, 1 = block comment, 2 = raw stri
 	# tab-indented, which put every indented line's code into a field the
 	# reader was not looking at until this line existed.
 	gsub(/\t/, " ", code); gsub(/\t/, " ", com)
-	printf "%d\tC\t%s\n", FNR, code
-	printf "%d\tM\t%s\n", FNR, com
+	printf "%s\t%d\tC\t%s\n", FILENAME, FNR, code
+	printf "%s\t%d\tM\t%s\n", FILENAME, FNR, com
 }
 AWK
 
@@ -215,7 +222,7 @@ AWK
 # An empty index has to reach the integrity check below and be reported as the
 # breakage it is, not as a finding about the code.
 git ls-files -z '*.go' | xargs -0 awk -f "${WORK}/split.awk" |
-	awk -F'\t' '$2 == "C" { print $3 }' |
+	awk -F'\t' '$3 == "C" { print $4 }' |
 	tr -c 'A-Za-z0-9_' '\n' |
 	{ grep -E '^[A-Za-z_][A-Za-z0-9_]*$' || true; } |
 	sort -u >"${WORK}/code-names"
@@ -308,15 +315,22 @@ awk '
 # evidence, and `sort` collates by locale: it put main_test.go before main.go,
 # where git orders paths by bytes and `.` sorts under `_`. Taking the order
 # out of the diff is both the right one and one less thing to get wrong.
+: >"${WORK}/relex-files"
 for file in $(awk '!seen[$1]++ { print $1 }' "${WORK}/added-lines"); do
-	[ -f "${file}" ] || continue
-
-	awk -f "${WORK}/split.awk" "${file}" |
-		awk -F'\t' -v f="${file}" '
-			NR == FNR { if ($1 == f) want[$2] = 1; next }
-			$2 == "M" && ($1 in want) && $3 ~ /[A-Za-z]/ { print f "\t" $1 "\t" $3 }
-		' "${WORK}/added-lines" - >>"${WORK}/added-comments"
+	[ -f "${file}" ] && printf '%s\n' "${file}" >>"${WORK}/relex-files"
 done
+
+# Lexed in one run rather than one per file, the way the index above is. The
+# added-line table is keyed by file and line together, so the join needs no
+# per-file pass to tell whose line 214 it is looking at.
+if [ -s "${WORK}/relex-files" ]; then
+	tr '\n' '\0' <"${WORK}/relex-files" |
+		xargs -0 awk -f "${WORK}/split.awk" |
+		awk -F'\t' '
+			NR == FNR { want[$0] = 1; next }
+			$3 == "M" && (($1 "\t" $2) in want) && $4 ~ /[A-Za-z]/ { print $1 "\t" $2 "\t" $4 }
+		' "${WORK}/added-lines" - >"${WORK}/added-comments"
+fi
 
 EXAMINED="$(wc -l <"${WORK}/added-comments" | tr -d ' ')"
 
