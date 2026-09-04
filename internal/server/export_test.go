@@ -25,6 +25,14 @@ func (s *Server) TaskByPanel(panelID string) (task.Task, bool) {
 	return task.Task{}, false
 }
 
+// PanelCount returns how many panels the fleet holds, for tests asserting what a
+// scheduler tick did or did not provision.
+func (s *Server) PanelCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.panels)
+}
+
 // TaskCount returns how many tasks the server is tracking, for tests asserting
 // re-dispatch updates one task rather than spawning many.
 func (s *Server) TaskCount() int {

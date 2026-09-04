@@ -292,6 +292,14 @@ always speak the socket directly).
 A worktree spawn is a spawn, so it draws on the same two limits from the same purse: the fleet ceiling and the rate cap
 count `spawn --worktree` exactly as they count `spawn`, and a conductor cannot dodge one by switching to the other.
 
+**Queueing work is not spawning, and the backlog is not a way round the rate cap either.** A task that provisions its
+own agent (`enqueue` with an agent command) is admitted freely — filling a backlog over a minute is what a backlog is
+for, and the conductor is not spawning when it does so. The scheduler is, later and on its own tick, and it is the
+scheduler that pays, out of the same purse `spawn` draws on. It provisions **one fresh agent per tick**, so a backlog
+of ten drains over ten seconds rather than all at once; the rest of it waits its turn rather than being refused. What
+sharing the purse buys is the other half: a conductor just told to slow down cannot have the queue make it a panel in
+the same instant, and a panel the scheduler has just provisioned is one the conductor's next `spawn` waits behind.
+
 Opening a worktree and **retiring** one are fenced differently on purpose. A conductor may open them, under those caps,
 and may see what its spawns have left behind — reading the residue is not removing it. Clearing it is the operator's,
 because a sweep is the one verb in this surface that deletes work from a disk rather than bookkeeping from a fleet.

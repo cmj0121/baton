@@ -484,10 +484,15 @@ type Server struct {
 	// pass the "no conductor exists yet" check. Guarded by mu.
 	conductorPending bool
 
-	// spawn and refine are the two agent-facing rate caps, keyed by the PANEL the
-	// connection DECLARED as its own, not by the connection itself. Guarded by mu.
-	// See minConductorSpawnGap and minRefineGap for what each one is worth, and
-	// the gapStamp type for why they are shaped alike.
+	// spawn and refine are the two agent-facing rate caps. Guarded by mu. See
+	// minConductorSpawnGap and minRefineGap for what each one is worth, and the
+	// gapStamp type for why they are shaped alike.
+	//
+	// NEITHER IS KEYED ON THE CONNECTION, and refine is keyed by the PANEL the
+	// connection declared as its own. spawn is keyed on the door it guards (see
+	// spawnDoor), because three roads reach that door and one purse is the only
+	// shape that can hold them; the paragraphs below are about the connection,
+	// and they are why neither of them is keyed on it.
 	//
 	// THE IDENTITY IS THE WHOLE OF IT. Both stamps used to live on the clientConn,
 	// which reads as the obvious place and is wrong for anything an agent drives:
@@ -504,16 +509,16 @@ type Server struct {
 	// because an LLM will loop was inert on the path the LLM uses. Both are fixed
 	// here, by the same change, because they are one bug.
 	//
-	// BE EXACT ABOUT WHAT THE KEY IS, in the voice connProvenance uses. The two
-	// caps do not check the declared panel to the same depth. A refine is gated by
-	// isConductor first, which compares the declared self against the fleet, so
-	// its stamp is keyed on a panel the server agreed the caller is. A spawn is
-	// gated by guardConductor, which reads cc.self and validates it against
-	// nothing — so an agent varying Self per dial still walks through the spawn
-	// cap. That is not a hole worth closing while #38's trust model already
-	// declines to be a boundary against an agent holding the operator's own uid;
-	// it is the difference between an evasion that requires knowing something and
-	// the old bug, which required nothing at all.
+	// BE EXACT ABOUT WHAT THE KEY IS, in the voice connProvenance uses. A refine
+	// is gated by isConductor first, which compares the declared self against the
+	// fleet, so its stamp is keyed on a panel the server agreed the caller is. A
+	// spawn is gated by guardConductor, which reads cc.self and validates it
+	// against nothing — so while the spawn cap was keyed on that id too, an agent
+	// varying Self per dial walked straight through it. That was recorded here as
+	// an evasion not worth closing on its own, since #38 already declines to be a
+	// boundary against an agent holding the operator's own uid. #75 closed it
+	// anyway, as a side effect of a key chosen for another reason entirely: a door
+	// the caller does not name is a door the caller cannot vary.
 	spawn  gapStamp
 	refine gapStamp
 
@@ -2202,12 +2207,13 @@ const (
 	// panel counts toward it.
 	maxConductorFleet = 64
 
-	// minConductorSpawnGap throttles a conductor's panel.create rate: a tight
-	// loop cannot spray panels faster than a person ever would.
+	// minConductorSpawnGap throttles the rate panels are spawned at on anything
+	// but the operator's own hand: a tight loop cannot spray panels faster than a
+	// person ever would.
 	//
-	// Keyed on the conductor's PANEL and not on its connection — see
-	// Server.spawn, which says what the connection-keyed version failed to
-	// gapStamp and why baton_spawn walked straight through it.
+	// Keyed on the DOOR — see spawnDoor — and not on a connection, which is what
+	// Server.spawn's own history says the connection-keyed version failed to do
+	// and why baton_spawn walked straight through it.
 	minConductorSpawnGap = 250 * time.Millisecond
 )
 
@@ -2222,15 +2228,21 @@ const (
 // which is why both are set where the Server is (New, and gateServer for the
 // tests that drive them).
 //
-// ONE identity rather than a map, because both of its users are keyed on a
-// singleton — the conductor panel (hasConductorLocked), whose id survives a
-// respawn — so at most one is worth remembering. A caller with a different
-// identity is admitted and takes the slot, which is exactly why this shape
-// cannot serve a door the whole fleet holds: two identities alternating would
-// each take the slot from the other and NEITHER would be refused. If the
-// singleton were ever broken, that is what two conductors would get — the cap
-// going quiet rather than clamping. See rateBuckets, which is the map version and
-// the reason score.submit does not use this one.
+// ONE identity rather than a map, because neither of its users has more than one
+// worth remembering: the spawn cap is stamped under the door it guards, which is
+// a constant, and the refine cap under the conductor panel (hasConductorLocked),
+// which is a singleton whose id survives a respawn. A caller with a different
+// identity is admitted and takes the slot, which is exactly why this shape cannot
+// serve a door the whole fleet holds: two identities alternating would each take
+// the slot from the other and NEITHER would be refused. A DOOR THE FLEET HOLDS IS
+// ONE WITH MANY KEYS, not one with many callers — score.submit, where every panel
+// is its own identity. The spawn door has three callers and one key, which is the
+// opposite shape and the one this type is for. That is not hypothetical
+// — it is what #75 would have got by giving the scheduler its own key on this
+// same stamp, and the reason it shares the conductor's instead. If the conductor
+// singleton were ever broken, it is also what two conductors would do to the
+// refine cap: it goes quiet rather than clamping. See rateBuckets, which is the
+// map version and the reason score.submit does not use this one.
 type gapStamp struct {
 	gap time.Duration
 	who string
@@ -2255,10 +2267,16 @@ func (t *gapStamp) tooSoon(id string, now time.Time) (sinceLast time.Duration, r
 	return 0, false
 }
 
-// tooSoon takes Server.mu around one gapStamp check. The two rate caps both run
-// off the command loop, where the lock is not already held — so the name carries
-// no Locked suffix: everywhere else in this package that suffix means the CALLER
-// holds mu, and this takes it.
+// tooSoon takes Server.mu around one gapStamp check. Its caller — the refine cap
+// — runs off the command loop, where the lock is not already held, so the name
+// carries no Locked suffix: everywhere else in this package that suffix means the
+// CALLER holds mu, and this takes it.
+//
+// It is the only one left. The spawn cap used to come through here too and now
+// asks gapStamp directly, from inside spawnBudgetLocked, because that runs under
+// a lock the caller already holds on one of its two roads. The parameter is kept
+// rather than folded into a refine-only wrapper: what this function knows is the
+// TYPE's locking convention, which is where the convention belongs.
 func (s *Server) tooSoon(t *gapStamp, id string, now time.Time) (sinceLast time.Duration, refuse bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2500,46 +2518,93 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 		// conductor refused at the ceiling could otherwise walk through the other
 		// door and fan an existing agent onto branch after branch, unmetered.
 		if gitops.Op(cmd.Git) == gitops.OpWorktreeAdd {
-			return s.spawnCapsReason(cc)
+			return s.spawnCapsReason()
 		}
 	case "panel.create":
-		return s.spawnCapsReason(cc)
+		return s.spawnCapsReason()
 	}
 	return ""
 }
 
-// spawnCapsReason is the conductor's spawn budget: the fleet ceiling and the rate
-// gap, returned as a denial reason or "" to admit. It is shared by the two verbs
-// that spawn synchronously on a conductor's command — panel.create and panel.git
+// spawnDoor is the identity the spawn budget's rate gap is stamped under, and it
+// names the DOOR rather than whoever knocked on it. That is #75's ruling and the
+// whole of what makes the budget one purse.
+//
+// It was the conductor's own panel id, which read as the obvious key and cannot
+// serve three roads. gapStamp holds ONE stamp in total, so two identities
+// alternating each take the slot from the other and NEITHER is refused — the
+// failure its own comment names. A conductor refused at panel.create would then
+// have had its spawn-on-demand task provisioned by the scheduler a moment later,
+// under a different key, out of a purse the refusal had not touched. Keying both
+// on the door makes that impossible by construction rather than by agreement.
+//
+// The gap was always a statement about the HOST — panels must not appear faster
+// than a person would ever make them — and never about which caller asked. A
+// second road is what made the difference show. It closes the evasion Server.spawn
+// records beside it as accepted, too: an agent varying the Self it declares per
+// dial no longer varies the key it is stamped under.
+const spawnDoor = "createPanel"
+
+// fleetFullReason is the capacity refusal, formatted once. Both its operands are
+// compile-time constants and scheduleLocked asks the budget once per queued
+// spawn-on-demand task — under s.mu, on a one-second tick — so formatting it per
+// ask was a string built and dropped for every waiting task on a full fleet.
+var fleetFullReason = fmt.Sprintf("fleet at capacity (%d panels)", maxConductorFleet)
+
+// spawnBudgetLocked is the fleet's spawn budget — the ceiling and the rate gap —
+// spelled ONCE, for every road that ends in createPanel on something other than
+// the operator's own hand. It answers a reason to refuse or "" to admit.
+//
+// One spelling because there were two: the ceiling was written here and again at
+// scheduleLocked, #67 had just added a third caller to the first of them, and two
+// spellings of one limit is how they drift. They already had — the scheduler's
+// applied to every fleet and this one only while a conductor was driving — which
+// is a difference nobody chose.
+//
+// IT IS STILL HELD BY AGREEMENT AND NOT BY CONSTRUCTION, which was true of the
+// two spellings and is true of the one. The charge cannot move inside createPanel
+// itself: there is no connection there to tell the operator's own hand from an
+// agent's, so a conductor's road and the cockpit's would be metered alike, and
+// the scheduler — which spends its slot when it DECIDES, holding s.mu, and
+// creates the panel later without it — would be charged twice. So a fourth road
+// is a road nothing here notices. There is one already: the plugin host's
+// Server.Spawn (baton.spawn), deliberately exempt because a plugin is installed
+// by the operator and is the operator's hand. Anyone adding a fifth must charge
+// it deliberately.
+//
+// It has a SIDE EFFECT on the admitting path: tooSoon stamps the clock, so a call
+// that returns "" has spent the slot. Call it once per decision to spawn, and
+// never to merely ask. The caller holds s.mu.
+func (s *Server) spawnBudgetLocked(now time.Time) string {
+	if len(s.panels) >= maxConductorFleet {
+		return fleetFullReason
+	}
+	// Checked LAST, so the capacity refusal above — which is about the fleet
+	// rather than about this attempt — does not spend the slot.
+	if _, tooSoon := s.spawn.tooSoon(spawnDoor, now); tooSoon {
+		return "spawning too fast, slow down"
+	}
+	return ""
+}
+
+// spawnCapsReason is the budget above as a conductor fence: the same two caps,
+// worded as a refusal the agent reads. It is shared by the two verbs that spawn
+// SYNCHRONOUSLY on a conductor's command — panel.create and panel.git
 // worktree-add — so the budget is spent from one purse however the spawn is
 // spelled.
 //
-// SYNCHRONOUSLY is the word doing the work, and the scope of this budget is
-// narrower than "every panel a conductor can cause to exist". A spawn-on-demand
-// task.enqueue also ends in createPanel, by way of the scheduler; it pays the
-// fleet ceiling, but spelled separately at its own site (see scheduleLocked), and
-// it pays NO rate gap. Charging it here would be wrong — the conductor's command
-// only queues, and the scheduler decides later whether to spawn at all — but that
-// leaves the ceiling with two enforcement sites and the gap with one. Anyone
-// adding a third spawn path must charge it deliberately; nothing here does it by
-// construction.
-//
-// It has a SIDE EFFECT on the admitting path: tooSoon stamps the clock, so a call
-// that returns "" has spent the caller's slot. Call it once per command, from the
-// guard, and never to merely ask.
-func (s *Server) spawnCapsReason(cc *clientConn) string {
+// SYNCHRONOUSLY is still the word doing the work, and the third road is charged
+// somewhere else for exactly that reason. A spawn-on-demand task.enqueue ends in
+// createPanel too, but by way of the scheduler: the conductor's command only
+// queues, and metering it here would be metering the wrong actor at the wrong
+// moment — a conductor queueing ten tasks over a minute is doing what the backlog
+// is for. The gap is charged where the spawn actually happens, on the scheduler
+// as it drains (see scheduleLocked), out of the purse this shares with it.
+func (s *Server) spawnCapsReason() string {
 	s.mu.Lock()
-	n := len(s.panels)
-	s.mu.Unlock()
-	if n >= maxConductorFleet {
-		return fmt.Sprintf("conductor role: fleet at capacity (%d panels)", maxConductorFleet)
-	}
-	// Checked LAST, so the capacity refusal above — which is about the fleet
-	// rather than about this caller — does not spend the caller's slot. Keyed
-	// on the conductor's panel rather than on this connection, because
-	// baton_spawn dials per tool call; see Server.spawn.
-	if _, tooSoon := s.tooSoon(&s.spawn, cc.self, time.Now()); tooSoon {
-		return "conductor role: spawning too fast, slow down"
+	defer s.mu.Unlock()
+	if reason := s.spawnBudgetLocked(time.Now()); reason != "" {
+		return "conductor role: " + reason
 	}
 	return ""
 }
@@ -4200,8 +4265,32 @@ type spawnRequest struct {
 // agent — recording the brief, moving the task to dispatched — and returns the
 // prompts to deliver once the lock is released. A queued task that carries a spawn
 // spec and finds no free agent instead yields a spawnRequest: the scheduler
-// provisions a fresh agent for it (below the fleet ceiling) rather than leaving it
-// to wait on the standing fleet. Caller holds s.mu.
+// provisions a fresh agent for it, out of the fleet's spawn budget, rather than
+// leaving it to wait on the standing fleet. Caller holds s.mu.
+//
+// THE SPAWN BUDGET IS CHARGED HERE, and #75 is the reason it is here rather than
+// at task.enqueue. The enqueue is not a spawn: the conductor asks for work to be
+// done and this decides, later and on its own tick, whether a panel has to exist
+// for it. A rate gap at the enqueue would meter an actor that spawned nothing at
+// a moment nothing was spawned, and would refuse a conductor filling a backlog
+// over a minute, which is what a backlog is for. This is where the spawn is, so
+// this is where it is paid for — and out of spawnCapsReason's purse rather than a
+// second one, so a conductor just told to slow down cannot walk through this door
+// in the same instant.
+//
+// Nothing is refused by it. A task the budget turns away stays queued exactly as
+// it was and is offered again on the next tick, so the whole backlog still drains
+// — one fresh agent at a time instead of a tick's worth at machine speed. That
+// was the hole: with no gap here at all, one pass provisioned every spawn-on-demand
+// task the ceiling would admit, back to back, in the time createPanel takes.
+//
+// BE EXACT ABOUT WHAT BINDS THE RATE, because it is not the gap. One instant is
+// read for the whole pass, so a pass hands back at most ONE spawn however long
+// the backlog is; the pass then runs again on the next monitor tick, which is a
+// second — four times the gap. So the observed drain is one agent per TICK, and
+// the gap's job here is not the pacing but the SHARED PURSE: it is what a
+// conductor's synchronous spawn also spends, and the only reason the two roads
+// cannot each have one in the same instant.
 func (s *Server) scheduleLocked() ([]delivery, []spawnRequest) {
 	// One pass over the task table: collect the unassigned backlog and tally each
 	// group's in-flight (dispatched/running) count, so the per-group cap is a map
@@ -4231,6 +4320,11 @@ func (s *Server) scheduleLocked() ([]delivery, []spawnRequest) {
 	// times without this, under s.mu.
 	deliver := make([]delivery, 0, len(queued))
 	var spawns []spawnRequest
+	// One instant for the whole pass, which is what makes the gap admit ONE spawn
+	// from it: the first candidate stamps the budget at now, and every later one
+	// asks at the same now and is inside the gap by definition. Reading the clock
+	// per candidate would say the same thing more expensively, under the lock.
+	now := time.Now()
 	for _, t := range queued {
 		if s.queueConcurrency > 0 && groupRunning[t.Group] >= s.queueConcurrency {
 			continue
@@ -4239,8 +4333,9 @@ func (s *Server) scheduleLocked() ([]delivery, []spawnRequest) {
 		if !ok {
 			// No standing agent is free. If the task provisions its own, ask for one
 			// panel per task (spawning marks it in flight so a later tick does not
-			// double-spawn), staying below the fleet ceiling.
-			if t.Spawn != nil && !s.spawning[t.ID] && len(s.panels) < maxConductorFleet {
+			// double-spawn), within the fleet's spawn budget — the ceiling, and the
+			// gap that is the reason this pass hands back at most one.
+			if t.Spawn != nil && !s.spawning[t.ID] && s.spawnBudgetLocked(now) == "" {
 				s.spawning[t.ID] = true
 				groupRunning[t.Group]++ // the pending worker counts against the cap for later tasks
 				spawns = append(spawns, spawnRequest{taskID: t.ID, spec: *t.Spawn})
