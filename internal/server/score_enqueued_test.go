@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -97,11 +98,10 @@ func TestAnEnqueuedBriefSurvivesADaemonRestart(t *testing.T) {
 			// enqueue is all it does before it stops.
 			first, _, firstBytes := scoreServer(st)
 			first.qstore = queue.New(qdir, time.Now)
-			stop := make(chan struct{})
-			go first.taskSaverLoop(stop)
+			stopSaver := runSaver(t, first)
 			first.onCommand(conn(tc.self), proto.Command{Action: "task.enqueue", Prompt: "Keep the build green."})
 			waitForBacklog(t, first.qstore, 1)
-			close(stop)
+			stopSaver()
 			if len(*firstBytes) != 0 {
 				t.Fatalf("the first daemon delivered %q; the restart is what must do the delivering", string(*firstBytes))
 			}
@@ -297,6 +297,22 @@ func TestTheEnqueueStampIsTheServersConclusion(t *testing.T) {
 	}
 }
 
+// runSaver starts the backlog saver and hands back the stop. Its writes are a
+// temp file and a rename, so a test that only closes the stop can have one still
+// in flight when t.TempDir's cleanup walks the directory — which failed as
+// "RemoveAll cleanup: directory not empty", twice in sixty runs, on a tree with
+// nothing else changed. Waiting for the loop to return is what makes the
+// directory quiet before anyone removes it.
+func runSaver(t *testing.T, s *Server) func() {
+	t.Helper()
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() { defer close(done); s.taskSaverLoop(stop) }()
+	var once sync.Once
+	wait := func() { once.Do(func() { close(stop); <-done }) }
+	t.Cleanup(wait)
+	return wait
+}
+
 // TestTheEnqueueStampReachesTheBacklogFile is the disk half of the same
 // conclusion: what the restart reads back has to be what the connection decided,
 // and a stamp the saver drops is a signal the reboot loses.
@@ -304,9 +320,7 @@ func TestTheEnqueueStampReachesTheBacklogFile(t *testing.T) {
 	qdir := filepath.Join(t.TempDir(), "backlog")
 	s, _, _ := scoreServer(nil)
 	s.qstore = queue.New(qdir, time.Now)
-	stop := make(chan struct{})
-	go s.taskSaverLoop(stop)
-	defer close(stop)
+	runSaver(t, s)
 
 	s.onCommand(conn(""), proto.Command{Action: "task.enqueue", Prompt: "go"})
 	waitForBacklog(t, s.qstore, 1)
