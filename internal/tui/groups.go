@@ -1122,13 +1122,17 @@ func groupBadge() string {
 	return lipgloss.NewStyle().Foreground(colDark).Background(colBrand).Bold(true).Padding(0, 1).Render("GROUP")
 }
 
-// kindBreakdown summarises panels by kind — "2 agent · 1 shell" — in the kind
-// colours, showing only the kinds present. A single em dash when there are none.
+// kindBreakdown summarises panels by kind — "2 agent · 1 command · 1 shell" — in
+// the kind colours, showing only the kinds present. A single em dash when there
+// are none.
 func kindBreakdown(panels []panel.Panel) string {
-	agents, shells := kindCounts(panels)
-	parts := make([]string, 0, 2)
+	agents, commands, shells := kindCounts(panels)
+	parts := make([]string, 0, 3)
 	if agents > 0 {
 		parts = append(parts, lipgloss.NewStyle().Foreground(colAgent).Render(fmt.Sprintf("%d agent", agents)))
+	}
+	if commands > 0 {
+		parts = append(parts, lipgloss.NewStyle().Foreground(colCommand).Render(fmt.Sprintf("%d command", commands)))
 	}
 	if shells > 0 {
 		parts = append(parts, lipgloss.NewStyle().Foreground(colShell).Render(fmt.Sprintf("%d shell", shells)))

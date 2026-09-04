@@ -71,15 +71,23 @@ func stateCounts(panels []panel.Panel) map[panel.State]int {
 }
 
 // kindCounts tallies panels by kind, the shared input to a kind breakdown.
-func kindCounts(panels []panel.Panel) (agents, shells int) {
+//
+// Three counters rather than "agents and the rest": lumping command panels in
+// with shells is the same claim the fleet used to make the other way round, and
+// it is wrong for the same reason. A summary that says "1 shell" over a running
+// build has told the operator something untrue about what is on the machine.
+func kindCounts(panels []panel.Panel) (agents, commands, shells int) {
 	for _, p := range panels {
-		if p.IsAgent() {
+		switch {
+		case p.IsAgent():
 			agents++
-		} else {
+		case p.IsCommand():
+			commands++
+		default:
 			shells++
 		}
 	}
-	return agents, shells
+	return agents, commands, shells
 }
 
 // liveIDs is the ids of the panels that still have a running process — exited

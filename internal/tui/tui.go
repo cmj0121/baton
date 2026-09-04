@@ -66,6 +66,13 @@ const (
 	colAgent = lipgloss.Color("75") // agent-panel count (blue)
 	colShell = lipgloss.Color("73") // shell-panel count (teal)
 
+	// colCommand is the third kind's own colour rather than a shade of either
+	// neighbour's, because the distinction it draws is the one the operator is
+	// looking for: a command panel is neither a worker to give work to nor a
+	// prompt to type at. Purple sits off the blue-teal axis the other two share,
+	// so the three read as three at a glance and not as two-and-a-variant.
+	colCommand = lipgloss.Color("140") // command-panel count (purple)
+
 	colBar    = lipgloss.Color("111") // light-blue status-bar fill (the footer)
 	colScroll = lipgloss.Color("179") // warm amber footer fill while in scroll mode
 	colAmber  = lipgloss.Color("172") // usage segment past the warning threshold, before the alarm
@@ -3762,11 +3769,18 @@ func shortPath(dir string, width int) string {
 	return truncate(filepath.Base(dir), width)
 }
 
-// kindBadge tags a panel as an agent or a plain shell.
+// kindBadge tags a panel as an agent, a plain shell, or a command.
+//
+// The label is Kind.String() rather than a table here, so a kind this build knows
+// can never be badged as another one — the badge is the operator's fastest read
+// of what a panel IS, and #54 is what an agent badge over a plain binary costs.
 func kindBadge(kind panel.Kind) string {
 	bg := colShell // shell: teal
-	if kind == panel.Agent {
+	switch kind {
+	case panel.Agent:
 		bg = colAgent // agent: blue
+	case panel.Command:
+		bg = colCommand // command: purple
 	}
 	label := strings.ToUpper(kind.String())
 	return lipgloss.NewStyle().Foreground(colDark).Background(bg).Bold(true).Padding(0, 1).Render(label)

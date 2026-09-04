@@ -87,11 +87,21 @@ func (l lens) bucket(p panel.Panel) string {
 	case lensDir:
 		return p.Cwd // re-based against the fleet's common prefix by lensFleet
 	case lensProfile:
+		// A panel with no profile falls back to its KIND, because the profile lens
+		// asks "what kind of agent is this" and the honest answer for these is "not
+		// one". Command panels get their own bucket rather than joining the shells:
+		// filing a running build under "shells" is a claim about the machine that is
+		// simply false, and at fifty panels the lens is where an operator looks to
+		// find out what is actually running.
 		if p.Profile == "" {
-			if p.IsAgent() {
+			switch {
+			case p.IsAgent():
 				return "(no profile)"
+			case p.IsCommand():
+				return "commands"
+			default:
+				return "shells"
 			}
-			return "shells"
 		}
 		return p.Profile
 	case lensState:
