@@ -1217,6 +1217,30 @@ func loadServerBoot(sock string) serverBoot {
 	}
 	store, reason := openScore(cfg.Score, scorePol, scoreOpenTimeout)
 
+	// And here the half-decoded struct STOPS. Everything above this line either
+	// gated on err or is one of the two keys the paragraph above argues for; what
+	// travels on serverBoot is read by runServerOn, and two of its readers are
+	// construction-time options srv.Reload never revisits.
+	//
+	// That is #48's defect surviving in the one place applyConfig cannot reach.
+	// Its NEVER-HAD-ONE branch zeroes the config and comes up on the defaults, but
+	// usageOption and limitsOption are spent when the server is BUILT — so a file
+	// that failed to parse after decoding usage.source, usage.interval,
+	// usage.thresholds or usage.limits-source booted the daemon polling an
+	// endpoint, on a cadence, against thresholds nobody could read, and no later
+	// reload took them back. Applying the defaults is what applyConfig would have
+	// done; doing it here is what makes it true of the options it cannot see.
+	//
+	// Score is kept whole, and it is the same exception argued directly above:
+	// score.dir and score.enabled are taken from a half-parsed file on purpose,
+	// because a wrong directory splits the fleet's memory invisibly while a wrong
+	// policy is a recoverable mis-ranking. The store is already open on those two;
+	// runServerOn reads the section again for WithScore and for the reload warning,
+	// and both must see what the store was actually opened with.
+	if err != nil {
+		cfg = config.Config{Score: cfg.Score}
+	}
+
 	var once sync.Once
 	return serverBoot{cfg: cfg, scoreStore: store, scoreReason: reason, release: func() {
 		once.Do(func() {
