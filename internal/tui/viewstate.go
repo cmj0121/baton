@@ -107,7 +107,21 @@ func (m model) applyViewState(v viewState) model {
 	return m
 }
 
-// rememberView persists the model's current view preferences.
+// rememberLayout and rememberLens each persist ONE preference, merged over
+// whatever the file already holds.
+//
+// THE MERGE IS WHAT MAKES THE POINTERS TRUE. They used to be one function that
+// wrote both fields on either keystroke, so pressing `v l` once recorded the lens
+// as a deliberate opinion the operator had never expressed — and an opinion is
+// exactly what a present field means here, the thing a future config key for the
+// layout is required to lose to. The type said "absent means no opinion" and the
+// only writer never left anything absent, which is the same defect as a comment
+// asserting a rule nothing enforces.
+//
+// Each reads the file back before writing rather than tracking what it last saved.
+// A cockpit is usually killed rather than closed, and it shares this file with
+// every other cockpit on this terminal; the file is the state, and anything in
+// memory is a guess about it.
 //
 // A save failure is dropped on purpose. The sibling toggles that write the config
 // report one in the status line, but they are overwriting a message that says
@@ -117,7 +131,16 @@ func (m model) applyViewState(v viewState) model {
 // The operator is not left in the dark either: this file shares a directory with
 // the config, so a home that cannot be written announces itself the next time any
 // setting is saved.
-func (m model) rememberView() {
-	showTree, lens := m.showTree, m.lens.String()
-	_ = viewState{ShowTree: &showTree, Lens: &lens}.save(m.viewStatePath)
+func (m model) rememberLayout() {
+	v := loadViewState(m.viewStatePath)
+	showTree := m.showTree
+	v.ShowTree = &showTree
+	_ = v.save(m.viewStatePath)
+}
+
+func (m model) rememberLens() {
+	v := loadViewState(m.viewStatePath)
+	lens := m.lens.String()
+	v.Lens = &lens
+	_ = v.save(m.viewStatePath)
 }

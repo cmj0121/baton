@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,6 +43,57 @@ func TestRememberedViewSurvivesTheSession(t *testing.T) {
 	}
 	if next.lens != lensDir {
 		t.Errorf("lens = %v, want directory carried across the restart", next.lens)
+	}
+}
+
+// TestOneKeystrokeRecordsOneOpinion is what the pointers are FOR, asserted
+// rather than described.
+//
+// viewState's fields are pointers so that absent can mean "no opinion" — the
+// operator never pressed this key, so a built-in default or a future config key
+// for the layout still stands. The writer used to contradict that: it wrote both
+// fields on either keystroke, so pressing `v l` recorded a lens the operator had
+// never chosen, and the config key the pointer exists to protect would have been
+// overridden by a file that was only recording an absence.
+//
+// So this reads the RAW JSON. Round-tripping through viewState cannot see the
+// difference — a written lens and an unwritten one both load into a model that
+// then agrees with itself — and the key's presence is the whole claim.
+func TestOneKeystrokeRecordsOneOpinion(t *testing.T) {
+	m := stateModel(t)
+	m.mode = modeDashboard
+
+	keys := func() map[string]any {
+		t.Helper()
+		data, err := os.ReadFile(m.viewStatePath)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(data, &raw); err != nil {
+			t.Fatalf("unmarshal %s: %v", data, err)
+		}
+		return raw
+	}
+
+	m = m.toggleLayout() // v l, and nothing else
+	got := keys()
+	if _, ok := got["show_tree"]; !ok {
+		t.Error("v l did not record the layout, so the rest of this proves nothing")
+	}
+	if _, ok := got["lens"]; ok {
+		t.Error("v l recorded a lens the operator never chose; absent is what lets a config key win")
+	}
+
+	// The second keystroke ADDS to the file rather than replacing it: a merge that
+	// dropped the earlier opinion would be the same bug pointing the other way.
+	m = m.cycleLens(1) // v g
+	got = keys()
+	if _, ok := got["lens"]; !ok {
+		t.Error("v g did not record the lens")
+	}
+	if _, ok := got["show_tree"]; !ok {
+		t.Error("v g dropped the layout the operator had already chosen")
 	}
 }
 

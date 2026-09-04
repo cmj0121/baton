@@ -270,7 +270,7 @@ func (m model) cycleLens(delta int) model {
 	}
 	m.restoreCursor(kind, id, "", had && kind == itemPanel)
 	m.status = "group by: " + m.lens.String()
-	m.rememberView() // on change, not on exit: a cockpit is usually killed, not closed
+	m.rememberLens() // on change, not on exit: a cockpit is usually killed, not closed
 	return m
 }
 
