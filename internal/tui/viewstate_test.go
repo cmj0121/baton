@@ -260,6 +260,13 @@ func TestLensIsRememberedByNameNotIndex(t *testing.T) {
 	if got := parseLens("a lens from a newer baton"); got != lensWork {
 		t.Errorf("parseLens(unknown) = %v, want the work-item default", got)
 	}
+	// A hand-edited file is the only way this arrives untidy — nothing baton writes
+	// is — and losing the lens over a stray capital would read as the cockpit
+	// forgetting. Nothing else covers it: the round trip above feeds parseLens the
+	// exact output of String, so the trim and the fold are invisible to it.
+	if got := parseLens("  Directory "); got != lensDir {
+		t.Errorf("parseLens(untidy) = %v, want the name read through the spacing and case", got)
+	}
 }
 
 // TestRememberedFileIsOwnerOnly: the file records what one operator likes and sits

@@ -59,17 +59,26 @@ func (l lens) String() string {
 // than its integer. lensOrder is a cycle somebody will reorder one day, and an
 // index persisted across that change would silently reopen the cockpit under a
 // different lens than the one it was left in.
+//
+// IT ASKS STRING FOR THE NAMES rather than repeating them, because it used to
+// repeat them and the miss would have been silent. A fifth lens is three edits —
+// the constant, lensOrder, String — and a parseLens that had not been told about
+// it stored the name correctly and read it back as the work items, which looks
+// like a cockpit that forgot rather than a lens that was never parsed. Now the
+// only way to have a lens String can name and parseLens cannot find is to leave
+// it out of lensOrder, and a lens missing from lensOrder cannot be reached by the
+// binding that would store it.
+//
+// The loop is over four elements at one keystroke. Whatever a map would save
+// here, it is not worth a second place to forget the lens.
 func parseLens(s string) lens {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "directory":
-		return lensDir
-	case "profile":
-		return lensProfile
-	case "state":
-		return lensState
-	default:
-		return lensWork
+	name := strings.ToLower(strings.TrimSpace(s))
+	for _, l := range lensOrder {
+		if l.String() == name {
+			return l
+		}
 	}
+	return lensWork
 }
 
 // real reports whether this lens shows the fleet's own structure — the work items
