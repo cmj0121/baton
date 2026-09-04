@@ -324,10 +324,17 @@ awk '
 # evidence, and `sort` collates by locale: it put main_test.go before main.go,
 # where git orders paths by bytes and `.` sorts under `_`. Taking the order
 # out of the diff is both the right one and one less thing to get wrong.
-: >"${WORK}/relex-files"
-for file in $(awk '!seen[$1]++ { print $1 }' "${WORK}/added-lines"); do
-	[ -f "${file}" ] && printf '%s\n' "${file}" >>"${WORK}/relex-files"
-done
+awk '!seen[$1]++ { print $1 }' "${WORK}/added-lines" >"${WORK}/added-files"
+
+# Read as lines, not as words, because a path may contain a space. That does
+# not on its own make such a path work: git quotes it in the "+++" header, so
+# it never reaches here intact, and the sweep then examines nothing and says so
+# -- exit 2, checked against both this version and the one before it. Reading
+# words would add a second way to get the same path wrong, no more than that.
+while IFS= read -r file; do
+	[ -f "${file}" ] || continue
+	printf '%s\n' "${file}"
+done <"${WORK}/added-files" >"${WORK}/relex-files"
 
 # Lexed in one run rather than one per file, the way the index above is. The
 # added-line table is keyed by file and line together, so the join needs no
