@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -98,41 +99,37 @@ type ctlSpawn struct {
 	Branch   string   `help:"Branch the new worktree is created on. Required with --worktree."`
 }
 
+// spawnRefusals says each of control's spawn refusals in the operator's
+// vocabulary. The RULES are not here — control.ResolveSpawn holds them, and their
+// order, once for every interface — but "agent" is a schema field and "--agent"
+// is what the operator typed, and a refusal a person reads should name the flag
+// they wrote.
+var spawnRefusals = map[error]string{
+	control.ErrBranchNeedsWorktree: "--branch names the worktree to spawn into; add --worktree",
+	control.ErrAgentAndRun:         "--agent and --run both name the process to run; pick one",
+	control.ErrRunHasNoWorktree:    "--worktree spawns an agent in the new tree; --run has no worktree form",
+}
+
 // Run spawns a panel and prints its id. Without --worktree it is the command it
 // has always been; --worktree swaps in the worktree spawn, where --dir stops
 // meaning the workdir and starts meaning the repository. --run is the third panel
 // kind: a plain binary the fleet watches and never enrols.
 //
-// --branch without --worktree is refused rather than ignored. A silently dropped
-// branch would spawn into the repository — the one outcome the worktree spawn
-// exists to prevent, and a misread rather than a refusal.
-//
-// --agent with --run, and --run with --worktree, are refused for the same reason.
-// Both name the process to run, so one of them would have to be dropped, and
-// whichever way it fell the panel would come up looking right and holding the
-// wrong standing — a plain binary enrolled in the scheduler, or an agent where a
-// command was asked for. A worktree spawn is an agent in a tree by definition;
-// there is no command form of it to fall back to.
+// Which of the three it means, and which contradictions are refused in which
+// order, is control.ResolveSpawn's. This end only re-words the refusal.
 func (s ctlSpawn) Run(c *control.Client) error {
-	switch {
-	case s.Branch != "" && !s.Worktree:
-		return fmt.Errorf("--branch names the worktree to spawn into; add --worktree")
-	case s.Agent != "" && s.Exec != "":
-		return fmt.Errorf("--agent and --run both name the process to run; pick one")
-	case s.Exec != "" && s.Worktree:
-		return fmt.Errorf("--worktree spawns an agent in the new tree; --run has no worktree form")
-	}
-	var id string
-	var err error
-	switch {
-	case s.Worktree:
-		id, err = c.SpawnWorktree(s.Agent, s.Arg, s.Dir, s.Branch)
-	case s.Exec != "":
-		id, err = c.SpawnCommand(s.Exec, s.Arg, s.Dir)
-	default:
-		id, err = c.SpawnPanel(s.Agent, s.Arg, s.Dir)
-	}
+	id, err := c.ResolveSpawn(control.SpawnRequest{
+		Agent:    s.Agent,
+		Run:      s.Exec,
+		Args:     s.Arg,
+		Dir:      s.Dir,
+		Worktree: s.Worktree,
+		Branch:   s.Branch,
+	})
 	if err != nil {
+		if msg, ok := spawnRefusals[err]; ok {
+			return errors.New(msg)
+		}
 		return err
 	}
 	fmt.Println(id)

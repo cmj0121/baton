@@ -13,6 +13,7 @@ package control
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -287,6 +288,72 @@ func (c *Client) SpawnWorktree(agent string, args []string, repo, branch string)
 		Dir: repo, Name: branch,
 		Path: agent, Args: args,
 	})
+}
+
+// The three ways a spawn request can contradict itself. They are sentinels so
+// that an interface can say them in its own vocabulary — `ctl` names the flags
+// the operator typed, the MCP tool names its schema fields — without owning a
+// second copy of when each one applies.
+var (
+	// ErrAgentAndRun: both name the process to run, so honouring either would
+	// silently drop the other, and the panel comes up looking right while holding
+	// the wrong standing — a plain binary enrolled in the scheduler, or an agent
+	// where a command was asked for.
+	ErrAgentAndRun = errors.New("agent and run both name the process to run; set one")
+	// ErrRunHasNoWorktree: a worktree spawn is an agent in the tree it builds, by
+	// definition. There is no command form of it to fall back to.
+	ErrRunHasNoWorktree = errors.New("worktree spawns an agent in the new tree; run has no worktree form")
+	// ErrBranchNeedsWorktree: dropping the branch would spawn into the repository
+	// itself — the one outcome the worktree spawn exists to prevent — so it is a
+	// refusal, not an ignored field.
+	ErrBranchNeedsWorktree = errors.New("branch names the worktree to spawn into; set worktree")
+)
+
+// SpawnRequest is a spawn as an interface received it: the flags of `ctl spawn`,
+// the arguments of the baton_spawn tool. Every field is as it arrived, unresolved
+// — deciding which of the three spawns it means, or that it means none of them,
+// is ResolveSpawn's job and nobody else's.
+type SpawnRequest struct {
+	Agent    string
+	Run      string
+	Args     []string
+	Dir      string
+	Worktree bool
+	Branch   string
+}
+
+// ResolveSpawn turns a SpawnRequest into the spawn it names, or refuses it with
+// one of the sentinels above.
+//
+// THE ORDER OF THE REFUSALS IS PART OF THE ANSWER, which is why there is one
+// copy of it. A request can break more than one rule at once — `--branch x
+// --agent a --run b` with no worktree breaks two — and whichever rule is tested
+// first is the reason the caller is given. Two interfaces expanding the same
+// three rules into two switches gave that request two different reasons, and
+// nobody chose that; the ordering here is `ctl`'s, because the operator surface
+// is where a refusal is read by a person.
+//
+// Branch-without-worktree leads because it is the rule about what the request
+// ASKED FOR: the other two are about a process named twice, but this one is a
+// spawn aimed at the wrong directory, and it stays wrong however the rest
+// resolves.
+func (c *Client) ResolveSpawn(r SpawnRequest) (string, error) {
+	switch {
+	case r.Branch != "" && !r.Worktree:
+		return "", ErrBranchNeedsWorktree
+	case r.Agent != "" && r.Run != "":
+		return "", ErrAgentAndRun
+	case r.Run != "" && r.Worktree:
+		return "", ErrRunHasNoWorktree
+	}
+	switch {
+	case r.Worktree:
+		return c.SpawnWorktree(r.Agent, r.Args, r.Dir, r.Branch)
+	case r.Run != "":
+		return c.SpawnCommand(r.Run, r.Args, r.Dir)
+	default:
+		return c.SpawnPanel(r.Agent, r.Args, r.Dir)
+	}
 }
 
 // SendText types text into panel id, appending a newline to submit it unless

@@ -238,33 +238,21 @@ func defaultTools() []tool {
 				"worktree": map[string]any{"type": "boolean", "description": "spawn into a fresh git worktree of dir; requires branch and agent"},
 				"branch":   str("branch the new worktree is created on; required with worktree"),
 			}),
+			// Every refusal below is control.ResolveSpawn's, in its own words. Setting
+			// one field of an either/or pair, or one field of a required pair, is
+			// exactly the slip a model makes, so each is refused rather than resolved:
+			// a conductor that meant "watch this build" would otherwise get a panel the
+			// scheduler hands a task to, and a dropped branch would spawn into the
+			// shared checkout this verb exists to get its workers out of.
 			run: func(c *control.Client, a args) (string, error) {
-				var id string
-				var err error
-				switch worktree := a.boolDefault("worktree", false); {
-				case a.str("agent") != "" && a.str("run") != "":
-					// Both name the process to run, so honouring either would silently drop
-					// the other — and a conductor that meant "watch this build" would get a
-					// panel the scheduler then hands a task to. Refusing is the only answer
-					// that cannot be wrong, and setting one field of an either/or pair is
-					// exactly the slip a model makes.
-					return "", fmt.Errorf("agent and run both name the process to run; set one")
-				case worktree && a.str("run") != "":
-					return "", fmt.Errorf("worktree spawns an agent in the new tree; run has no worktree form")
-				case worktree:
-					id, err = c.SpawnWorktree(a.str("agent"), a.strSlice("args"), a.str("dir"), a.str("branch"))
-				case a.str("run") != "":
-					id, err = c.SpawnCommand(a.str("run"), a.strSlice("args"), a.str("dir"))
-				case a.str("branch") != "":
-					// A branch with no worktree is refused rather than dropped, the same as
-					// `ctl spawn --branch` without `--worktree`. Silently ignoring it would
-					// spawn into `dir` itself — for a conductor, the shared checkout this
-					// whole verb exists to get its workers out of — and setting one field
-					// of a pair is exactly the slip a model makes.
-					return "", fmt.Errorf("branch names the worktree to spawn into; set worktree: true")
-				default:
-					id, err = c.SpawnPanel(a.str("agent"), a.strSlice("args"), a.str("dir"))
-				}
+				id, err := c.ResolveSpawn(control.SpawnRequest{
+					Agent:    a.str("agent"),
+					Run:      a.str("run"),
+					Args:     a.strSlice("args"),
+					Dir:      a.str("dir"),
+					Worktree: a.boolDefault("worktree", false),
+					Branch:   a.str("branch"),
+				})
 				if err != nil {
 					return "", err
 				}
