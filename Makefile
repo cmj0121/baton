@@ -1,6 +1,6 @@
 SUBDIR :=
 
-.PHONY: all clean lint test test-race cover ci run build install uninstall upgrade help $(SUBDIR)
+.PHONY: all clean lint test test-race cover stale-comments ci run build install uninstall upgrade help $(SUBDIR)
 
 # strip the symbol table (-s) and DWARF debug info (-w), and trim absolute paths,
 # to keep the release binary small and reproducible.
@@ -30,6 +30,17 @@ test-race:			# run test with the race detector
 
 cover:				# run race+coverage and gate each package at 80%
 	./scripts/coverage-gate.sh 80
+
+# Deliberately not a dependency of `ci`, and deliberately not a pre-commit
+# hook. Over the 110 commits since v1.6.0 the sweep raised eight names and
+# every one was prose that reads like code -- a git config key, two darwin C
+# calls, an English past tense. Nothing a reviewer needed. A gate whose every
+# firing so far has been a false alarm teaches people to add --no-verify, and
+# then it is not a gate. It is worth running and worth reading; it is not yet
+# worth blocking on, and this line is the honest place to say so.
+stale-comments:		# find names that survive only in comments a branch adds
+	./scripts/stale-comment-sweep-test.sh
+	./scripts/stale-comment-sweep.sh
 
 ci: build crossbuild lint cover	# local mirror of the CI pipeline (build -> cross -> lint -> cover)
 
