@@ -205,3 +205,54 @@ func TestCommandPanelHoldsAfterItExits(t *testing.T) {
 		t.Fatalf("activity = %q, want %q", s.panels[i].Activity, "finished")
 	}
 }
+
+// TestCommandPanelTakesADispatchLikeAShell is the refusal this file does NOT
+// have, pinned as the acceptance it actually is.
+//
+// The gate the refusals above go through is agentTargetSpec, and dispatch does
+// not go through it: `baton ctl dispatch`, the baton_dispatch tool and a
+// dispatch-group fan-out all land on a command panel, and the brief carries the
+// score block a fan-out would put on an agent. SPEC.md said the opposite of both
+// halves for a while, and it is the doc that was wrong.
+//
+// The shell panel is why. Dispatch is "write these bytes into this PTY", and a
+// shell is no more an agent than a command panel is — it takes a dispatch, and
+// it takes the block with it. Refusing the command panel alone would split the
+// two non-agent kinds on a rule with nothing behind it, and would take away the
+// one way to answer a binary that is sitting on a prompt. The agent-only ops are
+// refused because they need a checkout to reason about; writing to a PTY needs
+// nothing but the PTY.
+//
+// So both kinds are asserted together, and asserted to behave the SAME. A future
+// change that gates dispatch on kind has to break this pair, not one of them.
+func TestCommandPanelTakesADispatchLikeAShell(t *testing.T) {
+	st, _ := scoreStore(t)
+	seedEntry(t, st, "run the linter before claiming a task is done")
+	s, _, written := gateServer(
+		panel.Panel{ID: "c1", Kind: panel.Command, State: panel.Idle},
+		panel.Panel{ID: "s1", Kind: panel.Shell, State: panel.Idle},
+	)
+	WithScore(ScoreState{Store: st, Enabled: true})(s)
+
+	for _, id := range []string{"c1", "s1"} {
+		if _, err := s.dispatchScored(id, "status", "", authorUser); err != nil {
+			t.Fatalf("dispatch to %s: %v", id, err)
+		}
+	}
+
+	if len(*written) != 2 {
+		t.Fatalf("delivered %v, want one write to each of the two non-agent panels", *written)
+	}
+	for i, id := range []string{"c1", "s1"} {
+		got := (*written)[i]
+		if !strings.HasPrefix(got, id+":") {
+			t.Fatalf("write %d = %q, want it addressed to %s", i, got, id)
+		}
+		if !strings.Contains(got, "run the linter before claiming a task is done") {
+			t.Fatalf("the brief to %s carries no score block: %q", id, got)
+		}
+	}
+	if (*written)[0][len("c1"):] != (*written)[1][len("s1"):] {
+		t.Fatalf("the command panel and the shell were briefed differently:\n%q\n%q", (*written)[0], (*written)[1])
+	}
+}
