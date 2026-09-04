@@ -3643,10 +3643,22 @@ your goal — treat it as your standing instructions.
 //
 // A command panel takes the agent's form — "go · baton", "make · api" — because
 // it was spawned the same way and the same two facts identify it: what is
-// running and where. The id form is what a SHELL needs, since every shell runs
-// the same binary and only the number tells them apart.
+// running and where.
+//
+// SO THE RULE IS THE SHELL'S, not a list of the kinds that are not it. The id
+// form exists because every shell runs the same binary and only the number tells
+// them apart; anything spawned with a command of its own is identified by that
+// command. Written as "agent or command" it was a property of the shell spelled
+// as an OR over everything else, and a fourth kind would have had to be added
+// here to keep behaving — silently taking the shell's form until someone
+// noticed. Written this way a fourth kind gets the command form, which is the
+// answer for any kind that names a binary, and only a genuinely shell-like kind
+// would need this line touched at all.
+//
+// createPanel normalises "" to KindShell and its spawn switch refuses any kind it
+// does not know, so kind is one of the three by the time it reaches here.
 func panelTitle(kind, path, dir, id string) string {
-	if kind == proto.KindAgent || kind == proto.KindCommand {
+	if kind != proto.KindShell {
 		name := filepath.Base(path)
 		if dir != "" {
 			return fmt.Sprintf("%s · %s", name, filepath.Base(dir))
