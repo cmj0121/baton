@@ -70,6 +70,7 @@ acts, and exits.
 | `baton ctl list`                                                      | print the fleet as JSON (id, title, state, group, …)                             |
 | `baton ctl tree [--json]`                                             | draw the process tree (groups → panels → OS children), with CPU%/RSS             |
 | `baton ctl spawn [--agent CMD] [--arg A] [--dir D]`                   | spawn a panel (agent if `--agent`, else a shell); prints the new id              |
+| `baton ctl spawn --run CMD [--arg A] [--dir D]`                       | spawn a **command** panel: a plain binary the fleet watches and never enrols     |
 | `baton ctl spawn --worktree --dir <repo> --branch <name> --agent CMD` | branch `<repo>`, open a git worktree for it, and spawn the agent **in the tree** |
 | `baton ctl send <id> <text> [--no-enter]`                             | type text into a panel; submits with a newline unless `--no-enter`               |
 | `baton ctl attention --why <text> [--id ID]`                          | say this panel needs a human, and why — see [Raising a hand](#raising-a-hand)    |
@@ -207,7 +208,8 @@ instead of shelling out:
 `baton_dispatch_group` · `baton_enqueue` · `baton_queue` · `baton_reorder` · `baton_group` · `baton_rename` ·
 `baton_pin` · `baton_unpin` · `baton_signal` · `baton_close`
 
-`baton_spawn` takes `{agent, args, dir}`, and `{worktree: true, branch}` alongside them to spawn into a fresh git
+`baton_spawn` takes `{agent, args, dir}`; `{run, args, dir}` spawns a command panel instead — a plain binary that is
+watched but never given work — and `{worktree: true, branch}` alongside the agent form spawns into a fresh git
 worktree instead of into `dir` — the same verb rather than a second tool, so a conductor that can already spawn needs to
 discover nothing new. With `worktree`, `dir` is the repository to branch from; `worktree` without `branch`, or a `dir`
 that is not a repository, is a tool error and the fleet is unchanged.

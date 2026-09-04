@@ -80,9 +80,19 @@ func (ctlList) Run(c *control.Client) error {
 }
 
 type ctlSpawn struct {
-	Agent    string   `help:"Agent profile command to run, e.g. claude. Omit for a shell panel."`
-	Command  string   `help:"Plain binary to run as the panel's process, e.g. go. Watched like an agent, never given work."`
-	Arg      []string `help:"Argument passed to the agent or command (repeatable)."`
+	Agent string `help:"Agent profile command to run, e.g. claude. Omit for a shell panel."`
+
+	// --run, not --command, and the collision is the reason. `ctl queue add
+	// --command` already means "the AGENT binary to provision when none is free",
+	// so the same token here would mean "the binary that is explicitly NOT an
+	// agent" one subcommand away — the standing decided by which verb you happened
+	// to type. That is #54's inference wearing a flag name, and this is the issue
+	// that should least be able to reintroduce it.
+	// The FIELD is Exec only because ctlSpawn.Run is kong's command handler; the
+	// flag the operator types is --run.
+	Exec string `name:"run" help:"Plain binary to run as the panel's process, e.g. make. Watched like an agent, never given work."`
+
+	Arg      []string `help:"Argument passed to the agent or the command (repeatable)."`
 	Dir      string   `help:"Working directory the panel runs in; with --worktree, the repository to branch from."`
 	Worktree bool     `help:"Spawn into a fresh git worktree of --dir on --branch, instead of into --dir itself."`
 	Branch   string   `help:"Branch the new worktree is created on. Required with --worktree."`
@@ -90,16 +100,16 @@ type ctlSpawn struct {
 
 // Run spawns a panel and prints its id. Without --worktree it is the command it
 // has always been; --worktree swaps in the worktree spawn, where --dir stops
-// meaning the workdir and starts meaning the repository. --command is the third
-// panel kind: a plain binary the fleet watches and never enrols.
+// meaning the workdir and starts meaning the repository. --run is the third panel
+// kind: a plain binary the fleet watches and never enrols.
 //
 // --branch without --worktree is refused rather than ignored. A silently dropped
 // branch would spawn into the repository — the one outcome the worktree spawn
 // exists to prevent, and a misread rather than a refusal.
 //
-// --agent with --command, and --command with --worktree, are refused for the same
-// reason. Both name the process to run, so one of them would have to be dropped,
-// and whichever way it fell the panel would come up looking right and holding the
+// --agent with --run, and --run with --worktree, are refused for the same reason.
+// Both name the process to run, so one of them would have to be dropped, and
+// whichever way it fell the panel would come up looking right and holding the
 // wrong standing — a plain binary enrolled in the scheduler, or an agent where a
 // command was asked for. A worktree spawn is an agent in a tree by definition;
 // there is no command form of it to fall back to.
@@ -107,18 +117,18 @@ func (s ctlSpawn) Run(c *control.Client) error {
 	switch {
 	case s.Branch != "" && !s.Worktree:
 		return fmt.Errorf("--branch names the worktree to spawn into; add --worktree")
-	case s.Agent != "" && s.Command != "":
-		return fmt.Errorf("--agent and --command both name the process to run; pick one")
-	case s.Command != "" && s.Worktree:
-		return fmt.Errorf("--worktree spawns an agent in the new tree; --command has no worktree form")
+	case s.Agent != "" && s.Exec != "":
+		return fmt.Errorf("--agent and --run both name the process to run; pick one")
+	case s.Exec != "" && s.Worktree:
+		return fmt.Errorf("--worktree spawns an agent in the new tree; --run has no worktree form")
 	}
 	var id string
 	var err error
 	switch {
 	case s.Worktree:
 		id, err = c.SpawnWorktree(s.Agent, s.Arg, s.Dir, s.Branch)
-	case s.Command != "":
-		id, err = c.SpawnCommand(s.Command, s.Arg, s.Dir)
+	case s.Exec != "":
+		id, err = c.SpawnCommand(s.Exec, s.Arg, s.Dir)
 	default:
 		id, err = c.SpawnPanel(s.Agent, s.Arg, s.Dir)
 	}

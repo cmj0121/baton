@@ -4,13 +4,37 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alecthomas/kong"
+
 	"github.com/cmj0121/baton/internal/control"
 	"github.com/cmj0121/baton/internal/proto"
 )
 
+// TestCtlSpawnRunFlagParses closes the one link the tests below skip by building
+// ctlSpawn directly: that the operator's actual argv reaches the field. The field
+// is named Exec because ctlSpawn.Run is kong's command handler, so the flag name
+// lives in a struct tag — exactly the kind of indirection that compiles while
+// spelling the flag something nobody types.
+func TestCtlSpawnRunFlagParses(t *testing.T) {
+	var cli ctlCLI
+	parser, err := kong.New(&cli, kong.Name("baton ctl"), kong.Exit(func(int) {}))
+	if err != nil {
+		t.Fatalf("kong.New: %v", err)
+	}
+	if _, err := parser.Parse([]string{"spawn", "--run", "make", "--arg", "test"}); err != nil {
+		t.Fatalf("parsing --run: %v", err)
+	}
+	if cli.Spawn.Exec != "make" {
+		t.Fatalf("--run landed in %q, want %q", cli.Spawn.Exec, "make")
+	}
+	if cli.Spawn.Agent != "" {
+		t.Fatalf("--run must not fill --agent, got %q", cli.Spawn.Agent)
+	}
+}
+
 // TestCtlSpawnCommandKind is the issue's own reproduction, fixed: `ctl spawn
-// --command time` produces a COMMAND panel. Typed as `--agent time` it produced
-// an agent panel, and the fleet then offered it queued work.
+// --run time` produces a COMMAND panel. Typed as `--agent time` it produced an
+// agent panel, and the fleet then offered it queued work.
 func TestCtlSpawnCommandKind(t *testing.T) {
 	sock := ctlTestServer(t)
 	c, err := control.DialSocket(sock, "", "", "")
@@ -19,9 +43,9 @@ func TestCtlSpawnCommandKind(t *testing.T) {
 	}
 	defer func() { _ = c.Close() }()
 
-	cmd := ctlSpawn{Command: "/bin/sh", Arg: []string{"-c", "sleep 30"}, Dir: t.TempDir()}
+	cmd := ctlSpawn{Exec: "/bin/sh", Arg: []string{"-c", "sleep 30"}, Dir: t.TempDir()}
 	if err := cmd.Run(c); err != nil {
-		t.Fatalf("ctl spawn --command: %v", err)
+		t.Fatalf("ctl spawn --run: %v", err)
 	}
 
 	panels, err := c.List()
@@ -57,8 +81,8 @@ func TestCtlSpawnCommandRefusals(t *testing.T) {
 		cmd  ctlSpawn
 		want string
 	}{
-		{"agent and command", ctlSpawn{Agent: "/bin/sh", Command: "/bin/sh"}, "pick one"},
-		{"command with worktree", ctlSpawn{Command: "/bin/sh", Dir: "/tmp/repo", Branch: "feat/x", Worktree: true}, "no worktree form"},
+		{"agent and run", ctlSpawn{Agent: "/bin/sh", Exec: "/bin/sh"}, "pick one"},
+		{"run with worktree", ctlSpawn{Exec: "/bin/sh", Dir: "/tmp/repo", Branch: "feat/x", Worktree: true}, "no worktree form"},
 	}
 	for _, tc := range cases {
 		err := tc.cmd.Run(c)
