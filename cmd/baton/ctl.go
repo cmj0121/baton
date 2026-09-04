@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -80,32 +81,55 @@ func (ctlList) Run(c *control.Client) error {
 }
 
 type ctlSpawn struct {
-	Agent    string   `help:"Agent profile command to run, e.g. claude. Omit for a shell panel."`
-	Arg      []string `help:"Argument passed to the agent command (repeatable)."`
+	Agent string `help:"Agent profile command to run, e.g. claude. Omit for a shell panel."`
+
+	// --run, not --command, and the collision is the reason. `ctl queue add
+	// --command` already means "the AGENT binary to provision when none is free",
+	// so the same token here would mean "the binary that is explicitly NOT an
+	// agent" one subcommand away — the standing decided by which verb you happened
+	// to type. That is #54's inference wearing a flag name, and this is the issue
+	// that should least be able to reintroduce it.
+	// The FIELD is Exec only because ctlSpawn.Run is kong's command handler; the
+	// flag the operator types is --run.
+	Exec string `name:"run" help:"Plain binary to run as the panel's process, e.g. make. Watched like an agent, never given work."`
+
+	Arg      []string `help:"Argument passed to the agent or the command (repeatable)."`
 	Dir      string   `help:"Working directory the panel runs in; with --worktree, the repository to branch from."`
 	Worktree bool     `help:"Spawn into a fresh git worktree of --dir on --branch, instead of into --dir itself."`
 	Branch   string   `help:"Branch the new worktree is created on. Required with --worktree."`
 }
 
+// spawnRefusals says each of control's spawn refusals in the operator's
+// vocabulary. The RULES are not here — control.ResolveSpawn holds them, and their
+// order, once for every interface — but "agent" is a schema field and "--agent"
+// is what the operator typed, and a refusal a person reads should name the flag
+// they wrote.
+var spawnRefusals = map[error]string{
+	control.ErrBranchNeedsWorktree: "--branch names the worktree to spawn into; add --worktree",
+	control.ErrAgentAndRun:         "--agent and --run both name the process to run; pick one",
+	control.ErrRunHasNoWorktree:    "--worktree spawns an agent in the new tree; --run has no worktree form",
+}
+
 // Run spawns a panel and prints its id. Without --worktree it is the command it
 // has always been; --worktree swaps in the worktree spawn, where --dir stops
-// meaning the workdir and starts meaning the repository.
+// meaning the workdir and starts meaning the repository. --run is the third panel
+// kind: a plain binary the fleet watches and never enrols.
 //
-// --branch without --worktree is refused rather than ignored. A silently dropped
-// branch would spawn into the repository — the one outcome the worktree spawn
-// exists to prevent, and a misread rather than a refusal.
+// Which of the three it means, and which contradictions are refused in which
+// order, is control.ResolveSpawn's. This end only re-words the refusal.
 func (s ctlSpawn) Run(c *control.Client) error {
-	if s.Branch != "" && !s.Worktree {
-		return fmt.Errorf("--branch names the worktree to spawn into; add --worktree")
-	}
-	var id string
-	var err error
-	if s.Worktree {
-		id, err = c.SpawnWorktree(s.Agent, s.Arg, s.Dir, s.Branch)
-	} else {
-		id, err = c.SpawnPanel(s.Agent, s.Arg, s.Dir)
-	}
+	id, err := c.ResolveSpawn(control.SpawnRequest{
+		Agent:    s.Agent,
+		Run:      s.Exec,
+		Args:     s.Arg,
+		Dir:      s.Dir,
+		Worktree: s.Worktree,
+		Branch:   s.Branch,
+	})
 	if err != nil {
+		if msg, ok := spawnRefusals[err]; ok {
+			return errors.New(msg)
+		}
 		return err
 	}
 	fmt.Println(id)

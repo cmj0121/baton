@@ -32,9 +32,11 @@ The trailing word is the entry's rung. Seven entries by default (`score.working-
 capped at 8000 runes — past that the lowest-ranked entries are dropped whole, never truncated mid-entry.
 
 Every delivery the wire makes carries the block: a direct `panel.dispatch`, each member of a group fan-out, and a
-queued task at the moment the scheduler drains it onto a panel. **Plugin-originated dispatches are the exception** —
-`baton.dispatch`, `baton.dispatch_group` and a task `baton.enqueue` queued deliver the bare prompt, and never come near
-the score.
+queued task at the moment the scheduler drains it onto a panel. It is **ranked against the panel the brief lands on,
+at the moment it lands** — so a dispatch to a panel that is busy is ranked when that panel settles, against the
+directory and the work item it has then, not the ones it had when you typed. **Plugin-originated dispatches are the
+exception** — `baton.dispatch`, `baton.dispatch_group` and a task `baton.enqueue` queued deliver the bare prompt, and
+never come near the score.
 
 ## The file
 
@@ -51,8 +53,9 @@ Four rules, and they are the whole format:
 1. **One entry per line**, shaped `- [id] text`. The id is six hex characters, assigned by baton, and stable for the
    entry's whole life — it is what makes "you changed this line" answerable precisely rather than by guess.
 2. **Edit or delete lines freely.** Your text wins over the machine's, always. Reword a line and the old wording is
-   kept as an alias, so a later repeat of the old phrasing still folds into the entry. Delete a line and it is retired,
-   whatever the log remembers about it.
+   kept as an alias, so a later repeat of the old phrasing still folds into the entry. Reword it into what another
+   line already says and the two [become one entry](#joining-two-entries-that-say-the-same-thing) that remembers both
+   wordings. Delete a line and it is retired, whatever the log remembers about it.
 3. **Anything that is not an entry is ignored** — headings, blank lines, your own prose. Keep notes in the file if you
    like; baton preserves every byte of them verbatim.
 4. **A bullet with no id becomes an entry.** Type `- keep the build green` and the next dispatch admits it as a new
@@ -95,6 +98,31 @@ who cannot read the code should be a test rather than a belief.
 The conductor's `score_lower` moves an entry down one rung at a time. Editing the file is what takes it all the way
 back.
 
+### Joining two entries that say the same thing
+
+Folding matches on text, so two observations that mean the same thing in different words sit as two entries and each
+climbs on its own. **Edit one line to say exactly what the other says, and they become one:**
+
+```txt
+- [e7f3a2] run the linter before claiming a task is done
+- [1b90cc] run the linter before claiming a task is done   ← was "always run the linter first"
+```
+
+One save does it. The entry that already said it survives; the other retires, and the wording you edited away is kept
+on the survivor as an alias — so a later "always run the linter first", said by you or by an agent, folds into it
+rather than starting a third entry.
+
+That last part is the whole of what this buys, and it is why **deleting the duplicate line is not the same gesture**:
+a deleted line takes its wording with it, and the survivor never learns it.
+
+**It counts nothing** — no reinforcement, no signal, no rung — for the same reason a reword counts nothing. Joining
+two statements is not saying either of them again, so the survivor keeps exactly the tier and the counts it had
+already earned, and the retired entry's counts stay with it.
+
+Only an edit that _creates_ the match joins anything. Two lines that already say the same thing are left alone: a line
+you restored under an id the store had retired is your decision about which entry that line is, and correcting a
+trailing full stop on it is a correction rather than a merge. The conductor's `score_merge` is what joins that pair.
+
 ## How an entry earns its tier
 
 | Rung | Renders as           | Reached by                                                          |
@@ -108,7 +136,8 @@ that never comes back simply sits at the bottom, which costs nothing.
 
 A repeat does not add a line — it **folds** into the entry that already says it and counts as a reinforcement.
 Folding matches on text, so two observations that mean the same thing in different words each sit at rung 1 and never
-climb. That is the deliberate way to fail: Score remembers less, rather than remembering wrong.
+climb. That is the deliberate way to fail: Score remembers less, rather than remembering wrong. When you spot such a
+pair, [join them](#joining-two-entries-that-say-the-same-thing) — one line edited to say what the other says.
 
 **No number of agent submissions reaches rung 3.** Recurrence alone stops one rung below it. The top rung takes
 `score.user-signals-at` signals that came from you (2 by default), and a signal is identified by the connection it
@@ -117,7 +146,11 @@ arrived on, never by anyone's claim about it. Three things count as you saying i
 - typing a duplicate line into `score.md` (one pass counts one signal, however many duplicate lines carry the wording —
   one paste is one action, not five hundred returns)
 - `baton ctl score submit` from your own shell
-- **dispatching a brief that matches an existing entry** — a prompt you type is you saying the thing
+- **dispatching or queuing a brief that matches an existing entry** — a prompt you type is you saying the thing,
+  whether you sent it with `baton ctl dispatch` or left it in the backlog with `baton ctl queue add`. **A brief
+  counts when it is delivered**, never when it is typed: a queued one when the scheduler drains it, which may be after
+  a restart, and a dispatch to a busy panel when that panel settles. One a `task.pre` hook refuses at delivery counts
+  nothing, one parked for a panel that never settles counts nothing, and neither does a task `baton.enqueue` queued.
 
 A user signal lifts the ceiling; it does not skip a rung. The entry still climbs the ordinary ladder to get there.
 
@@ -322,8 +355,18 @@ whether or not a conductor exists. Three MCP tools, refused to any connection th
 
 **None of them counts as anything, and there is no tool that raises an entry.** A reword cannot make an entry more
 important; a lowered entry climbs again only by being said again. Corrections are rate-capped at four a second, and a
-run of merges that takes more than half the fleet's memory inside a minute raises a warning in the daemon log — because
-that has no undo beyond reading the event log by hand.
+run of merges that takes more than half the fleet's memory raises a warning in the daemon log — because that has no undo
+beyond reading the event log by hand. The half is measured from where the run of merging BEGAN, so an emptying spread
+over several minutes still crosses it; a whole minute with no merge in it ends the run and the next one is measured
+afresh. Entries you delete from `score.md` yourself are never counted against the conductor.
+
+**The tools are the conductor's, and one of the three things they do is also yours.** These are refused to your own
+cockpit, deliberately: the check is "is this the panel the daemon marked conductor", and a connection that declares no
+panel is not it. What you have instead is the file, where `score_merge`'s outcome is
+[a line edited to say what another says](#joining-two-entries-that-say-the-same-thing) — so a fleet that never runs a
+conductor is not a fleet with no way to join two entries. `score_reword` is your own edit, which is the same thing
+again. `score_lower` is the one with no file spelling; deleting a line's `[id]` takes the entry all the way back
+instead.
 
 ## Configuration
 

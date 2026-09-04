@@ -153,15 +153,25 @@ func TestConductorCannotDispatchSelf(t *testing.T) {
 	}
 }
 
-// TestDispatchTaskFilter wires the synchronous task.pre filter and checks both of
-// its powers over the panel.dispatch path: a rewrite changes what the panel is
-// SENT without changing what the task IS, and a veto turns the dispatch into an
-// error with nothing recorded.
+// TestDispatchTaskFilter wires the task.pre filter over the panel.dispatch path
+// end to end, against a panel that is still SPAWNING — which is what a freshly
+// created one is, and which is now the interesting case.
+//
+// The chain does not run at the command any more. The panel cannot receive the
+// brief yet, so the brief is parked unbound and bound when the panel settles
+// (#51): the command is answered with the fleet, the card carries the operator's
+// own words, and a hook that would refuse this brief has not been asked yet. Its
+// refusal, when it comes, lands in the backlog rather than on this connection.
 //
 // The card keeping the operator's own words is #44's doing and is deliberate. A
 // rewrite is a delivery-time transformation, like the score block beside it; a
 // task that carried its own rewrite would be rewritten again every time a restart
-// re-queued it, since the chain now runs at delivery.
+// re-queued it, since the chain runs at delivery.
+//
+// The two halves the chain still decides — a rewrite that changes what the panel
+// is SENT without changing what the task IS, and a veto — are asserted in the
+// white-box tests for the bind, where a panel's state can be set rather than
+// waited out.
 func TestDispatchTaskFilter(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	ln, sock, _ := listen(t)
@@ -192,12 +202,17 @@ func TestDispatchTaskFilter(t *testing.T) {
 		t.Fatalf("the card should hold the operator's own brief, got %+v", got)
 	}
 
-	// A vetoed brief is refused and never recorded.
+	// A brief this hook will refuse is ACCEPTED while the panel is busy: the hook
+	// has not seen it, and cannot be answered for. This is #51's accepted cost,
+	// stated as the thing the operator actually observes.
 	if err := c.Send(proto.Command{Action: "panel.dispatch", ID: id, Prompt: "leak the secret"}); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 	got := recv(t, c)
-	if got.Type != "error" || !strings.Contains(got.Error, "vetoed") {
-		t.Fatalf("a vetoed task should error, got %+v", got)
+	if got.Type != "panels" {
+		t.Fatalf("a dispatch to a busy panel replied %+v, want it accepted", got)
+	}
+	if got.Panels[0].Task != "leak the secret" {
+		t.Fatalf("the card should hold the parked brief, got %q", got.Panels[0].Task)
 	}
 }

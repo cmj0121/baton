@@ -228,10 +228,11 @@ server resolves the op to a concrete command in [`internal/gitops`](../internal/
   cockpit resolved from the fleet default. Both verbs send the same command, so no
   second wire action was added and the protocol version did not move; an older
   daemon, which knows only the first form, answers the second with `no panel with
-id ""` — a refusal, not a misread. The targetless form is refused for a
-  **conductor** connection: naming its own command would be `panel.create`'s power
-  without `panel.create`'s fleet ceiling and rate cap, so a conductor keeps the
-  form that copies an existing agent;
+id ""` — a refusal, not a misread. For a **conductor** connection BOTH forms are
+  charged `panel.create`'s fleet ceiling and rate cap, because a worktree-add is a
+  spawn wearing a git op's name. Charging only the targetless one would shut
+  nothing: a conductor refused at the ceiling could fan its own agent onto branch
+  after branch through the other form, unmetered;
 - **worktree-remove** runs synchronously and confirms with a notice.
 
 The agent-only and git-work-tree gates are enforced server-side — the cockpit gates

@@ -326,6 +326,7 @@ func (m model) toggleLayout() model {
 	default:
 		m.status = "cards"
 	}
+	m.rememberLayout() // on change, not on exit: a cockpit is usually killed, not closed
 	return m
 }
 

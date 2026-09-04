@@ -51,6 +51,36 @@ func (l lens) String() string {
 	}
 }
 
+// parseLens maps a persisted name back to a lens, defaulting to the work items —
+// the fleet's own structure, and the one place a person must always end up when
+// nothing else is known.
+//
+// It is the inverse of String, so the remembered value is the lens's NAME rather
+// than its integer. lensOrder is a cycle somebody will reorder one day, and an
+// index persisted across that change would silently reopen the cockpit under a
+// different lens than the one it was left in.
+//
+// IT ASKS STRING FOR THE NAMES rather than repeating them, because it used to
+// repeat them and the miss would have been silent. A fifth lens is three edits —
+// the constant, lensOrder, String — and a parseLens that had not been told about
+// it stored the name correctly and read it back as the work items, which looks
+// like a cockpit that forgot rather than a lens that was never parsed. Now the
+// only way to have a lens String can name and parseLens cannot find is to leave
+// it out of lensOrder, and a lens missing from lensOrder cannot be reached by the
+// binding that would store it.
+//
+// The loop is over four elements at one keystroke. Whatever a map would save
+// here, it is not worth a second place to forget the lens.
+func parseLens(s string) lens {
+	name := strings.ToLower(strings.TrimSpace(s))
+	for _, l := range lensOrder {
+		if l.String() == name {
+			return l
+		}
+	}
+	return lensWork
+}
+
 // real reports whether this lens shows the fleet's own structure — the work items
 // the server holds — rather than a projection over it. Only the real tree can be
 // reorganised: the rest have no parents anybody can move a panel between.
@@ -66,11 +96,21 @@ func (l lens) bucket(p panel.Panel) string {
 	case lensDir:
 		return p.Cwd // re-based against the fleet's common prefix by lensFleet
 	case lensProfile:
+		// A panel with no profile falls back to its KIND, because the profile lens
+		// asks "what kind of agent is this" and the honest answer for these is "not
+		// one". Command panels get their own bucket rather than joining the shells:
+		// filing a running build under "shells" is a claim about the machine that is
+		// simply false, and at fifty panels the lens is where an operator looks to
+		// find out what is actually running.
 		if p.Profile == "" {
-			if p.IsAgent() {
+			switch {
+			case p.IsAgent():
 				return "(no profile)"
+			case p.IsCommand():
+				return "commands"
+			default:
+				return "shells"
 			}
-			return "shells"
 		}
 		return p.Profile
 	case lensState:
@@ -239,6 +279,7 @@ func (m model) cycleLens(delta int) model {
 	}
 	m.restoreCursor(kind, id, "", had && kind == itemPanel)
 	m.status = "group by: " + m.lens.String()
+	m.rememberLens() // on change, not on exit: a cockpit is usually killed, not closed
 	return m
 }
 

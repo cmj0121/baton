@@ -108,7 +108,7 @@ func TestDeclarationClosesTheSchedulerWindow(t *testing.T) {
 	if id, ok := freeIdleAgent(s, ""); ok {
 		t.Fatalf("a panel that raised its hand is not free for work, got %q", id)
 	}
-	if _, err := s.enqueueTask("audit the auth module", "", nil); err != nil {
+	if _, err := s.enqueueTask(conn(""), "audit the auth module", "", nil); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	if deliver, spawns := schedule(s); len(deliver) != 0 || len(spawns) != 0 {

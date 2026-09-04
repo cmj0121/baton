@@ -78,17 +78,54 @@ type SpawnSpec struct {
 // That is a one-shot, bounded by the backlog that survived the restart, and it
 // only ever runs the chain over work the chain was going to see anyway: it is
 // accepted, not covered.
+//
+// UserSignal is NOT the other half of Plugin, and the name is the difference.
+// Plugin is a durable fact about where the task came from, true for as long as
+// the task exists. UserSignal is a PERMISSION, worth exactly one reinforcement,
+// and the scheduler spends it on the assignment that takes it — so on a task in
+// flight it reads false, and that is the field working, not the field lying. See
+// Server.takeUserSignalLocked, which is the only thing that spends it, and which
+// says which way the spend is lossy.
+//
+// It is here rather than in the server for #50, and the reason is a gap in time:
+// a brief the operator ENQUEUED reinforces what it repeats exactly as a
+// dispatched one does, but the connection that enqueued it is long gone by the
+// time the scheduler drains the task onto a panel, and a queued task routinely
+// outlives the daemon that took it in. Persisting it is what carries the
+// server's reading of that connection across both gaps.
+//
+// IT IS THE SERVER'S CONCLUSION, NOT A CLAIM. Nothing on the wire can set it: the
+// enqueue command carries no such field, and the value is decided at enqueue from
+// Server.connProvenance — the one discrimination #38 §4 allows — under the lock
+// that creates the task. That a user connection's provenance has exactly ONE
+// value ({Source: SourceUser}, with no panel, cwd, profile or group, because a
+// cockpit has no panel row) is what lets a single bool carry the whole of it
+// without loss. An agent's enqueue is stamped false and stays false.
+//
+// It is a claim to anyone who can write the backlog files directly — which is the
+// same exposure #38's Trust and exposure section already accepts for score.md
+// itself, and no worse: an agent that can edit this file can edit that one.
+//
+// Absent on a task from an older build for the same reason Plugin is, and the
+// absence means the same thing it means for a connection that never declared
+// itself the user: no signal. A backlog that survived the upgrade counts nothing,
+// which is the safe direction — invariant I6 is about entries climbing on
+// something that was not the user, so the failure to fold is the tolerable half.
+//
+// The JSON key stays "user": the field is renamed, the file format is not, so a
+// backlog written by an older build restores with its stamp intact.
 type Task struct {
-	ID       string     `json:"id"`
-	Prompt   string     `json:"prompt"`
-	Status   Status     `json:"status"`
-	Panel    string     `json:"panel,omitempty"`    // the panel currently executing it, if any
-	Group    string     `json:"group,omitempty"`    // the work item it belongs to, if any
-	Result   string     `json:"result,omitempty"`   // a terminal note (e.g. a failure reason)
-	Priority int        `json:"priority,omitempty"` // scheduler order among queued tasks: higher drains first (default 0, ties break oldest-first)
-	Attempts int        `json:"attempts"`           // how many times its prompt has been delivered
-	Spawn    *SpawnSpec `json:"spawn,omitempty"`    // provision a fresh agent for this task when none is free (nil = existing agents only)
-	Plugin   bool       `json:"plugin,omitempty"`   // queued by a plugin (baton.enqueue) rather than over the socket; see below
-	Created  time.Time  `json:"created"`
-	Updated  time.Time  `json:"updated"`
+	ID         string     `json:"id"`
+	Prompt     string     `json:"prompt"`
+	Status     Status     `json:"status"`
+	Panel      string     `json:"panel,omitempty"`    // the panel currently executing it, if any
+	Group      string     `json:"group,omitempty"`    // the work item it belongs to, if any
+	Result     string     `json:"result,omitempty"`   // a terminal note (e.g. a failure reason)
+	Priority   int        `json:"priority,omitempty"` // scheduler order among queued tasks: higher drains first (default 0, ties break oldest-first)
+	Attempts   int        `json:"attempts"`           // how many times its prompt has been delivered
+	Spawn      *SpawnSpec `json:"spawn,omitempty"`    // provision a fresh agent for this task when none is free (nil = existing agents only)
+	Plugin     bool       `json:"plugin,omitempty"`   // queued by a plugin (baton.enqueue) rather than over the socket; see below
+	UserSignal bool       `json:"user,omitempty"`     // ONE-SHOT permission to count the operator's reinforcement, spent at assignment; see below
+	Created    time.Time  `json:"created"`
+	Updated    time.Time  `json:"updated"`
 }

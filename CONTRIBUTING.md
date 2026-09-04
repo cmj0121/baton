@@ -35,6 +35,47 @@ same checks locally before pushing:
 Run `make ci` before opening a pull request — if it passes locally, it passes
 in CI.
 
+## Comments that outlive the code
+
+The commonest defect found in review here is not wrong code. It is a comment
+describing a neighbouring piece of code that the same commit changed. Writing
+the comment is not the failure; not re-reading it once the code beside it moved
+is. Two habits, in order of how much they buy:
+
+### `make stale-comments`
+
+A rename leaves the old name sitting in the comment beside it, and the compiler
+never looks at a comment. `make stale-comments` walks every comment line your
+branch **adds** to a `.go` file, pulls out every code-shaped name, and checks it
+against every name the tree's code actually contains. A name that survives only
+in prose is the residue of an edit that moved on without it.
+
+It needs no list of what was renamed, which is the point — it cannot be told
+the wrong answer by a list that is out of date. Run it before asking for
+review. It is not part of `make ci` and not a pre-commit hook, because so far
+every name it has raised on this repository has been prose that reads like code
+(`init.defaultBranch`, `proc_pidpath`, "a SIGKILLed daemon"). Read its output;
+do not let it block you. Its exit codes are `0` clean, `1` names found, and `2`
+**nothing was checked** — the last being a failure, never a pass, because a
+sweep that examined nothing looks exactly like one that examined everything and
+approved it.
+
+### Claims a grep cannot check
+
+The sweep only finds stale **identifiers**. Two other ways a comment goes stale
+have no name in them at all, so no tool will ever see them:
+
+- a comment that **enumerates cases** and goes stale when a case is added;
+- a comment that **states an arithmetic result** and goes stale when the
+  function it describes changes.
+
+The only form of either that survives the next edit is one the compiler or the
+suite checks: a test that recomputes the figure from the function itself, or a
+typed value replacing a closed enumeration written out in prose. When you catch
+yourself writing a claim a reader would have to verify by hand, move it into an
+assertion instead. That is a habit, not a tool, and `make stale-comments`
+passing says nothing about it.
+
 ### Pre-commit hooks
 
 Install the hooks once and they run automatically on every commit:

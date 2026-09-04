@@ -35,7 +35,7 @@ func supervisorServer(policy restart.Policy) *Server {
 func supervise(s *Server, exitCode int, now time.Time) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := s.superviseExitLocked("p1", exitCode, now)
+	out := s.superviseExitLocked("p1", s.panels[0].Kind, exitCode, now)
 	if st := s.restarts["p1"]; st != nil && st.timer != nil {
 		st.timer.Stop()
 		st.timer = nil
@@ -198,7 +198,7 @@ func TestPerProfilePolicyWins(t *testing.T) {
 func TestForgetRestartDisarms(t *testing.T) {
 	s := supervisorServer(restart.Policy{Mode: restart.OnFailure, Max: 3, Backoff: time.Hour})
 	s.mu.Lock()
-	s.superviseExitLocked("p1", 1, time.Now())
+	s.superviseExitLocked("p1", s.panels[0].Kind, 1, time.Now())
 	armed := s.restarts["p1"].timer != nil
 	s.forgetRestartLocked("p1")
 	_, still := s.restarts["p1"]
@@ -217,7 +217,7 @@ func TestForgetRestartDisarms(t *testing.T) {
 func TestNoteSpawnDisarmsAndStartsTheClock(t *testing.T) {
 	s := supervisorServer(restart.Policy{Mode: restart.OnFailure, Max: 3, Backoff: time.Hour})
 	s.mu.Lock()
-	s.superviseExitLocked("p1", 1, time.Now())
+	s.superviseExitLocked("p1", s.panels[0].Kind, 1, time.Now())
 	now := time.Now()
 	s.noteSpawnLocked("p1", now)
 	st := s.restarts["p1"]

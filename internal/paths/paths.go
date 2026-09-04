@@ -95,6 +95,25 @@ func TUIConfigFile() string {
 	return filepath.Join(home(), ".baton", "TUI.yaml")
 }
 
+// TUIStateFile is where the cockpit remembers the view preferences an operator
+// can only reach by keystroke ($HOME/.baton/TUI.state.json): the dashboard's
+// cards-or-tree choice and the group-by lens.
+//
+// It is the machine-written sibling of TUIConfigFile, and the split is the point.
+// TUI.yaml is a file the operator writes and comments, and the server hot-reloads
+// it on SIGHUP; rewriting it to remember a toggle would reorder their keys, drop
+// their comments, and race their editor. This file is baton's own, never
+// hand-edited, and safe to overwrite whole.
+//
+// Like UsageLimitsFile — and unlike StateFile and QueueDir — it is deliberately
+// NOT scoped to a socket. A fleet snapshot belongs to the daemon that holds those
+// panels, but a taste for the tree belongs to the operator: it does not change
+// because they attached to a different fleet, so every daemon on the host resolves
+// this one path.
+func TUIStateFile() string {
+	return filepath.Join(home(), ".baton", "TUI.state.json")
+}
+
 // ConductorFile is the operator's conductor brief ($HOME/.baton/CONDUCTOR.md): a
 // goal and guide the user writes for the conductor agent. It is optional — when
 // absent or empty the conductor gets only the built-in control primer. The server

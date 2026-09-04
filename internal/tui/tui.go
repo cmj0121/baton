@@ -26,6 +26,7 @@ import (
 	"github.com/cmj0121/baton/internal/i18n"
 	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/panel"
+	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/vtirm"
 )
@@ -65,6 +66,13 @@ const (
 	colAgent = lipgloss.Color("75") // agent-panel count (blue)
 	colShell = lipgloss.Color("73") // shell-panel count (teal)
 
+	// colCommand is the third kind's own colour rather than a shade of either
+	// neighbour's, because the distinction it draws is the one the operator is
+	// looking for: a command panel is neither a worker to give work to nor a
+	// prompt to type at. Purple sits off the blue-teal axis the other two share,
+	// so the three read as three at a glance and not as two-and-a-variant.
+	colCommand = lipgloss.Color("140") // command-panel count (purple)
+
 	colBar    = lipgloss.Color("111") // light-blue status-bar fill (the footer)
 	colScroll = lipgloss.Color("179") // warm amber footer fill while in scroll mode
 	colAmber  = lipgloss.Color("172") // usage segment past the warning threshold, before the alarm
@@ -82,6 +90,14 @@ var (
 	// caret and the value column of the config screens.
 	caretStyle = lipgloss.NewStyle().Bold(true).Foreground(colBrand)
 	valueStyle = lipgloss.NewStyle().Foreground(colCyan)
+
+	// The breakdown colours, on the same terms: kindBreakdown and fleetBreakdown
+	// draw one of each per kind per group row per frame, and a Style is a value
+	// built from a colour that never changes.
+	agentStyle   = lipgloss.NewStyle().Foreground(colAgent)
+	commandStyle = lipgloss.NewStyle().Foreground(colCommand)
+	shellStyle   = lipgloss.NewStyle().Foreground(colShell)
+	groupStyle   = lipgloss.NewStyle().Foreground(colBrand)
 
 	// The footer fill, prebuilt once per mode: the standing light blue, and a warm
 	// amber while scrolling so the whole status bar signals "history / navigation"
@@ -482,11 +498,18 @@ type model struct {
 	// three work items is the one layout that cannot show nesting, which is the
 	// worst possible place to hide it.
 	//
-	// Nobody sets it directly: opening a work item from the cards turns it on,
-	// because "show me what is inside this" can only be answered by the tree, and
-	// ← out of a shut top-level row turns it off again. A view state, session-lived
-	// like every other one here.
+	// One key sets it and nothing else does: toggleLayout, bound to `v l`. The
+	// arrows walk the tree and space opens a row; neither reaches this flag, and
+	// treeIsChosen only clears it on a copy to ask what the fleet would look like
+	// without it. That is what makes it a PREFERENCE rather than navigation, and
+	// so what makes it worth remembering across sessions (see viewStatePath).
 	showTree bool
+
+	// viewStatePath is where the remembered view preferences live — the file
+	// paths.TUIStateFile names. New sets it; a model built without one (every test
+	// that does not ask for persistence) leaves it empty, which makes both the load
+	// and the save inert rather than writing into the real $HOME.
+	viewStatePath string
 
 	// collapsed records the group rows a person has explicitly SHUT, keyed by group
 	// path. Groups are expanded by default — a tree that opened closed would show
@@ -574,8 +597,22 @@ func New(c *client.Client, appVersion string) tea.Model {
 		endpoint:   c.Endpoint(),
 		now:        time.Now(),
 		scrollMem:  map[string]scrollState{},
+
+		viewStatePath: paths.TUIStateFile(),
 	}
-	return m.applyPrefs(loadPrefs())
+	m = m.applyPrefs(loadPrefs())
+
+	// Remembered preferences go on LAST, and that is the precedence rule: the
+	// built-in default is the floor, the config layers over it, and a key the
+	// operator actually pressed beats both. Only fields the file has an opinion
+	// about are touched, so a config that gains a key for either setting still
+	// speaks for everyone who has never pressed it.
+	//
+	// It is applied here rather than in applyPrefs because applyPrefs is also the
+	// SIGHUP reload, and it deliberately leaves live view state alone. Reading the
+	// file there would yank the dashboard back to the remembered layout every time
+	// the operator edited an unrelated setting.
+	return m.applyViewState(loadViewState(m.viewStatePath))
 }
 
 // applyPrefs overlays a freshly loaded prefs onto the model — the in-place client
@@ -3740,11 +3777,18 @@ func shortPath(dir string, width int) string {
 	return truncate(filepath.Base(dir), width)
 }
 
-// kindBadge tags a panel as an agent or a plain shell.
+// kindBadge tags a panel as an agent, a plain shell, or a command.
+//
+// The label is Kind.String() rather than a table here, so a kind this build knows
+// can never be badged as another one — the badge is the operator's fastest read
+// of what a panel IS, and #54 is what an agent badge over a plain binary costs.
 func kindBadge(kind panel.Kind) string {
 	bg := colShell // shell: teal
-	if kind == panel.Agent {
+	switch kind {
+	case panel.Agent:
 		bg = colAgent // agent: blue
+	case panel.Command:
+		bg = colCommand // command: purple
 	}
 	label := strings.ToUpper(kind.String())
 	return lipgloss.NewStyle().Foreground(colDark).Background(bg).Bold(true).Padding(0, 1).Render(label)

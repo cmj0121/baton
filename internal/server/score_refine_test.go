@@ -287,9 +287,9 @@ func TestTheAlarmsFiguresAreWhatTheyClaim(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		entries int           // what the store holds when the run starts
-		merges  int           // merges in the first window, one entry each
+		merges  int           // merges in the first batch, one entry each
 		floor   int           // what the caller read off the store's policy
-		rewind  time.Duration // how far the window's start is pushed back, then…
+		wait    time.Duration // how long the conductor then pauses, before…
 		again   int           // …this many more merges
 		want    int           // alarms the whole run must raise
 	}{
@@ -306,21 +306,30 @@ func TestTheAlarmsFiguresAreWhatTheyClaim(t *testing.T) {
 		// Below it, everything the fleet remembers is already in every brief, and
 		// halving it is ordinary.
 		{name: "a store below the floor is silent", entries: 7, merges: 6, floor: 8, want: 0},
-		// A second window can alarm again, so a collapse outlasting the window is
-		// not reported once and forgotten. Rewinding by TWO MINUTES is what makes
-		// this an assertion about a one-minute window rather than about any window:
-		// the five merges that follow are half of what the NEW window opens on
-		// rather than half of the original twenty.
-		{name: "a later window alarms again", entries: 20, merges: 10, floor: 8,
-			rewind: 2 * time.Minute, again: 5, want: 2},
+		// A collapse that comes back is not reported once and forgotten. Pausing
+		// for MORE than the window ends the run, so the five merges that follow are
+		// half of the ten the store now holds and alarm on their own. Raise the
+		// window to an hour and this is one alarm, not two: the pause no longer
+		// ends anything and the second batch is still inside the first alarm's
+		// quiet period.
+		{name: "a later run alarms again", entries: 20, merges: 10, floor: 8,
+			wait: 70 * time.Second, again: 5, want: 2},
+		// #53, as arithmetic: the numbers measured on a live daemon, where a
+		// conductor took 74 entries to 38, waited just under the window, and took
+		// 38 to 20 without ever raising the alarm. The pause is SHORT of the window,
+		// so the run carries and its baseline is still 74 — one further merge is the
+		// 37th entry taken and crosses the line. It fails in both directions: it was
+		// zero alarms before the baseline stopped following the merges down, and it
+		// is zero again if the window is short enough that 58 s ends the run.
+		{name: "a pause inside the window keeps the baseline", entries: 74, merges: 36, floor: 8,
+			wait: 58 * time.Second, again: 1, want: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var a mergeAlarm
-			left, fired := alarmRun(&a, tc.entries, tc.merges, tc.floor, t0)
-			if tc.rewind > 0 {
-				a.at = a.at.Add(-tc.rewind)
+			left, now, fired := alarmRun(&a, tc.entries, tc.merges, tc.floor, t0)
+			if tc.again > 0 {
 				var more int
-				left, more = alarmRun(&a, left, tc.again, tc.floor, t0)
+				left, _, more = alarmRun(&a, left, tc.again, tc.floor, now.Add(tc.wait))
 				fired += more
 			}
 			if fired != tc.want {
@@ -331,17 +340,23 @@ func TestTheAlarmsFiguresAreWhatTheyClaim(t *testing.T) {
 	}
 }
 
-// alarmRun drives merges through one alarm, one entry lost per merge, and counts
-// the warnings. It answers what the store is left holding, so a second run can
-// carry on from it.
-func alarmRun(a *mergeAlarm, entries, merges, floor int, now time.Time) (left, fired int) {
-	for range merges {
-		if _, alarm := a.note(entries, entries-1, floor, now); alarm {
+// alarmRun drives merges through one alarm, one entry lost per merge, at the
+// rate minRefineGap admits them — which is the rate the alarm exists to watch,
+// and the reason the clock advances here rather than standing still. It answers
+// what the store is left holding and WHEN THE LAST MERGE LANDED, so that a pause
+// a caller adds to it is the silence the conductor actually left and not that
+// plus a gap it never spent.
+func alarmRun(a *mergeAlarm, entries, merges, floor int, now time.Time) (left int, at time.Time, fired int) {
+	for i := range merges {
+		if i > 0 {
+			now = now.Add(minRefineGap)
+		}
+		if _, _, alarm := a.note(entries, entries-1, floor, now); alarm {
 			fired++
 		}
 		entries--
 	}
-	return entries, fired
+	return entries, now, fired
 }
 
 // TestTheAlarmFloorIsTheWorkingSet is the floor's derivation asserted as

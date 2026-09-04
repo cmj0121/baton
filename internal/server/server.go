@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -389,10 +390,16 @@ type Server struct {
 	reportedCwd map[string]bool
 
 	// pendingDispatch holds a dispatch whose panel was not yet ready to receive it
-	// (still spawning or mid-output), to be delivered once the panel settles to
-	// idle/attention. Keyed by panel id, guarded by mu; the monitor tick drains it.
-	// The key is the at-most-one-per-panel invariant: a fresh dispatch to a panel
-	// replaces whatever was held for it, which is what dispatchScored relies on.
+	// (still spawning or mid-output), to be bound and delivered once the panel
+	// settles to idle/attention. Keyed by panel id, guarded by mu; the monitor tick
+	// drains it. The key is the at-most-one-per-panel invariant: a fresh dispatch to
+	// a panel replaces whatever was held for it, which is what dispatchScored
+	// relies on.
+	//
+	// What is held is the BRIEF, never bytes: nothing here has been ranked or
+	// filtered yet, so a dispatch that waits ten minutes for a busy panel is bound
+	// against the panel it finally lands on rather than the one it was aimed at
+	// (#51).
 	pendingDispatch map[string]delivery
 
 	// deferred holds deliveries a tick's budget did not reach. They are carried
@@ -484,10 +491,15 @@ type Server struct {
 	// pass the "no conductor exists yet" check. Guarded by mu.
 	conductorPending bool
 
-	// spawn and refine are the two agent-facing rate caps, keyed by the PANEL the
-	// connection DECLARED as its own, not by the connection itself. Guarded by mu.
-	// See minConductorSpawnGap and minRefineGap for what each one is worth, and
-	// the gapStamp type for why they are shaped alike.
+	// spawn and refine are the two agent-facing rate caps. Guarded by mu. See
+	// minConductorSpawnGap and minRefineGap for what each one is worth, and the
+	// gapStamp type for why they are shaped alike.
+	//
+	// NEITHER IS KEYED ON THE CONNECTION, and refine is keyed by the PANEL the
+	// connection declared as its own. spawn is keyed on the door it guards (see
+	// spawnDoor), because three roads reach that door and one purse is the only
+	// shape that can hold them; the paragraphs below are about the connection,
+	// and they are why neither of them is keyed on it.
 	//
 	// THE IDENTITY IS THE WHOLE OF IT. Both stamps used to live on the clientConn,
 	// which reads as the obvious place and is wrong for anything an agent drives:
@@ -504,16 +516,16 @@ type Server struct {
 	// because an LLM will loop was inert on the path the LLM uses. Both are fixed
 	// here, by the same change, because they are one bug.
 	//
-	// BE EXACT ABOUT WHAT THE KEY IS, in the voice connProvenance uses. The two
-	// caps do not check the declared panel to the same depth. A refine is gated by
-	// isConductor first, which compares the declared self against the fleet, so
-	// its stamp is keyed on a panel the server agreed the caller is. A spawn is
-	// gated by guardConductor, which reads cc.self and validates it against
-	// nothing — so an agent varying Self per dial still walks through the spawn
-	// cap. That is not a hole worth closing while #38's trust model already
-	// declines to be a boundary against an agent holding the operator's own uid;
-	// it is the difference between an evasion that requires knowing something and
-	// the old bug, which required nothing at all.
+	// BE EXACT ABOUT WHAT THE KEY IS, in the voice connProvenance uses. A refine
+	// is gated by isConductor first, which compares the declared self against the
+	// fleet, so its stamp is keyed on a panel the server agreed the caller is. A
+	// spawn is gated by guardConductor, which reads cc.self and validates it
+	// against nothing — so while the spawn cap was keyed on that id too, an agent
+	// varying Self per dial walked straight through it. That was recorded here as
+	// an evasion not worth closing on its own, since #38 already declines to be a
+	// boundary against an agent holding the operator's own uid. #75 closed it
+	// anyway, as a side effect of a key chosen for another reason entirely: a door
+	// the caller does not name is a door the caller cannot vary.
 	spawn  gapStamp
 	refine gapStamp
 
@@ -1105,7 +1117,7 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 			s.panels[i].State = panel.Exited
 			s.panels[i].ExitCode = exitCode // the daemon reports it; the cockpit renders a non-zero one as failed
 			s.panels[i].Reason = ""         // a dead process is not asking for anything
-			s.panels[i].Activity = "exited"
+			s.panels[i].Activity = exitActivity(s.panels[i].Kind, exitCode)
 			s.exitedAt[id] = time.Now()   // the Monitor is about to forget it; keep the instant the queue sorts on
 			s.mon.forget(id)              // a dead panel no longer ticks
 			delete(s.declared, id)        // …and its raised hand goes with it
@@ -1116,7 +1128,7 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 			s.advanceTaskLocked(id, task.Failed, fmt.Sprintf("panel exited (code %d)", exitCode))
 			// The restart policy decides whether this is the end of the panel or a
 			// pause in it, and says which on the card.
-			if notice = s.superviseExitLocked(id, exitCode, time.Now()); notice != "" {
+			if notice = s.superviseExitLocked(id, s.panels[i].Kind, exitCode, time.Now()); notice != "" {
 				s.panels[i].Activity = notice
 			}
 			fields = panelFields(s.panels[i])
@@ -1761,9 +1773,17 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 	// also runs the task.pre chain here, which is the whole reason this loop is on
 	// this side of the Unlock above; see deliver.
 	//
-	// Only the unbound ones are budgeted. A bound delivery is a write, which is
-	// what this loop always was; an unbound one can sit on a hook for up to the
-	// task.pre fail-open timeout, and the whole tick is behind it — this tick's
+	// EVERY delivery is budgeted, and after #51 there is no other kind to exempt:
+	// a delivery arrives here unbound or it does not arrive here at all, since a
+	// dispatch to a settled panel writes its own bound bytes and one to a busy
+	// panel is parked as the operator wrote it. The exemption this paragraph used
+	// to describe — a bound delivery is only a write, so charge it nothing — was
+	// the half of "what does binding cost" that skipped the ceiling precisely
+	// because its hook had already run, and it went with the shape that made it
+	// possible. See deliveryBudget.
+	//
+	// The ceiling is here because an unbound delivery can sit on a hook for up to
+	// the task.pre fail-open timeout, and the whole tick is behind it — this tick's
 	// telemetry and its report of what settled, cwd sampling, the CloseOnDone reap
 	// and spawn-on-demand provisioning all wait for this loop to end. (The idle
 	// settling itself already happened under the lock above; what waits is saying
@@ -1778,7 +1798,7 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 	start := s.mon.now()
 	var over []delivery
 	for _, d := range deliver {
-		if d.data == nil && s.mon.now().Sub(start) >= deliveryBudget {
+		if s.mon.now().Sub(start) >= deliveryBudget {
 			over = append(over, d)
 			continue
 		}
@@ -1827,8 +1847,13 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 }
 
 // deliveryBudget is how long one monitor tick will spend binding and delivering
-// UNBOUND briefs before leaving the rest for the next tick. It is what bounds the
-// gap between fleet reports when task.pre is slow.
+// briefs before leaving the rest for the next tick. It is what bounds the gap
+// between fleet reports when task.pre is slow.
+//
+// It applies to EVERY delivery, which it did not while a delivery could arrive
+// already bound: "what does binding cost" had two answers in one file, and the
+// half that skipped the ceiling was the half whose hook had already run. One
+// shape, one budget (#51).
 //
 // It is a DURATION and not a count, and the difference is the whole of it. A
 // count cannot tell a hook that answered in eight microseconds from one that
@@ -1851,65 +1876,113 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 const deliveryBudget = monitorInterval
 
 // delivery is one brief on its way to a panel, carried out of s.mu so that the
-// write — and, for a brief still to be bound, the score render and the task.pre
-// chain as well — happens with the lock released. It sits in pendingDispatch
-// while the panel is not ready, and in the monitor tick's deliver list once it is.
+// bind — the score render and the task.pre chain — and the write that follows it
+// both happen with the lock released. It sits in pendingDispatch while the panel
+// is not ready, and in the monitor tick's deliver list once it is.
 //
-// EXACTLY ONE OF data AND task/prompt IS FILLED. That is the type's invariant,
-// stated here rather than left to each reader: deliver tests d.data != nil and
-// the monitor tick tests d.data == nil, in opposite polarity, and both are
-// asking this one question. Which half is filled says WHEN the brief was bound
-// to this panel:
+// EVERY DELIVERY IS UNBOUND. prompt is the text its author wrote, ranked against
+// nothing and filtered by nobody; deliver binds it against the panel this
+// delivery names, at the moment it lands. That is R5's rule, and it now has no
+// exemptions: the queued task the scheduler just assigned, the one a provisioned
+// agent is about to receive, and the direct panel.dispatch whose panel was busy
+// all arrive here in the same shape and are bound at the same point. The one
+// brief that is not bound is the one plugin marks — baton.enqueue and
+// baton.dispatch deliver exactly what was written, since running the chain over
+// them would re-enter a task.pre hook that dispatches, once per delivery.
 //
-//   - data is a brief that already is what the panel should receive, and only
-//     its write was held. A plugin-originated dispatch bypasses the chain
-//     outright, and the wire's panel.dispatch and each member of its fan-out ran
-//     it at the command — against this same panel, so running it again here
-//     would run every hook twice.
+// IT WAS A UNION until #51 — bound bytes or an unbound brief, discriminated on
+// data == nil in two functions of opposite polarity — because a direct dispatch
+// bound at the COMMAND and parked the finished bytes when the panel was busy. A
+// hook then saw the panel as it had been minutes earlier, and the score block
+// rode along ranked against a context that had moved. Three defects were the
+// union's rather than that path's, and all three go with it: the "exactly one
+// half is filled" invariant that was prose and nothing else, the claim
+// (task/attempt) that only one half carried — so a held bound write was the one
+// delivery nobody re-checked before writing — and a delivery budget that charged
+// one half and not the other.
 //
-//     Binding at the command is a deliberate exception for a DIRECT dispatch,
-//     not a description of the routes that take it: a direct dispatch owes its
-//     caller a synchronous veto, and the caller is on the socket waiting for one.
-//     A queued task has no such caller — the connection that enqueued it may have
-//     closed hours before the scheduler drained it — so its refusal belongs in
-//     the backlog instead, which is what puts the chain at delivery for that
-//     half. The cost of the exception is that a dispatch to a BUSY panel binds at
-//     command time and its bytes then wait in pendingDispatch, so a hook sees the
-//     panel as it was when the command arrived rather than when it settles.
-//
-//   - task/prompt is a brief still unbound — a queued task the scheduler has just
-//     assigned, or one a provisioned agent is about to receive. Until the
-//     assignment there was no panel to bind against, so the chain belongs at this
-//     delivery (#44) — unless plugin says baton.enqueue queued it, which is the
-//     one unbound brief that is delivered exactly as it was written.
+// The cost of closing it is stated in #51 and accepted: a dispatch to a busy
+// panel is answered "sent" before the hook that may refuse it has run, and the
+// refusal arrives later as a terminal task in the backlog, walked back by
+// vetoQueuedTask exactly as a queued task's is.
 type delivery struct {
 	panel  string
-	data   []byte
 	task   string
 	prompt string
+	// submit is the sequence that sends the prompt, as the command asked for it
+	// (proto.Command.Submit); "" takes defaultSubmit. It is carried rather than
+	// looked up because the bind now happens after the command has been answered,
+	// so by then there is no command left to ask. Only a direct dispatch ever
+	// names one — a queued task takes the default — and dropping it here would
+	// silently downgrade `panel.dispatch` with a custom submit to a busy panel.
+	submit string
 	// spawned marks a panel provisioned for this task alone (applyScheduledSpawns),
 	// which is what tells a walk-back that the panel was created FOR the task: a
 	// standing agent goes back to the pool, an ephemeral one is reaped with it.
 	spawned bool
-	// plugin marks a task baton.enqueue queued (task.Task.Plugin). It is carried
+	// plugin marks a brief a plugin originated — a task baton.enqueue queued
+	// (task.Task.Plugin) or a baton.dispatch held for a busy panel. It is carried
 	// here rather than looked up at delivery so that deliver — which runs off
 	// s.mu, and must, because it binds — needs no lock take of its own to know it.
 	// Task.Plugin is written once, under the lock that creates the task, and never
 	// mutated after, so there is no drift for the copy to protect against.
 	plugin bool
+	// signal is the operator's ONE reinforcement, riding along with this delivery
+	// and spent when the delivery is assigned (task.Task.UserSignal). It is not
+	// plugin's opposite, and reading the two as an either/or is the mistake the
+	// pair invites: plugin is a durable fact about where the brief came from and
+	// holds for the brief's whole life, signal is a permission that is gone once
+	// taken. What is true is narrower — they are never BOTH set, because neither
+	// baton.enqueue nor baton.dispatch is the operator — and it does not make
+	// either one the other's absence.
+	//
+	// It is carried here for the same reason plugin is: deliver runs off s.mu,
+	// and must, because it binds.
+	//
+	// It is the server's conclusion about the connection and never a field a
+	// client filled (#38 §4): connAuthor decides it while the socket is still
+	// open, and nothing on the wire carries an author.
+	signal bool
 	// attempt is the task's Attempts as the assignment left it — the delivery's
 	// claim on the panel, re-checked before the write. See claimDelivery.
 	attempt int
 }
 
+// bindDelivery renders d into the bytes the panel receives, running the bind
+// unless plugin marks it. It must be called with s.mu RELEASED, because the
+// bind blocks on the Lua worker for up to its fail-open timeout.
+//
+// ok=false is a task.pre veto, and the two callers answer it differently — the
+// tick walks the task back (vetoQueuedTask), the command refuses synchronously
+// (errVetoed) — so the answer stays at the caller and only the rendering lives
+// here. took is what the fan-out's budget charges; a plugin brief binds nothing
+// and costs nothing.
+func (s *Server) bindDelivery(d delivery) (data []byte, ok bool, took time.Duration) {
+	if d.plugin {
+		// baton.enqueue and baton.dispatch get what a plugin-originated dispatch
+		// gets: the bare prompt, no block. Running the chain over one would re-enter
+		// a task.pre hook that dispatches, once per delivery, unbounded.
+		return dispatchData(d.prompt, d.submit), true, 0
+	}
+	b, ok, took := s.bindBrief(d.panel, d.prompt)
+	if !ok {
+		return nil, false, took
+	}
+	// Neither the block nor the rewrite is recorded. The block is advice for this
+	// one delivery; the rewrite is the plugin's edit of it, and a task that carried
+	// its own rewrite would be rewritten again on every restart, because
+	// restoreTasksLocked re-queues an in-flight task and the chain now runs at
+	// delivery. See dispatchScored.
+	return briefBytes(b.Score, b.Prompt, d.submit), true, took
+}
+
 // deliver carries out one delivery with s.mu RELEASED.
 //
-// A brief already bound to this panel is just the write, and so is one
-// baton.enqueue queued. An unbound one is bound HERE — this is the moment the
-// panel, and with it the cwd, profile and group the working set is ranked
-// against, is finally known (#44) — and binding means the score render and then
-// the task.pre chain, which goes through the Lua worker's single thread behind a
-// 2s fail-open timeout (see filterBrief).
+// A plugin-originated brief is just the write. Every other one is bound HERE —
+// this is the moment the panel, and with it the cwd, profile and group the
+// working set is ranked against, is finally known (#44, #51) — and binding means
+// the score render and then the task.pre chain, which goes through the Lua
+// worker's single thread behind a 2s fail-open timeout (see filterBrief).
 // Running that under s.mu would stall every connection for up to two seconds per
 // queued task, so the scheduler assigns under the lock and the binding waits
 // until after the Unlock.
@@ -1927,33 +2000,68 @@ type delivery struct {
 // marked dispatched on a panel, and has to be walked back rather than refused;
 // vetoQueuedTask does that.
 func (s *Server) deliver(d delivery) {
-	if d.data != nil {
-		s.writeInput(d.panel, d.data)
+	data, ok, _ := s.bindDelivery(d)
+	if !ok {
+		s.vetoQueuedTask(d)
 		return
-	}
-	var data []byte
-	if d.plugin {
-		// baton.enqueue is a plugin-originated dispatch like baton.dispatch, and gets
-		// what one gets: the bare prompt, no block. Running the chain over it would
-		// re-enter a task.pre hook that enqueues, once per delivery, unbounded.
-		data = dispatchData(d.prompt, "")
-	} else {
-		b, ok, _ := s.bindBrief(d.panel, d.prompt)
-		if !ok {
-			s.vetoQueuedTask(d)
-			return
-		}
-		// Neither the block nor the rewrite is recorded. The block is advice for
-		// this one delivery; the rewrite is the plugin's edit of it, and a task
-		// that carried its own rewrite would be rewritten again on every restart,
-		// because restoreTasksLocked re-queues an in-flight task and the chain now
-		// runs at delivery. See dispatchScored.
-		data = briefBytes(b.Score, b.Prompt, "")
 	}
 	if !s.claimDelivery(d) {
 		return
 	}
 	s.writeInput(d.panel, data)
+	s.signalDelivered(d)
+}
+
+// signalDelivered records a DELIVERED brief as the user's reinforcement of
+// whatever entry it repeats — #50, closing the asymmetry that let a dispatched
+// brief reach the top tier while the same words through `queue add` reached
+// nothing, and then #51, which made the direct dispatch to a busy panel reach it
+// through here too rather than counting at the command.
+//
+// It is HERE, after the write, because R4's two rules have to survive the gap
+// between the command and the delivery and this is the only point at which both
+// hold:
+//
+//   - the signal counts what the USER typed. d.prompt is the task's own text —
+//     what `task list` shows and what a restart restores — never bindBrief's
+//     output, so a task.pre rewrite cannot reach the tier #37 reserves for the
+//     operator. The bound bytes are already gone from this scope by design.
+//   - it counts only once delivery ACTUALLY succeeded. A veto returns before this
+//     line, a superseded or ended delivery is refused by claimDelivery before it,
+//     a brief still parked for a panel that never settles never reaches it at
+//     all, and in every case nothing reached an agent.
+//
+// The provenance is rebuilt rather than carried because there is nothing to
+// carry: connProvenance yields exactly {Source: SourceUser} for a cockpit
+// connection — no panel, no cwd, no profile, no group, because a cockpit has no
+// panel row — so the carried bool is the whole of the conclusion and this is its
+// only reading. An agent's or a plugin's brief never sets d.signal and never gets
+// here.
+//
+// It has TWO callers, and they are the two moments a delivery can land:
+// dispatchScored writes it straight through to a settled panel, and deliver
+// carries it out of pendingDispatch or the backlog on a later tick. One body, so
+// the two cannot drift into counting the same brief differently — or, as before
+// #51, into counting one of them twice.
+//
+// ONE BODY IS NOT WHAT MAKES "ONCE" HOLD, and it was read as though it were. Both
+// callers run inside one process; the operator's brief outlives the process. What
+// bounds the count is that d.signal is a stamp SPENT when the delivery is assigned
+// (takeUserSignalLocked) — a task can be delivered again, by a re-drive or by the
+// restart that re-queues it, and the second delivery arrives here with d.signal
+// false. This function's job is only the other rule: count it where the write has
+// already happened.
+//
+// The cost is one store round trip per user delivery, exactly the one R4 added to
+// a dispatch (Store.Signal re-reads score.md unconditionally). On the deferred
+// path it lands inside the monitor tick's delivery budget, which already charges
+// the bind, so a backlog of the operator's own briefs is paced by the same
+// ceiling.
+func (s *Server) signalDelivered(d delivery) {
+	if !d.signal {
+		return
+	}
+	s.scoreSignalFrom(d.prompt, score.Provenance{Source: score.SourceUser})
 }
 
 // claimDelivery re-checks, immediately before the write, that this delivery is
@@ -2001,12 +2109,19 @@ func (s *Server) claimedLocked(d delivery) *task.Task {
 // vetoReason is what a task.pre veto is called, on the wire and in the backlog
 // alike. One string for both, because a veto at delivery has no caller left to
 // answer: the enqueueing connection may have closed hours before the scheduler
-// drained the task, so the refusal is recorded as the task's terminal note and
-// an operator reading `task list` sees the same words a direct dispatch is
-// refused with.
+// drained the task, and a dispatch to a busy panel has already been answered
+// "sent" (#51). Either way the refusal is recorded as the task's terminal note,
+// and an operator reading `task list` sees the same words a dispatch to a
+// settled panel is refused with on the spot.
 const vetoReason = "task vetoed by a task.pre hook"
 
 // vetoQueuedTask walks back an assignment a task.pre hook refused at delivery.
+//
+// It is the walk-back for EVERY deferred refusal, and deliberately only one
+// shape of it: a queued task the scheduler assigned, and — since #51 — a direct
+// dispatch that was parked for a busy panel. The two arrive here as the same
+// delivery and leave the same trace, so an operator has one thing to read and a
+// later change has one place to make.
 //
 // The task ends terminal in the backlog carrying the reason (#44 decision 2),
 // and the panel goes back to the pool in the same breath. The status alone is
@@ -2202,12 +2317,13 @@ const (
 	// panel counts toward it.
 	maxConductorFleet = 64
 
-	// minConductorSpawnGap throttles a conductor's panel.create rate: a tight
-	// loop cannot spray panels faster than a person ever would.
+	// minConductorSpawnGap throttles the rate panels are spawned at on anything
+	// but the operator's own hand: a tight loop cannot spray panels faster than a
+	// person ever would.
 	//
-	// Keyed on the conductor's PANEL and not on its connection — see
-	// Server.spawn, which says what the connection-keyed version failed to
-	// gapStamp and why baton_spawn walked straight through it.
+	// Keyed on the DOOR — see spawnDoor — and not on a connection, which is what
+	// Server.spawn's own history says the connection-keyed version failed to do
+	// and why baton_spawn walked straight through it.
 	minConductorSpawnGap = 250 * time.Millisecond
 )
 
@@ -2222,15 +2338,21 @@ const (
 // which is why both are set where the Server is (New, and gateServer for the
 // tests that drive them).
 //
-// ONE identity rather than a map, because both of its users are keyed on a
-// singleton — the conductor panel (hasConductorLocked), whose id survives a
-// respawn — so at most one is worth remembering. A caller with a different
-// identity is admitted and takes the slot, which is exactly why this shape
-// cannot serve a door the whole fleet holds: two identities alternating would
-// each take the slot from the other and NEITHER would be refused. If the
-// singleton were ever broken, that is what two conductors would get — the cap
-// going quiet rather than clamping. See rateBuckets, which is the map version and
-// the reason score.submit does not use this one.
+// ONE identity rather than a map, because neither of its users has more than one
+// worth remembering: the spawn cap is stamped under the door it guards, which is
+// a constant, and the refine cap under the conductor panel (hasConductorLocked),
+// which is a singleton whose id survives a respawn. A caller with a different
+// identity is admitted and takes the slot, which is exactly why this shape cannot
+// serve a door the whole fleet holds: two identities alternating would each take
+// the slot from the other and NEITHER would be refused. A DOOR THE FLEET HOLDS IS
+// ONE WITH MANY KEYS, not one with many callers — score.submit, where every panel
+// is its own identity. The spawn door has three callers and one key, which is the
+// opposite shape and the one this type is for. That is not hypothetical
+// — it is what #75 would have got by giving the scheduler its own key on this
+// same stamp, and the reason it shares the conductor's instead. If the conductor
+// singleton were ever broken, it is also what two conductors would do to the
+// refine cap: it goes quiet rather than clamping. See rateBuckets, which is the
+// map version and the reason score.submit does not use this one.
 type gapStamp struct {
 	gap time.Duration
 	who string
@@ -2255,10 +2377,16 @@ func (t *gapStamp) tooSoon(id string, now time.Time) (sinceLast time.Duration, r
 	return 0, false
 }
 
-// tooSoon takes Server.mu around one gapStamp check. The two rate caps both run
-// off the command loop, where the lock is not already held — so the name carries
-// no Locked suffix: everywhere else in this package that suffix means the CALLER
-// holds mu, and this takes it.
+// tooSoon takes Server.mu around one gapStamp check. Its caller — the refine cap
+// — runs off the command loop, where the lock is not already held, so the name
+// carries no Locked suffix: everywhere else in this package that suffix means the
+// CALLER holds mu, and this takes it.
+//
+// It is the only one left. The spawn cap used to come through here too and now
+// asks gapStamp directly, from inside spawnBudgetLocked, because that runs under
+// a lock the caller already holds on one of its two roads. The parameter is kept
+// rather than folded into a refine-only wrapper: what this function knows is the
+// TYPE's locking convention, which is where the convention belongs.
 func (s *Server) tooSoon(t *gapStamp, id string, now time.Time) (sinceLast time.Duration, refuse bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2500,46 +2628,93 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 		// conductor refused at the ceiling could otherwise walk through the other
 		// door and fan an existing agent onto branch after branch, unmetered.
 		if gitops.Op(cmd.Git) == gitops.OpWorktreeAdd {
-			return s.spawnCapsReason(cc)
+			return s.spawnCapsReason()
 		}
 	case "panel.create":
-		return s.spawnCapsReason(cc)
+		return s.spawnCapsReason()
 	}
 	return ""
 }
 
-// spawnCapsReason is the conductor's spawn budget: the fleet ceiling and the rate
-// gap, returned as a denial reason or "" to admit. It is shared by the two verbs
-// that spawn synchronously on a conductor's command — panel.create and panel.git
+// spawnDoor is the identity the spawn budget's rate gap is stamped under, and it
+// names the DOOR rather than whoever knocked on it. That is #75's ruling and the
+// whole of what makes the budget one purse.
+//
+// It was the conductor's own panel id, which read as the obvious key and cannot
+// serve three roads. gapStamp holds ONE stamp in total, so two identities
+// alternating each take the slot from the other and NEITHER is refused — the
+// failure its own comment names. A conductor refused at panel.create would then
+// have had its spawn-on-demand task provisioned by the scheduler a moment later,
+// under a different key, out of a purse the refusal had not touched. Keying both
+// on the door makes that impossible by construction rather than by agreement.
+//
+// The gap was always a statement about the HOST — panels must not appear faster
+// than a person would ever make them — and never about which caller asked. A
+// second road is what made the difference show. It closes the evasion Server.spawn
+// records beside it as accepted, too: an agent varying the Self it declares per
+// dial no longer varies the key it is stamped under.
+const spawnDoor = "createPanel"
+
+// fleetFullReason is the capacity refusal, formatted once. Both its operands are
+// compile-time constants and scheduleLocked asks the budget once per queued
+// spawn-on-demand task — under s.mu, on a one-second tick — so formatting it per
+// ask was a string built and dropped for every waiting task on a full fleet.
+var fleetFullReason = fmt.Sprintf("fleet at capacity (%d panels)", maxConductorFleet)
+
+// spawnBudgetLocked is the fleet's spawn budget — the ceiling and the rate gap —
+// spelled ONCE, for every road that ends in createPanel on something other than
+// the operator's own hand. It answers a reason to refuse or "" to admit.
+//
+// One spelling because there were two: the ceiling was written here and again at
+// scheduleLocked, #67 had just added a third caller to the first of them, and two
+// spellings of one limit is how they drift. They already had — the scheduler's
+// applied to every fleet and this one only while a conductor was driving — which
+// is a difference nobody chose.
+//
+// IT IS STILL HELD BY AGREEMENT AND NOT BY CONSTRUCTION, which was true of the
+// two spellings and is true of the one. The charge cannot move inside createPanel
+// itself: there is no connection there to tell the operator's own hand from an
+// agent's, so a conductor's road and the cockpit's would be metered alike, and
+// the scheduler — which spends its slot when it DECIDES, holding s.mu, and
+// creates the panel later without it — would be charged twice. So a fourth road
+// is a road nothing here notices. There is one already: the plugin host's
+// Server.Spawn (baton.spawn), deliberately exempt because a plugin is installed
+// by the operator and is the operator's hand. Anyone adding a fifth must charge
+// it deliberately.
+//
+// It has a SIDE EFFECT on the admitting path: tooSoon stamps the clock, so a call
+// that returns "" has spent the slot. Call it once per decision to spawn, and
+// never to merely ask. The caller holds s.mu.
+func (s *Server) spawnBudgetLocked(now time.Time) string {
+	if len(s.panels) >= maxConductorFleet {
+		return fleetFullReason
+	}
+	// Checked LAST, so the capacity refusal above — which is about the fleet
+	// rather than about this attempt — does not spend the slot.
+	if _, tooSoon := s.spawn.tooSoon(spawnDoor, now); tooSoon {
+		return "spawning too fast, slow down"
+	}
+	return ""
+}
+
+// spawnCapsReason is the budget above as a conductor fence: the same two caps,
+// worded as a refusal the agent reads. It is shared by the two verbs that spawn
+// SYNCHRONOUSLY on a conductor's command — panel.create and panel.git
 // worktree-add — so the budget is spent from one purse however the spawn is
 // spelled.
 //
-// SYNCHRONOUSLY is the word doing the work, and the scope of this budget is
-// narrower than "every panel a conductor can cause to exist". A spawn-on-demand
-// task.enqueue also ends in createPanel, by way of the scheduler; it pays the
-// fleet ceiling, but spelled separately at its own site (see scheduleLocked), and
-// it pays NO rate gap. Charging it here would be wrong — the conductor's command
-// only queues, and the scheduler decides later whether to spawn at all — but that
-// leaves the ceiling with two enforcement sites and the gap with one. Anyone
-// adding a third spawn path must charge it deliberately; nothing here does it by
-// construction.
-//
-// It has a SIDE EFFECT on the admitting path: tooSoon stamps the clock, so a call
-// that returns "" has spent the caller's slot. Call it once per command, from the
-// guard, and never to merely ask.
-func (s *Server) spawnCapsReason(cc *clientConn) string {
+// SYNCHRONOUSLY is still the word doing the work, and the third road is charged
+// somewhere else for exactly that reason. A spawn-on-demand task.enqueue ends in
+// createPanel too, but by way of the scheduler: the conductor's command only
+// queues, and metering it here would be metering the wrong actor at the wrong
+// moment — a conductor queueing ten tasks over a minute is doing what the backlog
+// is for. The gap is charged where the spawn actually happens, on the scheduler
+// as it drains (see scheduleLocked), out of the purse this shares with it.
+func (s *Server) spawnCapsReason() string {
 	s.mu.Lock()
-	n := len(s.panels)
-	s.mu.Unlock()
-	if n >= maxConductorFleet {
-		return fmt.Sprintf("conductor role: fleet at capacity (%d panels)", maxConductorFleet)
-	}
-	// Checked LAST, so the capacity refusal above — which is about the fleet
-	// rather than about this caller — does not spend the caller's slot. Keyed
-	// on the conductor's panel rather than on this connection, because
-	// baton_spawn dials per tool call; see Server.spawn.
-	if _, tooSoon := s.tooSoon(&s.spawn, cc.self, time.Now()); tooSoon {
-		return "conductor role: spawning too fast, slow down"
+	defer s.mu.Unlock()
+	if reason := s.spawnBudgetLocked(time.Now()); reason != "" {
+		return "conductor role: " + reason
 	}
 	return ""
 }
@@ -2810,27 +2985,22 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "panel.dispatch":
 		// Assign a task to a panel: record the brief and deliver it to the process as
 		// a unit. Unlike panel.input (raw keystrokes), the server knows the objective,
-		// so it reaches every frontend's card and the snapshot. The target panel is
-		// known here, so this IS the delivery: the brief is bound to that panel — its
-		// context and the score block ranked against it — before the chain runs.
+		// so it reaches every frontend's card and the snapshot.
 		//
-		// cmd.Prompt is what the task records and b.Prompt what the panel receives:
-		// a hook's rewrite is delivered, never written back onto the task. See
-		// dispatchScored for why that separation is load-bearing rather than tidy.
-		b, ok, _ := s.bindBrief(cmd.ID, cmd.Prompt)
-		if !ok {
-			send(cc, proto.ServerMsg{Type: "error", Error: vetoReason})
-			return
-		}
-		if err := s.dispatchScored(cmd.ID, cmd.Prompt, b, cmd.Submit); err != nil {
+		// The brief is bound to the panel AT THE MOMENT IT LANDS, which is here when
+		// the panel is settled and at the monitor tick that sees it settle when it is
+		// not (#51). So the answer to this command is no longer uniformly "the hook
+		// said yes": a busy panel is answered "sent", and a hook that later refuses
+		// walks the task back into the backlog. dispatchScored holds that whole
+		// decision, including the user signal, because the signal is owed only to a
+		// delivery that actually happened.
+		//
+		// The author is concluded from the CONNECTION here, while the socket is
+		// still open — a deferred delivery has none left to ask (#38 §4).
+		if _, err := s.dispatchScored(cmd.ID, cmd.Prompt, cmd.Submit, s.connAuthor(cc)); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
-		// Only now: a brief the hook chain vetoed or the delivery refused never
-		// reached an agent, and #38 §4's signal is the user telling the FLEET
-		// something. cmd.Prompt rather than b.Prompt, because a hook's rewrite
-		// is the plugin author's words and not the user's; see scoreSignal.
-		s.scoreSignal(cc, cmd.Prompt)
 		s.broadcastFleet()
 	case "panel.dispatch-group":
 		// Fan one task to every member of a work item — the mechanic behind racing N
@@ -2870,7 +3040,7 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		if cmd.Path != "" {
 			spawn = &task.SpawnSpec{Command: cmd.Path, Profile: cmd.Profile, Args: cmd.Args, Dir: cmd.Dir, CloseOnDone: cmd.Ephemeral}
 		}
-		if _, err := s.enqueueTask(cmd.Prompt, cmd.Group, spawn); err != nil {
+		if _, err := s.enqueueTask(cc, cmd.Prompt, cmd.Group, spawn); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
@@ -2943,9 +3113,11 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 
 // createPanel is a core action: it spawns the backing process and records the new
 // panel in the fleet. A shell panel runs path (or the default shell when empty);
-// an agent panel runs its profile command with args. Both run in dir, the working
-// directory; an empty dir falls back to the configured default (then the user's
-// home), so a panel never inherits the directory the daemon was launched from.
+// an agent panel runs its profile command with args; a command panel runs a plain
+// binary with args, the same spawn shape as an agent and none of its standing.
+// All three run in dir, the working directory; an empty dir falls back to the
+// configured default (then the user's home), so a panel never inherits the
+// directory the daemon was launched from.
 //
 // profile names the agent profile the spawn came from. It is recorded with the
 // panel and is what its resource limits resolve through, so the caps follow the
@@ -3045,6 +3217,18 @@ func (s *Server) createPanel(kind, path string, args []string, dir, profile stri
 			return "", fmt.Errorf("an agent panel needs a command")
 		}
 		spec = ptymgr.Spec{Command: path, Args: args, Dir: dir, Env: env}
+	case proto.KindCommand:
+		if path == "" {
+			return "", fmt.Errorf("a command panel needs a command")
+		}
+		// No identity env, for the reason the shell case spells out at length and one
+		// of its own: BATON_PANEL_ID is how a process that can see neither the
+		// cockpit nor `ctl list` learns which panel it is, and it is told so it can
+		// drive the fleet from inside. A plain binary drives nothing — it is being
+		// watched, not conducted — so the variable would name a panel to a process
+		// with no use for the name and no way to act on it. env is deliberately not
+		// read here; the switch above never fills it for this kind.
+		spec = ptymgr.Spec{Command: path, Args: args, Dir: dir}
 	default:
 		return "", fmt.Errorf("unknown panel kind %q", kind)
 	}
@@ -3456,8 +3640,25 @@ your goal — treat it as your standing instructions.
 // panelTitle is the human label for a new panel. An agent reads as
 // "<command> · <workdir>", e.g. "claude · baton", so its task and where it runs
 // are visible at a glance; a shell falls back to "<name> #<id>".
+//
+// A command panel takes the agent's form — "go · baton", "make · api" — because
+// it was spawned the same way and the same two facts identify it: what is
+// running and where.
+//
+// SO THE RULE IS THE SHELL'S, not a list of the kinds that are not it. The id
+// form exists because every shell runs the same binary and only the number tells
+// them apart; anything spawned with a command of its own is identified by that
+// command. Written as "agent or command" it was a property of the shell spelled
+// as an OR over everything else, and a fourth kind would have had to be added
+// here to keep behaving — silently taking the shell's form until someone
+// noticed. Written this way a fourth kind gets the command form, which is the
+// answer for any kind that names a binary, and only a genuinely shell-like kind
+// would need this line touched at all.
+//
+// createPanel normalises "" to KindShell and its spawn switch refuses any kind it
+// does not know, so kind is one of the three by the time it reaches here.
 func panelTitle(kind, path, dir, id string) string {
-	if kind == proto.KindAgent {
+	if kind != proto.KindShell {
 		name := filepath.Base(path)
 		if dir != "" {
 			return fmt.Sprintf("%s · %s", name, filepath.Base(dir))
@@ -3786,75 +3987,160 @@ func briefBytes(scoreBlock, prompt, submit string) []byte {
 	return append(b, submit...)
 }
 
-// dispatchPanel is a core action: it records prompt as the panel's task brief and
+// dispatchPanel is the PLUGIN's direct dispatch (baton.dispatch, and each member
+// of baton.dispatch_group): it records prompt as the panel's task brief and
 // delivers it to the panel's process as a unit — the prompt text followed by a
-// submit sequence. Unlike raw panel.input, the server keeps the brief on the
-// panel, so it reaches every frontend's card and is persisted to survive a
-// restart. An empty id, unknown panel, or empty prompt errors — dispatch is
-// "assign a task", not "clear it".
+// submit sequence — bare, with no score block and no task.pre chain, because a
+// plugin-originated dispatch must not re-enter the chain it may itself be
+// running inside.
 //
-// Delivery is gated on readiness: a panel still spawning or mid-output is not
-// ready to receive a prompt, so the bytes are held in pendingDispatch and the
-// monitor tick delivers them once the panel settles to idle/attention. A panel
-// already settled is written immediately. The brief is recorded either way.
+// Unlike raw panel.input, the server keeps the brief on the panel, so it reaches
+// every frontend's card and is persisted to survive a restart. An empty id,
+// unknown panel, or empty prompt errors — dispatch is "assign a task", not
+// "clear it".
 func (s *Server) dispatchPanel(id, prompt, submit string) error {
-	return s.dispatchScored(id, prompt, TaskBrief{Prompt: prompt}, submit)
+	_, err := s.dispatchScored(id, prompt, submit, authorPlugin)
+	return err
 }
 
-// dispatchScored is dispatchPanel with the DELIVERED brief separated from the
-// RECORDED one. b is what the process receives — a task.pre hook's rewrite,
-// behind b.Score when there is one — while recorded is what the card, the
-// snapshot and a restart's restore keep.
+// errVetoed is the error a dispatch a task.pre hook refused comes back as. It is
+// a sentinel rather than a fresh error because a fan-out has to tell a veto from
+// a member that simply left the fleet, and those are the only two ways one
+// member's dispatch fails once fanoutTargets has vetted the group and the prompt.
+// Its text is vetoReason, so the wire says to a refused dispatch exactly what it
+// said before.
+var errVetoed = errors.New(vetoReason)
+
+// dispatchScored assigns prompt to a panel as a task and gets it to the process.
 //
-// Both differences are delivery-time transformations, and NEITHER may become the
-// task's identity. The score block is advice for one delivery. So is the
-// rewrite, and writing that one back would compound: restoreTasksLocked
-// re-queues an in-flight task on every restart, and the chain now runs at
-// delivery, so a task carrying its own rewrite would be rewritten again — once
-// more per restart, at the same version, with no upgrade and no operator action
-// involved. Keeping the author's text also keeps "what did I actually ask for"
-// answerable afterwards.
+// DELIVERY IS GATED ON READINESS, and that gate is now the whole shape of this
+// function. A panel that is settled can receive the brief now, so this command
+// IS the delivery: the bind happens here — the score render against this panel
+// and then the task.pre chain — and its veto is the caller's synchronous answer,
+// with nothing recorded behind it. A panel still spawning or mid-output cannot,
+// so NOTHING IS BOUND: the brief is parked in pendingDispatch as it was written
+// and the monitor tick binds it when the panel settles, against the panel as it
+// is then.
 //
-// The delivered half arrives as the BRIEF rather than as its two strings, and
-// that is the guard: recorded and b.Prompt are both strings and are equal in the
-// plain case, so as bare positional arguments they could be swapped without
-// breaking a build or a plain-dispatch test — and the swap records the hook's
-// rewrite as the task's identity, which is the one thing this separation exists
-// to prevent. Every caller has the brief in hand already.
+// That is #51, and the trade it closes is worth stating where it is made. The
+// exemption it removes bound a busy panel's brief at the command and parked the
+// finished bytes, so a hook was asked about a panel's cwd, profile and group as
+// they had been minutes before the write, and the score block rode along ranked
+// against the same stale context. What it costs is the synchronous veto for that
+// case: `baton ctl dispatch p3 "…"` to a busy panel is answered "sent", and if
+// the hook refuses at delivery the refusal lands as a terminal task in the
+// backlog — vetoQueuedTask's walk-back, the same one a queued task takes, into a
+// backlog the operator may not be watching. #51 weighed that and accepted it.
 //
-// dispatchPanel passes its own prompt as both, which is the plain dispatch.
-func (s *Server) dispatchScored(id, recorded string, b TaskBrief, submit string) error {
+// It was not a free exemption to keep, which is what settled it: a user's
+// dispatch to a busy panel recorded its reinforcement at command time while the
+// bytes were still parked, and kept it even if the panel died without ever
+// settling. That is a reinforcement for a brief no agent saw — the very thing
+// TestABriefToAnUnknownPanelCountsNothing forbids on the other path.
+//
+// The RECORDED brief and the DELIVERED one are still different things, and the
+// separation is now structural rather than a convention two callers had to
+// keep. Only prompt comes in: the card, the snapshot and a restart's restore all
+// keep it, while a task.pre rewrite and the score block are built inside and
+// never escape. Passing the two as adjacent strings was the hazard — they are
+// equal in the plain case, so a swap broke no build and no plain-dispatch test,
+// and it recorded the hook's rewrite as the task's identity. There is one string
+// now, so there is nothing to swap.
+//
+// author is the server's conclusion about who asked (#38 §4), never a claim: it
+// decides whether the chain runs at all (authorPlugin skips it) and whether the
+// delivery reinforces what it repeats (authorUser). See connAuthor.
+//
+// It returns how long the bind took, because that is what a fan-out's budget
+// charges — the same value and the same clock bindBrief hands the monitor tick,
+// so one bind cannot cost two different things depending on which side of the
+// server asked for it. A dispatch that parked, or one a plugin sent, binds
+// nothing and costs nothing.
+func (s *Server) dispatchScored(id, prompt, submit string, author taskAuthor) (time.Duration, error) {
 	if id == "" {
-		return fmt.Errorf("panel.dispatch needs an id")
+		return 0, fmt.Errorf("panel.dispatch needs an id")
 	}
-	if recorded == "" {
-		return fmt.Errorf("panel.dispatch needs a prompt")
+	if prompt == "" {
+		return 0, fmt.Errorf("panel.dispatch needs a prompt")
 	}
-	data := briefBytes(b.Score, b.Prompt, submit)
+	d := delivery{
+		panel:  id,
+		prompt: prompt,
+		submit: submit,
+		plugin: author == authorPlugin,
+		signal: author == authorUser,
+	}
 
 	s.mu.Lock()
 	idx := s.indexLocked(id)
 	if idx < 0 {
 		s.mu.Unlock()
-		return fmt.Errorf("no panel with id %q", id)
+		return 0, fmt.Errorf("no panel with id %q", id)
 	}
-	s.panels[idx].Task = recorded
-	ready := dispatchReady(s.panels[idx].State)
-	status := task.Queued
-	if ready {
-		delete(s.pendingDispatch, id) // a fresh immediate dispatch supersedes a held one
-		status = task.Dispatched
-	} else {
-		s.pendingDispatch[id] = delivery{panel: id, data: data} // deliver when the panel next settles
+	if !dispatchReady(s.panels[idx].State) {
+		s.holdDispatchLocked(idx, d)
+		s.mu.Unlock()
+		s.markDirty() // persist the brief so a restart restores it
+		return 0, nil
 	}
-	s.upsertTaskLocked(id, recorded, s.panels[idx].Group, status)
 	s.mu.Unlock()
 
-	if ready {
-		s.writeInput(id, data)
+	// Ready, so this is the delivery and the bind belongs here. It runs off s.mu
+	// for the same reason the monitor tick's does: the chain blocks on the Lua
+	// worker for up to its fail-open timeout, and holding the lock across that
+	// would refuse every other command for as long.
+	data, ok, took := s.bindDelivery(d)
+	if !ok {
+		// Nothing is recorded: no task, no brief on the card. A veto here is the
+		// answer to a caller who is still on the socket waiting for one.
+		return took, errVetoed
 	}
+
+	s.mu.Lock()
+	idx = s.indexLocked(id)
+	if idx < 0 {
+		s.mu.Unlock()
+		return took, fmt.Errorf("no panel with id %q", id)
+	}
+	if !dispatchReady(s.panels[idx].State) {
+		// The panel started working while the chain ran. The bytes in hand are bound
+		// to the panel as it was before that, which is exactly what this function
+		// stopped parking, so they are DISCARDED and the brief is held unbound like
+		// any other. The chain will be asked again at settle: the cost of the race
+		// is a hook run twice over a window no wider than one bind, and the
+		// alternative is the stale write #51 closed.
+		s.holdDispatchLocked(idx, d)
+		s.mu.Unlock()
+		s.markDirty()
+		return took, nil
+	}
+	s.panels[idx].Task = prompt
+	delete(s.pendingDispatch, id) // a fresh immediate dispatch supersedes a held one
+	t := s.upsertTaskLocked(id, prompt, s.panels[idx].Group, task.Dispatched)
+	d.task, d.attempt = t.ID, t.Attempts
+	s.mu.Unlock()
+
+	s.writeInput(id, data)
+	s.signalDelivered(d)
 	s.markDirty() // persist the brief so a restart restores it
-	return nil
+	return took, nil
+}
+
+// holdDispatchLocked records d.prompt as the panel's brief and parks d, UNBOUND,
+// for the monitor tick to bind and deliver when the panel settles. Caller holds
+// s.mu, and idx is d.panel's row.
+//
+// The task is created here rather than at delivery because the delivery needs a
+// CLAIM: task and attempt are what claimDelivery re-checks before the write and
+// what vetoQueuedTask walks back, and a held dispatch had neither while it was
+// parked as finished bytes — it was the one delivery nobody re-checked. The task
+// is Queued, which is what it is: a brief the fleet has accepted and not yet
+// delivered, and the status the walk-back's terminal transition advances from.
+func (s *Server) holdDispatchLocked(idx int, d delivery) {
+	s.panels[idx].Task = d.prompt
+	t := s.upsertTaskLocked(d.panel, d.prompt, s.panels[idx].Group, task.Queued)
+	d.task, d.attempt = t.ID, t.Attempts
+	s.pendingDispatch[d.panel] = d // deliver when the panel next settles
 }
 
 // markTaskDirtyLocked nudges the task saver to refresh (or remove) a task's disk
@@ -4116,24 +4402,75 @@ func (s *Server) declaredLocked(id string) bool {
 	return d != nil && d.Reason != ""
 }
 
+// taskAuthor is the server's conclusion about WHO put a task in the backlog. It
+// is one value rather than a pair of bools because the three states are mutually
+// exclusive and two adjacent bools at a call site can be swapped without breaking
+// a build — the same hazard dispatchScored takes its brief whole to avoid, and
+// here the swap would silently let a plugin's own enqueue reach the tier #37
+// reserves for the operator.
+//
+// It is decided from the CONNECTION and from nothing else (#38 §4). No enqueue
+// command carries an author field, so there is nothing for a client to assert.
+type taskAuthor int
+
+const (
+	// authorAgent is a connection that declared a self on hello: an agent inside a
+	// panel driving the backlog. The default, and the safe one — a stamp that goes
+	// wrong in this direction only loses a reinforcement.
+	authorAgent taskAuthor = iota
+	// authorUser is a connection that declared no self: the TUI, or `baton ctl`
+	// from the operator's own shell. See connProvenance for what that rests on.
+	authorUser
+	// authorPlugin is baton.enqueue, called from inside the Lua worker. There is no
+	// connection at all, and it is emphatically not the user.
+	authorPlugin
+)
+
 // enqueueTask adds an unassigned task that arrived over the SOCKET to the backlog
 // for the scheduler to drain onto a free agent. It errors when the queued backlog
 // is at queueMax — the cap is backpressure on a runaway producer, counting only
 // unassigned tasks, so a busy fleet never blocks new work from being queued.
-func (s *Server) enqueueTask(prompt, group string, spawn *task.SpawnSpec) (string, error) {
-	return s.enqueueTaskFrom(prompt, group, spawn, false)
+//
+// cc is the enqueueing connection, and it is a parameter rather than something the
+// backlog looks up later because by delivery time it is gone: connProvenance can
+// only be asked while the socket is still open, so #38 §4's discrimination has to
+// be made HERE and recorded (#50). It is read through connProvenance rather than
+// tested for cc.self == "" inline, so the fleet keeps one discrimination.
+func (s *Server) enqueueTask(cc *clientConn, prompt, group string, spawn *task.SpawnSpec) (string, error) {
+	return s.enqueueTaskFrom(prompt, group, spawn, s.connAuthor(cc))
 }
 
-// enqueueTaskFrom is enqueueTask with the origin spelled out: plugin marks a task
-// baton.enqueue created, which is delivered bare — no score, no task.pre chain —
-// exactly as baton.dispatch is.
+// connAuthor is the taskAuthor a live connection amounts to: authorUser when
+// connProvenance reads it as the operator's, authorAgent otherwise. authorPlugin
+// never comes from here — a plugin has no connection at all.
+//
+// It exists so the two doors a brief can arrive at — panel.dispatch and
+// task.enqueue — reach #38 §4's discrimination by the same road. They asked the
+// same question in the same words at two sites, and the answer decides whether a
+// brief can reach the tier #37 reserves for the operator, which is not a test to
+// keep two copies of. It must be asked while the socket is open: by delivery time
+// the connection may be long gone, which is why the conclusion is carried on the
+// task (#50) and on the delivery (#51) rather than looked up later.
+func (s *Server) connAuthor(cc *clientConn) taskAuthor {
+	if s.connProvenance(cc).Source == score.SourceUser {
+		return authorUser
+	}
+	return authorAgent
+}
+
+// enqueueTaskFrom is enqueueTask with the origin spelled out: authorPlugin marks a
+// task baton.enqueue created, which is delivered bare — no score, no task.pre
+// chain — exactly as baton.dispatch is, and authorUser marks one the operator
+// typed, whose delivery reinforces what it repeats (#50).
 //
 // The stamp goes on under the SAME lock that creates the task. Setting it
 // afterwards would leave a window in which a monitor tick could drain the task
 // and run the very chain the stamp exists to skip, which is the whole of the
-// guarantee: a task.pre hook that calls baton.enqueue must not re-enter itself
-// when the task it queued is delivered.
-func (s *Server) enqueueTaskFrom(prompt, group string, spawn *task.SpawnSpec, plugin bool) (string, error) {
+// plugin guarantee: a task.pre hook that calls baton.enqueue must not re-enter
+// itself when the task it queued is delivered. The user stamp needs the same
+// window closed for the mirror-image reason — a task drained before it was
+// stamped would deliver, and the operator's brief would count for nothing.
+func (s *Server) enqueueTaskFrom(prompt, group string, spawn *task.SpawnSpec, author taskAuthor) (string, error) {
 	if prompt == "" {
 		return "", fmt.Errorf("task.enqueue needs a prompt")
 	}
@@ -4146,12 +4483,66 @@ func (s *Server) enqueueTaskFrom(prompt, group string, spawn *task.SpawnSpec, pl
 		return "", fmt.Errorf("queue is full (%d queued); raise queue.max or let it drain", s.queueMax)
 	}
 	t := s.upsertTaskLocked("", prompt, group, task.Queued)
-	t.Plugin = plugin
+	t.Plugin = author == authorPlugin
+	t.UserSignal = author == authorUser
 	t.Spawn = spawn
-	if spawn != nil || plugin {
+	if spawn != nil || author != authorAgent {
 		s.markTaskDirtyLocked(t.ID) // persist the spawn spec and the origin alongside the task
 	}
 	return t.ID, nil
+}
+
+// takeUserSignalLocked SPENDS the task's stamp, handing the one reinforcement it
+// is worth to the delivery now being assigned and leaving nothing behind for a
+// second one to find. Caller holds s.mu.
+//
+// task.Task.UserSignal is a one-shot permission to count, not a durable fact about the
+// task, and treating it as the latter is what let ONE operator act count twice.
+// The stamp is persisted, because a queued brief routinely outlives the daemon
+// that took it in; but a restart brings every panel back exited, so
+// restoreTasksLocked re-queues a task that was IN FLIGHT — already delivered,
+// already counted — and the stamp on disk offered the reinforcement again. It
+// replayed on every reboot that caught a user task mid-delivery, and it moved a
+// tier. R4's rule is that the signal counts once; spending the stamp is what
+// makes "once" survive the gap the stamp exists to cross.
+//
+// It is spent at ASSIGNMENT rather than where the count lands, and the two are
+// not the same moment: the assignment is under this lock, the count is after the
+// write, off it. That ordering is deliberate and it is lossy in ONE direction —
+// a delivery vetoed at task.pre, superseded before claimDelivery, or cut off by
+// a daemon that dies between the two spends the stamp and counts nothing. That
+// is R4's other rule (only a delivery that ACTUALLY succeeded counts) paid for
+// with a missed fold, which is the tolerable half of I6: an entry that fails to
+// climb is a worse ranking, an entry that climbs on a replay is a false one.
+//
+// The spend is nudged to disk here rather than left to the caller's own
+// markTaskDirtyLocked, so that it cannot be reordered out of the file by an edit
+// to either call site.
+//
+// WHAT IS LEFT IS A DURABILITY WINDOW, and it is worth stating exactly, because
+// it is easy to read this as closing more than it does. The saver is a goroutine
+// draining a channel, so the spend is durable a moment AFTER the count, not
+// before it. A daemon killed inside that moment leaves a backlog file still
+// saying the stamp is unspent — and the file is then indistinguishable from a
+// brief that was never delivered, which is a case that must count. The next
+// daemon counts it a second time.
+//
+// That is narrower than what it replaces by the whole difference between an
+// invariant and an accident: the replay was systematic, on EVERY restart that
+// caught a user task in flight and again on the one after that, and it is now
+// reachable only by dying inside one saver hop. It is the same class of cost
+// task.Task.Plugin already carries and states — a stamp the saver has not
+// written yet is a stamp a reboot reads as absent — and it is accepted here on
+// the same terms rather than paid for with a synchronous write on the delivery
+// path. The tests wait for the assignment to reach the file for this reason; see
+// waitForBacklogInFlight, which is where the window is visible.
+func (s *Server) takeUserSignalLocked(t *task.Task) bool {
+	if !t.UserSignal {
+		return false
+	}
+	t.UserSignal = false
+	s.markTaskDirtyLocked(t.ID)
+	return true
 }
 
 // queuedBacklogLenLocked counts the unassigned queued tasks — the backlog depth
@@ -4200,8 +4591,32 @@ type spawnRequest struct {
 // agent — recording the brief, moving the task to dispatched — and returns the
 // prompts to deliver once the lock is released. A queued task that carries a spawn
 // spec and finds no free agent instead yields a spawnRequest: the scheduler
-// provisions a fresh agent for it (below the fleet ceiling) rather than leaving it
-// to wait on the standing fleet. Caller holds s.mu.
+// provisions a fresh agent for it, out of the fleet's spawn budget, rather than
+// leaving it to wait on the standing fleet. Caller holds s.mu.
+//
+// THE SPAWN BUDGET IS CHARGED HERE, and #75 is the reason it is here rather than
+// at task.enqueue. The enqueue is not a spawn: the conductor asks for work to be
+// done and this decides, later and on its own tick, whether a panel has to exist
+// for it. A rate gap at the enqueue would meter an actor that spawned nothing at
+// a moment nothing was spawned, and would refuse a conductor filling a backlog
+// over a minute, which is what a backlog is for. This is where the spawn is, so
+// this is where it is paid for — and out of spawnCapsReason's purse rather than a
+// second one, so a conductor just told to slow down cannot walk through this door
+// in the same instant.
+//
+// Nothing is refused by it. A task the budget turns away stays queued exactly as
+// it was and is offered again on the next tick, so the whole backlog still drains
+// — one fresh agent at a time instead of a tick's worth at machine speed. That
+// was the hole: with no gap here at all, one pass provisioned every spawn-on-demand
+// task the ceiling would admit, back to back, in the time createPanel takes.
+//
+// BE EXACT ABOUT WHAT BINDS THE RATE, because it is not the gap. One instant is
+// read for the whole pass, so a pass hands back at most ONE spawn however long
+// the backlog is; the pass then runs again on the next monitor tick, which is a
+// second — four times the gap. So the observed drain is one agent per TICK, and
+// the gap's job here is not the pacing but the SHARED PURSE: it is what a
+// conductor's synchronous spawn also spends, and the only reason the two roads
+// cannot each have one in the same instant.
 func (s *Server) scheduleLocked() ([]delivery, []spawnRequest) {
 	// One pass over the task table: collect the unassigned backlog and tally each
 	// group's in-flight (dispatched/running) count, so the per-group cap is a map
@@ -4231,6 +4646,11 @@ func (s *Server) scheduleLocked() ([]delivery, []spawnRequest) {
 	// times without this, under s.mu.
 	deliver := make([]delivery, 0, len(queued))
 	var spawns []spawnRequest
+	// One instant for the whole pass, which is what makes the gap admit ONE spawn
+	// from it: the first candidate stamps the budget at now, and every later one
+	// asks at the same now and is inside the gap by definition. Reading the clock
+	// per candidate would say the same thing more expensively, under the lock.
+	now := time.Now()
 	for _, t := range queued {
 		if s.queueConcurrency > 0 && groupRunning[t.Group] >= s.queueConcurrency {
 			continue
@@ -4239,8 +4659,9 @@ func (s *Server) scheduleLocked() ([]delivery, []spawnRequest) {
 		if !ok {
 			// No standing agent is free. If the task provisions its own, ask for one
 			// panel per task (spawning marks it in flight so a later tick does not
-			// double-spawn), staying below the fleet ceiling.
-			if t.Spawn != nil && !s.spawning[t.ID] && len(s.panels) < maxConductorFleet {
+			// double-spawn), within the fleet's spawn budget — the ceiling, and the
+			// gap that is the reason this pass hands back at most one.
+			if t.Spawn != nil && !s.spawning[t.ID] && s.spawnBudgetLocked(now) == "" {
 				s.spawning[t.ID] = true
 				groupRunning[t.Group]++ // the pending worker counts against the cap for later tasks
 				spawns = append(spawns, spawnRequest{taskID: t.ID, spec: *t.Spawn})
@@ -4258,7 +4679,7 @@ func (s *Server) scheduleLocked() ([]delivery, []spawnRequest) {
 		groupRunning[t.Group]++ // the fresh dispatch counts against the cap for later tasks
 		s.emit("task.change", taskFields(t))
 		s.markTaskDirtyLocked(t.ID)
-		deliver = append(deliver, delivery{panel: pid, task: t.ID, prompt: t.Prompt, plugin: t.Plugin, attempt: t.Attempts})
+		deliver = append(deliver, delivery{panel: pid, task: t.ID, prompt: t.Prompt, plugin: t.Plugin, signal: s.takeUserSignalLocked(t), attempt: t.Attempts})
 	}
 	return deliver, spawns
 }
@@ -4301,7 +4722,7 @@ func (s *Server) applyScheduledSpawns(spawns []spawnRequest) bool {
 		s.panelTask[pid] = t.ID
 		// Unbound: the panel was created a moment ago and has not settled, so its
 		// brief is bound when the monitor delivers it rather than here (#44).
-		s.pendingDispatch[pid] = delivery{panel: pid, task: t.ID, prompt: t.Prompt, spawned: true, plugin: t.Plugin, attempt: t.Attempts}
+		s.pendingDispatch[pid] = delivery{panel: pid, task: t.ID, prompt: t.Prompt, spawned: true, plugin: t.Plugin, signal: s.takeUserSignalLocked(t), attempt: t.Attempts}
 		s.emit("task.change", taskFields(t))
 		s.markTaskDirtyLocked(t.ID)
 		s.mu.Unlock()
@@ -4650,15 +5071,29 @@ func (s *Server) dispatchGroupBound(group, prompt, submit string) (fanout, error
 			f.add(id, outcomeSkipped) // never asked, so never dispatched
 			continue
 		}
-		b, ok, took := s.bindBrief(id, prompt)
+		// authorAgent, and it is a HOLD rather than a reading of the connection: a
+		// cockpit fan-out records no user signal today, while the same words sent as
+		// a direct dispatch record one. That asymmetry is #50's family and neither
+		// #50 nor #51 rules on it — closing it means deciding whether one command
+		// fanned to ten panels is one reinforcement or ten, and the per-member
+		// reading inflates a single brief the operator typed once into ten.
+		//
+		// THE HOLD IS HELD BY A TEST, not by this paragraph. It said authorUser was
+		// the one-line change that closes it and nothing stopped that line being
+		// written: made, it counted N reinforcements for one command and the suite
+		// stayed green. TestAFanoutCountsNoUserSignal is the assertion now — a
+		// cockpit fan-out counts zero, and the same words dispatched directly still
+		// count one, so the decision has to be taken deliberately, against a test
+		// that names both sides of it, rather than by editing a token here.
+		took, err := s.dispatchScored(id, prompt, submit, authorAgent)
 		spent += took
 		switch {
-		case !ok:
+		case errors.Is(err, errVetoed):
 			f.add(id, outcomeVetoed)
-		case s.dispatchScored(id, prompt, b, submit) == nil:
-			f.add(id, outcomeSent)
-		default:
+		case err != nil:
 			f.add(id, outcomeLost)
+		default:
+			f.add(id, outcomeSent)
 		}
 	}
 	sent, vetoed, skipped := f.count(outcomeSent), f.count(outcomeVetoed), f.panels(outcomeSkipped)

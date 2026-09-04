@@ -99,13 +99,33 @@ func (s *Server) forgetRestartLocked(id string) {
 // The order of the checks is the policy, written out:
 //
 //   - a daemon shutting down is killing everything on purpose
+//   - a command panel's exit is its result, not a fault to undo
 //   - a panel with no recorded spec has nothing to re-run
 //   - an exit the user asked for is not a failure
 //   - a clean exit is a finished job, not a crash
 //   - a run that lasted long enough earns its failure budget back
 //   - and giving up is loud, carrying the reason
-func (s *Server) superviseExitLocked(id string, exitCode int, now time.Time) string {
+//
+// The command-panel rung is the one exclusion the policy makes by KIND, and it is
+// the only agent surface #54 had to gate by hand rather than get for free from
+// IsAgent — because supervision was never agent-only. on-failure asks "did this
+// exit abnormally", and for a plain binary the answer is a RESULT: a test run
+// that failed, a build that did not compile, a grep that found nothing. Re-running
+// it re-runs the failure, five times, on a backoff, and then announces that it
+// gave up — a crash loop assembled out of a program working correctly. A shell
+// keeps the policy because a shell that died did die; only a command panel is
+// spawned to reach an exit code and stop.
+// kind is taken rather than looked up: both callers are holding the panel when
+// they call, and one of them is already walking s.panels with the matching index
+// in hand. Passing the KIND rather than that index is what makes it safe for the
+// other caller, restartPanel, which reads it before an unlock and uses it after —
+// a panel's kind is fixed at creation and never mutated, where an index a close
+// could shift means a different panel by the time it is spent.
+func (s *Server) superviseExitLocked(id string, kind panel.Kind, exitCode int, now time.Time) string {
 	if s.shuttingDown {
+		return ""
+	}
+	if kind == panel.Command {
 		return ""
 	}
 	spec, ok := s.specs[id]
@@ -160,6 +180,14 @@ func (s *Server) restartPanel(id string) {
 	}
 	idx := s.indexLocked(id)
 	stale := s.shuttingDown || idx < 0 || s.panels[idx].State != panel.Exited
+	var kind panel.Kind
+	if !stale {
+		// Read here, under the lock that made idx meaningful, and spent after the
+		// respawn. The index could not make that trip — a close in between shifts it
+		// onto somebody else's panel — but a kind is decided at creation and never
+		// changes, so the answer it gives on the far side is still this panel's.
+		kind = s.panels[idx].Kind
+	}
 	s.mu.Unlock()
 	if stale {
 		return
@@ -168,7 +196,7 @@ func (s *Server) restartPanel(id string) {
 	if err := s.respawnPanel(id); err != nil {
 		log.Warn().Err(err).Str("panel", id).Msg("restart failed")
 		s.mu.Lock()
-		activity := s.superviseExitLocked(id, -1, time.Now())
+		activity := s.superviseExitLocked(id, kind, -1, time.Now())
 		if i := s.indexLocked(id); i >= 0 && activity != "" {
 			s.panels[i].Activity = activity
 		}

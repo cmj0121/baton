@@ -5,11 +5,11 @@ import (
 	"os"
 	"strings"
 	"time"
-	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/cmj0121/baton/internal/panel"
+	"github.com/cmj0121/baton/internal/scrub"
 )
 
 // The attention notifications: everything the cockpit does to TELL a human a
@@ -298,44 +298,19 @@ func notify(text string) tea.Cmd {
 // everything after it is executed by the terminal as its own bytes — an OSC 52
 // that rewrites the operator's clipboard, a cursor escape that scribbles over the
 // frame. So every control rune goes, not only the two that terminate this
-// particular sequence: C0 and C1 alike (which covers ESC, BEL, and the single-byte
-// CSI/OSC introducers some terminals still honour), format runes, and the
-// replacement rune invalid UTF-8 decodes to.
+// particular sequence; internal/scrub is where that class list lives and why.
 //
-// It takes sanitizeReason's shape rather than sanitizeText's on purpose.
+// It takes internal/scrub's filter rather than sanitizeText's on purpose.
 // sanitizeText protects a RENDERED line, so it may keep a tab and may drop an
 // ESC-introduced sequence whole; the payload of an escape can afford neither
-// guess. Whitespace runs fold to one space and the result is capped, for the same
-// reason the server caps a declared reason: this is a sentence, and its length is
-// not the agent's to choose.
+// guess. The result is capped at maxNotifyRunes, this boundary's own number — the
+// server's reason cap is a different one, for a different surface.
 //
 // A title that scrubs away to nothing becomes a placeholder rather than being
 // dropped. Losing the alert entirely would hand an agent a way to silence its own
 // escalation just by naming itself in control bytes.
 func sanitizeNotify(title string) string {
-	var b strings.Builder
-	b.Grow(len(title))
-	pendingSpace := false
-	for _, r := range title {
-		switch {
-		case unicode.IsSpace(r):
-			pendingSpace = true
-		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == unicode.ReplacementChar:
-			continue
-		default:
-			if pendingSpace && b.Len() > 0 {
-				b.WriteRune(' ')
-			}
-			pendingSpace = false
-			b.WriteRune(r)
-		}
-	}
-	out := b.String()
-	if len(out) > maxNotifyRunes { // bytes >= runes, so this skips the common case
-		if rs := []rune(out); len(rs) > maxNotifyRunes {
-			out = strings.TrimRight(string(rs[:maxNotifyRunes]), " ")
-		}
-	}
+	out := scrub.Capped(title, maxNotifyRunes)
 	if out == "" {
 		return "a panel"
 	}

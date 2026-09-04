@@ -193,9 +193,10 @@ panel:
   唯一的差別就在**怎麼解析**:有 `id` 時它指名一個面板,repo 與 spec 都從那裡來;而**空的 `id`**
   是主控台那一式,由 `dir` 指名 repo、`path`/`args`/`profile` 帶著座艙從艦隊預設解析出來的 spec。
   兩個動詞送的是同一個命令,所以沒有新增第二個 wire action,協定版本也沒有動;只認得第一式的舊
-  常駐程式,對第二式會回 `no panel with id ""`——是拒絕,不是誤讀。對 conductor 連線,無目標那一式
-  會被拒絕:讓它自己指定要跑的指令,等於給了 `panel.create` 的能力卻沒有 `panel.create` 的數量上限
-  與速率上限,所以 conductor 只留下複製既有 agent 的那一式;
+  常駐程式,對第二式會回 `no panel with id ""`——是拒絕,不是誤讀。對 conductor 連線,兩式都要付
+  `panel.create` 的數量上限與速率上限,因為 worktree-add 是一次披著 git 操作名字的生成。只對無目標
+  那一式收費等於什麼都沒擋:在數量上限被拒的 conductor,可以改走另一式把自己的 agent 一個分支一個
+  分支扇出去,完全不計量;
 - **worktree-remove** 同步執行,並以一則通知確認。
 
 「只對 agent 開放」與「需在 git 工作樹內」這兩道柵欄由伺服器端強制執行——座艙也會把關,但常駐程式

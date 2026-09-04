@@ -2,11 +2,10 @@ package server
 
 import (
 	"fmt"
-	"strings"
-	"unicode"
 
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/scrub"
 )
 
 // This file is the WRITE side of the detection precedence's top rung: an agent
@@ -221,49 +220,14 @@ func (s *Server) suppressedLocked(id string) bool {
 // for panel OUTPUT, which the server passes through byte-exact because it is a
 // terminal stream and the emulator is what interprets it. A reason is a field.)
 //
-// It keeps printable runes, folds every run of whitespace into one space so a
-// reason is one line by construction (a card and an inbox row both have exactly
-// one to give it), and drops three classes of rune:
-//
-//   - Control characters (Cc, which is both C0 and C1). An escape sequence loses
-//     its ESC and leaves its parameters behind as plain text — "[1;31m" rather
-//     than a colour — which is not tidied up on purpose: a reason that tried to
-//     carry an escape should look wrong to whoever reads it, not quietly become
-//     clean prose.
-//   - FORMAT characters (Cf): U+202E RIGHT-TO-LEFT OVERRIDE and the bidi
-//     isolates render a line backwards, U+200B is invisible. None of them are
-//     control characters, so IsControl does not see them, and since the contract
-//     above tells every frontend the text is already safe, this is the last place
-//     they can be stopped.
-//   - The replacement character, which is what an invalid UTF-8 byte decodes to.
-//
-// The result is capped at maxReasonRunes. A reason is a sentence for a person to
-// read, and the value is broadcast to every client on every fleet snapshot — an
-// unbounded agent-controlled string on that path is a cost the fleet pays over
-// and over for text no inbox row could show.
+// Which runes go and why is internal/scrub's to state, and it states it once for
+// the three boundaries that need the same answer (#47). What is local here is
+// the contract above, and the cap: maxReasonRunes. A reason is a sentence for a
+// person to read, and the value is broadcast to every client on every fleet
+// snapshot — an unbounded agent-controlled string on that path is a cost the
+// fleet pays over and over for text no inbox row could show. The cap is this
+// boundary's own number, not a shared one; the notification path and the score
+// store each carry a different limit for reasons of their own.
 func sanitizeReason(reason string) string {
-	var b strings.Builder
-	b.Grow(len(reason))
-	pendingSpace := false
-	for _, r := range reason {
-		switch {
-		case unicode.IsSpace(r):
-			pendingSpace = true
-		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == unicode.ReplacementChar:
-			continue
-		default:
-			if pendingSpace && b.Len() > 0 {
-				b.WriteRune(' ')
-			}
-			pendingSpace = false
-			b.WriteRune(r)
-		}
-	}
-	out := b.String()
-	if len(out) > maxReasonRunes { // bytes >= runes, so this skips the common case
-		if rs := []rune(out); len(rs) > maxReasonRunes {
-			out = strings.TrimRight(string(rs[:maxReasonRunes]), " ")
-		}
-	}
-	return out
+	return scrub.Capped(reason, maxReasonRunes)
 }

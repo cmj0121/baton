@@ -38,6 +38,21 @@ import (
 // wire under a new meaning — is a bump, like any other change of meaning.
 // TestScratchActionIsRefused in internal/server holds the up direction to that.
 //
+// ADDING A VALUE TO A FIELD'S VOCABULARY is the fourth shape, and the command
+// panel kind (#54) is the case that settled it. `KindCommand` is a third string
+// the Kind field may carry, and adding one is not adding an action: the field
+// already existed, already carried a string, and already had a documented rule
+// for a value the reader does not know. Both directions degrade. Down: an old
+// cockpit hands "command" to panel.ParseKind, whose default has always been
+// Shell, so it draws the panel as SHELL — plainer than the truth, and never a
+// claim the panel can be dispatched, diffed or given git; TestParseKindUnknownIsShell
+// holds that default. Up: an old daemon reading `panel.create` with kind
+// "command" falls through createPanel's kind switch to `unknown panel kind
+// "command"` — a refusal the client surfaces, not a spawn of the wrong thing.
+// A new value that does NOT degrade this way — one an old peer would silently
+// treat as a DIFFERENT known value, rather than as its documented unknown — is a
+// bump, because that is a change of meaning wearing a new name.
+//
 // GIVING A FIELD A MEANING IT DID NOT HAVE for one op is the third shape, and
 // the dashboard's worktree verb (#66) is the case that settled it. `panel.git`
 // with git "worktree-add" grew a second form: an EMPTY ID, a Dir naming the
@@ -78,8 +93,9 @@ const (
 
 // Panel kinds carried on the wire.
 const (
-	KindShell = "shell" // a plain host shell (the default)
-	KindAgent = "agent" // an agent CLI run as the panel process
+	KindShell   = "shell"   // a plain host shell (the default)
+	KindAgent   = "agent"   // an agent CLI run as the panel process
+	KindCommand = "command" // a plain binary run as the panel process (#54)
 )
 
 // EventBufferSize is the per-client buffer of outbound server messages. It is
@@ -91,7 +107,7 @@ const EventBufferSize = 256
 // the fleet with panel.group / panel.rename.
 type Command struct {
 	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | panel.tail | panel.diff | panel.git | panel.log | panel.logview | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run | remote.status | remote.enable | remote.disable | remote.rotate | remote.kick | score.submit | score.list | score.status | score.merge | score.reword | score.lower | worktree.list | worktree.sweep
-	Kind      string   `json:"kind,omitempty"`      // panel kind for "panel.create" (default "shell")
+	Kind      string   `json:"kind,omitempty"`      // panel kind for "panel.create": "shell" (the default), "agent", or "command"
 	ID        string   `json:"id,omitempty"`        // target panel for close/attach/input/resize/diff, the panel to rename, the panel "score.list" ranks its entries for (empty = rank against no context), the score entry a refine verb corrects, or — empty on "panel.git" worktree-add — the spawn that has no source panel at all
 	Path      string   `json:"path,omitempty"`      // init command (binary path) for "panel.create"; empty = default shell. Also the agent command for a targetless "panel.git" worktree-add, which spawns one
 	Args      []string `json:"args,omitempty"`      // command arguments for "panel.create" (an agent profile's args), and for a targetless "panel.git" worktree-add

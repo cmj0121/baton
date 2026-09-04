@@ -1,5 +1,6 @@
-// Package panel defines baton's core panel model: one live terminal that runs
-// either a shell or an agent, together with the Monitor's view of its lifecycle.
+// Package panel defines baton's core panel model: one live terminal that runs a
+// shell, an agent, or a plain command, together with the Monitor's view of its
+// lifecycle.
 //
 // A Panel is the real, server-fed model: the server owns the fleet and reports it
 // to every frontend, which renders it as-is. The struct is shaped so the core can
@@ -12,17 +13,32 @@ import "github.com/cmj0121/baton/internal/proto"
 // Kind is what a panel runs.
 type Kind int
 
-// The panel kinds.
+// The panel kinds. New members are APPENDED, never inserted: the zero value has
+// to stay Shell, since that is what a panel.create with no kind asks for. The
+// constant itself is never serialised — the wire carries the string String()
+// renders — so nothing outside this package may depend on the numbers.
 const (
 	Shell Kind = iota // a plain host shell
 	Agent             // an agent CLI (claude, copilot, …) run as the panel process
+
+	// Command is a plain binary run as the panel process — `time`, a test run, a
+	// build, a `tail -f`. It spawns like an agent (a command and its arguments,
+	// not a login shell) and it is watched like one (same tiles, same output
+	// capture, same signals), and there the resemblance ends: it is NOT an agent,
+	// so every surface that asks IsAgent gets false and the fleet stops offering
+	// it work it cannot read. What it is instead is written out at IsCommand.
+	Command
 )
 
 func (k Kind) String() string {
-	if k == Agent {
+	switch k {
+	case Agent:
 		return "agent"
+	case Command:
+		return "command"
+	default:
+		return "shell"
 	}
-	return "shell"
 }
 
 // State is the Monitor lifecycle state a panel is in (see docs/SPEC.md).
@@ -77,11 +93,26 @@ func (s State) String() string {
 }
 
 // ParseKind maps a wire kind string to a Kind, defaulting to Shell.
+//
+// Shell is the right floor for a kind this build does not know, and the arrival
+// of a third kind is what tested that rather than changed it. The mismatch the
+// default exists for is an OLDER cockpit reading a NEWER daemon, and there a
+// frontend must UNDER-CLAIM: rendering an unknown kind as an agent would offer
+// the git menu, the diff pop-up and a dispatch on a panel that may be a plain
+// binary — the exact confusion a command panel exists to end — while rendering
+// it as a shell claims only "a process in a terminal, no agent semantics", which
+// is true of a command panel and of whatever kind baton adds after it. So an old
+// cockpit draws a command panel as SHELL, which is a plainer picture than the
+// truth and never a wrong one.
 func ParseKind(s string) Kind {
-	if s == "agent" {
+	switch s {
+	case "agent":
 		return Agent
+	case "command":
+		return Command
+	default:
+		return Shell
 	}
-	return Shell
 }
 
 // ParseState maps a wire state string to a State, defaulting to Idle.
@@ -113,8 +144,8 @@ func ParseState(s string) State {
 	}
 }
 
-// Panel is one live terminal the server owns: a shell or an agent, plus the
-// Monitor's lifecycle state. The Group field files the panel under a work item;
+// Panel is one live terminal the server owns: a shell, an agent or a plain
+// command, plus the Monitor's lifecycle state. The Group field files the panel under a work item;
 // the Activity/Spark fields are live telemetry the Monitor reports as output
 // ebbs and flows — a short status line and an output-rate sparkline.
 type Panel struct {
@@ -211,8 +242,23 @@ type Panel struct {
 	Reason string
 }
 
-// IsAgent reports whether the panel runs an agent CLI rather than a shell.
+// IsAgent reports whether the panel runs an agent CLI. It is false for a command
+// panel, which is the whole point of that kind: a plain binary running in a panel
+// is a process to watch, not a worker to give work to.
 func (p Panel) IsAgent() bool { return p.Kind == Agent }
+
+// IsCommand reports whether the panel runs a plain command rather than a shell or
+// an agent.
+//
+// The one thing that separates it from the other two once it is running is what
+// its EXIT means. A shell that exits is gone — the session it was is over. An
+// agent that exits left a dead slot the operator inspects and may respawn into,
+// which is why an exit there reads as death. A command that exits has done the
+// thing it was spawned to do, and its output is at its most useful precisely
+// then; the panel holds until the operator closes it, and its exit code is the
+// answer rather than a fault. Nothing supervises it back to life (see the server
+// restart policy) and nothing tidies it away.
+func (p Panel) IsCommand() bool { return p.Kind == Command }
 
 // FromProto decodes a wire panel into the domain model.
 func FromProto(p proto.Panel) Panel {

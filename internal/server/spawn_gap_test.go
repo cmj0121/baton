@@ -1,10 +1,7 @@
 package server
 
 import (
-	"encoding/json"
 	"fmt"
-	"net"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -32,8 +29,8 @@ func fullFleet() []panel.Panel {
 // the clientConn — so it throttled a conductor holding one socket open and did
 // nothing at all to `baton_spawn`, which goes through the same dial-per-tool-call
 // MCP path the refine verbs do, or to `baton ctl spawn`, which is a process per
-// command. It was cured by the same change: both caps are keyed on the
-// conductor's PANEL now, through Server.gapStamp.
+// command. It was cured by moving the stamp off the connection: the refine cap
+// onto the conductor's PANEL, and this one — since #75 — onto the door it guards.
 //
 // TestConductorGuardrails covers the persistent-connection case and passed
 // throughout, which is exactly why this one has to exist beside it.
@@ -63,13 +60,17 @@ func TestSpawnGapThrottlesAcrossConnections(t *testing.T) {
 		t.Fatalf("a spawn past the gap was refused: %q", reason)
 	}
 
-	// A DIFFERENT conductor identity is not throttled by this one's stamp. The
-	// singleton makes that hypothetical today, and the assertion is what says the
-	// cap fences a caller rather than the verb.
+	// A DIFFERENT identity IS throttled by the stamp the first one left, and that
+	// is #75's ruling read from its narrowest angle. The cap fences the DOOR, not
+	// the caller: three roads reach createPanel and gapStamp holds one stamp in
+	// total, so keying it on who asked would let two askers alternate and refuse
+	// neither. This is the assertion that fails the moment the key goes back to
+	// being something a caller names.
 	other := conn("c2")
 	other.role = roleConductor
-	if reason := s.guardConductor(other, create); reason != "" {
-		t.Fatalf("a different panel was throttled by another's stamp: %q", reason)
+	if reason := s.guardConductor(other, create); !strings.Contains(reason, "too fast") {
+		t.Fatalf("a second identity was admitted (%q) an instant after the first spawned: the spawn "+
+			"cap is keyed on the caller again, and two callers alternating are never refused", reason)
 	}
 }
 
@@ -169,37 +170,7 @@ func TestWorktreeAddPaysTheSpawnCaps(t *testing.T) {
 func TestWTAddConductorReachesTheCap(t *testing.T) {
 	s := newHostServer(t)
 	s.spawn.gap = time.Hour
-
-	srvEnd, cliEnd := net.Pipe()
-	go s.handle(srvEnd)
-	t.Cleanup(func() { _ = cliEnd.Close() })
-
-	enc, dec := json.NewEncoder(cliEnd), json.NewDecoder(cliEnd)
-	send := func(cmd proto.Command) {
-		t.Helper()
-		if err := enc.Encode(cmd); err != nil {
-			t.Fatalf("send %s: %v", cmd.Action, err)
-		}
-	}
-	// until drains the stream (welcome, snapshots, pings) for the next message of
-	// one of the wanted types.
-	until := func(want ...string) proto.ServerMsg {
-		t.Helper()
-		for range 40 {
-			var msg proto.ServerMsg
-			if err := dec.Decode(&msg); err != nil {
-				t.Fatalf("decode: %v", err)
-			}
-			if slices.Contains(want, msg.Type) {
-				return msg
-			}
-		}
-		t.Fatalf("never saw any of %v", want)
-		return proto.ServerMsg{}
-	}
-
-	send(proto.Command{Action: "hello", Role: roleConductor, Self: "c1"})
-	until("panels")
+	send, until := conductorWire(t, s)
 
 	// A plain spawn, admitted, spends the conductor's slot.
 	send(proto.Command{Action: "panel.create", Kind: proto.KindShell})

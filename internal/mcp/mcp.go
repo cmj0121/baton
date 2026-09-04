@@ -220,34 +220,39 @@ func defaultTools() []tool {
 		},
 		{
 			name: "baton_spawn",
-			desc: "Spawn a panel and return its id. Give 'agent' to run an agent CLI (e.g. claude); omit it for a shell. Set 'worktree' with a 'branch' to spawn into a fresh git worktree of 'dir' instead — prefer that when the workers would otherwise share one checkout.",
+			desc: "Spawn a panel and return its id. Give 'agent' to run an agent CLI (e.g. claude); give 'run' to run a plain binary (a build, a test run, a tail) that is watched but never given work; omit both for a shell. Set 'worktree' with a 'branch' to spawn into a fresh git worktree of 'dir' instead — prefer that when the workers would otherwise share one checkout.",
 			// worktree/branch are extra fields on this tool rather than a sibling
 			// tool, so a conductor that already knows how to spawn does not have to
 			// discover a second one. They also re-point 'dir': with worktree it names
 			// the repository to branch from, not the directory the process runs in.
 			schema: obj(map[string]any{
-				"agent":    str("agent CLI command to run; omit for a shell panel"),
-				"args":     strList("arguments passed to the agent command"),
+				"agent": str("agent CLI command to run; omit for a shell panel"),
+				// 'run', not 'command': baton_enqueue's 'command' already means "the AGENT
+				// binary to provision", so the same key here would mean the binary that is
+				// explicitly NOT an agent, in a tool the same conductor calls. A model that
+				// learned one meaning would carry it to the other and get a panel with the
+				// wrong standing — #54's inference reappearing in the tool vocabulary.
+				"run":      str("plain binary to run as the panel's process; watched like an agent, never given work"),
+				"args":     strList("arguments passed to the agent or command"),
 				"dir":      str("working directory the panel runs in; with worktree, the repository to branch from"),
 				"worktree": map[string]any{"type": "boolean", "description": "spawn into a fresh git worktree of dir; requires branch and agent"},
 				"branch":   str("branch the new worktree is created on; required with worktree"),
 			}),
+			// Every refusal below is control.ResolveSpawn's, in its own words. Setting
+			// one field of an either/or pair, or one field of a required pair, is
+			// exactly the slip a model makes, so each is refused rather than resolved:
+			// a conductor that meant "watch this build" would otherwise get a panel the
+			// scheduler hands a task to, and a dropped branch would spawn into the
+			// shared checkout this verb exists to get its workers out of.
 			run: func(c *control.Client, a args) (string, error) {
-				var id string
-				var err error
-				switch worktree := a.boolDefault("worktree", false); {
-				case worktree:
-					id, err = c.SpawnWorktree(a.str("agent"), a.strSlice("args"), a.str("dir"), a.str("branch"))
-				case a.str("branch") != "":
-					// A branch with no worktree is refused rather than dropped, the same as
-					// `ctl spawn --branch` without `--worktree`. Silently ignoring it would
-					// spawn into `dir` itself — for a conductor, the shared checkout this
-					// whole verb exists to get its workers out of — and setting one field
-					// of a pair is exactly the slip a model makes.
-					return "", fmt.Errorf("branch names the worktree to spawn into; set worktree: true")
-				default:
-					id, err = c.SpawnPanel(a.str("agent"), a.strSlice("args"), a.str("dir"))
-				}
+				id, err := c.ResolveSpawn(control.SpawnRequest{
+					Agent:    a.str("agent"),
+					Run:      a.str("run"),
+					Args:     a.strSlice("args"),
+					Dir:      a.str("dir"),
+					Worktree: a.boolDefault("worktree", false),
+					Branch:   a.str("branch"),
+				})
 				if err != nil {
 					return "", err
 				}

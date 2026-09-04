@@ -4,9 +4,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
-	"time"
 
+	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/paths"
 )
 
@@ -77,12 +78,14 @@ func TestAttachForceStopError(t *testing.T) {
 // TestRunServerOnBadConfigFiles drives the server loop with malformed config,
 // plugin, and TUI files under $HOME/.baton, exercising the warn-and-continue
 // error branches of runServerOn/applyConfig (config.Load, plugin Load, and
-// LoadTUI all fail) without stopping the server. The listener is closed to make
-// Serve return on its own, as in TestRunServerOn.
+// LoadTUI all fail) without stopping the server.
+//
+// The daemon comes up through bootFleet, which is the boot-and-shutdown dance
+// this test used to inline: it serves, and closing the listener makes Serve
+// return nil, both asserted there. What is left here is the only thing this test
+// is about — the files it writes before the boot.
 func TestRunServerOnBadConfigFiles(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_RUNTIME_DIR", home)
 
 	confDir := filepath.Join(home, ".baton")
 	if err := os.MkdirAll(confDir, 0o755); err != nil {
@@ -100,28 +103,77 @@ func TestRunServerOnBadConfigFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sock := filepath.Join(t.TempDir(), "baton.sock")
-	t.Setenv("BATON_SOCK", sock)
-	// A fresh plugin path resolves under HOME; make sure no external override leaks.
-	t.Setenv("BATON_PLUGIN", "")
+	bootFleet(t, home)
+}
 
-	ln, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatalf("listen: %v", err)
+// TestABootConfigNobodyCouldReadCarriesOnlyScore is #48's rule at the one seam
+// applyConfig cannot reach.
+//
+// A failed load returns a struct beside its error, and it is not the zero one:
+// the decoder fills what it read before it gave up. applyConfig's NEVER-HAD-ONE
+// branch throws that away and comes up on the defaults — but usageOption and
+// limitsOption are spent when the server is BUILT, off serverBoot.cfg, and
+// srv.Reload never revisits them. So a file that failed AFTER its usage section
+// booted the daemon polling an endpoint on a cadence against thresholds nobody
+// could read, for the life of the process.
+//
+// The file below is exactly that shape: the whole usage section and both score
+// keys decode, and then a number that is not one takes the strict pass down. The
+// assertion is the whole struct rather than the usage keys, because the next
+// construction-time option read off this config would be the same defect again,
+// and this catches it without being rewritten.
+//
+// Score is asserted PRESENT in the same breath, because that is the deliberate
+// exception and a fix that took it out would be a worse bug than the one being
+// fixed: the store is already open on score.dir, and a WithScore that disagreed
+// with it would leave the daemon reporting a memory it is not using.
+func TestABootConfigNobodyCouldReadCarriesOnlyScore(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_RUNTIME_DIR", home)
+
+	confDir := filepath.Join(home, ".baton")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	scoreDir := filepath.Join(home, "memory")
+	conf := "usage:\n" +
+		"  source: api\n" +
+		"  interval: 900\n" +
+		"  limits: oauth\n" +
+		"  window: 168h\n" +
+		"  warn-at: 0.1\n" +
+		"  alarm-at: 0.2\n" +
+		"score:\n" +
+		"  dir: " + scoreDir + "\n" +
+		"  enabled: true\n" +
+		"queue:\n" +
+		"  max: not-a-number\n"
+	if err := os.WriteFile(filepath.Join(confDir, "config"), []byte(conf), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
-	done := make(chan error, 1)
-	go func() { done <- runServerOn(ln, sock, loadServerBoot(sock)) }()
+	// The file must fail to parse AND have decoded the usage section, or this
+	// test is asserting over a case that cannot arise.
+	raw, err := config.Load()
+	if err == nil {
+		t.Fatal("the config parsed; this test needs one that does not")
+	}
+	if raw.Usage.Source == "" {
+		t.Fatalf("the decoder kept nothing from the usage section (%+v); the residual this test is about is gone", raw.Usage)
+	}
 
-	waitServing(t, sock)
+	sock := filepath.Join(t.TempDir(), "baton.sock")
+	t.Setenv("BATON_SOCK", sock)
+	boot := loadServerBoot(sock)
+	defer boot.release()
 
-	_ = ln.Close()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("runServerOn returned %v, want nil", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("runServerOn did not return after the listener closed")
+	if boot.cfg.Score.Dir != scoreDir || !boot.cfg.Score.IsEnabled() {
+		t.Fatalf("boot score = %+v, want the two keys #48 takes from a half-parsed file", boot.cfg.Score)
+	}
+	rest := boot.cfg
+	rest.Score = config.ScoreConfig{}
+	if !reflect.DeepEqual(rest, config.Config{}) {
+		t.Fatalf("the boot config carries %+v from a file nobody could read, want only score", rest)
 	}
 }

@@ -20,7 +20,7 @@ func schedule(s *Server) ([]delivery, []spawnRequest) {
 // requested again on the next pass (so a slow spawn is not double-provisioned).
 func TestSpawnOnDemandRequestsPanel(t *testing.T) {
 	s, _, _ := gateServer() // no agents in the fleet
-	id, err := s.enqueueTask("build it", "", &task.SpawnSpec{Command: "claude"})
+	id, err := s.enqueueTask(conn(""), "build it", "", &task.SpawnSpec{Command: "claude"})
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestSpawnOnDemandRequestsPanel(t *testing.T) {
 // agent when one exists, rather than provisioning a new panel.
 func TestSpawnOnDemandPrefersIdleAgent(t *testing.T) {
 	s, _, _ := gateServer(panel.Panel{ID: "a1", Kind: panel.Agent, State: panel.Idle})
-	id, err := s.enqueueTask("build it", "", &task.SpawnSpec{Command: "claude"})
+	id, err := s.enqueueTask(conn(""), "build it", "", &task.SpawnSpec{Command: "claude"})
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestSpawnOnDemandPrefersIdleAgent(t *testing.T) {
 // holding the dispatch for delivery once the panel settles.
 func TestSpawnOnDemandProvisionsAndAssigns(t *testing.T) {
 	s, _, _ := gateServer() // no agents
-	id, err := s.enqueueTask("hi", "", &task.SpawnSpec{Command: "cat"})
+	id, err := s.enqueueTask(conn(""), "hi", "", &task.SpawnSpec{Command: "cat"})
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestSpawnOnDemandProvisionsAndAssigns(t *testing.T) {
 // refused rather than queuing a task that can never provision anything.
 func TestEnqueueSpawnNeedsCommand(t *testing.T) {
 	s, _, _ := gateServer()
-	if _, err := s.enqueueTask("x", "", &task.SpawnSpec{}); err == nil {
+	if _, err := s.enqueueTask(conn(""), "x", "", &task.SpawnSpec{}); err == nil {
 		t.Fatal("a spawn task without a command should be refused")
 	}
 }
