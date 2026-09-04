@@ -1773,9 +1773,17 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 	// also runs the task.pre chain here, which is the whole reason this loop is on
 	// this side of the Unlock above; see deliver.
 	//
-	// Only the unbound ones are budgeted. A bound delivery is a write, which is
-	// what this loop always was; an unbound one can sit on a hook for up to the
-	// task.pre fail-open timeout, and the whole tick is behind it — this tick's
+	// EVERY delivery is budgeted, and after #51 there is no other kind to exempt:
+	// a delivery arrives here unbound or it does not arrive here at all, since a
+	// dispatch to a settled panel writes its own bound bytes and one to a busy
+	// panel is parked as the operator wrote it. The exemption this paragraph used
+	// to describe — a bound delivery is only a write, so charge it nothing — was
+	// the half of "what does binding cost" that skipped the ceiling precisely
+	// because its hook had already run, and it went with the shape that made it
+	// possible. See deliveryBudget.
+	//
+	// The ceiling is here because an unbound delivery can sit on a hook for up to
+	// the task.pre fail-open timeout, and the whole tick is behind it — this tick's
 	// telemetry and its report of what settled, cwd sampling, the CloseOnDone reap
 	// and spawn-on-demand provisioning all wait for this loop to end. (The idle
 	// settling itself already happened under the lock above; what waits is saying

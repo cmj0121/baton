@@ -1057,6 +1057,23 @@ const (
 // that never happened. An alarm that can say that is an alarm people learn to
 // ignore, which is what the floor beside it exists to prevent.
 //
+// #52'S MERGES ARE NOT THESE MERGES, and this alarm cannot see one. A line the
+// operator edits in score.md into what another entry already says retires that
+// entry inside Store.Reconcile — on any read, from any surface — while note is
+// reached only from the conductor's score.merge. So a convergence arrives here as
+// movement the merges did not cause and takes the BASELINE DOWN with it, exactly
+// as a deleted line does: ten entries converged by hand between two conductor
+// merges make the collapse this alarm is watching for look ten smaller, never
+// larger.
+//
+// That is defensible and not merely unnoticed. From this side a convergence IS a
+// deletion — the operator's own save to the operator's own file, which is the
+// whole gesture #52 exists to give them — and #38 declines to be a boundary
+// against a same-uid agent editing that file, which can delete a line as easily
+// as converge one. The quantity this warning claims is what the CONDUCTOR'S
+// merging has taken, and that claim stays exactly true; the error is in the quiet
+// direction, which is the one an alarm people learn to ignore cannot afford.
+//
 // A RUN ENDS IN SILENCE, never in shrinkage. A whole mergeAlarmWindow with no
 // merge at all closes the run and re-seeds the baseline on what the next merge
 // finds; anything short of that carries. That leaves a band — a conductor
