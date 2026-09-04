@@ -265,36 +265,55 @@ echo ">> indexed ${INDEXED} names across ${GO_FILES} tracked .go files"
 # examined comment lines while the grep says there were some to examine, the
 # sweep is broken, and saying so is the only honest thing left to do.
 # ---------------------------------------------------------------------------
-RAW_COMMENT_LINES=0
+# One diff, read twice. The per-file diffs this used to run are a partition of
+# this one, so asking git 53 more times for slices of what it has already
+# handed over buys nothing. The count below and the added-line sets now come
+# from the same bytes, which also means they cannot disagree about the range.
+: >"${WORK}/whole-diff"
 if [ -n "${CHANGED}" ]; then
-	RAW_COMMENT_LINES="$(git diff --unified=0 "${BASE_SHA}" -- '*.go' |
-		grep -c -E '^\+.*(//|/\*)' || true)"
+	git diff --unified=0 "${BASE_SHA}" -- '*.go' >"${WORK}/whole-diff"
 fi
+
+RAW_COMMENT_LINES="$(grep -c -E '^\+.*(//|/\*)' <"${WORK}/whole-diff" || true)"
 
 # ---------------------------------------------------------------------------
 # Collect the comment text on lines the range added, file by file.
 # ---------------------------------------------------------------------------
 : >"${WORK}/added-comments"
 
-for file in ${CHANGED}; do
+# Line numbers of added lines, read out of the hunk headers of a zero context
+# diff: "@@ -old,n +new,m @@" means m lines starting at new. Which file a hunk
+# belongs to is the "+++ b/<path>" header above it -- and that header is only
+# read while inside one, because an added line inside a block comment can
+# itself begin "++" and arrive looking exactly like the header.
+awk '
+	/^diff --git / { file = ""; hdr = 1; next }
+	hdr && /^\+\+\+ / { file = substr($0, 5); sub(/^b\//, "", file); hdr = 0; next }
+	/^@@/ {
+		match($0, /\+[0-9]+(,[0-9]+)?/)
+		spec = substr($0, RSTART + 1, RLENGTH - 1)
+		split(spec, p, ",")
+		count = (p[2] == "" ? 1 : p[2])
+		for (k = 0; k < count; k++) print file "\t" p[1] + k
+	}
+' <"${WORK}/whole-diff" >"${WORK}/added-lines"
+
+# Walking the files that actually gained a line, rather than every changed
+# file, drops the "did this one gain anything?" test with it: a deletion-only
+# edit contributes no hunk with a positive count, and a deleted file none at
+# all, so neither reaches the loop to begin with.
+#
+# First appearance, not `sort -u`. The report prints the first three comments
+# carrying a stale name, so the order files are visited in is the order of the
+# evidence, and `sort` collates by locale: it put main_test.go before main.go,
+# where git orders paths by bytes and `.` sorts under `_`. Taking the order
+# out of the diff is both the right one and one less thing to get wrong.
+for file in $(awk '!seen[$1]++ { print $1 }' "${WORK}/added-lines"); do
 	[ -f "${file}" ] || continue
-
-	# Line numbers of added lines, read out of the hunk headers of a zero
-	# context diff: "@@ -old,n +new,m @@" means m lines starting at new.
-	git diff --unified=0 "${BASE_SHA}" -- "${file}" |
-		awk '/^@@/ {
-			match($0, /\+[0-9]+(,[0-9]+)?/)
-			spec = substr($0, RSTART + 1, RLENGTH - 1)
-			split(spec, p, ",")
-			count = (p[2] == "" ? 1 : p[2])
-			for (k = 0; k < count; k++) print p[1] + k
-		}' | sort -un >"${WORK}/added-lines"
-
-	[ -s "${WORK}/added-lines" ] || continue
 
 	awk -f "${WORK}/split.awk" "${file}" |
 		awk -F'\t' -v f="${file}" '
-			NR == FNR { want[$1] = 1; next }
+			NR == FNR { if ($1 == f) want[$2] = 1; next }
 			$2 == "M" && ($1 in want) && $3 ~ /[A-Za-z]/ { print f "\t" $1 "\t" $3 }
 		' "${WORK}/added-lines" - >>"${WORK}/added-comments"
 done
