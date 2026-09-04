@@ -32,25 +32,34 @@ func tailReply(t *testing.T, cc *clientConn) proto.ServerMsg {
 }
 
 // noisyPty returns a PTY manager holding one panel that has printed more than
-// maxTailBytes, so the clamp has something to bite on.
+// want bytes and has then EXITED, so the clamp has something to bite on and what
+// it bites on can no longer move.
+//
+// Waiting for a byte count would hand the ring back while the generator was still
+// writing: the count is reached around line 203 of 244, so a caller that reads the
+// ring twice would be comparing two different rings, and the later read would win
+// whenever the writer landed between them. Manager.Wait is the writer's own
+// completion rather than a guess about it — it returns once the pump has drained
+// the PTY, reaped the child and delivered its OnClose, so every byte this panel
+// will ever produce is already in the ring. ptymgr keeps a pane after its process
+// is gone, so Tail still serves the retained output.
 func noisyPty(t *testing.T, id string, want int) *ptymgr.Manager {
 	t.Helper()
 	pm := ptymgr.New()
 	t.Cleanup(func() { pm.Stop(id) })
-	// A line of 79 characters plus the PTY's CRLF, repeated until the ring holds
-	// more than the caller asked for. `yes` is the cheapest generator that keeps
-	// going; head bounds it so the panel exits on its own.
+	// A line of 79 characters plus the PTY's CRLF, repeated past what the caller
+	// asked for. `yes` is the cheapest generator that keeps going; head bounds it
+	// so the panel exits on its own — and that exit is what Wait waits for.
 	spec := ptymgr.Spec{Command: "/bin/sh", Args: []string{"-c",
 		`yes ` + strings.Repeat("x", 79) + ` | head -n ` + strconv.Itoa(want/80+40)}}
 	if err := pm.StartCmd(id, spec); err != nil {
 		t.Fatalf("start the noisy panel: %v", err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for len(pm.Tail(id, 1<<20)) <= want {
-		if time.Now().After(deadline) {
-			t.Fatalf("the noisy panel only produced %d bytes, want > %d", len(pm.Tail(id, 1<<20)), want)
-		}
-		time.Sleep(10 * time.Millisecond)
+	if err := pm.Wait(10 * time.Second); err != nil {
+		t.Fatalf("the noisy panel was still writing after 10s, so its ring is not a fixed target: %v", err)
+	}
+	if got := len(pm.Tail(id, 1<<20)); got <= want {
+		t.Fatalf("the noisy panel only produced %d bytes, want > %d", got, want)
 	}
 	return pm
 }
