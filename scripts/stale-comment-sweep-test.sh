@@ -27,10 +27,10 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 export GIT_AUTHOR_NAME=sweep-test GIT_AUTHOR_EMAIL=sweep@test
 export GIT_COMMITTER_NAME=sweep-test GIT_COMMITTER_EMAIL=sweep@test
 
-# check <name> <expected-exit> <expected-substring-or-empty> -- <sweep args...>
+# check <name> <expected-exit> <expected-substring-or-empty> <sweep args...>
 check() {
 	local name="$1" want_code="$2" want_text="$3"
-	shift 4
+	shift 3
 	local out code
 	out="$("${SWEEP}" "$@" 2>&1)"
 	code=$?
@@ -89,13 +89,13 @@ GO
 git add -A && git commit -q -m "rename the function, miss the second comment"
 
 echo "catching a stale name:"
-check "the straggler is reported" 1 "explainLocked" -- HEAD~1
+check "the straggler is reported" 1 "explainLocked" HEAD~1
 
 # The same tree with the comment corrected must go quiet, or the tool reports
 # every branch and teaches people to ignore it.
 sed -i.bak 's/explainLocked runs/describeHold runs/' lock.go && rm -f lock.go.bak
 git add -A && git commit -q -m "fix the straggler"
-check "the corrected comment is quiet" 0 "" -- HEAD~1
+check "the corrected comment is quiet" 0 "" HEAD~1
 
 # Prose that merely looks like code must not be reported. A capitalised word
 # opening a sentence is the commonest shape in any comment in any repository.
@@ -106,7 +106,7 @@ cat >>lock.go <<'GO'
 func note() {}
 GO
 git add -A && git commit -q -m "add ordinary English prose"
-check "ordinary prose is not an identifier" 0 "" -- HEAD~1
+check "ordinary prose is not an identifier" 0 "" HEAD~1
 
 # ---------------------------------------------------------------------------
 # The refusals. Each of these once had an obvious wrong answer -- exit 0 --
@@ -115,8 +115,8 @@ check "ordinary prose is not an identifier" 0 "" -- HEAD~1
 # ---------------------------------------------------------------------------
 echo ""
 echo "refusing to vouch for what it did not read:"
-check "an empty range is not a pass" 2 "NOTHING CHECKED" -- HEAD
-check "an unresolvable base is not a pass" 2 "NOTHING CHECKED" -- no/such/ref
+check "an empty range is not a pass" 2 "NOTHING CHECKED" HEAD
+check "an unresolvable base is not a pass" 2 "NOTHING CHECKED" no/such/ref
 
 # A commit that adds Go code but no comments is a truthful nothing-to-do, and
 # the sweep may only say so because an independent count of the raw diff
@@ -126,7 +126,7 @@ cat >>lock.go <<'GO'
 func plain() int { return 1 }
 GO
 git add -A && git commit -q -m "add code carrying no comment"
-check "a commit with no added comments passes honestly" 0 "nothing here to sweep" -- HEAD~1
+check "a commit with no added comments passes honestly" 0 "nothing here to sweep" HEAD~1
 
 # ---------------------------------------------------------------------------
 # A repository of nothing but comments. If the lexer ever routes code into the
@@ -147,7 +147,7 @@ git add -A && git commit -q -m "baseline"
 # report the tree.
 printf 'package a\n\nfunc b() {}\n' >a.go
 git add -A && git commit -q -m "real code, so the index is real"
-check "a readable tree is read" 0 "" -- HEAD~1
+check "a readable tree is read" 0 "" HEAD~1
 
 # A tree whose .go files carry no code at all is what a broken lexer looks
 # like from the inside, and it is reachable without breaking anything: a file
@@ -166,7 +166,7 @@ printf '// a file of pure comment\n' >a.go
 git add -A && git commit -q -m "baseline"
 printf '// a file of pure comment\n// naming mostlyProse, which exists nowhere\n' >a.go
 git add -A && git commit -q -m "a comment naming something absent"
-check "a tool fault is not dressed up as a finding" 2 "comment/code split failed" -- HEAD~1
+check "a tool fault is not dressed up as a finding" 2 "comment/code split failed" HEAD~1
 
 echo ""
 if [ "${FAILURES}" -gt 0 ]; then
