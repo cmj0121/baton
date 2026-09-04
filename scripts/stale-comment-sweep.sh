@@ -293,7 +293,7 @@ fi
 RAW_COMMENT_LINES="$(grep -c -E '^\+.*(//|/\*)' <"${WORK}/whole-diff" || true)"
 
 # ---------------------------------------------------------------------------
-# Collect the comment text on lines the range added, file by file.
+# Collect the comment text on lines the range added.
 # ---------------------------------------------------------------------------
 : >"${WORK}/added-comments"
 
