@@ -26,18 +26,19 @@ func busyScoreServer(st *score.Store) (*Server, *fakeClock, *[]byte) {
 	return s, clk, delivered
 }
 
-// dispatchTo drives panel.dispatch over the command path as a client would, and
-// insists the command was ACCEPTED. The signal is recorded by the delivery now,
-// so a test that called dispatchScored directly would skip connAuthor — the one
-// place the operator is told apart from an agent.
+// dispatchTo is dispatch plus the assertion this file turns on: the command was
+// ACCEPTED. #51 answers a dispatch to a BUSY panel with "sent" and parks the
+// brief, so a reply here is a refusal and the case under test never happened.
+//
+// Both halves are the package's own. dispatch drives panel.dispatch over the
+// command path as a client would — the signal is recorded by the delivery now, so
+// a test that called dispatchScored directly would skip connAuthor, the one place
+// the operator is told apart from an agent — and noError is what nine other tests
+// already use to say no reply is queued.
 func dispatchTo(t *testing.T, s *Server, cc *clientConn, prompt string) {
 	t.Helper()
-	s.onCommand(cc, proto.Command{Action: "panel.dispatch", ID: "p1", Prompt: prompt})
-	select {
-	case msg := <-cc.out:
-		t.Fatalf("dispatch to a busy panel replied %+v, want it accepted", msg)
-	default:
-	}
+	dispatch(t, s, cc, prompt)
+	noError(t, cc)
 }
 
 // settle takes the panel from busy to idle and runs the tick that notices, which

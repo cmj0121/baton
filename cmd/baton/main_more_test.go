@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/paths"
@@ -79,12 +78,14 @@ func TestAttachForceStopError(t *testing.T) {
 // TestRunServerOnBadConfigFiles drives the server loop with malformed config,
 // plugin, and TUI files under $HOME/.baton, exercising the warn-and-continue
 // error branches of runServerOn/applyConfig (config.Load, plugin Load, and
-// LoadTUI all fail) without stopping the server. The listener is closed to make
-// Serve return on its own, as in TestRunServerOn.
+// LoadTUI all fail) without stopping the server.
+//
+// The daemon comes up through bootFleet, which is the boot-and-shutdown dance
+// this test used to inline: it serves, and closing the listener makes Serve
+// return nil, both asserted there. What is left here is the only thing this test
+// is about — the files it writes before the boot.
 func TestRunServerOnBadConfigFiles(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_RUNTIME_DIR", home)
 
 	confDir := filepath.Join(home, ".baton")
 	if err := os.MkdirAll(confDir, 0o755); err != nil {
@@ -102,30 +103,7 @@ func TestRunServerOnBadConfigFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sock := filepath.Join(t.TempDir(), "baton.sock")
-	t.Setenv("BATON_SOCK", sock)
-	// A fresh plugin path resolves under HOME; make sure no external override leaks.
-	t.Setenv("BATON_PLUGIN", "")
-
-	ln, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-
-	done := make(chan error, 1)
-	go func() { done <- runServerOn(ln, sock, loadServerBoot(sock)) }()
-
-	waitServing(t, sock)
-
-	_ = ln.Close()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("runServerOn returned %v, want nil", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("runServerOn did not return after the listener closed")
-	}
+	bootFleet(t, home)
 }
 
 // TestABootConfigNobodyCouldReadCarriesOnlyScore is #48's rule at the one seam

@@ -393,50 +393,28 @@ func TestBuildServerOptions(t *testing.T) {
 	}
 }
 
-// TestRunServerOn drives the real server loop in-process on a temp socket, then
-// closes the listener to make Serve return on its own — exercising runServerOn
-// without forking a daemon or hitting the os.Exit signal path.
+// TestRunServerOn drives the real server loop in-process on a temp socket —
+// exercising runServerOn without forking a daemon or hitting the os.Exit signal
+// path.
+//
+// bootFleet does the boot: it waits for the loop to be SERVING rather than for
+// the PID file, and that distinction is the reason the wait exists. The pid is
+// published from above the bind now, by loadServerBoot, so by the time this test
+// has a boot to hand runServerOn the file is already there and says nothing about
+// the loop. An answered hello does: it comes from Serve, which starts after the
+// signal handlers are installed, so the SIGHUP below cannot arrive while its
+// default disposition is still "kill this process".
+//
+// Closing the listener and checking that runServerOn returned nil is bootFleet's
+// cleanup, so it happens after this function returns rather than at its foot.
 func TestRunServerOn(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_RUNTIME_DIR", home)
-
-	sock := filepath.Join(t.TempDir(), "baton.sock")
-	t.Setenv("BATON_SOCK", sock)
-
-	ln, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-
-	done := make(chan error, 1)
-	go func() { done <- runServerOn(ln, sock, loadServerBoot(sock)) }()
-
-	// Wait for the loop to be serving before signalling it. This used to wait on
-	// the PID file, which runServerOn wrote first; the pid is published from above
-	// the bind now, by loadServerBoot, so by the time this test has a boot to hand
-	// runServerOn the file is already there and says nothing about the loop. An
-	// answered hello does: it comes from Serve, which starts after the signal
-	// handlers below are installed, so the SIGHUP cannot arrive while its default
-	// disposition is still "kill this process".
-	waitServing(t, sock)
+	bootFleet(t, t.TempDir())
 
 	// A SIGHUP exercises the reload goroutine (config + plugin re-read).
 	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
 		t.Fatalf("send SIGHUP: %v", err)
 	}
 	time.Sleep(50 * time.Millisecond)
-
-	// Closing the listener makes Serve return, so runServerOn returns nil.
-	_ = ln.Close()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("runServerOn returned %v, want nil", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("runServerOn did not return after the listener closed")
-	}
 }
 
 // TestStartStopDaemon forks a real daemon child (the test binary re-exec'd with

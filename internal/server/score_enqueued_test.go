@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/queue"
+	"github.com/cmj0121/baton/internal/task"
 )
 
 // This file covers #50: a brief the operator ENQUEUED reinforces what it repeats
@@ -438,17 +440,9 @@ func TestTheEnqueueStampReachesTheBacklogFile(t *testing.T) {
 // would restart onto an empty backlog roughly at random.
 func waitForBacklog(t *testing.T, qs *queue.Store, n int) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		tasks, bad, err := qs.LoadAll()
-		if err == nil && len(bad) == 0 && len(tasks) >= n {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the backlog at %s loaded %d tasks (bad=%v, err=%v), want %d", qs.Dir(), len(tasks), bad, err, n)
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
+	waitBacklog(t, qs, fmt.Sprintf("held %d tasks", n), func(tasks []task.Task) bool {
+		return len(tasks) >= n
+	})
 }
 
 // waitForBacklogInFlight blocks until the backlog file shows a task ASSIGNED to a
@@ -469,18 +463,34 @@ func waitForBacklog(t *testing.T, qs *queue.Store, n int) {
 // saver snapshots under that same lock.
 func waitForBacklogInFlight(t *testing.T, qs *queue.Store) {
 	t.Helper()
+	waitBacklog(t, qs, "recorded a delivery", func(tasks []task.Task) bool {
+		for _, tk := range tasks {
+			if tk.Panel != "" {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// waitBacklog polls the store until pred holds over what it loads, and fails
+// naming what the caller was waiting FOR — the two waits above differ in nothing
+// else, and a poll loop copied per predicate is a timeout somebody tunes in one
+// place and not the other.
+//
+// A load that errors, or that reports a bad file, is never handed to pred: those
+// are the half-written states the retry exists to ride out, and a predicate would
+// have to remember not to trust them.
+func waitBacklog(t *testing.T, qs *queue.Store, want string, pred func([]task.Task) bool) {
+	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		tasks, bad, err := qs.LoadAll()
-		if err == nil && len(bad) == 0 {
-			for _, tk := range tasks {
-				if tk.Panel != "" {
-					return
-				}
-			}
+		if err == nil && len(bad) == 0 && pred(tasks) {
+			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the backlog at %s never recorded a delivery (tasks=%+v, bad=%v, err=%v)", qs.Dir(), tasks, bad, err)
+			t.Fatalf("the backlog at %s never %s (tasks=%+v, bad=%v, err=%v)", qs.Dir(), want, tasks, bad, err)
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
