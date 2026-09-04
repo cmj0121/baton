@@ -56,13 +56,22 @@ die_unchecked() {
 BASE="${1:-${BASE:-}}"
 
 if [ -z "${BASE}" ]; then
-	# Default to everything this branch adds. Fall back through the remote
-	# tracking branch to a local one, and finally to the previous commit so a
-	# run while sitting on the base branch still has something real to sweep.
-	for candidate in origin/main main; do
-		if git rev-parse --verify --quiet "${candidate}^{commit}" >/dev/null; then
-			BASE="$(git merge-base "${candidate}" HEAD)"
-			break
+	# Default to everything this branch adds. Take the NEAREST merge-base among
+	# the candidates rather than the first that resolves: a remote-tracking ref
+	# can be stale, or belong to a mirror nobody pushes to, and taking it on
+	# faith sweeps every commit since that mirror last moved. In this repo
+	# `origin` is an unreachable gitea and origin/main sat 130 commits behind
+	# `main`, so first-match swept a whole release's worth of history and
+	# reported eight names from work that had nothing to do with the branch.
+	#
+	# Nearest is the right rule in both directions: a stale local `main` loses
+	# to a fresher remote just as a stale remote loses to a fresher local.
+	for candidate in origin/main main GITHUB/main upstream/main; do
+		git rev-parse --verify --quiet "${candidate}^{commit}" >/dev/null || continue
+		mb="$(git merge-base "${candidate}" HEAD 2>/dev/null)" || continue
+		[ -n "${mb}" ] || continue
+		if [ -z "${BASE}" ] || git merge-base --is-ancestor "${BASE}" "${mb}"; then
+			BASE="${mb}"
 		fi
 	done
 	if [ -z "${BASE}" ] || [ "$(git rev-parse "${BASE}")" = "$(git rev-parse HEAD)" ]; then
