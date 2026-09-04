@@ -226,6 +226,48 @@ func TestABacklogFromAnOlderBuildCountsNothing(t *testing.T) {
 	}
 }
 
+// TestABacklogKeyIsTheNameOnDisk is the other half of the fixture above, and it
+// exists because the field and the key are now spelled differently.
+// task.Task.UserSignal is stored under "user", and the mismatch is deliberate:
+// the Go name says what the field IS (a permission, spent once), the JSON name
+// is a FILE FORMAT and renaming it would silently drop the stamp off every
+// backlog written by a build on the other side of the rename.
+//
+// Nothing else could fail on that. The neighbouring fixture pins the key's
+// ABSENCE, and every other path writes and reads the key with the same binary,
+// so a round trip agrees with itself whatever the key is called. Retagging the
+// field passed the entire suite before this test existed. Here the key is
+// hand-written, so the assertion is against the format rather than against the
+// encoder's opinion of it.
+func TestABacklogKeyIsTheNameOnDisk(t *testing.T) {
+	st, _ := scoreStore(t)
+	qdir := filepath.Join(t.TempDir(), "backlog")
+	e := seedEntry(t, st, "keep the build green")
+
+	if err := os.MkdirAll(qdir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stamped := `{"schema":1,"task":{"id":"t1","prompt":"Keep the build green.","status":"queued",` +
+		`"user":true,"attempts":0,"created":"2026-01-01T00:00:00Z","updated":"2026-01-01T00:00:00Z"}}`
+	if err := os.WriteFile(filepath.Join(qdir, "t1.json"), []byte(stamped), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	s, _, delivered := scoreServer(st)
+	s.qstore = queue.New(qdir, time.Now)
+	s.mu.Lock()
+	s.restoreTasksLocked()
+	s.mu.Unlock()
+	s.monitorTick()
+
+	if len(*delivered) == 0 {
+		t.Fatal("the restored task never reached a panel, so the count below is vacuous")
+	}
+	if got := entryNow(t, st, e.Id); got.UserSignals != 1 {
+		t.Fatalf("entry = %+v, want the stamp under the \"user\" key to have counted once", got)
+	}
+}
+
 // TestAnEnqueuedBriefCountsTheOperatorsOwnWords is R4's rule carried over the gap:
 // a task.pre hook may rewrite a prompt freely, and ranking its output as the
 // operator's voice would let a plugin reach the one tier #37 reserves for a
@@ -341,7 +383,7 @@ func TestTheEnqueueStampIsTheServersConclusion(t *testing.T) {
 				t.Fatalf("backlog holds %d tasks, want one", len(s.tasks))
 			}
 			for _, got := range s.tasks {
-				if got.User != tc.wantUser || got.Plugin != tc.wantPlugin {
+				if got.UserSignal != tc.wantUser || got.Plugin != tc.wantPlugin {
 					t.Fatalf("task = %+v, want user=%v plugin=%v", got, tc.wantUser, tc.wantPlugin)
 				}
 			}
@@ -381,7 +423,7 @@ func TestTheEnqueueStampReachesTheBacklogFile(t *testing.T) {
 	if err != nil || len(bad) != 0 {
 		t.Fatalf("LoadAll: %v, bad=%v", err, bad)
 	}
-	if len(tasks) != 1 || !tasks[0].User {
+	if len(tasks) != 1 || !tasks[0].UserSignal {
 		t.Fatalf("backlog files = %+v, want the operator's stamp persisted", tasks)
 	}
 }

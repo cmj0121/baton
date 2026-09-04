@@ -79,22 +79,20 @@ type SpawnSpec struct {
 // only ever runs the chain over work the chain was going to see anyway: it is
 // accepted, not covered.
 //
-// User is the same kind of record for the same kind of reason, and it is here for
-// #50: a brief the operator ENQUEUED reinforces what it repeats exactly as one
-// they dispatched does, but the connection that enqueued it is long gone by the
-// time the scheduler drains the task onto a panel. The stamp is what carries the
-// server's reading of that connection across the gap — and across a restart,
-// since a queued task routinely outlives the daemon that took it in.
+// UserSignal is NOT the other half of Plugin, and the name is the difference.
+// Plugin is a durable fact about where the task came from, true for as long as
+// the task exists. UserSignal is a PERMISSION, worth exactly one reinforcement,
+// and the scheduler spends it on the assignment that takes it — so on a task in
+// flight it reads false, and that is the field working, not the field lying. See
+// Server.takeUserSignalLocked, which is the only thing that spends it, and which
+// says which way the spend is lossy.
 //
-// IT IS SPENT, NOT KEPT. It is the permission to count ONE reinforcement, and the
-// scheduler clears it on the assignment that takes it, so the field on a task in
-// flight reads false. A task can be delivered more than once — a restart re-queues
-// one that was mid-delivery, and the stamp survived that re-queue while it was
-// durable, offering the same reinforcement on every reboot — so a stamp that
-// outlived its delivery was one operator act counted many times. Nothing but the
-// backlog reads the field, so spending it costs no other reader; see
-// Server.takeUserSignalLocked for which way the spend is lossy and why that
-// direction is the tolerable one.
+// It is here rather than in the server for #50, and the reason is a gap in time:
+// a brief the operator ENQUEUED reinforces what it repeats exactly as a
+// dispatched one does, but the connection that enqueued it is long gone by the
+// time the scheduler drains the task onto a panel, and a queued task routinely
+// outlives the daemon that took it in. Persisting it is what carries the
+// server's reading of that connection across both gaps.
 //
 // IT IS THE SERVER'S CONCLUSION, NOT A CLAIM. Nothing on the wire can set it: the
 // enqueue command carries no such field, and the value is decided at enqueue from
@@ -113,18 +111,21 @@ type SpawnSpec struct {
 // itself the user: no signal. A backlog that survived the upgrade counts nothing,
 // which is the safe direction — invariant I6 is about entries climbing on
 // something that was not the user, so the failure to fold is the tolerable half.
+//
+// The JSON key stays "user": the field is renamed, the file format is not, so a
+// backlog written by an older build restores with its stamp intact.
 type Task struct {
-	ID       string     `json:"id"`
-	Prompt   string     `json:"prompt"`
-	Status   Status     `json:"status"`
-	Panel    string     `json:"panel,omitempty"`    // the panel currently executing it, if any
-	Group    string     `json:"group,omitempty"`    // the work item it belongs to, if any
-	Result   string     `json:"result,omitempty"`   // a terminal note (e.g. a failure reason)
-	Priority int        `json:"priority,omitempty"` // scheduler order among queued tasks: higher drains first (default 0, ties break oldest-first)
-	Attempts int        `json:"attempts"`           // how many times its prompt has been delivered
-	Spawn    *SpawnSpec `json:"spawn,omitempty"`    // provision a fresh agent for this task when none is free (nil = existing agents only)
-	Plugin   bool       `json:"plugin,omitempty"`   // queued by a plugin (baton.enqueue) rather than over the socket; see below
-	User     bool       `json:"user,omitempty"`     // the server read the enqueueing connection as the operator's, not an agent's; see below
-	Created  time.Time  `json:"created"`
-	Updated  time.Time  `json:"updated"`
+	ID         string     `json:"id"`
+	Prompt     string     `json:"prompt"`
+	Status     Status     `json:"status"`
+	Panel      string     `json:"panel,omitempty"`    // the panel currently executing it, if any
+	Group      string     `json:"group,omitempty"`    // the work item it belongs to, if any
+	Result     string     `json:"result,omitempty"`   // a terminal note (e.g. a failure reason)
+	Priority   int        `json:"priority,omitempty"` // scheduler order among queued tasks: higher drains first (default 0, ties break oldest-first)
+	Attempts   int        `json:"attempts"`           // how many times its prompt has been delivered
+	Spawn      *SpawnSpec `json:"spawn,omitempty"`    // provision a fresh agent for this task when none is free (nil = existing agents only)
+	Plugin     bool       `json:"plugin,omitempty"`   // queued by a plugin (baton.enqueue) rather than over the socket; see below
+	UserSignal bool       `json:"user,omitempty"`     // ONE-SHOT permission to count the operator's reinforcement, spent at assignment; see below
+	Created    time.Time  `json:"created"`
+	Updated    time.Time  `json:"updated"`
 }

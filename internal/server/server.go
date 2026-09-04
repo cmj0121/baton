@@ -1927,15 +1927,22 @@ type delivery struct {
 	// Task.Plugin is written once, under the lock that creates the task, and never
 	// mutated after, so there is no drift for the copy to protect against.
 	plugin bool
-	// user marks a brief the OPERATOR authored (task.Task.User), carried for the
-	// same reason and on the same terms as plugin. It is what makes the delivery
-	// reinforce what it repeats once it lands (#50, #51); the two are mutually
-	// exclusive, since neither baton.enqueue nor baton.dispatch is the user.
+	// signal is the operator's ONE reinforcement, riding along with this delivery
+	// and spent when the delivery is assigned (task.Task.UserSignal). It is not
+	// plugin's opposite, and reading the two as an either/or is the mistake the
+	// pair invites: plugin is a durable fact about where the brief came from and
+	// holds for the brief's whole life, signal is a permission that is gone once
+	// taken. What is true is narrower — they are never BOTH set, because neither
+	// baton.enqueue nor baton.dispatch is the operator — and it does not make
+	// either one the other's absence.
+	//
+	// It is carried here for the same reason plugin is: deliver runs off s.mu,
+	// and must, because it binds.
 	//
 	// It is the server's conclusion about the connection and never a field a
 	// client filled (#38 §4): connAuthor decides it while the socket is still
 	// open, and nothing on the wire carries an author.
-	user bool
+	signal bool
 	// attempt is the task's Attempts as the assignment left it — the delivery's
 	// claim on the panel, re-checked before the write. See claimDelivery.
 	attempt int
@@ -2028,7 +2035,7 @@ func (s *Server) deliver(d delivery) {
 // carry: connProvenance yields exactly {Source: SourceUser} for a cockpit
 // connection — no panel, no cwd, no profile, no group, because a cockpit has no
 // panel row — so the carried bool is the whole of the conclusion and this is its
-// only reading. An agent's or a plugin's brief never sets d.user and never gets
+// only reading. An agent's or a plugin's brief never sets d.signal and never gets
 // here.
 //
 // It has TWO callers, and they are the two moments a delivery can land:
@@ -2039,9 +2046,9 @@ func (s *Server) deliver(d delivery) {
 //
 // ONE BODY IS NOT WHAT MAKES "ONCE" HOLD, and it was read as though it were. Both
 // callers run inside one process; the operator's brief outlives the process. What
-// bounds the count is that d.user is a stamp SPENT when the delivery is assigned
+// bounds the count is that d.signal is a stamp SPENT when the delivery is assigned
 // (takeUserSignalLocked) — a task can be delivered again, by a re-drive or by the
-// restart that re-queues it, and the second delivery arrives here with d.user
+// restart that re-queues it, and the second delivery arrives here with d.signal
 // false. This function's job is only the other rule: count it where the write has
 // already happened.
 //
@@ -2051,7 +2058,7 @@ func (s *Server) deliver(d delivery) {
 // the bind, so a backlog of the operator's own briefs is paced by the same
 // ceiling.
 func (s *Server) signalDelivered(d delivery) {
-	if !d.user {
+	if !d.signal {
 		return
 	}
 	s.scoreSignalFrom(d.prompt, score.Provenance{Source: score.SourceUser})
@@ -4049,7 +4056,7 @@ func (s *Server) dispatchScored(id, prompt, submit string, author taskAuthor) (t
 		prompt: prompt,
 		submit: submit,
 		plugin: author == authorPlugin,
-		user:   author == authorUser,
+		signal: author == authorUser,
 	}
 
 	s.mu.Lock()
@@ -4465,7 +4472,7 @@ func (s *Server) enqueueTaskFrom(prompt, group string, spawn *task.SpawnSpec, au
 	}
 	t := s.upsertTaskLocked("", prompt, group, task.Queued)
 	t.Plugin = author == authorPlugin
-	t.User = author == authorUser
+	t.UserSignal = author == authorUser
 	t.Spawn = spawn
 	if spawn != nil || author != authorAgent {
 		s.markTaskDirtyLocked(t.ID) // persist the spawn spec and the origin alongside the task
@@ -4477,7 +4484,7 @@ func (s *Server) enqueueTaskFrom(prompt, group string, spawn *task.SpawnSpec, au
 // is worth to the delivery now being assigned and leaving nothing behind for a
 // second one to find. Caller holds s.mu.
 //
-// task.Task.User is a one-shot permission to count, not a durable fact about the
+// task.Task.UserSignal is a one-shot permission to count, not a durable fact about the
 // task, and treating it as the latter is what let ONE operator act count twice.
 // The stamp is persisted, because a queued brief routinely outlives the daemon
 // that took it in; but a restart brings every panel back exited, so
@@ -4518,10 +4525,10 @@ func (s *Server) enqueueTaskFrom(prompt, group string, spawn *task.SpawnSpec, au
 // path. The tests wait for the assignment to reach the file for this reason; see
 // waitForBacklogInFlight, which is where the window is visible.
 func (s *Server) takeUserSignalLocked(t *task.Task) bool {
-	if !t.User {
+	if !t.UserSignal {
 		return false
 	}
-	t.User = false
+	t.UserSignal = false
 	s.markTaskDirtyLocked(t.ID)
 	return true
 }
@@ -4660,7 +4667,7 @@ func (s *Server) scheduleLocked() ([]delivery, []spawnRequest) {
 		groupRunning[t.Group]++ // the fresh dispatch counts against the cap for later tasks
 		s.emit("task.change", taskFields(t))
 		s.markTaskDirtyLocked(t.ID)
-		deliver = append(deliver, delivery{panel: pid, task: t.ID, prompt: t.Prompt, plugin: t.Plugin, user: s.takeUserSignalLocked(t), attempt: t.Attempts})
+		deliver = append(deliver, delivery{panel: pid, task: t.ID, prompt: t.Prompt, plugin: t.Plugin, signal: s.takeUserSignalLocked(t), attempt: t.Attempts})
 	}
 	return deliver, spawns
 }
@@ -4703,7 +4710,7 @@ func (s *Server) applyScheduledSpawns(spawns []spawnRequest) bool {
 		s.panelTask[pid] = t.ID
 		// Unbound: the panel was created a moment ago and has not settled, so its
 		// brief is bound when the monitor delivers it rather than here (#44).
-		s.pendingDispatch[pid] = delivery{panel: pid, task: t.ID, prompt: t.Prompt, spawned: true, plugin: t.Plugin, user: s.takeUserSignalLocked(t), attempt: t.Attempts}
+		s.pendingDispatch[pid] = delivery{panel: pid, task: t.ID, prompt: t.Prompt, spawned: true, plugin: t.Plugin, signal: s.takeUserSignalLocked(t), attempt: t.Attempts}
 		s.emit("task.change", taskFields(t))
 		s.markTaskDirtyLocked(t.ID)
 		s.mu.Unlock()
