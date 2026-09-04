@@ -117,7 +117,10 @@ arrived on, never by anyone's claim about it. Three things count as you saying i
 - typing a duplicate line into `score.md` (one pass counts one signal, however many duplicate lines carry the wording —
   one paste is one action, not five hundred returns)
 - `baton ctl score submit` from your own shell
-- **dispatching a brief that matches an existing entry** — a prompt you type is you saying the thing
+- **dispatching or queuing a brief that matches an existing entry** — a prompt you type is you saying the thing,
+  whether you sent it with `baton ctl dispatch` or left it in the backlog with `baton ctl queue add`. A queued brief
+  counts when the scheduler actually delivers it, which may be after a restart; one a `task.pre` hook refuses at
+  delivery counts nothing, and neither does a task `baton.enqueue` queued.
 
 A user signal lifts the ceiling; it does not skip a rung. The entry still climbs the ordinary ladder to get there.
 
