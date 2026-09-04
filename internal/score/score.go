@@ -5177,8 +5177,14 @@ func parseLine(line string) (id, text string, ok bool) {
 }
 
 // mdHeader is what an ABSENT score.md is written back as: comment lines that
-// teach the entry format and, above all, the one rule about this file an
-// operator cannot infer from reading it — a bullet with no id is memory.
+// teach the entry format and, above all, the two rules about this file an
+// operator cannot infer from reading it — a bullet with no id is memory, and a
+// line edited to say exactly what another says merges the two (#52).
+//
+// The second earns its place on the same test as the first: it is a gesture,
+// not a fact about the file, so nothing in the file suggests it exists. An
+// operator who sees two entries saying the same thing deletes one, which loses
+// the wording they deleted; the whole of what the merge buys is keeping it.
 //
 // R7 removed the header these lines restore, so that a fresh install would show
 // what the fleet had earned and nothing else. What that left is a file whose
@@ -5216,6 +5222,10 @@ var mdHeader = []string{
 	"# and baton keeps them byte for byte.",
 	"#",
 	"# Edit or delete lines freely — your text wins, and a deleted line retires.",
+	"#",
+	"# Two lines saying the same thing? Edit one to say EXACTLY what the other",
+	"# says. They become one entry, and it remembers both wordings — so a later",
+	"# repeat of either one folds in rather than starting a third entry.",
 }
 
 // parseBullet decodes a line the operator wrote as an entry but gave no id: a

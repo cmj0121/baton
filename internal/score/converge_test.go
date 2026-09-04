@@ -241,6 +241,46 @@ func TestConvergenceReplaysIdentically(t *testing.T) {
 	}
 }
 
+// TestTheFileTeachesTheMergeGesture is why #52 lands in the file rather than in
+// a verb, and it is the assertion that the two halves agree: the gesture is
+// taught in the header of a fresh score.md, and performing it on that same file
+// merges. A header describing something the pass does not do fails here.
+//
+// It also pins the header against the rewrite this pass makes. A merging pass
+// rewrites score.md whole, and the operator's prose — the header included — has
+// to come back byte for byte.
+func TestTheFileTeachesTheMergeGesture(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, dir)
+	fresh := headerLines(readFile(t, dir, scoreMD))
+	if len(fresh) == 0 {
+		t.Fatal("a fresh score.md teaches nothing")
+	}
+	if taught := strings.Join(fresh, "\n"); !strings.Contains(taught, "EXACTLY what the other") {
+		t.Fatalf("the header never teaches the merge gesture:\n%s", taught)
+	}
+
+	keep := submit(t, s, "ask before rewriting history")
+	gone := submit(t, s, "never rewrite a shared branch")
+
+	// The gesture exactly as the header states it, typed under the header the
+	// store wrote.
+	writeMD(t, dir, strings.Join(fresh, "\n")+"\n"+
+		"- ["+keep.Id+"] ask before rewriting history\n"+
+		"- ["+gone.Id+"] ask before rewriting history\n")
+	if d := reconcile(t, s); d.Merged != 1 {
+		t.Fatalf("pass = %+v, want the gesture the header teaches to merge", d)
+	}
+	md := readFile(t, dir, scoreMD)
+	if got := headerLines(md); len(got) != len(fresh) {
+		t.Fatalf("the merging rewrite kept %d header lines, want %d:\n%s", len(got), len(fresh), md)
+	}
+	e, folded, err := s.Submit("never rewrite a shared branch", Provenance{Source: SourceAgent})
+	if err != nil || !folded || e.Id != keep.Id {
+		t.Fatalf("Submit(absorbed wording) = %+v folded=%v err=%v, want the alias the header promises", e, folded, err)
+	}
+}
+
 // TestConvergenceKeepsTheAliasWhenTheRewriteFails states the cost of the pass
 // making ONE durable append. The alias is durable before score.md is touched, so
 // a rewrite that fails cannot lose it — but the absorbed entry is retired in the
