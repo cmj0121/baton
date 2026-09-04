@@ -1129,13 +1129,13 @@ func kindBreakdown(panels []panel.Panel) string {
 	agents, commands, shells := kindCounts(panels)
 	parts := make([]string, 0, 3)
 	if agents > 0 {
-		parts = append(parts, lipgloss.NewStyle().Foreground(colAgent).Render(fmt.Sprintf("%d agent", agents)))
+		parts = append(parts, agentStyle.Render(fmt.Sprintf("%d agent", agents)))
 	}
 	if commands > 0 {
-		parts = append(parts, lipgloss.NewStyle().Foreground(colCommand).Render(fmt.Sprintf("%d command", commands)))
+		parts = append(parts, commandStyle.Render(fmt.Sprintf("%d command", commands)))
 	}
 	if shells > 0 {
-		parts = append(parts, lipgloss.NewStyle().Foreground(colShell).Render(fmt.Sprintf("%d shell", shells)))
+		parts = append(parts, shellStyle.Render(fmt.Sprintf("%d shell", shells)))
 	}
 	if len(parts) == 0 {
 		return mutedStyle.Render("—")
@@ -1154,7 +1154,7 @@ func fleetBreakdown(fleet []panel.Panel) string {
 	parts := []string{kindBreakdown(fleet)}
 	groups := groupCount(fleet)
 	if groups > 0 {
-		parts = append(parts, lipgloss.NewStyle().Foreground(colBrand).Render(fmt.Sprintf("%d group", groups)))
+		parts = append(parts, groupStyle.Render(fmt.Sprintf("%d group", groups)))
 	}
 	return strings.Join(parts, mutedStyle.Render(" · "))
 }

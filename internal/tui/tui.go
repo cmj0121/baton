@@ -91,6 +91,14 @@ var (
 	caretStyle = lipgloss.NewStyle().Bold(true).Foreground(colBrand)
 	valueStyle = lipgloss.NewStyle().Foreground(colCyan)
 
+	// The breakdown colours, on the same terms: kindBreakdown and fleetBreakdown
+	// draw one of each per kind per group row per frame, and a Style is a value
+	// built from a colour that never changes.
+	agentStyle   = lipgloss.NewStyle().Foreground(colAgent)
+	commandStyle = lipgloss.NewStyle().Foreground(colCommand)
+	shellStyle   = lipgloss.NewStyle().Foreground(colShell)
+	groupStyle   = lipgloss.NewStyle().Foreground(colBrand)
+
 	// The footer fill, prebuilt once per mode: the standing light blue, and a warm
 	// amber while scrolling so the whole status bar signals "history / navigation"
 	// at a glance. bar/barStrong select between them by mode, so a per-tick footer
