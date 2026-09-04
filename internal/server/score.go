@@ -174,7 +174,7 @@ func (s *Server) noteScoreWrites() {
 //   - Is this worth saying at all? — the sentinel on the submit door answered
 //     it; the refine door did not ask, and warned unconditionally.
 //   - Has it already been said? — scoreLook's latch answered it for the read
-//     path and scoreSignal borrowed that latch; neither mutation door asked,
+//     path and scoreSignalFrom borrowed that latch; neither mutation door asked,
 //     and the write latch had no voice to borrow (#59).
 //
 // The order is the whole of the composition and it only works one way round:
@@ -437,9 +437,10 @@ func ScoreCounters(e *zerolog.Event, d score.Delta, h score.Health) *zerolog.Eve
 // dispatchScored accepts, which is not this issue's to make.
 //
 // It only READS the memory. A brief the user wrote is one of #38 §4's two
-// sources of the user signal, but that is recorded by scoreSignal after the
-// dispatch has actually landed — a brief a task.pre hook vetoed, or one that
-// failed on an unknown panel id, is not the user telling the fleet anything.
+// sources of the user signal, but that is recorded by signalDelivered after the
+// delivery has actually landed — a brief a task.pre hook vetoed, one that failed
+// on an unknown panel id, and one still parked for a panel that never settles
+// are none of them the user telling the fleet anything.
 func (s *Server) dispatchBrief(id, prompt string) TaskBrief {
 	ctx, found := s.panelContext(id)
 	b := TaskBrief{Prompt: prompt, Panel: id, Group: ctx.Group, Cwd: ctx.Cwd, Profile: ctx.Profile}
@@ -479,15 +480,16 @@ func (s *Server) bindBrief(panelID, prompt string) (TaskBrief, bool, time.Durati
 	return b, ok, s.mon.now().Sub(started)
 }
 
-// scoreSignal records a brief the USER dispatched as a reinforcement of whatever
-// entry it repeats — #38 §4's second source, the one that needs no protocol
-// beyond the connection it arrived on.
+// scoreSignalFrom records a brief the USER authored as a reinforcement of
+// whatever entry it repeats — #38 §4's second source, the one that needs no
+// protocol beyond the connection it arrived on.
 //
-// It runs AFTER the dispatch has landed, not while the brief is being built. A
-// task.pre hook can veto a dispatch and an unknown panel id can fail one, and
-// either way nothing reached an agent; counting those would make the signal a
-// record of what the user ASKED for rather than of what the fleet was told, and
-// the entry would climb on briefs that never happened.
+// It runs AFTER the delivery has landed, not while the brief is being built. A
+// task.pre hook can veto a dispatch, an unknown panel id can fail one, and a
+// brief parked for a panel that never settles is never delivered at all; in each
+// case nothing reached an agent. Counting those would make the signal a record of
+// what the user ASKED for rather than of what the fleet was told, and the entry
+// would climb on briefs that never happened.
 //
 // It counts the user's OWN text rather than the brief the hook chain produced.
 // A task.pre hook may rewrite a prompt freely, so ranking its output as the
@@ -515,20 +517,13 @@ func (s *Server) bindBrief(panelID, prompt string) (TaskBrief, bool, time.Durati
 // cost is only bearable while it is visible and a line that arrives on the next
 // dispatch — or not at all, if the daemon stops first — is not that.
 //
-// It has TWO callers and one body. panel.dispatch asks it with the connection in
-// hand, which is the direct door; a delivery drained from the backlog asks
-// scoreSignalFrom with the provenance the server concluded at enqueue and
-// persisted on the task (#50), because by then the connection is gone. The
-// discrimination is made in one place either way — connProvenance's — and only
-// the moment it is made differs.
-func (s *Server) scoreSignal(cc *clientConn, prompt string) {
-	s.scoreSignalFrom(prompt, s.connProvenance(cc))
-}
-
-// scoreSignalFrom is scoreSignal with the provenance already decided. It is the
-// whole body, and the split exists so that a caller with no live connection —
-// Server.signalDelivered, replaying a stamp the enqueue recorded — cannot reach a
-// second, subtly different copy of the SourceUser test.
+// The provenance is decided ELSEWHERE and arrives already made. Every caller is
+// Server.signalDelivered, replaying a stamp connAuthor concluded from the
+// connection — at the command for a dispatch that landed at once, at the enqueue
+// for a task the scheduler drained later (#50), at the command again for a
+// dispatch parked for a busy panel (#51). By delivery the connection may be gone,
+// so the conclusion has to be carried; this end of it only spends what it is
+// handed, and there is exactly one SourceUser test in the server.
 func (s *Server) scoreSignalFrom(prompt string, prov score.Provenance) {
 	if !s.scoreState.available() {
 		return

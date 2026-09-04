@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -389,10 +390,16 @@ type Server struct {
 	reportedCwd map[string]bool
 
 	// pendingDispatch holds a dispatch whose panel was not yet ready to receive it
-	// (still spawning or mid-output), to be delivered once the panel settles to
-	// idle/attention. Keyed by panel id, guarded by mu; the monitor tick drains it.
-	// The key is the at-most-one-per-panel invariant: a fresh dispatch to a panel
-	// replaces whatever was held for it, which is what dispatchScored relies on.
+	// (still spawning or mid-output), to be bound and delivered once the panel
+	// settles to idle/attention. Keyed by panel id, guarded by mu; the monitor tick
+	// drains it. The key is the at-most-one-per-panel invariant: a fresh dispatch to
+	// a panel replaces whatever was held for it, which is what dispatchScored
+	// relies on.
+	//
+	// What is held is the BRIEF, never bytes: nothing here has been ranked or
+	// filtered yet, so a dispatch that waits ten minutes for a busy panel is bound
+	// against the panel it finally lands on rather than the one it was aimed at
+	// (#51).
 	pendingDispatch map[string]delivery
 
 	// deferred holds deliveries a tick's budget did not reach. They are carried
@@ -1783,7 +1790,7 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 	start := s.mon.now()
 	var over []delivery
 	for _, d := range deliver {
-		if d.data == nil && s.mon.now().Sub(start) >= deliveryBudget {
+		if s.mon.now().Sub(start) >= deliveryBudget {
 			over = append(over, d)
 			continue
 		}
@@ -1832,8 +1839,13 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 }
 
 // deliveryBudget is how long one monitor tick will spend binding and delivering
-// UNBOUND briefs before leaving the rest for the next tick. It is what bounds the
-// gap between fleet reports when task.pre is slow.
+// briefs before leaving the rest for the next tick. It is what bounds the gap
+// between fleet reports when task.pre is slow.
+//
+// It applies to EVERY delivery, which it did not while a delivery could arrive
+// already bound: "what does binding cost" had two answers in one file, and the
+// half that skipped the ceiling was the half whose hook had already run. One
+// shape, one budget (#51).
 //
 // It is a DURATION and not a count, and the difference is the whole of it. A
 // count cannot tell a hook that answered in eight microseconds from one that
@@ -1856,61 +1868,65 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 const deliveryBudget = monitorInterval
 
 // delivery is one brief on its way to a panel, carried out of s.mu so that the
-// write — and, for a brief still to be bound, the score render and the task.pre
-// chain as well — happens with the lock released. It sits in pendingDispatch
-// while the panel is not ready, and in the monitor tick's deliver list once it is.
+// bind — the score render and the task.pre chain — and the write that follows it
+// both happen with the lock released. It sits in pendingDispatch while the panel
+// is not ready, and in the monitor tick's deliver list once it is.
 //
-// EXACTLY ONE OF data AND task/prompt IS FILLED. That is the type's invariant,
-// stated here rather than left to each reader: deliver tests d.data != nil and
-// the monitor tick tests d.data == nil, in opposite polarity, and both are
-// asking this one question. Which half is filled says WHEN the brief was bound
-// to this panel:
+// EVERY DELIVERY IS UNBOUND. prompt is the text its author wrote, ranked against
+// nothing and filtered by nobody; deliver binds it against the panel this
+// delivery names, at the moment it lands. That is R5's rule, and it now has no
+// exemptions: the queued task the scheduler just assigned, the one a provisioned
+// agent is about to receive, and the direct panel.dispatch whose panel was busy
+// all arrive here in the same shape and are bound at the same point. The one
+// brief that is not bound is the one plugin marks — baton.enqueue and
+// baton.dispatch deliver exactly what was written, since running the chain over
+// them would re-enter a task.pre hook that dispatches, once per delivery.
 //
-//   - data is a brief that already is what the panel should receive, and only
-//     its write was held. A plugin-originated dispatch bypasses the chain
-//     outright, and the wire's panel.dispatch and each member of its fan-out ran
-//     it at the command — against this same panel, so running it again here
-//     would run every hook twice.
+// IT WAS A UNION until #51 — bound bytes or an unbound brief, discriminated on
+// data == nil in two functions of opposite polarity — because a direct dispatch
+// bound at the COMMAND and parked the finished bytes when the panel was busy. A
+// hook then saw the panel as it had been minutes earlier, and the score block
+// rode along ranked against a context that had moved. Three defects were the
+// union's rather than that path's, and all three go with it: the "exactly one
+// half is filled" invariant that was prose and nothing else, the claim
+// (task/attempt) that only one half carried — so a held bound write was the one
+// delivery nobody re-checked before writing — and a delivery budget that charged
+// one half and not the other.
 //
-//     Binding at the command is a deliberate exception for a DIRECT dispatch,
-//     not a description of the routes that take it: a direct dispatch owes its
-//     caller a synchronous veto, and the caller is on the socket waiting for one.
-//     A queued task has no such caller — the connection that enqueued it may have
-//     closed hours before the scheduler drained it — so its refusal belongs in
-//     the backlog instead, which is what puts the chain at delivery for that
-//     half. The cost of the exception is that a dispatch to a BUSY panel binds at
-//     command time and its bytes then wait in pendingDispatch, so a hook sees the
-//     panel as it was when the command arrived rather than when it settles.
-//
-//   - task/prompt is a brief still unbound — a queued task the scheduler has just
-//     assigned, or one a provisioned agent is about to receive. Until the
-//     assignment there was no panel to bind against, so the chain belongs at this
-//     delivery (#44) — unless plugin says baton.enqueue queued it, which is the
-//     one unbound brief that is delivered exactly as it was written.
+// The cost of closing it is stated in #51 and accepted: a dispatch to a busy
+// panel is answered "sent" before the hook that may refuse it has run, and the
+// refusal arrives later as a terminal task in the backlog, walked back by
+// vetoQueuedTask exactly as a queued task's is.
 type delivery struct {
 	panel  string
-	data   []byte
 	task   string
 	prompt string
+	// submit is the sequence that sends the prompt, as the command asked for it
+	// (proto.Command.Submit); "" takes defaultSubmit. It is carried rather than
+	// looked up because the bind now happens after the command has been answered,
+	// so by then there is no command left to ask. Only a direct dispatch ever
+	// names one — a queued task takes the default — and dropping it here would
+	// silently downgrade `panel.dispatch` with a custom submit to a busy panel.
+	submit string
 	// spawned marks a panel provisioned for this task alone (applyScheduledSpawns),
 	// which is what tells a walk-back that the panel was created FOR the task: a
 	// standing agent goes back to the pool, an ephemeral one is reaped with it.
 	spawned bool
-	// plugin marks a task baton.enqueue queued (task.Task.Plugin). It is carried
+	// plugin marks a brief a plugin originated — a task baton.enqueue queued
+	// (task.Task.Plugin) or a baton.dispatch held for a busy panel. It is carried
 	// here rather than looked up at delivery so that deliver — which runs off
 	// s.mu, and must, because it binds — needs no lock take of its own to know it.
 	// Task.Plugin is written once, under the lock that creates the task, and never
 	// mutated after, so there is no drift for the copy to protect against.
 	plugin bool
-	// user marks a task the OPERATOR enqueued (task.Task.User), carried for the
-	// same reason and on the same terms as plugin. It is what makes an enqueued
-	// brief reinforce what it repeats once the delivery lands (#50); the two are
-	// mutually exclusive, since baton.enqueue is not the user.
+	// user marks a brief the OPERATOR authored (task.Task.User), carried for the
+	// same reason and on the same terms as plugin. It is what makes the delivery
+	// reinforce what it repeats once it lands (#50, #51); the two are mutually
+	// exclusive, since neither baton.enqueue nor baton.dispatch is the user.
 	//
-	// It is set on the UNBOUND variant only. A bound delivery is a direct dispatch
-	// whose bytes were merely held, and the panel.dispatch case has already
-	// recorded that signal against the connection it arrived on — stamping it here
-	// as well would count one brief twice.
+	// It is the server's conclusion about the connection and never a field a
+	// client filled (#38 §4): connAuthor decides it while the socket is still
+	// open, and nothing on the wire carries an author.
 	user bool
 	// attempt is the task's Attempts as the assignment left it — the delivery's
 	// claim on the panel, re-checked before the write. See claimDelivery.
@@ -1919,12 +1935,11 @@ type delivery struct {
 
 // deliver carries out one delivery with s.mu RELEASED.
 //
-// A brief already bound to this panel is just the write, and so is one
-// baton.enqueue queued. An unbound one is bound HERE — this is the moment the
-// panel, and with it the cwd, profile and group the working set is ranked
-// against, is finally known (#44) — and binding means the score render and then
-// the task.pre chain, which goes through the Lua worker's single thread behind a
-// 2s fail-open timeout (see filterBrief).
+// A plugin-originated brief is just the write. Every other one is bound HERE —
+// this is the moment the panel, and with it the cwd, profile and group the
+// working set is ranked against, is finally known (#44, #51) — and binding means
+// the score render and then the task.pre chain, which goes through the Lua
+// worker's single thread behind a 2s fail-open timeout (see filterBrief).
 // Running that under s.mu would stall every connection for up to two seconds per
 // queued task, so the scheduler assigns under the lock and the binding waits
 // until after the Unlock.
@@ -1942,16 +1957,12 @@ type delivery struct {
 // marked dispatched on a panel, and has to be walked back rather than refused;
 // vetoQueuedTask does that.
 func (s *Server) deliver(d delivery) {
-	if d.data != nil {
-		s.writeInput(d.panel, d.data)
-		return
-	}
 	var data []byte
 	if d.plugin {
-		// baton.enqueue is a plugin-originated dispatch like baton.dispatch, and gets
-		// what one gets: the bare prompt, no block. Running the chain over it would
-		// re-enter a task.pre hook that enqueues, once per delivery, unbounded.
-		data = dispatchData(d.prompt, "")
+		// baton.enqueue and baton.dispatch get what a plugin-originated dispatch
+		// gets: the bare prompt, no block. Running the chain over one would re-enter
+		// a task.pre hook that dispatches, once per delivery, unbounded.
+		data = dispatchData(d.prompt, d.submit)
 	} else {
 		b, ok, _ := s.bindBrief(d.panel, d.prompt)
 		if !ok {
@@ -1963,7 +1974,7 @@ func (s *Server) deliver(d delivery) {
 		// that carried its own rewrite would be rewritten again on every restart,
 		// because restoreTasksLocked re-queues an in-flight task and the chain now
 		// runs at delivery. See dispatchScored.
-		data = briefBytes(b.Score, b.Prompt, "")
+		data = briefBytes(b.Score, b.Prompt, d.submit)
 	}
 	if !s.claimDelivery(d) {
 		return
@@ -1972,13 +1983,15 @@ func (s *Server) deliver(d delivery) {
 	s.signalDelivered(d)
 }
 
-// signalDelivered records an ENQUEUED brief as the user's reinforcement of
+// signalDelivered records a DELIVERED brief as the user's reinforcement of
 // whatever entry it repeats — #50, closing the asymmetry that let a dispatched
 // brief reach the top tier while the same words through `queue add` reached
-// nothing.
+// nothing, and then #51, which made the direct dispatch to a busy panel reach it
+// through here too rather than counting at the command.
 //
 // It is HERE, after the write, because R4's two rules have to survive the gap
-// between enqueue and delivery and this is the only point at which both hold:
+// between the command and the delivery and this is the only point at which both
+// hold:
 //
 //   - the signal counts what the USER typed. d.prompt is the task's own text —
 //     what `task list` shows and what a restart restores — never bindBrief's
@@ -1986,18 +1999,27 @@ func (s *Server) deliver(d delivery) {
 //     operator. The bound bytes are already gone from this scope by design.
 //   - it counts only once delivery ACTUALLY succeeded. A veto returns before this
 //     line, a superseded or ended delivery is refused by claimDelivery before it,
-//     and either way nothing reached an agent.
+//     a brief still parked for a panel that never settles never reaches it at
+//     all, and in every case nothing reached an agent.
 //
 // The provenance is rebuilt rather than carried because there is nothing to
 // carry: connProvenance yields exactly {Source: SourceUser} for a cockpit
 // connection — no panel, no cwd, no profile, no group, because a cockpit has no
-// panel row — so the persisted bool is the whole of the conclusion and this is
-// its only reading. An agent's enqueue never sets d.user and never gets here.
+// panel row — so the carried bool is the whole of the conclusion and this is its
+// only reading. An agent's or a plugin's brief never sets d.user and never gets
+// here.
 //
-// The cost is one store round trip per user-enqueued delivery, exactly the one
-// R4 added to a dispatch (Store.Signal re-reads score.md unconditionally). It
-// lands inside the monitor tick's delivery budget, which already charges the
-// bind, so a backlog of the operator's own briefs is paced by the same ceiling.
+// It has TWO callers, and they are the two moments a delivery can land:
+// dispatchScored writes it straight through to a settled panel, and deliver
+// carries it out of pendingDispatch or the backlog on a later tick. One body, so
+// the two cannot drift into counting the same brief differently — or, as before
+// #51, into counting one of them twice.
+//
+// The cost is one store round trip per user delivery, exactly the one R4 added to
+// a dispatch (Store.Signal re-reads score.md unconditionally). On the deferred
+// path it lands inside the monitor tick's delivery budget, which already charges
+// the bind, so a backlog of the operator's own briefs is paced by the same
+// ceiling.
 func (s *Server) signalDelivered(d delivery) {
 	if !d.user {
 		return
@@ -2050,12 +2072,19 @@ func (s *Server) claimedLocked(d delivery) *task.Task {
 // vetoReason is what a task.pre veto is called, on the wire and in the backlog
 // alike. One string for both, because a veto at delivery has no caller left to
 // answer: the enqueueing connection may have closed hours before the scheduler
-// drained the task, so the refusal is recorded as the task's terminal note and
-// an operator reading `task list` sees the same words a direct dispatch is
-// refused with.
+// drained the task, and a dispatch to a busy panel has already been answered
+// "sent" (#51). Either way the refusal is recorded as the task's terminal note,
+// and an operator reading `task list` sees the same words a dispatch to a
+// settled panel is refused with on the spot.
 const vetoReason = "task vetoed by a task.pre hook"
 
 // vetoQueuedTask walks back an assignment a task.pre hook refused at delivery.
+//
+// It is the walk-back for EVERY deferred refusal, and deliberately only one
+// shape of it: a queued task the scheduler assigned, and — since #51 — a direct
+// dispatch that was parked for a busy panel. The two arrive here as the same
+// delivery and leave the same trace, so an operator has one thing to read and a
+// later change has one place to make.
 //
 // The task ends terminal in the backlog carrying the reason (#44 decision 2),
 // and the panel goes back to the pool in the same breath. The status alone is
@@ -2919,27 +2948,22 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "panel.dispatch":
 		// Assign a task to a panel: record the brief and deliver it to the process as
 		// a unit. Unlike panel.input (raw keystrokes), the server knows the objective,
-		// so it reaches every frontend's card and the snapshot. The target panel is
-		// known here, so this IS the delivery: the brief is bound to that panel — its
-		// context and the score block ranked against it — before the chain runs.
+		// so it reaches every frontend's card and the snapshot.
 		//
-		// cmd.Prompt is what the task records and b.Prompt what the panel receives:
-		// a hook's rewrite is delivered, never written back onto the task. See
-		// dispatchScored for why that separation is load-bearing rather than tidy.
-		b, ok, _ := s.bindBrief(cmd.ID, cmd.Prompt)
-		if !ok {
-			send(cc, proto.ServerMsg{Type: "error", Error: vetoReason})
-			return
-		}
-		if err := s.dispatchScored(cmd.ID, cmd.Prompt, b, cmd.Submit); err != nil {
+		// The brief is bound to the panel AT THE MOMENT IT LANDS, which is here when
+		// the panel is settled and at the monitor tick that sees it settle when it is
+		// not (#51). So the answer to this command is no longer uniformly "the hook
+		// said yes": a busy panel is answered "sent", and a hook that later refuses
+		// walks the task back into the backlog. dispatchScored holds that whole
+		// decision, including the user signal, because the signal is owed only to a
+		// delivery that actually happened.
+		//
+		// The author is concluded from the CONNECTION here, while the socket is
+		// still open — a deferred delivery has none left to ask (#38 §4).
+		if _, err := s.dispatchScored(cmd.ID, cmd.Prompt, cmd.Submit, s.connAuthor(cc)); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
-		// Only now: a brief the hook chain vetoed or the delivery refused never
-		// reached an agent, and #38 §4's signal is the user telling the FLEET
-		// something. cmd.Prompt rather than b.Prompt, because a hook's rewrite
-		// is the plugin author's words and not the user's; see scoreSignal.
-		s.scoreSignal(cc, cmd.Prompt)
 		s.broadcastFleet()
 	case "panel.dispatch-group":
 		// Fan one task to every member of a work item — the mechanic behind racing N
@@ -3914,75 +3938,168 @@ func briefBytes(scoreBlock, prompt, submit string) []byte {
 	return append(b, submit...)
 }
 
-// dispatchPanel is a core action: it records prompt as the panel's task brief and
+// dispatchPanel is the PLUGIN's direct dispatch (baton.dispatch, and each member
+// of baton.dispatch_group): it records prompt as the panel's task brief and
 // delivers it to the panel's process as a unit — the prompt text followed by a
-// submit sequence. Unlike raw panel.input, the server keeps the brief on the
-// panel, so it reaches every frontend's card and is persisted to survive a
-// restart. An empty id, unknown panel, or empty prompt errors — dispatch is
-// "assign a task", not "clear it".
+// submit sequence — bare, with no score block and no task.pre chain, because a
+// plugin-originated dispatch must not re-enter the chain it may itself be
+// running inside.
 //
-// Delivery is gated on readiness: a panel still spawning or mid-output is not
-// ready to receive a prompt, so the bytes are held in pendingDispatch and the
-// monitor tick delivers them once the panel settles to idle/attention. A panel
-// already settled is written immediately. The brief is recorded either way.
+// Unlike raw panel.input, the server keeps the brief on the panel, so it reaches
+// every frontend's card and is persisted to survive a restart. An empty id,
+// unknown panel, or empty prompt errors — dispatch is "assign a task", not
+// "clear it".
 func (s *Server) dispatchPanel(id, prompt, submit string) error {
-	return s.dispatchScored(id, prompt, TaskBrief{Prompt: prompt}, submit)
+	_, err := s.dispatchScored(id, prompt, submit, authorPlugin)
+	return err
 }
 
-// dispatchScored is dispatchPanel with the DELIVERED brief separated from the
-// RECORDED one. b is what the process receives — a task.pre hook's rewrite,
-// behind b.Score when there is one — while recorded is what the card, the
-// snapshot and a restart's restore keep.
+// errVetoed is the error a dispatch a task.pre hook refused comes back as. It is
+// a sentinel rather than a fresh error because a fan-out has to tell a veto from
+// a member that simply left the fleet, and those are the only two ways one
+// member's dispatch fails once fanoutTargets has vetted the group and the prompt.
+// Its text is vetoReason, so the wire says to a refused dispatch exactly what it
+// said before.
+var errVetoed = errors.New(vetoReason)
+
+// dispatchScored assigns prompt to a panel as a task and gets it to the process.
 //
-// Both differences are delivery-time transformations, and NEITHER may become the
-// task's identity. The score block is advice for one delivery. So is the
-// rewrite, and writing that one back would compound: restoreTasksLocked
-// re-queues an in-flight task on every restart, and the chain now runs at
-// delivery, so a task carrying its own rewrite would be rewritten again — once
-// more per restart, at the same version, with no upgrade and no operator action
-// involved. Keeping the author's text also keeps "what did I actually ask for"
-// answerable afterwards.
+// DELIVERY IS GATED ON READINESS, and that gate is now the whole shape of this
+// function. A panel that is settled can receive the brief now, so this command
+// IS the delivery: the bind happens here — the score render against this panel
+// and then the task.pre chain — and its veto is the caller's synchronous answer,
+// with nothing recorded behind it. A panel still spawning or mid-output cannot,
+// so NOTHING IS BOUND: the brief is parked in pendingDispatch as it was written
+// and the monitor tick binds it when the panel settles, against the panel as it
+// is then.
 //
-// The delivered half arrives as the BRIEF rather than as its two strings, and
-// that is the guard: recorded and b.Prompt are both strings and are equal in the
-// plain case, so as bare positional arguments they could be swapped without
-// breaking a build or a plain-dispatch test — and the swap records the hook's
-// rewrite as the task's identity, which is the one thing this separation exists
-// to prevent. Every caller has the brief in hand already.
+// That is #51, and the trade it closes is worth stating where it is made. The
+// exemption it removes bound a busy panel's brief at the command and parked the
+// finished bytes, so a hook was asked about a panel's cwd, profile and group as
+// they had been minutes before the write, and the score block rode along ranked
+// against the same stale context. What it costs is the synchronous veto for that
+// case: `baton ctl dispatch p3 "…"` to a busy panel is answered "sent", and if
+// the hook refuses at delivery the refusal lands as a terminal task in the
+// backlog — vetoQueuedTask's walk-back, the same one a queued task takes, into a
+// backlog the operator may not be watching. #51 weighed that and accepted it.
 //
-// dispatchPanel passes its own prompt as both, which is the plain dispatch.
-func (s *Server) dispatchScored(id, recorded string, b TaskBrief, submit string) error {
+// It was not a free exemption to keep, which is what settled it: a user's
+// dispatch to a busy panel recorded its reinforcement at command time while the
+// bytes were still parked, and kept it even if the panel died without ever
+// settling. That is a reinforcement for a brief no agent saw — the very thing
+// TestABriefToAnUnknownPanelCountsNothing forbids on the other path.
+//
+// The RECORDED brief and the DELIVERED one are still different things, and the
+// separation is now structural rather than a convention two callers had to
+// keep. Only prompt comes in: the card, the snapshot and a restart's restore all
+// keep it, while a task.pre rewrite and the score block are built inside and
+// never escape. Passing the two as adjacent strings was the hazard — they are
+// equal in the plain case, so a swap broke no build and no plain-dispatch test,
+// and it recorded the hook's rewrite as the task's identity. There is one string
+// now, so there is nothing to swap.
+//
+// author is the server's conclusion about who asked (#38 §4), never a claim: it
+// decides whether the chain runs at all (authorPlugin skips it) and whether the
+// delivery reinforces what it repeats (authorUser). See connAuthor.
+//
+// It returns how long the bind took, because that is what a fan-out's budget
+// charges — the same value and the same clock bindBrief hands the monitor tick,
+// so one bind cannot cost two different things depending on which side of the
+// server asked for it. A dispatch that parked, or one a plugin sent, binds
+// nothing and costs nothing.
+func (s *Server) dispatchScored(id, prompt, submit string, author taskAuthor) (time.Duration, error) {
 	if id == "" {
-		return fmt.Errorf("panel.dispatch needs an id")
+		return 0, fmt.Errorf("panel.dispatch needs an id")
 	}
-	if recorded == "" {
-		return fmt.Errorf("panel.dispatch needs a prompt")
+	if prompt == "" {
+		return 0, fmt.Errorf("panel.dispatch needs a prompt")
 	}
-	data := briefBytes(b.Score, b.Prompt, submit)
+	d := delivery{
+		panel:  id,
+		prompt: prompt,
+		submit: submit,
+		plugin: author == authorPlugin,
+		user:   author == authorUser,
+	}
 
 	s.mu.Lock()
 	idx := s.indexLocked(id)
 	if idx < 0 {
 		s.mu.Unlock()
-		return fmt.Errorf("no panel with id %q", id)
+		return 0, fmt.Errorf("no panel with id %q", id)
 	}
-	s.panels[idx].Task = recorded
-	ready := dispatchReady(s.panels[idx].State)
-	status := task.Queued
-	if ready {
-		delete(s.pendingDispatch, id) // a fresh immediate dispatch supersedes a held one
-		status = task.Dispatched
-	} else {
-		s.pendingDispatch[id] = delivery{panel: id, data: data} // deliver when the panel next settles
+	if !dispatchReady(s.panels[idx].State) {
+		s.holdDispatchLocked(idx, d)
+		s.mu.Unlock()
+		s.markDirty() // persist the brief so a restart restores it
+		return 0, nil
 	}
-	s.upsertTaskLocked(id, recorded, s.panels[idx].Group, status)
 	s.mu.Unlock()
 
-	if ready {
-		s.writeInput(id, data)
+	// Ready, so this is the delivery and the bind belongs here. It runs off s.mu
+	// for the same reason the monitor tick's does: the chain blocks on the Lua
+	// worker for up to its fail-open timeout, and holding the lock across that
+	// would refuse every other command for as long.
+	var data []byte
+	var took time.Duration
+	if d.plugin {
+		data = dispatchData(prompt, submit)
+	} else {
+		b, ok, elapsed := s.bindBrief(id, prompt)
+		took = elapsed
+		if !ok {
+			// Nothing is recorded: no task, no brief on the card. A veto here is the
+			// answer to a caller who is still on the socket waiting for one.
+			return took, errVetoed
+		}
+		data = briefBytes(b.Score, b.Prompt, submit)
 	}
+
+	s.mu.Lock()
+	idx = s.indexLocked(id)
+	if idx < 0 {
+		s.mu.Unlock()
+		return took, fmt.Errorf("no panel with id %q", id)
+	}
+	if !dispatchReady(s.panels[idx].State) {
+		// The panel started working while the chain ran. The bytes in hand are bound
+		// to the panel as it was before that, which is exactly what this function
+		// stopped parking, so they are DISCARDED and the brief is held unbound like
+		// any other. The chain will be asked again at settle: the cost of the race
+		// is a hook run twice over a window no wider than one bind, and the
+		// alternative is the stale write #51 closed.
+		s.holdDispatchLocked(idx, d)
+		s.mu.Unlock()
+		s.markDirty()
+		return took, nil
+	}
+	s.panels[idx].Task = prompt
+	delete(s.pendingDispatch, id) // a fresh immediate dispatch supersedes a held one
+	t := s.upsertTaskLocked(id, prompt, s.panels[idx].Group, task.Dispatched)
+	d.task, d.attempt = t.ID, t.Attempts
+	s.mu.Unlock()
+
+	s.writeInput(id, data)
+	s.signalDelivered(d)
 	s.markDirty() // persist the brief so a restart restores it
-	return nil
+	return took, nil
+}
+
+// holdDispatchLocked records d.prompt as the panel's brief and parks d, UNBOUND,
+// for the monitor tick to bind and deliver when the panel settles. Caller holds
+// s.mu, and idx is d.panel's row.
+//
+// The task is created here rather than at delivery because the delivery needs a
+// CLAIM: task and attempt are what claimDelivery re-checks before the write and
+// what vetoQueuedTask walks back, and a held dispatch had neither while it was
+// parked as finished bytes — it was the one delivery nobody re-checked. The task
+// is Queued, which is what it is: a brief the fleet has accepted and not yet
+// delivered, and the status the walk-back's terminal transition advances from.
+func (s *Server) holdDispatchLocked(idx int, d delivery) {
+	s.panels[idx].Task = d.prompt
+	t := s.upsertTaskLocked(d.panel, d.prompt, s.panels[idx].Group, task.Queued)
+	d.task, d.attempt = t.ID, t.Attempts
+	s.pendingDispatch[d.panel] = d // deliver when the panel next settles
 }
 
 // markTaskDirtyLocked nudges the task saver to refresh (or remove) a task's disk
@@ -4279,11 +4396,25 @@ const (
 // be made HERE and recorded (#50). It is read through connProvenance rather than
 // tested for cc.self == "" inline, so the fleet keeps one discrimination.
 func (s *Server) enqueueTask(cc *clientConn, prompt, group string, spawn *task.SpawnSpec) (string, error) {
-	author := authorAgent
+	return s.enqueueTaskFrom(prompt, group, spawn, s.connAuthor(cc))
+}
+
+// connAuthor is the taskAuthor a live connection amounts to: authorUser when
+// connProvenance reads it as the operator's, authorAgent otherwise. authorPlugin
+// never comes from here — a plugin has no connection at all.
+//
+// It exists so the two doors a brief can arrive at — panel.dispatch and
+// task.enqueue — reach #38 §4's discrimination by the same road. They asked the
+// same question in the same words at two sites, and the answer decides whether a
+// brief can reach the tier #37 reserves for the operator, which is not a test to
+// keep two copies of. It must be asked while the socket is open: by delivery time
+// the connection may be long gone, which is why the conclusion is carried on the
+// task (#50) and on the delivery (#51) rather than looked up later.
+func (s *Server) connAuthor(cc *clientConn) taskAuthor {
 	if s.connProvenance(cc).Source == score.SourceUser {
-		author = authorUser
+		return authorUser
 	}
-	return s.enqueueTaskFrom(prompt, group, spawn, author)
+	return authorAgent
 }
 
 // enqueueTaskFrom is enqueueTask with the origin spelled out: authorPlugin marks a
@@ -4846,15 +4977,23 @@ func (s *Server) dispatchGroupBound(group, prompt, submit string) (fanout, error
 			f.add(id, outcomeSkipped) // never asked, so never dispatched
 			continue
 		}
-		b, ok, took := s.bindBrief(id, prompt)
+		// authorAgent, and it is a HOLD rather than a reading of the connection: a
+		// cockpit fan-out records no user signal today, while the same words sent as
+		// a direct dispatch record one. That asymmetry is #50's family and neither
+		// #50 nor #51 rules on it — closing it means deciding whether one command
+		// fanned to ten panels is one reinforcement or ten, and the per-member
+		// reading inflates a single brief the operator typed once into ten. It is
+		// left exactly where it was; authorUser here is the one-line change that
+		// closes it, once that decision is made.
+		took, err := s.dispatchScored(id, prompt, submit, authorAgent)
 		spent += took
 		switch {
-		case !ok:
+		case errors.Is(err, errVetoed):
 			f.add(id, outcomeVetoed)
-		case s.dispatchScored(id, prompt, b, submit) == nil:
-			f.add(id, outcomeSent)
-		default:
+		case err != nil:
 			f.add(id, outcomeLost)
+		default:
+			f.add(id, outcomeSent)
 		}
 	}
 	sent, vetoed, skipped := f.count(outcomeSent), f.count(outcomeVetoed), f.panels(outcomeSkipped)
