@@ -86,6 +86,16 @@ type SpawnSpec struct {
 // server's reading of that connection across the gap — and across a restart,
 // since a queued task routinely outlives the daemon that took it in.
 //
+// IT IS SPENT, NOT KEPT. It is the permission to count ONE reinforcement, and the
+// scheduler clears it on the assignment that takes it, so the field on a task in
+// flight reads false. A task can be delivered more than once — a restart re-queues
+// one that was mid-delivery, and the stamp survived that re-queue while it was
+// durable, offering the same reinforcement on every reboot — so a stamp that
+// outlived its delivery was one operator act counted many times. Nothing but the
+// backlog reads the field, so spending it costs no other reader; see
+// Server.takeUserSignalLocked for which way the spend is lossy and why that
+// direction is the tolerable one.
+//
 // IT IS THE SERVER'S CONCLUSION, NOT A CLAIM. Nothing on the wire can set it: the
 // enqueue command carries no such field, and the value is decided at enqueue from
 // Server.connProvenance — the one discrimination #38 §4 allows — under the lock

@@ -2015,6 +2015,14 @@ func (s *Server) deliver(d delivery) {
 // the two cannot drift into counting the same brief differently — or, as before
 // #51, into counting one of them twice.
 //
+// ONE BODY IS NOT WHAT MAKES "ONCE" HOLD, and it was read as though it were. Both
+// callers run inside one process; the operator's brief outlives the process. What
+// bounds the count is that d.user is a stamp SPENT when the delivery is assigned
+// (takeUserSignalLocked) — a task can be delivered again, by a re-drive or by the
+// restart that re-queues it, and the second delivery arrives here with d.user
+// false. This function's job is only the other rule: count it where the write has
+// already happened.
+//
 // The cost is one store round trip per user delivery, exactly the one R4 added to
 // a dispatch (Store.Signal re-reads score.md unconditionally). On the deferred
 // path it lands inside the monitor tick's delivery budget, which already charges
@@ -4451,6 +4459,44 @@ func (s *Server) enqueueTaskFrom(prompt, group string, spawn *task.SpawnSpec, au
 	return t.ID, nil
 }
 
+// takeUserSignalLocked SPENDS the task's stamp, handing the one reinforcement it
+// is worth to the delivery now being assigned and leaving nothing behind for a
+// second one to find. Caller holds s.mu.
+//
+// task.Task.User is a one-shot permission to count, not a durable fact about the
+// task, and treating it as the latter is what let ONE operator act count twice.
+// The stamp is persisted, because a queued brief routinely outlives the daemon
+// that took it in; but a restart brings every panel back exited, so
+// restoreTasksLocked re-queues a task that was IN FLIGHT — already delivered,
+// already counted — and the stamp on disk offered the reinforcement again. It
+// replayed on every reboot that caught a user task mid-delivery, and it moved a
+// tier. R4's rule is that the signal counts once; spending the stamp is what
+// makes "once" survive the gap the stamp exists to cross.
+//
+// It is spent at ASSIGNMENT rather than where the count lands, and the two are
+// not the same moment: the assignment is under this lock, the count is after the
+// write, off it. That ordering is deliberate and it is lossy in ONE direction —
+// a delivery vetoed at task.pre, superseded before claimDelivery, or cut off by
+// a daemon that dies between the two spends the stamp and counts nothing. That
+// is R4's other rule (only a delivery that ACTUALLY succeeded counts) paid for
+// with a missed fold, which is the tolerable half of I6: an entry that fails to
+// climb is a worse ranking, an entry that climbs on a replay is a false one.
+//
+// The spend is nudged to disk here rather than left to the caller's own
+// markTaskDirtyLocked, so that it cannot be reordered out of the file by an edit
+// to either call site. Persistence is still the saver's best effort, exactly as
+// it is for the stamp going on — a nudge dropped under a full channel is
+// re-sent by the task's next change, and the same window that could lose the
+// stamp could keep it.
+func (s *Server) takeUserSignalLocked(t *task.Task) bool {
+	if !t.User {
+		return false
+	}
+	t.User = false
+	s.markTaskDirtyLocked(t.ID)
+	return true
+}
+
 // queuedBacklogLenLocked counts the unassigned queued tasks — the backlog depth
 // queueMax caps. Caller holds s.mu.
 func (s *Server) queuedBacklogLenLocked() int {
@@ -4585,7 +4631,7 @@ func (s *Server) scheduleLocked() ([]delivery, []spawnRequest) {
 		groupRunning[t.Group]++ // the fresh dispatch counts against the cap for later tasks
 		s.emit("task.change", taskFields(t))
 		s.markTaskDirtyLocked(t.ID)
-		deliver = append(deliver, delivery{panel: pid, task: t.ID, prompt: t.Prompt, plugin: t.Plugin, user: t.User, attempt: t.Attempts})
+		deliver = append(deliver, delivery{panel: pid, task: t.ID, prompt: t.Prompt, plugin: t.Plugin, user: s.takeUserSignalLocked(t), attempt: t.Attempts})
 	}
 	return deliver, spawns
 }
@@ -4628,7 +4674,7 @@ func (s *Server) applyScheduledSpawns(spawns []spawnRequest) bool {
 		s.panelTask[pid] = t.ID
 		// Unbound: the panel was created a moment ago and has not settled, so its
 		// brief is bound when the monitor delivers it rather than here (#44).
-		s.pendingDispatch[pid] = delivery{panel: pid, task: t.ID, prompt: t.Prompt, spawned: true, plugin: t.Plugin, user: t.User, attempt: t.Attempts}
+		s.pendingDispatch[pid] = delivery{panel: pid, task: t.ID, prompt: t.Prompt, spawned: true, plugin: t.Plugin, user: s.takeUserSignalLocked(t), attempt: t.Attempts}
 		s.emit("task.change", taskFields(t))
 		s.markTaskDirtyLocked(t.ID)
 		s.mu.Unlock()

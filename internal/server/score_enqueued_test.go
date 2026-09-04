@@ -125,6 +125,58 @@ func TestAnEnqueuedBriefSurvivesADaemonRestart(t *testing.T) {
 	}
 }
 
+// TestADeliveredBriefIsNotCountedAgainAfterARestart is the other half of the
+// restart, and the half the test above cannot see: its first daemon deliberately
+// delivers nothing, so the stamp it hands the second one has never been spent.
+//
+// Here it has been. The first daemon drains the backlog and counts the operator's
+// reinforcement; the task is then in flight on a panel a restart brings back
+// exited, so restoreTasksLocked re-queues it and the second daemon delivers the
+// SAME brief again. R4's rule is that the signal counts once — a task already
+// delivered is not countable again, whatever the backlog file says — so the entry
+// must read after the reboot exactly what it read before it.
+//
+// It asserts the tier as well as the counts, because the tier is what the double
+// count actually cost: one operator act moved an entry a rank it had not earned.
+func TestADeliveredBriefIsNotCountedAgainAfterARestart(t *testing.T) {
+	st, _ := scoreStore(t)
+	qdir := filepath.Join(t.TempDir(), "backlog")
+	e := seedEntry(t, st, "keep the build green")
+
+	first, _, firstBytes := scoreServer(st)
+	first.qstore = queue.New(qdir, time.Now)
+	stopSaver := runSaver(t, first)
+	first.onCommand(conn(""), proto.Command{Action: "task.enqueue", Prompt: "Keep the build green."})
+	first.monitorTick() // delivered here, and counted here
+	waitForBacklog(t, first.qstore, 1)
+	stopSaver()
+	if len(*firstBytes) == 0 {
+		t.Fatal("the first daemon delivered nothing, so this is the other test")
+	}
+	before := entryNow(t, st, e.Id)
+	if before.UserSignals != 1 {
+		t.Fatalf("user signals before the restart = %d, want the one delivery counted once", before.UserSignals)
+	}
+
+	second, _, secondBytes := scoreServer(st)
+	second.qstore = queue.New(qdir, time.Now)
+	second.mu.Lock()
+	second.restoreTasksLocked()
+	second.mu.Unlock()
+	second.monitorTick()
+
+	if len(*secondBytes) == 0 {
+		t.Fatal("the restored task never reached a panel, so the count below is vacuous")
+	}
+	after := entryNow(t, st, e.Id)
+	if after.UserSignals != before.UserSignals || after.Reinforcements != before.Reinforcements {
+		t.Fatalf("after the restart = %+v, want the counts unchanged from %+v", after, before)
+	}
+	if after.Tier != before.Tier {
+		t.Fatalf("tier moved %d -> %d on a replayed delivery", before.Tier, after.Tier)
+	}
+}
+
 // TestABacklogFromAnOlderBuildCountsNothing is the absence half of the round trip.
 // A task queued before the field existed decodes with it false, which is the same
 // thing an agent's enqueue means: no signal. The safe direction — invariant I6 is
