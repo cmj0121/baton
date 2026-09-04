@@ -1,0 +1,344 @@
+package server
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/queue"
+)
+
+// This file covers #50: a brief the operator ENQUEUED reinforces what it repeats
+// exactly as one they dispatched does. Its subject is the gap the dispatch path
+// does not have — the connection that enqueued the task is gone by the time the
+// scheduler drains it, and a restart may sit in between — so the tests here are
+// about what survives that gap rather than about the fold itself, which
+// score_brief_test.go already pins on the direct path.
+
+// enqueueOn drives task.enqueue exactly as a client would and then runs the tick
+// that drains the backlog onto the idle agent scoreServer provides. Both halves
+// matter: the stamp is decided in the first and read in the second, and a test
+// that called enqueueTask directly would skip the wire case that supplies the
+// connection.
+func enqueueOn(t *testing.T, s *Server, cc *clientConn, prompt string) {
+	t.Helper()
+	s.onCommand(cc, proto.Command{Action: "task.enqueue", Prompt: prompt})
+	s.monitorTick()
+}
+
+// TestAnEnqueuedBriefReinforcesWhatItRepeats is #50 itself: `baton ctl queue add`
+// and `baton ctl dispatch` are the same act from the operator's side, so the same
+// words must land the same way. The discrimination is still the connection's and
+// only the connection's — the same command from an agent panel counts nothing —
+// and every case here drains onto the same panel, so it is the enqueueing
+// connection deciding rather than the delivering one.
+func TestAnEnqueuedBriefReinforcesWhatItRepeats(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		self        string
+		wantSignals int
+	}{
+		{"from the cockpit", "", 1},
+		{"from an agent panel", "p1", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, _ := scoreStore(t)
+			s, _, delivered := scoreServer(st)
+			e := seedEntry(t, st, "keep the build green")
+
+			// Not byte-identical to the entry, so the match is the folding
+			// normaliser's — the same one the direct path is held to.
+			enqueueOn(t, s, conn(tc.self), "Keep the build green.")
+
+			if len(*delivered) == 0 {
+				t.Fatal("the queued task never reached the panel, so the count below is vacuous")
+			}
+			got := entryNow(t, st, e.Id)
+			if got.UserSignals != tc.wantSignals {
+				t.Fatalf("user signals = %d, want %d", got.UserSignals, tc.wantSignals)
+			}
+			if got.Reinforcements != tc.wantSignals {
+				t.Fatalf("reinforcements = %d, want %d: only the operator's brief counts",
+					got.Reinforcements, tc.wantSignals)
+			}
+		})
+	}
+}
+
+// TestAnEnqueuedBriefSurvivesADaemonRestart is the load-bearing one, and the
+// reason the stamp is on task.Task rather than in a server-side map.
+//
+// A queued task routinely outlives the daemon that took it in: restoreTasksLocked
+// re-queues the whole backlog on boot, and the connection that enqueued each task
+// closed long before. A signal that is right in memory and wrong after a reboot
+// passes every test that does not reboot, so this one reboots — a second Server
+// over the SAME backlog directory, with nothing carried across but the files.
+//
+// The store is shared because score.md is on disk too: the fleet's memory is what
+// the restart is being asked to reinforce, not something the daemon holds.
+func TestAnEnqueuedBriefSurvivesADaemonRestart(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		self        string
+		wantSignals int
+	}{
+		{"from the cockpit", "", 1},
+		{"from an agent panel", "p1", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, _ := scoreStore(t)
+			qdir := filepath.Join(t.TempDir(), "backlog")
+			e := seedEntry(t, st, "keep the build green")
+
+			// The daemon that takes the task in. It never delivers anything: the
+			// enqueue is all it does before it stops.
+			first, _, firstBytes := scoreServer(st)
+			first.qstore = queue.New(qdir, time.Now)
+			stop := make(chan struct{})
+			go first.taskSaverLoop(stop)
+			first.onCommand(conn(tc.self), proto.Command{Action: "task.enqueue", Prompt: "Keep the build green."})
+			waitForBacklog(t, first.qstore, 1)
+			close(stop)
+			if len(*firstBytes) != 0 {
+				t.Fatalf("the first daemon delivered %q; the restart is what must do the delivering", string(*firstBytes))
+			}
+
+			// The daemon that boots onto the surviving backlog, restores it, and
+			// drains it. Nothing but the files reached it.
+			second, _, secondBytes := scoreServer(st)
+			second.qstore = queue.New(qdir, time.Now)
+			second.mu.Lock()
+			second.restoreTasksLocked()
+			second.mu.Unlock()
+			second.monitorTick()
+
+			if len(*secondBytes) == 0 {
+				t.Fatal("the restored task never reached a panel, so the count below is vacuous")
+			}
+			if got := entryNow(t, st, e.Id); got.UserSignals != tc.wantSignals {
+				t.Fatalf("user signals after the restart = %d, want %d", got.UserSignals, tc.wantSignals)
+			}
+		})
+	}
+}
+
+// TestABacklogFromAnOlderBuildCountsNothing is the absence half of the round trip.
+// A task queued before the field existed decodes with it false, which is the same
+// thing an agent's enqueue means: no signal. The safe direction — invariant I6 is
+// about entries climbing on something that was not the operator, so failing to
+// fold is the tolerable miss and folding wrongly is not.
+//
+// The file is hand-written rather than produced by an older binary, so what it
+// actually pins is that the key's absence decodes as false and reaches delivery
+// as false.
+func TestABacklogFromAnOlderBuildCountsNothing(t *testing.T) {
+	st, _ := scoreStore(t)
+	qdir := filepath.Join(t.TempDir(), "backlog")
+	e := seedEntry(t, st, "keep the build green")
+
+	if err := os.MkdirAll(qdir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Every field an old build wrote, and no "user" key at all.
+	old := `{"schema":1,"task":{"id":"t1","prompt":"Keep the build green.","status":"queued",` +
+		`"attempts":1,"created":"2026-01-01T00:00:00Z","updated":"2026-01-01T00:00:00Z"}}`
+	if err := os.WriteFile(filepath.Join(qdir, "t1.json"), []byte(old), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// The file is only a fixture if it really lacks the key.
+	var probe struct {
+		Task map[string]any `json:"task"`
+	}
+	if err := json.Unmarshal([]byte(old), &probe); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	if _, ok := probe.Task["user"]; ok {
+		t.Fatal("the fixture carries a user key, so it does not stand for an older build")
+	}
+
+	s, _, delivered := scoreServer(st)
+	s.qstore = queue.New(qdir, time.Now)
+	s.mu.Lock()
+	s.restoreTasksLocked()
+	s.mu.Unlock()
+	s.monitorTick()
+
+	if len(*delivered) == 0 {
+		t.Fatal("the restored task never reached a panel, so the count below is vacuous")
+	}
+	if got := entryNow(t, st, e.Id); got.UserSignals != 0 || got.Reinforcements != 0 {
+		t.Fatalf("entry = %+v, want a task from an older build to have counted nothing", got)
+	}
+}
+
+// TestAnEnqueuedBriefCountsTheOperatorsOwnWords is R4's rule carried over the gap:
+// a task.pre hook may rewrite a prompt freely, and ranking its output as the
+// operator's voice would let a plugin reach the one tier #37 reserves for a
+// person — the self-report #38 §4 rules out, arriving through the customisation
+// point.
+//
+// Two entries, so the check is positive on both sides: the words the operator
+// typed fold, and the words the hook substituted do not.
+func TestAnEnqueuedBriefCountsTheOperatorsOwnWords(t *testing.T) {
+	st, _ := scoreStore(t)
+	s, _, _ := scoreServer(st)
+	typed := seedEntry(t, st, "keep the build green")
+	rewritten := seedEntry(t, st, "ship it on friday")
+
+	s.onFilterTask = func(b TaskBrief) (TaskBrief, bool) {
+		b.Prompt = "ship it on friday"
+		return b, true
+	}
+	enqueueOn(t, s, conn(""), "keep the build green")
+
+	if got := entryNow(t, st, typed.Id); got.UserSignals != 1 {
+		t.Fatalf("the typed entry = %+v, want the operator's own words counted", got)
+	}
+	if got := entryNow(t, st, rewritten.Id); got.UserSignals != 0 || got.Reinforcements != 0 {
+		t.Fatalf("the rewritten entry = %+v, want a hook's words to reach no tier", got)
+	}
+}
+
+// TestAVetoedQueuedTaskCountsNothing is R4's other rule over the same gap: the
+// signal is what the fleet was TOLD, not what the operator asked for. A task.pre
+// veto at delivery means nothing reached an agent, and vetoQueuedTask walks the
+// assignment back — so a reinforcement recorded here would be one for a task no
+// agent ever saw, on an entry the operator cannot account for afterwards.
+func TestAVetoedQueuedTaskCountsNothing(t *testing.T) {
+	st, _ := scoreStore(t)
+	s, _, delivered := scoreServer(st)
+	e := seedEntry(t, st, "keep the build green")
+
+	s.onFilterTask = func(TaskBrief) (TaskBrief, bool) { return TaskBrief{}, false }
+	enqueueOn(t, s, conn(""), "keep the build green")
+
+	if len(*delivered) != 0 {
+		t.Fatalf("a vetoed queued task delivered %q", string(*delivered))
+	}
+	if got := entryNow(t, st, e.Id); got.UserSignals != 0 || got.Reinforcements != 0 {
+		t.Fatalf("entry = %+v, want a vetoed queued task to have counted nothing", got)
+	}
+
+	// With the veto lifted the very same words do count, so the check above is the
+	// hook's doing rather than the enqueue path failing to signal at all.
+	s.onFilterTask = nil
+	enqueueOn(t, s, conn(""), "keep the build green")
+	if got := entryNow(t, st, e.Id); got.UserSignals != 1 {
+		t.Fatalf("entry = %+v, want the unvetoed queued task counted", got)
+	}
+}
+
+// TestAPluginEnqueuedBriefCountsNothing closes the door baton.enqueue would
+// otherwise open. A plugin-originated task is delivered bare — no chain, no score
+// — and it is not the operator saying anything, so a hook that enqueues its own
+// wording must not be able to climb an entry by repeating it.
+func TestAPluginEnqueuedBriefCountsNothing(t *testing.T) {
+	st, _ := scoreStore(t)
+	s, _, delivered := scoreServer(st)
+	e := seedEntry(t, st, "keep the build green")
+
+	if _, err := s.Enqueue("keep the build green", ""); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	s.monitorTick()
+
+	if len(*delivered) == 0 {
+		t.Fatal("the plugin's task never reached a panel, so the count below is vacuous")
+	}
+	if got := entryNow(t, st, e.Id); got.UserSignals != 0 || got.Reinforcements != 0 {
+		t.Fatalf("entry = %+v, want a plugin's enqueue to have counted nothing", got)
+	}
+}
+
+// TestTheEnqueueStampIsTheServersConclusion pins the stamp's provenance at the
+// only place it is decided. Nothing on the wire can assert it: the same enqueue
+// command, byte for byte, is stamped by the CONNECTION it arrived on, and a
+// plugin's enqueue — which has no connection at all — is stamped by neither.
+//
+// It reads the task table rather than an entry because the subject is the record
+// itself, which is what a restart replays and what a frontend is shown.
+func TestTheEnqueueStampIsTheServersConclusion(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		enqueue    func(*Server)
+		wantUser   bool
+		wantPlugin bool
+	}{
+		{"the cockpit's connection", func(s *Server) {
+			s.onCommand(conn(""), proto.Command{Action: "task.enqueue", Prompt: "go"})
+		}, true, false},
+		{"an agent panel's connection", func(s *Server) {
+			s.onCommand(conn("p1"), proto.Command{Action: "task.enqueue", Prompt: "go"})
+		}, false, false},
+		{"baton.enqueue, which has no connection", func(s *Server) {
+			if _, err := s.Enqueue("go", ""); err != nil {
+				t.Fatalf("enqueue: %v", err)
+			}
+		}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, _ := scoreServer(nil)
+			tc.enqueue(s)
+
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if len(s.tasks) != 1 {
+				t.Fatalf("backlog holds %d tasks, want one", len(s.tasks))
+			}
+			for _, got := range s.tasks {
+				if got.User != tc.wantUser || got.Plugin != tc.wantPlugin {
+					t.Fatalf("task = %+v, want user=%v plugin=%v", got, tc.wantUser, tc.wantPlugin)
+				}
+			}
+		})
+	}
+}
+
+// TestTheEnqueueStampReachesTheBacklogFile is the disk half of the same
+// conclusion: what the restart reads back has to be what the connection decided,
+// and a stamp the saver drops is a signal the reboot loses.
+func TestTheEnqueueStampReachesTheBacklogFile(t *testing.T) {
+	qdir := filepath.Join(t.TempDir(), "backlog")
+	s, _, _ := scoreServer(nil)
+	s.qstore = queue.New(qdir, time.Now)
+	stop := make(chan struct{})
+	go s.taskSaverLoop(stop)
+	defer close(stop)
+
+	s.onCommand(conn(""), proto.Command{Action: "task.enqueue", Prompt: "go"})
+	waitForBacklog(t, s.qstore, 1)
+
+	tasks, bad, err := s.qstore.LoadAll()
+	if err != nil || len(bad) != 0 {
+		t.Fatalf("LoadAll: %v, bad=%v", err, bad)
+	}
+	if len(tasks) != 1 || !tasks[0].User {
+		t.Fatalf("backlog files = %+v, want the operator's stamp persisted", tasks)
+	}
+}
+
+// waitForBacklog blocks until the store can load n tasks. The saver is a
+// goroutine draining a channel, so the file arrives shortly after the command
+// returns rather than during it.
+//
+// It asks the STORE rather than counting directory entries, and that is not
+// fussiness: Save is a temp-file-plus-rename, so a directory listing sees a file
+// one tick before the task is readable and a test that waited on the listing
+// would restart onto an empty backlog roughly at random.
+func waitForBacklog(t *testing.T, qs *queue.Store, n int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		tasks, bad, err := qs.LoadAll()
+		if err == nil && len(bad) == 0 && len(tasks) >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the backlog at %s loaded %d tasks (bad=%v, err=%v), want %d", qs.Dir(), len(tasks), bad, err, n)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
