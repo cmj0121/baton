@@ -50,6 +50,11 @@ die_unchecked() {
 	exit 2
 }
 
+# Lines on stdin. The `tr` is not decoration: some wc implementations pad the
+# number, and every one of these counts is compared with -eq or printed into a
+# sentence.
+count() { wc -l | tr -d ' '; }
+
 # ---------------------------------------------------------------------------
 # Resolve the range.
 # ---------------------------------------------------------------------------
@@ -216,25 +221,29 @@ AWK
 # ---------------------------------------------------------------------------
 # Build the index of every name the code actually contains.
 # ---------------------------------------------------------------------------
+# Every identifier on stdin, one per line, sorted and deduplicated.
+#
 # The braces around grep matter under `set -o pipefail`: a grep that matches
 # nothing exits 1 and takes the pipeline, and so the script, down with it --
 # with status 1, which this script has already spent on "stale names found".
 # An empty index has to reach the integrity check below and be reported as the
 # breakage it is, not as a finding about the code.
+names() {
+	tr -c 'A-Za-z0-9_' '\n' |
+		{ grep -E '^[A-Za-z_][A-Za-z0-9_]*$' || true; } |
+		sort -u
+}
+
 git ls-files -z '*.go' | xargs -0 awk -f "${WORK}/split.awk" |
 	awk -F'\t' '$3 == "C" { print $4 }' |
-	tr -c 'A-Za-z0-9_' '\n' |
-	{ grep -E '^[A-Za-z_][A-Za-z0-9_]*$' || true; } |
-	sort -u >"${WORK}/code-names"
+	names >"${WORK}/code-names"
 
 # Non-Go tracked sources hold names too -- proto and yaml declare fields that
 # Go comments legitimately mention. Comments there are not stripped, which
 # costs recall and buys no false positives, and recall in a file nobody renamed
 # is not what this is for.
 git ls-files -z '*.proto' '*.yaml' '*.yml' 'go.mod' 2>/dev/null | xargs -0 -r cat 2>/dev/null |
-	tr -c 'A-Za-z0-9_' '\n' |
-	{ grep -E '^[A-Za-z_][A-Za-z0-9_]*$' || true; } |
-	sort -u >>"${WORK}/code-names"
+	names >>"${WORK}/code-names"
 
 # Filenames, because a comment that says "mdheader_test.go covers #57" is
 # naming a file that exists, not an identifier that does not. Measured over the
@@ -244,7 +253,7 @@ git ls-files | sed 's#.*/##; s#\.[^.]*$##' | sort -u >>"${WORK}/code-names"
 
 sort -u -o "${WORK}/code-names" "${WORK}/code-names"
 
-INDEXED="$(wc -l <"${WORK}/code-names" | tr -d ' ')"
+INDEXED="$(count <"${WORK}/code-names")"
 
 # Does the index look like it came from Go code at all?
 #
@@ -254,7 +263,7 @@ INDEXED="$(wc -l <"${WORK}/code-names" | tr -d ' ')"
 # a magic minimum is wrong for a repo of ten files and wrong for one of ten
 # thousand. Every Go file on earth contains `package` and `func` in code, so
 # their absence from the code stream is proof the split failed.
-GO_FILES="$(git ls-files '*.go' | wc -l | tr -d ' ')"
+GO_FILES="$(git ls-files '*.go' | count)"
 if [ "${GO_FILES}" -gt 0 ]; then
 	for keyword in package func; do
 		grep -qx "${keyword}" "${WORK}/code-names" ||
@@ -332,7 +341,7 @@ if [ -s "${WORK}/relex-files" ]; then
 		' "${WORK}/added-lines" - >"${WORK}/added-comments"
 fi
 
-EXAMINED="$(wc -l <"${WORK}/added-comments" | tr -d ' ')"
+EXAMINED="$(count <"${WORK}/added-comments")"
 
 if [ "${EXAMINED}" -eq 0 ] && [ "${RAW_COMMENT_LINES}" -gt 0 ]; then
 	die_unchecked "the diff adds ${RAW_COMMENT_LINES} comment line(s) but the sweep examined 0 of them"
@@ -349,10 +358,10 @@ fi
 # Compare, and report with the evidence attached.
 # ---------------------------------------------------------------------------
 cut -f3 <"${WORK}/added-comments" | awk -f "${WORK}/shaped.awk" | sort -u >"${WORK}/comment-names"
-DISTINCT="$(wc -l <"${WORK}/comment-names" | tr -d ' ')"
+DISTINCT="$(count <"${WORK}/comment-names")"
 
 comm -23 "${WORK}/comment-names" "${WORK}/code-names" >"${WORK}/stale"
-STALE="$(wc -l <"${WORK}/stale" | tr -d ' ')"
+STALE="$(count <"${WORK}/stale")"
 
 echo ">> examined ${EXAMINED} added comment line(s), ${DISTINCT} distinct code-shaped name(s)"
 
