@@ -322,8 +322,10 @@ whether or not a conductor exists. Three MCP tools, refused to any connection th
 
 **None of them counts as anything, and there is no tool that raises an entry.** A reword cannot make an entry more
 important; a lowered entry climbs again only by being said again. Corrections are rate-capped at four a second, and a
-run of merges that takes more than half the fleet's memory inside a minute raises a warning in the daemon log — because
-that has no undo beyond reading the event log by hand.
+run of merges that takes more than half the fleet's memory raises a warning in the daemon log — because that has no undo
+beyond reading the event log by hand. The half is measured from where the run of merging BEGAN, so an emptying spread
+over several minutes still crosses it; a whole minute with no merge in it ends the run and the next one is measured
+afresh. Entries you delete from `score.md` yourself are never counted against the conductor.
 
 ## Configuration
 

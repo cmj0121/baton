@@ -954,8 +954,10 @@ func (s *Server) scoreSubmit(cc *clientConn, cmd proto.Command) {
 const minRefineGap = 250 * time.Millisecond
 
 // The slow-collapse alarm: a Warn when merges have taken more than
-// mergeAlarmDropPercent of the entries the store held at the start of a
-// mergeAlarmWindow. See mergeAlarm.
+// mergeAlarmDropPercent of the entries the store held when the current RUN of
+// merging began — not of what it held when the current window opened, which is
+// #53 and is argued on mergeAlarm. A run ends after a whole mergeAlarmWindow
+// with no merge in it. See mergeAlarm.
 //
 // It is an ALARM and not a budget, deliberately. A cap on the total would refuse
 // a legitimate large tidy-up — an operator who has just noticed forty
@@ -964,17 +966,20 @@ const minRefineGap = 250 * time.Millisecond
 // told, which is all invariant I8 asks and all that is needed once the rate cap
 // has already made the collapse take minutes rather than seconds.
 //
-// Half, within a minute, above a floor the store's own tuning sets. Each figure
-// earns its place:
+// Half, a minute, above a floor the store's own tuning sets. Each figure earns
+// its place:
 //
 //   - HALF, because a proportion is what makes this a statement about the memory
 //     rather than about a number of merges. A tenth would fire on any ordinary
 //     tidy-up of a small store; losing half of what the fleet remembers is not a
 //     tidy-up under any reading.
-//   - A MINUTE, because it has to be long enough that a conductor working
-//     honestly through a list of duplicates at the paced rate does not trip on a
-//     handful, and short enough that the operator hears about a collapse while
-//     it is happening rather than afterwards.
+//   - A MINUTE, and it now buys two things rather than one. It is how long the
+//     alarm stays quiet after it has sounded, so a collapse that outlasts it is
+//     not reported once and forgotten; and it is how much SILENCE ends a run, so
+//     a conductor working honestly through a list of duplicates and then stopping
+//     is measured afresh next time it comes back. Long enough that the paced rate
+//     does not trip on a handful, short enough that the operator hears about a
+//     collapse while it is happening rather than afterwards.
 //
 // THE FLOOR IS NOT A CONSTANT HERE, and that is the third figure's whole story.
 // It is the store's own working set plus one — the smallest store that does NOT
@@ -1023,40 +1028,87 @@ const (
 // are asserted as arithmetic rather than reconstructed from a live server, a log
 // capture and a pacing helper.
 //
-// at and from are the current window's start and the entry count it opened on;
-// fired says that window has already alarmed. The zero value opens its first
-// window on the first merge. Guarded by Server.mu.
+// THE BASELINE IS NOT RE-READ FROM THE STORE THE MERGES HAVE SHRUNK, which is
+// the whole of #53 and the reason this type is bigger than three fields. It used
+// to open each window on whatever the store held at that moment, so "half of
+// what is left" could be taken over and over: 74 → 38 in one window and 38 → 20
+// in the next is 72% of the fleet's memory gone without a single alarm, measured.
+// A sliding window is the same measurement against the same descending baseline
+// and fixes nothing; the baseline has to stop moving with the thing it watches.
+//
+// So the baseline follows EVERYTHING THE MERGES DID NOT DO, and nothing else.
+// Entries the fleet submitted, and lines the operator deleted from score.md,
+// move it; the entries a merge took do not. What is left of from-after is then
+// exactly the count this run of merging has removed, which is the quantity the
+// warning claims to be about. A high-water mark that only ever rose — the cheap
+// fix #53 proposes — would have been silent in the same places, but an operator
+// deleting forty lines by hand would have left the baseline forty entries above
+// a store nobody merged, and the next ordinary merge would announce a collapse
+// that never happened. An alarm that can say that is an alarm people learn to
+// ignore, which is what the floor beside it exists to prevent.
+//
+// A RUN ENDS IN SILENCE, never in shrinkage. A whole mergeAlarmWindow with no
+// merge at all closes the run and re-seeds the baseline on what the next merge
+// finds; anything short of that carries. That leaves a band — a conductor
+// pausing a full minute between bursts is measured afresh each time — and the
+// band is deliberate: this alarm is for the accident, a loop does not pause for
+// a minute, and #38 declines to be a boundary against a same-uid agent that
+// deliberately stops just under a threshold it cannot see.
+//
+// at and from are the run's start and the entry count it is measured against;
+// last and after are when the previous merge was noted and what it left, which
+// is how movement the merges did not cause becomes visible; firedAt is when this
+// run last alarmed, zero until it has. The zero value opens its first run on the
+// first merge. Guarded by Server.mu.
 type mergeAlarm struct {
-	at    time.Time
-	from  int
-	fired bool
+	at      time.Time
+	from    int
+	last    time.Time
+	after   int
+	firedAt time.Time
 }
 
 // note takes one merge — the entry count before it and the count after — and
-// answers whether this is the merge that crossed the line, and the count the
-// current window opened on, for the log line. floor is the smallest store worth
-// alarming about; the caller reads it off the store's policy, and the constants
-// above say why it is not one of them.
+// answers whether this is the merge that crossed the line, the count the run is
+// measured against, and how long the run has been going, both for the log line.
+// floor is the smallest store worth alarming about; the caller reads it off the
+// store's policy, and the constants above say why it is not one of them.
 //
-// It fires ONCE per window. The point is to tell an operator that their memory
-// is collapsing, and a line per merge after that adds nothing they can act on —
-// the per-merge Info lines are already there for anyone reconstructing it. The
-// window then rolls and can alarm again, so a collapse that outlasts a minute is
-// not reported once and forgotten.
+// It fires at most ONCE PER WINDOW. The point is to tell an operator that their
+// memory is collapsing, and a line per merge after that adds nothing they can act
+// on — the per-merge Info lines are already there for anyone reconstructing it.
+// A window after the last one it can alarm again, so a collapse that outlasts a
+// minute is not reported once and forgotten.
 //
 // Nothing is refused here. See the constants for why an alarm rather than a
 // budget. The caller holds Server.mu.
-func (a *mergeAlarm) note(before, after, floor int, now time.Time) (from int, alarm bool) {
-	if a.at.IsZero() || now.Sub(a.at) > mergeAlarmWindow {
-		// The window opens on the count BEFORE this merge, so the very first merge
-		// of a window is measured against a store that still had its entry.
-		a.at, a.from, a.fired = now, before, false
+func (a *mergeAlarm) note(before, after, floor int, now time.Time) (from int, over time.Duration, alarm bool) {
+	if a.last.IsZero() || now.Sub(a.last) > mergeAlarmWindow {
+		// A whole window with no merge at all: whatever was happening has stopped.
+		// The run opens on the count BEFORE this merge, so its very first merge is
+		// measured against a store that still had its entry.
+		a.at, a.from, a.firedAt = now, before, time.Time{}
+	} else {
+		// Everything the store did between the last merge and this one was done by
+		// something else — a submission, or the operator's own editor — so the
+		// baseline moves with it. Only the merges are held against the run.
+		a.from += before - a.after
 	}
-	if a.fired || a.from < floor || (a.from-after)*100 < a.from*mergeAlarmDropPercent {
-		return a.from, false
+	a.last, a.after = now, after
+	over = now.Sub(a.at)
+	// Nothing to say: the store is too small to be worth an alarm, or this run has
+	// not taken enough of it.
+	if a.from < floor || (a.from-after)*100 < a.from*mergeAlarmDropPercent {
+		return a.from, over, false
 	}
-	a.fired = true
-	return a.from, true
+	// Something to say, said recently enough. Two decisions rather than one
+	// condition, because they fail for unrelated reasons and an operator reading
+	// this wants to know which.
+	if !a.firedAt.IsZero() && now.Sub(a.firedAt) <= mergeAlarmWindow {
+		return a.from, over, false
+	}
+	a.firedAt = now
+	return a.from, over, true
 }
 
 // scoreRefine handles the conductor's three corrections — score.merge,
@@ -1137,8 +1189,11 @@ func (s *Server) scoreRefine(cc *clientConn, cmd proto.Command) {
 	// less, on the action that chose it.
 	//
 	// The entry count is taken from the same view for the same kind of reason:
-	// only a merge can take an entry out, and the alarm needs the count from
-	// before it did.
+	// the alarm needs the count from before this correction ran. It is the count
+	// AFTER the operator's own pass, deliberately — lines they deleted retire
+	// their entries, and #53's baseline moves with every entry that left by any
+	// route but a merge, which it can only do if it is told where the store stood
+	// once their edit had landed.
 	v := s.scoreView(score.Context{})
 	evictions, entries := v.Health.AliasEvictions, v.Total
 	// One switch, and it is the wire's: it maps the three actions onto the three
@@ -1204,9 +1259,14 @@ func (s *Server) scoreRefine(cc *clientConn, cmd proto.Command) {
 		// package default, so a fleet that tuned score.working-set gets the alarm
 		// its own briefs justify. See mergeAlarmWindow's comment.
 		after := s.scoreState.Store.Len()
-		if from, alarm := s.noteMergeDrop(entries, after, v.Policy.WorkingSet+1, time.Now()); alarm {
+		if from, over, alarm := s.noteMergeDrop(entries, after, v.Policy.WorkingSet+1, time.Now()); alarm {
+			// `over` is how long this run of merging has been going, which is what
+			// the line used to claim with a flat `within: 1m`. The drop is measured
+			// from where the run started rather than from where the current window
+			// opened (#53), so a fixed minute would have been a false statement about
+			// a collapse that had been under way for five.
 			log.Warn().Str("conductor", cc.self).Int("entries", after).
-				Int("was", from).Dur("within", mergeAlarmWindow).
+				Int("was", from).Dur("over", over.Round(time.Second)).
 				Msg("merging has taken more than half the fleet's memory; check score.md is still what you meant")
 		}
 	}
@@ -1220,7 +1280,7 @@ func (s *Server) scoreRefine(cc *clientConn, cmd proto.Command) {
 // around one gapStamp check and for the same reason: both run off the command
 // loop, where the lock is not already held. See mergeAlarm.note, which is where
 // the rule lives.
-func (s *Server) noteMergeDrop(before, after, floor int, now time.Time) (from int, alarm bool) {
+func (s *Server) noteMergeDrop(before, after, floor int, now time.Time) (from int, over time.Duration, alarm bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.merges.note(before, after, floor, now)
