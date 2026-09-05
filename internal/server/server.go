@@ -5972,12 +5972,38 @@ func (s *Server) ungroup(ids []string, name string) error {
 //
 // The class is internal/scrub's, so this and the render-side filters cannot
 // disagree about what a control character is.
+//
+// Length is refused here for the same reason and by the same argument. A name is
+// kept on the panel, written into every fleet snapshot, and encoded once per
+// attached client on every fleet change — so its size is not paid once, it is paid
+// on every event for as long as the panel lives. Driven against a live daemon: one
+// panel.rename carrying a 900 KiB title made every subsequent panels broadcast
+// 900 KiB, to every cockpit. Truncating instead would break exactly what the
+// paragraph above defends, since two names that differ past the cut are one name
+// to nameTakenLocked and two on the screen.
 func nameSafe(name string) error {
 	if strings.ContainsFunc(name, scrub.Drop) {
 		return fmt.Errorf("the name %q contains a control character", name)
 	}
+	if n := len([]rune(name)); n > maxNameRunes {
+		return fmt.Errorf("the name is %d runes long, and the limit is %d", n, maxNameRunes)
+	}
 	return nil
 }
+
+// maxNameRunes caps a panel title or a work-item name.
+//
+// A name is an identity drawn in a card header, so the surfaces it has to fit are
+// terminal-shaped: the cockpit's own notification cap for the very same string is
+// 96 runes, and no card on an 80-column screen shows a fraction of that. 128 sits
+// just above the narrowest surface a name reaches, which makes it a bound on
+// nothing a person would type and a bound on a kilobyte of it.
+//
+// It is the group path's depth cap too, and deliberately the only one: a path is
+// segments joined by "/", so a name that cannot exceed 128 runes cannot exceed 64
+// segments either, and one number nobody has to keep in step with another is
+// worth more than a second number sized on a guess about nesting.
+const maxNameRunes = 128
 
 // rename is a core action that renames either one panel (by id) or a whole group
 // (by its current name). A panel rename changes its title; a group rename rewrites
