@@ -179,6 +179,29 @@ func TestSetRingCapResetsToDefault(t *testing.T) {
 	if m.ringCap != DefaultRingCap {
 		t.Fatalf("a zero cap should reset to DefaultRingCap, got %d", m.ringCap)
 	}
+	m.SetRingCap(maxRingCap * 4)
+	if m.ringCap != maxRingCap {
+		t.Fatalf("an absurd cap should ceil at maxRingCap, got %d", m.ringCap)
+	}
+}
+
+// TestRingCapCeilingSurvivesTheFirstByte is the ceiling's reason for existing.
+// appendRing compares the ring's length against 2*ringCap, which is NEGATIVE for
+// a ringCap past MaxInt/2 — so the trim fires on the panel's first byte of output
+// and make([]byte, ringCap) panics. `replay-kb: 5000000000000000` in the
+// operator's config is multiplied by 1024 on the way here and lands exactly
+// there, taking the daemon and every panel with it.
+func TestRingCapCeilingSurvivesTheFirstByte(t *testing.T) {
+	m := New()
+	m.SetRingCap(5_000_000_000_000_000 * 1024)
+	if 2*m.ringCap < 0 {
+		t.Fatalf("2*ringCap overflowed: ringCap = %d", m.ringCap)
+	}
+	p := &pane{}
+	m.appendRing(p, []byte("hello")) // panicked before the ceiling existed
+	if got := string(m.ringView(p)); got != "hello" {
+		t.Fatalf("ringView = %q, want %q", got, "hello")
+	}
 }
 
 // TestStartCmdRunsArgsInDir checks StartCmd honours the working directory and the
@@ -444,6 +467,9 @@ func TestRingCap(t *testing.T) {
 	}
 	if got := New(WithRingCap(10)).ringCap; got != minRingCap {
 		t.Fatalf("a tiny cap should floor at %d, got %d", minRingCap, got)
+	}
+	if got := New(WithRingCap(1 << 60)).ringCap; got != maxRingCap {
+		t.Fatalf("an absurd cap should ceil at %d, got %d", maxRingCap, got)
 	}
 
 	// A custom cap above the floor exposes only the most recent bytes (the tail),
