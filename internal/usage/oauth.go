@@ -338,8 +338,9 @@ func tokenFromFile(path string) (string, error) {
 // pile a second one on top of it.
 const keychainTimeout = 2 * time.Minute
 
-// keychainArgv is the lookup, and keychainRun makes it injectable: a test proves
-// the bound by pointing this at a command that never returns on its own.
+// keychainArgv is the lookup and keychainWait is its bound, both variables so a
+// test can prove the bound in milliseconds by pointing the first at a command
+// that never returns on its own and shortening the second.
 var (
 	keychainArgv = []string{"security", "find-generic-password", "-s", keychainService, "-w"}
 	keychainWait = keychainTimeout
