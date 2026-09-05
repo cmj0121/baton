@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -3543,13 +3544,34 @@ func writeConductorFiles(ws, id string) {
 	_ = os.WriteFile(filepath.Join(ws, ".mcp.json"), conductorMCPConfig(), 0o600)
 }
 
+// maxConductorGuide caps the operator's brief.
+//
+// writeConductorFiles calls this on every conductor spawn and respawn, and a spawn
+// is a wire action, so what the daemon reads here is asked for by a peer rather
+// than by a boot. It is also amplified on the way out: the guide is read, appended
+// to a copy of the primer, and then written to THREE files in the workspace, so a
+// gigabyte on disk is several gigabytes of allocation and three gigabytes written
+// every time the conductor is opened.
+//
+// 256 KiB. The brief is prose an agent reads as its instructions, so the bound
+// that already exists on it is the model's context window — around sixty thousand
+// tokens at this size, most of one. A brief that will not fit in the agent it is
+// addressed to is not a brief, and the whole file already treats a guide it cannot
+// use as a hint it does without.
+const maxConductorGuide = 256 << 10
+
 // conductorBriefing is the full BATON.md: the built-in control primer, plus the
 // operator's own goal and guide from $HOME/.baton/CONDUCTOR.md when it is present
 // and non-empty. The operator brief is appended (never replaces the primer), so
 // the agent always keeps the mechanics and forbidden actions.
+//
+// A guide past maxConductorGuide is dropped whole rather than cut: half an
+// operator's instructions, ending mid-sentence and handed to an agent as its
+// standing orders, is worse than the primer on its own. It is said out loud
+// because the operator would otherwise see their brief silently ignored.
 func conductorBriefing(id string) []byte {
 	b := conductorPrimer(id)
-	guide, err := os.ReadFile(paths.ConductorFile())
+	guide, err := readConductorGuide(paths.ConductorFile())
 	if err != nil || strings.TrimSpace(string(guide)) == "" {
 		return b
 	}
@@ -3561,6 +3583,32 @@ func conductorBriefing(id string) []byte {
 	}
 	return b
 }
+
+// readConductorGuide reads the operator's brief, refusing one past
+// maxConductorGuide without ever holding it. Every other failure here is already
+// "no brief", so this one joins them — with a line, since a brief that is being
+// ignored is a thing its author has to be told about.
+func readConductorGuide(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	guide, err := io.ReadAll(io.LimitReader(f, maxConductorGuide+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(guide) > maxConductorGuide {
+		log.Warn().Str("file", path).Int("limit", maxConductorGuide).
+			Msg("the conductor's brief is too large to use; opening it with the built-in primer alone")
+		return nil, errGuideTooLarge
+	}
+	return guide, nil
+}
+
+// errGuideTooLarge is the refusal readConductorGuide answers with, kept as a
+// value so the caller's "no brief" branch is one test rather than two.
+var errGuideTooLarge = errors.New("the conductor brief is too large to read")
 
 // conductorMCPConfig is the .mcp.json dropped into the conductor workspace so an
 // MCP-aware agent (Claude Code) auto-loads baton's fleet-control tools. It points
