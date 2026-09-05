@@ -2,6 +2,7 @@ package usage
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,13 +76,33 @@ func statusLinePaths(dir string) []string {
 	return append(paths, filepath.Join(claudeConfigDir(), "settings.json"))
 }
 
+// maxSettingsFile caps one settings file.
+//
+// This is the read in this package whose PATH a peer chooses. StatusLine is
+// called on every panel spawn, and statusLinePaths builds its list from the
+// panel's working directory — which arrived on the socket as panel.create's Dir.
+// So a peer that can put a file anywhere can name the directory the daemon then
+// reads a settings file out of, unbounded, once per spawn.
+//
+// One mebibyte. A settings file is hooks, permissions, env and a status line: a
+// long permissions allowlist runs to tens of kilobytes, so this is a hundred
+// times a large real one. Past it the file is treated the way a malformed one
+// already is — not a settings file this can adjudicate — which is the outcome
+// this function is built around rather than a new one it has to invent.
+const maxSettingsFile = 1 << 20
+
 // readClaudeSettings parses one settings file. A missing file is the common case
-// and not an error; a malformed one is treated the same way, because a cockpit is
-// in no position to adjudicate somebody's JSON and guessing at it is how a status
-// line ends up replaced by accident.
+// and not an error; a malformed or oversized one is treated the same way, because
+// a cockpit is in no position to adjudicate somebody's JSON and guessing at it is
+// how a status line ends up replaced by accident.
 func readClaudeSettings(path string) (claudeSettings, bool) {
-	b, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
+		return claudeSettings{}, false
+	}
+	defer func() { _ = f.Close() }()
+	b, err := io.ReadAll(io.LimitReader(f, maxSettingsFile+1))
+	if err != nil || len(b) > maxSettingsFile {
 		return claudeSettings{}, false
 	}
 	var s claudeSettings
