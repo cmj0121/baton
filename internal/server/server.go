@@ -2757,6 +2757,29 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	if cc.role == roleConductor {
 		cmd.Profile = ""
 	}
+	// A directory on the wire must be absolute, and this is the only place that
+	// says so for all of them: panel.create's workdir, task.enqueue's spawn spec,
+	// the repo a targetless worktree-add branches from, the tree worktree-remove
+	// takes away.
+	//
+	// A relative one is not refused for being strange — it is refused because the
+	// only thing it could resolve against here is the DAEMON's working directory,
+	// whichever terminal the operator happened to start baton in, which is nobody's
+	// intent. ptymgr.PanelDir already promises a panel never inherits it; that
+	// promise covered the empty string and nothing else, so `--dir=..` put a panel
+	// one level above the launch directory and `worktree-add --dir=x` would have
+	// branched a repo found there. The cockpit has always sent absolute paths (see
+	// expandDir); ctl and the MCP tools now resolve theirs against the caller's own
+	// cwd, which is the one place a relative path has a meaning. This makes it a
+	// property of the server rather than a convention every client has to keep.
+	//
+	// %q because dir came off the wire and reaches a terminal: an ESC in it renders
+	// as four printable characters while the path stays exact.
+	if cmd.Dir != "" && !filepath.IsAbs(cmd.Dir) {
+		send(cc, proto.ServerMsg{Type: "error",
+			Error: fmt.Sprintf("a working directory must be an absolute path: %q", cmd.Dir)})
+		return
+	}
 	switch cmd.Action {
 	case "hello":
 		// A hello may ADD fences and may never drop one.

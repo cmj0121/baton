@@ -338,6 +338,15 @@ type SpawnRequest struct {
 // spawn aimed at the wrong directory, and it stays wrong however the rest
 // resolves.
 func (c *Client) ResolveSpawn(r SpawnRequest) (string, error) {
+	// Resolved HERE, in the process the caller typed it in, because that is the
+	// only process where a relative path means anything. The daemon refuses one
+	// outright: the sole directory it could resolve against is its own, whichever
+	// terminal baton was started in, which is never what `--dir=../sibling` or an
+	// agent's `"dir": "./web"` meant. This is `ctl`'s operator shell and, for the
+	// MCP tools, the panel the agent is running in — in both cases the cwd the
+	// relative path was written against. Empty stays empty: the server reads that
+	// as "use the fleet default", not as a directory.
+	r.Dir = paths.Expand(r.Dir)
 	switch {
 	case r.Branch != "" && !r.Worktree:
 		return "", ErrBranchNeedsWorktree
@@ -419,7 +428,10 @@ func (c *Client) Enqueue(prompt, group string) error {
 func (c *Client) EnqueueSpawn(prompt, group, command string, args []string, dir string, closeOnDone bool) error {
 	return c.Do(proto.Command{
 		Action: "task.enqueue", Prompt: prompt, Group: group,
-		Path: command, Args: args, Dir: dir, Ephemeral: closeOnDone,
+		// Absolute for the reason ResolveSpawn spells out, and one more: this spawn
+		// happens LATER, when the scheduler finds no free agent, so a relative path
+		// would be resolved long after whatever made it meaningful had moved on.
+		Path: command, Args: args, Dir: paths.Expand(dir), Ephemeral: closeOnDone,
 	})
 }
 
