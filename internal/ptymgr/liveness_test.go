@@ -115,10 +115,14 @@ func TestManagerLockIsNotHeldAcrossTheCallbacks(t *testing.T) {
 		close(done)
 	})
 
+	// The child exits on its own, so there is deliberately no deferred Stop:
+	// Stop takes m.mu, and on the failure this test exists to catch that lock is
+	// held forever by the deadlocked pump. Cleaning up would then hang the whole
+	// binary and report as a timeout panic blamed on whatever ran last, instead
+	// of as this test failing with its reason.
 	if err := m.StartCmd("p", Spec{Command: "/bin/sh", Args: []string{"-c", "echo hello; exit 0"}}); err != nil {
 		t.Fatalf("StartCmd: %v", err)
 	}
-	defer m.Stop("p")
 
 	select {
 	case <-reentered:
