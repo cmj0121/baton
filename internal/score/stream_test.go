@@ -449,8 +449,8 @@ func TestAReplayThatCannotReadTheLogRefusesToOpen(t *testing.T) {
 	}
 }
 
-// TestAnOversizedEventLogHealsItself is the round's whole point, and the test
-// round 3's TestOversizedEventLogIsRefusedNotRead used to be.
+// TestAnOversizedEventLogHealsItself is the round's whole point, and what round
+// 3's refusal test asked for in reverse: that log is now read, not turned away.
 //
 // A log far past the old read cap opens, the boot compaction below the replay
 // runs, and the file is small again — with every entry's provenance, tier and

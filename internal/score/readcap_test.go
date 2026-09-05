@@ -45,9 +45,10 @@ func sparseFile(t *testing.T, path string, n int64) {
 	}
 }
 
-// TestAnOversizedEventLogIsNoLongerRefusedUnread is round 3's
-// TestOversizedEventLogIsRefusedNotRead, inverted, and the inversion is this
-// round's point. That refusal made the daemon boot instead of being OOM-killed,
+// TestAnOversizedEventLogIsNoLongerRefusedUnread is round 3's refusal test
+// inverted, and the inversion is this round's point. That refusal — an oversized
+// event log failing Open with a reason naming the file — made the daemon boot
+// instead of being OOM-killed,
 // which was right and is kept — cmd/baton's openScore still boots the fleet
 // without a store on any Open failure. What the refusal could NOT do is let the
 // file heal: Open's boot compaction sits below the replay that was failing, so a
