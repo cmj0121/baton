@@ -177,6 +177,33 @@ func TestOpenTrustedRefusesASymlinkInAWritableDirectory(t *testing.T) {
 	mustRefuse(t, link, "not sticky")
 }
 
+// TestOpenTrustedRefusesAnotherUsersFile is the check no temp directory can
+// exercise: a test process cannot create a file it does not own, so the fixture
+// has to be a file the system already provides. /etc/passwd is root-owned and
+// world-readable on every unix, which is exactly the shape that matters — a file
+// this user may READ in full and may not write, yet whose owner can rewrite what
+// baton would execute at any moment.
+//
+// The mode and directory rules both pass it (0644 in a 0755 /etc), so this test
+// fails unless ownership is being asked about on its own.
+func TestOpenTrustedRefusesAnotherUsersFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no uid to compare off unix")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("running as root owns /etc/passwd, so there is no other user to catch")
+	}
+	const other = "/etc/passwd"
+	fi, err := os.Stat(other)
+	if err != nil {
+		t.Skipf("no %s on this host: %v", other, err)
+	}
+	if fi.Mode().Perm()&0o022 != 0 {
+		t.Skipf("%s is writable by group or other here (%04o); the mode rule would catch it first", other, fi.Mode().Perm())
+	}
+	mustRefuse(t, other, "is not owned by uid")
+}
+
 // TestOpenTrustedRefusesADirectory keeps the caller from reaching Lua with a
 // descriptor that cannot be read as a file.
 func TestOpenTrustedRefusesADirectory(t *testing.T) {
