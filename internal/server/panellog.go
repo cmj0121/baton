@@ -294,6 +294,7 @@ func (s *Server) openLogView(cc *clientConn, id string) error {
 // way tail does but leaves you able to stop following and page through what came
 // before — the panel it belongs to is usually still running, so both halves get
 // used. It falls back to `tail -f` on a host with no less.
+//
 // The "--" fences the path into the data position. Both pagers read a leading
 // "-" as an option wherever it sits, and the path is filepath.Join'd onto the
 // configured panel.log-dir — a value baton does not choose. The basename it
