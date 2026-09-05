@@ -16,9 +16,9 @@ import (
 // the flock'd lock files — and a panel runs a third-party binary with the user's
 // full environment.
 //
-// Go opens every file O_CLOEXEC and passes a child only fds 0, 1 and 2 plus
-// Cmd.ExtraFiles (which nothing in this tree sets), so the expectation is that
-// nothing leaks. That is a claim about the runtime rather than about baton, and
+// Go opens every file O_CLOEXEC and passes a child only fds 0, 1 and 2 plus the
+// extra descriptors a caller asks os/exec to hand over -- which nothing in this
+// tree asks for -- so the expectation is that nothing leaks. That is a claim about the runtime rather than about baton, and
 // this asserts it against the real spawn path instead of trusting it: the parent
 // opens a decoy, starts a panel, and the panel reports which descriptors above
 // stderr it can see. Its three fds are the PTY, so anything else is a leak.
