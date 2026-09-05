@@ -187,10 +187,10 @@ func TestSetRingCapResetsToDefault(t *testing.T) {
 
 // TestRingCapCeilingSurvivesTheFirstByte is the ceiling's reason for existing.
 // appendRing compares the ring's length against 2*ringCap, which is NEGATIVE for
-// a ringCap past MaxInt/2 — so the trim fires on the panel's first byte of output
-// and make([]byte, ringCap) panics. `replay-kb: 5000000000000000` in the
-// operator's config is multiplied by 1024 on the way here and lands exactly
-// there, taking the daemon and every panel with it.
+// a ringCap past half the largest int — so the trim fires on the panel's first
+// byte of output and make([]byte, ringCap) panics. `replay-kb: 5000000000000000`
+// in the operator's own config is multiplied by 1024 on the way here and lands
+// exactly there, taking the daemon and every panel with it.
 func TestRingCapCeilingSurvivesTheFirstByte(t *testing.T) {
 	m := New()
 	m.SetRingCap(5_000_000_000_000_000 * 1024)

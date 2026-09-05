@@ -32,18 +32,18 @@ const DefaultRingCap = 256 * 1024
 const minRingCap = 4 * 1024
 
 // maxRingCap ceils it, and the ceiling is not about memory. appendRing compares
-// the ring's length against 2*ringCap, and a ringCap past MaxInt/2 makes that
-// product negative — so the comparison is true on the panel's FIRST byte of
-// output and make([]byte, ringCap) panics with "makeslice: len out of range",
-// killing the daemon and every panel in it. That value arrives from a number in
-// the operator's own config: `replay-kb: 5000000000000000` is multiplied by 1024
-// on the way here.
+// the ring's length against 2*ringCap, and a ringCap past half the largest int
+// makes that product negative — so the comparison is true on the panel's FIRST
+// byte of output and make([]byte, ringCap) panics with "makeslice: len out of
+// range", killing the daemon and every panel in it. That value arrives from a
+// number in the operator's own config: `replay-kb: 5000000000000000` is
+// multiplied by 1024 on the way here.
 //
-// 1 GiB. Four thousand times DefaultRingCap and past any replay buffer anyone has
-// a use for, which is the point — the number exists so that a size cannot become
-// a panic, not to express an opinion about how much scrollback is reasonable. A
-// machine that cannot allocate a gigabyte then fails at allocation, which says
-// what happened.
+// One gibibyte: four thousand times DefaultRingCap, and past any replay buffer
+// anyone has a use for, which is the point — the number exists so that a size
+// cannot become a panic, not to express an opinion about how much scrollback is
+// reasonable. A machine that cannot allocate that much then fails at allocation,
+// which says what happened.
 const maxRingCap = 1 << 30
 
 // clampRingCap fits a requested ring size between the floor and the ceiling.
