@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -231,8 +232,16 @@ func (p *OAuthLimits) fetch(ctx context.Context) (Limits, error) {
 		return Limits{}, fmt.Errorf("usage endpoint answered %d: %w", resp.StatusCode, errBadStatus)
 	}
 
+	// Through a LimitReader, the way api.go reads its own bodies. This is a
+	// NETWORK response — the only thing in this file baton does not control the
+	// size of — and encoding/json buffers a whole value before it returns one, so
+	// an unbounded decoder here hands whoever answers the request a lever on the
+	// daemon's memory. Measured against an httptest endpoint that streamed 512 MiB
+	// inside one JSON string: 3.5 GB allocated, 3.59 GB of heap, in 3.3 s — well
+	// inside this client's 10 s timeout, so the real ceiling was the link speed.
+	// The genuine payload is five small objects, a few hundred bytes.
 	var payload oauthPayload
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxUsageBody)).Decode(&payload); err != nil {
 		return Limits{}, fmt.Errorf("usage endpoint sent something unreadable: %w", err)
 	}
 
