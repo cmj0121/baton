@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -263,7 +264,7 @@ func replaceFile(path string, data []byte) (err error) {
 	if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".usage-limits-*.tmp")
+	f, err := os.CreateTemp(filepath.Dir(path), tempPrefix+"*"+tempSuffix)
 	if err != nil {
 		return err
 	}
@@ -283,7 +284,70 @@ func replaceFile(path string, data []byte) (err error) {
 	if err = os.Chmod(tmp, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err = os.Rename(tmp, path); err != nil {
+		return err
+	}
+	sweepStaleTemps(filepath.Dir(path), time.Now())
+	return nil
+}
+
+// tempPrefix and tempSuffix bracket the name os.CreateTemp issues above, split
+// out so the writer and the sweep below cannot drift apart on what a temporary
+// of this package's looks like.
+const (
+	tempPrefix = ".usage-limits-"
+	tempSuffix = ".tmp"
+)
+
+// staleTempAge is how long a temporary must have sat untouched before a writer
+// will remove it. A sink write is three syscalls on a 200-byte file — the
+// benchmark in replaceFile's doc puts the whole of it at 164-192 µs — so a
+// minute is four orders of magnitude more than a live writer needs, and the
+// gate exists only so a temporary belonging to one of the OTHER panels writing
+// concurrently is never taken out from under its rename.
+//
+// Getting that wrong is cheap in the one direction it can go wrong. Sweeping a
+// live writer's temporary makes its rename fail, and a failed sink write loses
+// a reading that "will be along again in a second" — the loss this file already
+// argues is acceptable, not a new one.
+const staleTempAge = time.Minute
+
+// sweepStaleTemps removes the temporaries a writer killed between os.CreateTemp
+// and the rename left behind. It runs after a successful write, which is a few
+// times a minute for a whole fleet rather than once per render: WriteLimitsIfChanged
+// skips the redundant writes, so the one os.ReadDir this costs is not paid on
+// the status line's hot path.
+//
+// IT IS NEEDED HERE AND NOT IN paths.WriteFileAtomic, which is the reason this
+// is not simply a call to that helper. The helper's temporary is named after its
+// target, so there is exactly one of them and the next write opens it O_TRUNC and
+// reuses it; the debris is self-limiting. os.CreateTemp — which this file needs,
+// because a name derived from the target cannot be shared by a writer running
+// once per panel per render — issues a name that is never handed out twice, so
+// every kill leaves a file no later write will ever touch. Killing the real
+// `baton usage-sink` at randomised moments left one in 15 of 500 runs, and a
+// status line is precisely the process a supervisor kills for being slow.
+//
+// Errors are ignored, for the reason the whole sink ignores them: a temporary
+// that cannot be removed is not worth failing a status line over. REGULAR FILES
+// ONLY — os.Remove takes an empty directory as readily as a file, and nothing
+// this package creates under that name is a directory.
+func sweepStaleTemps(dir string, now time.Time) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasPrefix(name, tempPrefix) || !strings.HasSuffix(name, tempSuffix) {
+			continue
+		}
+		info, ierr := e.Info()
+		if ierr != nil || !info.Mode().IsRegular() || now.Sub(info.ModTime()) < staleTempAge {
+			continue
+		}
+		_ = os.Remove(filepath.Join(dir, name))
+	}
 }
 
 // LimitsProvider fetches the account's rate-limit standing from one source.
