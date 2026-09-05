@@ -13,10 +13,15 @@ import (
 	"github.com/cmj0121/baton/internal/server"
 )
 
-// wireFrameCap is maxCommandBytes as the wire sees it. Restated here rather than
-// exported: the tests below drive the socket the way a peer does, and a peer does
-// not get to read the daemon's constants.
-const wireFrameCap = 1 << 20
+// legitimateFrame is the largest frame these tests claim an honest client sends,
+// written as a figure rather than as maxCommandBytes-minus-something. A test that
+// sizes its input off the constant it is checking moves with the constant and can
+// never catch a cap narrowed to where it bites.
+//
+// A mebibyte less a little: the cockpit's own largest frame is a 4 KiB panel.input
+// chunk, and everything ctl and the MCP tools carry arrived as an argv string the
+// operating system had already bounded well below this.
+const legitimateFrame = 1<<20 - 1024
 
 // rawDial opens a raw control connection and greets, returning the conn and a
 // reader over the server's replies. Raw rather than client.Dial because these
@@ -129,7 +134,7 @@ func TestLargeButLegalCommandFrameIsAccepted(t *testing.T) {
 	// A dispatch at a prompt length that leaves the whole frame a few hundred
 	// bytes short of the cap. It targets no panel, so the daemon answers "error" —
 	// which is the proof the frame was DECODED rather than refused unread.
-	cmd := proto.Command{Action: "panel.dispatch", ID: "no-such-panel", Prompt: strings.Repeat("A", wireFrameCap-1024)}
+	cmd := proto.Command{Action: "panel.dispatch", ID: "no-such-panel", Prompt: strings.Repeat("A", legitimateFrame)}
 	if err := json.NewEncoder(conn).Encode(cmd); err != nil {
 		t.Fatalf("send: %v", err)
 	}

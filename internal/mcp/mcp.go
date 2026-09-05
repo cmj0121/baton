@@ -67,9 +67,19 @@ func (s *Server) Serve(in io.Reader, out io.Writer) error {
 	r := bufio.NewReader(in)
 	enc := json.NewEncoder(out)
 	for {
-		line, err := r.ReadBytes('\n')
-		if trimmed := bytes.TrimSpace(line); len(trimmed) > 0 {
-			if resp, reply := s.handleLine(trimmed); reply {
+		line, over, err := cappedLine(r)
+		switch {
+		case over:
+			// The frame is refused with the same parse error a malformed one gets:
+			// the id lives inside the bytes that were never kept, so there is nothing
+			// to echo, and the client learns its call did not happen. Refusing beats
+			// truncating for the reason the framing exists at all — a half-message
+			// handed to the decoder desynchronises every call after it.
+			if encErr := enc.Encode(oversizedFrameResponse()); encErr != nil {
+				return encErr
+			}
+		case len(bytes.TrimSpace(line)) > 0:
+			if resp, reply := s.handleLine(bytes.TrimSpace(line)); reply {
 				if encErr := enc.Encode(resp); encErr != nil {
 					return encErr
 				}
@@ -81,6 +91,57 @@ func (s *Server) Serve(in io.Reader, out io.Writer) error {
 			}
 			return err
 		}
+	}
+}
+
+// maxFrameBytes caps how many bytes ONE JSON-RPC frame may cost this process.
+//
+// The framing above already isolates a malformed frame from the ones after it.
+// It does not isolate a HUGE one: bufio.Reader.ReadBytes grows until the line
+// ends, so a client that never sends a newline is a client that decides how much
+// memory `baton mcp` holds. Measured: one 256 MiB line took the process to 519
+// MiB of heap, swallowed without a word, and the loop carried on as if nothing
+// had happened. The conductor's whole grip on the fleet is this one process.
+//
+// One mebibyte. baton's MCP tools take panel ids, an agent name, a directory and
+// a prompt, and every one of them ends up in a proto.Command on the control
+// socket, where the daemon's own per-frame cap is the same figure — so a frame
+// larger than this could not have produced a command that landed anyway.
+const maxFrameBytes = 1 << 20
+
+// cappedLine reads the next newline-terminated frame, or reports it as oversized
+// and returns nothing for it, leaving the reader at the head of the next frame.
+//
+// It is a near-twin of internal/usage's reader over Claude Code's transcripts,
+// deliberately rather than by accident: they bound different streams for
+// different reasons and answer an oversized record differently — this one refuses
+// it to the client, that one counts it and reports the under-count — so what they
+// share is ten lines of newline resync and not a policy. A third copy is when
+// this becomes a package, which is the rule internal/scrub already set.
+func cappedLine(r *bufio.Reader) (line []byte, over bool, err error) {
+	for {
+		// ReadSlice rather than ReadBytes: it hands back a view of the reader's own
+		// buffer, so a frame being discarded is never copied anywhere.
+		frag, ferr := r.ReadSlice('\n')
+		if !over && len(line)+len(frag) > maxFrameBytes {
+			over, line = true, nil // release what was held before giving up on it
+		}
+		if !over {
+			line = append(line, frag...)
+		}
+		if ferr != bufio.ErrBufferFull {
+			return line, over, ferr
+		}
+	}
+}
+
+// oversizedFrameResponse is the answer to a frame past maxFrameBytes: a parse
+// error with a null id, since the id was in the bytes that were dropped.
+func oversizedFrameResponse() rpcResponse {
+	return rpcResponse{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage("null"),
+		Error:   &rpcError{Code: -32700, Message: fmt.Sprintf("frame is larger than the %d-byte limit", maxFrameBytes)},
 	}
 }
 
