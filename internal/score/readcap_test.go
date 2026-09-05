@@ -8,13 +8,18 @@ import (
 	"testing"
 )
 
-// This file is the READ bound's. compactAtBytes bounds how large this package
-// lets the event log GROW; nothing bounded how large a file it was willing to
-// READ, and #56's own note says where that ends — a 1.217 GB log OOM-killed
-// inside Open, "the one boot failure that cannot heal, because the process that
-// dies is the process that would have shrunk the file". Reproduced on this branch
-// a quarter of the way there: a 256 MiB log took Open to 607 MiB of live heap and
-// 1161 MiB allocated, and returned no error at all.
+// This file is the READ bound's, and since the replay began streaming that bound
+// covers score.md ALONE. #56's own note says where an unbounded whole-file read
+// ends — a 1.217 GB log OOM-killed inside Open, "the one boot failure that cannot
+// heal, because the process that dies is the process that would have shrunk the
+// file" — and the cap this file was written for stopped that kill by refusing the
+// read. What it could not stop was the refusal itself becoming permanent.
+//
+// The event log is no longer read whole, so there is nothing left for a cap on it
+// to protect; see maxScoreFileBytes for why that half was removed rather than
+// raised, and stream_test.go for the heal it was standing in the way of. score.md
+// keeps the cap for the reasons it always had: it is held whole, it is re-read on
+// every submission, and it is the one of the two a person edits by hand.
 
 // legitimateStoreFile is the largest file these tests claim a healthy store has,
 // written as a figure rather than as maxScoreFileBytes-minus-something so that a
@@ -40,27 +45,31 @@ func sparseFile(t *testing.T, path string, n int64) {
 	}
 }
 
-// TestOversizedEventLogIsRefusedNotRead: an event log past the cap fails Open
-// with a reason naming the file, rather than being read into memory.
+// TestAnOversizedEventLogIsNoLongerRefusedUnread is round 3's
+// TestOversizedEventLogIsRefusedNotRead, inverted, and the inversion is this
+// round's point. That refusal made the daemon boot instead of being OOM-killed,
+// which was right and is kept — cmd/baton's openScore still boots the fleet
+// without a store on any Open failure. What the refusal could NOT do is let the
+// file heal: Open's boot compaction sits below the replay that was failing, so a
+// log a byte past the cap was refused by every later start with the file
+// untouched.
 //
-// Failing Open is the RIGHT outcome and not a compromise: cmd/baton's openScore
-// already boots the daemon without a store when Open fails and carries the reason
-// to score.status, score.submit and the boot log (#38's lifecycle — corrupt score
-// files never block the fleet). So the refusal turns an OOM-kill on every start
-// into a fleet that runs and says which file is in the way.
-func TestOversizedEventLogIsRefusedNotRead(t *testing.T) {
+// This is the narrow claim — a file past the old cap is READ rather than refused.
+// TestAnOversizedEventLogHealsItself is the wide one: read, compacted, and small
+// again by the next boot.
+func TestAnOversizedEventLogIsNoLongerRefusedUnread(t *testing.T) {
 	dir := t.TempDir()
 	sparseFile(t, filepath.Join(dir, "score-events.jsonl"), maxScoreFileBytes+1)
 
 	s, err := Open(dir, Policy{})
-	if s != nil {
-		s.Close()
+	if err != nil {
+		t.Fatalf("an event log past the old cap must open, got %v", err)
 	}
-	if !errors.Is(err, ErrFileTooLarge) {
-		t.Fatalf("Open err = %v, want ErrFileTooLarge", err)
-	}
-	if !strings.Contains(err.Error(), "score-events.jsonl") {
-		t.Errorf("the refusal should name the file, got %q", err)
+	defer s.Close()
+	// NULs are not records, so this file is damage and the store it yields is
+	// empty. What matters is that it is OPEN, and that the next submission lands.
+	if _, _, err := s.Submit("the fleet still remembers", Provenance{Source: SourceUser}); err != nil {
+		t.Fatalf("submit after opening over an oversized log: %v", err)
 	}
 }
 
