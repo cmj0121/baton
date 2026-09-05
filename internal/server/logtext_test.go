@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,16 +17,44 @@ import (
 // or an opening clause, which is what a reader greps the log for.
 const legitimateLogQuote = 100
 
-// TestALogLineIsNotAnAgentsDiskBudget drives a fleet search whose term is as long
-// as one command frame allows and checks the log line it leaves stays a log line.
+// TestALogLineIsNotAnAgentsDiskBudget drives a vetoed brief as long as one
+// command frame allows and checks the log line it leaves stays a log line.
 //
-// fleet.search logs at INFO, which is the DEFAULT level, and it quoted the term
-// verbatim. So the size of a line in the operator's log file was a number an agent
-// chose — and rotation at 8 MiB means it also chose how often the file churns. The
-// frame cap took that from unbounded to a megabyte a line, which is the difference
-// between losing a disk and losing a log; this takes it the rest of the way,
-// because a megabyte in a log file is not evidence of anything.
+// The dispatch veto is the site that still needs this. A brief has no rune cap of
+// its own and should not have one — a task brief is genuinely prose — so what the
+// frame cap leaves is a megabyte per WARN line, against a log that rotates at
+// 8 MiB. Eight refused briefs would churn a rotation, and an agent that can get
+// its own briefs refused chooses how often that happens.
 func TestALogLineIsNotAnAgentsDiskBudget(t *testing.T) {
+	st, _ := scoreStore(t)
+	s, clk, delivered := busyScoreServer(st)
+	s.onFilterTask = func(TaskBrief) (TaskBrief, bool) { return TaskBrief{}, false }
+
+	brief := strings.Repeat("Z", maxCommandBytes-1024)
+	dispatchTo(t, s, conn(""), brief)
+
+	logged := captureLog(t)
+	settle(s, clk) // the tick that binds the parked brief, and refuses it
+
+	if len(*delivered) != 0 {
+		t.Fatalf("a vetoed delivery wrote %d bytes", len(*delivered))
+	}
+	got := logged()
+	if !strings.Contains(got, "task.pre hook refused") {
+		t.Fatalf("the veto was not logged at all:\n%s", got[:min(len(got), 500)])
+	}
+	// Generous: the line carries its level, timestamp, message, task id and panel
+	// too. The point is that it is a log line rather than a megabyte of one.
+	if len(got) > 4096 {
+		t.Fatalf("one veto wrote %d bytes of log for a %d-byte brief", len(got), len(brief))
+	}
+}
+
+// TestAnOversizedSearchTermIsRefused: the term is compiled, and compilation is
+// not linear in what it is given — a 1 MiB term of "(a)(a)…" takes 193 ms and
+// allocates 350 MiB before a single panel's ring is touched. maxHitsPerPanel and
+// maxHitsTotal bound the REPLY and none of that.
+func TestAnOversizedSearchTermIsRefused(t *testing.T) {
 	dir, err := os.MkdirTemp("", "bt")
 	if err != nil {
 		t.Fatalf("tempdir: %v", err)
@@ -38,23 +67,40 @@ func TestALogLineIsNotAnAgentsDiskBudget(t *testing.T) {
 	t.Cleanup(func() { _ = ln.Close() })
 	s := New(ln)
 
-	logged := captureLog(t)
 	cc := &clientConn{out: make(chan proto.ServerMsg, 4)}
-	// Just under maxCommandBytes: the largest term the socket will carry at all.
-	if err := s.sendSearch(cc, strings.Repeat("Z", maxCommandBytes-1024)); err != nil {
-		t.Fatalf("sendSearch: %v", err)
+	err = s.sendSearch(cc, strings.Repeat("(a)", (maxCommandBytes-1024)/3))
+	if err == nil {
+		t.Fatal("a megabyte of regexp was compiled rather than refused")
+	}
+	if !strings.Contains(err.Error(), "limit") {
+		t.Errorf("the refusal should say why, got %q", err)
+	}
+}
+
+// TestARealSearchTermIsStillCompiled is the other half: an alternation of a
+// hundred branches is a term somebody could paste, and it has to run.
+func TestARealSearchTermIsStillCompiled(t *testing.T) {
+	dir, err := os.MkdirTemp("", "bt")
+	if err != nil {
+		t.Fatalf("tempdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	ln, err := net.Listen("unix", filepath.Join(dir, "s.sock"))
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	s := New(ln)
+
+	branches := make([]string, 100)
+	for i := range branches {
+		branches[i] = fmt.Sprintf("needl%03d", i)
+	}
+	cc := &clientConn{out: make(chan proto.ServerMsg, 4)}
+	if err := s.sendSearch(cc, "("+strings.Join(branches, "|")+")"); err != nil {
+		t.Fatalf("a hundred-branch alternation should search, got %v", err)
 	}
 	<-cc.out
-
-	got := logged()
-	if !strings.Contains(got, "fleet search") {
-		t.Fatalf("the search was not logged at all:\n%s", got[:min(len(got), 500)])
-	}
-	// Generous: the line carries its level, timestamp, message and hit count too.
-	// The point is that it is a log line rather than a megabyte of one.
-	if len(got) > 4096 {
-		t.Fatalf("one search wrote %d bytes of log for a %d-byte term", len(got), maxCommandBytes-1024)
-	}
 }
 
 // TestALogQuoteKeepsWhatAReaderCameFor is the other half: the term still has to

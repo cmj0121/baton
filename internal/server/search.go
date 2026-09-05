@@ -32,6 +32,31 @@ const (
 	maxHitsTotal    = 1000
 )
 
+// maxQueryRunes caps the term itself, which the two caps above do not: they bound
+// the REPLY, and a search's expensive half is over before a single hit exists.
+//
+// The term is compiled, and regexp compilation is not linear in what it is given.
+// Measured on this daemon's own compileFleetSearch call: a 1 MiB term of "(a)(a)…"
+// takes 193 ms and allocates 350 MiB, and 64 KiB of "a{100}" allocates 286 MiB in
+// 91 ms — before any panel's ring has been touched. That is a third of a gigabyte
+// per search, at whatever rate a peer cares to ask, and the frame cap does not
+// help because a megabyte of frame is exactly what buys it.
+//
+// 1024 runes. The term is matched line by line against terminal output and is
+// typed into a single-row search box, so this is already several times the widest
+// terminal row — and it holds an alternation of a hundred eight-character
+// branches, which is past anything a person types at a search prompt and into
+// what they would have to paste. Compilation at that size is microseconds and
+// kilobytes, by the same measurement above scaled down a thousandfold.
+//
+// It also puts compileFleetSearch's fallback out of reach of its own failure: that
+// path calls MustCompile on regexp.QuoteMeta(query), which at most doubles a
+// 1024-rune term, and a literal that small cannot be the "expression too large"
+// the quantifier shape reaches at a megabyte. A panic in the command loop is the
+// daemon, so the reachability mattered even though the panic itself is not this
+// round's to fix.
+const maxQueryRunes = 1024
+
 // sendSearch scans every panel's retained output for query and replies "search"
 // with the matching lines. An empty query is an error (nothing to match); a query
 // that is not a valid regexp falls back to a literal match of the raw text, mirroring
@@ -42,6 +67,9 @@ func (s *Server) sendSearch(cc *clientConn, query string) error {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return fmt.Errorf("empty search term")
+	}
+	if n := len([]rune(query)); n > maxQueryRunes {
+		return fmt.Errorf("the search term is %d runes long, and the limit is %d", n, maxQueryRunes)
 	}
 	re := compileFleetSearch(query)
 
