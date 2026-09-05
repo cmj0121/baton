@@ -5330,7 +5330,13 @@ func (s *Server) sendDiff(cc *clientConn, targetID string) error {
 	}
 	dir := s.targetDir(targetID, spec.Spec)
 	if !gitdiff.IsWorkTree(dir) {
-		return fmt.Errorf("not a git repository: %s", dir)
+		// %q, because this reaches a human's terminal and dir is the panel's LIVE
+		// cwd — read from the OSC 7 report the panel's own output emits, whose
+		// payload url.Parse percent-decodes, so an agent can put a real ESC in it
+		// without touching the filesystem. Quoting keeps the path exact (which is
+		// what an error about a path owes the reader) while rendering the ESC as
+		// four printable characters.
+		return fmt.Errorf("not a git repository: %q", dir)
 	}
 	if !gitdiff.HasChanges(dir) {
 		return fmt.Errorf("no uncommitted changes")
@@ -5554,7 +5560,7 @@ func (s *Server) worktreeSpawn(repo, branch string, spec spawnSpec) error {
 		return fmt.Errorf("worktree: an agent command is required")
 	}
 	if !gitdiff.IsWorkTree(repo) {
-		return fmt.Errorf("not a git repository: %s", repo)
+		return fmt.Errorf("not a git repository: %q", repo)
 	}
 
 	path := worktreePath(base, repo, branch)
@@ -5567,7 +5573,7 @@ func (s *Server) worktreeSpawn(repo, branch string, spec spawnSpec) error {
 	// as a work item immediately.
 	id, err := s.createPanel(proto.KindAgent, spec.Command, spec.Args, path, spec.Profile, false, false)
 	if err != nil {
-		return fmt.Errorf("worktree created at %s, but the agent did not start: %w", path, err)
+		return fmt.Errorf("worktree created at %q, but the agent did not start: %w", path, err)
 	}
 	if err := s.groupPanels([]string{id}, branch); err != nil {
 		log.Warn().Str("panel", id).Str("group", branch).Err(err).Msg("worktree agent spawned but not grouped")
