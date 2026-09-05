@@ -262,6 +262,13 @@ func TestAnOverLongRecordIsTornAndTheScanCarriesOn(t *testing.T) {
 		huge string
 	}{
 		{"a run of NULs with no newline in it", strings.Repeat("\x00", maxRecordBytes+1)},
+		// One byte over is decided on the LAST read of the line, where the whole of
+		// it is still in hand. These two are decided in the middle of it, which is
+		// the draining path: the bytes already held are dropped, every later read of
+		// the same line is thrown away, and the flag has to be cleared at the
+		// newline or every record after the damage is counted torn too.
+		{"a run of NULs many times the cap", strings.Repeat("\x00", 3*maxRecordBytes)},
+		{"garbage many times the cap", strings.Repeat("x", 3*maxRecordBytes+7)},
 		{"a syntactically valid record past the cap", `{"schema":1,"event":"submitted","id":"cccccccc","text":"` + strings.Repeat("x", maxRecordBytes) + `"}`},
 		{"garbage exactly one byte over", strings.Repeat("x", maxRecordBytes+1)},
 	} {
@@ -299,6 +306,54 @@ func TestAnOverLongFinalRecordIsTornExactlyOnce(t *testing.T) {
 	}
 	if !equalStrings(got, []string{"aaaaaaaa"}) {
 		t.Errorf("records = %v, want the intact record before the damage", got)
+	}
+}
+
+// TestTheRecordCapCountsTheRecordAndNotItsSeparator is where the newline strip
+// is load-bearing, and it is the only place it is: json.Unmarshal tolerates a
+// trailing newline and TrimSpace already handles a blank line, so every other
+// line decodes the same whether the separator was taken off or not. The cap does
+// not. A record of exactly maxRecordBytes is a record the buffered split accepted
+// — bytes.Split never handed the separator to anyone — and counting the '\n'
+// against the cap would make this one line torn on a boot and kept on a
+// compaction's tail, which is the disagreement scanRecords exists to prevent.
+func TestTheRecordCapCountsTheRecordAndNotItsSeparator(t *testing.T) {
+	// A valid record padded to exactly the cap, to the byte. The padding is plain
+	// ASCII, so the marshal grows one byte per rune and the correction converges
+	// on the first pass.
+	atCap := []byte(nil)
+	for pad := maxRecordBytes; ; {
+		rec, err := json.Marshal(event{Schema: 1, Event: EventSubmitted, Id: "aaaaaaaa", Text: strings.Repeat("x", pad)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rec) == maxRecordBytes {
+			atCap = rec
+			break
+		}
+		if pad += maxRecordBytes - len(rec); pad <= 0 {
+			t.Fatalf("cannot build a record of exactly %d bytes", maxRecordBytes)
+		}
+	}
+
+	var got []string
+	torn, err := scanRecordsFrom(bytes.NewReader(append(append([]byte{}, atCap...), '\n')), func(ev *event) { got = append(got, ev.Id) })
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if torn != 0 || !equalStrings(got, []string{"aaaaaaaa"}) {
+		t.Errorf("a record of exactly maxRecordBytes was torn=%d records=%v; the separator must not count against the cap", torn, got)
+	}
+
+	// And one byte more IS over, so the boundary is where it says it is.
+	over := append(append([]byte{}, atCap...), 'x', '\n')
+	got = nil
+	torn, err = scanRecordsFrom(bytes.NewReader(over), func(ev *event) { got = append(got, ev.Id) })
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if torn != 1 || len(got) != 0 {
+		t.Errorf("a record one byte past the cap was torn=%d records=%v, want torn=1 and nothing decoded", torn, got)
 	}
 }
 
@@ -360,6 +415,38 @@ func (f *failAfter) Read(p []byte) (int, error) {
 	n := copy(p, f.data[f.n:min(f.at, len(f.data))])
 	f.n += n
 	return n, nil
+}
+
+// TestAReplayThatCannotReadTheLogRefusesToOpen is the guard that keeps the
+// streaming read from becoming a silent truncation, and it is the one place this
+// change could have LOST state rather than merely refused it.
+//
+// A read that dies half way through a log leaves the store holding a prefix of
+// its own history. If replay swallowed that error, Open would return a store
+// missing entries, and the boot compaction below it would then rewrite the log
+// from that prefix — turning a transient read failure into permanent deletion of
+// everything after it. The whole-file read this replaced returned the error, and
+// so must this one: the store is discarded, cmd/baton boots the fleet without its
+// memory and says why, and the file is untouched for the next start to read.
+//
+// A directory under the log's name is the reachable shape: os.Open succeeds and
+// the first read fails, which is what a bad restore or an operator's mkdir leaves.
+func TestAReplayThatCannotReadTheLogRefusesToOpen(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, scoreEvents), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(dir, Policy{})
+	if s != nil {
+		s.Close()
+	}
+	if err == nil {
+		t.Fatal("a log that cannot be read must fail Open, not open a store missing everything it could not read")
+	}
+	if !strings.Contains(err.Error(), scoreEvents) {
+		t.Errorf("the refusal should name the file, got %q", err)
+	}
 }
 
 // TestAnOversizedEventLogHealsItself is the round's whole point, and the test
