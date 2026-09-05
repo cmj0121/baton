@@ -49,9 +49,15 @@ func TestKeychainStallDoesNotStrandInflight(t *testing.T) {
 	})
 	p.token = oauthTokenNoFile(t)
 
-	if _, ok := p.Limits(context.Background()); ok {
-		t.Fatal("Limits reported a reading when the token lookup stalled out")
-	}
+	// Bounded, because on the failure this test exists to catch, Limits does not
+	// return at all — and a test that hangs reports as a timeout panic blamed on
+	// whatever ran last, rather than as this one failing with its reason.
+	withinFive(t, "Limits with a stalled token lookup", func() {
+		if _, ok := p.Limits(context.Background()); ok {
+			t.Error("Limits reported a reading when the token lookup stalled out")
+		}
+	})
+
 	p.mu.Lock()
 	stranded := p.inflight
 	p.mu.Unlock()
@@ -67,6 +73,22 @@ func TestKeychainStallDoesNotStrandInflight(t *testing.T) {
 	p.token = func() (string, error) { return "test-token", nil }
 	if _, ok := p.Limits(context.Background()); !ok {
 		t.Fatal("the provider never recovered from a stalled token lookup")
+	}
+}
+
+// withinFive fails if fn has not returned by then, so an unbounded call reports
+// as a failure with a reason instead of hanging the suite.
+func withinFive(t *testing.T, what string, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s did not return — the keychain lookup is unbounded", what)
 	}
 }
 
