@@ -28,6 +28,7 @@ import (
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/scrub"
 	"github.com/cmj0121/baton/internal/vtirm"
 )
 
@@ -3755,7 +3756,15 @@ const (
 // behind an ellipsis. The tail is kept rather than the head because the tail is
 // what distinguishes one panel from another — every worktree under one repo
 // shares a prefix and differs at the end.
+//
+// It scrubs first, because a directory name is text an agent can choose: `mkdir
+// $'\e[2J'` and cd into it, and the panel's Cwd — read off the live process, not
+// off what it was launched with — carries the escape onto the dashboard. This is
+// the only place a Cwd or a log path is rendered, which is why the filter sits
+// here rather than at the snapshot: mergeFleet leaves Cwd exact because the
+// cockpit sends it back as a spawn directory.
 func shortPath(dir string, width int) string {
+	dir = scrub.Text(dir)
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		if dir == home {
 			return "~"
