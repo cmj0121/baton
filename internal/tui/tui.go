@@ -1958,23 +1958,25 @@ func deleteLastWord(s string) string {
 // It returns the (possibly unchanged) text and a hint to show under the field.
 func completePath(in string) (string, string) {
 	if in == "~" {
-		in = "~/" // a bare ~ is the home dir; normalise so base stays a suffix of in
-	}
-	expanded := in
-	if home, err := os.UserHomeDir(); err == nil {
-		if strings.HasPrefix(in, "~/") {
-			expanded = filepath.Join(home, in[2:])
-			// filepath.Join strips a trailing separator; restore it so the split
-			// below yields the same empty base it would for the typed text. Without
-			// this, base came from the home-expanded path and was not a suffix of in,
-			// so `in[:len(in)-len(base)]` went negative and panicked on "~/" + Tab.
-			if strings.HasSuffix(in, "/") && !strings.HasSuffix(expanded, string(os.PathSeparator)) {
-				expanded += string(os.PathSeparator)
-			}
-		}
+		in = "~/" // a bare ~ is the home dir; normalise so the split below yields an empty base
 	}
 
-	dir, base := filepath.Split(expanded)
+	// Split the TYPED text, and expand only the directory half. filepath.Split
+	// guarantees dir+base == in, so base is a suffix of in by construction and the
+	// prefix re-attached below is a real prefix of it.
+	//
+	// Splitting the ~-EXPANDED path instead is what this used to do, and it is not
+	// safe: filepath.Join CLEANS, so a typed "." or ".." segment collapses and base
+	// becomes a segment the typed text never held. "~/." expands to the home
+	// directory itself, whose base is the username, and `in[:len(in)-len(base)]`
+	// goes negative by the length of the username — Tab in any path overlay, on a
+	// path any shell completes. The trailing-separator restore that used to sit
+	// here closed one instance of that ("~/" + Tab) rather than the invariant.
+	prefix, base := filepath.Split(in)
+	dir := prefix
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(dir, "~/") {
+		dir = filepath.Join(home, dir[2:])
+	}
 	if dir == "" {
 		dir = "."
 	}
@@ -1993,9 +1995,6 @@ func completePath(in string) (string, string) {
 		}
 		names = append(names, name)
 	}
-	// The last segment is byte-identical in `in` and `expanded` (only the leading
-	// ~ expands), so its length locates the typed prefix to re-attach.
-	prefix := in[:len(in)-len(base)]
 	switch len(names) {
 	case 0:
 		return in, "no match"

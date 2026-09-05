@@ -50,6 +50,12 @@ func TestCompletePath(t *testing.T) {
 	if _, hint := completePath(filepath.Join(dir, "nope", "x")); hint != "no such directory" {
 		t.Errorf("a bad directory should be reported, hint %q", hint)
 	}
+
+	// A dot segment is kept verbatim rather than cleaned away: the completion
+	// re-attaches the text the human typed, not a normalised rewrite of it.
+	if got, _ := completePath(dir + "/./be"); got != dir+"/./beta.txt" {
+		t.Errorf("a dot segment should survive the completion, got %q", got)
+	}
 }
 
 // TestCompletePathTilde guards the home-relative inputs that used to panic:
@@ -63,6 +69,23 @@ func TestCompletePathTilde(t *testing.T) {
 		t.Skip("no home directory to complete against")
 	}
 	for _, in := range []string{"~", "~/"} {
+		got, _ := completePath(in) // must not panic
+		if !strings.HasPrefix(got, "~/") {
+			t.Errorf("completePath(%q) = %q, want a ~/-prefixed result", in, got)
+		}
+	}
+}
+
+// TestCompletePathDotSegments is the same bug the trailing-slash restore above
+// only half closed. filepath.Join CLEANS, so a typed "." or ".." segment collapses
+// and the expanded base is a segment the typed text never held: "~/." expands to
+// the home directory, whose base is the username, and `in[:len(in)-len(base)]` is
+// then negative by the length of the username. Tab in any path overlay reaches it.
+func TestCompletePathDotSegments(t *testing.T) {
+	if home, err := os.UserHomeDir(); err != nil || home == "" {
+		t.Skip("no home directory to complete against")
+	}
+	for _, in := range []string{"~/.", "~/..", "~/a/..", "~/./", "~/../"} {
 		got, _ := completePath(in) // must not panic
 		if !strings.HasPrefix(got, "~/") {
 			t.Errorf("completePath(%q) = %q, want a ~/-prefixed result", in, got)
