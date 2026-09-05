@@ -2325,6 +2325,37 @@ func (s *Server) handle(conn net.Conn) {
 			_ = conn.SetReadDeadline(time.Time{}) // idle command loop has no read deadline
 			first = false
 		}
+		// There is deliberately NO recover() around this call, and the reason is
+		// specific to this daemon rather than a general position on recover.
+		//
+		// The case for one is real: Go does not confine a panic to the goroutine
+		// that raised it, so one malformed command from one client would otherwise
+		// end the process and every panel in the fleet with it — fifty agents lost
+		// to one peer's bad arithmetic. The cockpit makes exactly that trade twice,
+		// in writeEmu and View, and it is right to: both abandon work that owns no
+		// shared state (an emulator's own buffer; a pure render that mutated
+		// nothing), so the next frame reconstructs and the blast radius really is
+		// one panel.
+		//
+		// Neither half of that holds here. Command handling mutates the whole
+		// server under one lock, and of the 121 s.mu critical sections in this
+		// package only 43 release with a defer — the other 101 unlock calls are
+		// manual, and a panic unwinding past one SKIPS it. Measured, not
+		// reasoned: with a recover here and a panic injected inside sendSearch's
+		// manual section, the daemon stays up and every goroutine that needs s.mu
+		// stops forever — the monitor tick, the heartbeat, the next command, the
+		// next client's handshake, and Shutdown itself, which then cannot kill the
+		// panels it owns.
+		//
+		// So the choice is not "one panel or fifty". It is "a process that dies and
+		// is restarted" against "a process that is up, holds every panel's children
+		// alive, answers nothing, and cannot be stopped except with SIGKILL" — and
+		// which no supervisor will notice, because the pid is still there. Dying is
+		// the better failure, and it is loud.
+		//
+		// What earns a recover here is not a recover: it is that a panic cannot be
+		// reached from the wire. That is what TestTheCommandLoopSurvivesWhatAPeerCanSay
+		// asserts, and it is falsifiable in a way a recover never is.
 		s.onCommand(cc, cmd)
 	}
 }
