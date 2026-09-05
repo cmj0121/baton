@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -1336,6 +1337,71 @@ type Store struct {
 
 // errDisabled is returned by mutations on the disabled (nil) store.
 var errDisabled = errors.New("score is disabled")
+
+// ErrFileTooLarge marks a store file too big to read into memory. Exported for
+// the same reason ErrSubmissionText is: it is the operator's problem, it names
+// a file and a remedy, and it must not be confused with a store that is merely
+// broken.
+var ErrFileTooLarge = errors.New("score: file is too large to read")
+
+// maxScoreFileBytes caps what either of the store's files may weigh before it is
+// refused unread.
+//
+// It is the missing half of compactAtBytes. That constant bounds how large this
+// package lets the event log GROW; nothing bounded how large a log it is willing
+// to READ, and the two are not the same file in the same state. compactAtBytes'
+// own derivation names the failure exactly — "#56 measured where that ends: a
+// 1.217 GB log peaked at 2373 MB and was OOM-killed inside Open on a box that
+// could not spare it, which is the one boot failure that cannot heal, because
+// the process that dies is the process that would have shrunk the file. Every
+// later start repeats it." Reproduced on this branch at a quarter of that size:
+// a 256 MiB log took Open to 607 MiB of live heap and 1161 MiB allocated.
+//
+// A stat-shaped refusal is what makes that failure heal. cmd/baton's openScore
+// already boots the daemon WITHOUT a store when Open fails and carries the
+// reason to all three score surfaces (#38's lifecycle: corrupt score files never
+// block the fleet), so refusing the read turns an OOM-kill on every start into a
+// fleet that runs and says which file is in the way.
+//
+// SIXTY-FOUR MEBIBYTES, derived rather than picked. compactAtBytes' own comment
+// states the log's steady-state ceiling as two of itself added together — 16 MiB
+// — so anything at or below that would fire on a healthy store. This is four
+// times that ceiling, which at the measured 3 MB of transient heap per megabyte
+// of log costs about 192 MB at the very limit: eleven times the daemon's 17.8 MB
+// baseline, survivable on any machine that can run a fleet, and an eighth of what
+// #56 was killed at. In records it is around 340,000 distinct entries' worth of
+// compacted log, against a working set #37 calls a handful — so the store that
+// meets it is one nothing in this design produces.
+//
+// It bounds score.md by the same figure and needs no separate argument for it:
+// the markdown holds one line per LIVE entry where the log holds every event ever
+// recorded about one, so a store whose log fits is a store whose markdown fits.
+// It is read far more often than the log — every submission reconciles — which
+// only makes the cap matter more, not differently.
+const maxScoreFileBytes = 64 << 20
+
+// readScoreFile reads one of the store's files whole, refusing one past
+// maxScoreFileBytes without ever holding it.
+//
+// The cap is applied to the READ and not to a stat, so a file that grows between
+// the two cannot walk through it. The extra byte is what reveals a file that ran
+// past the cap without loading its tail, which is internal/gitdiff's trick for
+// the same problem.
+func readScoreFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	data, err := io.ReadAll(io.LimitReader(f, maxScoreFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxScoreFileBytes {
+		return nil, fmt.Errorf("%w: %s is over %d bytes", ErrFileTooLarge, path, maxScoreFileBytes)
+	}
+	return data, nil
+}
 
 // ErrSubmissionText marks the two refusals Submit makes at its own boundary,
 // BEFORE the store touches the disk: text that sanitised away to nothing, and
@@ -2793,7 +2859,7 @@ func (s *Store) lowerLocked(i int) error {
 // an error for a state the caller has just ruled out would be a refusal nobody
 // could act on.
 func (s *Store) replaceMDLineLocked(id, repl string) error {
-	data, err := os.ReadFile(s.mdPath)
+	data, err := readScoreFile(s.mdPath)
 	if err != nil {
 		return err
 	}
@@ -3321,7 +3387,7 @@ func scanRecords(data []byte, note func(ev *event)) (torn int) {
 }
 
 func (s *Store) replayLocked() error {
-	data, err := os.ReadFile(s.eventsPath)
+	data, err := readScoreFile(s.eventsPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -4126,7 +4192,7 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 
 	var lines []string
 	if exists {
-		data, rerr := os.ReadFile(s.mdPath)
+		data, rerr := readScoreFile(s.mdPath)
 		switch {
 		case rerr == nil:
 			lines = strings.Split(string(data), "\n")
