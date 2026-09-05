@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -233,4 +234,66 @@ func TestCaptureNotARepo(t *testing.T) {
 	if _, err := Capture(OpStatus, t.TempDir(), "", ""); err == nil {
 		t.Fatal("Capture outside a repo should error")
 	}
+}
+
+// TestCaptureBoundsGitsOutput pins the read cap.
+//
+// A captured op's whole output is held in memory and then sent to the cockpit as
+// one gitout message, so whatever git prints becomes a socket payload. `git
+// status` is the one that can run away: it collapses an untracked DIRECTORY to a
+// single line, but lists root-level untracked files one per line — 60,000 of
+// them measured at 3 MB, and it scales linearly with no ceiling of its own. That
+// is an ordinary agent accident (a build that sprayed files beside the source),
+// not an attack, which is exactly why the daemon should not have to hold it.
+func TestCaptureBoundsGitsOutput(t *testing.T) {
+	dir := initRepo(t)
+	// Long names rather than many files: git prints one line per ROOT-level
+	// untracked file, so ~110 bytes each clears maxCaptureBytes in 3,000 writes
+	// instead of 5,000-odd. Untracked files must sit at the root — git collapses a
+	// directory to a single line, which is why this is bounded in practice at all.
+	pad := strings.Repeat("x", 80)
+	for i := range 3000 {
+		name := fmt.Sprintf("untracked_%s_%06d.txt", pad, i)
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	res, err := Capture(OpStatus, dir, "", "")
+	if err != nil {
+		t.Fatalf("Capture: %v", err)
+	}
+	if len(res.Output) > maxCaptureBytes+capTruncationSlack {
+		t.Fatalf("Capture held %d bytes; want it bounded at %d", len(res.Output), maxCaptureBytes)
+	}
+	if !strings.Contains(res.Output, "truncated") {
+		t.Fatalf("a truncated capture must say so; got the last 120 bytes as %q", tailOf(res.Output, 120))
+	}
+}
+
+// TestCaptureKeepsAShortOutputWhole is the other side of the cap: an ordinary
+// status must arrive untouched and unmarked.
+func TestCaptureKeepsAShortOutputWhole(t *testing.T) {
+	dir := initRepo(t)
+	dirty(t, dir)
+
+	res, err := Capture(OpStatus, dir, "", "")
+	if err != nil {
+		t.Fatalf("Capture: %v", err)
+	}
+	if strings.Contains(res.Output, "truncated") {
+		t.Fatalf("a short status must not be marked truncated: %q", res.Output)
+	}
+	// The filename, not git's prose: git's messages are localised and this suite
+	// runs under whatever locale the developer has.
+	if !strings.Contains(res.Output, "new.txt") {
+		t.Fatalf("an uncapped status should still name the untracked file: %q", res.Output)
+	}
+}
+
+func tailOf(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }
