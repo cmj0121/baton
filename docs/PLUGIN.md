@@ -355,9 +355,37 @@ the last word. Both feed the same reload path, so `C-t R` re-reads config _and_ 
 ## Trust
 
 The plugin file is **trusted code you wrote**, like a shell rc or a Neovim `init.lua`. It runs with the daemon's full
-privileges and (by default) the full Lua standard library — that is the point of "control almost everything." It lives at
-a private path (`0600`, under `$HOME/.baton`). Baton does not sandbox it. A future opt-in restricted mode (no `os`/`io`,
-no network) is possible if there is demand, but the default is full power.
+privileges and (by default) the full Lua standard library — that is the point of "control almost everything." Baton does
+not sandbox it. A future opt-in restricted mode (no `os`/`io`, no network) is possible if there is demand, but the
+default is full power.
+
+Because the file is trusted that completely, baton checks that it is really yours before running it — on the first load
+and again on **every** reload, so a file that was sound at boot is refused the moment it stops being. It asks one
+question: could somebody **other than you** have decided what runs? A plugin is refused when
+
+- it is **writable by group or other** (`0666`, `0664`, …),
+- it is **owned by another user**, or
+- it sits in a **directory writable by group or other** without the sticky bit — there, your file's own `0600` is
+  decoration, because anyone who may unlink it may put their own in its place. A shared `/tmp` is sticky and therefore
+  fine.
+
+Two things it deliberately does **not** do. It does not mind a file others can **read**: `0644` is what a plugin checked
+out of a dotfiles repository arrives as, and readable is not writable. And it follows a **symlink** rather than refusing
+it, since pointing `~/.baton/plug-in.lua` at a repository is the ordinary way to keep one — both ends are checked, the
+link's own directory and the target's file and directory.
+
+A refusal is **loud but not fatal**. The daemon keeps running (a reload happens while your agents are live, and losing
+the fleet over a mode bit would be the worse trade), but unlike a Lua syntax error it is logged at error level _and_
+raises a notice in every attached cockpit. A syntax error is your own file failing one keystroke after you caused it; a
+plugin that worked for months and stopped when a mode bit moved looks exactly like a plugin that is working, so it says
+so where you will see it. To fix one:
+
+```sh
+chmod 600 ~/.baton/plug-in.lua
+```
+
+`--plugin FILE` may point anywhere, so the checks are on the file rather than on its location; `$HOME/.baton` is the
+default, not the rule.
 
 ## Implementation
 
