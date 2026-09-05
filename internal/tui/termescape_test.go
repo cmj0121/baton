@@ -139,3 +139,40 @@ func TestLabelWhitespaceFoldsToOneLine(t *testing.T) {
 		t.Errorf("title = %q, want the folded single line", got)
 	}
 }
+
+// The daemon's error reply is the other way agent-chosen text reaches the
+// operator: a failed git push folds git's own stderr into the message, a rename
+// clash echoes the name, and applyEvent puts the lot in the status line. The
+// footer draws m.status in exactly two places, which is why the filter is there
+// and not on the forty-odd assignments that compose it.
+func TestServerErrorEscapeNeverReachesTheFooter(t *testing.T) {
+	m := wired(nil)
+	m.width, m.height = 200, 60
+	m.applyEvent(proto.ServerMsg{Type: "error", Error: evilName})
+
+	assertClean(t, "status bar", m.statusBar("", ""), "api", "worker")
+
+	m.gitConfirmOp = "push"
+	assertClean(t, "git confirm popup", m.gitPickerView(), "api", "worker")
+}
+
+// A multi-line error — which git's stderr routinely is — folds to one line, so a
+// long push failure is clipped by the footer's budget instead of spilling a second
+// row over the frame.
+func TestFooterFoldsAMultiLineError(t *testing.T) {
+	m := wired(nil)
+	m.applyEvent(proto.ServerMsg{Type: "error", Error: "fatal: refusing\nto push\n"})
+
+	if got := m.statusText(); got != "error: fatal: refusing to push" {
+		t.Errorf("statusText = %q, want the folded single line", got)
+	}
+}
+
+// A plugin sets the footer segment from whatever it was watching, which is agent
+// output often enough, and it lands in the same one-line strip.
+func TestPluginFooterEscapeNeverReachesTheStrip(t *testing.T) {
+	m := wired(nil)
+	m.pluginFooter = evilName
+
+	assertClean(t, "plugin footer cap", m.pluginFooterCap(), "api")
+}

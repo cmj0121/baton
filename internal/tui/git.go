@@ -269,7 +269,7 @@ func (m model) gitPickerView() string {
 	var hints string
 	if m.gitConfirmOp != "" {
 		hints = legend("y", "confirm", "n/esc", "cancel")
-		rows = append(rows, "", lipgloss.NewStyle().Foreground(colBrand).Bold(true).Render(m.status))
+		rows = append(rows, "", lipgloss.NewStyle().Foreground(colBrand).Bold(true).Render(m.statusText()))
 	} else {
 		hints = legend("↑↓", "move", "enter", "run", "esc", "cancel")
 	}
