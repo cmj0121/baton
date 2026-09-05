@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/scrub"
 )
 
 // Fleet-wide search (modeFleetSearch). `/` on the dashboard opens a term prompt; on
@@ -166,23 +167,43 @@ func (m model) fleetSearchWidth() int {
 
 // fleetHeaderRow renders a panel-group header: a marker, the panel title, and its
 // work item when grouped, in the highlight blue.
+//
+// The title and group are scrubbed here rather than inherited from the fleet
+// snapshot, because a search hit does not come from the snapshot: the daemon reads
+// them off its own panel rows and puts them on the "search" reply, so mergeFleet
+// never sees these copies. scrub, like every other label.
 func fleetHeaderRow(h proto.SearchHit, width int) string {
-	label := h.Title
+	label := scrub.Text(h.Title)
 	if h.Group != "" {
-		label += "  ·  " + h.Group
+		label += "  ·  " + scrub.Text(h.Group)
 	}
 	return lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(truncate("◈ "+label, max(1, width)))
 }
 
 // fleetHitRow renders one matched line: a caret when selected, the line text in ink
 // (selected) or muted (the rest), with the matched term highlighted throughout.
+//
+// The line is raw panel OUTPUT — the daemon greps it out of the replay ring — so
+// it is the one string on this screen an agent writes without having to try.
+//
+// It is filtered HERE rather than trusted from the wire. The daemon does strip
+// escapes on its way past (searchLines, so a match is made against what a terminal
+// would show), but with a CSI-only regexp: an OSC, a lone BEL, a bare ESC c and
+// every format character walk through it. A frontend that leaned on that promise
+// would draw them.
+//
+// scrub rather than sanitizeText, even though this is a line of output: a hit is a
+// one-line row in a picker, already trimmed and clipped to the popup's width, and
+// what it is FOR is to be selected — the panel it names is where the real bytes
+// are read. So it takes the label filter, which also drops the bidi override
+// sanitizeText keeps, and there is no column of a diff here to preserve a tab for.
 func fleetHitRow(h proto.SearchHit, re *regexp.Regexp, width int, selected bool) string {
 	caret, baseFg := "    ", colMuted
 	if selected {
 		caret = "  " + lipgloss.NewStyle().Foreground(colBrand).Bold(true).Render("▸ ")
 		baseFg = colInk
 	}
-	return caret + fleetHighlight(strings.TrimSpace(h.Text), re, max(1, width-4), baseFg, colBrandHi)
+	return caret + fleetHighlight(scrub.Text(h.Text), re, max(1, width-4), baseFg, colBrandHi)
 }
 
 // fleetHighlight clips a plain line to width cells and renders it in baseFg with

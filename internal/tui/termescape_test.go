@@ -224,3 +224,21 @@ func TestDirPickerDrawsNoEscapeFromADirectoryName(t *testing.T) {
 		t.Error("the row's path was rewritten; the pick would spawn in a directory that does not exist")
 	}
 }
+
+// Fleet search shows raw panel OUTPUT, which is the one thing on this list an
+// agent writes without even trying: it prints the escape and the daemon greps it
+// out of the replay ring.
+//
+// proto.SearchHit.Text used to promise "escape sequences stripped", and the
+// daemon's searchLines does strip them — but with a CSI-only regexp, so an OSC
+// (`\x1b]0;…\a`), a bare ESC c, a lone BEL and every format character walked
+// straight through it into a cockpit popup. The frontend filters what it draws
+// rather than trusting the promise, which is the rule everywhere else the cockpit
+// renders foreign bytes.
+func TestFleetSearchDrawsNoEscape(t *testing.T) {
+	hit := proto.SearchHit{Panel: "1", Title: evilName, Group: evilName, Text: evilName}
+
+	assertNoInjected(t, "search header", fleetHeaderRow(hit, 120), "api", "worker")
+	assertNoInjected(t, "search hit", fleetHitRow(hit, nil, 120, false), "api", "worker")
+	assertNoInjected(t, "search hit selected", fleetHitRow(hit, nil, 120, true), "api", "worker")
+}
