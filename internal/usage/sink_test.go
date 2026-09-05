@@ -336,8 +336,8 @@ func TestReadLimitsStillReadsARealFile(t *testing.T) {
 
 // A status line is a process Claude Code spawns on every render and kills when it
 // outstays its welcome, so a writer killed between creating its temporary and
-// renaming it is routine rather than exotic: 15 of 500 SIGKILLed `baton
-// usage-sink` runs left one behind. Each carries a name os.CreateTemp will never
+// renaming it is routine rather than exotic: of 500 `baton usage-sink` runs
+// killed by SIGKILL, 15 left one behind. Each carries a name os.CreateTemp will never
 // issue again, so no later write reuses it and — before sweepStaleTemps — nothing
 // removed it either. The debris grew without bound in a directory the operator
 // reads.

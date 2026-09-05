@@ -52,7 +52,7 @@ func TestSingleWriterPerDirectory(t *testing.T) {
 // failure that cannot heal, because the process that would clear the lock is the
 // process that died.
 //
-// It is driven with a real SIGKILLed process rather than reasoned about, because
+// It is driven with a real process killed by SIGKILL rather than reasoned about, because
 // the property belongs to the kernel and a same-process test would prove nothing
 // about it.
 func TestLockIsReleasedByAKilledHolder(t *testing.T) {
