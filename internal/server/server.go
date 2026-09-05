@@ -2293,14 +2293,33 @@ func (s *Server) handle(conn net.Conn) {
 	// connect-but-never-speak peer is dropped; once the first command is read the
 	// deadline is cleared, leaving the steady-state loop with no read deadline (a
 	// client may legitimately stay idle for minutes).
-	dec := json.NewDecoder(conn)
+	//
+	// The decoder reads through a frameLimiter rather than off the conn directly:
+	// encoding/json buffers a whole value before returning it, so without a bound
+	// one command line is one allocation of whatever size the peer chose. See
+	// maxCommandBytes.
+	lim := newFrameLimiter(conn, maxCommandBytes)
+	dec := json.NewDecoder(lim)
 	_ = conn.SetReadDeadline(time.Now().Add(proto.HandshakeTimeout))
 	first := true
 	for {
 		var cmd proto.Command
 		if err := dec.Decode(&cmd); err != nil {
+			// An oversized frame is said out loud, because it is the one error here
+			// an operator can act on: every other one is the ordinary end of a
+			// connection. The goodbye is queued too, but it is BEST-EFFORT and the
+			// log line is what carries the reason. A peer that is still shovelling
+			// bytes at a socket the daemon has just closed has its queued inbound
+			// data discarded by the kernel, so the very peer most likely to trip the
+			// cap is the one least likely to read the answer.
+			if errors.Is(err, errFrameTooLarge) {
+				log.Warn().Str("conn", cc.id).Int("limit", maxCommandBytes).
+					Msg("dropping a connection that sent an oversized command frame")
+				send(cc, goodbye(fmt.Sprintf("command frame is larger than the %d-byte limit", maxCommandBytes)))
+			}
 			return // client detached, timed out on the handshake, or the conn broke
 		}
+		lim.reset() // a fresh budget for the next frame
 		if first {
 			_ = conn.SetReadDeadline(time.Time{}) // idle command loop has no read deadline
 			first = false
