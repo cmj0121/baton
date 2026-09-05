@@ -228,12 +228,14 @@ func TestAttachRemoteReturnsAFormFailure(t *testing.T) {
 // and then a refused passkey both come back into the form, keeping what was
 // typed, and the third answer attaches.
 func TestAttachRemoteRetriesWithTheAddressKept(t *testing.T) {
+	// Matched over the whole argument list rather than at a fixed position: the
+	// destination sits behind an end-of-options "--", and which slot that lands in
+	// is sshArgs' business, not this fixture's.
 	fakeSSH(t, `
-if [ "$1" = "laptop.lan" ]; then
-	printf '{"type":"goodbye","error":"wrong passkey"}\n'
-else
-	printf '{"type":"welcome","version":"baton/1"}\n'
-fi
+case " $* " in
+*" laptop.lan "*) printf '{"type":"goodbye","error":"wrong passkey"}\n' ;;
+*)                printf '{"type":"welcome","version":"baton/1"}\n' ;;
+esac
 cat >/dev/null
 `)
 	p := &scriptedPrompt{answers: []tui.RemoteTarget{
@@ -296,7 +298,7 @@ cat >/dev/null
 	if err != nil {
 		t.Fatalf("read argv: %v", err)
 	}
-	if got := strings.TrimSpace(string(argv)); got != "-p 2222 desk.lan /opt/bin/baton --stdio" {
+	if got := strings.TrimSpace(string(argv)); got != "-p 2222 -- desk.lan /opt/bin/baton --stdio" {
 		t.Fatalf("ssh was run as %q", got)
 	}
 }

@@ -90,6 +90,9 @@ func ParseAddress(s string) (Address, error) {
 		if addr.User == "" {
 			return Address{}, fmt.Errorf("remote address has an empty user")
 		}
+		if strings.HasPrefix(addr.User, "-") {
+			return Address{}, fmt.Errorf("remote address has an invalid user %q: cannot start with '-'", addr.User)
+		}
 	}
 
 	host, port, err := splitHostPort(s)
@@ -98,6 +101,18 @@ func ParseAddress(s string) (Address, error) {
 	}
 	if host == "" {
 		return Address{}, fmt.Errorf("remote address has an empty host")
+	}
+	// The security-critical rule, and the reason it lives at the parse rather than
+	// at the dial: Target() is handed to ssh(1) as its destination, and ssh reads
+	// an argument beginning with "-" as an OPTION wherever it sits. A destination
+	// of "-oProxyCommand=…" therefore runs a command on this machine instead of
+	// dialling anything — the shape of it is an address, the effect is local
+	// execution. No host or login legitimately starts with "-", so refusing the
+	// prefix costs nothing and lets the remote form say so in words. (client's
+	// sshArgs fences the same value with "--" as well; neither is a reason to drop
+	// the other, exactly as gitops pairs ValidateBranch with its "--".)
+	if strings.HasPrefix(host, "-") {
+		return Address{}, fmt.Errorf("remote address has an invalid host %q: cannot start with '-'", host)
 	}
 	addr.Host = host
 	if port != "" {

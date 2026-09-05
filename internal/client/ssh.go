@@ -138,7 +138,14 @@ func sshArgs(addr remote.Address, opts SSHOptions) []string {
 	if strings.TrimSpace(command) == "" {
 		command = DefaultRemoteCommand
 	}
-	return append(args, addr.Target(), command)
+	// End-of-options guard. ssh reads an argument beginning with "-" as an option
+	// wherever it sits, so an unfenced destination is not merely a host that fails
+	// to resolve: "-oProxyCommand=…" is a command ssh runs on THIS machine before
+	// it dials anywhere. remote.ParseAddress refuses that shape at the boundary and
+	// this fences it at the argv, the same belt-and-braces gitops.WorktreeAdd uses
+	// for a worktree path. Everything baton passes as an option goes in front of
+	// it; the destination and the remote command are positional and go after.
+	return append(args, "--", addr.Target(), command)
 }
 
 // sshConn is the protocol connection over an ssh child's stdin/stdout.
