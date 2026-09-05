@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // LocalProvider reads Claude Code's session transcripts and aggregates the token
@@ -142,6 +144,12 @@ func (p *LocalProvider) Fetch(ctx context.Context) (Snapshot, error) {
 		// reading but under-counts by an unknown amount is the one thing worse.
 		return Snapshot{Source: "local"}, err
 	}
+	// A dropped line is spend this reading does not carry, so the reading is a
+	// little low and nothing on screen says why. Once per poll, with a count.
+	if sc.oversized > 0 {
+		log.Warn().Int("lines", sc.oversized).Int("limit", maxTranscriptLine).
+			Msg("usage under-counts: transcript lines past the size limit were skipped")
+	}
 	if p.window <= 0 {
 		return sc.snapshot(cutoff), nil // the calendar-day fallback: totals, no reset
 	}
@@ -207,6 +215,12 @@ type scan struct {
 	now     time.Time
 	seen    map[string]struct{}
 	entries []counted
+
+	// oversized counts the lines dropped for running past maxTranscriptLine. It
+	// is kept so the drop can be said once per poll instead of once per line: the
+	// thing that produces an oversized line tends to produce a lot of them, and a
+	// log line each would be the disk-filling this cap exists to stop.
+	oversized int
 }
 
 func newScan(cutoff, now time.Time) *scan {
@@ -275,10 +289,24 @@ func (sc *scan) snapshot(since time.Time) Snapshot {
 	return snap
 }
 
+// maxTranscriptLine caps how many bytes ONE transcript line may cost the daemon.
+//
+// bufio.Scanner's 64 KiB default is far too small here — a single line genuinely
+// can carry a pasted image — but "too small" is not an argument for no cap at all,
+// which is what this reader had. These files are written by a process baton does
+// not control, on a path an agent panel can also write to, and the daemon rereads
+// them on a poll every thirty seconds. Driven with one 256 MiB line in a transcript
+// under the scan floor: 519 MiB allocated inside Fetch, and again on the next poll.
+//
+// Sixteen mebibytes, and the argument is the pasted image the unbounded reader was
+// there for. The API's own per-image ceiling is about 5 MB, which is ~6.7 MB once
+// base64 has had it, so 16 MiB holds two maximal images and the message wrapped
+// round them. Past that a line is not a message any more.
+const maxTranscriptLine = 16 << 20
+
 // transcript folds one transcript file's in-window usage in, crediting it to
-// session. It reads line by line with an unbounded reader (a single line can carry
-// a pasted image and blow past bufio.Scanner's token cap), and only parses lines
-// that mention usage.
+// session. It reads line by line, bounded at maxTranscriptLine, and only parses
+// lines that mention usage.
 func (sc *scan) transcript(path, session string) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -288,12 +316,41 @@ func (sc *scan) transcript(path, session string) {
 
 	r := bufio.NewReader(f)
 	for {
-		line, err := r.ReadBytes('\n')
+		line, over, err := cappedLine(r)
+		if over {
+			sc.oversized++
+		}
 		if len(line) > 0 && bytes.Contains(line, usageKey) {
 			sc.fold(line, session)
 		}
 		if err != nil {
 			return // io.EOF or a read error: either way, done with this file
+		}
+	}
+}
+
+// cappedLine reads the next newline-terminated line, or reports it as oversized
+// and returns nothing for it.
+//
+// A line past the cap is DROPPED rather than truncated, and the reader is left at
+// the head of the next one. Truncating would hand fold a JSON fragment that is
+// unparseable anyway, and a torn fragment that happened to parse would be worse:
+// it would be counted. Dropping costs one message's tokens out of a figure that is
+// a footer reading, and the caller says so out loud rather than under-counting in
+// silence.
+func cappedLine(r *bufio.Reader) (line []byte, over bool, err error) {
+	for {
+		// ReadSlice rather than ReadBytes: it hands back a view of the reader's own
+		// buffer, so a line being discarded is never copied anywhere.
+		frag, ferr := r.ReadSlice('\n')
+		if !over && len(line)+len(frag) > maxTranscriptLine {
+			over, line = true, nil // release what was held before giving up on it
+		}
+		if !over {
+			line = append(line, frag...)
+		}
+		if ferr != bufio.ErrBufferFull {
+			return line, over, ferr
 		}
 	}
 }
