@@ -247,3 +247,58 @@ func TestOpenTrustedReadsTheDescriptorItVetted(t *testing.T) {
 		t.Fatalf("descriptor read %q, want the vetted original %q", got[:n], "-- lua\n")
 	}
 }
+
+// TestOpenTrustedRefusesAFifoInsteadOfBlocking is the liveness half of the
+// check, and it is separate from the kind refusal below because the two fail
+// differently: without O_NONBLOCK the open never returns AT ALL, so the kind
+// test would hang rather than report, and a hung test surfaces as a timeout
+// panic attributed to whatever ran last.
+//
+// The path is the operator's own $HOME/.baton/plug-in.lua, so this is not the
+// hostile-peer case OpenRegular defends. It matters because of WHERE the open
+// runs: on the single-threaded Lua worker, driven from the boot pass before
+// Serve. A FIFO there parks main in Plugin.Load with the socket already bound
+// and nothing ever calling Accept — a daemon that is listening and answering
+// nobody, which is a far worse failure than "your plugin did not load".
+func TestOpenTrustedRefusesAFifoInsteadOfBlocking(t *testing.T) {
+	p := mkfifo(t, filepath.Join(privateDir(t), "plug-in.lua"))
+
+	var err error
+	withinASecond(t, "OpenTrusted on a FIFO", func() {
+		var f *os.File
+		f, err = paths.OpenTrusted(p)
+		if f != nil {
+			_ = f.Close()
+		}
+	})
+	if err == nil {
+		t.Fatal("OpenTrusted on a FIFO = nil error, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("OpenTrusted on a FIFO refused for %q, want the kind refusal", err)
+	}
+}
+
+// TestOpenTrustedFollowsALinkToAFifo is the same case one hop away: a symlink is
+// followed on purpose (a plugin kept in a dotfiles repository is the reason), so
+// the FIFO can arrive through the link rather than at the name itself.
+func TestOpenTrustedFollowsALinkToAFifo(t *testing.T) {
+	dir := privateDir(t)
+	fifo := mkfifo(t, filepath.Join(dir, "pipe"))
+	link := filepath.Join(dir, "plug-in.lua")
+	if err := os.Symlink(fifo, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	var err error
+	withinASecond(t, "OpenTrusted on a link to a FIFO", func() {
+		var f *os.File
+		f, err = paths.OpenTrusted(link)
+		if f != nil {
+			_ = f.Close()
+		}
+	})
+	if err == nil {
+		t.Fatal("OpenTrusted on a link to a FIFO = nil error, want a refusal")
+	}
+}

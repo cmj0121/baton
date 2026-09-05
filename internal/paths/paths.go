@@ -325,7 +325,19 @@ func ensurePrivateDir(dir string) error {
 // in which the file could be exchanged for another. The caller reads the exact
 // inode that passed.
 func OpenTrusted(path string) (*os.File, error) {
-	f, err := os.Open(path)
+	// O_NONBLOCK for the reason OpenRegular carries at length: open(2) on a FIFO
+	// with no writer never returns, and the kind check below is downstream of the
+	// open, so without the flag it is never reached. It costs nothing here —
+	// checkTrusted lets nothing but a regular file past, and a regular file's
+	// reads ignore the flag.
+	//
+	// The path is $HOME/.baton/plug-in.lua, which the operator owns, so this is
+	// not the peer-named path OpenRegular defends. It is the operator's own foot:
+	// a FIFO left where the plugin goes parks the LUA WORKER, and the worker is
+	// loaded from the boot pass before Serve — so the daemon binds its socket and
+	// then never accepts on it, which reads from outside as a fleet that hangs
+	// rather than as a plugin that is wrong.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err // including fs.ErrNotExist, which callers read as "no file"
 	}
