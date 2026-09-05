@@ -5276,6 +5276,15 @@ func createAtomic(path string, perm os.FileMode, data []byte) (*atomicFile, erro
 		return nil, err
 	}
 	a := &atomicFile{f: f, path: path, tmp: tmp}
+	// perm above is applied only when the open CREATES the file; a temp left by a
+	// killed process, or planted under a parent that is not as private as this one
+	// assumes, keeps its own mode and the commit renames that onto score.md. The
+	// directory lock this comment's sibling relies on orders baton's writers
+	// against each other but says nothing about a file that was already there.
+	if err := f.Chmod(perm); err != nil {
+		a.discard()
+		return nil, err
+	}
 	if err := a.writeSync(data); err != nil {
 		a.discard()
 		return nil, err

@@ -385,6 +385,20 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
 		}
 	}()
 
+	// The mode argument above applies ONLY when the open creates the file, so a
+	// temp file that is already there keeps the mode it already had and the rename
+	// carries that onto the target. The name is derived from the target, so it is
+	// predictable: a process killed between the create and the rename leaves one
+	// under exactly the name the next write reuses, and under a parent an admin
+	// left group-writable it is a name another user can create first. Every caller
+	// here asks for 0600, so the difference is a fleet's stores becoming readable.
+	// Chmod on the DESCRIPTOR, not the path, so it cannot be redirected between the
+	// open and the change; it is below the defer so a failure still clears the temp.
+	if err = f.Chmod(perm); err != nil {
+		_ = f.Close()
+		return err
+	}
+
 	if _, err = f.Write(data); err != nil {
 		_ = f.Close()
 		return err
