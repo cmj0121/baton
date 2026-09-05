@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -286,5 +287,49 @@ func TestFormatLimits(t *testing.T) {
 	}
 	if got := FormatLimits(Limits{}, limitsNow, 10); got != "" {
 		t.Errorf("FormatLimits of an empty reading = %q, want empty", got)
+	}
+}
+
+// legitimateSink is the largest sink file these tests claim a real writer
+// produces, as a figure rather than as maxSinkFile-minus-something: a test sized
+// off the constant it checks moves with the constant. A full reading marshals to
+// a few hundred bytes; four kibibytes is already ten times one.
+const legitimateSink = 4 << 10
+
+// TestReadLimitsRefusesAnOversizedFile: this is the DEFAULT limits source, so the
+// daemon does this read on every usage tick, forever — and the file sits in the
+// fleet's own directory, where any process running as the fleet owner can grow
+// it. A reading is a few hundred bytes; a file that is not is not a reading.
+func TestReadLimitsRefusesAnOversizedFile(t *testing.T) {
+	path := sinkPath(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Valid JSON carrying a real window, and only its size wrong — so the only
+	// thing that can refuse it is the cap.
+	body := `{"five_hour":{"used_percentage":50},"at":"2026-08-20T12:00:00Z","pad":"` +
+		strings.Repeat("p", maxSinkFile) + `"}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ReadLimits(path); ok {
+		t.Fatal("a sink file past the cap was read as a reading")
+	}
+}
+
+// TestReadLimitsStillReadsARealFile is the other half: a sink file with room to
+// spare must still decode, or the daemon has lost its default usage source.
+func TestReadLimitsStillReadsARealFile(t *testing.T) {
+	path := sinkPath(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"five_hour":{"used_percentage":50},"at":"2026-08-20T12:00:00Z","pad":"` +
+		strings.Repeat("p", legitimateSink) + `"}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ReadLimits(path); !ok {
+		t.Fatalf("a %d-byte sink file should still be read", len(body))
 	}
 }

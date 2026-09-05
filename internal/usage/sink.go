@@ -3,6 +3,7 @@ package usage
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -141,12 +142,41 @@ func UnmarshalLimits(b []byte) (Limits, bool) {
 	return l, true
 }
 
+// maxSinkFile caps how much of the sink file is read.
+//
+// "One small read per tick" is what StatuslineLimits promises, and the promise
+// held only for as long as whatever wrote the file kept it small. This is the
+// DEFAULT limits source, so the daemon does this read every tick, forever; the
+// file sits in the fleet's own directory where any process running as the fleet
+// owner can grow it, and its writer is a status line invoked by an agent's own
+// runtime rather than by baton.
+//
+// 64 KiB, sized on what MarshalLimits actually produces: five windows and a
+// credit block, a few hundred bytes, so this is a hundred times a full reading.
+// Anything past it is not a reading with some slack in it, it is a different
+// file — and the caller already has somewhere to put "there is nothing to show".
+const maxSinkFile = 64 << 10
+
 // ReadLimits loads the reading a sink last wrote. A missing or unreadable file is
 // not an error — it means no panel has reported yet, which is the ordinary state
-// of a fleet that has not run a Claude Code turn since baton was installed.
+// of a fleet that has not run a Claude Code turn since baton was installed. A file
+// past maxSinkFile is read the same way: nothing to show.
 func ReadLimits(path string) (Limits, bool) {
-	b, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
+		return Limits{}, false
+	}
+	defer func() { _ = f.Close() }()
+	// One byte past the cap, so a file that ran over is known without its tail
+	// ever being held.
+	//
+	// The length test is not redundant with the LimitReader, even though a
+	// truncated JSON object would fail to parse anyway. Resting on that would make
+	// the refusal a side effect of encoding/json's intolerance for a cut object
+	// rather than a decision this function made, and a format less brittle than
+	// JSON would quietly turn the cap into a truncation.
+	b, err := io.ReadAll(io.LimitReader(f, maxSinkFile+1))
+	if err != nil || len(b) > maxSinkFile {
 		return Limits{}, false
 	}
 	return UnmarshalLimits(b)
