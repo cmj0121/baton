@@ -66,3 +66,37 @@ func TestAnOrdinaryConductorGuideIsUsed(t *testing.T) {
 		t.Fatalf("a %d-byte brief should be used", legitimateGuide)
 	}
 }
+
+// TestConductorWiringSaysWhenItCouldNotBeWritten pins the log line. The three
+// writes are best-effort by design -- a spawn is not refused over a missing hint
+// -- but a conductor that comes up with no tools because .mcp.json never landed
+// used to leave nothing anywhere to say why.
+func TestConductorWiringSaysWhenItCouldNotBeWritten(t *testing.T) {
+	logged := captureLog(t)
+	writeConductorFiles(filepath.Join(t.TempDir(), "no-such-workspace"), "p1")
+	got := logged()
+	for _, name := range []string{"BATON.md", "CLAUDE.md", ".mcp.json"} {
+		if !strings.Contains(got, name) {
+			t.Errorf("a failed write of %s left no log line: %s", name, got)
+		}
+	}
+}
+
+// TestConductorWiringIsAtomic is why the best-effort argument holds. os.WriteFile
+// truncates before it writes, so a failure part-way leaves a torn file, and a torn
+// CLAUDE.md is a truncated brief the agent reads as complete. The atomic write
+// leaves the PREVIOUS file instead -- stale, which is the failure the comment
+// above writeConductorFiles reasons about.
+func TestConductorWiringIsAtomic(t *testing.T) {
+	ws := t.TempDir()
+	writeConductorFiles(ws, "p1")
+	for _, name := range []string{"BATON.md", "CLAUDE.md", ".mcp.json"} {
+		b, err := os.ReadFile(filepath.Join(ws, name))
+		if err != nil || len(b) == 0 {
+			t.Fatalf("%s: read %d bytes, err %v", name, len(b), err)
+		}
+		if _, err := os.Stat(filepath.Join(ws, name+".tmp")); err == nil {
+			t.Errorf("%s left its temp file behind", name)
+		}
+	}
+}

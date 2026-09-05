@@ -3560,12 +3560,31 @@ func (s *Server) resetConductorWorkspace() error {
 // no extra wiring; the CLAUDE.md copy is harmless for other agents. It is called on
 // every spawn and respawn, so an edited operator brief ($HOME/.baton/CONDUCTOR.md)
 // is re-read each time the conductor is opened. All writes are best-effort — a
-// missing file just costs a hint or the auto-loaded tools, not correctness.
+// missing or stale file just costs a hint or the auto-loaded tools, not
+// correctness.
+//
+// That argument holds only because the writes are atomic. os.WriteFile truncates
+// and then writes, so a failure part-way leaves a TORN file, and a torn CLAUDE.md
+// is not a missing one: the agent reads a truncated brief as a complete one and
+// acts on half its instructions with nothing to say so. WriteFileAtomic leaves the
+// previous file, or none, which is the failure the paragraph above reasons about.
+// The error is still not returned — a spawn is not worth refusing over a hint —
+// but it is logged, because "the conductor has no tools" is otherwise a symptom
+// with no cause anywhere.
 func writeConductorFiles(ws, id string) {
 	briefing := conductorBriefing(id)
-	_ = os.WriteFile(filepath.Join(ws, "BATON.md"), briefing, 0o600)
-	_ = os.WriteFile(filepath.Join(ws, "CLAUDE.md"), briefing, 0o600)
-	_ = os.WriteFile(filepath.Join(ws, ".mcp.json"), conductorMCPConfig(), 0o600)
+	for _, f := range []struct {
+		name string
+		data []byte
+	}{
+		{"BATON.md", briefing},
+		{"CLAUDE.md", briefing},
+		{".mcp.json", conductorMCPConfig()},
+	} {
+		if err := paths.WriteFileAtomic(filepath.Join(ws, f.name), f.data, 0o600); err != nil {
+			log.Warn().Str("file", f.name).Str("workspace", ws).Err(err).Msg("conductor wiring not written")
+		}
+	}
 }
 
 // maxConductorGuide caps the operator's brief.
