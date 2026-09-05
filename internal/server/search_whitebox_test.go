@@ -30,7 +30,10 @@ func TestSearchLinesStripsEscapesAndRewrites(t *testing.T) {
 }
 
 func TestCompileFleetSearchCaseInsensitive(t *testing.T) {
-	re := compileFleetSearch("Baton")
+	re, err := compileFleetSearch("Baton")
+	if err != nil {
+		t.Fatalf("compileFleetSearch: %v", err)
+	}
 	if !re.MatchString("the BATON conducts") {
 		t.Fatal("fleet search should be case-insensitive")
 	}
@@ -39,11 +42,24 @@ func TestCompileFleetSearchCaseInsensitive(t *testing.T) {
 func TestCompileFleetSearchLiteralFallback(t *testing.T) {
 	// An invalid regexp must not panic — it falls back to a literal match, so the
 	// raw term still finds itself (matching the cockpit's scrollback search rule).
-	re := compileFleetSearch("cost[") // unterminated class: not a valid regexp
+	re, err := compileFleetSearch("cost[") // unterminated class: not a valid regexp
+	if err != nil {
+		t.Fatalf("compileFleetSearch: %v", err)
+	}
 	if !re.MatchString("the cost[ of it") {
 		t.Fatal("an invalid regexp should fall back to a literal match")
 	}
 	if re.MatchString("no bracket here") {
 		t.Fatal("the literal fallback should only match the raw term")
+	}
+}
+
+// TestCompileFleetSearchRefusesInvalidUTF8 pins the one term the literal fallback
+// cannot express. regexp.QuoteMeta escapes metacharacters but passes invalid UTF-8
+// through, and regexp rejects that — so before this returned an error, a one-byte
+// term panicked the command loop, and with it the daemon and every panel in it.
+func TestCompileFleetSearchRefusesInvalidUTF8(t *testing.T) {
+	if _, err := compileFleetSearch("\xff"); err == nil {
+		t.Fatal("an invalid-UTF-8 term must be refused, not asserted away")
 	}
 }

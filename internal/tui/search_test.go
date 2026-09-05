@@ -260,3 +260,19 @@ func TestSearchOpensFromZoom(t *testing.T) {
 		t.Fatalf("C-t f should open the search prompt, input=%v", m.input)
 	}
 }
+
+// TestCompileSearchSurvivesInvalidUTF8 pins the term that used to panic the
+// fallback. regexp rejects a pattern that is not valid UTF-8 and QuoteMeta does
+// not sanitise one, so a lone 0xff byte reached MustCompile as itself.
+func TestCompileSearchSurvivesInvalidUTF8(t *testing.T) {
+	re, literal := compileSearch("\xff")
+	if re == nil {
+		t.Fatal("compileSearch must never return nil")
+	}
+	if !literal {
+		t.Fatal("an unquotable term should report the literal fallback")
+	}
+	if !re.MatchString("a � b") {
+		t.Fatal("the coerced term should match what the terminal draws for those bytes")
+	}
+}

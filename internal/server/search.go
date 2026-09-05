@@ -49,12 +49,13 @@ const (
 // what they would have to paste. Compilation at that size is microseconds and
 // kilobytes, by the same measurement above scaled down a thousandfold.
 //
-// It also puts compileFleetSearch's fallback out of reach of its own failure: that
-// path calls MustCompile on regexp.QuoteMeta(query), which at most doubles a
-// 1024-rune term, and a literal that small cannot be the "expression too large"
-// the quantifier shape reaches at a megabyte. A panic in the command loop is the
-// daemon, so the reachability mattered even though the panic itself is not this
-// round's to fix.
+// It bounds the cost of compilation and nothing else. It was once also credited
+// with keeping compileFleetSearch's fallback out of reach of its own failure, on
+// the reasoning that a quoted 1024-rune term is too small to be "expression too
+// large". That is true and beside the point: the fallback's real failure is
+// invalid UTF-8, which QuoteMeta passes through and regexp rejects, and a term
+// that trips it is one byte long. See compileFleetSearch, which now returns that
+// error rather than asserting a size bound can prevent it.
 const maxQueryRunes = 1024
 
 // sendSearch scans every panel's retained output for query and replies "search"
@@ -71,7 +72,10 @@ func (s *Server) sendSearch(cc *clientConn, query string) error {
 	if n := len([]rune(query)); n > maxQueryRunes {
 		return fmt.Errorf("the search term is %d runes long, and the limit is %d", n, maxQueryRunes)
 	}
-	re := compileFleetSearch(query)
+	re, err := compileFleetSearch(query)
+	if err != nil {
+		return fmt.Errorf("the search term cannot be matched: %w", err)
+	}
 
 	// Collect the panel identity under the lock, then read the rings without it:
 	// pty.Snapshot takes the ptymgr's own lock, so holding s.mu across the whole
@@ -130,11 +134,24 @@ scan:
 // back to a literal match when the term is not a valid regexp — the same rule the
 // cockpit's scrollback search uses, so the two searches accept identical input and
 // a fallback-literal fleet search lines up with the per-panel one it hands off to.
-func compileFleetSearch(query string) *regexp.Regexp {
+//
+// It returns the fallback's error rather than asserting the fallback cannot fail,
+// because it can: regexp.QuoteMeta escapes every metacharacter but passes invalid
+// UTF-8 through untouched, and regexp rejects a pattern that is not valid UTF-8.
+// compileFleetSearch("\xff") panics on a MustCompile here, and no length cap
+// changes that — the term is one byte long.
+//
+// Nothing can send that term today. Every route to Query goes through
+// encoding/json, which replaces invalid UTF-8 with U+FFFD on the way in, so the
+// daemon has never seen a term it could not quote. That is a property of the
+// decoder, not of this function, and it is the only thing standing between a
+// one-byte command and a dead daemon — so this returns an error the caller can
+// refuse with, and the command loop keeps no assertion it does not need.
+func compileFleetSearch(query string) (*regexp.Regexp, error) {
 	if re, err := regexp.Compile("(?i)" + query); err == nil {
-		return re
+		return re, nil
 	}
-	return regexp.MustCompile("(?i)" + regexp.QuoteMeta(query))
+	return regexp.Compile("(?i)" + regexp.QuoteMeta(query))
 }
 
 // searchLines turns a panel's raw output ring into plain text lines to match

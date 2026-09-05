@@ -2962,8 +2962,9 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "fleet.search":
 		// Scan every panel's retained output for the term and reply "search" with the
 		// matching lines; the cockpit renders them grouped by panel. Read-only — it
-		// touches no panel state and spawns nothing — so a failure (only an empty term)
-		// just surfaces as an error, like panel.diff.
+		// touches no panel state and spawns nothing — so a failure (an empty term, an
+		// over-long one, or one regexp cannot express) just surfaces as an error, like
+		// panel.diff.
 		if err := s.sendSearch(cc, cmd.Query); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
