@@ -319,7 +319,7 @@ func logScoreFolds(folds []score.Fold) {
 		// signal's waits for the next read to drain it, so zerolog's timestamp is
 		// when the daemon got round to saying it and can be minutes out; see
 		// score.Fold.At.
-		e := log.Info().Str("id", f.Id).Str("entry", f.Text).Str("duplicate", f.Repeat).
+		e := log.Info().Str("id", f.Id).Str("entry", logText(f.Text)).Str("duplicate", logText(f.Repeat)).
 			Int("duplicates", f.Duplicates).Str("source", f.Prov.Source).
 			Int("reinforcements", f.Reinforcements).Int("user_signals", f.UserSignals).
 			Int("tier", f.Tier).Bool("counted", f.Counted).Time("at", f.At)

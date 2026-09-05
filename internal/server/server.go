@@ -2171,8 +2171,8 @@ func (s *Server) vetoQueuedTask(d delivery) {
 	// discards the work and evicts the record of having discarded it. This line is
 	// the only account that survives that, so it carries the prompt: the task id
 	// it names may be gone from `task list` by the time anyone looks.
-	log.Warn().Str("task", d.task).Str("panel", d.panel).Str("prompt", d.prompt).
-		Str("reason", vetoReason).Msg("a task.pre hook refused a queued task at delivery")
+	log.Warn().Str("task", d.task).Str("panel", d.panel).Str("prompt", logText(d.prompt)).
+		Str("reason", logText(vetoReason)).Msg("a task.pre hook refused a queued task at delivery")
 
 	if ephemeral {
 		_ = s.closePanel(d.panel)

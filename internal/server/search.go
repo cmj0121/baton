@@ -90,9 +90,9 @@ scan:
 		}
 	}
 	if truncated {
-		log.Info().Str("query", query).Int("hits", len(hits)).Msg("fleet search truncated at a cap")
+		log.Info().Str("query", logText(query)).Int("hits", len(hits)).Msg("fleet search truncated at a cap")
 	} else {
-		log.Info().Str("query", query).Int("hits", len(hits)).Msg("fleet search")
+		log.Info().Str("query", logText(query)).Int("hits", len(hits)).Msg("fleet search")
 	}
 	send(cc, proto.ServerMsg{Type: "search", Hits: hits})
 	return nil
