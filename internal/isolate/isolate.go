@@ -141,8 +141,18 @@ func (p Policy) Validate() error {
 	if !p.Enabled() {
 		return nil
 	}
-	if strings.TrimSpace(p.Image) == "" {
+	image := strings.TrimSpace(p.Image)
+	if image == "" {
 		return fmt.Errorf("isolate: %s needs an image; baton ships none", p.Mode)
+	}
+	// Wrap puts the image in the runtime's positional IMAGE slot, and the runtime
+	// reads a leading "-" there as one more flag: `docker run … --privileged true`
+	// takes --privileged as an option and `true` as the image. So an image
+	// beginning with "-" does not fail to start a container — it starts a LESS
+	// confined one, which is the exact outcome this package exists to prevent. No
+	// registry reference begins with "-", so refusing the prefix costs nothing.
+	if strings.HasPrefix(image, "-") {
+		return fmt.Errorf("isolate: invalid image %q: cannot start with '-'; %s would read it as a flag", image, p.Mode)
 	}
 	return nil
 }
