@@ -289,6 +289,111 @@ func ensurePrivateDir(dir string) error {
 	return nil
 }
 
+// OpenTrusted opens a file baton is about to execute as trusted code — today the
+// Lua plugin, which runs with the daemon's full authority (docs/PLUGIN.md) — and
+// refuses to hand back a descriptor unless only the file's owner could have
+// written what is in it.
+//
+// The posture it enforces is the one the document already claims, not a new one:
+// the plugin is the operator's own code at a private path. Nothing here sandboxes
+// what the file may then do, and nothing here objects to a file other people can
+// READ. The question asked is narrower and is the only one that matters for
+// execution — could somebody OTHER than this user have decided what runs?
+//
+// Three ways they could, and each is refused:
+//
+//   - The file is writable by group or other. Anyone in that set edits the code
+//     the daemon runs.
+//   - The file belongs to another user. They cannot be stopped from rewriting
+//     their own file, whatever its mode says today.
+//   - The directory holding it is writable by group or other without the sticky
+//     bit. Then the file's own mode is decoration: another user unlinks it and
+//     creates their own under the same name. With the sticky bit (a shared /tmp)
+//     only the owner may unlink, and the owner is us.
+//
+// A symlink is followed rather than refused: pointing $HOME/.baton/plug-in.lua at
+// a dotfiles repository is the ordinary way to keep one, and refusing it would
+// reject the careful setups along with the careless. Both ends are checked — the
+// link's own directory, so the name cannot be re-pointed, and the target's file
+// and directory, so the code itself is sound. Intermediate hops in a chain of
+// links are not walked, nor are ancestors above the immediate directory; a $HOME
+// nobody can trust is a defeat this check was never going to prevent.
+//
+// The mode and owner are read with fstat on the RETURNED descriptor, not with a
+// second stat of the path, so there is no window between the check and the read
+// in which the file could be exchanged for another. The caller reads the exact
+// inode that passed.
+func OpenTrusted(path string) (*os.File, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err // including fs.ErrNotExist, which callers read as "no file"
+	}
+	if err := checkTrusted(path, f); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+// checkTrusted is OpenTrusted's verdict on an already-open file: fstat the
+// descriptor, then vet the directories the name and the target live in.
+func checkTrusted(path string, f *os.File) error {
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	switch {
+	case !fi.Mode().IsRegular():
+		return fmt.Errorf("%s is not a regular file", path)
+	case fi.Mode().Perm()&0o022 != 0:
+		return fmt.Errorf("%s is writable by group or other (%04o)", path, fi.Mode().Perm())
+	case !ownedByCaller(fi):
+		return fmt.Errorf("%s is not owned by uid %d", path, os.Getuid())
+	}
+
+	// The resolved path, because the directory that decides whether the CODE can be
+	// swapped is the target's, while the directory that decides whether the NAME can
+	// be re-pointed is the link's. They are the same path when nothing is a symlink,
+	// so the second check costs a stat and no false positives. A resolve that fails
+	// on a file we just opened is not a case to shrug at — it means we cannot tell
+	// where the bytes came from, so it refuses rather than passes.
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return err
+	}
+	if err := checkTrustedDir(filepath.Dir(path)); err != nil {
+		return err
+	}
+	if dir := filepath.Dir(resolved); dir != filepath.Dir(path) {
+		return checkTrustedDir(dir)
+	}
+	return nil
+}
+
+// checkTrustedDir refuses a directory in which another user could replace the
+// file wholesale. Write permission on a directory is permission to unlink and
+// recreate the names inside it, so a group- or other-writable one hands the
+// plugin's contents to anybody in that set no matter what the file's own mode
+// says. The sticky bit takes that back — it restricts unlink and rename to the
+// owner — which is why a plugin under a shared /tmp is allowed and one under a
+// plain 0777 directory is not.
+//
+// Ownership of the directory is deliberately NOT checked. A directory owned by
+// another user but unwritable to us is either root's (/etc/baton, an
+// administrator's provisioning, and root is not an adversary this check can
+// resist anyway) or an arrangement nobody makes; requiring it would refuse the
+// first to catch the second.
+func checkTrustedDir(dir string) error {
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if fi.Mode().Perm()&0o022 != 0 && fi.Mode()&os.ModeSticky == 0 {
+		return fmt.Errorf("%s is writable by group or other (%04o) and not sticky", dir, fi.Mode().Perm())
+	}
+	return nil
+}
+
 // conductorBase is the per-user temporary directory the conductor workspace lives
 // in. It is deliberately temporary rather than beside the socket: the workspace
 // holds an agent's accumulated state, and the contract is that a reboot clears
