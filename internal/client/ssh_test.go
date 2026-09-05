@@ -37,7 +37,7 @@ func addr(t *testing.T, s string) remote.Address {
 
 func TestSSHArgsKeepTheDefaultPortImplicit(t *testing.T) {
 	got := sshArgs(addr(t, "cmj@laptop.lan"), SSHOptions{})
-	want := []string{"cmj@laptop.lan", DefaultRemoteCommand}
+	want := []string{"--", "cmj@laptop.lan", DefaultRemoteCommand}
 	if !slices.Equal(got, want) {
 		t.Fatalf("sshArgs = %q, want %q", got, want)
 	}
@@ -45,7 +45,7 @@ func TestSSHArgsKeepTheDefaultPortImplicit(t *testing.T) {
 
 func TestSSHArgsPassAPortAndACommandOverride(t *testing.T) {
 	got := sshArgs(addr(t, "laptop.lan:2222"), SSHOptions{Command: "/opt/bin/baton --stdio"})
-	want := []string{"-p", "2222", "laptop.lan", "/opt/bin/baton --stdio"}
+	want := []string{"-p", "2222", "--", "laptop.lan", "/opt/bin/baton --stdio"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("sshArgs = %q, want %q", got, want)
 	}
@@ -59,9 +59,34 @@ func TestSSHArgsPassAPortAndACommandOverride(t *testing.T) {
 
 func TestSSHArgsCarryExtraOptions(t *testing.T) {
 	got := sshArgs(addr(t, "laptop.lan"), SSHOptions{SSHArgs: []string{"-o", "BatchMode=yes"}})
-	want := []string{"-o", "BatchMode=yes", "laptop.lan", DefaultRemoteCommand}
+	want := []string{"-o", "BatchMode=yes", "--", "laptop.lan", DefaultRemoteCommand}
 	if !slices.Equal(got, want) {
 		t.Fatalf("sshArgs = %q, want %q", got, want)
+	}
+}
+
+// TestSSHArgsFenceTheDestinationAgainstOptionInjection is the argument-injection
+// regression. ssh reads an argument beginning with "-" as an option wherever it
+// sits, so a destination like "-oProxyCommand=…" is not a host baton fails to
+// reach — it is a command ssh runs on THIS machine before it dials anything. The
+// "--" is what makes the destination data. remote.ParseAddress refuses the shape
+// as well; this is the second half of that pair, and the half that holds if an
+// Address is ever built from somewhere other than a parse.
+func TestSSHArgsFenceTheDestinationAgainstOptionInjection(t *testing.T) {
+	hostile := "-oProxyCommand=touch /tmp/pwned"
+	got := sshArgs(remote.Address{Host: hostile, Port: 2222}, SSHOptions{})
+
+	i := slices.Index(got, "--")
+	if i < 0 {
+		t.Fatalf("sshArgs = %q, want an end-of-options %q before the destination", got, "--")
+	}
+	if got[i+1] != hostile {
+		t.Fatalf("sshArgs = %q, want the destination straight after %q", got, "--")
+	}
+	// baton's own options must stay in front of the fence, or ssh would read -p as
+	// the destination and the port as the command.
+	if !slices.Contains(got[:i], "-p") {
+		t.Fatalf("sshArgs = %q, want baton's own options before the fence", got)
 	}
 }
 

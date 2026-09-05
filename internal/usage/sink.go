@@ -3,10 +3,14 @@ package usage
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/cmj0121/baton/internal/paths"
 )
 
 // The sink is the handoff between two processes that never talk to each other.
@@ -141,12 +145,48 @@ func UnmarshalLimits(b []byte) (Limits, bool) {
 	return l, true
 }
 
+// maxSinkFile caps how much of the sink file is read.
+//
+// "One small read per tick" is what StatuslineLimits promises, and the promise
+// held only for as long as whatever wrote the file kept it small. This is the
+// DEFAULT limits source, so the daemon does this read every tick, forever; the
+// file sits in the fleet's own directory where any process running as the fleet
+// owner can grow it, and its writer is a status line invoked by an agent's own
+// runtime rather than by baton.
+//
+// 64 KiB, sized on what MarshalLimits actually produces: five windows and a
+// credit block, a few hundred bytes, so this is a hundred times a full reading.
+// Anything past it is not a reading with some slack in it, it is a different
+// file — and the caller already has somewhere to put "there is nothing to show".
+const maxSinkFile = 64 << 10
+
 // ReadLimits loads the reading a sink last wrote. A missing or unreadable file is
 // not an error — it means no panel has reported yet, which is the ordinary state
-// of a fleet that has not run a Claude Code turn since baton was installed.
+// of a fleet that has not run a Claude Code turn since baton was installed. A file
+// past maxSinkFile is read the same way: nothing to show.
+//
+// paths.OpenRegular rather than os.Open, and for the half maxSinkFile does not
+// cover. The size of this file was bounded; its KIND was not, and open(2) on a
+// FIFO with no writer never returns. This read sits on the usage poller's one
+// goroutine, so a pipe left at the name does not cost a reading — it costs the
+// poller, permanently, and the footer and the quota bars stop with it. Anything
+// that is not a plain file joins the missing and the oversized.
 func ReadLimits(path string) (Limits, bool) {
-	b, err := os.ReadFile(path)
+	f, err := paths.OpenRegular(path)
 	if err != nil {
+		return Limits{}, false
+	}
+	defer func() { _ = f.Close() }()
+	// One byte past the cap, so a file that ran over is known without its tail
+	// ever being held.
+	//
+	// The length test is not redundant with the LimitReader, even though a
+	// truncated JSON object would fail to parse anyway. Resting on that would make
+	// the refusal a side effect of encoding/json's intolerance for a cut object
+	// rather than a decision this function made, and a format less brittle than
+	// JSON would quietly turn the cap into a truncation.
+	b, err := io.ReadAll(io.LimitReader(f, maxSinkFile+1))
+	if err != nil || len(b) > maxSinkFile {
 		return Limits{}, false
 	}
 	return UnmarshalLimits(b)
@@ -233,7 +273,7 @@ func replaceFile(path string, data []byte) (err error) {
 	if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".usage-limits-*.tmp")
+	f, err := os.CreateTemp(filepath.Dir(path), tempPrefix+"*"+tempSuffix)
 	if err != nil {
 		return err
 	}
@@ -253,7 +293,70 @@ func replaceFile(path string, data []byte) (err error) {
 	if err = os.Chmod(tmp, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err = os.Rename(tmp, path); err != nil {
+		return err
+	}
+	sweepStaleTemps(filepath.Dir(path), time.Now())
+	return nil
+}
+
+// tempPrefix and tempSuffix bracket the name os.CreateTemp issues above, split
+// out so the writer and the sweep below cannot drift apart on what a temporary
+// of this package's looks like.
+const (
+	tempPrefix = ".usage-limits-"
+	tempSuffix = ".tmp"
+)
+
+// staleTempAge is how long a temporary must have sat untouched before a writer
+// will remove it. A sink write is three syscalls on a 200-byte file — the
+// benchmark in replaceFile's doc puts the whole of it at 164-192 µs — so a
+// minute is four orders of magnitude more than a live writer needs, and the
+// gate exists only so a temporary belonging to one of the OTHER panels writing
+// concurrently is never taken out from under its rename.
+//
+// Getting that wrong is cheap in the one direction it can go wrong. Sweeping a
+// live writer's temporary makes its rename fail, and a failed sink write loses
+// a reading that "will be along again in a second" — the loss this file already
+// argues is acceptable, not a new one.
+const staleTempAge = time.Minute
+
+// sweepStaleTemps removes the temporaries a writer killed between os.CreateTemp
+// and the rename left behind. It runs after a successful write, which is a few
+// times a minute for a whole fleet rather than once per render: WriteLimitsIfChanged
+// skips the redundant writes, so the one os.ReadDir this costs is not paid on
+// the status line's hot path.
+//
+// IT IS NEEDED HERE AND NOT IN paths.WriteFileAtomic, which is the reason this
+// is not simply a call to that helper. The helper's temporary is named after its
+// target, so there is exactly one of them and the next write opens it O_TRUNC and
+// reuses it; the debris is self-limiting. os.CreateTemp — which this file needs,
+// because a name derived from the target cannot be shared by a writer running
+// once per panel per render — issues a name that is never handed out twice, so
+// every kill leaves a file no later write will ever touch. Killing the real
+// `baton usage-sink` at randomised moments left one in 15 of 500 runs, and a
+// status line is precisely the process a supervisor kills for being slow.
+//
+// Errors are ignored, for the reason the whole sink ignores them: a temporary
+// that cannot be removed is not worth failing a status line over. REGULAR FILES
+// ONLY — os.Remove takes an empty directory as readily as a file, and nothing
+// this package creates under that name is a directory.
+func sweepStaleTemps(dir string, now time.Time) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasPrefix(name, tempPrefix) || !strings.HasSuffix(name, tempSuffix) {
+			continue
+		}
+		info, ierr := e.Info()
+		if ierr != nil || !info.Mode().IsRegular() || now.Sub(info.ModTime()) < staleTempAge {
+			continue
+		}
+		_ = os.Remove(filepath.Join(dir, name))
+	}
 }
 
 // LimitsProvider fetches the account's rate-limit standing from one source.

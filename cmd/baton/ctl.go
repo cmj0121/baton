@@ -9,6 +9,7 @@ import (
 
 	"github.com/cmj0121/baton/internal/control"
 	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/scrub"
 )
 
 // ctlCLI is the `baton ctl` control surface: a thin client over the session's
@@ -47,8 +48,7 @@ func ctlMain(args []string) int {
 		kong.UsageOnError(),
 	)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "baton ctl:", err)
-		return 2
+		return ctlFail(err, 2)
 	}
 	kctx, err := parser.Parse(args)
 	if err != nil {
@@ -57,16 +57,29 @@ func ctlMain(args []string) int {
 
 	c, err := control.Dial()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "baton ctl:", err)
-		return 1
+		return ctlFail(err, 1)
 	}
 	defer func() { _ = c.Close() }()
 
 	if err := kctx.Run(c); err != nil {
-		fmt.Fprintln(os.Stderr, "baton ctl:", err)
-		return 1
+		return ctlFail(err, 1)
 	}
 	return 0
+}
+
+// ctlFail prints one error to stderr and returns the exit code to give the
+// process.
+//
+// It scrubs, because this is a terminal with nothing in front of it. The cockpit
+// renders a daemon error into a footer it controls; `baton ctl` hands the bytes
+// to the operator's terminal directly. And the daemon's error is not the daemon's
+// prose: gitops folds git's own stderr into it, so a push refused by a hook
+// reports whatever that hook printed, and a rename or a spawn echoes the name it
+// was given. The daemon quotes the paths it names, but it cannot vouch for text
+// that came out of another program.
+func ctlFail(err error, code int) int {
+	fmt.Fprintln(os.Stderr, "baton ctl:", scrub.Text(err.Error()))
+	return code
 }
 
 type ctlList struct{}

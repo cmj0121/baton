@@ -52,6 +52,30 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+// TestValidateRejectsAnImageTheRuntimeWouldReadAsAFlag is the argument-injection
+// regression, and the one place in baton where it costs more than a misparse:
+// Wrap puts the image in `docker run <flags> IMAGE <command>`, and the runtime
+// reads a leading "-" there as another flag. `docker run --rm --network host
+// --privileged true` is what that produces — checked against Docker 29.4.0,
+// which takes --privileged as an option and `true` as the image — so an image
+// beginning with "-" does not fail to start a container, it starts a LESS
+// confined one. Wrap calls Validate, so refusing here covers the spawn as well
+// as the config load.
+func TestValidateRejectsAnImageTheRuntimeWouldReadAsAFlag(t *testing.T) {
+	p := Policy{Mode: ModeDocker, Image: "--privileged"}
+	if err := p.Validate(); err == nil {
+		t.Fatal("an image beginning with '-' must be refused: the runtime reads it as a flag")
+	}
+	// And the refusal must reach the spawn, not only the config load.
+	if _, err := p.Wrap("baton-x", ptymgr.Spec{Dir: t.TempDir()}, limits.Limits{}); err == nil {
+		t.Fatal("Wrap must refuse the same policy")
+	}
+	// An interior dash is an ordinary image name and must keep working.
+	if err := (Policy{Mode: ModeDocker, Image: "my-org/my-agent:v1"}).Validate(); err != nil {
+		t.Fatalf("an interior dash is a normal image name: %v", err)
+	}
+}
+
 func TestRuntime(t *testing.T) {
 	if got := dockerPolicy().Runtime(); got != "docker" {
 		t.Fatalf("Runtime() = %q, want docker", got)

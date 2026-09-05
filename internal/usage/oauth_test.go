@@ -3,10 +3,12 @@ package usage
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -269,5 +271,54 @@ func TestParseCredentials(t *testing.T) {
 		if _, err := parseCredentials([]byte(junk)); !errors.Is(err, errNoToken) {
 			t.Errorf("%s: err = %v, want errNoToken", name, err)
 		}
+	}
+}
+
+// paddedOAuthBody builds a well-formed endpoint answer of exactly n bytes, by
+// padding a field the payload does not read. It is the shape of a hostile or
+// broken answer: valid JSON all the way down, and only its SIZE wrong.
+func paddedOAuthBody(n int) string {
+	const head = `{"five_hour":{"utilization":37.0,"resets_at":"2026-08-20T14:00:00.000000+00:00"},"pad":"`
+	const tail = `"}`
+	return head + strings.Repeat("p", n-len(head)-len(tail)) + tail
+}
+
+// TestOAuthBodyIsCapped drives an oversized answer at the source and checks it is
+// refused rather than buffered.
+//
+// This is a NETWORK input, and the only one in the file whose size baton does not
+// control. Unbounded, an httptest endpoint streaming 512 MiB inside a single JSON
+// string took the process to 3.5 GB allocated and 3.59 GB of heap in 3.3 s — well
+// inside the client's 10 s timeout, so the ceiling was the link speed and nothing
+// else. In the daemon that is the whole fleet.
+//
+// The body is one byte over the cap and otherwise perfectly valid, so the only
+// thing that can refuse it is the cap: widen maxUsageBody and this decodes.
+func TestOAuthBodyIsCapped(t *testing.T) {
+	p, _ := newTestOAuth(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, paddedOAuthBody(maxUsageBody+1))
+	})
+	if l, ok := p.Limits(context.Background()); ok {
+		t.Fatalf("an answer past the cap was decoded: %+v", l)
+	}
+}
+
+// legitimateBody is the largest answer these tests claim the endpoint sends,
+// written as a figure rather than as maxUsageBody-minus-something. A test that
+// sizes its input off the constant it is checking moves with the constant and can
+// never catch a cap narrowed to where it bites. A mebibyte is already thousands of
+// times the real payload, which is five small objects.
+const legitimateBody = 1 << 20
+
+// TestOAuthBodyUnderTheCapIsRead is the other half: an answer far larger than the
+// endpoint has ever sent still has to decode. A cap that fired on a legitimate
+// answer would cost the user their quota reading for a whole back-off window.
+func TestOAuthBodyUnderTheCapIsRead(t *testing.T) {
+	p, _ := newTestOAuth(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, paddedOAuthBody(legitimateBody))
+	})
+	l, ok := p.Limits(context.Background())
+	if !ok || l.FiveHour == nil || l.FiveHour.UsedPercent != 37 {
+		t.Fatalf("an answer under the cap should be read whole, got (%+v, %v)", l, ok)
 	}
 }

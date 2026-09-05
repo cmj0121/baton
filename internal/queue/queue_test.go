@@ -113,6 +113,51 @@ func TestLoadAllSkipsAndQuarantinesBad(t *testing.T) {
 	}
 }
 
+// The backlog is many files, so a crash damages one of them and leaves the rest
+// whole. Every shape a crash actually produces must cost exactly the one task it
+// landed on: the others still load, and LoadAll still reports no error, because
+// one unreadable task file is not a reason to refuse the operator their backlog.
+func TestLoadAllPostCrashArtifactsCostOnlyTheirOwnTask(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body []byte
+	}{
+		{"a zero-length task file", []byte{}},
+		{"nothing but NULs", make([]byte, 2048)},
+		{"a task cut off mid-object", []byte(`{"schema":1,"task":{"id":"t2"`)},
+		{"a whole task with a NUL tail", append([]byte(`{"schema":1,"task":{"id":"t2"}}`), make([]byte, 64)...)},
+		{"a whole task with a garbage tail", []byte(`{"schema":1,"task":{"id":"t2"}}` + "\xff\xfe rubbish")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStore(t)
+			if err := s.Save(task.Task{ID: "t1", Prompt: "good", Status: task.Queued}); err != nil {
+				t.Fatalf("save good: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(s.Dir(), "t2.json"), tc.body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			got, bad, err := s.LoadAll()
+			if err != nil {
+				t.Fatalf("LoadAll returned an error, want the backlog to load: %v", err)
+			}
+			if len(got) != 1 || got[0].ID != "t1" {
+				t.Fatalf("the undamaged task should still load, got %+v", got)
+			}
+			if len(bad) != 1 || bad[0] != "t2" {
+				t.Fatalf("the damaged task should be reported bad exactly once, got %v", bad)
+			}
+			// And it must be quarantinable, or the next boot reports it again forever.
+			if err := s.Quarantine("t2"); err != nil {
+				t.Fatalf("quarantine: %v", err)
+			}
+			if _, bad, _ = s.LoadAll(); len(bad) != 0 {
+				t.Fatalf("after quarantine the damaged file should be out of the way, got %v", bad)
+			}
+		})
+	}
+}
+
 // TestMissingDirIsEmpty checks LoadAll on a never-created backlog is empty, not an
 // error (first run).
 func TestMissingDirIsEmpty(t *testing.T) {

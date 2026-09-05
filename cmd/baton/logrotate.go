@@ -49,6 +49,24 @@ const (
 	rotateLockSuffix = ".lock"
 )
 
+// logPerm is what every generation of this log is created with, and it is 0600
+// for the reason panellog.filePerm is: the file carries content, not just the
+// fact that something ran. logScoreFolds writes the verbatim text of a fleet
+// memory entry (internal/server/score.go), and a vetoed delivery writes the
+// verbatim text of a task brief (internal/server/server.go) — both at levels the
+// default verbosity keeps. score.md itself is 0600, so anything wider here
+// republishes at a looser mode exactly what the store is careful to keep.
+//
+// It applies to the ROTATED generation too, which is a second creation site: a
+// mode set only on the first open would widen the log again the first time it
+// filled. The lock file below has always been 0600 and stays that way.
+//
+// $HOME/.baton is 0700, so on the default path this is the inner of two layers —
+// but --log=FILE puts the log wherever an operator points it, where the outer
+// layer is whatever that directory happens to be. paths.SecureSocket makes the
+// same argument for the socket sitting behind that same 0700 directory.
+const logPerm os.FileMode = 0o600
+
 // logRotator is the writer under the daemon's (and every CLI's) zerolog: it
 // appends to the log file and rotates it when it has grown past a cap.
 //
@@ -131,7 +149,7 @@ type logRotator struct {
 // the cap from the inside. It is not enough on its own — the daemon runs for
 // weeks and opens once, which is why Write carries the same check.
 func openLogRotator(path string, max int64) (*logRotator, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, logPerm)
 	if err != nil {
 		return nil, fmt.Errorf("open log file %s: %w", path, err)
 	}
@@ -211,7 +229,7 @@ func (r *logRotator) roll() {
 	if fi, serr := os.Stat(r.path); serr == nil && fi.Size() >= r.max {
 		_ = os.Rename(r.path, r.path+rotatedLogSuffix)
 	}
-	nf, err := os.OpenFile(r.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	nf, err := os.OpenFile(r.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, logPerm)
 	if err != nil {
 		r.n.Store(0)
 		return

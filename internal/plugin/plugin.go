@@ -16,13 +16,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"time"
 
 	"github.com/rs/zerolog/log"
 	lua "github.com/yuin/gopher-lua"
 
 	"github.com/cmj0121/baton/internal/config"
+	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/proto"
 )
 
@@ -262,12 +262,26 @@ func (p *Plugin) load(path string, base config.Config) (LoadResult, error) {
 	firstLoad := !p.loaded
 	p.loaded = true
 
-	if _, statErr := os.Stat(path); errors.Is(statErr, fs.ErrNotExist) {
-		log.Debug().Str("path", path).Msg("no plugin file; running with config defaults")
-		return p.result(), nil
+	f, openErr := paths.OpenTrusted(path)
+	if openErr != nil {
+		if errors.Is(openErr, fs.ErrNotExist) {
+			log.Debug().Str("path", path).Msg("no plugin file; running with config defaults")
+			return p.result(), nil
+		}
+		return p.result(), p.refuse(path, openErr)
 	}
+	defer func() { _ = f.Close() }()
 
-	if err := p.L.DoFile(path); err != nil {
+	// Compiled from the open descriptor rather than from the path, because opening
+	// the path a second time would run whatever is there by then. These are the
+	// bytes OpenTrusted vetted, so nothing can be substituted between the verdict
+	// and the execution.
+	fn, err := p.L.Load(f, path)
+	if err == nil {
+		p.L.Push(fn)
+		err = p.L.PCall(0, 0, nil)
+	}
+	if err != nil {
 		// Non-fatal: the daemon runs on with whatever (config/commands) ran before the
 		// error. Surface it so the caller can log it.
 		return p.result(), fmt.Errorf("load plugin %s: %w", path, err)
@@ -278,6 +292,32 @@ func (p *Plugin) load(path string, base config.Config) (LoadResult, error) {
 		p.dispatch("server.reload", map[string]any{})
 	}
 	return p.result(), nil
+}
+
+// refuse reports a plugin file baton would not execute — one whose permissions,
+// owner, or directory say somebody other than this user could have decided what
+// runs (see paths.OpenTrusted). It returns the error the caller still logs.
+//
+// IT IS LOUDER THAN A SYNTAX ERROR ON PURPOSE, because it is a different kind of
+// event. A Lua error is the operator's own file failing in a way the operator
+// just caused: they edited it, they pressed C-t R, and the feedback loop is one
+// keystroke long. This is a statement about somebody ELSE, the operator did not
+// cause it, and it will refuse identically on every reload from now on. The
+// quiet failure is inverted too — after a syntax error you know your hooks are
+// off, whereas a plugin that worked for months and stopped when a mode bit moved
+// looks exactly like a plugin that is working.
+//
+// It is deliberately NOT fatal. The road in is shared by the boot pass and every
+// reload, and on a reload the daemon is holding live agent panels: killing the
+// fleet because a mode bit changed would turn an integrity concern into certain
+// loss of the operator's work. So the plugin does not run and the operator is
+// told twice — an error in the daemon log, and a notice on every attached
+// cockpit, which is the half a log file cannot deliver.
+func (p *Plugin) refuse(path string, cause error) error {
+	err := fmt.Errorf("refusing to run plugin %s: %w", path, cause)
+	log.Error().Str("path", path).Err(cause).Msg("plugin refused: only its owner may write it")
+	p.host.Notify("plugin not loaded: " + cause.Error())
+	return err
 }
 
 // result snapshots the registries into a LoadResult for the daemon to apply.

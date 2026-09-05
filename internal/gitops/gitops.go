@@ -104,6 +104,58 @@ func Resolve(op Op, dir, arg, editor string) (name string, args, env []string, e
 // synchronously elsewhere and never reach here.
 func NeedsPTY(op Op) bool { return op == OpCommit }
 
+// maxCaptureBytes bounds how much of a captured op's output is held in memory.
+//
+// A capture's whole output becomes one gitout message on the socket, so whatever
+// git prints is a payload the daemon holds and then broadcasts. `git status` is
+// the op that can run away: it collapses an untracked DIRECTORY to a single line,
+// but lists root-level untracked files one per line — 60,000 of them measured at
+// 3 MB against git 2.55.0, scaling linearly with no ceiling of its own. That is
+// an ordinary agent accident (a build that sprayed files beside the source)
+// rather than an attack, which is the reason to bound it rather than to trust it.
+//
+// 256 KiB is far past any status, log or push message worth reading in a popup,
+// and the marker below says when something was dropped.
+const maxCaptureBytes = 256 << 10
+
+// capTruncationSlack is how much the marker itself may add past the cap, so a
+// test can assert the bound without hard-coding the marker's length.
+const capTruncationSlack = 128
+
+// capped is an io.Writer that keeps at most cap bytes and counts the rest. Both
+// of a command's streams share ONE of these, exactly as they shared one Buffer
+// before, so stdout and stderr stay interleaved in the order git wrote them.
+type capped struct {
+	buf     bytes.Buffer
+	cap     int
+	dropped int
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	switch room := c.cap - c.buf.Len(); {
+	case room >= len(p):
+		return c.buf.Write(p)
+	case room > 0:
+		if _, err := c.buf.Write(p[:room]); err != nil {
+			return 0, err
+		}
+		c.dropped += len(p) - room
+	default:
+		c.dropped += len(p)
+	}
+	// The full length is reported even for the bytes thrown away: a short write is
+	// an I/O error to exec, and would kill a command that is merely verbose.
+	return len(p), nil
+}
+
+// String is the kept output, with a marker when anything was dropped.
+func (c *capped) String() string {
+	if c.dropped == 0 {
+		return c.buf.String()
+	}
+	return fmt.Sprintf("%s\n… truncated at %d bytes\n", c.buf.String(), c.cap)
+}
+
 // CaptureResult is the outcome of a captured op: git's combined output text and
 // whether it exited non-zero. A non-zero exit is not an error here — the output
 // (git's own message, e.g. a push rejection) is exactly what the popup should
@@ -135,8 +187,8 @@ func Capture(op Op, dir, arg, editor string) (CaptureResult, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Env = append(append(os.Environ(), env...), "GIT_TERMINAL_PROMPT=0")
-	var buf bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &buf, &buf
+	buf := &capped{cap: maxCaptureBytes}
+	cmd.Stdout, cmd.Stderr = buf, buf
 
 	if runErr := cmd.Run(); runErr != nil {
 		out := buf.String()

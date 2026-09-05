@@ -5,6 +5,7 @@ import (
 
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/scrub"
 )
 
 // stateInfo is how a panel state renders: a glyph LED, a label, and a semantic
@@ -116,12 +117,37 @@ func exitedIDs(panels []panel.Panel) []string {
 	return ids
 }
 
-// mergeFleet maps a server snapshot into the dashboard's panel model. The server
-// owns the fleet now, so this is a faithful translation — whatever it sends is
-// what the cockpit shows.
+// mergeFleet maps a server snapshot into the dashboard's panel model, scrubbing
+// the four strings an AGENT chose on its way in.
+//
+// The server owns the fleet, so everything else here is a faithful translation.
+// The labels are the exception: a panel renames itself, groups itself, and is
+// dispatched a brief, and every one of those strings is drawn straight onto the
+// operator's real terminal by a dozen different surfaces — a tree row, a card, a
+// group header, a zoom footer, the split roster. Filtering each of those is a
+// list nobody can keep complete; filtering the snapshot once is the only place
+// that covers a surface added next week.
+//
+// It takes internal/scrub rather than sanitizeText because these are LABELS, one
+// line by construction, and scrub is the filter shaped for that: it folds a
+// newline or a tab to a space (sanitizeText keeps a tab, which would shear the
+// column alignment the tree row's fixed block depends on) and it drops the format
+// characters (U+202E and the bidi isolates) that sanitizeText keeps — a title that
+// renders its own text backwards is a spoof even though it executes nothing.
+// sanitizeText stays where it belongs: on a rendered LINE of foreign output, a
+// diff hunk or a git log line, where a tab is column data.
+//
+// Cwd is deliberately NOT scrubbed here. It is the one field the cockpit sends
+// back — "open a shell here" spawns in it — so folding the double space out of a
+// real directory name would spawn in the wrong place. It is filtered where it is
+// drawn instead; see shortPath.
 func mergeFleet(panels []proto.Panel) []panel.Panel {
 	out := make([]panel.Panel, len(panels))
 	for i, p := range panels {
+		p.Title = scrub.Text(p.Title)
+		p.Group = scrub.Text(p.Group)
+		p.Task = scrub.Text(p.Task)
+		p.Profile = scrub.Text(p.Profile)
 		out[i] = panel.FromProto(p)
 	}
 	return out

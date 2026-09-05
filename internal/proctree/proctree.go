@@ -18,6 +18,7 @@ import (
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/scrub"
 )
 
 // Kind tags a node's role: it drives how the line renders and is the JSON
@@ -232,23 +233,32 @@ func lineLabel(n *Node) string {
 // their bare label, a raw process leads with its pid, and daemon/panel nodes append
 // their pid and comm. Callers that render the resource columns their own way (the
 // cockpit's coloured CPU bar) pair this with their own suffix.
+//
+// It scrubs, because a line of this tree is three quarters chosen by the thing
+// being watched: a panel's title and group are what an agent renamed itself to,
+// and a comm is the argv0 of a process an agent spawned. `baton ctl tree` prints
+// the result with fmt.Print, straight to a real terminal — an ESC in a title
+// erases the operator's screen there exactly as it would in the cockpit. This is
+// the one function that turns a node into a plaintext line, so both surfaces are
+// covered here and the fields stay exact for `--json`, where encoding/json
+// escapes a control byte itself.
 func LabelText(n *Node) string {
 	switch n.Kind {
 	case KindGroup:
-		return n.Label
+		return scrub.Text(n.Label)
 	case KindProc:
 		s := fmt.Sprintf("pid=%d", n.Pid)
 		if n.Comm != "" {
-			s += "  " + n.Comm
+			s += "  " + scrub.Text(n.Comm)
 		}
 		return s
 	}
-	s := n.Label
+	s := scrub.Text(n.Label)
 	if n.Pid > 0 {
 		s += fmt.Sprintf(" pid=%d", n.Pid)
 	}
 	if n.Comm != "" {
-		s += "  " + n.Comm
+		s += "  " + scrub.Text(n.Comm)
 	}
 	return s
 }

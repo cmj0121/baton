@@ -179,6 +179,29 @@ func TestSetRingCapResetsToDefault(t *testing.T) {
 	if m.ringCap != DefaultRingCap {
 		t.Fatalf("a zero cap should reset to DefaultRingCap, got %d", m.ringCap)
 	}
+	m.SetRingCap(maxRingCap * 4)
+	if m.ringCap != maxRingCap {
+		t.Fatalf("an absurd cap should ceil at maxRingCap, got %d", m.ringCap)
+	}
+}
+
+// TestRingCapCeilingSurvivesTheFirstByte is the ceiling's reason for existing.
+// appendRing compares the ring's length against 2*ringCap, which is NEGATIVE for
+// a ringCap past half the largest int — so the trim fires on the panel's first
+// byte of output and make([]byte, ringCap) panics. `replay-kb: 5000000000000000`
+// in the operator's own config is multiplied by 1024 on the way here and lands
+// exactly there, taking the daemon and every panel with it.
+func TestRingCapCeilingSurvivesTheFirstByte(t *testing.T) {
+	m := New()
+	m.SetRingCap(5_000_000_000_000_000 * 1024)
+	if 2*m.ringCap < 0 {
+		t.Fatalf("2*ringCap overflowed: ringCap = %d", m.ringCap)
+	}
+	p := &pane{}
+	m.appendRing(p, []byte("hello")) // panicked before the ceiling existed
+	if got := string(m.ringView(p)); got != "hello" {
+		t.Fatalf("ringView = %q, want %q", got, "hello")
+	}
 }
 
 // TestStartCmdRunsArgsInDir checks StartCmd honours the working directory and the
@@ -215,6 +238,62 @@ func TestStartCmdRunsArgsInDir(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("output never showed the workdir leaf %q; got %q", leaf, string(got))
+}
+
+// TestStartCmdHandsThePanelTheWholeDaemonEnvironment pins the inheritance
+// contract, in both directions, because it is a real decision and nothing was
+// stating it.
+//
+// A panel is started from os.Environ(), so EVERYTHING the daemon holds reaches
+// every panel — the control socket and panel id, which is the point, and equally
+// whichever model API key, forge token or agent-socket path happened to be
+// exported in the shell baton was launched from. There is no filter and there
+// should not be one: an agent CLI needs its own API key to be an agent at all,
+// and a blanket strip would break every backend in the catalogue while a
+// determined panel could read the daemon's environment from the OS anyway. The
+// narrowing mechanism is container isolation's env-allow list, which is
+// default-deny by construction.
+//
+// So this test is not a complaint. It is the statement SECURITY.md now makes,
+// held in place: if someone later adds a filter here, this fails and they have
+// to say which half of the contract they meant to change.
+func TestStartCmdHandsThePanelTheWholeDaemonEnvironment(t *testing.T) {
+	t.Setenv("BATON_TEST_INHERITED_SECRET", "sk-not-a-real-key")
+	m := New()
+
+	var mu sync.Mutex
+	var got []byte
+	m.OnOutput(func(_ string, data []byte) {
+		mu.Lock()
+		got = append(got, data...)
+		mu.Unlock()
+	})
+
+	// The spec's own Env is appended AFTER os.Environ(), so a per-panel value
+	// overrides an inherited one of the same name — assert both in one spawn.
+	spec := Spec{
+		Command: "/bin/sh",
+		Args:    []string{"-c", `printf "[%s][%s]" "$BATON_TEST_INHERITED_SECRET" "$BATON_TEST_OVERRIDE"`},
+		Dir:     t.TempDir(),
+		Env:     []string{"BATON_TEST_OVERRIDE=per-panel"},
+	}
+	if err := m.StartCmd("env", spec); err != nil {
+		t.Fatalf("StartCmd: %v", err)
+	}
+	defer m.Stop("env")
+
+	want := "[sk-not-a-real-key][per-panel]"
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		seen := strings.Contains(string(got), want)
+		mu.Unlock()
+		if seen {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("panel env never showed %q; got %q", want, string(got))
 }
 
 func TestOnCloseFiresOnExit(t *testing.T) {
@@ -388,6 +467,9 @@ func TestRingCap(t *testing.T) {
 	}
 	if got := New(WithRingCap(10)).ringCap; got != minRingCap {
 		t.Fatalf("a tiny cap should floor at %d, got %d", minRingCap, got)
+	}
+	if got := New(WithRingCap(1 << 60)).ringCap; got != maxRingCap {
+		t.Fatalf("an absurd cap should ceil at %d, got %d", maxRingCap, got)
 	}
 
 	// A custom cap above the floor exposes only the most recent bytes (the tail),

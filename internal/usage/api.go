@@ -35,6 +35,11 @@ type APIProvider struct {
 // a hard ceiling. maxUsagePages bounds the pagination loop so a reply that keeps
 // reporting has_more (a bug or a bad proxy) cannot spin forever within the
 // request deadline.
+//
+// It is the package's cap and not this file's: the oauth source decodes its own
+// answer through the same figure. Two HTTP sources reading the same class of
+// input want one number to defend rather than two to keep in step, and the oauth
+// payload — five small objects — is nowhere near it either.
 const (
 	maxUsageBody  = 8 << 20 // 8 MiB
 	maxUsagePages = 1000

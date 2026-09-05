@@ -6,6 +6,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"strings"
@@ -648,11 +649,55 @@ func (a AgentProfile) Isolation() (isolate.Policy, error) {
 	return isolate.Policy{}, err
 }
 
+// maxConfigBytes caps either YAML file the daemon reads.
+//
+// Load's own comment already states the fact this is built on — "the file is a
+// few kilobytes and is read once at boot and once per SIGHUP" — and the read had
+// nothing holding it to that. It is not only a boot-time read either: the SIGHUP
+// arrives as a server.reload over the control socket, so how much the daemon
+// allocates here is a thing a peer can ask for repeatedly, and the bytes are
+// unmarshalled TWICE (see Load's second, loose pass) before the parsed tree on
+// top of that.
+//
+// One mebibyte, which is a couple of hundred times "a few kilobytes" and past any
+// hand-written file: the largest thing this schema holds is the agents map, and a
+// hundred profiles with their limits and args is still tens of kilobytes.
+//
+// It degrades exactly the way a syntax error already does, which is why it can be
+// an error at all: every caller of Load and LoadTUI falls back to the built-in
+// defaults and says so, so a file too big to read costs the operator their
+// settings rather than the fleet its daemon.
+const maxConfigBytes = 1 << 20
+
+// readConfigFile reads a config file whole, refusing one past maxConfigBytes
+// without ever holding it. The extra byte is what reveals a file that ran over
+// without its tail being loaded.
+func readConfigFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	data, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	// The length test is what makes this a cap rather than a truncation, and YAML
+	// is the format where the difference bites: a comment truncated anywhere is
+	// still a valid comment, so a reader that stopped at the limit and parsed what
+	// it had would apply a config it never finished reading. See the test built on
+	// exactly that file.
+	if len(data) > maxConfigBytes {
+		return nil, fmt.Errorf("%s is over %d bytes, which is not a config file", path, maxConfigBytes)
+	}
+	return data, nil
+}
+
 // Load reads the config file. A missing file yields an empty Config and no
 // error, so a first run just uses the defaults.
 func Load() (Config, error) {
 	var c Config
-	data, err := os.ReadFile(paths.ConfigFile())
+	data, err := readConfigFile(paths.ConfigFile())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return c, nil
@@ -762,7 +807,7 @@ func isYAMLNumber(v any) bool {
 // is broadcast to frontends.
 func LoadTUI() (TUIConfig, error) {
 	var t TUIConfig
-	data, err := os.ReadFile(paths.TUIConfigFile())
+	data, err := readConfigFile(paths.TUIConfigFile())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return t, nil

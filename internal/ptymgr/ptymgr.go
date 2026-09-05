@@ -31,6 +31,24 @@ const DefaultRingCap = 256 * 1024
 // reads the last attnTailBytes) always have something to work with.
 const minRingCap = 4 * 1024
 
+// maxRingCap ceils it, and the ceiling is not about memory. appendRing compares
+// the ring's length against 2*ringCap, and a ringCap past half the largest int
+// makes that product negative — so the comparison is true on the panel's FIRST
+// byte of output and make([]byte, ringCap) panics with "makeslice: len out of
+// range", killing the daemon and every panel in it. That value arrives from a
+// number in the operator's own config: `replay-kb: 5000000000000000` is
+// multiplied by 1024 on the way here.
+//
+// One gibibyte: four thousand times DefaultRingCap, and past any replay buffer
+// anyone has a use for, which is the point — the number exists so that a size
+// cannot become a panic, not to express an opinion about how much scrollback is
+// reasonable. A machine that cannot allocate that much then fails at allocation,
+// which says what happened.
+const maxRingCap = 1 << 30
+
+// clampRingCap fits a requested ring size between the floor and the ceiling.
+func clampRingCap(bytes int) int { return min(max(bytes, minRingCap), maxRingCap) }
+
 // pane is one PTY plus a ring buffer of its recent output. After the process
 // exits the pane is kept (dead) so its final output can still be replayed; it is
 // freed only when the panel is closed or purged.
@@ -71,26 +89,24 @@ var ErrPumpsRunning = errors.New("ptymgr: PTY pumps still running")
 // Option tunes a Manager at construction.
 type Option func(*Manager)
 
-// WithRingCap sets the per-panel replay buffer to bytes (floored at minRingCap),
-// the recent output replayed on attach to seed a frontend's scrollback.
+// WithRingCap sets the per-panel replay buffer to bytes (clamped to
+// [minRingCap, maxRingCap]), the recent output replayed on attach to seed a
+// frontend's scrollback.
 func WithRingCap(bytes int) Option {
 	return func(m *Manager) { m.ringCap = bytes }
 }
 
 // SetRingCap changes the per-panel replay buffer size for output kept from here
-// on. A value at or below zero resets it to the built-in default; anything below
-// minRingCap is floored. Existing rings are trimmed to the new cap on their next
-// write, so a change takes hold under a running fleet without touching any live
-// process — the hot-reload path. Safe for concurrent use.
+// on. A value at or below zero resets it to the built-in default; anything outside
+// [minRingCap, maxRingCap] is clamped. Existing rings are trimmed to the new cap on
+// their next write, so a change takes hold under a running fleet without touching
+// any live process — the hot-reload path. Safe for concurrent use.
 func (m *Manager) SetRingCap(bytes int) {
-	switch {
-	case bytes <= 0:
+	if bytes <= 0 {
 		bytes = DefaultRingCap
-	case bytes < minRingCap:
-		bytes = minRingCap
 	}
 	m.mu.Lock()
-	m.ringCap = bytes
+	m.ringCap = clampRingCap(bytes)
 	m.mu.Unlock()
 }
 
@@ -100,9 +116,7 @@ func New(opts ...Option) *Manager {
 	for _, opt := range opts {
 		opt(m)
 	}
-	if m.ringCap < minRingCap {
-		m.ringCap = minRingCap
-	}
+	m.ringCap = clampRingCap(m.ringCap)
 	return m
 }
 

@@ -352,7 +352,12 @@ type SearchHit struct {
 	Panel string `json:"panel"`           // panel id the match is in
 	Title string `json:"title"`           // panel title, so the results list stands alone
 	Group string `json:"group,omitempty"` // work item the panel belongs to, for grouping the hits
-	Text  string `json:"text"`            // the matched line, plain (escape sequences stripped)
+	// Text is the matched line. The daemon strips the CSI sequences it finds, so
+	// the match is made against what a terminal would SHOW rather than against the
+	// bytes — but that is a matching aid, not a safety promise: an OSC, a bare ESC
+	// c, a lone BEL and every format character survive it. A frontend that draws
+	// this to a terminal filters it itself; see fleetHitRow.
+	Text string `json:"text"`
 }
 
 // PluginCommand is one command a Lua plugin registered, surfaced to frontends so

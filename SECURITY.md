@@ -79,6 +79,18 @@ agent accidents, not a sandbox against a hostile program:
   holds everything typed into that shell, which is why nothing is logged until
   you set `panel.log-dir`, and why auto-logging is per agent profile rather than
   fleet-wide.
+- **A panel inherits the daemon's whole environment.** Every panel is started
+  from the daemon's own environment plus `TERM`, so whatever was exported in the
+  shell you launched baton from reaches every agent, every shell panel and every
+  ephemeral git or log panel: `BATON_SOCK` and `BATON_PANEL_ID`, which is the
+  point, and equally your `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`, `AWS_*` or
+  `SSH_AUTH_SOCK`, which is the part worth knowing. There is no filter, and a
+  blanket one would be wrong: an agent CLI needs its own API key to be an agent
+  at all, and a panel running as your uid could read the daemon's environment
+  anyway. If you run a third-party agent binary you would not hand those to, the
+  narrowing mechanism is container isolation's `env-allow`
+  ([docs/ISOLATION.md](docs/ISOLATION.md)), which passes **only** the variables
+  you name — or start the daemon from a shell that does not hold them.
 - **The socket is uid-private.** Any local process running as you can connect —
   that is the intended trust level, not a flaw.
 - **Lua plugins** (`$HOME/.baton/plug-in.lua`) run unsandboxed, with your

@@ -43,6 +43,47 @@ func TestWorktreeRemoveWithTheTreeAsItsOwnDir(t *testing.T) {
 	}
 }
 
+// TestWorktreeAddFencesAPathThatLooksLikeAFlag pins the "--" in WorktreeAdd.
+//
+// Both worktree helpers carry an end-of-options guard and a comment explaining
+// it, and until this test neither guard was held by anything: deleting the "--"
+// from either call left the whole package green. git 2.55.0 answers an unfenced
+// leading-dash path with `error: unknown option`, so the fence is the difference
+// between a path being data and being read as an option.
+//
+// The path has to be RELATIVE to carry a leading "-" at all — an absolute one
+// begins with "/" and was never at risk — and git resolves it against cmd.Dir,
+// so "-always" lands inside the repo. Unfenced, git 2.55.0 answers `error:
+// unknown switch 'a'`; fenced, the directory exists. baton's own caller passes
+// an absolute path today, which is what makes this defence in depth rather than
+// a live hole — and exactly why nothing was holding the guard in place.
+func TestWorktreeAddFencesAPathThatLooksLikeAFlag(t *testing.T) {
+	repo := initRepo(t)
+
+	if err := WorktreeAdd(repo, "feature/fenced-add", "-always"); err != nil {
+		t.Fatalf("WorktreeAdd on a leading-dash path: %v — the path must reach git as data", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "-always", ".git")); err != nil {
+		t.Fatalf("worktree not created at %q: %v", filepath.Join(repo, "-always"), err)
+	}
+}
+
+// TestWorktreeRemoveFencesAPathThatLooksLikeAFlag is the same pin on the remove
+// side, so the pair also proves the two guards agree about what a path is.
+func TestWorktreeRemoveFencesAPathThatLooksLikeAFlag(t *testing.T) {
+	repo := initRepo(t)
+	if err := WorktreeAdd(repo, "feature/fenced-remove", "-always"); err != nil {
+		t.Fatalf("WorktreeAdd: %v", err)
+	}
+
+	if err := WorktreeRemove(repo, "-always"); err != nil {
+		t.Fatalf("WorktreeRemove on a leading-dash path: %v — the path must reach git as data", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "-always")); !os.IsNotExist(err) {
+		t.Fatalf("worktree at %q should be gone, stat err = %v", filepath.Join(repo, "-always"), err)
+	}
+}
+
 // TestWorktreeRemoveRefusesAPlainDirectory is the other half of "a path is
 // enough": a directory that is not a worktree is REFUSED rather than deleted,
 // even when it sits inside a repository. git resolves the repo from dir and then

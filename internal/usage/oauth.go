@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -231,8 +232,16 @@ func (p *OAuthLimits) fetch(ctx context.Context) (Limits, error) {
 		return Limits{}, fmt.Errorf("usage endpoint answered %d: %w", resp.StatusCode, errBadStatus)
 	}
 
+	// Through a LimitReader, the way api.go reads its own bodies. This is a
+	// NETWORK response — the only thing in this file baton does not control the
+	// size of — and encoding/json buffers a whole value before it returns one, so
+	// an unbounded decoder here hands whoever answers the request a lever on the
+	// daemon's memory. Measured against an httptest endpoint that streamed 512 MiB
+	// inside one JSON string: 3.5 GB allocated, 3.59 GB of heap, in 3.3 s — well
+	// inside this client's 10 s timeout, so the real ceiling was the link speed.
+	// The genuine payload is five small objects, a few hundred bytes.
 	var payload oauthPayload
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxUsageBody)).Decode(&payload); err != nil {
 		return Limits{}, fmt.Errorf("usage endpoint sent something unreadable: %w", err)
 	}
 
@@ -309,13 +318,59 @@ func tokenFromFile(path string) (string, error) {
 	return parseCredentials(b)
 }
 
+// keychainTimeout bounds the keychain lookup, which is the one call in this file
+// that can wait on a HUMAN rather than on a machine.
+//
+// The lookup normally answers in milliseconds. The slow case is the first one:
+// macOS puts up a dialog asking whether baton may read the credential, and the
+// operator has to notice it — it can open behind a full-screen terminal or on
+// another Space — read it, decide whether a multiplexer should hold their token,
+// and possibly type their login password. That is the operation the bound must
+// not cut off, and thirty seconds does cut it off; a person who looked away is
+// not a person who refused.
+//
+// Two minutes is comfortably past any of that, and being generous costs almost
+// nothing: while the lookup runs, inflight is set, so every other caller is
+// served the held reading immediately rather than queueing behind it, and the
+// only thing that goes stale is a cosmetic footer. It is also deliberately under
+// OAuthMinInterval (3 minutes), so a lookup that runs the bound out can never
+// still be going when the next fetch becomes eligible — one stuck prompt cannot
+// pile a second one on top of it.
+const keychainTimeout = 2 * time.Minute
+
+// keychainArgv is the lookup and keychainWait is its bound, both variables so a
+// test can prove the bound in milliseconds by pointing the first at a command
+// that never returns on its own and shortening the second.
+var (
+	keychainArgv = []string{"security", "find-generic-password", "-s", keychainService, "-w"}
+	keychainWait = keychainTimeout
+)
+
 // tokenFromKeychain reads the access token out of the macOS login keychain,
 // where Claude Code stores it under its own service name. The lookup may prompt
 // the user for keychain access the first time, which is the operating system
 // doing exactly what it should: baton is asking for somebody's credential, and
 // that ought to be a visible act.
+//
+// A visible act nobody answers, though, is an unbounded one. `security` waits on
+// that dialog for as long as it stands, and this call sits on the usage poller's
+// goroutine with inflight already set — so an unanswered prompt used to park the
+// poller for the daemon's life and leave inflight true forever, freezing the
+// footer and the quota bars together. It is bounded here rather than left to the
+// caller's context ON PURPOSE: that context carries the poll interval, which is
+// clamped no lower than ten seconds, and ten seconds is not an offer of consent
+// a person can accept. Wiring it through would have made the dialog impossible
+// to answer instead of merely slow.
 func tokenFromKeychain() (string, error) {
-	out, err := exec.Command("security", "find-generic-password", "-s", keychainService, "-w").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), keychainWait)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, keychainArgv[0], keychainArgv[1:]...)
+	// The kill on expiry closes `security`'s pipes, but Output waits on them
+	// rather than on the process, so this is what makes the bound a bound.
+	cmd.WaitDelay = time.Second
+
+	out, err := cmd.Output()
 	if err != nil {
 		// Deliberately not wrapped: the command's stderr can echo back what it was
 		// asked for, and this one was asked for a credential.

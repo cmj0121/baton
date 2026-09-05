@@ -28,6 +28,7 @@ import (
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/scrub"
 	"github.com/cmj0121/baton/internal/vtirm"
 )
 
@@ -1957,23 +1958,25 @@ func deleteLastWord(s string) string {
 // It returns the (possibly unchanged) text and a hint to show under the field.
 func completePath(in string) (string, string) {
 	if in == "~" {
-		in = "~/" // a bare ~ is the home dir; normalise so base stays a suffix of in
-	}
-	expanded := in
-	if home, err := os.UserHomeDir(); err == nil {
-		if strings.HasPrefix(in, "~/") {
-			expanded = filepath.Join(home, in[2:])
-			// filepath.Join strips a trailing separator; restore it so the split
-			// below yields the same empty base it would for the typed text. Without
-			// this, base came from the home-expanded path and was not a suffix of in,
-			// so `in[:len(in)-len(base)]` went negative and panicked on "~/" + Tab.
-			if strings.HasSuffix(in, "/") && !strings.HasSuffix(expanded, string(os.PathSeparator)) {
-				expanded += string(os.PathSeparator)
-			}
-		}
+		in = "~/" // a bare ~ is the home dir; normalise so the split below yields an empty base
 	}
 
-	dir, base := filepath.Split(expanded)
+	// Split the TYPED text, and expand only the directory half. filepath.Split
+	// guarantees dir+base == in, so base is a suffix of in by construction and the
+	// prefix re-attached below is a real prefix of it.
+	//
+	// Splitting the ~-EXPANDED path instead is what this used to do, and it is not
+	// safe: filepath.Join CLEANS, so a typed "." or ".." segment collapses and base
+	// becomes a segment the typed text never held. "~/." expands to the home
+	// directory itself, whose base is the username, and `in[:len(in)-len(base)]`
+	// goes negative by the length of the username — Tab in any path overlay, on a
+	// path any shell completes. The trailing-separator restore that used to sit
+	// here closed one instance of that ("~/" + Tab) rather than the invariant.
+	prefix, base := filepath.Split(in)
+	dir := prefix
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(dir, "~/") {
+		dir = filepath.Join(home, dir[2:])
+	}
 	if dir == "" {
 		dir = "."
 	}
@@ -1992,9 +1995,6 @@ func completePath(in string) (string, string) {
 		}
 		names = append(names, name)
 	}
-	// The last segment is byte-identical in `in` and `expanded` (only the leading
-	// ~ expands), so its length locates the typed prefix to re-attach.
-	prefix := in[:len(in)-len(base)]
 	switch len(names) {
 	case 0:
 		return in, "no match"
@@ -3755,7 +3755,15 @@ const (
 // behind an ellipsis. The tail is kept rather than the head because the tail is
 // what distinguishes one panel from another — every worktree under one repo
 // shares a prefix and differs at the end.
+//
+// It scrubs first, because a directory name is text an agent can choose: `mkdir
+// $'\e[2J'` and cd into it, and the panel's Cwd — read off the live process, not
+// off what it was launched with — carries the escape onto the dashboard. This is
+// the only place a Cwd or a log path is rendered, which is why the filter sits
+// here rather than at the snapshot: mergeFleet leaves Cwd exact because the
+// cockpit sends it back as a spawn directory.
 func shortPath(dir string, width int) string {
+	dir = scrub.Text(dir)
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		if dir == home {
 			return "~"
@@ -4716,11 +4724,15 @@ func (m model) outageCap() string {
 // pluginFooterCap renders the plugin's persistent footer segment (baton.footer),
 // e.g. a live token counter. Empty when no plugin set one, so the footer is
 // unchanged until a plugin opts in. Clipped so a long string never breaks the strip.
+//
+// Scrubbed for the same reason the status is: a plugin composes this from whatever
+// it was watching, which is agent output often enough, and it lands in the same
+// one-line strip.
 func (m model) pluginFooterCap() string {
 	if m.pluginFooter == "" {
 		return ""
 	}
-	return seg(truncate(m.pluginFooter, 32), colDark, colBrandHi)
+	return seg(truncate(scrub.Text(m.pluginFooter), 32), colDark, colBrandHi)
 }
 
 // frontendVersion is this build's version, defaulting to "dev" when unset (a
@@ -4746,6 +4758,26 @@ func (m model) versionLine() string {
 	return parts + " · protocol " + ver
 }
 
+// statusText is m.status as the footer may draw it.
+//
+// The status line is the cockpit's most promiscuous sink: forty-odd assignments
+// compose it, and several splice in text baton did not write — the daemon's error
+// reply ("error: " + sm.Error), which folds git's own stderr in on a failed push,
+// and a local err.Error() carrying a path. Scrubbing every contributor is a list
+// that goes stale; the strip renders m.status in exactly two places, so the filter
+// lives at both of those instead.
+//
+// The whitespace fold is not incidental here. A git error is genuinely
+// multi-line, and a raw newline in the footer breaks the one-line strip the whole
+// bar is laid out around — scrub folds it to a space, so a long error is clipped
+// by the budget rather than spilling.
+//
+// The callers that only TEST m.status — the "error" prefix that reddens the cap,
+// the TTL that ages it out — keep reading it raw. They decide a colour and a
+// lifetime, neither of which is a security control, and neither of which the
+// filter could change: a leading "error:" is unaffected by it.
+func (m model) statusText() string { return scrub.Text(m.status) }
+
 func (m model) statusBar(left, hint string) string {
 	// The run so far — "C-t …", "g …", "C-t v …" — in place of the older PREFIX
 	// chip, which said only that the leader was down and said it on the
@@ -4765,7 +4797,7 @@ func (m model) statusBar(left, hint string) string {
 	caps := prefixBadge + m.outageCap() + m.attentionBadge() + m.logCap() + m.pluginFooterCap() + m.usageCap() + stats + clock
 	right := caps
 	if budget := m.width - lipgloss.Width(left) - lipgloss.Width(caps) - 4; budget > 0 {
-		right += seg("● "+truncate(m.status, budget), colInk, statusBg) // "● " + cap padding
+		right += seg("● "+truncate(m.statusText(), budget), colInk, statusBg) // "● " + cap padding
 	}
 
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)

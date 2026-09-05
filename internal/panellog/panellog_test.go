@@ -236,6 +236,45 @@ func TestRollKeepsOnePreviousGeneration(t *testing.T) {
 	}
 }
 
+// A daemon killed mid-run leaves a log nobody rolled, and it can be well past
+// the cap — the roll only happens on a write, and the write that would have done
+// it is the one that died. The size bound therefore cannot live in memory: it has
+// to be re-derived from the file, or a fleet that is killed often enough grows a
+// log without limit and docs/LIMITS.md's promise is only true of tidy shutdowns.
+//
+// open() re-stats on every open for exactly this reason, so the first write after
+// the restart rolls.
+func TestOversizedLogLeftByAKillRollsOnTheNextWrite(t *testing.T) {
+	dir := t.TempDir()
+	name := FileName("build", "9", at)
+	path := filepath.Join(dir, name)
+	// The file a kill left: far past the cap, and no process holding it.
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", 4096)), 0o600); err != nil {
+		t.Fatalf("plant an oversized log: %v", err)
+	}
+
+	s, err := Open(dir, "build", "9", 64, at)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := s.Write([]byte("the first line after the restart\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := s.Close("logging stopped", at); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if _, err := os.Stat(path + ".1"); err != nil {
+		t.Fatalf("the oversized log a kill left was not rolled aside: %v", err)
+	}
+	if got := read(t, path+".1"); !strings.Contains(got, strings.Repeat("x", 4096)) {
+		t.Error("rolling the oversized log lost what it held")
+	}
+	if got := read(t, path); !strings.Contains(got, "the first line after the restart") {
+		t.Errorf("the fresh log should hold the write that triggered the roll:\n%s", got)
+	}
+}
+
 // TestCloseIsIdempotent covers the paths that all end in a close — switching
 // logging off, the panel exiting, the daemon shutting down — overlapping.
 func TestCloseIsIdempotent(t *testing.T) {

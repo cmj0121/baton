@@ -84,6 +84,35 @@ func TestParseAddressRejectsNonsense(t *testing.T) {
 	}
 }
 
+// TestParseAddressRefusesADestinationSSHWouldReadAsAnOption is the
+// argument-injection regression at the boundary. Target() is handed to ssh(1) as
+// its destination, and ssh reads any argument beginning with "-" as an option:
+// "-oProxyCommand=…" pasted into the remote form would run a command on the
+// operator's own machine rather than dial a host. Refusing it here is what turns
+// that into a legible "invalid host" in the form instead.
+func TestParseAddressRefusesADestinationSSHWouldReadAsAnOption(t *testing.T) {
+	for _, in := range []string{
+		"-oProxyCommand=touch /tmp/pwned", // the host alone carries the option
+		"-oProxyCommand=id:2222",          // …and survives a port being split off
+		"  -F/dev/null",                   // …and the leading trim
+		"-x@laptop.lan",                   // the LOGIN leads Target(), so it counts too
+	} {
+		if got, err := ParseAddress(in); err == nil {
+			t.Fatalf("ParseAddress(%q) = %+v, want an error: Target()=%q reaches ssh as an option", in, got, got.Target())
+		}
+	}
+}
+
+// A leading "-" is refused, but a "-" anywhere else in a name is ordinary and
+// must keep working — the guard is about ssh's option parsing, not about dashes.
+func TestParseAddressKeepsOrdinaryDashes(t *testing.T) {
+	for _, in := range []string{"build-box", "cmj@build-box-2:2222", "my-user@host"} {
+		if _, err := ParseAddress(in); err != nil {
+			t.Fatalf("ParseAddress(%q): %v — an interior dash is a normal name", in, err)
+		}
+	}
+}
+
 func TestAddressTargetAndString(t *testing.T) {
 	a, _ := ParseAddress("cmj@laptop.lan:2222")
 	if got := a.Target(); got != "cmj@laptop.lan" {

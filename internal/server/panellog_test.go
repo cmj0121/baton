@@ -2,6 +2,7 @@ package server
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -331,14 +332,42 @@ func TestFollowCommandPrefersLess(t *testing.T) {
 	name, args := followCommand("/tmp/a.log")
 	switch {
 	case strings.HasSuffix(name, "less"):
-		if len(args) != 2 || args[0] != "+F" || args[1] != "/tmp/a.log" {
-			t.Errorf("less args = %v; want [+F /tmp/a.log]", args)
+		if len(args) != 3 || args[0] != "+F" || args[1] != "--" || args[2] != "/tmp/a.log" {
+			t.Errorf("less args = %v; want [+F -- /tmp/a.log]", args)
 		}
 	case name == "tail":
-		if len(args) != 2 || args[0] != "-f" {
-			t.Errorf("tail args = %v; want [-f /tmp/a.log]", args)
+		if len(args) != 3 || args[0] != "-f" || args[1] != "--" {
+			t.Errorf("tail args = %v; want [-f -- /tmp/a.log]", args)
 		}
 	default:
 		t.Errorf("followCommand = %q; want less or tail", name)
+	}
+}
+
+// TestFollowCommandFencesThePath keeps the log path in the data position. Both
+// pagers read a leading "-" as an option wherever it sits — `tail -f -o=x.log`
+// answers "invalid option -- o" rather than following a file — and the path is
+// filepath.Join'd onto the configured panel.log-dir, which baton does not choose.
+// The generated basename can never lead with "-", so this is the directory's
+// case and defence in depth rather than a reachable hole; it costs one argument.
+func TestFollowCommandFencesThePath(t *testing.T) {
+	// Both branches, not whichever one this machine happens to take: emptying PATH
+	// is what forces the tail fallback, which on a host with less would otherwise
+	// go unasserted for good.
+	for _, tc := range []struct{ name, path string }{
+		{"less", os.Getenv("PATH")},
+		{"tail fallback", t.TempDir()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("PATH", tc.path)
+			_, args := followCommand("-o=owned.log")
+			i := slices.Index(args, "--")
+			if i < 0 {
+				t.Fatalf("followCommand args = %v; want an end-of-options %q before the path", args, "--")
+			}
+			if args[i+1] != "-o=owned.log" {
+				t.Fatalf("followCommand args = %v; want the path straight after %q", args, "--")
+			}
+		})
 	}
 }

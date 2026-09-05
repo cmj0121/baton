@@ -102,6 +102,41 @@ func TestLoadCorruptJSON(t *testing.T) {
 	assertCorruptedAside(t, dir, path)
 }
 
+// The shapes a crash leaves, as opposed to the shape a bad edit leaves. A
+// filesystem that allocated the block but never wrote it back hands the next
+// reader NUL bytes; a write cut in half hands it a valid prefix and nothing
+// else. None of them may fail boot, and each must be moved aside rather than
+// read: this file is the operator's layout, so a snapshot that cannot be trusted
+// has to be kept for them rather than silently overwritten.
+func TestLoadPostCrashArtifactsNeverFailBoot(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body []byte
+	}{
+		{"a zero-length file", []byte{}},
+		{"nothing but NULs", make([]byte, 4096)},
+		{"a snapshot cut off mid-object", []byte(`{"schema":1,"panels":[{"id":"p1",`)},
+		{"a whole snapshot with a NUL tail", append([]byte(`{"schema":1}`), make([]byte, 128)...)},
+		{"a whole snapshot with a garbage tail", []byte(`{"schema":1}` + "\xff\xfe rubbish")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "x.state.json")
+			if err := os.WriteFile(path, tc.body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load returned an error, want boot to proceed: %v", err)
+			}
+			if !reflect.DeepEqual(got, State{Schema: Schema}) {
+				t.Fatalf("got %+v, want an empty State", got)
+			}
+			assertCorruptedAside(t, dir, path)
+		})
+	}
+}
+
 func TestLoadNewerSchema(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "x.state.json")

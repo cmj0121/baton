@@ -404,7 +404,7 @@ func startDaemon(verbose int, logPath, pluginPath string, forced bool) error {
 
 	// The child logs through zerolog; redirect its std streams to the same file
 	// so panics and other non-logger output are captured too.
-	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, logPerm)
 	if err != nil {
 		return fmt.Errorf("open log file %s: %w", logPath, err)
 	}
@@ -1545,10 +1545,23 @@ type reloadable struct {
 // built-in replay buffer when the config leaves a field unset.
 func reloadableSettings(cfg config.Config) reloadable {
 	rc := reloadable{settings: server.Settings{
-		DefaultDir:  cfg.Panel.Workdir,
+		// Both of these are hand-written directories, so both are expanded here for
+		// the reason logPolicy states below — and both were missing it.
+		//
+		// `workdir: "~/proj"` put every directory-less panel in a LITERAL "~/proj"
+		// under whatever directory the daemon was launched from, which is the one
+		// place the field's own documentation promises a panel never lands.
+		//
+		// `worktree-dir: "trees"` is worse than misplaced, because the relative
+		// string gets two different anchors: git resolves it against the REPO, so
+		// the tree appears at <repo>/trees/<branch>, while the record baton stamps
+		// resolves it with filepath.Abs against the DAEMON's cwd. The two disagree,
+		// the record names a path that does not exist, and the next sweep drops it —
+		// leaving a real worktree baton has forgotten it made.
+		DefaultDir:  paths.Expand(cfg.Panel.Workdir),
 		DiffCommand: cfg.Panel.DiffCommand,
 		Editor:      cfg.Panel.Editor,
-		WorktreeDir: cfg.Panel.WorktreeDir,
+		WorktreeDir: paths.Expand(cfg.Panel.WorktreeDir),
 		Limits:      cfg.Panel.Limits,
 		AgentLimits: agentLimits(cfg.Panel.Agents),
 	}}

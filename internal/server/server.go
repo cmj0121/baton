@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -40,6 +41,7 @@ import (
 	"github.com/cmj0121/baton/internal/remote"
 	"github.com/cmj0121/baton/internal/restart"
 	"github.com/cmj0121/baton/internal/score"
+	"github.com/cmj0121/baton/internal/scrub"
 	"github.com/cmj0121/baton/internal/signals"
 	"github.com/cmj0121/baton/internal/state"
 	"github.com/cmj0121/baton/internal/task"
@@ -2170,8 +2172,8 @@ func (s *Server) vetoQueuedTask(d delivery) {
 	// discards the work and evicts the record of having discarded it. This line is
 	// the only account that survives that, so it carries the prompt: the task id
 	// it names may be gone from `task list` by the time anyone looks.
-	log.Warn().Str("task", d.task).Str("panel", d.panel).Str("prompt", d.prompt).
-		Str("reason", vetoReason).Msg("a task.pre hook refused a queued task at delivery")
+	log.Warn().Str("task", d.task).Str("panel", d.panel).Str("prompt", logText(d.prompt)).
+		Str("reason", logText(vetoReason)).Msg("a task.pre hook refused a queued task at delivery")
 
 	if ephemeral {
 		_ = s.closePanel(d.panel)
@@ -2292,18 +2294,68 @@ func (s *Server) handle(conn net.Conn) {
 	// connect-but-never-speak peer is dropped; once the first command is read the
 	// deadline is cleared, leaving the steady-state loop with no read deadline (a
 	// client may legitimately stay idle for minutes).
-	dec := json.NewDecoder(conn)
+	//
+	// The decoder reads through a frameLimiter rather than off the conn directly:
+	// encoding/json buffers a whole value before returning it, so without a bound
+	// one command line is one allocation of whatever size the peer chose. See
+	// maxCommandBytes.
+	lim := newFrameLimiter(conn, maxCommandBytes)
+	dec := json.NewDecoder(lim)
 	_ = conn.SetReadDeadline(time.Now().Add(proto.HandshakeTimeout))
 	first := true
 	for {
 		var cmd proto.Command
 		if err := dec.Decode(&cmd); err != nil {
+			// An oversized frame is said out loud, because it is the one error here
+			// an operator can act on: every other one is the ordinary end of a
+			// connection. The goodbye is queued too, but it is BEST-EFFORT and the
+			// log line is what carries the reason. A peer that is still shovelling
+			// bytes at a socket the daemon has just closed has its queued inbound
+			// data discarded by the kernel, so the very peer most likely to trip the
+			// cap is the one least likely to read the answer.
+			if errors.Is(err, errFrameTooLarge) {
+				log.Warn().Str("conn", cc.id).Int("limit", maxCommandBytes).
+					Msg("dropping a connection that sent an oversized command frame")
+				send(cc, goodbye(fmt.Sprintf("command frame is larger than the %d-byte limit", maxCommandBytes)))
+			}
 			return // client detached, timed out on the handshake, or the conn broke
 		}
+		lim.reset() // a fresh budget for the next frame
 		if first {
 			_ = conn.SetReadDeadline(time.Time{}) // idle command loop has no read deadline
 			first = false
 		}
+		// There is deliberately NO recover() around this call, and the reason is
+		// specific to this daemon rather than a general position on recover.
+		//
+		// The case for one is real: Go does not confine a panic to the goroutine
+		// that raised it, so one malformed command from one client would otherwise
+		// end the process and every panel in the fleet with it — fifty agents lost
+		// to one peer's bad arithmetic. The cockpit makes exactly that trade twice,
+		// in writeEmu and View, and it is right to: both abandon work that owns no
+		// shared state (an emulator's own buffer; a pure render that mutated
+		// nothing), so the next frame reconstructs and the blast radius really is
+		// one panel.
+		//
+		// Neither half of that holds here. Command handling mutates the whole
+		// server under one lock, and of the 121 s.mu critical sections in this
+		// package only 43 release with a defer — the other 101 unlock calls are
+		// manual, and a panic unwinding past one SKIPS it. Measured, not
+		// reasoned: with a recover here and a panic injected inside sendSearch's
+		// manual section, the daemon stays up and every goroutine that needs s.mu
+		// stops forever — the monitor tick, the heartbeat, the next command, the
+		// next client's handshake, and Shutdown itself, which then cannot kill the
+		// panels it owns.
+		//
+		// So the choice is not "one panel or fifty". It is "a process that dies and
+		// is restarted" against "a process that is up, holds every panel's children
+		// alive, answers nothing, and cannot be stopped except with SIGKILL" — and
+		// which no supervisor will notice, because the pid is still there. Dying is
+		// the better failure, and it is loud.
+		//
+		// What earns a recover here is not a recover: it is that a panic cannot be
+		// reached from the wire. That is what TestTheCommandLoopSurvivesWhatAPeerCanSay
+		// asserts, and it is falsifiable in a way a recover never is.
 		s.onCommand(cc, cmd)
 	}
 }
@@ -2736,6 +2788,29 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	if cc.role == roleConductor {
 		cmd.Profile = ""
 	}
+	// A directory on the wire must be absolute, and this is the only place that
+	// says so for all of them: panel.create's workdir, task.enqueue's spawn spec,
+	// the repo a targetless worktree-add branches from, the tree worktree-remove
+	// takes away.
+	//
+	// A relative one is not refused for being strange — it is refused because the
+	// only thing it could resolve against here is the DAEMON's working directory,
+	// whichever terminal the operator happened to start baton in, which is nobody's
+	// intent. ptymgr.PanelDir already promises a panel never inherits it; that
+	// promise covered the empty string and nothing else, so `--dir=..` put a panel
+	// one level above the launch directory and `worktree-add --dir=x` would have
+	// branched a repo found there. The cockpit has always sent absolute paths (see
+	// expandDir); ctl and the MCP tools now resolve theirs against the caller's own
+	// cwd, which is the one place a relative path has a meaning. This makes it a
+	// property of the server rather than a convention every client has to keep.
+	//
+	// %q because dir came off the wire and reaches a terminal: an ESC in it renders
+	// as four printable characters while the path stays exact.
+	if cmd.Dir != "" && !filepath.IsAbs(cmd.Dir) {
+		send(cc, proto.ServerMsg{Type: "error",
+			Error: fmt.Sprintf("a working directory must be an absolute path: %q", cmd.Dir)})
+		return
+	}
 	switch cmd.Action {
 	case "hello":
 		// A hello may ADD fences and may never drop one.
@@ -2918,8 +2993,9 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "fleet.search":
 		// Scan every panel's retained output for the term and reply "search" with the
 		// matching lines; the cockpit renders them grouped by panel. Read-only — it
-		// touches no panel state and spawns nothing — so a failure (only an empty term)
-		// just surfaces as an error, like panel.diff.
+		// touches no panel state and spawns nothing — so a failure (an empty term, an
+		// over-long one, or one regexp cannot express) just surfaces as an error, like
+		// panel.diff.
 		if err := s.sendSearch(cc, cmd.Query); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
@@ -3515,21 +3591,61 @@ func (s *Server) resetConductorWorkspace() error {
 // no extra wiring; the CLAUDE.md copy is harmless for other agents. It is called on
 // every spawn and respawn, so an edited operator brief ($HOME/.baton/CONDUCTOR.md)
 // is re-read each time the conductor is opened. All writes are best-effort — a
-// missing file just costs a hint or the auto-loaded tools, not correctness.
+// missing or stale file just costs a hint or the auto-loaded tools, not
+// correctness.
+//
+// That argument holds only because the writes are atomic. os.WriteFile truncates
+// and then writes, so a failure part-way leaves a TORN file, and a torn CLAUDE.md
+// is not a missing one: the agent reads a truncated brief as a complete one and
+// acts on half its instructions with nothing to say so. WriteFileAtomic leaves the
+// previous file, or none, which is the failure the paragraph above reasons about.
+// The error is still not returned — a spawn is not worth refusing over a hint —
+// but it is logged, because "the conductor has no tools" is otherwise a symptom
+// with no cause anywhere.
 func writeConductorFiles(ws, id string) {
 	briefing := conductorBriefing(id)
-	_ = os.WriteFile(filepath.Join(ws, "BATON.md"), briefing, 0o600)
-	_ = os.WriteFile(filepath.Join(ws, "CLAUDE.md"), briefing, 0o600)
-	_ = os.WriteFile(filepath.Join(ws, ".mcp.json"), conductorMCPConfig(), 0o600)
+	for _, f := range []struct {
+		name string
+		data []byte
+	}{
+		{"BATON.md", briefing},
+		{"CLAUDE.md", briefing},
+		{".mcp.json", conductorMCPConfig()},
+	} {
+		if err := paths.WriteFileAtomic(filepath.Join(ws, f.name), f.data, 0o600); err != nil {
+			log.Warn().Str("file", f.name).Str("workspace", ws).Err(err).Msg("conductor wiring not written")
+		}
+	}
 }
+
+// maxConductorGuide caps the operator's brief.
+//
+// writeConductorFiles calls this on every conductor spawn and respawn, and a spawn
+// is a wire action, so what the daemon reads here is asked for by a peer rather
+// than by a boot. It is also amplified on the way out: the guide is read, appended
+// to a copy of the primer, and then written to THREE files in the workspace, so a
+// gigabyte on disk is several gigabytes of allocation and three gigabytes written
+// every time the conductor is opened.
+//
+// 256 KiB. The brief is prose an agent reads as its instructions, so the bound
+// that already exists on it is the model's context window — around sixty thousand
+// tokens at this size, most of one. A brief that will not fit in the agent it is
+// addressed to is not a brief, and the whole file already treats a guide it cannot
+// use as a hint it does without.
+const maxConductorGuide = 256 << 10
 
 // conductorBriefing is the full BATON.md: the built-in control primer, plus the
 // operator's own goal and guide from $HOME/.baton/CONDUCTOR.md when it is present
 // and non-empty. The operator brief is appended (never replaces the primer), so
 // the agent always keeps the mechanics and forbidden actions.
+//
+// A guide past maxConductorGuide is dropped whole rather than cut: half an
+// operator's instructions, ending mid-sentence and handed to an agent as its
+// standing orders, is worse than the primer on its own. It is said out loud
+// because the operator would otherwise see their brief silently ignored.
 func conductorBriefing(id string) []byte {
 	b := conductorPrimer(id)
-	guide, err := os.ReadFile(paths.ConductorFile())
+	guide, err := readConductorGuide(paths.ConductorFile())
 	if err != nil || strings.TrimSpace(string(guide)) == "" {
 		return b
 	}
@@ -3541,6 +3657,32 @@ func conductorBriefing(id string) []byte {
 	}
 	return b
 }
+
+// readConductorGuide reads the operator's brief, refusing one past
+// maxConductorGuide without ever holding it. Every other failure here is already
+// "no brief", so this one joins them — with a line, since a brief that is being
+// ignored is a thing its author has to be told about.
+func readConductorGuide(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	guide, err := io.ReadAll(io.LimitReader(f, maxConductorGuide+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(guide) > maxConductorGuide {
+		log.Warn().Str("file", path).Int("limit", maxConductorGuide).
+			Msg("the conductor's brief is too large to use; opening it with the built-in primer alone")
+		return nil, errGuideTooLarge
+	}
+	return guide, nil
+}
+
+// errGuideTooLarge is the refusal readConductorGuide answers with, kept as a
+// value so the caller's "no brief" branch is one test rather than two.
+var errGuideTooLarge = errors.New("the conductor brief is too large to read")
 
 // conductorMCPConfig is the .mcp.json dropped into the conductor workspace so an
 // MCP-aware agent (Claude Code) auto-loads baton's fleet-control tools. It points
@@ -5330,7 +5472,13 @@ func (s *Server) sendDiff(cc *clientConn, targetID string) error {
 	}
 	dir := s.targetDir(targetID, spec.Spec)
 	if !gitdiff.IsWorkTree(dir) {
-		return fmt.Errorf("not a git repository: %s", dir)
+		// %q, because this reaches a human's terminal and dir is the panel's LIVE
+		// cwd — read from the OSC 7 report the panel's own output emits, whose
+		// payload url.Parse percent-decodes, so an agent can put a real ESC in it
+		// without touching the filesystem. Quoting keeps the path exact (which is
+		// what an error about a path owes the reader) while rendering the ESC as
+		// four printable characters.
+		return fmt.Errorf("not a git repository: %q", dir)
 	}
 	if !gitdiff.HasChanges(dir) {
 		return fmt.Errorf("no uncommitted changes")
@@ -5554,7 +5702,7 @@ func (s *Server) worktreeSpawn(repo, branch string, spec spawnSpec) error {
 		return fmt.Errorf("worktree: an agent command is required")
 	}
 	if !gitdiff.IsWorkTree(repo) {
-		return fmt.Errorf("not a git repository: %s", repo)
+		return fmt.Errorf("not a git repository: %q", repo)
 	}
 
 	path := worktreePath(base, repo, branch)
@@ -5567,7 +5715,7 @@ func (s *Server) worktreeSpawn(repo, branch string, spec spawnSpec) error {
 	// as a work item immediately.
 	id, err := s.createPanel(proto.KindAgent, spec.Command, spec.Args, path, spec.Profile, false, false)
 	if err != nil {
-		return fmt.Errorf("worktree created at %s, but the agent did not start: %w", path, err)
+		return fmt.Errorf("worktree created at %q, but the agent did not start: %w", path, err)
 	}
 	if err := s.groupPanels([]string{id}, branch); err != nil {
 		log.Warn().Str("panel", id).Str("group", branch).Err(err).Msg("worktree agent spawned but not grouped")
@@ -5759,6 +5907,9 @@ func (s *Server) groupPanels(ids []string, name string) error {
 	if !panel.GroupValid(name) {
 		return fmt.Errorf("invalid group path %q", name)
 	}
+	if err := nameSafe(name); err != nil {
+		return err
+	}
 	if len(ids) == 0 {
 		return fmt.Errorf("panel.group needs at least one panel")
 	}
@@ -5925,6 +6076,57 @@ func (s *Server) ungroup(ids []string, name string) error {
 	return nil
 }
 
+// nameSafe refuses a work item's name that carries a rune a terminal acts on or
+// that a reader cannot see.
+//
+// This is a REFUSAL rather than a filter, and the difference matters here. Every
+// frontend already declines to draw these runes, so a name carrying one would be
+// silently rewritten on its way to the screen — and a name is an identity, not
+// prose. Rewriting one means the daemon's no-duplicate-names policy stops holding
+// where it is read: "api" and "api" with a zero-width space on the end are two
+// names to nameTakenLocked and one name on every screen, which is exactly the
+// confusion a uniqueness rule exists to prevent. Refusing keeps the stored name
+// and the drawn name the same string.
+//
+// It also keeps the answer explainable. An operator who typed a stray tab is told
+// so; an agent that tried to name itself in escape bytes is told no, rather than
+// quietly getting a name it did not choose.
+//
+// The class is internal/scrub's, so this and the render-side filters cannot
+// disagree about what a control character is.
+//
+// Length is refused here for the same reason and by the same argument. A name is
+// kept on the panel, written into every fleet snapshot, and encoded once per
+// attached client on every fleet change — so its size is not paid once, it is paid
+// on every event for as long as the panel lives. Driven against a live daemon: one
+// panel.rename carrying a 900 KiB title made every subsequent panels broadcast
+// 900 KiB, to every cockpit. Truncating instead would break exactly what the
+// paragraph above defends, since two names that differ past the cut are one name
+// to nameTakenLocked and two on the screen.
+func nameSafe(name string) error {
+	if strings.ContainsFunc(name, scrub.Drop) {
+		return fmt.Errorf("the name %q contains a control character", name)
+	}
+	if n := len([]rune(name)); n > maxNameRunes {
+		return fmt.Errorf("the name is %d runes long, and the limit is %d", n, maxNameRunes)
+	}
+	return nil
+}
+
+// maxNameRunes caps a panel title or a work-item name.
+//
+// A name is an identity drawn in a card header, so the surfaces it has to fit are
+// terminal-shaped: the cockpit's own notification cap for the very same string is
+// 96 runes, and no card on an 80-column screen shows a fraction of that. 128 sits
+// just above the narrowest surface a name reaches, which makes it a bound on
+// nothing a person would type and a bound on a kilobyte of it.
+//
+// It is the group path's depth cap too, and deliberately the only one: a path is
+// segments joined by "/", so a name that cannot exceed 128 runes cannot exceed 64
+// segments either, and one number nobody has to keep in step with another is
+// worth more than a second number sized on a guess about nesting.
+const maxNameRunes = 128
+
 // rename is a core action that renames either one panel (by id) or a whole group
 // (by its current name). A panel rename changes its title; a group rename rewrites
 // the Group on every member. Exactly one target must be given, and the new name
@@ -5933,6 +6135,9 @@ func (s *Server) rename(id, group, name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return fmt.Errorf("panel.rename needs a name")
+	}
+	if err := nameSafe(name); err != nil {
+		return err
 	}
 	switch {
 	case id != "" && group != "":

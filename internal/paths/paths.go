@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/host"
@@ -289,6 +290,169 @@ func ensurePrivateDir(dir string) error {
 	return nil
 }
 
+// OpenTrusted opens a file baton is about to execute as trusted code — today the
+// Lua plugin, which runs with the daemon's full authority (docs/PLUGIN.md) — and
+// refuses to hand back a descriptor unless only the file's owner could have
+// written what is in it.
+//
+// The posture it enforces is the one the document already claims, not a new one:
+// the plugin is the operator's own code at a private path. Nothing here sandboxes
+// what the file may then do, and nothing here objects to a file other people can
+// READ. The question asked is narrower and is the only one that matters for
+// execution — could somebody OTHER than this user have decided what runs?
+//
+// Three ways they could, and each is refused:
+//
+//   - The file is writable by group or other. Anyone in that set edits the code
+//     the daemon runs.
+//   - The file belongs to another user. They cannot be stopped from rewriting
+//     their own file, whatever its mode says today.
+//   - The directory holding it is writable by group or other without the sticky
+//     bit. Then the file's own mode is decoration: another user unlinks it and
+//     creates their own under the same name. With the sticky bit (a shared /tmp)
+//     only the owner may unlink, and the owner is us.
+//
+// A symlink is followed rather than refused: pointing $HOME/.baton/plug-in.lua at
+// a dotfiles repository is the ordinary way to keep one, and refusing it would
+// reject the careful setups along with the careless. Both ends are checked — the
+// link's own directory, so the name cannot be re-pointed, and the target's file
+// and directory, so the code itself is sound. Intermediate hops in a chain of
+// links are not walked, nor are ancestors above the immediate directory; a $HOME
+// nobody can trust is a defeat this check was never going to prevent.
+//
+// The mode and owner are read with fstat on the RETURNED descriptor, not with a
+// second stat of the path, so there is no window between the check and the read
+// in which the file could be exchanged for another. The caller reads the exact
+// inode that passed.
+func OpenTrusted(path string) (*os.File, error) {
+	// O_NONBLOCK for the reason OpenRegular carries at length: open(2) on a FIFO
+	// with no writer never returns, and the kind check below is downstream of the
+	// open, so without the flag it is never reached. It costs nothing here —
+	// checkTrusted lets nothing but a regular file past, and a regular file's
+	// reads ignore the flag.
+	//
+	// The path is $HOME/.baton/plug-in.lua, which the operator owns, so this is
+	// not the peer-named path OpenRegular defends. It is the operator's own foot:
+	// a FIFO left where the plugin goes parks the LUA WORKER, and the worker is
+	// loaded from the boot pass before Serve — so the daemon binds its socket and
+	// then never accepts on it, which reads from outside as a fleet that hangs
+	// rather than as a plugin that is wrong.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err // including fs.ErrNotExist, which callers read as "no file"
+	}
+	if err := checkTrusted(path, f); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+// checkTrusted is OpenTrusted's verdict on an already-open file: fstat the
+// descriptor, then vet the directories the name and the target live in.
+func checkTrusted(path string, f *os.File) error {
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	switch {
+	case !fi.Mode().IsRegular():
+		return fmt.Errorf("%s is not a regular file", path)
+	case fi.Mode().Perm()&0o022 != 0:
+		return fmt.Errorf("%s is writable by group or other (%04o)", path, fi.Mode().Perm())
+	case !ownedByCaller(fi):
+		return fmt.Errorf("%s is not owned by uid %d", path, os.Getuid())
+	}
+
+	// The resolved path, because the directory that decides whether the CODE can be
+	// swapped is the target's, while the directory that decides whether the NAME can
+	// be re-pointed is the link's. They are the same path when nothing is a symlink,
+	// so the second check costs a stat and no false positives. A resolve that fails
+	// on a file we just opened is not a case to shrug at — it means we cannot tell
+	// where the bytes came from, so it refuses rather than passes.
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return err
+	}
+	if err := checkTrustedDir(filepath.Dir(path)); err != nil {
+		return err
+	}
+	if dir := filepath.Dir(resolved); dir != filepath.Dir(path) {
+		return checkTrustedDir(dir)
+	}
+	return nil
+}
+
+// checkTrustedDir refuses a directory in which another user could replace the
+// file wholesale. Write permission on a directory is permission to unlink and
+// recreate the names inside it, so a group- or other-writable one hands the
+// plugin's contents to anybody in that set no matter what the file's own mode
+// says. The sticky bit takes that back — it restricts unlink and rename to the
+// owner — which is why a plugin under a shared /tmp is allowed and one under a
+// plain 0777 directory is not.
+//
+// Ownership of the directory is deliberately NOT checked. A directory owned by
+// another user but unwritable to us is either root's (/etc/baton, an
+// administrator's provisioning, and root is not an adversary this check can
+// resist anyway) or an arrangement nobody makes; requiring it would refuse the
+// first to catch the second.
+func checkTrustedDir(dir string) error {
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if fi.Mode().Perm()&0o022 != 0 && fi.Mode()&os.ModeSticky == 0 {
+		return fmt.Errorf("%s is writable by group or other (%04o) and not sticky", dir, fi.Mode().Perm())
+	}
+	return nil
+}
+
+// OpenRegular opens a file whose PATH baton did not choose — one under a working
+// directory a peer named on the socket, or one an agent's own work tree holds —
+// and hands back a descriptor only if the name really is a plain file.
+//
+// The question is about the OPEN itself, not about who wrote the bytes; that one
+// is OpenTrusted's, and this is the weaker check for the far commoner case of
+// reading somebody's data file rather than running somebody's code.
+//
+// open(2) on a FIFO with no writer BLOCKS until a writer arrives, and never
+// returns if none ever does. A daemon that opens whatever name it is pointed at
+// can therefore be parked for good by anyone who can create a file where it will
+// look: a `.claude/settings.json` that is a FIFO in the directory a panel.create
+// named, or — since git lists an untracked SYMLINK but not an untracked FIFO —
+// a link to one dropped in the work tree an agent already runs in. Neither costs
+// the caller anything to arrange, and each parks the handler goroutine of the
+// connection that asked, along with the reservation it was holding.
+//
+// O_NONBLOCK is what makes the open return, and it is the whole fix: on a FIFO
+// it succeeds with no writer instead of waiting for one. The mode is then read
+// with fstat on the RETURNED descriptor rather than with a second stat of the
+// path, so nothing can be swapped in between the check and the read — the caller
+// reads the exact inode that passed.
+//
+// A symlink is followed rather than refused. baton is reading a settings file or
+// an untracked file, and keeping either as a link is ordinary; the flag makes
+// the target's KIND the thing that decides, which is the property that matters.
+//
+// The descriptor keeps O_NONBLOCK, which costs the caller nothing: a read of a
+// regular file ignores it, and a regular file is the only thing that gets here.
+func OpenRegular(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err // including fs.ErrNotExist, which callers read as "no file"
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	return f, nil
+}
+
 // conductorBase is the per-user temporary directory the conductor workspace lives
 // in. It is deliberately temporary rather than beside the socket: the workspace
 // holds an agent's accumulated state, and the contract is that a reboot clears
@@ -384,6 +548,20 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
 			_ = os.Remove(tmp)
 		}
 	}()
+
+	// The mode argument above applies ONLY when the open creates the file, so a
+	// temp file that is already there keeps the mode it already had and the rename
+	// carries that onto the target. The name is derived from the target, so it is
+	// predictable: a process killed between the create and the rename leaves one
+	// under exactly the name the next write reuses, and under a parent an admin
+	// left group-writable it is a name another user can create first. Every caller
+	// here asks for 0600, so the difference is a fleet's stores becoming readable.
+	// Chmod on the DESCRIPTOR, not the path, so it cannot be redirected between the
+	// open and the change; it is below the defer so a failure still clears the temp.
+	if err = f.Chmod(perm); err != nil {
+		_ = f.Close()
+		return err
+	}
 
 	if _, err = f.Write(data); err != nil {
 		_ = f.Close()

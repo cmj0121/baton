@@ -119,7 +119,13 @@ func (x ctlWorktreeSweep) confirm(c *control.Client) (bool, error) {
 		if !e.Exists {
 			note = "  (already gone; only the record is dropped)"
 		}
-		fmt.Fprintf(os.Stderr, "  %s%s\n", e.Path, note)
+		// %q: this is the list an operator answers y/N to, and the path is agent-
+		// chosen text (it is built from the dir the spawn asked for, which no
+		// validation constrains the way ValidateBranch constrains the branch half).
+		// A raw escape here could repaint the very question being asked. Quoting
+		// keeps the path exact — which a delete prompt owes the reader — while
+		// rendering an escape as printable characters.
+		fmt.Fprintf(os.Stderr, "  %q%s\n", e.Path, note)
 	}
 	fmt.Fprint(os.Stderr, "remove them? [y/N] ")
 

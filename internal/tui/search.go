@@ -113,11 +113,20 @@ func (m model) clearSearch() model {
 // true), so a search term with regex metacharacters still finds itself instead
 // of erroring; the caller surfaces the fallback rather than hiding it. The
 // literal form is always valid, so the regexp is never nil.
+//
+// ToValidUTF8 is what makes that last sentence true. regexp.QuoteMeta escapes
+// every metacharacter but passes invalid UTF-8 through untouched, and regexp
+// rejects a pattern that is not valid UTF-8 — so without it a one-byte term panics
+// the MustCompile, and with it the cockpit, from an Update the render's recover
+// does not cover. Nothing types such a term today (bubbletea hands Update decoded
+// runes), which is why this is a coerce rather than a refusal: both callers rely
+// on a non-nil matcher, and U+FFFD is what the terminal draws for those bytes
+// anyway, so matching it is the same search the human meant.
 func compileSearch(query string) (re *regexp.Regexp, literal bool) {
 	if re, err := regexp.Compile("(?i)" + query); err == nil {
 		return re, false
 	}
-	return regexp.MustCompile("(?i)" + regexp.QuoteMeta(query)), true
+	return regexp.MustCompile("(?i)" + regexp.QuoteMeta(strings.ToValidUTF8(query, "�"))), true
 }
 
 // searchContextRows is how many lines of context the viewport keeps above the

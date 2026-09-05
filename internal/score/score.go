@@ -25,12 +25,14 @@
 package score
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -1336,6 +1338,80 @@ type Store struct {
 
 // errDisabled is returned by mutations on the disabled (nil) store.
 var errDisabled = errors.New("score is disabled")
+
+// ErrFileTooLarge marks score.md too big to read into memory. Exported for the
+// same reason ErrSubmissionText is: it is the operator's problem, it names a file
+// and a remedy, and it must not be confused with a store that is merely broken.
+var ErrFileTooLarge = errors.New("score: file is too large to read")
+
+// maxScoreFileBytes caps what score.md may weigh before it is refused unread.
+//
+// IT NO LONGER BOUNDS THE EVENT LOG, and that half of it was removed rather than
+// raised. The two files are read in different ways now and only one of them is
+// held whole.
+//
+// The cap was added because replay read the log into one []byte and split it, so
+// a boot's memory was the FILE's size however little the file described.
+// compactAtBytes' derivation names where that ends — "#56 measured where that
+// ends: a 1.217 GB log peaked at 2373 MB and was OOM-killed inside Open on a box
+// that could not spare it, which is the one boot failure that cannot heal,
+// because the process that dies is the process that would have shrunk the file."
+// The cap stopped the kill and bought the refusal instead, and cmd/baton's
+// openScore turns that into a fleet that runs and says which file is in the way.
+//
+// What it could not buy is the heal. Open's boot compaction is the only thing
+// that shrinks an overgrown log, and it sits BELOW the replay that was failing,
+// so a log one byte past the cap was refused by every later start with the file
+// untouched — measured on this branch: two boots over a 268435517-byte log, both
+// refused, 268435517 bytes after. scanRecordsFrom folds one record at a time
+// instead, and replay's cost is now what the log DESCRIBES rather than what it
+// weighs: the same 1.217 GB log opens at 3 MiB of live heap and 14 MiB of peak
+// RSS, compacts itself to 11 KB, and the next boot takes 0 ms.
+//
+// So the refusal is gone from this door, and the argument is that it was refusing
+// a cost the daemon did not have to pay. What replay still holds is the store's
+// own state — an Entry per live entry, an id per burned one — and the worst shape
+// a log can take costs 632 MiB of live heap over 256 MiB of nothing but distinct
+// retired ids. But that is the weight of the STORE and not of the read: a daemon
+// that cannot replay it could not have held it once open either, so refusing at
+// boot saves the machine nothing and costs the fleet its memory permanently.
+// A byte cap is also a poor proxy for it in both directions — it refused a 256
+// MiB log describing fifty entries, and admits a 60 MiB one describing 200,000 at
+// 262 MiB of heap. The bound that shape actually wants is on the NUMBER OF
+// ENTRIES, which nothing in this package has; see Store.entries.
+//
+// SIXTY-FOUR MEBIBYTES for score.md, unchanged and still derived the same way.
+// compactAtBytes states the log's steady-state ceiling as two of itself added
+// together — 16 MiB — and the markdown holds one line per LIVE entry where the
+// log holds every event ever recorded about one, so a store whose log is healthy
+// is a store whose markdown is far inside this. It stays capped because it is
+// still read WHOLE and read OFTEN — reconcileNowLocked re-reads it on every
+// submission — and because it is the one of the two a person edits by hand, so
+// it is the one that can be made enormous by an accident rather than by history.
+const maxScoreFileBytes = 64 << 20
+
+// readScoreFile reads score.md whole, refusing one past maxScoreFileBytes without
+// ever holding it.
+//
+// The cap is applied to the READ and not to a stat, so a file that grows between
+// the two cannot walk through it. The extra byte is what reveals a file that ran
+// past the cap without loading its tail, which is internal/gitdiff's trick for
+// the same problem.
+func readScoreFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	data, err := io.ReadAll(io.LimitReader(f, maxScoreFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxScoreFileBytes {
+		return nil, fmt.Errorf("%w: %s is over %d bytes", ErrFileTooLarge, path, maxScoreFileBytes)
+	}
+	return data, nil
+}
 
 // ErrSubmissionText marks the two refusals Submit makes at its own boundary,
 // BEFORE the store touches the disk: text that sanitised away to nothing, and
@@ -2793,7 +2869,7 @@ func (s *Store) lowerLocked(i int) error {
 // an error for a state the caller has just ruled out would be a refusal nobody
 // could act on.
 func (s *Store) replaceMDLineLocked(id, repl string) error {
-	data, err := os.ReadFile(s.mdPath)
+	data, err := readScoreFile(s.mdPath)
 	if err != nil {
 		return err
 	}
@@ -3291,10 +3367,66 @@ func (s *Store) submitLocked(text string, prov Provenance) (Entry, error) {
 // restart, off one unchanged file, with no error anywhere. It is exactly the
 // hazard logWriter is a type for, read from the other end.
 //
-// Split and decode over the caller's own bytes, and reuse one event across the
-// loop: a string split copies the whole log a second time and every line a
-// third, which on a 200k-event boot is most of the garbage the daemon makes
-// before it serves anything.
+// It is the []byte door onto scanRecordsFrom, for the one caller that already
+// holds its bytes: a compaction's tail is what the fleet appended while the
+// marshal ran, bounded by that, and never a file.
+func scanRecords(data []byte, note func(ev *event)) (torn int) {
+	// A bytes.Reader cannot fail, so the error scanRecordsFrom returns for a file
+	// is unreachable here and there is nothing for this caller to decide about it.
+	torn, _ = scanRecordsFrom(bytes.NewReader(data), note)
+	return torn
+}
+
+// scanRecordBufBytes is the window scanRecordsFrom reads through. It is sized so
+// that no record this package can write ever needs a second read, which is what
+// keeps the ordinary decode a view onto the window rather than a copy out of it,
+// exactly as the old whole-file split was: the longest record the store produces
+// is a `compacted` one, and that is maxEntryRunes of text plus maxAliases prior
+// wordings of the same length, at four bytes to a rune, plus its provenance and
+// fixed fields — comfortably under 12 KiB, which this is five times over.
+const scanRecordBufBytes = 64 << 10
+
+// maxRecordBytes is the longest single line scanRecordsFrom will assemble before
+// it stops keeping the bytes and counts the line torn. It is what makes the scan
+// bounded in memory rather than merely streamed: without it one line with no
+// newline in it is the whole file again.
+//
+// A MEBIBYTE, which is ninety times the largest record this package can write
+// (see scanRecordBufBytes for that arithmetic). Every record in the log is
+// written by appendDurable out of one marshal of an event whose text is capped at
+// maxEntryRunes and whose prior wordings are capped at maxAliases of the same, so
+// a line past this cannot be a record baton wrote. It is corruption — a run of
+// NULs the filesystem never wrote back, a cut write, two files spliced — in the
+// same category as the garbage tail scanRecords has always skipped.
+//
+// TORN, therefore, and not fatal, and not refused. Fatal is the disease this
+// whole change is treating: a store that cannot open is a store whose log nothing
+// will ever shrink, because the process that dies is the process that would have
+// shrunk it. Torn is what this package already does with a line it cannot read —
+// count it into Health.TornEvents, where an operator sees it, and carry on with
+// the records around it, which on an append-only log are still the truth. The one
+// thing torn costs is a valid record dropped, and then dropped for good by the
+// compaction that follows; that is the trade every torn line already makes, and
+// no record this package writes can land on this side of it.
+const maxRecordBytes = 1 << 20
+
+// scanRecordsFrom is scanRecords over a READER, and it is the reason replay's
+// cost stopped tracking the size of the log.
+//
+// The whole file used to be read into one []byte and split, so a boot's memory
+// was the log's size however little the log described — #56's 1.217 GB log peaked
+// at 2373 MB and was OOM-killed inside Open, and the read cap that stopped the
+// kill left the file refused instead, forever, by every later start. Folding one
+// record at a time needs only the record: what replay keeps is current state per
+// id, so a gigabyte of repeats about fifty entries costs fifty entries. That is
+// what lets Open reach the boot compaction below it and shrink the file, which is
+// the only way this failure has ever been able to heal itself.
+//
+// The reader is walked with ReadSlice rather than a Scanner because a Scanner's
+// answer to a line past its buffer is to stop, and stopping mid-log is precisely
+// the silent state loss this package must not have: every record after the
+// damaged one would vanish with no error and no count. Here an over-long line is
+// drained and counted and the scan goes on.
 //
 // BY POINTER, and the reason is the reuse rather than the copy. The event handed
 // to note is the LOOP'S OWN and is overwritten by the next record, so note may
@@ -3304,35 +3436,80 @@ func (s *Store) submitLocked(text string, prov Provenance) (Entry, error) {
 // record — 32 MB across a 200k-record boot — are real but are NOT a measured
 // win: replayLocked over 200k records runs at 274 ms either way, because
 // json.Unmarshal is 100% of what moves.
-func scanRecords(data []byte, note func(ev *event)) (torn int) {
+func scanRecordsFrom(r io.Reader, note func(ev *event)) (torn int, err error) {
+	br := bufio.NewReaderSize(r, scanRecordBufBytes)
 	var ev event
-	for _, line := range bytes.Split(data, newline) {
+	// held is the partial line assembled across reads, for the record that
+	// straddles the window; over says this line already ran past maxRecordBytes,
+	// so its remaining bytes are drained rather than kept.
+	var held []byte
+	over := false
+
+	decode := func(line []byte) {
 		if len(bytes.TrimSpace(line)) == 0 {
-			continue
+			return
 		}
 		ev = event{} // reused, so a field this record omits must not carry over
 		if json.Unmarshal(line, &ev) != nil || ev.Id == "" || ev.Event == "" {
 			torn++
-			continue
+			return
 		}
 		note(&ev)
 	}
-	return torn
+
+	for {
+		chunk, rerr := br.ReadSlice('\n')
+		if rerr == bufio.ErrBufferFull {
+			switch {
+			case over, len(held)+len(chunk) > maxRecordBytes:
+				over, held = true, held[:0]
+			default:
+				held = append(held, chunk...)
+			}
+			continue
+		}
+		if rerr != nil && rerr != io.EOF {
+			return torn, rerr
+		}
+		// The separator is dropped, and only where it is there: the file's last
+		// line carries none, which is the torn tail replay already tolerates.
+		line := chunk
+		if n := len(line); n > 0 && line[n-1] == '\n' {
+			line = line[:n-1]
+		}
+		switch {
+		case over || len(held)+len(line) > maxRecordBytes:
+			torn++
+		case len(held) > 0:
+			held = append(held, line...)
+			decode(held)
+		default:
+			decode(line)
+		}
+		held, over = held[:0], false
+		if rerr == io.EOF {
+			return torn, nil
+		}
+	}
 }
 
 func (s *Store) replayLocked() error {
-	data, err := os.ReadFile(s.eventsPath)
+	// STREAMED, and not read whole. See scanRecordsFrom: this is the read that
+	// used to make a boot's memory the log's size, and the boot compaction that
+	// shrinks an overgrown log sits below it and never ran when it failed.
+	f, err := os.Open(s.eventsPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
+	defer func() { _ = f.Close() }()
 
 	live := map[string]*Entry{}
 	placed := map[string]bool{} // ids already in order; a retire-then-restore must not re-add
 	var order []string
-	s.health.TornEvents += scanRecords(data, func(ev *event) {
+	torn, err := scanRecordsFrom(f, func(ev *event) {
 		s.burned[ev.Id] = struct{}{}
 		s.noteEventLocked(ev)
 		switch ev.Event {
@@ -3462,6 +3639,13 @@ func (s *Store) replayLocked() error {
 			delete(live, ev.Id)
 		}
 	})
+	// Counted first and returned second: the lines this read did get through were
+	// damaged whether or not the read then failed, and Open discards the store on
+	// the error anyway.
+	s.health.TornEvents += torn
+	if err != nil {
+		return err
+	}
 
 	s.entries = s.entries[:0]
 	for _, id := range order {
@@ -4126,7 +4310,7 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 
 	var lines []string
 	if exists {
-		data, rerr := os.ReadFile(s.mdPath)
+		data, rerr := readScoreFile(s.mdPath)
 		switch {
 		case rerr == nil:
 			lines = strings.Split(string(data), "\n")
@@ -5276,6 +5460,15 @@ func createAtomic(path string, perm os.FileMode, data []byte) (*atomicFile, erro
 		return nil, err
 	}
 	a := &atomicFile{f: f, path: path, tmp: tmp}
+	// perm above is applied only when the open CREATES the file; a temp left by a
+	// killed process, or planted under a parent that is not as private as this one
+	// assumes, keeps its own mode and the commit renames that onto score.md. The
+	// directory lock this comment's sibling relies on orders baton's writers
+	// against each other but says nothing about a file that was already there.
+	if err := f.Chmod(perm); err != nil {
+		a.discard()
+		return nil, err
+	}
 	if err := a.writeSync(data); err != nil {
 		a.discard()
 		return nil, err

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -286,5 +287,128 @@ func TestFormatLimits(t *testing.T) {
 	}
 	if got := FormatLimits(Limits{}, limitsNow, 10); got != "" {
 		t.Errorf("FormatLimits of an empty reading = %q, want empty", got)
+	}
+}
+
+// legitimateSink is the largest sink file these tests claim a real writer
+// produces, as a figure rather than as maxSinkFile-minus-something: a test sized
+// off the constant it checks moves with the constant. A full reading marshals to
+// a few hundred bytes; four kibibytes is already ten times one.
+const legitimateSink = 4 << 10
+
+// TestReadLimitsRefusesAnOversizedFile: this is the DEFAULT limits source, so the
+// daemon does this read on every usage tick, forever — and the file sits in the
+// fleet's own directory, where any process running as the fleet owner can grow
+// it. A reading is a few hundred bytes; a file that is not is not a reading.
+func TestReadLimitsRefusesAnOversizedFile(t *testing.T) {
+	path := sinkPath(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Valid JSON carrying a real window, and only its size wrong — so the only
+	// thing that can refuse it is the cap.
+	body := `{"five_hour":{"used_percentage":50},"at":"2026-08-20T12:00:00Z","pad":"` +
+		strings.Repeat("p", maxSinkFile) + `"}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ReadLimits(path); ok {
+		t.Fatal("a sink file past the cap was read as a reading")
+	}
+}
+
+// TestReadLimitsStillReadsARealFile is the other half: a sink file with room to
+// spare must still decode, or the daemon has lost its default usage source.
+func TestReadLimitsStillReadsARealFile(t *testing.T) {
+	path := sinkPath(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"five_hour":{"used_percentage":50},"at":"2026-08-20T12:00:00Z","pad":"` +
+		strings.Repeat("p", legitimateSink) + `"}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ReadLimits(path); !ok {
+		t.Fatalf("a %d-byte sink file should still be read", len(body))
+	}
+}
+
+// A status line is a process Claude Code spawns on every render and kills when it
+// outstays its welcome, so a writer killed between creating its temporary and
+// renaming it is routine rather than exotic: of 500 `baton usage-sink` runs
+// killed by SIGKILL, 15 left one behind. Each carries a name os.CreateTemp will never
+// issue again, so no later write reuses it and — before sweepStaleTemps — nothing
+// removed it either. The debris grew without bound in a directory the operator
+// reads.
+func TestWriteSweepsTempsAKilledWriterLeftBehind(t *testing.T) {
+	path := sinkPath(t)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	// Three the way a kill leaves them: one empty (killed before the write landed),
+	// two carrying bytes (killed after it, before the rename).
+	var stale []string
+	for i, body := range []string{"", `{"five_hour":`, string(benchReading)} {
+		f, err := os.CreateTemp(dir, tempPrefix+"*"+tempSuffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteString(body); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+		old := time.Now().Add(-time.Duration(i+10) * time.Minute)
+		if err := os.Chtimes(f.Name(), old, old); err != nil {
+			t.Fatal(err)
+		}
+		stale = append(stale, f.Name())
+	}
+
+	// And one a LIVE writer is holding right now, which must survive: sweeping it
+	// would break a rename that has not happened yet.
+	live, err := os.CreateTemp(dir, tempPrefix+"*"+tempSuffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := live.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A DIRECTORY under the temp name was not put there by this package, which
+	// creates its temporaries with os.CreateTemp and nothing else. os.Remove would
+	// take an empty one as readily as a file, so sweeping it would widen "clean up
+	// after yourself" into "clear whatever is in my way" on a path the operator can
+	// reach.
+	notOurs := filepath.Join(dir, tempPrefix+"999"+tempSuffix)
+	if err := os.Mkdir(notOurs, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(notOurs, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := WriteLimitsIfChanged(path, sample(limitsNow, 62.4, 34.1)); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, p := range stale {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("a temp a killed writer left behind was not swept: %s", filepath.Base(p))
+		}
+	}
+	if _, err := os.Stat(live.Name()); err != nil {
+		t.Errorf("the sweep removed a temp a live writer is still holding: %v", err)
+	}
+	if _, err := os.Stat(notOurs); err != nil {
+		t.Errorf("the sweep removed a directory this package never created: %v", err)
+	}
+	if _, ok := ReadLimits(path); !ok {
+		t.Error("the sink file is not readable after the sweep")
 	}
 }

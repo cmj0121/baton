@@ -112,6 +112,14 @@ func (s State) Save(path string) error {
 
 // corrupt renames the bad file aside and returns an empty State. A rename
 // failure (e.g. the file vanished) is non-fatal: boot must still proceed.
+//
+// NO fsync HERE, unlike Save's, and the difference is not an oversight. Save's
+// rename publishes data that exists nowhere else, so losing it to a crash loses
+// the user's layout. This one publishes a DECISION — "that file could not be
+// read" — which is derived from the file rather than stored in it. A crash that
+// loses the rename leaves the unreadable snapshot exactly where it was, and the
+// next boot reads it, reaches the same verdict, and renames it aside again. The
+// only thing a sync could buy is doing that once instead of twice.
 func corrupt(path string) (State, error) {
 	aside := path + ".corrupt-" + time.Now().UTC().Format("20060102T150405Z")
 	_ = os.Rename(path, aside)
