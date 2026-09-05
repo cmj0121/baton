@@ -1,6 +1,7 @@
 package score
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -275,6 +276,77 @@ func TestRecoveryTornLogTailIsCountedNotFatal(t *testing.T) {
 	}
 	if h, d := s.Health(), s.Boot(); h.TornEvents != 1 || d.Admitted != 0 {
 		t.Fatalf("health %+v / boot %+v, want exactly one torn line and no re-admission", h, d)
+	}
+}
+
+// A power loss does not only cut a record in half. A filesystem that allocated
+// the block but never wrote it back hands the tail to the next reader as NUL
+// bytes, which is the classic post-crash artifact on both ext4 and APFS, and a
+// cut write can leave any partial byte string at all. None of those may fail
+// Open: the log is append-only, so damage can only reach the LAST record, and
+// everything before it is still the truth.
+//
+// TestRecoveryTornLogTailIsCountedNotFatal above covers the cut-JSON shape. This
+// is the rest of the shapes a crash actually produces.
+func TestRecoveryPostCrashTailShapesAreSkippedNotFatal(t *testing.T) {
+	intact := `{"schema":1,"event":"submitted","id":"abc123","at":"2026-08-30T00:00:00Z","text":"survives the tear","source":"user","provenance":{"source":"user"}}`
+
+	for _, tc := range []struct {
+		name string
+		tail string
+	}{
+		{"a NUL-filled block the filesystem never wrote back", strings.Repeat("\x00", 512)},
+		{"a record cut off and then NUL-padded", `{"schema":1,"event":"sub` + strings.Repeat("\x00", 64)},
+		{"arbitrary binary garbage", "\xff\xfe\x00\x01\x02rubbish\x7f"},
+		{"a bare newline and nothing after it", "\n"},
+		{"a whole valid record repeated only halfway", intact[:len(intact)/2]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeMD(t, dir, "- [abc123] survives the tear\n")
+			log := intact + "\n" + tc.tail
+			if err := os.WriteFile(filepath.Join(dir, scoreEvents), []byte(log), 0o600); err != nil {
+				t.Fatalf("write events: %v", err)
+			}
+
+			s := openStore(t, dir)
+			if s.Len() != 1 {
+				t.Fatalf("entries = %d, want the one the intact line describes", s.Len())
+			}
+			if d := s.Boot(); d.Admitted != 0 {
+				t.Fatalf("boot = %+v, want the damaged tail read as damage rather than as a new entry", d)
+			}
+		})
+	}
+}
+
+// The whole file, not just its tail: an events log that is empty or entirely NUL
+// is what a crash between create and first write leaves. With no score.md beside
+// it the store must still open — projectLocked's "a MISSING file is not a
+// statement" rule — rather than refusing a fleet its memory.
+func TestRecoveryPostCrashWholeFileArtifactsOpenClean(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		log  []byte
+	}{
+		{"a zero-length events log", []byte{}},
+		{"an events log of nothing but NULs", bytes.Repeat([]byte{0}, 4096)},
+		{"an events log of blank lines", []byte("\n\n\n\n")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, scoreEvents), tc.log, 0o600); err != nil {
+				t.Fatalf("write events: %v", err)
+			}
+			s := openStore(t, dir)
+			if s.Len() != 0 {
+				t.Fatalf("entries = %d, want an empty store", s.Len())
+			}
+			// And it must be usable, not merely open: the next submit has to land.
+			if _, _, err := s.Submit("the fleet still remembers", Provenance{Source: "user"}); err != nil {
+				t.Fatalf("submit after opening over a damaged log: %v", err)
+			}
+		})
 	}
 }
 
