@@ -288,6 +288,19 @@ func (s *Sink) markLocked(reason string, now time.Time) error {
 
 // raw writes bytes through untouched and counts them toward the roll. Caller
 // holds s.mu; a closed sink discards.
+//
+// NO fsync, deliberately. This is the daemon's hottest write — every byte every
+// panel produces passes through it — and a sync per chunk would put a disk round
+// trip between an agent's output and the screen. What a crash can cost is the
+// tail of a plain-text transcript, and nothing reads this file back
+// structurally: the daemon holds the Sink and calls Path(), and everything that
+// parses a log is a person or their grep. A torn last line is a torn last line,
+// not a file that fails to open — the next Resume reopens in O_APPEND and
+// re-stats the size, so even a log left oversized by a kill rolls on the next
+// write rather than growing forever.
+//
+// It is the score store that pays for durability, because that file IS the
+// fleet's memory. This one is its transcript.
 func (s *Sink) raw(p []byte) error {
 	if s.f == nil {
 		return nil

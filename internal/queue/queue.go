@@ -95,6 +95,13 @@ func (s *Store) Remove(id string) error {
 
 // Quarantine renames a bad file aside as "<id>.json.bad-<RFC3339>" so a load can
 // skip it without losing it, mirroring the state store's corrupt-aside handling.
+//
+// NO fsync HERE, unlike Save's, for the reason state.corrupt gives: this rename
+// publishes a decision the next boot can re-derive, not data that exists nowhere
+// else. LoadAll reports the same file bad again and the caller quarantines it
+// again, so a crash that loses the rename costs one repeated verdict and no
+// task. Save is the opposite — a task file is the only copy of that task on
+// disk — which is why it goes through paths.WriteFileAtomic and this does not.
 func (s *Store) Quarantine(id string) error {
 	p, err := s.path(id)
 	if err != nil {
