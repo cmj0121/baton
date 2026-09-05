@@ -404,7 +404,7 @@ func startDaemon(verbose int, logPath, pluginPath string, forced bool) error {
 
 	// The child logs through zerolog; redirect its std streams to the same file
 	// so panics and other non-logger output are captured too.
-	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, logPerm)
 	if err != nil {
 		return fmt.Errorf("open log file %s: %w", logPath, err)
 	}
