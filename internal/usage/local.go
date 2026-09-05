@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"github.com/cmj0121/baton/internal/paths"
 )
 
 // LocalProvider reads Claude Code's session transcripts and aggregates the token
@@ -307,8 +309,15 @@ const maxTranscriptLine = 16 << 20
 // transcript folds one transcript file's in-window usage in, crediting it to
 // session. It reads line by line, bounded at maxTranscriptLine, and only parses
 // lines that mention usage.
+// paths.OpenRegular rather than os.Open, for the half maxTranscriptLine does not
+// cover: the line length was bounded, the file's KIND was not. The walk lists
+// whatever is in the projects tree and takes anything ending .jsonl, and open(2)
+// on a FIFO with no writer never returns — so one pipe named like a transcript
+// parks the usage poller's goroutine for the daemon's life, taking the footer
+// and the quota bars with it. A file that is not a plain file is skipped, which
+// is what the walk already does with every other unreadable entry.
 func (sc *scan) transcript(path, session string) {
-	f, err := os.Open(path)
+	f, err := paths.OpenRegular(path)
 	if err != nil {
 		return
 	}

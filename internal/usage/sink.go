@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/cmj0121/baton/internal/paths"
 )
 
 // The sink is the handoff between two processes that never talk to each other.
@@ -162,8 +164,15 @@ const maxSinkFile = 64 << 10
 // not an error — it means no panel has reported yet, which is the ordinary state
 // of a fleet that has not run a Claude Code turn since baton was installed. A file
 // past maxSinkFile is read the same way: nothing to show.
+//
+// paths.OpenRegular rather than os.Open, and for the half maxSinkFile does not
+// cover. The size of this file was bounded; its KIND was not, and open(2) on a
+// FIFO with no writer never returns. This read sits on the usage poller's one
+// goroutine, so a pipe left at the name does not cost a reading — it costs the
+// poller, permanently, and the footer and the quota bars stop with it. Anything
+// that is not a plain file joins the missing and the oversized.
 func ReadLimits(path string) (Limits, bool) {
-	f, err := os.Open(path)
+	f, err := paths.OpenRegular(path)
 	if err != nil {
 		return Limits{}, false
 	}
