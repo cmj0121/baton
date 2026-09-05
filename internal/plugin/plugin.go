@@ -272,9 +272,10 @@ func (p *Plugin) load(path string, base config.Config) (LoadResult, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	// Load+PCall rather than DoFile, because DoFile opens the path a second time and
-	// would run whatever is there by then. This runs the descriptor OpenTrusted
-	// vetted, so nothing can be substituted between the verdict and the execution.
+	// Compiled from the open descriptor rather than from the path, because opening
+	// the path a second time would run whatever is there by then. These are the
+	// bytes OpenTrusted vetted, so nothing can be substituted between the verdict
+	// and the execution.
 	fn, err := p.L.Load(f, path)
 	if err == nil {
 		p.L.Push(fn)
