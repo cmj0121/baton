@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode"
@@ -41,6 +43,25 @@ func assertClean(t *testing.T, what, got string, survives ...string) {
 			t.Errorf("%s: an ESC survived the render: %q", what, got)
 		case unicode.IsControl(r), unicode.Is(unicode.Cf, r):
 			t.Errorf("%s: %U survived the render: %q", what, r, got)
+		}
+	}
+	for _, want := range survives {
+		if !strings.Contains(got, want) {
+			t.Errorf("%s: %q was lost, so the assertion above proves nothing: %q", what, want, got)
+		}
+	}
+}
+
+// assertNoInjected is assertClean for a surface baton styles ITSELF: lipgloss
+// emits its own reset when it pads a column, so "no escape at all" cannot be the
+// assertion there without asserting that baton stopped styling. The escapes the
+// attacker supplied are named instead — they are exactly evilName's payloads, so
+// a filter that stopped working still fails here.
+func assertNoInjected(t *testing.T, what, got string, survives ...string) {
+	t.Helper()
+	for _, bad := range []string{"\x1b[2J", "\x1b[H", "\x1b]0;", "\a", "\u202e"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("%s: %q survived the render: %q", what, bad, got)
 		}
 	}
 	for _, want := range survives {
@@ -175,4 +196,31 @@ func TestPluginFooterEscapeNeverReachesTheStrip(t *testing.T) {
 	m.pluginFooter = evilName
 
 	assertClean(t, "plugin footer cap", m.pluginFooterCap(), "api")
+}
+
+// The workdir picker lists real directories, and a directory name is chosen by
+// whoever can call mkdir — which inside a panel is the agent. The name is drawn
+// with no filter of its own, so `mkdir $'\e[2J'` beside a repo puts an escape in
+// the picker the operator opens to choose where the next agent runs.
+//
+// The row's path is asserted untouched alongside: it is what the pick sends, so a
+// filter that rewrote it would spawn in a directory that does not exist.
+func TestDirPickerDrawsNoEscapeFromADirectoryName(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, evilName), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	m := wired(nil).browseDir(root)
+	assertNoInjected(t, "workdir picker", m.dirPickView(), "api")
+
+	var found bool
+	for _, r := range m.dirPickRows {
+		if r.path == filepath.Join(root, evilName) {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the row's path was rewritten; the pick would spawn in a directory that does not exist")
+	}
 }

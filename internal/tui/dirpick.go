@@ -9,6 +9,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/cmj0121/baton/internal/scrub"
 )
 
 // The workdir picker (modeDirPick, C-o from the workdir prompt). The prompt it
@@ -125,6 +127,17 @@ func (m model) dirRows(entries []os.DirEntry) []dirRow {
 			continue
 		}
 		rows = append(rows, dirRow{path: filepath.Join(m.dirPickDir, name), label: name + "/"})
+	}
+	// Scrub every label on the way out, headers included, because the ones that
+	// matter are indistinguishable from the ones that do not by the time the view
+	// draws them. A directory name is chosen by whoever can call mkdir, which
+	// inside a panel is the agent: `mkdir $'\e[2J'` beside a repo puts an escape in
+	// the picker the operator opens to choose where the NEXT agent runs.
+	//
+	// Only the label. The path is what a pick sends to the daemon, and a rewritten
+	// one would spawn in a directory that does not exist.
+	for i := range rows {
+		rows[i].label = scrub.Text(rows[i].label)
 	}
 	return rows
 }
