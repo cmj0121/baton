@@ -40,6 +40,7 @@ import (
 	"github.com/cmj0121/baton/internal/remote"
 	"github.com/cmj0121/baton/internal/restart"
 	"github.com/cmj0121/baton/internal/score"
+	"github.com/cmj0121/baton/internal/scrub"
 	"github.com/cmj0121/baton/internal/signals"
 	"github.com/cmj0121/baton/internal/state"
 	"github.com/cmj0121/baton/internal/task"
@@ -5765,6 +5766,9 @@ func (s *Server) groupPanels(ids []string, name string) error {
 	if !panel.GroupValid(name) {
 		return fmt.Errorf("invalid group path %q", name)
 	}
+	if err := nameSafe(name); err != nil {
+		return err
+	}
 	if len(ids) == 0 {
 		return fmt.Errorf("panel.group needs at least one panel")
 	}
@@ -5931,6 +5935,31 @@ func (s *Server) ungroup(ids []string, name string) error {
 	return nil
 }
 
+// nameSafe refuses a work item's name that carries a rune a terminal acts on or
+// that a reader cannot see.
+//
+// This is a REFUSAL rather than a filter, and the difference matters here. Every
+// frontend already declines to draw these runes, so a name carrying one would be
+// silently rewritten on its way to the screen — and a name is an identity, not
+// prose. Rewriting one means the daemon's no-duplicate-names policy stops holding
+// where it is read: "api" and "api" with a zero-width space on the end are two
+// names to nameTakenLocked and one name on every screen, which is exactly the
+// confusion a uniqueness rule exists to prevent. Refusing keeps the stored name
+// and the drawn name the same string.
+//
+// It also keeps the answer explainable. An operator who typed a stray tab is told
+// so; an agent that tried to name itself in escape bytes is told no, rather than
+// quietly getting a name it did not choose.
+//
+// The class is internal/scrub's, so this and the render-side filters cannot
+// disagree about what a control character is.
+func nameSafe(name string) error {
+	if strings.ContainsFunc(name, scrub.Drop) {
+		return fmt.Errorf("the name %q contains a control character", name)
+	}
+	return nil
+}
+
 // rename is a core action that renames either one panel (by id) or a whole group
 // (by its current name). A panel rename changes its title; a group rename rewrites
 // the Group on every member. Exactly one target must be given, and the new name
@@ -5939,6 +5968,9 @@ func (s *Server) rename(id, group, name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return fmt.Errorf("panel.rename needs a name")
+	}
+	if err := nameSafe(name); err != nil {
+		return err
 	}
 	switch {
 	case id != "" && group != "":
