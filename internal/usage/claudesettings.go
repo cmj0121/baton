@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/cmj0121/baton/internal/paths"
 )
 
 // Reading Claude Code's own settings is what lets baton put itself in front of
@@ -66,14 +68,16 @@ func StatusLine(dir string) (command string, configured bool) {
 // settings, then the user's own. A panel with no working directory is resolved
 // against the user's settings alone.
 func statusLinePaths(dir string) []string {
-	var paths []string
+	// Named `files`, not `paths`: this file now imports the paths package, and a
+	// local of that name would shadow it for the rest of the function.
+	var files []string
 	if dir = strings.TrimSpace(dir); dir != "" {
-		paths = append(paths,
+		files = append(files,
 			filepath.Join(dir, ".claude", "settings.local.json"),
 			filepath.Join(dir, ".claude", "settings.json"),
 		)
 	}
-	return append(paths, filepath.Join(claudeConfigDir(), "settings.json"))
+	return append(files, filepath.Join(claudeConfigDir(), "settings.json"))
 }
 
 // maxSettingsFile caps one settings file.
@@ -95,8 +99,14 @@ const maxSettingsFile = 1 << 20
 // and not an error; a malformed or oversized one is treated the same way, because
 // a cockpit is in no position to adjudicate somebody's JSON and guessing at it is
 // how a status line ends up replaced by accident.
+//
+// paths.OpenRegular rather than os.Open, for the same reason maxSettingsFile is
+// here at all: the directory is the peer's. A plain open of a FIFO left at this
+// name never returns, so the spawn that asked for it — and the connection that
+// asked for the spawn — would wait for a writer that is never coming. Anything
+// that is not a plain file joins the malformed and the oversized.
 func readClaudeSettings(path string) (claudeSettings, bool) {
-	f, err := os.Open(path)
+	f, err := paths.OpenRegular(path)
 	if err != nil {
 		return claudeSettings{}, false
 	}

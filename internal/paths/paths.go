@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/host"
@@ -392,6 +393,52 @@ func checkTrustedDir(dir string) error {
 		return fmt.Errorf("%s is writable by group or other (%04o) and not sticky", dir, fi.Mode().Perm())
 	}
 	return nil
+}
+
+// OpenRegular opens a file whose PATH baton did not choose — one under a working
+// directory a peer named on the socket, or one an agent's own work tree holds —
+// and hands back a descriptor only if the name really is a plain file.
+//
+// The question is about the OPEN itself, not about who wrote the bytes; that one
+// is OpenTrusted's, and this is the weaker check for the far commoner case of
+// reading somebody's data file rather than running somebody's code.
+//
+// open(2) on a FIFO with no writer BLOCKS until a writer arrives, and never
+// returns if none ever does. A daemon that opens whatever name it is pointed at
+// can therefore be parked for good by anyone who can create a file where it will
+// look: a `.claude/settings.json` that is a FIFO in the directory a panel.create
+// named, or — since git lists an untracked SYMLINK but not an untracked FIFO —
+// a link to one dropped in the work tree an agent already runs in. Neither costs
+// the caller anything to arrange, and each parks the handler goroutine of the
+// connection that asked, along with the reservation it was holding.
+//
+// O_NONBLOCK is what makes the open return, and it is the whole fix: on a FIFO
+// it succeeds with no writer instead of waiting for one. The mode is then read
+// with fstat on the RETURNED descriptor rather than with a second stat of the
+// path, so nothing can be swapped in between the check and the read — the caller
+// reads the exact inode that passed.
+//
+// A symlink is followed rather than refused. baton is reading a settings file or
+// an untracked file, and keeping either as a link is ordinary; the flag makes
+// the target's KIND the thing that decides, which is the property that matters.
+//
+// The descriptor keeps O_NONBLOCK, which costs the caller nothing: a read of a
+// regular file ignores it, and a regular file is the only thing that gets here.
+func OpenRegular(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err // including fs.ErrNotExist, which callers read as "no file"
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	return f, nil
 }
 
 // conductorBase is the per-user temporary directory the conductor workspace lives

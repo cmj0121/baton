@@ -1,8 +1,9 @@
 // Package gitdiff resolves "the diff of the current work" for a panel's workdir.
 // It is a set of pure helpers over git: it decides whether a directory is a git
 // work tree, whether it has uncommitted work (including untracked files), and
-// which command shows the diff. It depends on nothing else in baton, so the
-// server can call it without dragging the PTY layer into a unit test.
+// which command shows the diff. Its one dependency inside baton is the paths
+// package, for the guarded open in renderUntracked; nothing here drags the PTY
+// layer into a unit test, which is what that independence was ever for.
 //
 // Every git invocation runs under a short context timeout in the given dir, so a
 // hung or pathological repo can never wedge the caller.
@@ -13,11 +14,12 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/cmj0121/baton/internal/paths"
 )
 
 // gitTimeout bounds every git probe. The checks are cheap (rev-parse, status),
@@ -219,8 +221,15 @@ func sectionPath(lines []string) string {
 // renderUntracked renders an untracked file as an all-added unified-style diff so
 // it reads like the tracked changes beside it. A binary or unreadable file, or one
 // past untrackedDiffCap lines, is summarised rather than dumped in full.
+//
+// paths.OpenRegular rather than os.Open, because the work tree belongs to the
+// agent and the name comes back out of `git status`. git does not list an
+// untracked FIFO — but it DOES list an untracked symlink, and follows nothing —
+// so `ln -s some-fifo notes.txt` in its own directory is enough to leave a plain
+// open here waiting for a writer that never comes, taking the daemon's diff with
+// it. Not-a-plain-file reads as unreadable, which is a case this already renders.
 func renderUntracked(dir, path string) string {
-	f, err := os.Open(filepath.Join(dir, path))
+	f, err := paths.OpenRegular(filepath.Join(dir, path))
 	if err != nil {
 		return fmt.Sprintf("new file: %s\n(unreadable: %v)\n", path, err)
 	}
