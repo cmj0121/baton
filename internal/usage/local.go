@@ -18,13 +18,14 @@ import (
 	"github.com/cmj0121/baton/internal/paths"
 )
 
-// LocalProvider reads Claude Code's session transcripts and aggregates the token
-// usage inside the current window. Every Claude Code run — baton's own agent
-// panels included — appends a JSONL transcript under
+// LocalProvider reads an agent CLI's own session logs off the disk and aggregates
+// the token usage inside the current window. Which CLI's logs, and how a line in
+// them reads, is the format field; the default is Claude Code's, whose every run —
+// baton's own agent panels included — appends a JSONL transcript under
 // $HOME/.claude/projects/<project>/<session>.jsonl, one line per message, with
 // the assistant messages carrying a `usage` block.
 //
-// Because the transcripts are timestamped, this is the one source that can infer
+// Because the logs are timestamped, this is the one kind of source that can infer
 // where the window opened: the message that opened it. That makes the reset a
 // real countdown rather than a guess, and it is why a personal Pro/Max
 // subscription — whose usage never reaches the Admin API — is exactly the case
@@ -36,11 +37,12 @@ import (
 // it drags the window boundaries onto the edge of whatever the scan happened to
 // cover, which moves as the calendar does. So the anchor is carried instead, and
 // derived only when there is none to carry.
+//
 // The walk, the size caps, the dedup, the window chain and the anchor are the
 // same work for any vendor that appends timestamped session logs; only the root,
-// the file names and the line's shape differ. Those three are the format field,
-// so a second vendor is a vendorFormat and a registry entry rather than a second
-// copy of everything above.
+// the file names and the line's shape differ. Those three are the format, so a
+// second vendor is a vendorFormat and a registry entry rather than a second copy
+// of everything above.
 type LocalProvider struct {
 	dir    string           // the root scanned for session logs
 	window time.Duration    // window length; 0 falls back to a calendar day
@@ -203,7 +205,7 @@ func (p *LocalProvider) Fetch(ctx context.Context) (Snapshot, error) {
 		// window nor a day — it is a fraction of one, with no way to say which. Report
 		// nothing and let the caller hold whatever it had; a number that looks like a
 		// reading but under-counts by an unknown amount is the one thing worse.
-		return Snapshot{Source: "local"}, err
+		return Snapshot{Source: p.format.source}, err
 	}
 	// A dropped line is spend this reading does not carry, so the reading is a
 	// little low and nothing on screen says why. Once per poll, with a count.
@@ -222,7 +224,7 @@ func (p *LocalProvider) Fetch(ctx context.Context) (Snapshot, error) {
 		// account is no longer in — and rather than the spend of a window that is over,
 		// which would read as this window's. Since stays zero: there is no window for it
 		// to be the start of, and the scan floor is not one.
-		return Snapshot{Source: "local"}, nil
+		return Snapshot{Source: p.format.source}, nil
 	}
 	snap := sc.snapshot(start)
 	snap.Until, snap.Resets = start.Add(p.window), true
@@ -346,7 +348,7 @@ func (sc *scan) window(now time.Time, length time.Duration, anchor time.Time) (s
 // in would carry a finished window's spend into the current one — which is the
 // number the whole footer is read off.
 func (sc *scan) snapshot(since time.Time) Snapshot {
-	snap := Snapshot{Since: since, Source: "local"}
+	snap := Snapshot{Since: since, Source: sc.format.source}
 	for _, e := range sc.entries {
 		if e.ts.Before(since) {
 			continue
