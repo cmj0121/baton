@@ -13,8 +13,19 @@ Baton 顯示帳號的兩件不同的事,而這個區別正是重點:
 前者回答「是誰在燒」,後者回答「還剩下什麼可以燒」。一整隊 agent 兩者都需要。
 
 ```text
-⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31
+⊙ claude 1.2M tok · ≈$12.34 API · ⏳ 2:14:31
 ⊙ 5h ▓▓▓▓▓░░░ 2:14:31 · 7d ▓▓▓░░░░░ 3d4h
+```
+
+這一段會**寫出這個讀數屬於哪個 agent** —— 也就是艦隊的預設 agent
+(`panel.default-agent`)。在會叫起不只一種 agent 的艦隊上,沒有標名字的數字
+容易被讀成「你花掉的全部」;它其實只是其中一個 agent 的。
+
+它顯示的一定是那個 agent 自己的數字,不會把別人的數字掛在它名下。
+如果 Baton 讀不到預設 agent 的用量,這一段會直接說明,而不是給一個數字:
+
+```text
+⊙ codex · baton has no usage source for this agent
 ```
 
 按 **`v u`** 在頁尾的幾種檢視之間循環,按 **`v U`** 打開完整畫面;選擇會持久保存。
@@ -45,6 +56,14 @@ Baton 顯示帳號的兩件不同的事,而這個區別正是重點:
  Burning this window          share      tokens    of 5h
  ▸ zerg / agent-2               67%  800.0K tok      41%
  ▸ baton / conductor            25%  300.0K tok      16%
+
+   Agent          usage baton can account for
+ ▸ claude *       1.2M tok · ≈$12.34 API · resets 2:14:31
+ ▸ grok           58.0M tok · ≈$8.08 API
+ ◦ codex          baton has no usage source for this agent
+ · gemini         not installed on the fleet's machine
+ · aider          not installed on the fleet's machine
+ · opencode       not installed on the fleet's machine
 ```
 
 最後一欄才是這個畫面存在的理由。面板**佔本窗口 token 的比例**是 Baton 自己的讀數,
@@ -57,6 +76,31 @@ Baton 顯示帳號的兩件不同的事,而這個區別正是重點:
 標頭會說這個讀數多舊。這件事重要,是因為預設來源是**推送式**的(見下):它在面板重繪時
 送達,艦隊安靜下來就不再送達,所以一個讀數可以完全正確、同時已經半小時沒更新。
 超過五分鐘,頁尾會在前面標上 `~`。
+
+### agent 清單
+
+上面的進度條屬於一個帳號;最下面那份清單屬於**整隊**:Baton 認得的每一個 agent
+後端,以及它對各自用量能誠實說出口的話。`*` 標的是你的預設 agent,也就是頁尾正在
+回報的那一個。
+
+Baton 認得六個 agent CLI,能讀到其中兩個的帳。這份清單直接說明哪個是哪個,
+而不是讓你從一個永遠不動的數字自己推。共有三種狀態:
+
+| 標記 | 狀態                           | 意思                                                      |
+| ---- | ------------------------------ | --------------------------------------------------------- |
+| `▸`  | **讀到了** —— 已安裝且有來源   | 數字是真的。數字是 0 表示 Baton 找過了,本窗口確實沒消耗。 |
+| `◦`  | **沒有來源** —— 已安裝但讀不到 | CLI 在這台機器上,但 Baton 沒辦法讀它的用量。**不是** 0。  |
+| `·`  | **沒安裝** —— 不在這台機器上   | Baton 認得這個名字,但機器上沒有這個指令。                 |
+
+第二列和第三列的區別,正是這一段存在的理由。「Baton 看不到這個 agent 的用量」
+跟「這個 agent 沒有用量」是相反的兩種說法,而其中只有一種有證據支撐——所以
+沒有數字的 agent 帶的是**原因**,不是進度條。這裡不會有空的進度條,
+也不會有拿 0 頂替讀數的情況。
+
+只有 `◦` 會畫成琥珀色,因為只有它才是 Baton 回報能力上的缺口。
+沒人安裝的 agent 不是缺口。
+
+比較舊的 daemon 根本不會送出這份清單,這時整段會直接不畫,而不是畫成空的。
 
 ## 資料來源
 
@@ -135,6 +179,47 @@ Baton 以座艙自己的時鐘倒數它——每秒一次,不是每次輪詢一�
 
 選取一個**群組**時會把成員全部加總——「是誰在燒」這個問題,對一個工作項目問和對單一
 面板問一樣自然。
+
+## Baton 讀得到哪些 agent 的用量
+
+| Agent      | 用量來源                                   | 成本                       |
+| ---------- | ------------------------------------------ | -------------------------- |
+| `claude`   | `~/.claude/projects/**/*.jsonl` transcript | Baton 依模型自行計價       |
+| `grok`     | `~/.grok/sessions/**/updates.jsonl`        | **Grok 自己報的數字**,換算 |
+| `codex`    | —                                          | —                          |
+| `gemini`   | —                                          | —                          |
+| `aider`    | —                                          | —                          |
+| `opencode` | —                                          | —                          |
+
+`CLAUDE_CONFIG_DIR` 和 `GROK_HOME` 可以搬動這兩個根目錄,行為和各廠商自己的 CLI 一致。
+
+這兩個 reader 有一點差異值得知道。Claude Code 的 transcript 只寫 token 和模型、
+不寫價格,所以 Baton 用一張逐模型的表計價。Grok 每一輪都會寫出成本,所以 Baton
+直接讀那個數字,不去重算——Baton 裡沒有 Grok 的價目表,xAI 改價時也就不會過期。
+
+破折號表示 Baton **沒有用量來源**,不是說那個 agent 免費。Grok 的帳特別容易被漏掉:
+`chat_history.jsonl`、`events.jsonl`、`summary.json`、`prompt_context.json` 裡
+完全沒有 token 數,只有 `updates.jsonl` 記帳。如果你發現某個 agent 其實有把用量寫在
+某處,補上它是一個很小、範圍很收斂的改動——見下。
+
+### 為其他 agent 補一個 reader
+
+從磁碟讀用量真正麻煩的部分——有上限的行讀取、拒絕開啟非一般檔案、跨檔去重、
+窗口鏈與它攜帶的 anchor——全都在 `internal/usage/local.go` 的同一個引擎裡,
+直接繼承。新的 agent 只要提供四件事:
+
+1. 它的 session log 在**哪裡**,
+2. 裡面**哪一個檔案**才是記帳的那一份,
+3. 一個便宜的**子字串**,用來判斷某一行值不值得解析,
+4. 一個**解碼器**,把一行變成 token、時間戳和去重鍵。
+
+這就是一個 `vendorFormat`,加上 `internal/usage/vendor.go` 中 `vendorReaders`
+註冊表裡的一行。其他都不用動:協定不用動、daemon 不用動、cockpit 也不用動——
+這三者都是由那張註冊表驅動的。那個 agent 會自己從 `◦` 變成 `▸`。
+
+解碼器有兩條規則,引擎不會替你把關:每輪的紀錄必須是**增量,不是累計值**
+(檢查同一個 session 內它們並非單調遞增),以及解碼器絕不可以用不存在的識別碼
+拼出去重鍵——空的鍵代表「永遠不會是重複」。
 
 ## 設定
 

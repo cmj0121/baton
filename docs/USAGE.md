@@ -17,8 +17,21 @@ The first answers "who is burning it". The second answers "is there anything lef
 to burn". A fleet needs both.
 
 ```text
-⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31
+⊙ claude 1.2M tok · ≈$12.34 API · ⏳ 2:14:31
 ⊙ 5h ▓▓▓▓▓░░░ 2:14:31 · 7d ▓▓▓░░░░░ 3d4h
+```
+
+The segment **names the agent whose reading it is showing** — your fleet's
+default agent (`panel.default-agent`). On a fleet that spawns more than one kind
+of agent, an unlabelled number invites being read as everything you have spent;
+it is one agent's.
+
+It shows that agent's own figures, never another's under its name. If baton has
+no usage source for your default agent, the segment says so instead of showing a
+number:
+
+```text
+⊙ codex · baton has no usage source for this agent
 ```
 
 Press **`v u`** to cycle the footer segment through its views, and **`v U`** to
@@ -50,6 +63,14 @@ extra-usage balance if you have one, and the panels spending them.
  Burning this window          share      tokens    of 5h
  ▸ zerg / agent-2               67%  800.0K tok      41%
  ▸ baton / conductor            25%  300.0K tok      16%
+
+   Agent          usage baton can account for
+ ▸ claude *       1.2M tok · ≈$12.34 API · resets 2:14:31
+ ▸ grok           58.0M tok · ≈$8.08 API
+ ◦ codex          baton has no usage source for this agent
+ · gemini         not installed on the fleet's machine
+ · aider          not installed on the fleet's machine
+ · opencode       not installed on the fleet's machine
 ```
 
 The last column is what the overlay exists for. A panel's **share of the
@@ -67,6 +88,34 @@ is a **push** (see below): it arrives when a panel renders and stops arriving
 when the fleet goes quiet, so a reading can be perfectly true and half an hour
 old. Past five minutes the footer marks it with a leading `~`.
 
+### The vendor roll
+
+The bars above are one account's. The list at the bottom is the **fleet's**: every
+agent backend baton knows, and what it can honestly say about each one's usage.
+`*` marks your default agent — the one the footer is reporting.
+
+Baton knows six agent CLIs and can read the books of two of them, and the roll
+says which is which rather than leaving you to work it out from a number that
+never moves. There are three states:
+
+| Mark | State                                        | What it means                                                           |
+| ---- | -------------------------------------------- | ----------------------------------------------------------------------- |
+| `▸`  | **Read** — installed, and baton has a source | The figure is real. A figure of zero means baton looked and found none. |
+| `◦`  | **No source** — installed, unreadable        | The CLI is here; baton has no way to read its usage. **Not** a zero.    |
+| `·`  | **Absent** — not installed                   | Baton knows the name; the command is not on the fleet's machine.        |
+
+The distinction between the second and third row is the reason this section
+exists. "Baton cannot see this agent's usage" and "this agent has used nothing"
+are opposite claims, and only one of them is ever backed by evidence — so a
+vendor without a figure carries a **reason** rather than a bar. There are no
+empty bars here, and no zeros standing in for a missing reading.
+
+The `◦` state is the only one drawn in amber, because it is the only one that is a
+gap in baton's reporting. An agent nobody installed is not a gap.
+
+An older daemon sends no vendor list at all, and the section is then omitted
+rather than drawn empty.
+
 ## Data sources
 
 There are two settings, because the two halves come from different places.
@@ -81,6 +130,10 @@ totals cannot see.
 | ------- | ---------------------------------------------------------------- | ----------------------------------------------------------- |
 | `local` | Claude Code's own session transcripts under `~/.claude/projects` | A personal **Pro/Max subscription** (and API-key use alike) |
 | `api`   | The Anthropic **Admin** usage & cost API                         | A **Console / API-key organization**                        |
+
+This setting picks the **footer's headline source**, which is Anthropic's. The
+vendor roll in the overlay reads each agent with its own reader, and those are
+listed under [Which agents baton can account for](#which-agents-baton-can-account-for).
 
 The **local** source is the default and the one that works for a subscription:
 every Claude Code run — including the agent panels Baton spawns — appends a JSONL
@@ -216,6 +269,54 @@ footer:
 
 Selecting a **group** rolls up every member, since a work item is as natural a
 thing to ask "who is burning it" about as a single panel.
+
+## Which agents baton can account for
+
+| Agent      | Usage source                                | Cost                             |
+| ---------- | ------------------------------------------- | -------------------------------- |
+| `claude`   | `~/.claude/projects/**/*.jsonl` transcripts | Priced by Baton, per model       |
+| `grok`     | `~/.grok/sessions/**/updates.jsonl`         | **Grok's own figure**, converted |
+| `codex`    | —                                           | —                                |
+| `gemini`   | —                                           | —                                |
+| `aider`    | —                                           | —                                |
+| `opencode` | —                                           | —                                |
+
+`CLAUDE_CONFIG_DIR` and `GROK_HOME` relocate the two roots the way each vendor's
+own CLI does.
+
+The two readers differ in one way worth knowing. Claude Code's transcripts state
+tokens and a model but no price, so Baton prices them from a per-model table.
+Grok states the cost of every turn, so Baton reads that number rather than
+reconstructing it — there is no Grok price table in Baton to go stale when xAI
+reprices.
+
+A dash means Baton has **no usage source**, not that the agent is free. Grok's
+accounting in particular is easy to miss: `chat_history.jsonl`, `events.jsonl`,
+`summary.json` and `prompt_context.json` carry no token counts at all, and only
+`updates.jsonl` keeps the books. If you find an agent that does record its usage
+somewhere, adding it is a small, contained change — see below.
+
+### Adding a reader for another agent
+
+Everything that is hard about reading usage off a disk — bounded line reads, a
+refusal to open anything that is not a regular file, cross-file deduplication,
+the window chain and its carried anchor — lives in one engine in
+`internal/usage/local.go` and is inherited. A new vendor supplies four things:
+
+1. **where** its session logs live,
+2. **which** file inside them is the accounting record,
+3. a cheap **substring** that makes a line worth parsing,
+4. a **decoder** from one line to tokens, a timestamp and a dedup key.
+
+That is a `vendorFormat` and one line in the `vendorReaders` registry in
+`internal/usage/vendor.go`. Nothing else changes: not the wire, not the daemon,
+not the cockpit — all three are driven by what that registry contains. The agent
+moves from `◦` to `▸` in the roll on its own.
+
+Two rules for the decoder, both of which the engine will not enforce for you:
+per-turn records must be **deltas, not running totals** (check that they do not
+increase monotonically within a session), and a decoder must never manufacture a
+dedup key out of absent identifiers — an empty key means "never a duplicate".
 
 ## Configuration
 
