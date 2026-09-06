@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -147,5 +148,44 @@ func TestClaudeProjectsDirNoHome(t *testing.T) {
 	}
 	if got := claudeProjectsDir(); got != filepath.Join(".claude", "projects") {
 		t.Fatalf("claudeProjectsDir() = %q, want .claude/projects", got)
+	}
+}
+
+// A message older than the scan floor is not kept at all, rather than kept and
+// filtered out later by the window arithmetic.
+//
+// The distinction is invisible in the totals and load-bearing for the window: with
+// no anchor to continue from, the chain starts at the OLDEST entry in hand, so an
+// out-of-range message that got as far as the entry list would become the point a
+// window is measured from — dragging the countdown onto the edge of whatever the
+// scan happened to reach rather than onto a message that opened anything.
+func TestKeepRefusesAMessageBelowTheScanFloor(t *testing.T) {
+	cutoff := startOfDay(fixedNow)
+	sc := newScan(cutoff, fixedNow)
+
+	stale := cutoff.Add(-2 * time.Hour).Format(time.RFC3339)
+	fresh := fixedNow.Add(-time.Hour).Format(time.RFC3339)
+	line := func(ts, id string, in int64) string {
+		return `{"type":"assistant","requestId":"` + id + `","timestamp":"` + ts +
+			`","message":{"id":"` + id + `","model":"claude-sonnet-4","usage":{"input_tokens":` +
+			strconv.FormatInt(in, 10) + `,"output_tokens":0}}}`
+	}
+	sc.fold([]byte(line(stale, "old", 500)), "sess1")
+	sc.fold([]byte(line(fresh, "new", 7)), "sess1")
+
+	if len(sc.entries) != 1 {
+		t.Fatalf("kept %d entries, want 1; a message below the scan floor was buffered", len(sc.entries))
+	}
+	if got := sc.snapshot(cutoff).Input; got != 7 {
+		t.Errorf("input = %d, want 7; the stale message was counted", got)
+	}
+	// The window chain has no anchor, so it starts at the oldest entry held. That
+	// must be the in-range message, not the stale one.
+	start, open := sc.window(fixedNow, 5*time.Hour, time.Time{})
+	if !open {
+		t.Fatal("no window in progress for a message an hour old")
+	}
+	if start.Before(cutoff) {
+		t.Errorf("the window opened at %v, below the scan floor %v — a stale message anchored it", start, cutoff)
 	}
 }

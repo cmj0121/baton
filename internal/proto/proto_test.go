@@ -262,3 +262,18 @@ func TestAVendorWithNoReadingCarriesNoNumber(t *testing.T) {
 		t.Errorf("a vendor with no reading carries no reason: %s", raw)
 	}
 }
+
+// A daemon with nothing to say about vendors must put no vendors key on the wire
+// at all — not "vendors":null. Both decode to nil, so this is not about the
+// reader; it is the claim that turning the feature off leaves the payload byte
+// for byte what it was before the field existed, which is the cheapest possible
+// answer to "what does an old cockpit see".
+func TestNoVendorListPutsNoVendorKeyOnTheWire(t *testing.T) {
+	raw, err := json.Marshal(UsageInfo{Tokens: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "vendors") {
+		t.Errorf("a payload with no vendor list mentions vendors: %s", raw)
+	}
+}
