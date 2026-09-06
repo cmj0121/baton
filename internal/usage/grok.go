@@ -85,15 +85,30 @@ type grokUpdate struct {
 
 // grokCostTicksPerUSD converts grok's costUsdTicks to dollars.
 //
-// The scale is not documented, so it was measured rather than assumed. Fitting
-// ticks against tokens over this machine's grok-4.6 turns solves exactly, with no
-// residual, at 20000 ticks per uncached input token, 60000 per output token and
-// 5000 per cached-read token. Only one scale turns that triple into a price list
-// anybody would publish: at 1e10 ticks to the dollar it is $2.00, $6.00 and $0.50
-// per million tokens, with cached reads at a quarter of input and output at three
-// times it — the ordinary shape of a vendor's rate card. A factor of ten either
-// way gives $20/$60 or $0.02/$0.06 per million, and neither is a price anyone
-// charges.
+// The scale is not documented, so it was inferred, and the strength of that
+// inference is worth stating precisely because the obvious way to phrase it
+// overstates it.
+//
+// Solving ticks against tokens over this machine's grok-4.6 turns gives 20000
+// ticks per uncached input token, 60000 per output token and 5000 per cached
+// read. That solve has three unknowns and was fitted on three turns, so it lands
+// exactly BY CONSTRUCTION: a zero residual there is arithmetic, not evidence, and
+// the other turns in the corpus are other models on other rate cards and do not
+// fit these three numbers at all.
+//
+// What is evidence is that the answer came out ROUND. An arbitrary three-by-three
+// solve yields arbitrary numbers; this one yields $2.00, $6.00 and $0.50 per
+// million tokens at 1e10 ticks to the dollar, with cached reads a quarter of
+// input and output three times it — the ordinary shape of a published rate card.
+// A decade either way gives $20/$60 or $0.02/$0.06, and nobody charges either.
+//
+// The independent check is the whole corpus, which does not depend on the fit at
+// all: 136 turns, 349M tokens of which 166M are cached reads, total 325025000400
+// ticks. At 1e10 that is $32.50, which is what that traffic costs. At 1e9 it is
+// $325 and at 1e11 it is $3.25, and neither is.
+//
+// The way to falsify this is a turn whose cost grok also reports in dollars, or a
+// billing statement. Until then it is an inference with its own arithmetic shown.
 //
 // baton does not reconstruct this figure, it reads it: grok states the cost of
 // every turn, so there is no per-model price table here to go stale when grok
