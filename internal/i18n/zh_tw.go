@@ -167,6 +167,12 @@ var zhTW = map[string]string{
 	"usage.view.tokens":      "token",
 	"usage.view.of-5h":       "占 5h",
 
+	// The vendor roll: which agent backends this machine has, and which of them
+	// baton can account for.
+	"usage.view.agent":         "代理",
+	"usage.view.accounting":    "baton 能讀到的用量",
+	"usage.view.nothing-spent": "本窗口尚無消耗",
+
 	// The working-directory features.
 	"panel.here.unknown": "那個面板的目錄不明;改在預設工作目錄開啟",
 }

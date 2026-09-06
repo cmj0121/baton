@@ -82,11 +82,20 @@ func (m model) usageView() string {
 		// No source configured, or none that has reported yet. Saying which would be
 		// guessing at the daemon's config from the cockpit; saying nothing at all
 		// would leave someone staring at an empty box wondering if it was broken.
-		return m.popupBox(lipgloss.JoinVertical(lipgloss.Left,
-			sectionStyle.Render(spaced("ACCOUNT USAGE")), "",
+		//
+		// The vendor roll still goes in. It is the half of this overlay that does not
+		// depend on a quota source at all — which agents the fleet's machine has, and
+		// which of them baton can account for — and it is exactly what somebody who
+		// opened this and found no bars needs to see.
+		body := []string{sectionStyle.Render(spaced("ACCOUNT USAGE")), "",
 			mutedStyle.Render(i18n.T(m.effLang(), "usage.view.no-reading",
-				"no quota reading yet — a Claude Code panel reports one after its first turn")),
-			"", m.usageLegend()))
+				"no quota reading yet — a Claude Code panel reports one after its first turn"))}
+		if vendors := m.usageVendorSection(); len(vendors) > 0 {
+			body = append(body, "")
+			body = append(body, vendors...)
+		}
+		body = append(body, "", m.usageLegend())
+		return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, body...))
 	}
 
 	rows := m.usageBars(lim)
@@ -94,12 +103,104 @@ func (m model) usageView() string {
 		rows = append(rows, "", m.usageRosterHeader())
 		rows = append(rows, roster...)
 	}
+	if vendors := m.usageVendorSection(); len(vendors) > 0 {
+		rows = append(rows, "")
+		rows = append(rows, vendors...)
+	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		m.usageHeader(lim), "",
 		lipgloss.JoinVertical(lipgloss.Left, rows...), "",
 		m.usageLegend())
 	return m.popupBox(content)
+}
+
+// usageVendorSection is the vendor roll: every agent backend the fleet's machine
+// knows, and what baton can honestly say about each one's usage.
+//
+// The bars above are Anthropic's account. This is the fleet's, and the two are
+// different questions — an operator running a mixed fleet can be nowhere near a
+// Claude limit and still have no idea what the other agents have spent. The
+// section answers "which of these can baton even account for", once, in place of
+// the operator discovering it by noticing a number never moves.
+//
+// A vendor with no reading gets its reason, not a bar and not a zero. That is the
+// whole point of the section: "baton cannot see grok's usage" and "grok has used
+// nothing" are opposite claims, and a row that drew an empty bar would make the
+// second one for free.
+func (m model) usageVendorSection() []string {
+	if m.usageInfo == nil || len(m.usageInfo.Vendors) == 0 {
+		// Nil is an older daemon, which never said. Drawing a header over nothing
+		// would suggest the fleet has no agent backends.
+		return nil
+	}
+	tr := func(k, def string) string { return i18n.T(m.effLang(), k, def) }
+	def := m.effDefaultAgent()
+
+	// The two leading spaces stand in for the mark every row below carries, so the
+	// header's columns line up with theirs.
+	rows := []string{mutedStyle.Render(fmt.Sprintf("  %-14s %s",
+		tr("usage.view.agent", "Agent"), tr("usage.view.accounting", "usage baton can account for")))}
+	for _, v := range m.usageInfo.Vendors {
+		name := v.Vendor
+		if v.Vendor == def {
+			// The one the footer is reporting, marked so the two screens agree about
+			// which agent the headline number belongs to.
+			name += " *"
+		}
+		rows = append(rows, fmt.Sprintf("%s%-14s %s",
+			lipgloss.NewStyle().Foreground(m.vendorMarkColor(v)).Render(vendorMark(v)),
+			truncate(name, 14), m.vendorStanding(v)))
+	}
+	return rows
+}
+
+// vendorMark is the glyph in front of a vendor's row. The three states get three
+// different marks so the column can be read down without reading the text: a
+// reading is a filled mark, an installed agent baton cannot account for is a
+// hollow one, and an agent that is not here at all is a dash.
+func vendorMark(v proto.VendorUsage) string {
+	switch v.State {
+	case vendorReading:
+		return "▸ "
+	case vendorAbsent:
+		return "· "
+	default:
+		return "◦ "
+	}
+}
+
+// vendorMarkColor colours the mark by what it is saying. Absent is muted because
+// it is not a problem — an agent nobody installed is not a gap in baton's
+// reporting. An installed agent with no source is amber: that IS a gap, and it is
+// the one an operator would otherwise mistake for a quiet account.
+func (m model) vendorMarkColor(v proto.VendorUsage) lipgloss.Color {
+	switch v.State {
+	case vendorReading:
+		return colBrand
+	case vendorAbsent:
+		return colMuted
+	default:
+		return colAmber
+	}
+}
+
+// vendorStanding is the right-hand column: the figure when there is one, the
+// reason when there is not.
+func (m model) vendorStanding(v proto.VendorUsage) string {
+	if v.State != vendorReading {
+		return mutedStyle.Render(vendorReasonText(v))
+	}
+	text := usage.FormatTotals(v.Tokens, v.CostUSD)
+	if text == "" {
+		// A reading of nothing. It is a real zero — baton looked — and it has to read
+		// as one rather than as a blank, which is what every other state looks like.
+		return mutedStyle.Render(i18n.T(m.effLang(), "usage.view.nothing-spent", "nothing spent this window"))
+	}
+	if left := m.vendorCountdown(v); left != "" {
+		text = joinDot(text, i18n.T(m.effLang(), "usage.view.resets", "resets")+" "+left)
+	}
+	return text
 }
 
 // usageHeader names the overlay and says where the reading came from and how old
