@@ -1290,6 +1290,9 @@ func runServerOn(ln net.Listener, sock string, boot serverBoot) error {
 	// warnScoreKeysAReloadCannotApply.
 	bootedScore := cfg.Score
 	srv := server.New(ln, append(buildServerOptions(rc, stateF), usageOption(cfg), limitsOption(cfg),
+		// The per-vendor list measures against the same window the footer does, so
+		// the two can never describe different windows of the same account.
+		server.WithVendorUsage(cfg.Usage.WindowDuration()),
 		// The fan-out's ceiling is the plugin's own per-hook allowance, spent once
 		// for a whole group. It is handed over rather than restated in the server
 		// because this is the only place both numbers are visible, and the server's

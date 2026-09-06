@@ -53,6 +53,17 @@ import (
 // treat as a DIFFERENT known value, rather than as its documented unknown — is a
 // bump, because that is a change of meaning wearing a new name.
 //
+// The per-vendor usage list is the FIRST shape — a new optional field — and it
+// is recorded here because the temptation was to reach for a bump. UsageInfo
+// grew `Vendors`, and LimitsInfo was left exactly as it is. Down: an old cockpit
+// decodes the usage payload, ignores the key it does not know, and renders the
+// Anthropic quota bars it always rendered — no field it reads changed meaning or
+// polarity. Up: an old daemon simply never sets it, `omitempty` elides it, and a
+// new cockpit decodes nil, which is the documented "the daemon never said" and
+// is why the vendor section is skipped rather than drawn empty. The distinction
+// between nil and empty carries that, so it is part of the contract and not an
+// implementation detail; TestVendorsAbsentIsNotVendorsEmpty holds it.
+//
 // GIVING A FIELD A MEANING IT DID NOT HAVE for one op is the third shape, and
 // the dashboard's worktree verb (#66) is the case that settled it. `panel.git`
 // with git "worktree-add" grew a second form: an EMPTY ID, a Dir naming the
@@ -412,6 +423,62 @@ type UsageInfo struct {
 	// is nil, not zeroed, whenever there is no reading: a quota bar resting at 0%
 	// asserts a full tank.
 	Limits *LimitsInfo `json:"limits,omitempty"`
+
+	// Vendors is every agent backend the fleet's machine knows, each carrying what
+	// baton can honestly say about its usage. It sits BESIDE Limits rather than
+	// replacing it: Limits is Anthropic's plan in Anthropic's own field names, and
+	// a per-vendor list cannot be built on FiveHour/SevenDayOpus because a seven-day
+	// Opus ceiling is not a thing any other vendor has. VendorUsage carries a
+	// generic window instead — a label, a fraction, an instant.
+	//
+	// Nil and empty mean different things and the cockpit reads them differently.
+	// Nil is "the daemon never said", which is what an older daemon sends and what
+	// makes this field safe to add. An empty-but-present list would be "the daemon
+	// scanned and knows of no backends at all", which a current daemon does not
+	// produce — it always at least reports the presets it could not find.
+	Vendors []VendorUsage `json:"vendors,omitempty"`
+}
+
+// VendorUsage is one agent backend's usage standing on the wire.
+//
+// The point of the type is State. baton knows six agent CLIs and can read the
+// books of two, and the other four must not be drawn as quota bars resting at
+// zero: "baton cannot see this vendor's usage" and "this vendor has used nothing"
+// are opposite claims, and only one of them is ever evidence-backed. So a vendor
+// without a figure carries a Reason instead of a number, and the cockpit prints
+// the reason where the bar would have gone.
+type VendorUsage struct {
+	Vendor string `json:"vendor"`
+
+	// State is "reading" (the CLI is installed and baton read its books),
+	// "no-source" (installed, and baton has no reader for it) or "absent" (baton
+	// knows the name, the command is not on this machine). An unknown value is a
+	// vendor a newer daemon can say something about that this client cannot, and
+	// the documented reading is to show the name with the Reason and no bar —
+	// never to fall through to "reading", which would invent a figure.
+	State string `json:"state"`
+
+	// Reason is why there is no reading, in words meant for an operator. Non-empty
+	// exactly when State is not "reading".
+	Reason string `json:"reason,omitempty"`
+
+	Source  string         `json:"source,omitempty"` // the reader that produced the figure
+	Tokens  int64          `json:"tokens,omitempty"`
+	CostUSD float64        `json:"cost_usd,omitempty"`
+	Windows []VendorWindow `json:"windows,omitempty"`
+}
+
+// VendorWindow is one usage window in terms every vendor shares: what to call it,
+// how much of it is gone, and when it resets.
+//
+// It is not LimitWindow. LimitWindow's percentage is a share of a ceiling the
+// vendor published; this fraction is how far through a window baton is measuring.
+// Giving them one type would let a bar drawn from the second be read as the
+// first, which is a limit nobody stated.
+type VendorWindow struct {
+	Label       string  `json:"label"`
+	UsedPercent float64 `json:"used_percentage"`
+	ResetsAt    string  `json:"resets_at,omitempty"`
 }
 
 // LimitsInfo is the account's rate-limit standing on the wire. Every window is a
