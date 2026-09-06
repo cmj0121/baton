@@ -43,7 +43,7 @@ func writeTranscript(t *testing.T, root, project, session string, mtime time.Tim
 }
 
 func newLocal(dir string) *LocalProvider {
-	return &LocalProvider{dir: dir, now: func() time.Time { return fixedNow }}
+	return &LocalProvider{format: claudeFormat(), dir: dir, now: func() time.Time { return fixedNow }}
 }
 
 // TestLocalFetchAggregates: today's assistant messages are summed, a duplicate

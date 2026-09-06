@@ -12,7 +12,7 @@ import (
 // newLocalWindow is newLocal with a window length, so the countdown paths are
 // exercised rather than the calendar-day fallback.
 func newLocalWindow(dir string, window time.Duration) *LocalProvider {
-	return &LocalProvider{dir: dir, window: window, now: func() time.Time { return fixedNow }}
+	return &LocalProvider{format: claudeFormat(), dir: dir, window: window, now: func() time.Time { return fixedNow }}
 }
 
 // writeSubagentTranscript writes a subagent transcript at
@@ -110,7 +110,7 @@ func TestLocalFetchAnchorHoldsAcrossMidnight(t *testing.T) {
 	grow := growingTranscript(t, root, day, 5*time.Minute)
 
 	var now time.Time
-	p := &LocalProvider{dir: filepath.Join(root, "projects"), window: window, now: func() time.Time { return now }}
+	p := &LocalProvider{format: claudeFormat(), dir: filepath.Join(root, "projects"), window: window, now: func() time.Time { return now }}
 	seen := map[time.Time]Snapshot{}
 	for now = day.Add(6 * time.Hour); now.Before(day.Add(30 * time.Hour)); now = now.Add(15 * time.Minute) {
 		grow(now)
@@ -199,7 +199,7 @@ func TestLocalFetchWindowRunsDownAndRestarts(t *testing.T) {
 
 	at := func(now time.Time) Snapshot {
 		t.Helper()
-		p := &LocalProvider{dir: projects, window: window, now: func() time.Time { return now }}
+		p := &LocalProvider{format: claudeFormat(), dir: projects, window: window, now: func() time.Time { return now }}
 		snap, err := p.Fetch(context.Background())
 		if err != nil {
 			t.Fatal(err)
