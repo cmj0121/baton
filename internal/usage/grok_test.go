@@ -154,10 +154,13 @@ func TestGrokProviderReadsASessionTree(t *testing.T) {
 	write("updates.jsonl",
 		grokLine(ts, "ev1", "p1", 1000, 100, 400, 0, 10_000_000_000)+"\n"+
 			grokLine(ts+60, "ev2", "p2", 2000, 200, 800, 0, 20_000_000_000)+"\n")
-	// The narrative files describe the same two turns. A reader that took every
-	// .jsonl in the tree would count them again.
+	// The sibling files describe the same two turns. A reader that took every
+	// .jsonl in the tree would count them again. These are the exact names grok
+	// writes beside updates.jsonl, so the fixture is the claim it is checking.
 	write("chat_history.jsonl", grokLine(ts, "ev1", "p1", 1000, 100, 400, 0, 10_000_000_000)+"\n")
 	write("events.jsonl", grokLine(ts+60, "ev2", "p2", 2000, 200, 800, 0, 20_000_000_000)+"\n")
+	write("rewind_points.jsonl", grokLine(ts, "ev1", "p1", 1000, 100, 400, 0, 10_000_000_000)+"\n")
+	write("prompt_context.json", grokLine(ts, "ev1", "p1", 1000, 100, 400, 0, 10_000_000_000)+"\n")
 
 	p := NewGrokProvider(5 * time.Hour)
 	p.dir = filepath.Join(root, "sessions")
