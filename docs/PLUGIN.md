@@ -79,6 +79,13 @@ dispatches go straight to the core action and **bypass the `task.pre` filter** (
 never re-enter itself. That holds for `baton.enqueue` too, whose task is filtered nowhere: the origin is recorded on the
 task, so the bypass survives the wait in the backlog — and a daemon restart with it.
 
+`baton.spawn` pays the **fleet ceiling**. Sixty-four panels is sixty-four whoever asked for the sixty-fifth, so a hook
+that spawns in a loop is refused at the same wall a conductor is, with the same message. It does **not** pay the spawn
+rate cap, which a conductor does — and that half is a deliberate **hold** rather than a settled answer. A plugin is
+unattended code running a loop, which is exactly what a rate cap is for, and `baton.enqueue` is already metered against
+`queue.max` in this same API; what keeps it uncharged is that turning it on would break a working plugin at a limit it
+has never hit. Write your hooks as if it may change, and lean on the ceiling as the thing that will stop a runaway.
+
 Every write returns `ok, err` (Lua idiom): `nil, "the name \"api\" is already taken"` on the same failures the socket
 reports, so a plugin handles a rejected action instead of crashing.
 

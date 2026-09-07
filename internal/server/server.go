@@ -2824,7 +2824,26 @@ const spawnDoor = "createPanel"
 // compile-time constants and scheduleLocked asks the budget once per queued
 // spawn-on-demand task — under s.mu, on a one-second tick — so formatting it per
 // ask was a string built and dropped for every waiting task on a full fleet.
-var fleetFullReason = fmt.Sprintf("fleet at capacity (%d panels)", maxConductorFleet)
+//
+// IT NAMES THE REMEDY because since #86 an OPERATOR can read it. Until then no
+// cockpit spawn could reach it — the ceiling was a conductor's fence and its only
+// reader was an agent — and a bare number is a poor thing to hand a person who
+// pressed `p` and got nothing back. The remedy is the fact the number does not
+// carry: the ceiling counts the panels the fleet HOLDS, and an exited panel holds
+// its slot until something drops it, so purging is often a free slot where
+// closing a live panel is a real cost.
+//
+// ONE STRING FOR BOTH READERS rather than a kinder one for the cockpit. The
+// conductor's fence prefixes this same text, and a conductor may close other
+// panels and purge exited ones — guardConductor fences neither — so the advice is
+// true for whoever hits it. A second wording would be a second spelling of one
+// limit, which is the drift spawnBudgetLocked exists to have ended. It stays a
+// constant string for the reason it was already one: naming WHICH panels hold the
+// slots would mean tallying the fleet on a path scheduleLocked walks once per
+// queued task per tick.
+var fleetFullReason = fmt.Sprintf(
+	"fleet at capacity (%d panels) — close a panel or purge the exited ones to free a slot",
+	maxConductorFleet)
 
 // spawnBudgetLocked is the fleet's spawn budget — the ceiling and the rate gap —
 // spelled ONCE, for every road that ends in createPanel on something other than
@@ -2839,23 +2858,59 @@ var fleetFullReason = fmt.Sprintf("fleet at capacity (%d panels)", maxConductorF
 // WHICH ROADS SPEND FROM IT IS NO LONGER HELD BY AGREEMENT (#79). createPanel
 // takes a panelOrigin, so a road cannot reach that door without naming itself,
 // and each road's answer — exempt, or charged, and if charged then where — is
-// written on the constant it names. What did not move is the CHARGE. Both metered
-// roads spend their slot at the last point where a refusal can still land before
-// that road's own side effects, and for both of them that point is upstream of
-// createPanel: the conductor's at the fence, before `git worktree add` has built
-// a tree on disk, and the scheduler's at the decision, holding s.mu, with the
-// panel created afterwards. A charge moved down to the door would move those
-// refusals past the things they exist to prevent.
+// written on the constant it names.
+//
+// BOTH HALVES AT ONCE IS THE CONDUCTOR'S AND THE SCHEDULER'S ANSWER, not the
+// budget's shape (#86). The two limits say different things — see the two methods
+// below — and every road answers each of them on its own, which is why this pair
+// is two functions a road may call one of, rather than one function a road pays
+// or does not. What this spelling keeps is the two roads that do pay both: the
+// conductor at the fence, before the worktree add has built a tree on disk, and
+// the scheduler at the decision, holding s.mu, with the panel created afterwards.
+// Both spend at the last point where a refusal can still land before that road's
+// own side effects, and a charge moved down to the door would move those refusals
+// past the things they exist to prevent.
 //
 // It has a SIDE EFFECT on the admitting path: tooSoon stamps the clock, so a call
 // that returns "" has spent the slot. Call it once per decision to spawn, and
 // never to merely ask. The caller holds s.mu.
 func (s *Server) spawnBudgetLocked(now time.Time) string {
-	if len(s.panels) >= maxConductorFleet {
-		return fleetFullReason
+	if reason := s.fleetFullLocked(); reason != "" {
+		return reason
 	}
 	// Checked LAST, so the capacity refusal above — which is about the fleet
 	// rather than about this attempt — does not spend the slot.
+	return s.spawnGapLocked(now)
+}
+
+// fleetFullLocked is the CEILING half: a statement about the HOST, and since #86
+// the half EVERY road pays. Sixty-four panels is sixty-four panels whoever asked
+// for the sixty-fifth, and a ceiling one road may walk past is not a ceiling — the
+// road that walks past it spends the slots, and the next road along is refused for
+// a cause it did not create, by a message that does not name it.
+//
+// It reads and never stamps, so asking twice costs nothing. That is what lets the
+// scheduler ask at its decision and the door decline to ask again on its behalf,
+// without either of them having to know what the other did: this axis has no slot
+// to spend twice, only a race to lose. The caller holds s.mu.
+func (s *Server) fleetFullLocked() string {
+	if len(s.panels) >= maxConductorFleet {
+		return fleetFullReason
+	}
+	return ""
+}
+
+// spawnGapLocked is the RATE GAP half: a statement about HOW FAST something is
+// asking, which is a question about the asker and not about the host. That is why
+// the two hands nothing makes loop — the operator's, and for now the plugin's —
+// are exempt from this one and not from the ceiling.
+//
+// IT STAMPS. tooSoon marks the clock on the admitting branch, so a call that
+// returns "" has spent the slot and the next one inside the gap is refused. That
+// asymmetry with fleetFullLocked is the whole reason these are two methods and
+// not two ifs: one may be asked freely and the other may not, and a road's answer
+// per axis cannot be written until the two can be asked apart. Caller holds s.mu.
+func (s *Server) spawnGapLocked(now time.Time) string {
 	if _, tooSoon := s.spawn.tooSoon(spawnDoor, now); tooSoon {
 		return "spawning too fast, slow down"
 	}
@@ -3320,48 +3375,90 @@ type panelOrigin int
 
 const (
 	// originOperator is the cockpit's own panel.create, and the worktree bridge
-	// driven from one. The operator's hand pays NOTHING — neither the ceiling nor
-	// the rate gap — because guardConductor returns on its first line for a
-	// connection that is not a conductor. That exemption was nowhere written
-	// down; this is where it is written down.
+	// driven from one. It pays THE CEILING AND NOT THE GAP (#86), and the split is
+	// the whole of what this road is: the ceiling is a statement about the host, so
+	// the operator's own hand is under it like everything else, while the gap
+	// exists to stop something LOOPING and a person does not loop.
+	//
+	// The ceiling half is new, and it was exempt by accident rather than by
+	// argument: guardConductor returns on its first line for a connection that is
+	// not a conductor, so neither cap ever reached the cockpit. The cost of that
+	// was paid by somebody else — an operator could quietly take the fleet past 64,
+	// and the conductor that hit the wall a moment later was refused for a thing
+	// the operator did, by a message that did not say so.
 	originOperator panelOrigin = iota
 	// originConductor is those same two verbs driven by a scoped conductor, and it
-	// arrives here ALREADY CHARGED: guardConductor spends the slot through
-	// spawnCapsReason before the command reaches an action at all.
+	// pays BOTH axes — but ALREADY, before it arrives: guardConductor spends the
+	// slot through spawnCapsReason before the command reaches an action at all.
 	//
 	// That the charge is upstream is not an accident of where the code sits. For
-	// panel.git worktree-add the refusal has to land before `git worktree add`
-	// has built a tree on disk, which is upstream of this door by construction
+	// panel.git worktree-add the refusal has to land before the worktree add has
+	// built a tree on disk, which is upstream of this door by construction
 	// (TestWTAddConductorReachesTheCap). Charging again here would refuse the very
 	// spawn the fence has just admitted.
 	originConductor
-	// originScheduler is the backlog drain, ALREADY CHARGED for the other reason:
-	// scheduleLocked spends the slot when it DECIDES to provision, holding s.mu,
-	// and applyScheduledSpawns creates the panel afterwards without it. A charge
-	// here would find the gap that decision has just stamped and fail the task
-	// with a refusal it had already been granted.
+	// originScheduler is the backlog drain, and it pays BOTH axes ALREADY too, for
+	// the other reason: scheduleLocked spends the slot when it DECIDES to
+	// provision, holding s.mu, and applyScheduledSpawns creates the panel
+	// afterwards without it. A gap charge here would find the stamp that decision
+	// just left and fail the task with a refusal it had already been granted; a
+	// ceiling charge here would fail it for a fleet that filled up in between,
+	// which is a race the decision already resolved in the task's favour.
 	originScheduler
-	// originPlugin is the plugin host's Server.Spawn (baton.spawn), deliberately
-	// exempt because a plugin is installed by the operator and is the operator's
-	// hand. The exemption is argued rather than overlooked, and #79's own comment
-	// corrects itself to say so; this is the argument's new home.
+	// originPlugin is the plugin host's Server.Spawn (baton.spawn). It pays THE
+	// CEILING, for the reason the operator does — the ceiling is about the host,
+	// not about who asked — and is exempt from the gap.
+	//
+	// THE GAP EXEMPTION IS A HOLD RATHER THAN A CONCLUSION, and it is the one thing
+	// #86 declined to settle. The argument for charging it is good and is written
+	// here so it cannot be lost: a plugin is UNATTENDED CODE RUNNING A LOOP, which
+	// is precisely the failure the gap exists for — a hook that spawns on every
+	// panel.output event is one line away — and "a plugin is the operator's hand"
+	// does not survive contact with the rest of this design, because the same API
+	// meters baton.enqueue against queueMax, and an agent profile is just as
+	// operator-installed and is charged.
+	//
+	// What holds it is not a counter-argument but a cost: charging the gap can
+	// break a WORKING plugin at a limit it has never hit, on an upgrade nobody
+	// asked to change behaviour, and that is the operator's call rather than this
+	// change's. The edit is one line — a spawnGapLocked call in this arm of
+	// budgetReasonLocked — and TestThePluginsBurstIsStillAdmitted is what fails
+	// when someone makes it, so the hold cannot drift into a decision nobody took.
 	originPlugin
 )
 
-// budgetReason is what the fleet's spawn budget takes from a road that has
+// budgetReasonLocked is what the fleet's spawn budget takes from a road that has
 // reached createPanel: a refusal to hand back, or "" to admit. It is the budget's
-// enforcement point in the sense #79 asks for — every road's answer is written on
-// the constants above, so a road with no answer written spawns nothing rather
-// than passing unnoticed.
+// enforcement point in the sense #79 asks for — every road's answer is written
+// here and on the constants above, so a road with no answer written spawns
+// nothing rather than passing unnoticed.
 //
-// NOTHING IS CHARGED FROM HERE TODAY, and that is the transcription rather than
-// an omission. Two roads are exempt; the other two spend their slot upstream,
-// each at the last point where a refusal can still land before that road's own
-// side effects. Moving either charge down here would move the refusal past them,
-// which is a change of behaviour rather than of address.
-func (o panelOrigin) budgetReason() string {
+// ONE CASE PER ROAD, ANSWERING TWO AXES (#86). The budget is a ceiling and a rate
+// gap, they say different things, and a road answers each on its own: the two
+// hands nothing makes loop pay the ceiling here and not the gap, and the two that
+// pay both have paid both already, upstream, at the last point where a refusal
+// could still land before that road's own side effects. Grouping the arms by
+// their answer would hide that the two upstream roads reach "" for different
+// reasons — a stamp already spent, and a decision already taken — which is the
+// difference a later reader needs.
+//
+// It is a Server method rather than a panelOrigin one because the ceiling is a
+// question about the FLEET and a constant cannot answer it. The caller holds
+// s.mu, which is why the check sits inside createPanel's lock rather than at its
+// door.
+func (s *Server) budgetReasonLocked(o panelOrigin) string {
 	switch o {
-	case originOperator, originConductor, originScheduler, originPlugin:
+	case originOperator:
+		// Ceiling: charged, here. Gap: exempt — a person does not loop.
+		return s.fleetFullLocked()
+	case originPlugin:
+		// Ceiling: charged, here. Gap: exempt, and held rather than decided.
+		return s.fleetFullLocked()
+	case originConductor:
+		// Both, spent at the fence, before any worktree exists on disk.
+		return ""
+	case originScheduler:
+		// Both, spent at the decision, with the panel created afterwards.
 		return ""
 	default:
 		return fmt.Sprintf("spawn refused: no spawn budget is written for panel origin %d", o)
@@ -3404,9 +3501,6 @@ func connOrigin(cc *clientConn) panelOrigin {
 // question asked first: what the fleet's spawn budget takes from this road. See
 // panelOrigin, which is where each road's answer is written.
 func (s *Server) createPanel(origin panelOrigin, kind, path string, args []string, dir, profile string, conductor, globalShell bool) (string, error) {
-	if reason := origin.budgetReason(); reason != "" {
-		return "", errors.New(reason)
-	}
 	if kind == "" {
 		kind = proto.KindShell
 	}
@@ -3418,6 +3512,14 @@ func (s *Server) createPanel(origin panelOrigin, kind, path string, args []strin
 	}
 
 	s.mu.Lock()
+	// The budget is asked FIRST and under the lock, because its ceiling half is a
+	// question about the fleet: len(s.panels) read outside it is a number that was
+	// true once. It is also asked before the two singleton reservations below, so a
+	// refused spawn cannot leave conductorPending set behind it.
+	if reason := s.budgetReasonLocked(origin); reason != "" {
+		s.mu.Unlock()
+		return "", errors.New(reason)
+	}
 	if conductor && s.hasConductorLocked() {
 		s.mu.Unlock()
 		return "", fmt.Errorf("a conductor already exists")

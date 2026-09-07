@@ -143,8 +143,13 @@ func TestWorktreeAddPaysTheSpawnCaps(t *testing.T) {
 				t.Fatalf("a second worktree spawn inside the gap answered %q, want the rate refusal", reason)
 			}
 
-			// The caps fence the conductor, not the verb: the operator's cockpit runs
-			// the identical command against the identical full fleet and is admitted.
+			// THIS FENCE fences the conductor, not the verb: the operator's cockpit runs
+			// the identical command against the identical full fleet and this guard has
+			// nothing to say about it. That is unchanged by #86, which did not widen the
+			// fence — it charged the cockpit's ceiling at createPanel instead, where the
+			// road ends rather than where a conductor is stopped (see
+			// TestEachRoadsCeilingAtTheDoor). So the operator is still unfenced HERE and
+			// is still exempt from the rate cap everywhere.
 			cockpit, _, _ := gateServer(fullFleet()...)
 			if reason := cockpit.guardConductor(conn("c1"), tc.cmd); reason != "" {
 				t.Fatalf("the cockpit is not fenced by the conductor caps, got %q", reason)
