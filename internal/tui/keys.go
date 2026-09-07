@@ -38,9 +38,15 @@ import (
 // No landing is also a binding of its own, so a sequence fires on its last key
 // and the timeout never delays a keystroke. keyseq_test.go asserts it.
 const (
-	keyPrefix      = "ctrl+t"
-	keyNewPanel    = "p"
-	keyNewForm     = "n c" // new panel, choosing the command
+	keyPrefix   = "ctrl+t"
+	keyNewPanel = "p"
+	// A SHELL panel whose program you name — not the command kind #54 added.
+	// "command" is spoken for twice over: it is that kind on the wire, and it is
+	// `ctl queue add --command`, the agent binary to provision. ctl.go says why the
+	// spawn flag became --run rather than reuse it; this label had the same clash
+	// and kept the word, which is how it came to answer "which key opens a command
+	// panel" with the one that does not.
+	keyNewForm     = "n c"
 	keyNewHere     = "n ." // spawn a shell panel in the focused panel's current directory — "." reads as "here"
 	keyNewAgent    = "A"   // spawn an agent panel (shift+a) — one of the two spawns that keep a bare key
 	keyConductor   = "n C" // find-or-create the singleton conductor agent
@@ -232,7 +238,7 @@ type binding struct {
 var bindings = []binding{
 	{"new-panel", keyNewPanel, "spawn a new shell panel", actNewPanel, "Panels", "shell"},
 	{"new-panel-here", keyNewHere, "spawn a shell panel in the focused panel's directory", actNewHere, "Panels", "here"},
-	{"new-panel-form", keyNewForm, "new panel (choose the command)", actNewForm, "Panels", "command"},
+	{"new-panel-form", keyNewForm, "spawn a shell panel running a program you name", actNewForm, "Panels", "program"},
 	{"new-agent", keyNewAgent, "spawn an agent panel in a workdir", actNewAgent, "Panels", "agent"},
 	{"conductor", keyConductor, "open the conductor — an agent that drives the fleet", actConductor, "Panels", "conductor"},
 	{"global-shell", keyGlobalShell, "open the global shell — a host shell always one key away", actGlobalShell, "Panels", "global shell"},

@@ -94,7 +94,7 @@ var zhTW = map[string]string{
 	// --- binding descriptions, keyed by the binding's stable name -------------
 	"bind.new-panel":      "開一個新的 shell 面板",
 	"bind.new-panel-here": "在聚焦面板所在的目錄開一個 shell 面板",
-	"bind.new-panel-form": "新面板（自選要執行的指令）",
+	"bind.new-panel-form": "開一個 shell 面板,自選要跑的程式",
 	"bind.new-agent":      "在指定工作目錄開一個 agent 面板",
 	"bind.conductor":      "開啟 conductor — 指揮整群面板的 agent",
 	"bind.global-shell":   "開啟全域 shell — 一個按鍵就到的主機 shell",
