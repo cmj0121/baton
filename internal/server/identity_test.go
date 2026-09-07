@@ -54,7 +54,7 @@ func envValue(env []string, key string) (string, bool) {
 func TestAgentPanelKnowsItself(t *testing.T) {
 	s, dir := identityServer(t)
 
-	id, err := s.createPanel(proto.KindAgent, "/bin/sh", nil, dir, "", false, false)
+	id, err := s.createPanel(originOperator, proto.KindAgent, "/bin/sh", nil, dir, "", false, false)
 	if err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestAgentPanelKnowsItself(t *testing.T) {
 func TestShellPanelCarriesNoIdentity(t *testing.T) {
 	s, dir := identityServer(t)
 
-	id, err := s.createPanel(proto.KindShell, "", nil, dir, "", false, false)
+	id, err := s.createPanel(originOperator, proto.KindShell, "", nil, dir, "", false, false)
 	if err != nil {
 		t.Fatalf("create shell: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestShellPanelCarriesNoIdentity(t *testing.T) {
 func TestConductorIdentityUnchanged(t *testing.T) {
 	s, dir := identityServer(t)
 
-	cid, err := s.createPanel(proto.KindAgent, "/bin/sh", nil, dir, "", true, false)
+	cid, err := s.createPanel(originOperator, proto.KindAgent, "/bin/sh", nil, dir, "", true, false)
 	if err != nil {
 		t.Fatalf("create conductor: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestConductorIdentityUnchanged(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(s.PanelDir(cid)) })
 
-	pid, err := s.createPanel(proto.KindAgent, "/bin/sh", nil, dir, "", false, false)
+	pid, err := s.createPanel(originOperator, proto.KindAgent, "/bin/sh", nil, dir, "", false, false)
 	if err != nil {
 		t.Fatalf("create peer agent: %v", err)
 	}
@@ -131,11 +131,11 @@ func TestConductorIdentityUnchanged(t *testing.T) {
 func TestPanelIdentitiesAreDistinct(t *testing.T) {
 	s, dir := identityServer(t)
 
-	first, err := s.createPanel(proto.KindAgent, "/bin/sh", nil, dir, "", false, false)
+	first, err := s.createPanel(originOperator, proto.KindAgent, "/bin/sh", nil, dir, "", false, false)
 	if err != nil {
 		t.Fatalf("create first: %v", err)
 	}
-	second, err := s.createPanel(proto.KindAgent, "/bin/sh", nil, dir, "", false, false)
+	second, err := s.createPanel(originOperator, proto.KindAgent, "/bin/sh", nil, dir, "", false, false)
 	if err != nil {
 		t.Fatalf("create second: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestRespawnRebuildsSameIdentity(t *testing.T) {
 	stateF := filepath.Join(t.TempDir(), "state.json")
 	first, dir := identityServer(t, WithStateFile(stateF))
 
-	id, err := first.createPanel(proto.KindAgent, "/bin/sh", nil, dir, "", false, false)
+	id, err := first.createPanel(originOperator, proto.KindAgent, "/bin/sh", nil, dir, "", false, false)
 	if err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestRespawnedShellStaysAnonymous(t *testing.T) {
 	stateF := filepath.Join(t.TempDir(), "state.json")
 	first, dir := identityServer(t, WithStateFile(stateF))
 
-	id, err := first.createPanel(proto.KindShell, "", nil, dir, "", false, false)
+	id, err := first.createPanel(originOperator, proto.KindShell, "", nil, dir, "", false, false)
 	if err != nil {
 		t.Fatalf("create shell: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestConductorRespawnKeepsScopedRole(t *testing.T) {
 	stateF := filepath.Join(t.TempDir(), "state.json")
 	first, dir := identityServer(t, WithStateFile(stateF))
 
-	cid, err := first.createPanel(proto.KindAgent, "/bin/sh", nil, dir, "", true, false)
+	cid, err := first.createPanel(originOperator, proto.KindAgent, "/bin/sh", nil, dir, "", true, false)
 	if err != nil {
 		t.Fatalf("create conductor: %v", err)
 	}

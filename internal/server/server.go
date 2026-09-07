@@ -2836,16 +2836,16 @@ var fleetFullReason = fmt.Sprintf("fleet at capacity (%d panels)", maxConductorF
 // applied to every fleet and this one only while a conductor was driving — which
 // is a difference nobody chose.
 //
-// IT IS STILL HELD BY AGREEMENT AND NOT BY CONSTRUCTION, which was true of the
-// two spellings and is true of the one. The charge cannot move inside createPanel
-// itself: there is no connection there to tell the operator's own hand from an
-// agent's, so a conductor's road and the cockpit's would be metered alike, and
-// the scheduler — which spends its slot when it DECIDES, holding s.mu, and
-// creates the panel later without it — would be charged twice. So a fourth road
-// is a road nothing here notices. There is one already: the plugin host's
-// Server.Spawn (baton.spawn), deliberately exempt because a plugin is installed
-// by the operator and is the operator's hand. Anyone adding a fifth must charge
-// it deliberately.
+// WHICH ROADS SPEND FROM IT IS NO LONGER HELD BY AGREEMENT (#79). createPanel
+// takes a panelOrigin, so a road cannot reach that door without naming itself,
+// and each road's answer — exempt, or charged, and if charged then where — is
+// written on the constant it names. What did not move is the CHARGE. Both metered
+// roads spend their slot at the last point where a refusal can still land before
+// that road's own side effects, and for both of them that point is upstream of
+// createPanel: the conductor's at the fence, before `git worktree add` has built
+// a tree on disk, and the scheduler's at the decision, holding s.mu, with the
+// panel created afterwards. A charge moved down to the door would move those
+// refusals past the things they exist to prevent.
 //
 // It has a SIDE EFFECT on the admitting path: tooSoon stamps the clock, so a call
 // that returns "" has spent the slot. Call it once per decision to spawn, and
@@ -2867,6 +2867,11 @@ func (s *Server) spawnBudgetLocked(now time.Time) string {
 // SYNCHRONOUSLY on a conductor's command — panel.create and panel.git
 // worktree-add — so the budget is spent from one purse however the spawn is
 // spelled.
+//
+// This is where originConductor's slot is spent, and the fence is the right place
+// for both of its verbs rather than merely the historical one: it is the last
+// point before either road's side effects. worktree-add is the one that proves
+// it — a refusal after here is a refusal with a worktree already on disk.
 //
 // SYNCHRONOUSLY is still the word doing the work, and the third road is charged
 // somewhere else for exactly that reason. A spawn-on-demand task.enqueue ends in
@@ -2995,7 +3000,7 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "panel.list":
 		send(cc, s.panelsMsg())
 	case "panel.create":
-		if _, err := s.createPanel(cmd.Kind, cmd.Path, cmd.Args, cmd.Dir, cmd.Profile, cmd.Conductor, cmd.GlobalShell); err != nil {
+		if _, err := s.createPanel(connOrigin(cc), cmd.Kind, cmd.Path, cmd.Args, cmd.Dir, cmd.Profile, cmd.Conductor, cmd.GlobalShell); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
@@ -3300,6 +3305,83 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	}
 }
 
+// panelOrigin names the ROAD a createPanel call arrived on. It is the one fact
+// createPanel cannot work out for itself — there is no connection here to tell
+// the operator's own hand from an agent's — and it is why the fleet's spawn
+// budget was charged by agreement at the call sites, and why a fourth road could
+// reach this door with nothing here noticing (#79).
+//
+// It is one value rather than a pair of bools for the reason taskAuthor is: the
+// roads are mutually exclusive, and two adjacent bools at a call site can be
+// swapped without breaking a build. Like taskAuthor it is the SERVER'S
+// CONCLUSION and never a claim — no command carries an origin field, and the two
+// wire roads reach theirs through connOrigin, from the connection alone.
+type panelOrigin int
+
+const (
+	// originOperator is the cockpit's own panel.create, and the worktree bridge
+	// driven from one. The operator's hand pays NOTHING — neither the ceiling nor
+	// the rate gap — because guardConductor returns on its first line for a
+	// connection that is not a conductor. That exemption was nowhere written
+	// down; this is where it is written down.
+	originOperator panelOrigin = iota
+	// originConductor is those same two verbs driven by a scoped conductor, and it
+	// arrives here ALREADY CHARGED: guardConductor spends the slot through
+	// spawnCapsReason before the command reaches an action at all.
+	//
+	// That the charge is upstream is not an accident of where the code sits. For
+	// panel.git worktree-add the refusal has to land before `git worktree add`
+	// has built a tree on disk, which is upstream of this door by construction
+	// (TestWTAddConductorReachesTheCap). Charging again here would refuse the very
+	// spawn the fence has just admitted.
+	originConductor
+	// originScheduler is the backlog drain, ALREADY CHARGED for the other reason:
+	// scheduleLocked spends the slot when it DECIDES to provision, holding s.mu,
+	// and applyScheduledSpawns creates the panel afterwards without it. A charge
+	// here would find the gap that decision has just stamped and fail the task
+	// with a refusal it had already been granted.
+	originScheduler
+	// originPlugin is the plugin host's Server.Spawn (baton.spawn), deliberately
+	// exempt because a plugin is installed by the operator and is the operator's
+	// hand. The exemption is argued rather than overlooked, and #79's own comment
+	// corrects itself to say so; this is the argument's new home.
+	originPlugin
+)
+
+// budgetReason is what the fleet's spawn budget takes from a road that has
+// reached createPanel: a refusal to hand back, or "" to admit. It is the budget's
+// enforcement point in the sense #79 asks for — every road's answer is written on
+// the constants above, so a road with no answer written spawns nothing rather
+// than passing unnoticed.
+//
+// NOTHING IS CHARGED FROM HERE TODAY, and that is the transcription rather than
+// an omission. Two roads are exempt; the other two spend their slot upstream,
+// each at the last point where a refusal can still land before that road's own
+// side effects. Moving either charge down here would move the refusal past them,
+// which is a change of behaviour rather than of address.
+func (o panelOrigin) budgetReason() string {
+	switch o {
+	case originOperator, originConductor, originScheduler, originPlugin:
+		return ""
+	default:
+		return fmt.Sprintf("spawn refused: no spawn budget is written for panel origin %d", o)
+	}
+}
+
+// connOrigin is the panelOrigin a live connection amounts to: originConductor for
+// the scoped role guardConductor fences, originOperator for everything else.
+//
+// It exists so the two wire roads that end in createPanel — panel.create and
+// panel.git worktree-add — reach that discrimination by the same road, the way
+// connAuthor serves the two doors a brief arrives at. Both roads are metered by
+// the same fence on exactly this test, and it is not one to keep two copies of.
+func connOrigin(cc *clientConn) panelOrigin {
+	if cc.role == roleConductor {
+		return originConductor
+	}
+	return originOperator
+}
+
 // createPanel is a core action: it spawns the backing process and records the new
 // panel in the fleet. A shell panel runs path (or the default shell when empty);
 // an agent panel runs its profile command with args; a command panel runs a plain
@@ -3317,7 +3399,14 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 // in the socket's managed workspace (not any source tree) instead of dir, and
 // injects the socket + identity env so the agent inside can drive the fleet under
 // the scoped conductor role.
-func (s *Server) createPanel(kind, path string, args []string, dir, profile string, conductor, globalShell bool) (string, error) {
+//
+// origin names the road the call came down, and it is FIRST because it is the
+// question asked first: what the fleet's spawn budget takes from this road. See
+// panelOrigin, which is where each road's answer is written.
+func (s *Server) createPanel(origin panelOrigin, kind, path string, args []string, dir, profile string, conductor, globalShell bool) (string, error) {
+	if reason := origin.budgetReason(); reason != "" {
+		return "", errors.New(reason)
+	}
 	if kind == "" {
 		kind = proto.KindShell
 	}
@@ -4950,7 +5039,7 @@ func (s *Server) applyScheduledSpawns(spawns []spawnRequest) bool {
 	changed := false
 	var orphans []string
 	for _, req := range spawns {
-		pid, err := s.createPanel(proto.KindAgent, req.spec.Command, req.spec.Args, req.spec.Dir, req.spec.Profile, false, false)
+		pid, err := s.createPanel(originScheduler, proto.KindAgent, req.spec.Command, req.spec.Args, req.spec.Dir, req.spec.Profile, false, false)
 		s.mu.Lock()
 		delete(s.spawning, req.taskID)
 		t := s.tasks[req.taskID]
@@ -5630,7 +5719,7 @@ func (s *Server) sendDiff(cc *clientConn, targetID string) error {
 func (s *Server) runGit(cc *clientConn, cmd proto.Command) error {
 	switch op := gitops.Op(cmd.Git); op {
 	case gitops.OpWorktreeAdd:
-		if err := s.gitWorktreeAdd(cmd); err != nil {
+		if err := s.gitWorktreeAdd(connOrigin(cc), cmd); err != nil {
 			return err
 		}
 		s.broadcastFleet()
@@ -5792,7 +5881,13 @@ func (s *Server) agentTargetSpec(targetID, label string) (spawnSpec, error) {
 // tree is one a later sweep would have to leave alone.
 //
 // A real fleet change, so the caller broadcasts.
-func (s *Server) worktreeSpawn(repo, branch string, spec spawnSpec) error {
+//
+// origin is carried down from the connection rather than concluded here: this
+// road serves the cockpit and a conductor alike, and which of the two is asking
+// is the whole of what the spawn budget wants to know. It is passed on to
+// createPanel unchanged — the charge for a conductor's worktree-add is already
+// spent at the fence, before git built the tree.
+func (s *Server) worktreeSpawn(origin panelOrigin, repo, branch string, spec spawnSpec) error {
 	s.mu.Lock()
 	base := s.worktreeDir
 	s.mu.Unlock()
@@ -5826,7 +5921,7 @@ func (s *Server) worktreeSpawn(repo, branch string, spec spawnSpec) error {
 
 	// Spawn the agent in the new worktree and file it under the branch, so it lands
 	// as a work item immediately.
-	id, err := s.createPanel(proto.KindAgent, spec.Command, spec.Args, path, spec.Profile, false, false)
+	id, err := s.createPanel(origin, proto.KindAgent, spec.Command, spec.Args, path, spec.Profile, false, false)
 	if err != nil {
 		return fmt.Errorf("worktree created at %q, but the agent did not start: %w", path, err)
 	}
@@ -5884,13 +5979,13 @@ func (s *Server) forgetWorktree(path string) {
 // DAEMON's own working directory and branch whatever repo it happened to be
 // started in — a misread rather than a refusal, and the one outcome this seam
 // must not have.
-func (s *Server) gitWorktreeAdd(cmd proto.Command) error {
+func (s *Server) gitWorktreeAdd(origin panelOrigin, cmd proto.Command) error {
 	if cmd.ID == "" {
 		if cmd.Dir == "" {
 			return fmt.Errorf("worktree: a repository directory is required")
 		}
 		spec := spawnSpec{Spec: ptymgr.Spec{Command: cmd.Path, Args: cmd.Args}, Profile: cmd.Profile}
-		return s.worktreeSpawn(cmd.Dir, cmd.Name, spec)
+		return s.worktreeSpawn(origin, cmd.Dir, cmd.Name, spec)
 	}
 	// Named rather than used inline: TestEveryGitTargetFollowsTheAgent counts the
 	// git targets that resolve through targetDir by reading this file's source, so
@@ -5900,7 +5995,7 @@ func (s *Server) gitWorktreeAdd(cmd proto.Command) error {
 	if err != nil {
 		return err
 	}
-	return s.worktreeSpawn(s.targetDir(targetID, spec.Spec), cmd.Name, spec)
+	return s.worktreeSpawn(origin, s.targetDir(targetID, spec.Spec), cmd.Name, spec)
 }
 
 // gitWorktreeRemove removes the worktree at path from the target agent's repo. It

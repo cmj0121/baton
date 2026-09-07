@@ -292,7 +292,7 @@ func TestHostRespawnAndPurge(t *testing.T) {
 // about patience.
 func TestShutdownJoinsItsPanelPumps(t *testing.T) {
 	s := newHostServer(t)
-	if _, err := s.createPanel(proto.KindShell, "", nil, os.Getenv("BATON_TEST_DIR"), "", false, false); err != nil {
+	if _, err := s.createPanel(originOperator, proto.KindShell, "", nil, os.Getenv("BATON_TEST_DIR"), "", false, false); err != nil {
 		t.Fatalf("create shell panel: %v", err)
 	}
 
@@ -318,7 +318,7 @@ func TestShutdownJoinsItsPanelPumps(t *testing.T) {
 // patience, exactly as the test above does.
 func TestShutdownJoinsAClosedPanelsPump(t *testing.T) {
 	s := newHostServer(t)
-	id, err := s.createPanel(proto.KindAgent, "/bin/cat", []string{"-u"}, os.Getenv("BATON_TEST_DIR"), "", false, false)
+	id, err := s.createPanel(originOperator, proto.KindAgent, "/bin/cat", []string{"-u"}, os.Getenv("BATON_TEST_DIR"), "", false, false)
 	if err != nil {
 		t.Fatalf("create cat panel: %v", err)
 	}

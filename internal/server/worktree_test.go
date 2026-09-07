@@ -106,7 +106,7 @@ func TestWorktreeSpawnWithoutAPanel(t *testing.T) {
 	if len(s.panels) != 0 {
 		t.Fatalf("the fleet should be empty before the call, got %+v", s.panels)
 	}
-	if err := s.worktreeSpawn(repo, "feature/solo", idleAgent()); err != nil {
+	if err := s.worktreeSpawn(originOperator, repo, "feature/solo", idleAgent()); err != nil {
 		t.Fatalf("worktreeSpawn: %v", err)
 	}
 
@@ -153,7 +153,7 @@ func TestWorktreeSpawnRecordsOnlyItsOwn(t *testing.T) {
 	byHand := filepath.Join(t.TempDir(), "by-hand")
 	wtGit(t, repo, "worktree", "add", "-b", "by-hand", "--", byHand)
 
-	if err := s.worktreeSpawn(repo, "feature/mine", idleAgent()); err != nil {
+	if err := s.worktreeSpawn(originOperator, repo, "feature/mine", idleAgent()); err != nil {
 		t.Fatalf("worktreeSpawn: %v", err)
 	}
 	mine := filepath.Join(repo+"-worktrees", "feature-mine")
@@ -189,7 +189,7 @@ func TestWorktreeRemoveUnrecordsTheTree(t *testing.T) {
 	repo := wtRepo(t)
 	s, recordFile := wtServer(t)
 
-	if err := s.worktreeSpawn(repo, "feature/short", idleAgent()); err != nil {
+	if err := s.worktreeSpawn(originOperator, repo, "feature/short", idleAgent()); err != nil {
 		t.Fatalf("worktreeSpawn: %v", err)
 	}
 	tree := filepath.Join(repo+"-worktrees", "feature-short")
@@ -198,7 +198,7 @@ func TestWorktreeRemoveUnrecordsTheTree(t *testing.T) {
 	}
 
 	// `x` runs against an agent sitting in the repo, not in the tree being removed.
-	id, err := s.createPanel(proto.KindAgent, "/bin/sh", []string{"-c", "sleep 30"}, repo, "", false, false)
+	id, err := s.createPanel(originOperator, proto.KindAgent, "/bin/sh", []string{"-c", "sleep 30"}, repo, "", false, false)
 	if err != nil {
 		t.Fatalf("create the repo agent: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestWorktreeRemoveKeepsTheRecordWhenGitRefuses(t *testing.T) {
 	repo := wtRepo(t)
 	s, recordFile := wtServer(t)
 
-	if err := s.worktreeSpawn(repo, "feature/dirty", idleAgent()); err != nil {
+	if err := s.worktreeSpawn(originOperator, repo, "feature/dirty", idleAgent()); err != nil {
 		t.Fatalf("worktreeSpawn: %v", err)
 	}
 	tree := filepath.Join(repo+"-worktrees", "feature-dirty")
@@ -232,7 +232,7 @@ func TestWorktreeRemoveKeepsTheRecordWhenGitRefuses(t *testing.T) {
 	}
 	wtGit(t, tree, "add", "wip.txt")
 
-	id, err := s.createPanel(proto.KindAgent, "/bin/sh", []string{"-c", "sleep 30"}, repo, "", false, false)
+	id, err := s.createPanel(originOperator, proto.KindAgent, "/bin/sh", []string{"-c", "sleep 30"}, repo, "", false, false)
 	if err != nil {
 		t.Fatalf("create the repo agent: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestWorktreeSpawnKeepsTheTreeOnSpawnFailure(t *testing.T) {
 	s, recordFile := wtServer(t)
 
 	spec := spawnSpec{Spec: ptymgr.Spec{Command: filepath.Join(t.TempDir(), "no-such-agent")}}
-	err := s.worktreeSpawn(repo, "feature/dead", spec)
+	err := s.worktreeSpawn(originOperator, repo, "feature/dead", spec)
 	if err == nil {
 		t.Fatal("a spawn that cannot start should have been reported")
 	}
@@ -289,7 +289,7 @@ func TestWorktreeSpawnRefusesANonRepo(t *testing.T) {
 	plain := t.TempDir()
 	s, recordFile := wtServer(t)
 
-	err := s.worktreeSpawn(plain, "feature/nope", idleAgent())
+	err := s.worktreeSpawn(originOperator, plain, "feature/nope", idleAgent())
 	if err == nil || !strings.Contains(err.Error(), "not a git repository") {
 		t.Fatalf("a non-repo should be refused with the usual shape, got %v", err)
 	}
@@ -317,7 +317,7 @@ func TestWorktreeRecordIsOffWithoutPersistence(t *testing.T) {
 	if s.wtrees != nil {
 		t.Fatal("a server with no state file should keep no worktree record")
 	}
-	if err := s.worktreeSpawn(repo, "feature/nopersist", idleAgent()); err != nil {
+	if err := s.worktreeSpawn(originOperator, repo, "feature/nopersist", idleAgent()); err != nil {
 		t.Fatalf("worktreeSpawn: %v", err)
 	}
 	tree := filepath.Join(repo+"-worktrees", "feature-nopersist")

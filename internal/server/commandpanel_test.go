@@ -23,7 +23,7 @@ import (
 // panel it is grants it nothing it could use.
 func TestCreateCommandPanel(t *testing.T) {
 	s, _, _ := gateServer()
-	id, err := s.createPanel(proto.KindCommand, "cat", nil, t.TempDir(), "", false, false)
+	id, err := s.createPanel(originOperator, proto.KindCommand, "cat", nil, t.TempDir(), "", false, false)
 	if err != nil {
 		t.Fatalf("spawning a command panel: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestCreateCommandPanel(t *testing.T) {
 // which is the misread the kind exists to prevent.
 func TestCreateCommandPanelNeedsACommand(t *testing.T) {
 	s, _, _ := gateServer()
-	if _, err := s.createPanel(proto.KindCommand, "", nil, t.TempDir(), "", false, false); err == nil {
+	if _, err := s.createPanel(originOperator, proto.KindCommand, "", nil, t.TempDir(), "", false, false); err == nil {
 		t.Fatal("a command panel with no command should be refused")
 	}
 	if len(s.panels) != 0 {
