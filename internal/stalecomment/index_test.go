@@ -1,6 +1,8 @@
 package stalecomment
 
 import (
+	"go/parser"
+	"go/token"
 	"strings"
 	"testing"
 )
@@ -168,6 +170,39 @@ func TestTheIndexNeverHoldsTheBlank(t *testing.T) {
 	idx.add("")
 	if idx.Len() != 0 {
 		t.Fatalf("the index holds %d names, wanted none", idx.Len())
+	}
+}
+
+// Only exported names come out of an imported package, because only those can
+// be named from outside it. An unexported local in os/exec must not vouch for
+// an unexported name this tree renamed away.
+func TestOnlyExportedNamesComeOutOfADependency(t *testing.T) {
+	src := `package dep
+
+type Cmd struct {
+	ExtraFiles []int
+	hidden     int
+}
+
+func Run(localHelper int) {}
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "dep.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := newNameIndex()
+	idx.addExported(file)
+
+	for _, name := range []string{"Cmd", "ExtraFiles", "Run"} {
+		if !idx.names[name] {
+			t.Errorf("%q is exported and should be indexed", name)
+		}
+	}
+	for _, name := range []string{"hidden", "localHelper", "dep"} {
+		if idx.names[name] {
+			t.Errorf("%q is not exported and must not vouch for anything", name)
+		}
 	}
 }
 

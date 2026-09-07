@@ -227,6 +227,24 @@ func TestAToolFaultIsNotDressedUpAsAFinding(t *testing.T) {
 	}
 }
 
+// The independent count of what there was to check.
+//
+// A path holding a space reaches the sweep quoted, because that is how git
+// writes it in the "+++" header, so the scanner finds the file under a name the
+// tree does not have and examines nothing. A dumb pattern over the raw diff --
+// sharing no code with the scanner or with the hunk reader -- says there were
+// comment lines to examine, and the disagreement is the sweep saying it is
+// broken rather than saying the range is clean.
+func TestExaminingNoneOfWhatTheDiffAddsIsNotAPass(t *testing.T) {
+	f := newRepo(t)
+	f.write("a.go", "package a\n")
+	f.commit("baseline")
+	f.write("a b.go", "package a\n\n// vanishedHelper used to live here.\nfunc b() {}\n")
+	f.commit("a file whose name git has to quote")
+
+	f.check("a range the sweep could not read is not a pass", "HEAD~1", ExitUnchecked, "but the sweep examined 0 of them")
+}
+
 func TestAReadableTreeIsRead(t *testing.T) {
 	f := newRepo(t)
 	f.write("a.go", "package a\n")
