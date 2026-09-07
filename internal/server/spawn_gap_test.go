@@ -150,6 +150,11 @@ func TestWorktreeAddPaysTheSpawnCaps(t *testing.T) {
 			// road ends rather than where a conductor is stopped (see
 			// TestEachRoadsCeilingAtTheDoor). So the operator is still unfenced HERE and
 			// is still exempt from the rate cap everywhere.
+			//
+			// #90 then moved WHERE the operator's ceiling is read on this one road,
+			// without moving the fence: worktreeSpawn reads it before git makes the tree,
+			// because a refusal at the door is downstream of a side effect on disk. The
+			// guard below is still the conductor's alone.
 			cockpit, _, _ := gateServer(fullFleet()...)
 			if reason := cockpit.guardConductor(conn("c1"), tc.cmd); reason != "" {
 				t.Fatalf("the cockpit is not fenced by the conductor caps, got %q", reason)
