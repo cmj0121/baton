@@ -40,12 +40,14 @@ import (
 const (
 	keyPrefix   = "ctrl+t"
 	keyNewPanel = "p"
-	// A SHELL panel whose program you name — not the command kind #54 added.
-	// "command" is spoken for twice over: it is that kind on the wire, and it is
-	// `ctl queue add --command`, the agent binary to provision. ctl.go says why the
-	// spawn flag became --run rather than reuse it; this label had the same clash
-	// and kept the word, which is how it came to answer "which key opens a command
-	// panel" with the one that does not.
+	// The only spawn key that opens two kinds: enter on the empty box gives a shell
+	// panel, and a program typed into it gives a COMMAND panel (proto.KindCommand,
+	// #54) that holds when it exits. It is the cockpit's way in to the kind only
+	// `ctl spawn --run` and the MCP tool could reach before (#84).
+	//
+	// It still does not borrow ctl's word for it. `--run` is a flag on a command
+	// line, and `ctl queue add --command` means a third thing again — the agent
+	// binary to provision — so the label names the two KINDS and neither flag.
 	keyNewForm     = "n c"
 	keyNewHere     = "n ." // spawn a shell panel in the focused panel's current directory — "." reads as "here"
 	keyNewAgent    = "A"   // spawn an agent panel (shift+a) — one of the two spawns that keep a bare key
@@ -238,7 +240,7 @@ type binding struct {
 var bindings = []binding{
 	{"new-panel", keyNewPanel, "spawn a new shell panel", actNewPanel, "Panels", "shell"},
 	{"new-panel-here", keyNewHere, "spawn a shell panel in the focused panel's directory", actNewHere, "Panels", "here"},
-	{"new-panel-form", keyNewForm, "spawn a shell panel running a program you name", actNewForm, "Panels", "program"},
+	{"new-panel-form", keyNewForm, "spawn a shell, or a command panel running the program you name", actNewForm, "Panels", "program"},
 	{"new-agent", keyNewAgent, "spawn an agent panel in a workdir", actNewAgent, "Panels", "agent"},
 	{"conductor", keyConductor, "open the conductor — an agent that drives the fleet", actConductor, "Panels", "conductor"},
 	{"global-shell", keyGlobalShell, "open the global shell — a host shell always one key away", actGlobalShell, "Panels", "global shell"},

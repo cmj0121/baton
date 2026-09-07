@@ -5,40 +5,52 @@ import (
 	"testing"
 )
 
-// The spawn keys must not borrow a word that names a panel KIND they do not
-// create. "command" is spoken for twice — it is proto.KindCommand on the wire,
-// and it is `ctl queue add --command`, the agent binary to provision — and
-// keyNewForm ("n c") creates neither: it sends KindShell with a Path, so what
-// comes back is a shell panel running a program you named.
+// keyNewForm ("n c") is the one spawn key that opens two kinds: enter on the
+// empty box spawns a shell panel, and a program typed into it spawns
+// proto.KindCommand with that program and its arguments (#84).
 //
-// This is pinned because nothing pinned it. The label read "command" from before
-// the third kind existed and simply kept the word once it did, which is how the
-// key list came to answer "which key opens a command panel" with the one key that
-// cannot. The CLI made the same call and got it right — cmd/baton/ctl.go renames
-// its flag to --run and says why — so the rule is worth holding here too.
+// This is #85's rule, turned around rather than dropped. #85 pinned the label
+// against the word "command" because the key could not create one, so the key
+// list answered "which key opens a command panel" with the one key that could
+// not — a user asked exactly that and got the wrong key. The key can now, and a
+// label naming only the shell tells the same lie from the other side: the
+// operator who wants `make test` to hold when it finishes reads past the one key
+// that does it. So both kinds it spawns must be named.
 //
-// It is deliberately about the FORBIDDEN token rather than the current wording: a
-// test asserting the exact new sentence would fail on any honest rephrasing and
-// pass on any dishonest one that avoided that string.
-func TestNoSpawnKeyBorrowsTheCommandKindsName(t *testing.T) {
-	// Taken by the command kind (proto.KindCommand, and ctl's --run for it), so a
-	// binding that does not create one must not spend either word on itself.
-	spoken := []string{"command", "--run"}
-
+// The two words it must NOT spend are the ones it still does not own. "agent" is
+// a kind this key never creates — that is `A` — and "--run" is ctl's flag for the
+// same job on a different surface, which an operator reading a key list has no
+// way to type. Naming either sends someone to the wrong place, which is the
+// failure #85 was written against.
+//
+// The forbidden half is a token check so an honest rephrasing stays green. The
+// required half cannot be: the whole claim is that the label says which kinds
+// this key makes, and there is no wording of that which omits their names.
+func TestNewFormLabelNamesBothKindsItSpawns(t *testing.T) {
 	for _, b := range bindings {
 		if b.act != actNewForm {
 			continue
 		}
-		for _, w := range spoken {
-			if strings.Contains(strings.ToLower(b.desc), w) {
-				t.Errorf("binding %q desc %q uses %q, a word the command kind owns; it spawns a shell panel", b.name, b.desc, w)
-			}
-			if strings.Contains(strings.ToLower(b.short), w) {
-				t.Errorf("binding %q short label %q uses %q, a word the command kind owns; it spawns a shell panel", b.name, b.short, w)
+		desc, short := strings.ToLower(b.desc), strings.ToLower(b.short)
+
+		for _, w := range []string{"shell", "command"} {
+			if !strings.Contains(desc, w) {
+				t.Errorf("binding %q desc %q never says %q, one of the two kinds this key spawns", b.name, b.desc, w)
 			}
 		}
-		if b.short == "" || b.desc == "" {
-			t.Fatalf("binding %q lost its label entirely, which would pass the check above for the wrong reason", b.name)
+		for _, w := range []string{"agent", "--run"} {
+			if strings.Contains(desc, w) {
+				t.Errorf("binding %q desc %q uses %q, which this key neither spawns nor offers", b.name, b.desc, w)
+			}
+			if strings.Contains(short, w) {
+				t.Errorf("binding %q short label %q uses %q, which this key neither spawns nor offers", b.name, b.short, w)
+			}
+		}
+		// The desc checks above already fail on an empty desc; the short label has
+		// nothing holding it, and an empty one would slip past the forbidden-token
+		// check for the wrong reason.
+		if b.short == "" {
+			t.Fatalf("binding %q lost its short label, leaving its column in the key list blank", b.name)
 		}
 		return
 	}
