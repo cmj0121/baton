@@ -63,6 +63,7 @@ named "report" and pause for me.
 | `baton ctl list`                                                      | 以 JSON 印出隊伍(id、title、state、group、…)                              |
 | `baton ctl tree [--json]`                                             | 畫出行程樹(group → panel → OS 子行程),附 CPU%/RSS                         |
 | `baton ctl spawn [--agent CMD] [--arg A] [--dir D]`                   | 開一個面板(有 `--agent` 就是 agent,否則是 shell);印出新 id                |
+| `baton ctl spawn --run CMD [--arg A] [--dir D]`                       | 開一個 command 面板:一個隊伍會看顧、卻永遠不編派工作給它的普通執行檔      |
 | `baton ctl spawn --worktree --dir <repo> --branch <name> --agent CMD` | 從 `<repo>` 開一條分支、替它開一個 git worktree,並把 agent 開在那棵樹裡   |
 | `baton ctl send <id> <text> [--no-enter]`                             | 把文字打進某個面板;除非 `--no-enter`,否則以換行送出                       |
 | `baton ctl attention --why <text> [--id ID]`                          | 說這個面板需要人,以及為什麼——見 [舉手](#舉手)                             |
@@ -189,8 +190,9 @@ baton ctl resolve
 `baton_dispatch_group` · `baton_enqueue` · `baton_queue` · `baton_reorder` · `baton_group` · `baton_rename` ·
 `baton_pin` · `baton_unpin` · `baton_signal` · `baton_close`
 
-`baton_spawn` 收 `{agent, args, dir}`,再加上 `{worktree: true, branch}` 就會開進一個新的 git worktree,而不是開在
-`dir` 裡——用同一個動詞而不是另開一個工具,所以已經會開面板的 conductor 不必再去認識新東西。有 `worktree` 時,
+`baton_spawn` 收 `{agent, args, dir}`;改收 `{run, args, dir}` 則會開出一個 command 面板——一個會被看顧、卻永遠
+不會被交付工作的普通執行檔——而在 agent 那個型式上再加 `{worktree: true, branch}`,就會開進一個新的 git worktree,
+而不是開在 `dir` 裡——用同一個動詞而不是另開一個工具,所以已經會開面板的 conductor 不必再去認識新東西。有 `worktree` 時,
 `dir` 指的是要開分支的儲存庫;`worktree` 少了 `branch`、或 `dir` 不是儲存庫,都是工具錯誤,而隊伍原封不動。
 
 這裡完全沒有 worktree 工具——既不能列出,也不能清掃。conductor 負責開 worktree(透過 `baton_spawn`),
