@@ -208,23 +208,24 @@ Otras cuatro que la mayoría tampoco tiene:
 
 Y la cabina que se espera de un multiplexor, cada cosa a una tecla:
 
-| Función              | Tecla           | Qué hace                                                                                             |
-| -------------------- | --------------- | ---------------------------------------------------------------------------------------------------- |
-| Diff                 | `D`             | el diff del árbol de trabajo del panel — preparado y sin preparar a la vez, sin seguimiento incluido |
-| Git                  | `C-t G`         | diff, log, status, stage, commit, push, ramas y worktrees — **[docs/GIT.md](GIT.md)**                |
-| Señales              | `s`             | cualquier señal a la selección, a la tesela enfocada o a todo el grupo                               |
-| Buscar               | `f`             | filtrar la flota por título o por grupo                                                              |
-| Disposición de grupo | `+` `-` `L`     | cuántos miembros se emiten en vivo, y la forma de la división                                        |
-| Shell global         | `n h`           | un shell anfitrión simple que el servidor mantiene en `$HOME`, siempre a una tecla                   |
-| Directorio recordado | `n .`           | los paneles siguen su directorio por OSC 7 — **[docs/RESTART.md](RESTART.md)**                       |
-| Registro de panel    | `C-t l` `C-t L` | volcar la salida de un panel a un fichero y volver a leerla — **[docs/LOGGING.md](LOGGING.md)**      |
-| Persistencia         | `r`             | la flota sobrevive a un reinicio como huecos que relanzas desde su spec                              |
-| Política de reinicio | —               | `panel.restart: on-failure` devuelve un panel con espera y un límite                                 |
-| Recarga en caliente  | `C-t R`         | la configuración sin reiniciar la flota — o un `SIGHUP` al demonio                                   |
-| Apariencia           | —               | tema y rejillas propias en `$HOME/.baton/TUI.yaml` — **[docs/TUI.md](TUI.md)**                       |
-| Salvapantallas       | —               | una lluvia digital a pantalla completa cuando la cabina descansa — **[docs/TUI.md](TUI.md)**         |
-| Ratón                | —               | desactivado por defecto, para no quitarte la selección del terminal                                  |
-| Idioma               | —               | la lista de teclas se lee en inglés o en chino tradicional — **[docs/TUI.md](TUI.md#language)**      |
+| Función              | Tecla           | Qué hace                                                                                                 |
+| -------------------- | --------------- | -------------------------------------------------------------------------------------------------------- |
+| Diff                 | `D`             | el diff del árbol de trabajo del panel — preparado y sin preparar a la vez, sin seguimiento incluido     |
+| Git                  | `C-t G`         | diff, log, status, stage, commit, push, ramas y worktrees — **[docs/GIT.md](GIT.md)**                    |
+| Señales              | `s`             | cualquier señal a la selección, a la tesela enfocada o a todo el grupo                                   |
+| Buscar               | `f`             | filtrar la flota por título o por grupo                                                                  |
+| Disposición de grupo | `+` `-` `L`     | cuántos miembros se emiten en vivo, y la forma de la división                                            |
+| Shell global         | `n h`           | un shell anfitrión simple que el servidor mantiene en `$HOME`, siempre a una tecla                       |
+| Directorio recordado | `n .`           | los paneles siguen su directorio por OSC 7 — **[docs/RESTART.md](RESTART.md)**                           |
+| Registro de panel    | `C-t l` `C-t L` | volcar la salida de un panel a un fichero y volver a leerla — **[docs/LOGGING.md](LOGGING.md)**          |
+| Puerto serie         | `n c`           | `baton serial /dev/… 115200` — un puerto en un panel, que se reconecta — **[docs/SERIAL.md](SERIAL.md)** |
+| Persistencia         | `r`             | la flota sobrevive a un reinicio como huecos que relanzas desde su spec                                  |
+| Política de reinicio | —               | `panel.restart: on-failure` devuelve un panel con espera y un límite                                     |
+| Recarga en caliente  | `C-t R`         | la configuración sin reiniciar la flota — o un `SIGHUP` al demonio                                       |
+| Apariencia           | —               | tema y rejillas propias en `$HOME/.baton/TUI.yaml` — **[docs/TUI.md](TUI.md)**                           |
+| Salvapantallas       | —               | una lluvia digital a pantalla completa cuando la cabina descansa — **[docs/TUI.md](TUI.md)**             |
+| Ratón                | —               | desactivado por defecto, para no quitarte la selección del terminal                                      |
+| Idioma               | —               | la lista de teclas se lee en inglés o en chino tradicional — **[docs/TUI.md](TUI.md#language)**          |
 
 ## Arquitectura
 
@@ -257,6 +258,8 @@ tus propios comandos y define configuración, todo a través de un único objeto
   y por qué no existe `always`.
 - **[docs/GIT.md](GIT.md)** — el menú de git: cada operación, el flujo del editor de commits, los worktrees y la
   configuración.
+- **[docs/SERIAL.md](SERIAL.md)** — puertos serie: `baton serial`, los parámetros de línea, qué velocidades puede
+  fijar cada plataforma, `cu.` frente a `tty.` y qué significa un dispatch hacia un dispositivo.
 - **[docs/LOGGING.md](LOGGING.md)** — el registro de paneles: qué se escribe, dónde aterriza el archivo, los marcadores
   de sesión, la rotación, y de qué no es una frontera.
 - **[docs/REMOTE.md](REMOTE.md)** — el acceso remoto por SSH: el puente `--stdio`, qué es y qué no es la passkey,

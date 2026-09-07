@@ -199,23 +199,24 @@ Baton は 3 つの画面で操作し、キー 1 つで行き来します:
 
 そして、マルチプレクサに期待するコックピットが、どれもキー一つで:
 
-| 機能               | キー            | 内容                                                                                |
-| ------------------ | --------------- | ----------------------------------------------------------------------------------- |
-| Diff               | `D`             | agent panel の作業ツリー diff——staged と unstaged を一度に、未追跡も                |
-| Git                | `C-t G`         | diff・log・status・stage・commit・push・branch・worktree——**[docs/GIT.md](GIT.md)** |
-| signal             | `s`             | 選択・フォーカス中のタイル・group 全体に任意の signal                               |
-| 検索               | `f`             | fleet をタイトルや group で絞り込む                                                 |
-| group のレイアウト | `+` `-` `L`     | 何個をライブタイルで流すか、そして分割の形                                          |
-| global shell       | `n h`           | サーバが持つ `$HOME` の素のホスト shell、いつでもキー一つ                           |
-| 作業ディレクトリ   | `n .`           | panel は OSC 7 から現在地を覚える——**[docs/RESTART.md](RESTART.md)**                |
-| panel のログ       | `C-t l` `C-t L` | panel の出力をファイルへ、そして読み戻す——**[docs/LOGGING.md](LOGGING.md)**         |
-| 永続化             | `r`             | fleet は再起動を越えて残り、保持した spec から再実行できる                          |
-| 再起動ポリシー     | —               | `panel.restart: on-failure` がバックオフと上限つきで panel を戻す                   |
-| ホットリロード     | `C-t R`         | fleet を止めずに設定を再読み込み——デーモンへの `SIGHUP` でも                        |
-| 外観               | —               | テーマと自作の分割グリッドは `$HOME/.baton/TUI.yaml`——**[docs/TUI.md](TUI.md)**     |
-| スクリーンセーバ   | —               | コックピットが休むと流れるデジタルの雨——**[docs/TUI.md](TUI.md)**                   |
-| マウス             | —               | 既定は off、端末自身の選択を残すため                                                |
-| 言語               | —               | キー一覧は英語と繁体字中国語——**[docs/TUI.md](TUI.md#language)**                    |
+| 機能               | キー            | 内容                                                                                            |
+| ------------------ | --------------- | ----------------------------------------------------------------------------------------------- |
+| Diff               | `D`             | agent panel の作業ツリー diff——staged と unstaged を一度に、未追跡も                            |
+| Git                | `C-t G`         | diff・log・status・stage・commit・push・branch・worktree——**[docs/GIT.md](GIT.md)**             |
+| signal             | `s`             | 選択・フォーカス中のタイル・group 全体に任意の signal                                           |
+| 検索               | `f`             | fleet をタイトルや group で絞り込む                                                             |
+| group のレイアウト | `+` `-` `L`     | 何個をライブタイルで流すか、そして分割の形                                                      |
+| global shell       | `n h`           | サーバが持つ `$HOME` の素のホスト shell、いつでもキー一つ                                       |
+| 作業ディレクトリ   | `n .`           | panel は OSC 7 から現在地を覚える——**[docs/RESTART.md](RESTART.md)**                            |
+| panel のログ       | `C-t l` `C-t L` | panel の出力をファイルへ、そして読み戻す——**[docs/LOGGING.md](LOGGING.md)**                     |
+| シリアルポート     | `n c`           | `baton serial /dev/… 115200`——panel の中のポート、自動で再接続——**[docs/SERIAL.md](SERIAL.md)** |
+| 永続化             | `r`             | fleet は再起動を越えて残り、保持した spec から再実行できる                                      |
+| 再起動ポリシー     | —               | `panel.restart: on-failure` がバックオフと上限つきで panel を戻す                               |
+| ホットリロード     | `C-t R`         | fleet を止めずに設定を再読み込み——デーモンへの `SIGHUP` でも                                    |
+| 外観               | —               | テーマと自作の分割グリッドは `$HOME/.baton/TUI.yaml`——**[docs/TUI.md](TUI.md)**                 |
+| スクリーンセーバ   | —               | コックピットが休むと流れるデジタルの雨——**[docs/TUI.md](TUI.md)**                               |
+| マウス             | —               | 既定は off、端末自身の選択を残すため                                                            |
+| 言語               | —               | キー一覧は英語と繁体字中国語——**[docs/TUI.md](TUI.md#language)**                                |
 
 ## アーキテクチャ
 
@@ -245,6 +246,8 @@ fleet を動かし、自分のコマンドを足し、設定を書く——す�
 - **[docs/RESTART.md](RESTART.md)** — 再起動ポリシー:何が失敗で何が失敗でないか、バックオフと上限、そして
   `always` が存在しない理由。
 - **[docs/GIT.md](GIT.md)** — git メニュー:各操作、commit エディタの流れ、worktree、そして設定。
+- **[docs/SERIAL.md](SERIAL.md)** — シリアルポート:`baton serial`、回線設定、プラットフォームが設定できる
+  ボーレート、`cu.` と `tty.` の違い、そして機器への dispatch が何を意味するか。
 - **[docs/LOGGING.md](LOGGING.md)** — パネルのログ:何が書かれるか、どこに置かれるか、セッションのマーカー、
   ローテーション、そして何の境界ではないのか。
 - **[docs/REMOTE.md](REMOTE.md)** — SSH 越しのリモート接続:`--stdio` ブリッジ、passkey が何であって何でないか、
