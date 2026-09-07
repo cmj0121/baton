@@ -158,6 +158,52 @@ settings:
   keycast: true # show the key-press readout (also toggled live with v k)
 ```
 
+## Remembered view settings — `TUI.state.json`
+
+Two dashboard keys stick. `v l` asks for the **tree** on a fleet the cards would draw, and `v g` cycles the **group-by
+lens** — work item, directory, profile, state — both described in [SPEC.md](./SPEC.md#work-items). The cockpit you open
+tomorrow starts where you left those two. The choice is written to `$HOME/.baton/TUI.state.json` the moment you press
+the key rather than on exit, because a cockpit is usually killed rather than closed.
+
+```json
+{
+  "show_tree": true,
+  "lens": "directory"
+}
+```
+
+| Field       | Set by | Values                                       |
+| ----------- | ------ | -------------------------------------------- |
+| `show_tree` | `v l`  | `true` (the tree) / `false` (the cards)      |
+| `lens`      | `v g`  | `work item`, `directory`, `profile`, `state` |
+
+This is **baton's own file** — the machine-written sibling of the `TUI.yaml` above. It is rewritten whole on a
+keystroke, so there is nothing in it to hand-edit or comment; `TUI.yaml` is the file you write and the daemon
+hot-reloads on a `SIGHUP`, and a view keystroke never touches it.
+
+**It is client-side, deliberately.** Nothing here reaches the daemon or the fleet's snapshot: two cockpits on one daemon
+each keep their own taste, and a cockpit attached to a remote fleet keeps the one it was started with. Nor is it scoped
+to a socket the way the fleet's own state file is — a preference for the tree does not stop being true because you
+attached somewhere else, so every fleet on the host reads this one file. The group split's layout is the neighbour on
+the other side of that line and stays **server-owned**: a group's layout is a property of the group, and every viewer
+should see it arranged the same way.
+
+**Only a key you actually pressed is recorded.** A setting you have never touched is _absent_ from the file rather than
+written out as a default, and each key merges into what is already there — so pressing `v l` never quietly records an
+opinion about the lens as well. Absent means the built-in default (the cards, grouped by work item) still speaks for
+you, and would still speak for you if a config key for either setting ever landed.
+
+The file is **advisory**, and every failure it can have is silent. Missing (a first run), unreadable, or half-written:
+all three land on the built-in defaults with nothing on the status line, because a lost preference is not worth a
+startup error — and the next keystroke rewrites the file. A `lens` this build does not recognise reads as the work-item
+view. A failed **save** is dropped for the same reason: those two keys have something better to say on the status line
+than an I/O error, and a `$HOME` that cannot be written announces itself the next time any other setting is saved.
+
+**How you like it, never where you were.** That boundary is what decides whether anything else may ever join these two.
+The layout and the lens are set once and then stopped thinking about; the scroll position, the focused panel and the
+open mode are places, and restoring a place on launch drops you into a screen you did not ask for — so they are
+deliberately not kept.
+
 ## Related cockpit keys
 
 These ride alongside the appearance config (full key reference in [SPEC.md](./SPEC.md#keys)):
