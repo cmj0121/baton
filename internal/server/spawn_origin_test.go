@@ -201,6 +201,56 @@ func TestNoRoadIsChargedAtCreatePanel(t *testing.T) {
 	}
 }
 
+// TestEachRoadsCeilingAtTheDoor is the OTHER axis, read at the same door and read
+// separately on purpose. The budget is two limits in one call — a ceiling that is
+// a statement about the host, and a rate gap that is a statement about how fast
+// something is asking — and a road pays each of them somewhere, or nowhere, on
+// its own. One table per axis is what lets a cell move and be seen to move; the
+// single-answer version above could only ever say "all four the same".
+//
+// Every road is admitted onto a fleet already sitting on maxConductorFleet today.
+// Two of those four are the cells #86 changes; the other two are the ones it must
+// not, and they are here so a change to them cannot pass unnoticed.
+func TestEachRoadsCeilingAtTheDoor(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		origin      panelOrigin
+		wantRefused bool
+	}{
+		{"operator", originOperator, false},
+		{"conductor", originConductor, false},
+		{"scheduler", originScheduler, false},
+		{"plugin", originPlugin, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newHostServer(t)
+			packFleet(s)
+			before := s.PanelCount()
+
+			_, err := s.createPanel(tc.origin, proto.KindShell, "", nil,
+				os.Getenv("BATON_TEST_DIR"), "", false, false)
+			switch {
+			case tc.wantRefused && err == nil:
+				t.Fatalf("this road spawned the %dst panel onto a full fleet: a ceiling every "+
+					"road does not pay is not a ceiling", before+1)
+			case tc.wantRefused && !strings.Contains(err.Error(), "capacity"):
+				t.Fatalf("the refusal says %q, want it to name the fleet's capacity", err)
+			case !tc.wantRefused && err != nil:
+				t.Fatalf("this road was refused at the ceiling: %v — its charge is spent "+
+					"upstream, and charging it here charges it twice", err)
+			}
+
+			want := before + 1
+			if tc.wantRefused {
+				want = before
+			}
+			if got := s.PanelCount(); got != want {
+				t.Fatalf("the fleet is %d panels, want %d", got, want)
+			}
+		})
+	}
+}
+
 // TestConnOriginReadsTheRoleAndNothingElse pins the discrimination the origin
 // parameter exists to carry, and it is pinned on its own because nothing else
 // can pin it: the four origins cost the same at the door today, so a connection
