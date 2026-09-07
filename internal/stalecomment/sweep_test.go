@@ -11,8 +11,9 @@ import (
 
 // ---------------------------------------------------------------------------
 // A throwaway repository per case. The ambient git config must not reach them:
-// a global template, hook or init.defaultBranch would change what is committed
-// and the assertions would be about the developer's machine.
+// a global template, a hook, or a configured default branch name would change
+// what is committed, and the assertions would then be about the developer's
+// machine rather than about the sweep.
 // ---------------------------------------------------------------------------
 
 type fixture struct {
