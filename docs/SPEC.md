@@ -514,7 +514,7 @@ after `settings.key-timeout` (default `1.2s`).
 |                        | `m`                         | pick a row up — arrows carry it, `enter` drops  |
 |                        | `S-←` / `S-→`               | reorder the selected item                       |
 |                        | `p` / `A`                   | new shell panel / new agent panel               |
-|                        | `n c` / `n .`               | new panel (pick the command) / new shell here   |
+|                        | `n c` / `n .`               | shell running a program you name / shell here   |
 |                        | `n C` / `n h`               | the conductor / the global shell                |
 |                        | `n w`                       | a worktree on a new branch + an agent in it     |
 |                        | `w` / `r`                   | close the selection / re-run its exited panels  |
