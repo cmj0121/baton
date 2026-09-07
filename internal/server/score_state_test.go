@@ -28,6 +28,7 @@ type statusReply struct {
 	PromoteAt     int        `json:"promote_at"`
 	UserSignalsAt int        `json:"user_signals_at"`
 	WorkingSet    int        `json:"working_set"`
+	MaxEntries    int        `json:"max_entries"`
 	Rank          score.Rank `json:"rank"`
 	Dir           string     `json:"dir"`
 }
@@ -85,7 +86,7 @@ func TestScoreStatusDistinguishesOffFromUnavailable(t *testing.T) {
 	}{
 		{"running", st, true, "", statusReply{
 			Enabled: true, Available: true, Entries: 0, Rendered: 0,
-			PromoteAt: 3, UserSignalsAt: 2, WorkingSet: 7,
+			PromoteAt: 3, UserSignalsAt: 2, WorkingSet: 7, MaxEntries: 1000,
 			Rank: score.Rank{Recency: 2, Cwd: 2, Profile: 2, Group: 2}, Dir: dir,
 		}},
 		{"held by another daemon", nil, true, held, statusReply{Enabled: true, Reason: held}},
@@ -403,6 +404,51 @@ func TestASubmissionTheStoreCouldNotRecordIsLogged(t *testing.T) {
 					}
 				}
 			})
+		}
+	})
+
+	// A store at its entry cap (#83) is the third refusal on this door, and it
+	// is the one that most looks like a store failure and is not: nothing is
+	// wrong with the disk, the store is doing exactly what it was configured to
+	// do, and the refusal is reachable by every panel on the fleet at the submit
+	// rate. A line each would move #83's growth out of score-events.jsonl and
+	// into baton.log rather than stopping it.
+	//
+	// Both directions, as the table above: the submitter is told, with the
+	// numbers it takes to act, and the operator's broken-store lines stay silent.
+	t.Run("a submission refused because the store is full is not a broken store", func(t *testing.T) {
+		st, _ := scoreStoreTuned(t, score.Policy{MaxEntries: 1})
+		s, _, _ := scoreServer(st)
+		seed(t, st, "the agent asks before it deletes")
+
+		logged := captureLog(t)
+		cc := conn("")
+		s.onCommand(cc, proto.Command{Action: "score.submit", Prompt: "a second thing the fleet noticed"})
+		msg := reply(t, cc)
+		if msg.Type != "error" {
+			t.Fatalf("submit to a full store answered %+v, want the store's refusal", msg)
+		}
+		// The submitter gets the actionable half — a refusal saying only "no"
+		// leaves an agent retrying forever and an operator with nothing to fix.
+		for _, want := range []string{"1 entries", "limit is 1", "score.max-entries"} {
+			if !strings.Contains(msg.Error, want) {
+				t.Errorf("the reply %q does not name %q", msg.Error, want)
+			}
+		}
+		got := logged()
+		for _, claim := range []string{
+			"score could not record a submission",
+			"score writes are not landing",
+		} {
+			if strings.Contains(got, claim) {
+				t.Errorf("a healthy store at its entry cap was reported broken (%q):\n%s", claim, got)
+			}
+		}
+		// And the operator's own channel for it, which is what makes the silence
+		// above a routing decision rather than a hole: score.status carries the
+		// count beside the limit, so the pair reads as a gauge.
+		if st := status(t, s); st.Entries != 1 || st.MaxEntries != 1 {
+			t.Errorf("score.status reported entries=%d max_entries=%d, want 1 and 1", st.Entries, st.MaxEntries)
 		}
 	})
 

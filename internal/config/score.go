@@ -106,6 +106,20 @@ type ScoreConfig struct {
 	// working set took (#42).
 	WorkingSet int `yaml:"working-set,omitempty"`
 
+	// MaxEntries is how many entries the store will take from its AGENTS before
+	// `score.submit` is refused. Unset, and anything below one, lands on the
+	// store's default of a thousand; see score.defaultMaxEntries for why that is
+	// the number, and score.clampMaxEntries for why "fewer than one" is read as
+	// unset rather than as switching the memory off.
+	//
+	// It bounds unattended growth and nothing else (#83). A full store still
+	// FOLDS repeats, so the fleet goes on reinforcing what it already remembers;
+	// score.md still admits every line you type into it, whatever the count says,
+	// because that file is yours and refusing it would freeze curation at exactly
+	// the moment curation is what is needed. Raising the key is the other way out,
+	// and there is no ceiling on it.
+	MaxEntries int `yaml:"max-entries,omitempty"`
+
 	// Enabled turns the subsystem off entirely when false: no injection into
 	// briefs, submissions refused with a plain reason, files left untouched.
 	// It is a pointer for the reason every Settings toggle is: unset means

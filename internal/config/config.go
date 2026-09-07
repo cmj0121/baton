@@ -773,6 +773,7 @@ func LoadPartial() (Config, error) {
 			PromoteAt      any            `yaml:"promote-at"`
 			UserSignalsAt  any            `yaml:"user-signals-at"`
 			WorkingSet     any            `yaml:"working-set"`
+			MaxEntries     any            `yaml:"max-entries"`
 			Rank           map[string]any `yaml:"rank"`
 		} `yaml:"score"`
 	}
@@ -782,6 +783,7 @@ func LoadPartial() (Config, error) {
 		"score.promote-at":      loose.Score.PromoteAt,
 		"score.user-signals-at": loose.Score.UserSignalsAt,
 		"score.working-set":     loose.Score.WorkingSet,
+		"score.max-entries":     loose.Score.MaxEntries,
 	}, loose.Score.Rank)
 	// normalize runs on BOTH paths, which is the quieter half of #77. Its own doc
 	// says it exists so a hand-edited file cannot smuggle a nonsensical value past

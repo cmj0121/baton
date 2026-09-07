@@ -341,6 +341,41 @@ would walk straight through the cap, exactly as it could already by varying the 
 loop that is filling your disk by accident; it is not a defence against a client that has decided not to be counted.
 See **[SECURITY.md](../SECURITY.md)**.
 
+## How many entries the store will hold
+
+The rate cap above bounds how fast one actor may speak. It does not bound how much the store ends up **holding**, and
+those are different numbers: a fleet under the cap for a year still adds a distinct entry every time it notices
+something new.
+
+So `score.submit` also refuses a **new** entry once the store holds **1000** of them (`score.max-entries`). Three
+things follow, and the second and third are the point of it:
+
+- **A repeat still folds.** The cap is asked after the fold, so a full store goes on counting recurrences and goes on
+  earning tiers. It stops learning new things, not learning.
+- **Your own file is never refused.** A line you type into `score.md` is admitted whatever the count says — a bare
+  bullet included — because that file is yours and refusing it would freeze curation at the one moment curation is
+  what the store needs. The bound exists to stop growth nobody is watching, and nobody is watching a fleet, not you.
+- **Nothing is retired to make room.** The store does not drop your coldest entries to admit an agent's newest one. It
+  says no, and names both numbers, so the agent has a reply it can act on:
+
+  ```txt
+  score: the store is full: 240 entries, limit is 240; retire some in score.md or raise score.max-entries
+  ```
+
+You see the same pair without being refused anything: `baton ctl score status` reports `entries` beside `max_entries`.
+
+The refusal is deliberately **not** a daemon log line. It is reachable by every panel on the fleet at the submit rate,
+so a line each would move the growth this exists to stop out of `score-events.jsonl` and into `baton.log`.
+
+Why a thousand: the injected block holds 8000 runes, which is twenty-four or twenty-five entries at their maximum
+length, and `score.working-set` spends seven of them by default. A thousand is forty times what any one brief can ever
+carry and a thousand lines of `score.md` to read by hand. Past that a store is not a memory anyone is using; it is a
+leak, and it costs real memory — a store of 200,000 entries is 262 MiB of the daemon's heap, forever.
+
+Raise it if your fleet genuinely holds more. There is no ceiling on the key, the cost is stated above, and every path
+that is not `score.submit` already works at any size: a store past its cap opens, replays, reconciles, renders and
+compacts exactly as it did.
+
 ## The conductor's corrections
 
 Where a [conductor](CONTROL.md#the-conductor) is running it gets **correction** rights, not execution rights. The
@@ -378,6 +413,7 @@ score:
   promote-at: 3 # occurrences, from any source, before rung 1 → 2
   user-signals-at: 2 # signals from YOU before rung 3 is reachable
   working-set: 7 # entries one brief carries — the highest-ranked few
+  max-entries: 1000 # entries the store will take from agents before score.submit is refused
   rank:
     recency: 2.0
     cwd: 2.0
@@ -385,15 +421,15 @@ score:
     group: 2.0
 ```
 
-Every key is optional; unset means the value above. `promote-at` below 2 and `working-set` below 1 are read as unset,
-not as switching the feature off — `enabled` is where that is said.
+Every key is optional; unset means the value above. `promote-at` below 2, and `working-set` or `max-entries` below 1,
+are read as unset, not as switching the feature off — `enabled` is where that is said.
 
 **What a `SIGHUP` (or `C-t R`) reloads, and what it does not:**
 
-| Key                                                                            | Reloads                                        |
-| ------------------------------------------------------------------------------ | ---------------------------------------------- |
-| `score.promote-at`, `score.user-signals-at`, `score.rank`, `score.working-set` | yes — each is a number the live store compares |
-| `score.dir`, `score.enabled`                                                   | **no** — the store is opened once, at boot     |
+| Key                                                                                                 | Reloads                                        |
+| --------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `score.promote-at`, `score.user-signals-at`, `score.rank`, `score.working-set`, `score.max-entries` | yes — each is a number the live store compares |
+| `score.dir`, `score.enabled`                                                                        | **no** — the store is opened once, at boot     |
 
 So a fleet whose entries are climbing too eagerly, or whose briefs are carrying the wrong few, is retuned with `C-t R`
 rather than by restarting and returning every panel as exited. Moving the directory or switching the subsystem off

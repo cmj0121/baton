@@ -732,7 +732,8 @@ func sweepLegacyConductorWorkspaces(sock string) {
 }
 
 // scorePolicy is the store's tuning as the config file spells it — the
-// recurrence threshold, the working-set budget, and the ranking weights. It is
+// recurrence threshold, the working-set budget, the entry cap, and the ranking
+// weights. It is
 // the one translation between the two shapes, so boot and reload cannot spell
 // the same file into two different live policies.
 //
@@ -753,6 +754,7 @@ func scorePolicy(cfg config.ScoreConfig) score.Policy {
 		PromoteAt:     cfg.PromoteAt,
 		UserSignalsAt: cfg.UserSignalsAt,
 		WorkingSet:    cfg.WorkingSet,
+		MaxEntries:    cfg.MaxEntries,
 		Rank: score.Rank{
 			Recency: cfg.Rank.Recency,
 			Cwd:     cfg.Rank.Cwd,
@@ -848,6 +850,10 @@ func warnScorePolicy(cfg config.Config, want score.Policy, st *score.Store) {
 	if want.WorkingSet != 0 && want.WorkingSet != got.WorkingSet {
 		log.Warn().Int("configured", want.WorkingSet).Int("in_force", got.WorkingSet).
 			Msg("score.working-set is out of range and was clamped")
+	}
+	if want.MaxEntries != 0 && want.MaxEntries != got.MaxEntries {
+		log.Warn().Int("configured", want.MaxEntries).Int("in_force", got.MaxEntries).
+			Msg("score.max-entries is out of range and was clamped")
 	}
 	clamped("score.rank.recency", want.Rank.Recency, got.Rank.Recency)
 	clamped("score.rank.cwd", want.Rank.Cwd, got.Rank.Cwd)

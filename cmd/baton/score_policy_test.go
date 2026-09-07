@@ -25,11 +25,11 @@ import (
 // that did not.
 func TestScorePolicyTranslatesTheFileAndNothingElse(t *testing.T) {
 	cfg := config.ScoreConfig{
-		PromoteAt: 8, UserSignalsAt: 4, WorkingSet: 9,
+		PromoteAt: 8, UserSignalsAt: 4, WorkingSet: 9, MaxEntries: 2500,
 		Rank: config.RankConfig{Recency: 2, Cwd: 3, Profile: 3, Group: 3},
 	}
 	want := score.Policy{
-		PromoteAt: 8, UserSignalsAt: 4, WorkingSet: 9,
+		PromoteAt: 8, UserSignalsAt: 4, WorkingSet: 9, MaxEntries: 2500,
 		Rank: score.Rank{Recency: 2, Cwd: 3, Profile: 3, Group: 3},
 	}
 	if got := scorePolicy(cfg); got != want {

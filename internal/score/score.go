@@ -141,7 +141,8 @@ type Rank struct {
 
 // Policy is everything about the store's behaviour an operator configures: the
 // recurrence threshold a tier is earned at, how many entries one brief carries,
-// and what each ranking dimension is worth.
+// how many entries the store will take from its agents, and what each ranking
+// dimension is worth.
 //
 // It is ONE value rather than a knob per setter because every one of them is a
 // number the live store compares — none is state to swap — so they reload
@@ -151,6 +152,7 @@ type Policy struct {
 	PromoteAt     int
 	UserSignalsAt int
 	WorkingSet    int
+	MaxEntries    int
 	Rank          Rank
 }
 
@@ -177,6 +179,7 @@ func (p Policy) clamp() Policy {
 		PromoteAt:     clampPromoteAt(p.PromoteAt),
 		UserSignalsAt: clampUserSignalsAt(p.UserSignalsAt),
 		WorkingSet:    clampWorkingSet(p.WorkingSet),
+		MaxEntries:    clampMaxEntries(p.MaxEntries),
 		Rank: Rank{
 			Recency: clampWeight(p.Rank.Recency),
 			Cwd:     clampWeight(p.Rank.Cwd),
@@ -196,6 +199,76 @@ func (p Policy) clamp() Policy {
 func clampWorkingSet(n int) int {
 	if n < 1 {
 		return defaultWorkingSet
+	}
+	return n
+}
+
+// defaultMaxEntries is how many LIVE entries the store will take from its
+// agents before Submit is refused, when score.max-entries is unset. It is the
+// bound #83 says the store has always been missing, and it is a bound on the
+// COUNT because every proxy for it has been measured and found to be one.
+//
+// WHY A COUNT. R7 made Open stream its event log, so replay's cost stopped
+// tracking the file's size and started tracking what the file DESCRIBES: an
+// Entry per live entry, an id per burned one. maxScoreFileBytes says what that
+// left — a byte cap refused a 256 MiB log describing fifty entries, and admitted
+// a 60 MiB one describing 200,000 at 262 MiB of live heap. The shape cannot be
+// told from the size without reading the file, which is the thing a size cap
+// exists to avoid, so the byte cap was removed rather than raised and nothing
+// took its place.
+//
+// WHY ONE THOUSAND, and the number comes from what the store is FOR rather than
+// from what fits in RAM. maxBlockRunes works the arithmetic out one level up:
+// one brief carries at most twenty-four or twenty-five entries, because 8000
+// runes is what the rendered block may weigh and a maximal entry costs about
+// 324 of them. defaultWorkingSet is seven, and #37 calls a handful a default
+// rather than a rule. So the store exists to feed a set of about twenty-five,
+// and a thousand is forty times what one brief can ever carry and a hundred and
+// forty times the budget an unconfigured fleet actually spends. It is also far
+// past any memory a person curates by hand: score.md at the cap is a
+// thousand-line file. A store of six figures is not a store anyone is reading —
+// #38's whole argument is that entries earn their place — so past this it is a
+// leak rather than a memory, which is exactly what #83 says.
+//
+// WHAT IT BOUNDS, stated exactly, because it is narrower than "the store cannot
+// grow" and the difference is the whole of why `burned` keeps no limit of its
+// own. Submit is the only door an AGENT can add an entry through, and no door
+// an agent can reach retires one — a retire comes from a line leaving score.md
+// or from the conductor's merge. So this bounds unattended growth completely:
+// a fleet left running submits its way to the cap and stops, which is the 262
+// MiB shape above. What it does not bound is the number of ids the log has ever
+// NAMED, since an operator who deletes a thousand lines and lets the fleet fill
+// the store again has burned two thousand ids while never holding more than a
+// thousand. That is the 632 MiB shape #83 measured, it needs an operator in the
+// loop at every step, and it is left to Store.burned to state what could be
+// done about it and why nothing here does.
+//
+// It is CONFIGURABLE where maxEntryRunes beside it is not, and the line between
+// them is what each number is about. A rune cap is a rule about an entry's
+// SHAPE — #37 asks for one to three sentences, and that is doctrine no
+// deployment changes. This is a rule about a fleet's CAPACITY, which is a fact
+// about a deployment rather than about the store, exactly as score.working-set
+// is; and it is the only bound in this package that refuses a caller on a
+// number an operator might legitimately want to be larger. So it follows
+// working-set's house style — a floor, a documented default, an operator who
+// asks for more gets more — rather than maxEntryRunes'.
+const defaultMaxEntries = 1000
+
+// clampMaxEntries is what a configured entry cap actually becomes, and it is
+// clampWorkingSet's rule exactly: zero — the value of a key nobody wrote — and
+// anything below one fall back to the default, because "unset" and "a store
+// that may hold fewer than one entry" are the same instruction to switch the
+// feature off, and score.enabled is where that is said.
+//
+// There is no upper bound, for working-set's reason and for one of its own. An
+// operator who asks for a hundred thousand gets a hundred thousand: the cost is
+// theirs, they are told what it is in docs/SCORE.md, and a store that refused to
+// honour the number would be refusing the one escape hatch the cap owes them.
+// The number this package would clamp it to is the number this constant already
+// is, so a ceiling here would be the default pretending to be a limit.
+func clampMaxEntries(n int) int {
+	if n < 1 {
+		return defaultMaxEntries
 	}
 	return n
 }
@@ -1162,10 +1235,45 @@ func foldEvent(id, text string, prov Provenance, at time.Time, removedLine, sign
 type Store struct {
 	mu      sync.Mutex
 	dir     string
-	entries []Entry             // score.md file order; the RENDER order is the ranking's
-	burned  map[string]struct{} // every id the log has ever named; never reissued
-	boot    Delta               // what Open's recovery pass did to the operator's files
-	health  Health
+	entries []Entry // score.md file order; the RENDER order is the ranking's
+
+	// burned is every id the log has ever named, live or retired, and its one
+	// consumer is newIDLocked: an id whose entry was deleted is RETIRED, not
+	// free, and reissuing it would graft that entry's log history onto the
+	// newcomer that drew it.
+	//
+	// IT HAS NO BOUND, and that is a decision rather than an oversight, so say
+	// what was weighed. #83 measured it as the store's largest remaining shape —
+	// 256 MiB of log describing nothing but distinct retired ids costs 632 MiB of
+	// live heap, which a compaction shrinks to 98 MiB and no further, because a
+	// million and a bit ids is genuinely what the store then holds. Policy.
+	// MaxEntries bounds the LIVE set and does not touch this one: no door an
+	// agent can reach retires an entry, so an unattended fleet cannot burn a
+	// second id per slot, but an operator emptying score.md and letting the fleet
+	// refill it burns a fresh cap's worth every round.
+	//
+	// #83 asks whether a compacted store could record a WATERMARK instead of the
+	// whole set. It cannot, and the reason is one line of newIDLocked: an id is
+	// three bytes out of crypto/rand rendered as hex. A watermark is an ORDER —
+	// "everything below this is spent" — and random ids have none, so no scalar
+	// can answer "has this id been issued" for them. The guarantee would have to
+	// be bought by making ids monotonic, and every id already written into an
+	// operator's score.md and into every record of their log is not.
+	//
+	// What WOULD express it exactly is the id space itself: three bytes is
+	// 16,777,216 ids, so a bitset over it is 2 MiB flat, whatever fraction is
+	// burned — exact, with no false positive, and no ordering asked of anything.
+	// That is a bound of 2 MiB against today's 98, and it would also close the
+	// hazard this map has and does not report: newIDLocked retries until it
+	// misses, so a store approaching the id space stops terminating in any
+	// bounded time. Neither is urgent — the first needs an operator churning
+	// millions of lines, the second needs a store eight million ids deep — and
+	// both are one change to two functions rather than a bound bolted onto this
+	// one. They are left written down here rather than half-built.
+	burned map[string]struct{}
+
+	boot   Delta // what Open's recovery pass did to the operator's files
+	health Health
 
 	// writeFailing is Health.WriteFailing's home, and it is an atomic rather than
 	// a field of health for one reason: the thing that reads it is reporting on a
@@ -1378,7 +1486,9 @@ var ErrFileTooLarge = errors.New("score: file is too large to read")
 // A byte cap is also a poor proxy for it in both directions — it refused a 256
 // MiB log describing fifty entries, and admits a 60 MiB one describing 200,000 at
 // 262 MiB of heap. The bound that shape actually wants is on the NUMBER OF
-// ENTRIES, which nothing in this package has; see Store.entries.
+// ENTRIES, and #83 is where it was added: see defaultMaxEntries, which bounds
+// the live set that second figure is made of, and Store.burned, which is the
+// half of the same measurement no entry cap can reach.
 //
 // SIXTY-FOUR MEBIBYTES for score.md, unchanged and still derived the same way.
 // compactAtBytes states the log's steady-state ceiling as two of itself added
@@ -1423,6 +1533,21 @@ func readScoreFile(path string) ([]byte, error) {
 // operator greps for exactly that; without this an agent sending spaces produces
 // the same line, and a line anyone can manufacture is one nobody can act on.
 var ErrSubmissionText = errors.New("score: submission refused")
+
+// ErrStoreFull marks the one refusal that is about the STORE rather than about
+// the text: a submission that would take the live entry set past
+// Policy.MaxEntries. See defaultMaxEntries for the bound and Store.Submit for
+// where it is asked.
+//
+// It is a sentinel of its own rather than a third ErrSubmissionText, and the
+// two are not interchangeable in either direction. They have different remedies
+// — one is fixed by sending something shorter, the other only by an operator
+// curating score.md — and they have different audiences, which is the half a
+// caller cannot get from the message. internal/server's noteScoreTrouble has to
+// class it with the caller's refusals so the operator's broken-disk line does
+// not come under the control of every panel on the fleet, and a caller asking
+// "was my text refused" must not be told yes by a store that never looked at it.
+var ErrStoreFull = errors.New("score: the store is full")
 
 // ErrRefine is ErrSubmissionText's twin one door over: it marks every refusal
 // the three corrections make on the CALLER's request — an id naming no entry, a
@@ -1704,8 +1829,9 @@ func clampUserSignalsAt(n int) int {
 // SetPolicy RE-tunes a running store, and is only that: the policy a store is
 // born with is Open's argument, so no pass ever runs under a policy nobody
 // chose. It is safe on the disabled (nil) store and safe to call on a running
-// one, which is what lets score.promote-at, score.rank and score.working-set
-// ride the daemon's SIGHUP reload while score.dir and score.enabled still need
+// one, which is what lets score.promote-at, score.rank, score.working-set and
+// score.max-entries ride the daemon's SIGHUP reload while score.dir and
+// score.enabled still need
 // a restart: every field here is a number this store COMPARES, not a store to
 // swap under in-flight dispatches. p is clamped as Policy.clamp describes.
 //
@@ -1731,8 +1857,8 @@ func (s *Store) SetPolicy(p Policy) (changed bool) {
 }
 
 // Policy is the tuning in force: the recurrence threshold, the working-set
-// budget, and the ranking weights, all clamped. Zero on the disabled (nil)
-// store.
+// budget, the entry cap, and the ranking weights, all clamped. Zero on the
+// disabled (nil) store.
 //
 // A knob whose effect an operator cannot observe is a knob they cannot trust
 // (invariant I8), and the ranking weights are the sharpest case of that: a
@@ -2064,6 +2190,12 @@ func (s *Store) applyLocked(evs []event, apply func() error) error {
 // same observation submitted by twelve panels is one entry with twelve
 // reinforcements rather than twelve entries nobody can rank. What counts as a
 // repeat is normalize, and nothing else.
+//
+// It is also the door the entry cap is enforced on, and the ONLY one: a full
+// store refuses a new entry here with ErrStoreFull while still folding repeats,
+// and score.md goes on admitting whatever the operator types into it. See
+// defaultMaxEntries for the number and the branch below for why the asymmetry
+// is the whole point of the bound rather than a hole in it.
 func (s *Store) Submit(text string, prov Provenance) (Entry, bool, error) {
 	if s == nil {
 		return Entry{}, false, errDisabled
@@ -2098,6 +2230,46 @@ func (s *Store) Submit(text string, prov Provenance) (Entry, bool, error) {
 	if i := s.foldTargetLocked(e.Text); i >= 0 {
 		folded, _, err := s.foldLocked(i, e.Text, prov, false)
 		return folded, true, err
+	}
+	// The entry cap (#83), and it is asked HERE — past the reconcile, past the
+	// fold — for three reasons that are each the difference between a bound and
+	// a freeze.
+	//
+	// PAST THE RECONCILE, so the count is the store as the operator's file
+	// currently spells it. A file they have just cut back to fifty lines has
+	// nine hundred and fifty slots, and asking before the read would refuse them
+	// against a store that no longer exists.
+	//
+	// PAST THE FOLD, so a full store still LEARNS. A repeat adds no entry, and
+	// #37's whole model is that recurrence is what earns a tier — a cap that
+	// stopped the fleet reinforcing what it already remembers would take the
+	// store's only remaining useful act away at exactly the moment its memory is
+	// most worth ranking. So at the ceiling the fleet may still say a thing
+	// again; it may only not say a new one.
+	//
+	// AND IT IS ASKED OF EVERY SUBMISSION, the operator's own `ctl score submit`
+	// included, which is the part that looks wrong and is not. #38 §3 makes
+	// score.md the operator's whole interface and #38 §4 openly calls the
+	// source a self-declaration rather than a boundary — so #52 declined to give
+	// the operator's merge a gate keyed on Source and gave them the FILE instead.
+	// This is the same ruling read from the other end: exempting SourceUser here
+	// would hang a write surface on exactly the declaration #38 §4 says is not
+	// one, and it would buy nothing, because the exemption the operator is owed
+	// already exists and is unconditional. reconcileLocked's admit takes their
+	// line whatever the count says, so a store at the cap that they want larger
+	// grows by them typing into their own file, or by raising
+	// score.max-entries — never by the store trusting a string about who is
+	// asking.
+	//
+	// The message names the count and the limit, because "refused" alone is a
+	// dead end for both readers of it: the agent has no shorter thing to send,
+	// and the operator has to be told which number to act on. It reaches them
+	// unchanged — internal/server sends err.Error() to the submitter — and
+	// score.status carries the same pair for the operator who did not see it.
+	if len(s.entries) >= s.policy.MaxEntries {
+		return Entry{}, false, fmt.Errorf(
+			"%w: %d entries, limit is %d; retire some in score.md or raise score.max-entries",
+			ErrStoreFull, len(s.entries), s.policy.MaxEntries)
 	}
 	stored, err := s.submitLocked(e.Text, prov)
 	return stored, false, err

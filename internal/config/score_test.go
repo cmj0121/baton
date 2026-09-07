@@ -55,7 +55,7 @@ func TestScoreLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	yaml := "score:\n  dir: ~/scores\n  enabled: false\n  promote-at: 5\n  user-signals-at: 4\n" +
-		"  working-set: 3\n  rank:\n    recency: 4\n    cwd: 2.5\n    profile: 1\n    group: 8\n"
+		"  working-set: 3\n  max-entries: 250\n  rank:\n    recency: 4\n    cwd: 2.5\n    profile: 1\n    group: 8\n"
 	if err := os.WriteFile(paths.ConfigFile(), []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -85,6 +85,12 @@ func TestScoreLoad(t *testing.T) {
 	// silently restore the default instead.
 	if got.Score.WorkingSet != 3 {
 		t.Errorf("working-set = %d; want 3", got.Score.WorkingSet)
+	}
+	// The entry cap (#83) rides the same way. It reaches the store as written —
+	// the floor and the default of a thousand are score.clampMaxEntries', not the
+	// parser's — so a value well under the default has to survive unchanged here.
+	if got.Score.MaxEntries != 250 {
+		t.Errorf("max-entries = %d; want 250", got.Score.MaxEntries)
 	}
 	if want := (RankConfig{Recency: 4, Cwd: 2.5, Profile: 1, Group: 8}); got.Score.Rank != want {
 		t.Errorf("rank = %+v; want %+v", got.Score.Rank, want)
