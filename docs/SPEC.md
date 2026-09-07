@@ -247,6 +247,8 @@ a path. Nothing is sent until the drop, and a group carried into its own subtree
 does not move a panel into a group called `attention`, and switching back leaves the fleet exactly as it was. The
 reorganising verbs (`m`, `g g`, `g c`, `g a`, `g u`, `e`) are refused under a lens and say so: a bucket is not a work item,
 and there is no meaning to moving a panel "into" a directory. The heading states the lens whenever one is in force.
+The lens and the cards-or-tree choice are the two view settings a cockpit **remembers across sessions**, in that cockpit
+alone — see [TUI.md](./TUI.md#remembered-view-settings--tuistatejson).
 
 The directory lens re-bases every path against the fleet's **common prefix** and nests the remainder, so a set of git
 worktrees gathers under the directory that holds them rather than making one bucket per panel; a bucket holding nothing
