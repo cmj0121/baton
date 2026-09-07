@@ -208,23 +208,24 @@ Vier weitere, die die meisten auch nicht haben:
 
 Und das Cockpit, das man von einem Multiplexer erwartet, jeweils eine Taste entfernt:
 
-| Funktion              | Taste           | Was sie tut                                                                                               |
-| --------------------- | --------------- | --------------------------------------------------------------------------------------------------------- |
-| Diff                  | `D`             | der Work-Tree-Diff des Agent-Panels — gestaged und ungestaged zugleich, unversionierte inklusive          |
-| Git                   | `C-t G`         | Diff, Log, Status, Stage, Commit, Push, Branch und Worktrees — **[docs/GIT.md](GIT.md)**                  |
-| Signale               | `s`             | ein beliebiges Signal an die Auswahl, die fokussierte Kachel oder die ganze Gruppe                        |
-| Suchen                | `f`             | die Flotte nach Titel oder Gruppe filtern                                                                 |
-| Gruppen-Layouts       | `+` `-` `L`     | wie viele Mitglieder live laufen, und die Form des Splits                                                 |
-| Globale Shell         | `n h`           | eine schlichte Host-Shell, die der Server in `$HOME` hält, immer eine Taste entfernt                      |
-| Gemerktes Verzeichnis | `n .`           | Panels verfolgen ihr Verzeichnis über OSC 7 — **[docs/RESTART.md](RESTART.md)**                           |
-| Panel-Logging         | `C-t l` `C-t L` | die Ausgabe eines Panels in eine Datei leiten und zurücklesen — **[docs/LOGGING.md](LOGGING.md)**         |
-| Persistenz            | `r`             | die Flotte übersteht einen Neustart als Slots, die du aus ihrer Spec neu startest                         |
-| Restart-Policy        | —               | `panel.restart: on-failure` holt ein Panel mit Backoff und Limit zurück                                   |
-| Hot Reload            | `C-t R`         | Konfiguration ohne Neustart der Flotte — oder ein `SIGHUP` an den Daemon                                  |
-| Erscheinungsbild      | —               | Theme und eigene Split-Raster in `$HOME/.baton/TUI.yaml` — **[docs/TUI.md](TUI.md)**                      |
-| Bildschirmschoner     | —               | ein bildschirmfüllender Datenregen, wenn das Cockpit ruht — **[docs/TUI.md](TUI.md)**                     |
-| Maus                  | —               | standardmäßig aus, damit die eigene Auswahl des Terminals bleibt                                          |
-| Sprache               | —               | die Tastenliste liest sich auf Englisch oder Traditionell-Chinesisch — **[docs/TUI.md](TUI.md#language)** |
+| Funktion              | Taste           | Was sie tut                                                                                                         |
+| --------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Diff                  | `D`             | der Work-Tree-Diff des Agent-Panels — gestaged und ungestaged zugleich, unversionierte inklusive                    |
+| Git                   | `C-t G`         | Diff, Log, Status, Stage, Commit, Push, Branch und Worktrees — **[docs/GIT.md](GIT.md)**                            |
+| Signale               | `s`             | ein beliebiges Signal an die Auswahl, die fokussierte Kachel oder die ganze Gruppe                                  |
+| Suchen                | `f`             | die Flotte nach Titel oder Gruppe filtern                                                                           |
+| Gruppen-Layouts       | `+` `-` `L`     | wie viele Mitglieder live laufen, und die Form des Splits                                                           |
+| Globale Shell         | `n h`           | eine schlichte Host-Shell, die der Server in `$HOME` hält, immer eine Taste entfernt                                |
+| Gemerktes Verzeichnis | `n .`           | Panels verfolgen ihr Verzeichnis über OSC 7 — **[docs/RESTART.md](RESTART.md)**                                     |
+| Panel-Logging         | `C-t l` `C-t L` | die Ausgabe eines Panels in eine Datei leiten und zurücklesen — **[docs/LOGGING.md](LOGGING.md)**                   |
+| Serieller Port        | `n c`           | `baton serial /dev/… 115200` — ein Port in einem Panel, der sich wieder verbindet — **[docs/SERIAL.md](SERIAL.md)** |
+| Persistenz            | `r`             | die Flotte übersteht einen Neustart als Slots, die du aus ihrer Spec neu startest                                   |
+| Restart-Policy        | —               | `panel.restart: on-failure` holt ein Panel mit Backoff und Limit zurück                                             |
+| Hot Reload            | `C-t R`         | Konfiguration ohne Neustart der Flotte — oder ein `SIGHUP` an den Daemon                                            |
+| Erscheinungsbild      | —               | Theme und eigene Split-Raster in `$HOME/.baton/TUI.yaml` — **[docs/TUI.md](TUI.md)**                                |
+| Bildschirmschoner     | —               | ein bildschirmfüllender Datenregen, wenn das Cockpit ruht — **[docs/TUI.md](TUI.md)**                               |
+| Maus                  | —               | standardmäßig aus, damit die eigene Auswahl des Terminals bleibt                                                    |
+| Sprache               | —               | die Tastenliste liest sich auf Englisch oder Traditionell-Chinesisch — **[docs/TUI.md](TUI.md#language)**           |
 
 ## Architektur
 
@@ -257,6 +258,8 @@ Siehe **[docs/PLUGIN.md](PLUGIN.md)**.
 - **[docs/RESTART.md](RESTART.md)** — die Neustart-Richtlinie: was als Fehler zählt und was nicht, Backoff und Limit,
   und warum es kein `always` gibt.
 - **[docs/GIT.md](GIT.md)** — das Git-Menü: jede Operation, der Ablauf im Commit-Editor, Worktrees und die Konfiguration.
+- **[docs/SERIAL.md](SERIAL.md)** — serielle Ports: `baton serial`, die Leitungsparameter, welche Baudraten die
+  Plattform setzen kann, `cu.` gegen `tty.` und was ein Dispatch an ein Gerät bedeutet.
 - **[docs/LOGGING.md](LOGGING.md)** — die Panel-Protokollierung: was geschrieben wird, wo die Datei landet, die
   Sitzungsmarker, die Rotation, und wofür sie keine Grenze ist.
 - **[docs/REMOTE.md](REMOTE.md)** — der Fernzugriff über SSH: die `--stdio`-Brücke, was die Passkey ist und was

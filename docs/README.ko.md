@@ -201,23 +201,24 @@ Baton은 세 가지 화면으로 조종하며, 키 하나로 그 사이를 오�
 
 그리고 멀티플렉서라면 당연히 있어야 할 조종석, 모두 키 하나 거리에:
 
-| 기능          | 키              | 하는 일                                                                            |
-| ------------- | --------------- | ---------------------------------------------------------------------------------- |
-| Diff          | `D`             | agent 패널의 작업 트리 diff — staged와 unstaged를 한 번에, 미추적 포함             |
-| Git           | `C-t G`         | diff·log·status·stage·commit·push·branch·worktree — **[docs/GIT.md](GIT.md)**      |
-| 시그널        | `s`             | 선택·포커스된 타일·그룹 전체에 임의의 시그널                                       |
-| 찾기          | `f`             | 제목이나 그룹으로 함대 걸러 보기                                                   |
-| 그룹 레이아웃 | `+` `-` `L`     | 몇 개를 라이브 타일로 흘릴지, 그리고 분할의 모양                                   |
-| global shell  | `n h`           | 서버가 `$HOME`에 쥐고 있는 순수 호스트 shell 하나, 언제나 키 하나 거리             |
-| 작업 디렉터리 | `n .`           | 패널은 OSC 7로 자기 위치를 기억한다 — **[docs/RESTART.md](RESTART.md)**            |
-| 패널 로깅     | `C-t l` `C-t L` | 패널 출력을 파일로, 그리고 다시 읽어 오기 — **[docs/LOGGING.md](LOGGING.md)**      |
-| 지속성        | `r`             | 함대는 재시작을 넘어 남고, 보관된 스펙으로 다시 실행된다                           |
-| 재시작 정책   | —               | `panel.restart: on-failure`가 백오프와 한도를 달고 패널을 되돌린다                 |
-| 핫 리로드     | `C-t R`         | 함대를 멈추지 않고 설정을 다시 읽기 — 데몬에 `SIGHUP`으로도                        |
-| 외관          | —               | 테마와 직접 만든 분할 그리드는 `$HOME/.baton/TUI.yaml` — **[docs/TUI.md](TUI.md)** |
-| 화면 보호기   | —               | 조종석이 쉴 때 흐르는 디지털 비 — **[docs/TUI.md](TUI.md)**                        |
-| 마우스        | —               | 기본은 꺼짐, 터미널 자체의 선택을 남겨 두려고                                      |
-| 언어          | —               | 키 목록은 영어와 번체 중국어 — **[docs/TUI.md](TUI.md#language)**                  |
+| 기능          | 키              | 하는 일                                                                                      |
+| ------------- | --------------- | -------------------------------------------------------------------------------------------- |
+| Diff          | `D`             | agent 패널의 작업 트리 diff — staged와 unstaged를 한 번에, 미추적 포함                       |
+| Git           | `C-t G`         | diff·log·status·stage·commit·push·branch·worktree — **[docs/GIT.md](GIT.md)**                |
+| 시그널        | `s`             | 선택·포커스된 타일·그룹 전체에 임의의 시그널                                                 |
+| 찾기          | `f`             | 제목이나 그룹으로 함대 걸러 보기                                                             |
+| 그룹 레이아웃 | `+` `-` `L`     | 몇 개를 라이브 타일로 흘릴지, 그리고 분할의 모양                                             |
+| global shell  | `n h`           | 서버가 `$HOME`에 쥐고 있는 순수 호스트 shell 하나, 언제나 키 하나 거리                       |
+| 작업 디렉터리 | `n .`           | 패널은 OSC 7로 자기 위치를 기억한다 — **[docs/RESTART.md](RESTART.md)**                      |
+| 패널 로깅     | `C-t l` `C-t L` | 패널 출력을 파일로, 그리고 다시 읽어 오기 — **[docs/LOGGING.md](LOGGING.md)**                |
+| 시리얼 포트   | `n c`           | `baton serial /dev/… 115200` — 패널 안의 포트, 자동 재연결 — **[docs/SERIAL.md](SERIAL.md)** |
+| 지속성        | `r`             | 함대는 재시작을 넘어 남고, 보관된 스펙으로 다시 실행된다                                     |
+| 재시작 정책   | —               | `panel.restart: on-failure`가 백오프와 한도를 달고 패널을 되돌린다                           |
+| 핫 리로드     | `C-t R`         | 함대를 멈추지 않고 설정을 다시 읽기 — 데몬에 `SIGHUP`으로도                                  |
+| 외관          | —               | 테마와 직접 만든 분할 그리드는 `$HOME/.baton/TUI.yaml` — **[docs/TUI.md](TUI.md)**           |
+| 화면 보호기   | —               | 조종석이 쉴 때 흐르는 디지털 비 — **[docs/TUI.md](TUI.md)**                                  |
+| 마우스        | —               | 기본은 꺼짐, 터미널 자체의 선택을 남겨 두려고                                                |
+| 언어          | —               | 키 목록은 영어와 번체 중국어 — **[docs/TUI.md](TUI.md#language)**                            |
 
 ## 아키텍처
 
@@ -247,6 +248,8 @@ Lua 파일 하나(`$HOME/.baton/plug-in.lua`)면 Baton을 당신의 워크플로
 - **[docs/RESTART.md](RESTART.md)** — 재시작 정책: 무엇이 실패이고 무엇이 아닌지, 백오프와 한도, 그리고
   `always` 가 없는 이유.
 - **[docs/GIT.md](GIT.md)** — git 메뉴: 모든 동작, commit 편집 흐름, worktree, 그리고 설정.
+- **[docs/SERIAL.md](SERIAL.md)** — 시리얼 포트: `baton serial`, 회선 설정, 플랫폼이 설정할 수 있는 보 레이트,
+  `cu.` 와 `tty.` 의 차이, 그리고 장치로 보내는 dispatch가 무엇을 뜻하는지.
 - **[docs/LOGGING.md](LOGGING.md)** — 패널 로깅: 무엇이 쓰이는지, 어디에 놓이는지, 세션 표시, 롤오버,
   그리고 무엇의 경계가 _아닌지_.
 - **[docs/REMOTE.md](REMOTE.md)** — SSH 를 통한 원격 접속: `--stdio` 브리지, passkey 가 무엇이고 무엇이 아닌지,

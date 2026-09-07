@@ -210,23 +210,24 @@ Quatre autres que la plupart n'ont pas non plus :
 
 Et le cockpit qu'on attend d'un multiplexeur, chaque chose à une touche :
 
-| Fonction                 | Touche          | Ce que ça fait                                                                                         |
-| ------------------------ | --------------- | ------------------------------------------------------------------------------------------------------ |
-| Diff                     | `D`             | le diff de l'arbre de travail du panneau — indexé et non indexé d'un coup, non suivis compris          |
-| Git                      | `C-t G`         | diff, log, status, index, commit, push, branches et worktrees — **[docs/GIT.md](GIT.md)**              |
-| Signaux                  | `s`             | n'importe quel signal à la sélection, à la tuile ciblée ou à tout le groupe                            |
-| Recherche                | `f`             | filtrer la flotte par titre ou par groupe                                                              |
-| Disposition de groupe    | `+` `-` `L`     | combien de membres diffusent en direct, et la forme de la division                                     |
-| Shell global             | `n h`           | un shell hôte simple tenu par le serveur dans `$HOME`, toujours à une touche                           |
-| Répertoire mémorisé      | `n .`           | les panneaux suivent leur répertoire via OSC 7 — **[docs/RESTART.md](RESTART.md)**                     |
-| Journal de panneau       | `C-t l` `C-t L` | rediriger la sortie d'un panneau vers un fichier, et la relire — **[docs/LOGGING.md](LOGGING.md)**     |
-| Persistance              | `r`             | la flotte survit à un redémarrage en emplacements à relancer depuis leur spec                          |
-| Politique de redémarrage | —               | `panel.restart: on-failure` ramène un panneau avec un backoff et une limite                            |
-| Rechargement à chaud     | `C-t R`         | la configuration sans redémarrer la flotte — ou un `SIGHUP` au démon                                   |
-| Apparence                | —               | thème et grilles de division dans `$HOME/.baton/TUI.yaml` — **[docs/TUI.md](TUI.md)**                  |
-| Économiseur d'écran      | —               | une pluie numérique plein écran quand le cockpit se repose — **[docs/TUI.md](TUI.md)**                 |
-| Souris                   | —               | désactivée par défaut, pour garder la sélection propre au terminal                                     |
-| Langue                   | —               | la liste des touches se lit en anglais ou en chinois traditionnel — **[docs/TUI.md](TUI.md#language)** |
+| Fonction                 | Touche          | Ce que ça fait                                                                                              |
+| ------------------------ | --------------- | ----------------------------------------------------------------------------------------------------------- |
+| Diff                     | `D`             | le diff de l'arbre de travail du panneau — indexé et non indexé d'un coup, non suivis compris               |
+| Git                      | `C-t G`         | diff, log, status, index, commit, push, branches et worktrees — **[docs/GIT.md](GIT.md)**                   |
+| Signaux                  | `s`             | n'importe quel signal à la sélection, à la tuile ciblée ou à tout le groupe                                 |
+| Recherche                | `f`             | filtrer la flotte par titre ou par groupe                                                                   |
+| Disposition de groupe    | `+` `-` `L`     | combien de membres diffusent en direct, et la forme de la division                                          |
+| Shell global             | `n h`           | un shell hôte simple tenu par le serveur dans `$HOME`, toujours à une touche                                |
+| Répertoire mémorisé      | `n .`           | les panneaux suivent leur répertoire via OSC 7 — **[docs/RESTART.md](RESTART.md)**                          |
+| Journal de panneau       | `C-t l` `C-t L` | rediriger la sortie d'un panneau vers un fichier, et la relire — **[docs/LOGGING.md](LOGGING.md)**          |
+| Port série               | `n c`           | `baton serial /dev/… 115200` — un port dans un panneau, qui se reconnecte — **[docs/SERIAL.md](SERIAL.md)** |
+| Persistance              | `r`             | la flotte survit à un redémarrage en emplacements à relancer depuis leur spec                               |
+| Politique de redémarrage | —               | `panel.restart: on-failure` ramène un panneau avec un backoff et une limite                                 |
+| Rechargement à chaud     | `C-t R`         | la configuration sans redémarrer la flotte — ou un `SIGHUP` au démon                                        |
+| Apparence                | —               | thème et grilles de division dans `$HOME/.baton/TUI.yaml` — **[docs/TUI.md](TUI.md)**                       |
+| Économiseur d'écran      | —               | une pluie numérique plein écran quand le cockpit se repose — **[docs/TUI.md](TUI.md)**                      |
+| Souris                   | —               | désactivée par défaut, pour garder la sélection propre au terminal                                          |
+| Langue                   | —               | la liste des touches se lit en anglais ou en chinois traditionnel — **[docs/TUI.md](TUI.md#language)**      |
 
 ## Architecture
 
@@ -258,6 +259,8 @@ la flotte, ajouter vos propres commandes et définir la config — le tout à tr
 - **[docs/RESTART.md](RESTART.md)** — la politique de redémarrage : ce qui compte comme un échec et ce qui n'en est
   pas, le backoff et la limite, et pourquoi `always` n'existe pas.
 - **[docs/GIT.md](GIT.md)** — le menu git : chaque opération, le flux de l'éditeur de commit, les worktrees et la config.
+- **[docs/SERIAL.md](SERIAL.md)** — les ports série : `baton serial`, les paramètres de ligne, les débits que la
+  plateforme sait régler, `cu.` face à `tty.` et ce que signifie un dispatch vers un appareil.
 - **[docs/LOGGING.md](LOGGING.md)** — la journalisation des panneaux : ce qui est écrit, où le fichier atterrit, les
   marqueurs de session, la rotation, et ce dont ce n'est pas une frontière.
 - **[docs/REMOTE.md](REMOTE.md)** — l'accès distant en SSH : le pont `--stdio`, ce que la passkey est et n'est pas,
