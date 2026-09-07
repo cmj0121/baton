@@ -148,18 +148,80 @@ func TestTheSchedulerIsChargedOnceAndNotTwice(t *testing.T) {
 // TestTheWorktreeRoadIsChargedAtTheFenceAndNotOnTheRoad pins WHERE the fourth
 // road pays, which is not a detail: guardConductor charges it before any git
 // runs, so a refused conductor is refused before a tree exists on disk (see
-// TestWTAddConductorReachesTheCap). worktreeSpawn itself pays nothing, and a
-// charge moved onto the road would be paid after `git worktree add` has already
-// built the tree.
+// TestWTAddConductorReachesTheCap). A charge moved onto the road would be paid
+// after `git worktree add` had already built the tree.
+//
+// It drives the METERED half of the road — originConductor, the one a fence has
+// already charged — because that is the half a second charge at the door would
+// break, and the half that has to keep costing nothing here.
 func TestTheWorktreeRoadIsChargedAtTheFenceAndNotOnTheRoad(t *testing.T) {
 	repo := wtRepo(t)
 	s, _ := wtServer(t)
 
-	if err := s.worktreeSpawn(repo, "feature/origin", idleAgent()); err != nil {
+	if err := s.worktreeSpawn(originConductor, repo, "feature/origin", idleAgent()); err != nil {
 		t.Fatalf("worktreeSpawn: %v", err)
 	}
 	if doorSlotSpent(s) {
 		t.Fatal("worktreeSpawn spent the fleet's spawn slot itself: the charge for this road is " +
 			"the fence's, and it has to land before git builds the tree")
+	}
+}
+
+// TestNoRoadIsChargedAtCreatePanel is #79's refactor read as the thing it had to
+// be: a move of WHERE each road's answer is written, and of nothing else.
+//
+// Every road's answer now lives on its panelOrigin constant, and for all four of
+// them the answer is that createPanel takes nothing — two are exempt, and the
+// other two spend their slot upstream, each at the last point where a refusal can
+// still land before that road's own side effects. So the door itself charges
+// none of them, and this is the assertion that fails the moment an arm starts to.
+// A road that paid at the fence AND at the door would pay twice.
+func TestNoRoadIsChargedAtCreatePanel(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		origin panelOrigin
+	}{
+		{"operator", originOperator},
+		{"conductor", originConductor},
+		{"scheduler", originScheduler},
+		{"plugin", originPlugin},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newHostServer(t)
+			if _, err := s.createPanel(tc.origin, proto.KindShell, "", nil,
+				os.Getenv("BATON_TEST_DIR"), "", false, false); err != nil {
+				t.Fatalf("createPanel: %v", err)
+			}
+			if doorSlotSpent(s) {
+				t.Fatal("createPanel spent the fleet's spawn slot for this road; today every " +
+					"road's charge is answered before it gets here, and adding one at the door " +
+					"charges the two metered roads a second time")
+			}
+		})
+	}
+}
+
+// TestAFifthRoadMustNameItself is what the parameter buys, and it is the whole of
+// #79's complaint answered: a road that reaches this door without an answer
+// written for it now spawns nothing, where before it spawned freely and silently.
+//
+// The origin nobody has written a budget for is spelled here as a value outside
+// the four, because that is what a fifth road is on the day it is added and
+// before anyone has decided what it costs.
+func TestAFifthRoadMustNameItself(t *testing.T) {
+	s := newHostServer(t)
+	before := s.PanelCount()
+
+	id, err := s.createPanel(originPlugin+1, proto.KindShell, "", nil,
+		os.Getenv("BATON_TEST_DIR"), "", false, false)
+	if err == nil {
+		t.Fatalf("a road with no spawn budget written for it spawned panel %q: the budget is "+
+			"held by agreement again", id)
+	}
+	if !strings.Contains(err.Error(), "spawn budget") {
+		t.Fatalf("the refusal says %q, want it to name the missing budget", err)
+	}
+	if got := s.PanelCount(); got != before {
+		t.Fatalf("the fleet grew from %d to %d panels on a refused spawn", before, got)
 	}
 }

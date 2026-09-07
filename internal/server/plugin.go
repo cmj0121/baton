@@ -211,8 +211,14 @@ func (s *Server) Notify(msg string) {
 
 // Spawn creates a panel and, when group is non-empty, files it under that work item;
 // it returns the new panel's id. It is baton.spawn.
+//
+// originPlugin is the exemption, named: this road pays neither the fleet ceiling
+// nor the spawn gap, because a plugin is installed by the operator and is the
+// operator's hand. The argument lives on the constant; what lives here is that
+// the road now states which answer it is claiming rather than reaching the door
+// silently (#79).
 func (s *Server) Spawn(kind, command string, args []string, dir, group string) (string, error) {
-	id, err := s.createPanel(kind, command, args, dir, "", false, false)
+	id, err := s.createPanel(originPlugin, kind, command, args, dir, "", false, false)
 	if err != nil {
 		return "", err
 	}

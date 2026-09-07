@@ -27,11 +27,11 @@ func limitsServer(t *testing.T) (*Server, string) {
 func TestEffectiveLimitsLayersProfile(t *testing.T) {
 	s, dir := limitsServer(t)
 
-	heavy, err := s.createPanel(proto.KindAgent, "/bin/sh", nil, dir, "heavy", false, false)
+	heavy, err := s.createPanel(originOperator, proto.KindAgent, "/bin/sh", nil, dir, "heavy", false, false)
 	if err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
-	plain, err := s.createPanel(proto.KindShell, "", nil, dir, "", false, false)
+	plain, err := s.createPanel(originOperator, proto.KindShell, "", nil, dir, "", false, false)
 	if err != nil {
 		t.Fatalf("create shell: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestEffectiveLimitsLayersProfile(t *testing.T) {
 func TestReloadSwapsLimitsUnderLiveFleet(t *testing.T) {
 	s, dir := limitsServer(t)
 
-	id, err := s.createPanel(proto.KindAgent, "/bin/sh", nil, dir, "heavy", false, false)
+	id, err := s.createPanel(originOperator, proto.KindAgent, "/bin/sh", nil, dir, "heavy", false, false)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestRestoredPanelKeepsItsProfile(t *testing.T) {
 	stateF := filepath.Join(dir, "state.json")
 	s.stateF = stateF
 
-	id, err := s.createPanel(proto.KindAgent, "/bin/sh", nil, dir, "heavy", false, false)
+	id, err := s.createPanel(originOperator, proto.KindAgent, "/bin/sh", nil, dir, "heavy", false, false)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestRestoredPanelKeepsItsProfile(t *testing.T) {
 func TestWorktreeAgentInheritsTheProfile(t *testing.T) {
 	s, dir := limitsServer(t)
 
-	id, err := s.createPanel(proto.KindAgent, "/bin/sh", nil, dir, "heavy", false, false)
+	id, err := s.createPanel(originOperator, proto.KindAgent, "/bin/sh", nil, dir, "heavy", false, false)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

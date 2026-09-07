@@ -88,7 +88,7 @@ func TestStartPanelRefusesABrokenIsolation(t *testing.T) {
 	poisoned := isolate.Policy{Invalid: `isolate "dockerr" is not a runtime baton offers`}
 	s, dir := isolatedServer(t, poisoned)
 
-	id, err := s.createPanel(proto.KindAgent, "/bin/sh", nil, dir, "walled", false, false)
+	id, err := s.createPanel(originOperator, proto.KindAgent, "/bin/sh", nil, dir, "walled", false, false)
 	if err == nil {
 		t.Fatalf("the spawn must fail; it created panel %q on the host instead", id)
 	}
@@ -108,7 +108,7 @@ func TestStartPanelRefusesABrokenIsolation(t *testing.T) {
 func TestStartPanelUnisolatedIsUntouched(t *testing.T) {
 	s, dir := isolatedServer(t, dockerPolicy())
 
-	id, err := s.createPanel(proto.KindAgent, "/bin/sh", nil, dir, "plain", false, false)
+	id, err := s.createPanel(originOperator, proto.KindAgent, "/bin/sh", nil, dir, "plain", false, false)
 	if err != nil {
 		t.Fatalf("an un-isolated profile must spawn as it always has: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestSignalPanelRoutesByIsolation(t *testing.T) {
 
 	// An unisolated panel still takes it on its own process group — a live shell
 	// survives a SIGWINCH, so this asserts delivery without ending the panel.
-	id, err := s.createPanel(proto.KindShell, "", nil, dir, "", false, false)
+	id, err := s.createPanel(originOperator, proto.KindShell, "", nil, dir, "", false, false)
 	if err != nil {
 		t.Fatalf("create shell: %v", err)
 	}
