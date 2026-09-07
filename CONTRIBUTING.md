@@ -47,18 +47,28 @@ is. Two habits, in order of how much they buy:
 A rename leaves the old name sitting in the comment beside it, and the compiler
 never looks at a comment. `make stale-comments` walks every comment line your
 branch **adds** to a `.go` file, pulls out every code-shaped name, and checks it
-against every name the tree's code actually contains. A name that survives only
-in prose is the residue of an edit that moved on without it.
+against every name the code can reach. A name that survives only in prose is the
+residue of an edit that moved on without it.
+
+"Every name the code can reach" is `go/parser`'s answer, not a grep's: every
+identifier the tree declares or uses, every name spelled inside one of its
+string literals, the **exported surface of every package it imports**, and its
+filenames. So `ExtraFiles` in a comment about `os/exec` resolves, and so does
+`4GiB` beside a `"4GiB"` in a table.
 
 It needs no list of what was renamed, which is the point — it cannot be told
-the wrong answer by a list that is out of date. Run it before asking for
-review. It is not part of `make ci` and not a pre-commit hook, because so far
-every name it has raised on this repository has been prose that reads like code
-(`init.defaultBranch`, `proc_pidpath`, "a SIGKILLed daemon"). Read its output;
-do not let it block you. Its exit codes are `0` clean, `1` names found, and `2`
-**nothing was checked** — the last being a failure, never a pass, because a
-sweep that examined nothing looks exactly like one that examined everything and
-approved it.
+the wrong answer by a list that is out of date. Run it before asking for review.
+Its exit codes are `0` clean, `1` names found, and `2` **nothing was checked** —
+the last being a failure, never a pass, because a sweep that examined nothing
+looks exactly like one that examined everything and approved it. Pass a base
+revision to sweep a different range: `make stale-comments` compares against the
+nearest merge-base, and `go run ./cmd/stalecomment <rev>` against `<rev>`.
+
+It is not part of `make ci` and not a pre-commit hook. Replayed over the last
+400 commits it fires on 25 and ten of those are real — `keychainRun` and `rowAt`
+name functions that never existed — but the other fifteen are prose about names
+outside this module (`init.defaultBranch`, `proc_pidpath`, `known_hosts`), which
+no symbol table can reach. Read its output; do not let it block you.
 
 ### Claims a grep cannot check
 

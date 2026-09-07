@@ -32,15 +32,24 @@ cover:				# run race+coverage and gate each package at 80%
 	./scripts/coverage-gate.sh 80
 
 # Deliberately not a dependency of `ci`, and deliberately not a pre-commit
-# hook. Over the 110 commits since v1.6.0 the sweep raised eight names and
-# every one was prose that reads like code -- a git config key, two darwin C
-# calls, an English past tense. Nothing a reviewer needed. A gate whose every
-# firing so far has been a false alarm teaches people to add --no-verify, and
-# then it is not a gate. It is worth running and worth reading; it is not yet
-# worth blocking on, and this line is the honest place to say so.
+# hook -- but not for the reason the line here used to give.
+#
+# Replayed over the last 400 commits, the sweep fires on 25 of them and ten of
+# those are real: keychainRun and rowAt name functions that never existed,
+# TestLeftWalksOutOfTheTree and TestFoldSimilarPrefDefaultsOn name tests that do
+# not, and three of the ten are still stale on main today. "Every name it has
+# raised was prose" was itself a comment that outlived the code it described.
+#
+# The other fifteen are prose about names outside this module -- a git config
+# key, two darwin C calls, a vendor, an ssh filename. No symbol table can reach
+# those, so the sweep cannot tell them from a rename, and one wrong block every
+# twenty-odd commits still teaches people to add --no-verify. Worth running and
+# worth reading before review; not yet worth blocking on.
+#
+# Its own tests are ordinary Go tests, so `make ci` now checks the checker even
+# though it does not run it.
 stale-comments:		# find names that survive only in comments a branch adds
-	./scripts/stale-comment-sweep-test.sh
-	./scripts/stale-comment-sweep.sh
+	go run ./cmd/stalecomment
 
 ci: build crossbuild lint cover	# local mirror of the CI pipeline (build -> cross -> lint -> cover)
 
