@@ -233,10 +233,12 @@ id ""` — a refusal, not a misread. For a **conductor** connection BOTH forms a
   spawn wearing a git op's name. Charging only the targetless one would shut
   nothing: a conductor refused at the ceiling could fan its own agent onto branch
   after branch through the other form, unmetered. The **cockpit** pays the fleet
-  ceiling too, but at the spawn rather than at the gate: on a fleet already at
-  sixty-four the tree is created and _then_ the agent is refused, and the reply
-  says so — it opens `worktree created at …` and ends with the capacity refusal.
-  Free a slot first, or retire the tree with `x`;
+  ceiling too, but at the spawn rather than at the gate. The ordinary refusal
+  still comes first: worktreeSpawn reads the ceiling before git runs, so a fleet
+  already at sixty-four is turned away with no tree made. A fleet that fills
+  during the git call is the remaining window, and there the tree exists and the
+  reply says so — it opens `worktree created at …` and ends with the capacity
+  refusal. Free a slot first, or retire the tree with `x`;
 - **worktree-remove** runs synchronously and confirms with a notice.
 
 The agent-only and git-work-tree gates are enforced server-side — the cockpit gates
