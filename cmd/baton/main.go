@@ -119,11 +119,7 @@ func main() {
 		return
 	}
 	if cli.Remote {
-		cfg, err := config.Load()
-		if err != nil {
-			log.Warn().Err(err).Msg("config load failed; dialling with the defaults")
-		}
-		kctx.FatalIfErrorf(attachRemote(cfg))
+		kctx.FatalIfErrorf(attachRemote(remoteConfig()))
 		return
 	}
 	kctx.FatalIfErrorf(attach(cli.Verbose, logPath, cli.Plugin, cli.Force))

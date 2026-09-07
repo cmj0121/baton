@@ -34,6 +34,25 @@ type promptFunc func(address, problem string) (tui.RemoteTarget, bool, error)
 // cockpitFunc runs the cockpit against an attached remote client.
 type cockpitFunc func(*client.Client, remote.Address) error
 
+// remoteConfig reads the config a --remote attach dials with. One key is read
+// from it, settings.remote-command (attachRemoteWith), and a file that will not
+// parse must not be the thing that chooses it.
+//
+// It is a function so the seam is reachable from a test. The three lines were
+// inline in main, where the daemon's own false log line had quietly reappeared:
+// config.Load returned the half-decoded struct beside its error, so this warning
+// said "the defaults" and dialled with whatever the decoder had read before it
+// stopped — the exact sentence #48 removed from the daemon, still standing on
+// the near side of a remote attach (#77). Load now returns the defaults it
+// names, so the line is true rather than merely well-meant.
+func remoteConfig() config.Config {
+	cfg, err := config.Load()
+	if err != nil {
+		log.Warn().Err(err).Msg("config load failed; dialling with the defaults")
+	}
+	return cfg
+}
+
 // attachRemote runs the connection form, dials, and hands the client to the
 // ordinary cockpit.
 func attachRemote(cfg config.Config) error {
