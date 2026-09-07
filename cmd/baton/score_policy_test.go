@@ -48,9 +48,11 @@ func TestScorePolicyTranslatesTheFileAndNothingElse(t *testing.T) {
 // which is the one place the daemon still starts on defaults after #48, and the
 // reason applyConfig's half is written differently rather than shared.
 //
-// The file matters: config.Load hands back what it decoded BEFORE it gave up,
-// so `promote-at: 8` and `working-set: 9` are sitting in the struct it returns
-// alongside the error. Deleting the boot gate makes the store come up on them.
+// The file matters: config.LoadPartial hands back what it decoded BEFORE it
+// gave up, so `promote-at: 8` and `working-set: 9` are sitting in the struct it
+// returns alongside the error — and this seam calls LoadPartial rather than
+// Load precisely because it wants score.dir and score.enabled out of it (#77).
+// Deleting the boot gate makes the store come up on them.
 func TestBootOnAFileThatWillNotParseTakesTheDefaultPolicy(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

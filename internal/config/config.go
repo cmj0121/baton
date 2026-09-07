@@ -693,9 +693,55 @@ func readConfigFile(path string) ([]byte, error) {
 	return data, nil
 }
 
-// Load reads the config file. A missing file yields an empty Config and no
-// error, so a first run just uses the defaults.
+// Load reads the config file and answers the question every caller but two is
+// asking: what configuration should this process run on? A file that parsed
+// gives the operator's settings. A file that did not gives the built-in
+// defaults — the zero Config, which every consumer in this project already
+// reads as "use the default" — alongside the error saying why. A missing file
+// is not a failure at all: it yields those same defaults and no error, so a
+// first run just works.
+//
+// The error still has to be logged. What no longer rides beside it is a
+// half-decoded struct (#77). `cfg, err := Load(); if err != nil { warn };
+// use(cfg)` is the shape callers write, and it used to apply a configuration
+// nobody wrote: yaml.Unmarshal fills in whatever it decoded BEFORE it gave up,
+// so a file that failed on its last line handed back every line above it under
+// a warning that said "defaults" and meant "your settings, minus the ones the
+// decoder never reached". #48 removed that false line from the daemon; this
+// removes the value that made it false, so the shape above is correct by
+// default rather than by the caller remembering.
+//
+// A caller that genuinely wants the residue asks for it by name — LoadPartial —
+// and has to say there what it is doing with it.
 func Load() (Config, error) {
+	c, err := LoadPartial()
+	if err != nil {
+		return Config{}, err
+	}
+	return c, nil
+}
+
+// LoadPartial reads the config file and answers the OTHER question, the one
+// Load's signature used to conflate with that one: what parsed? On success the
+// two are identical. On a failure this is the half-decoded struct — whatever the
+// decoder filled in before it stopped — and a caller holding it is holding it
+// deliberately, because the only way to reach it is to have typed the word
+// "partial".
+//
+// There are exactly two things worth asking of a file nobody could read, and
+// each is argued where it is used rather than here:
+//
+//   - score.dir and score.enabled, at loadServerBoot. A wrong policy read from a
+//     half-parsed file is a recoverable mis-ranking; a wrong directory is a
+//     fleet memory silently split in two, each half durable and neither
+//     wrong-looking.
+//   - Score.BadNumbers, at applyConfig. The key an operator mistyped is a fact
+//     about the FILE rather than a setting to apply, and the loose second pass
+//     below is the only thing that can still name it once the strict pass has
+//     failed.
+//
+// Every other caller either gates on the error or calls Load.
+func LoadPartial() (Config, error) {
 	var c Config
 	data, err := readConfigFile(paths.ConfigFile())
 	if err != nil {
@@ -737,10 +783,23 @@ func Load() (Config, error) {
 		"score.user-signals-at": loose.Score.UserSignalsAt,
 		"score.working-set":     loose.Score.WorkingSet,
 	}, loose.Score.Rank)
+	// normalize runs on BOTH paths, which is the quieter half of #77. Its own doc
+	// says it exists so a hand-edited file cannot smuggle a nonsensical value past
+	// Load — and a file that did not parse is that same hand-edited file at its
+	// worst, so leaving the residue as the one value never bounds-checked would be
+	// the same trap with the volume turned down. It only clamps and drops, never
+	// invents, so it is as safe on a residue as on a whole config, and running it
+	// unconditionally makes the invariant one sentence: no Config leaves this
+	// package un-normalised.
+	//
+	// It is NOT what makes score.dir usable, and a reader looking for that here
+	// will not find it: ScoreConfig.Directory expands "~" and a relative path at
+	// every read, so the two keys loadServerBoot takes from a failed load need
+	// nothing done to them first.
+	c.normalize()
 	if perr != nil {
 		return c, fmt.Errorf("parse config %s: %w", paths.ConfigFile(), perr)
 	}
-	c.normalize()
 	return c, nil
 }
 
@@ -805,6 +864,13 @@ func isYAMLNumber(v any) bool {
 // file yields a zero TUIConfig and no error, so the built-in theme and the preset
 // layouts apply. The caller attaches the result onto Config.TUI before the config
 // is broadcast to frontends.
+//
+// A file that will not parse yields that same zero value, and there is no
+// LoadTUI-shaped counterpart to LoadPartial because nothing wants a half-decoded
+// theme: the sole caller (applyConfig) already reads the result only on the
+// success branch. This function had #77's shape without #77's victim, and one
+// half-decoded return value in a package whose other loader is now honest about
+// it is the trap waiting for its first caller rather than a feature.
 func LoadTUI() (TUIConfig, error) {
 	var t TUIConfig
 	data, err := readConfigFile(paths.TUIConfigFile())
@@ -815,7 +881,7 @@ func LoadTUI() (TUIConfig, error) {
 		return t, fmt.Errorf("read TUI config: %w", err)
 	}
 	if err := yaml.Unmarshal(data, &t); err != nil {
-		return t, fmt.Errorf("parse TUI config %s: %w", paths.TUIConfigFile(), err)
+		return TUIConfig{}, fmt.Errorf("parse TUI config %s: %w", paths.TUIConfigFile(), err)
 	}
 	return t, nil
 }

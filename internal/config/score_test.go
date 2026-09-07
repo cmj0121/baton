@@ -165,6 +165,11 @@ func TestScoreLegacyPromoteAtIsCaught(t *testing.T) {
 // keeps its running score policy on a reload and boots on the package defaults,
 // and the only line it would otherwise log names neither the section nor the
 // key. The second pass has to find them without the parse that failed.
+//
+// Read through LoadPartial, and only there: BadNumbers is a fact about the FILE
+// rather than a setting, so it lives on the residue and Load hands back the
+// defaults instead (#77). The ok=true rows go through the same call because on a
+// file that parses the two functions are the same function.
 func TestScoreBadNumbersNamesTheKey(t *testing.T) {
 	tests := []struct {
 		name string
@@ -203,9 +208,9 @@ func TestScoreBadNumbersNamesTheKey(t *testing.T) {
 			if err := os.WriteFile(paths.ConfigFile(), []byte(tc.yaml), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			got, err := Load()
+			got, err := LoadPartial()
 			if tc.ok != (err == nil) {
-				t.Fatalf("Load error = %v, want ok=%v", err, tc.ok)
+				t.Fatalf("LoadPartial error = %v, want ok=%v", err, tc.ok)
 			}
 			if !slices.Equal(got.Score.BadNumbers, tc.want) {
 				t.Fatalf("BadNumbers = %v, want %v", got.Score.BadNumbers, tc.want)
@@ -221,7 +226,8 @@ func TestScoreBadNumbersNamesTheKey(t *testing.T) {
 
 // TestScoreBadNumbersSurvivesAFailedParse is the property the whole second pass
 // exists for: the pass that NAMES the key must run even though the pass that
-// would have read the value did not.
+// would have read the value did not — and, since #77, that it survives on the
+// residue LoadPartial returns, which is where applyConfig reads it from.
 func TestScoreBadNumbersSurvivesAFailedParse(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -234,7 +240,7 @@ func TestScoreBadNumbersSurvivesAFailedParse(t *testing.T) {
 	if err := os.WriteFile(paths.ConfigFile(), []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := Load()
+	got, err := LoadPartial()
 	if err == nil {
 		t.Fatal("a mistyped weight should fail the parse")
 	}
@@ -290,7 +296,8 @@ func numericScoreKeys(t *testing.T, prefix string, rt reflect.Type) []string {
 
 // TestBadNumbersCoversEveryNumericKey closes the gap between two places that
 // spell the same keys: ScoreConfig's yaml tags, and the `loose` struct in
-// config.Load that finds the ones an operator mistyped. Nothing links them, so a
+// config.LoadPartial that finds the ones an operator mistyped. Nothing links
+// them, so a
 // numeric key added to ScoreConfig alone would parse, would fail the strict pass
 // when mistyped, and would be named by no warning at all — which is the failure
 // badNumbers exists to prevent, arriving through the door it does not watch.
@@ -332,7 +339,7 @@ func TestBadNumbersCoversEveryNumericKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := Load()
+	got, err := LoadPartial()
 	if err == nil {
 		t.Fatalf("a file of mistyped numbers should fail the strict parse:\n%s", b.String())
 	}

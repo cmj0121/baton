@@ -1184,13 +1184,17 @@ func loadServerBoot(sock string) serverBoot {
 	log.Info().Str("path", paths.ConfigFile()).Msg("boot: reading the config")
 	// Honour the user's settings from the shared config file; a missing or
 	// unreadable config keeps the strict defaults (unique names, home workdir).
-	cfg, err := config.Load()
+	// LoadPartial, not Load, and the name is doing the work: on a failure this is
+	// what the decoder kept before it gave up. Two keys below are read from it on
+	// purpose and everything else is gated on err, so the value never reaches
+	// serverBoot under the name cfg without passing the gate at the end.
+	partial, err := config.LoadPartial()
 	if err != nil {
 		log.Warn().Err(err).Msg("config load failed, building the server on defaults")
 	}
 	// Note what is NOT gated on the load error: score.dir and score.enabled are
-	// taken from cfg whatever it says, while the policy is not. That asymmetry is
-	// deliberate, and it is the safe direction of each.
+	// taken from the partial whatever it says, while the policy is not. That
+	// asymmetry is deliberate, and it is the safe direction of each.
 	//
 	// A policy read from a half-parsed file is a wrong POLICY — entries climb at
 	// the wrong threshold, briefs carry the wrong few — and every one of those is
@@ -1213,9 +1217,9 @@ func loadServerBoot(sock string) serverBoot {
 	// in rather than hiding it in a shared helper that would have to guess.
 	var scorePol score.Policy
 	if err == nil {
-		scorePol = scorePolicy(cfg.Score)
+		scorePol = scorePolicy(partial.Score)
 	}
-	store, reason := openScore(cfg.Score, scorePol, scoreOpenTimeout)
+	store, reason := openScore(partial.Score, scorePol, scoreOpenTimeout)
 
 	// And here the half-decoded struct STOPS. Everything above this line either
 	// gated on err or is one of the two keys the paragraph above argues for; what
@@ -1237,8 +1241,9 @@ func loadServerBoot(sock string) serverBoot {
 	// policy is a recoverable mis-ranking. The store is already open on those two;
 	// runServerOn reads the section again for WithScore and for the reload warning,
 	// and both must see what the store was actually opened with.
+	cfg := partial
 	if err != nil {
-		cfg = config.Config{Score: cfg.Score}
+		cfg = config.Config{Score: partial.Score}
 	}
 
 	var once sync.Once
@@ -1342,7 +1347,13 @@ func runServerOn(ln net.Listener, sock string, boot serverBoot) error {
 	// two call sites eight lines apart, and a bit derived from history would have
 	// to be right about a past this function cannot see.
 	applyConfig := func(reload bool) {
-		cfg, err := config.Load()
+		// LoadPartial because ONE thing is read from a failed load here, and it is
+		// not a setting: Score.BadNumbers, the name of the key the operator mistyped,
+		// which only Load's loose second pass can still recover once the strict pass
+		// has failed. Both branches below throw the rest away — the reload keeps what
+		// is running, the boot pass zeroes to the defaults — so the partial is read
+		// for a fact about the file and never for a value to apply (#48, #77).
+		cfg, err := config.LoadPartial()
 		if err != nil {
 			// Named first, and on both branches: a value that is not a number is
 			// what took the whole file down, and the decoder's error names a line

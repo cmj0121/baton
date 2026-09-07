@@ -161,8 +161,10 @@ score:
 // What makes it the right shape for this test is everything ABOVE that line. A
 // failed Unmarshal does not hand back the zero value — it hands back what it
 // decoded before it gave up — so this file's workdir, its empty agent map and
-// its promote-at are all sitting in the struct config.Load returns alongside
-// the error. They are exactly what the daemon used to go on and apply.
+// its promote-at are all sitting in the struct config.LoadPartial returns
+// alongside the error, which is what applyConfig reads (for the mistyped key's
+// name, and nothing else). They are exactly what the daemon used to go on and
+// apply.
 const brokenConfig = `panel:
   workdir: /nowhere
   agents: {}
