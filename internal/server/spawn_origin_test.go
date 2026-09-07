@@ -110,6 +110,32 @@ func TestTheConductorsCreateIsCharged(t *testing.T) {
 	}
 }
 
+// TestThePluginPaysTheCeilingAndNotTheGap is the plugin road read on both axes
+// through Server.Spawn itself — the method baton.spawn calls — rather than
+// through createPanel, because which origin this road names is the whole of what
+// it contributes and a test below it would not see the road at all.
+//
+// The ceiling half is new (#86) and is the operator's argument applied to a road
+// the operator installed: a plugin spawning the 65th panel takes the slot from
+// whatever asks next, and the ceiling is about the host either way.
+func TestThePluginPaysTheCeilingAndNotTheGap(t *testing.T) {
+	s := newHostServer(t)
+	packFleet(s)
+	dir := os.Getenv("BATON_TEST_DIR")
+
+	_, err := s.Spawn(proto.KindShell, "", nil, dir, "")
+	if err == nil {
+		t.Fatal("baton.spawn spawned onto a full fleet: a plugin is unattended code, and the " +
+			"ceiling it walks past is spent by whatever asks next")
+	}
+	if !strings.Contains(err.Error(), "capacity") {
+		t.Fatalf("the refusal says %q, want it to name the fleet's capacity", err)
+	}
+	if doorSlotSpent(s) {
+		t.Fatal("the capacity refusal spent the fleet's spawn slot on the plugin road")
+	}
+}
+
 // TestThePluginsBurstIsStillAdmitted is #86's MARKED HOLD in the only form a hold
 // survives in: a test. baton.spawn spawns twice in the same instant and both go
 // through, because the plugin host pays the ceiling and not the gap.
