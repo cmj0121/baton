@@ -14,6 +14,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// testDeadline is how long this file waits for something that is supposed to
+// happen. It is its own constant rather than shared with bridge_test.go because
+// that file is the external test package and this one is internal -- the same
+// number, in the two halves of the same suite, for the same reason: only a
+// failure ever waits it, so it is generous rather than a bet on spare cores.
+const testDeadline = 30 * time.Second
+
 // openPTY gives a pty and the name of its slave, which is the closest thing to a
 // serial port that exists on a machine with nothing plugged in: a character
 // device with a real termios that honours every setting in Config.
@@ -276,7 +283,7 @@ func TestClosingThePortEndsAReadAlreadyWaiting(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testDeadline):
 		t.Fatal("Close did not end the read in flight; the panel would wedge here")
 	}
 	wg.Wait()
