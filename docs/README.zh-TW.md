@@ -125,7 +125,7 @@ Baton 不是 tmux 的替代品,也不想接管你的 shell——你如果活在 
 |            | `v l`                 | 儀表板版面:卡片或樹狀                                |
 |            | `m`                   | 抓起一列——方向鍵搬運,`enter` 放下                    |
 |            | `enter`               | 開啟 / 放大所選                                      |
-|            | `p` / `A` / `n c`     | 新增 shell / agent / 挑指令面板                      |
+|            | `p` / `A` / `n c`     | 新增 shell / agent / command 面板                    |
 |            | `n .`                 | 在聚焦面板的目錄開新 shell 面板                      |
 |            | `n C`                 | 開啟 conductor(替你驅動整隊的 agent)                 |
 |            | `n h`                 | 開啟 global shell(開在 `$HOME` 的宿主 shell)         |

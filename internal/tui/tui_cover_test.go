@@ -296,28 +296,31 @@ func TestPanelConfigEditsShell(t *testing.T) {
 	}
 }
 
-func TestNewPanelFormPrefills(t *testing.T) {
+// The new-panel form opens EMPTY, and it used not to: it arrived holding the
+// default shell. That prefill read as "this is what enter will run", which was
+// true while enter ran the box as a shell path and is the opposite of true now —
+// enter on an empty box is the shell, and anything in the box is a command panel
+// (#84). A shell path sitting there would tell an operator the one thing the key
+// no longer means.
+func TestNewPanelFormOpensEmpty(t *testing.T) {
 	m := model{fleet: sampleFleet(), prefixKey: "ctrl+t",
 		binds: append([]binding(nil), bindings...), shellPath: "/bin/zsh"}
 
-	// prefix+n opens the new-panel popup prefilled with the default shell.
 	m = press(m, keyNewForm)
 	if m.input != inputNewPanelCmd {
 		t.Fatalf("%s should open the new-panel input, got %v", keyNewForm, m.input)
 	}
-	if m.inputBuf != "/bin/zsh" {
-		t.Fatalf("popup should prefill the default shell, got %q", m.inputBuf)
+	if m.inputBuf != "" {
+		t.Fatalf("the popup should open empty, got %q", m.inputBuf)
 	}
 
-	// Edit /bin/zsh → /bin/bash and submit (no client: spawnPanel just sets
-	// status).
-	m = press(m, "backspace", "backspace", "backspace") // drop "zsh"
+	// Type a program and submit (no client: spawnFromForm just sets status).
 	m = press(m, "b", "a", "s", "h")
 	m = press(m, "enter")
 	if m.input != inputNone {
 		t.Fatal("enter should close the popup")
 	}
-	if !strings.Contains(m.status, "spawning") || !strings.Contains(m.status, "/bin/bash") {
+	if !strings.Contains(m.status, "spawning") || !strings.Contains(m.status, "bash") {
 		t.Fatalf("spawn status = %q", m.status)
 	}
 }
