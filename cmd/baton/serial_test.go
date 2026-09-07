@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,34 +39,55 @@ func TestSerialMainRefusesALineItCannotSet(t *testing.T) {
 	}
 }
 
-// The device name reaches a terminal with nothing in front of it, and an agent
-// driving `ctl spawn --run baton serial …` chooses that name. An escape sequence
-// in it is dropped rather than executed.
-func TestSerialMainScrubsTheDeviceNameOutOfItsError(t *testing.T) {
-	out, code := runSerial(t, []string{"/dev/\x1b]0;pwned\x07tty", "12345"}, nil)
-	if code == 0 {
-		t.Fatal("exit = 0, want a refusal")
-	}
-	if strings.Contains(out, "\x1b]0;pwned\x07") {
-		t.Errorf("the device name's escape sequence reached the terminal: %q", out)
+// A refusal quotes back what it was given, and this one lands on a terminal with
+// nothing in front of it: no cockpit renders it into a footer it controls. An
+// agent driving `ctl spawn --run baton serial …` chooses those arguments, so the
+// escape sequences in them are dropped rather than executed.
+func TestSerialMainScrubsTheArgumentsOutOfItsError(t *testing.T) {
+	for _, args := range [][]string{
+		// kong names an argument it did not expect, verbatim and unquoted.
+		{"/dev/cu.usbmodem2101", "115200", "\x1b]0;pwned\x07"},
+		{"/dev/cu.usbmodem2101", "115200", "--", "\x1b]0;pwned\x07"},
+	} {
+		out, code := runSerial(t, args, nil)
+		if code == 0 {
+			t.Fatalf("`baton serial %q` exit = 0, want a refusal", args)
+		}
+		if strings.Contains(out, "\x1b]0;pwned\x07") {
+			t.Errorf("an escape sequence from the command line reached the terminal: %q", out)
+		}
 	}
 }
 
-// The whole subcommand, end to end, against a pty standing in for a port: the
-// panel's bytes reach the device, the device's bytes reach the panel, and
-// closing the panel's input is how it ends — no escape key, which is the point.
+// The whole subcommand, end to end, with a pty standing in for the port and
+// another for the panel it runs in: the panel's terminal goes raw, its bytes
+// reach the device unedited, the device's bytes reach the panel, closing the
+// panel's input is how it ends, and the terminal is put back on the way out.
 func TestSerialMainBridgesThePanelToThePort(t *testing.T) {
-	ptmx, tty, err := pty.Open()
+	device, port, err := pty.Open()
 	if err != nil {
 		t.Fatalf("pty.Open: %v", err)
 	}
-	defer func() { _ = tty.Close(); _ = ptmx.Close() }()
+	defer func() { _ = port.Close(); _ = device.Close() }()
 
-	keys, typed, err := os.Pipe()
+	keyboard, panel, err := pty.Open()
 	if err != nil {
+		t.Fatalf("pty.Open: %v", err)
+	}
+	defer func() { _ = panel.Close(); _ = keyboard.Close() }()
+
+	// Everything either side ever says, accumulated: a pty master from
+	// creack/pty is not a pollable file, so it has no read deadline to lean on and
+	// the reads live in goroutines that end when the file closes.
+	echoed, wire := drain(keyboard), drain(device)
+
+	// A pty comes up cooked, which is what makes the raw-mode assertions below
+	// mean something. If this one did not, they would all pass for free.
+	if _, err := keyboard.WriteString("cooked?"); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = keys.Close() }()
+	waitUntil(t, "the pty to echo, which is what raw mode has to turn off",
+		func() bool { return strings.Contains(echoed(), "cooked?") })
 
 	screen := filepath.Join(t.TempDir(), "screen")
 	shown := func() string {
@@ -74,31 +96,35 @@ func TestSerialMainBridgesThePanelToThePort(t *testing.T) {
 	}
 
 	code := make(chan int, 1)
-	go func() { code <- runSerialWith(t, []string{tty.Name(), "115200"}, keys, screen) }()
+	go func() { code <- runSerialWith(t, []string{port.Name(), "115200"}, panel, screen) }()
 
 	waitUntil(t, "the port to open", func() bool { return strings.Contains(shown(), "open at 115200 8N1") })
 
-	// The panel types; the device sees it, byte for byte, Ctrl-C included.
-	if _, err := typed.WriteString("boot\r\x03"); err != nil {
+	// The panel types; the device sees it, byte for byte. \r stays \r rather than
+	// becoming \n, and \x03 arrives as a byte rather than being taken for a signal
+	// — both of which a cooked terminal would have got wrong before the bridge
+	// ever saw them.
+	if _, err := keyboard.WriteString("boot\r\x03"); err != nil {
 		t.Fatal(err)
 	}
-	got := make([]byte, 6)
-	_ = ptmx.SetReadDeadline(time.Now().Add(2 * time.Second))
-	if _, err := ptmx.Read(got); err != nil {
-		t.Fatalf("the device never saw the keystrokes: %v", err)
-	}
-	if string(got) != "boot\r\x03" {
-		t.Errorf("the device saw %q, want %q", got, "boot\r\x03")
+	waitUntil(t, "the keystrokes to reach the device",
+		func() bool { return strings.Contains(wire(), "boot\r\x03") })
+
+	// And nothing of them was echoed locally: what the operator sees of their own
+	// typing is the board's business, the way it is under screen.
+	if strings.Contains(echoed(), "boot") {
+		t.Errorf("the panel's terminal echoed the keystrokes; the bridge did not take it raw:\n%q", echoed())
 	}
 
 	// The device answers; the panel sees it.
-	if _, err := ptmx.Write([]byte("ESP-ROM:esp32s3")); err != nil {
+	if _, err := device.Write([]byte("ESP-ROM:esp32s3")); err != nil {
 		t.Fatal(err)
 	}
 	waitUntil(t, "the device's bytes on the panel", func() bool { return strings.Contains(shown(), "ESP-ROM:esp32s3") })
 
-	// Closing the panel's input is the exit. There is no key to press.
-	_ = typed.Close()
+	// Closing the panel's terminal is the exit. There is no key to press: the
+	// bridge reserves none, because it does not own the terminal.
+	_ = panel.Close()
 	select {
 	case c := <-code:
 		if c != 0 {
@@ -106,6 +132,32 @@ func TestSerialMainBridgesThePanelToThePort(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("`baton serial` did not exit when the panel's input ended")
+	}
+}
+
+// drain reads a file into a buffer until it closes, and hands back a look at
+// what has arrived so far.
+func drain(f *os.File) func() string {
+	var mu sync.Mutex
+	var b strings.Builder
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := f.Read(buf)
+			if n > 0 {
+				mu.Lock()
+				b.Write(buf[:n])
+				mu.Unlock()
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return b.String()
 	}
 }
 
