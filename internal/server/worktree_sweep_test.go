@@ -91,6 +91,38 @@ func recvWorktree(t *testing.T, c *client.Client) proto.ServerMsg {
 }
 
 // listTrees runs worktree.list and decodes the classified set.
+// waitOrphan polls until the tree at path reads as an orphan, and hands back the
+// listing it last saw.
+//
+// The INTERVAL is what this helper is for, not the deadline. Six copies of this
+// loop used to spin with no backoff at all, sending a worktree.list round-trip as
+// fast as the server would answer one, so under -race on a shared runner the test
+// competed for the scheduler with the very goroutine it was waiting for.
+// TestWorktreeCloseSkipsTheDeadSlotStage and TestWorktreeSweepSkipsALockedOrphanToo
+// have each failed on CI and never once locally, which is that shape exactly: not
+// an operation too slow to finish, but a test starving the work it wanted done.
+//
+// The deadline is generous because only a failure ever pays it. A satisfied
+// condition returns on the first or second poll and waits none of it; a broken one
+// spends a minute and then says what it saw, which is a report rather than the
+// ten-second guess that reads as a flake and gets re-run.
+func waitOrphan(t *testing.T, c *client.Client, path, what string) []worktree.Entry {
+	t.Helper()
+	deadline := time.After(60 * time.Second)
+	for {
+		entries := listTrees(t, c)
+		if statusOfPath(t, entries, path) == worktree.StatusOrphan {
+			return entries
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("%s, got %+v", what, entries)
+			return nil
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
 func listTrees(t *testing.T, c *client.Client) []worktree.Entry {
 	t.Helper()
 	if err := c.Send(proto.Command{Action: "worktree.list"}); err != nil {
@@ -193,8 +225,22 @@ func spawnWorktreePanel(t *testing.T, c *client.Client, repo, branch string) (st
 	// leaving the second waiting forever for news that had already come. That is
 	// what failed on CI and never here: two loops raced for one channel and the
 	// machine decided who won.
+	// And it ASKS as well as listens, which the one loop alone did not. Exited and
+	// grouped are two facts that arrive separately -- the panel is created, filed
+	// under the branch, and then exits -- and nothing promises one broadcast
+	// carries the last two together. On two cores under -race the exit can be
+	// published before the grouping is, and then no single edge ever satisfies both
+	// and the loop waits out its whole deadline for news that will never come in
+	// that shape. That is what still failed on CI after the two loops became one.
+	// A panel.list is answered with the fleet as it STANDS, so once both facts are
+	// true on the server the next snapshot carries them together.
 	var id string
-	deadline := time.After(15 * time.Second)
+	deadline := time.After(60 * time.Second)
+	nudge := time.NewTicker(50 * time.Millisecond)
+	defer nudge.Stop()
+	if err := c.Send(proto.Command{Action: "panel.list"}); err != nil {
+		t.Fatalf("panel.list: %v", err)
+	}
 	for id == "" {
 		select {
 		case msg, ok := <-c.Events:
@@ -205,6 +251,10 @@ func spawnWorktreePanel(t *testing.T, c *client.Client, repo, branch string) (st
 				if p.State == "exited" && p.Group == branch {
 					id = p.ID
 				}
+			}
+		case <-nudge.C:
+			if err := c.Send(proto.Command{Action: "panel.list"}); err != nil {
+				t.Fatalf("panel.list: %v", err)
 			}
 		case <-deadline:
 			t.Fatalf("the worktree agent for %s never exited; tree expected at %s", branch, tree)
@@ -256,18 +306,7 @@ func TestWorktreeListAndSweepAcceptance(t *testing.T) {
 	if err := c.Send(proto.Command{Action: "panel.purge"}); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
-	deadline := time.After(10 * time.Second)
-	for {
-		entries = listTrees(t, c)
-		if statusOfPath(t, entries, tree) == worktree.StatusOrphan {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("purging the slot should have left an orphan, got %+v", entries)
-		default:
-		}
-	}
+	waitOrphan(t, c, tree, "purging the slot should have left an orphan")
 
 	// 4. The sweep retires it: off the disk, and out of git's own view. The second
 	//    half is what makes this a removal rather than an rm -rf.
@@ -326,14 +365,7 @@ func TestWorktreeSweepSkipsADirtyOrphan(t *testing.T) {
 	if err := c.Send(proto.Command{Action: "panel.purge"}); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
-	deadline := time.After(10 * time.Second)
-	for statusOfPath(t, listTrees(t, c), cleanTree) != worktree.StatusOrphan {
-		select {
-		case <-deadline:
-			t.Fatal("purging the slots should have left orphans")
-		default:
-		}
-	}
+	waitOrphan(t, c, cleanTree, "purging the slots should have left orphans")
 
 	got := sweepTrees(t, c)
 	if len(got.Skipped) != 1 || got.Skipped[0].Path != dirtyTree {
@@ -378,14 +410,7 @@ func TestWorktreeSweepDropsARecordWhoseTreeIsGone(t *testing.T) {
 	if err := c.Send(proto.Command{Action: "panel.purge"}); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
-	deadline := time.After(10 * time.Second)
-	for statusOfPath(t, listTrees(t, c), tree) != worktree.StatusOrphan {
-		select {
-		case <-deadline:
-			t.Fatal("purging the slot should have left an orphan")
-		default:
-		}
-	}
+	waitOrphan(t, c, tree, "purging the slot should have left an orphan")
 
 	// The operator deletes it behind baton's back.
 	if err := os.RemoveAll(tree); err != nil {
@@ -433,14 +458,7 @@ func TestWorktreeCloseSkipsTheDeadSlotStage(t *testing.T) {
 	if err := c.Send(proto.Command{Action: "panel.close", IDs: []string{id}}); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	deadline := time.After(10 * time.Second)
-	for statusOfPath(t, listTrees(t, c), tree) != worktree.StatusOrphan {
-		select {
-		case <-deadline:
-			t.Fatal("panel.close drops the spawn spec, so the tree should be an orphan")
-		default:
-		}
-	}
+	waitOrphan(t, c, tree, "panel.close drops the spawn spec, so the tree should be an orphan")
 }
 
 // TestWorktreeVerbsWithPersistenceOff is the fail-safe direction as an assertion,
@@ -498,14 +516,7 @@ func TestWorktreeSweepIsFencedFromTheConductor(t *testing.T) {
 	if err := c.Send(proto.Command{Action: "panel.purge"}); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
-	deadline := time.After(10 * time.Second)
-	for statusOfPath(t, listTrees(t, c), tree) != worktree.StatusOrphan {
-		select {
-		case <-deadline:
-			t.Fatal("purging the slot should have left an orphan")
-		default:
-		}
-	}
+	waitOrphan(t, c, tree, "purging the slot should have left an orphan")
 
 	if err := c.Send(proto.Command{Action: "hello", Role: "conductor", Self: "99"}); err != nil {
 		t.Fatalf("hello as conductor: %v", err)
@@ -568,14 +579,7 @@ func TestWorktreeSweepSkipsALockedOrphanToo(t *testing.T) {
 	if err := c.Send(proto.Command{Action: "panel.purge"}); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
-	deadline := time.After(10 * time.Second)
-	for statusOfPath(t, listTrees(t, c), cleanTree) != worktree.StatusOrphan {
-		select {
-		case <-deadline:
-			t.Fatal("purging the slots should have left orphans")
-		default:
-		}
-	}
+	waitOrphan(t, c, cleanTree, "purging the slots should have left orphans")
 
 	got := sweepTrees(t, c)
 	skipped := map[string]string{}
