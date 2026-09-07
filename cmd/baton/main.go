@@ -13,6 +13,10 @@
 // `baton ctl` is a thin control client for a human or a script (see ctl.go), and
 // `baton mcp` is a Model Context Protocol server an agent's .mcp.json launches so
 // it can spawn, group, signal, and send prompts to panels (see mcp.go).
+//
+// `baton serial <device> [baud]` drives nothing at all: it is a bridge to a
+// serial port, meant to be run IN a command panel the way screen would be (see
+// serial.go).
 package main
 
 import (
@@ -87,6 +91,14 @@ func main() {
 	// writes one line has any use for.
 	if len(os.Args) > 1 && os.Args[1] == "usage-sink" {
 		os.Exit(usageSinkMain(os.Args[2:]))
+	}
+	// `baton serial <device> [baud]` is an ordinary command panel that happens to
+	// be this binary: it opens the port, sets the line, and copies bytes both ways.
+	// Dispatched here with the others because it has no use for a cockpit either —
+	// its stdin and stdout ARE the panel, and the only state it wants is the
+	// device's.
+	if len(os.Args) > 1 && os.Args[1] == "serial" {
+		os.Exit(serialMain(os.Args[2:]))
 	}
 
 	var cli CLI
