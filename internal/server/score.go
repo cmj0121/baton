@@ -192,6 +192,13 @@ func (s *Server) noteScoreWrites() {
 //     any conductor that mistypes an id. Logging those here would put the line an
 //     operator greps for a dead mount under the control of every panel on the
 //     fleet — R7's argument on the submit door, now applied to all of them.
+//     score.ErrStoreFull joins them for the first half of that reason and not
+//     the second: a store at its entry cap is working exactly as configured, and
+//     the refusal is reachable by every panel on the fleet at the submit rate,
+//     so a line each would move #83's growth out of score-events.jsonl and into
+//     baton.log rather than stopping it. What it is NOT is invisible — the
+//     refusal names the count and the limit to the submitter, and score.status
+//     carries entries beside max_entries for the operator who never saw it.
 //   - A condition a LATCH is already holding has been said. The read latch was
 //     said by scoreLook, and the write latch by noteScoreWrites a moment ago:
 //     the doors share a reconcile pass and a durable funnel with those, so their
@@ -208,7 +215,8 @@ func (s *Server) noteScoreTrouble(err error) bool {
 	switch {
 	case err == nil:
 		return false
-	case errors.Is(err, score.ErrSubmissionText), errors.Is(err, score.ErrRefine):
+	case errors.Is(err, score.ErrSubmissionText), errors.Is(err, score.ErrRefine),
+		errors.Is(err, score.ErrStoreFull):
 		return false
 	default:
 		return !s.scoreState.failing.Load() && !s.scoreState.wrote.Load()
@@ -1512,6 +1520,7 @@ func (s *Server) scoreStatus() json.RawMessage {
 		PromoteAt     int         `json:"promote_at,omitempty"`
 		UserSignalsAt int         `json:"user_signals_at,omitempty"`
 		WorkingSet    int         `json:"working_set,omitempty"`
+		MaxEntries    int         `json:"max_entries,omitempty"`
 		Rank          *score.Rank `json:"rank,omitempty"`
 		Dir           string      `json:"dir,omitempty"`
 	}{
@@ -1527,8 +1536,13 @@ func (s *Server) scoreStatus() json.RawMessage {
 		PromoteAt:     v.Policy.PromoteAt,
 		UserSignalsAt: v.Policy.UserSignalsAt,
 		WorkingSet:    v.Policy.WorkingSet,
-		Rank:          rank,
-		Dir:           s.scoreState.Store.Dir(),
+		// Beside Entries, which is what makes the pair readable as a gauge: an
+		// operator whose agents are being refused meets the reason here rather
+		// than in a daemon log that deliberately does not carry it (#83, and see
+		// noteScoreTrouble for why it does not).
+		MaxEntries: v.Policy.MaxEntries,
+		Rank:       rank,
+		Dir:        s.scoreState.Store.Dir(),
 	})
 }
 
