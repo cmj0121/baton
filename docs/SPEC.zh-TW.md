@@ -51,7 +51,7 @@ Baton 是純鍵盤操作的,提供三種觀看 agent 的方式。儀表板與放
 五次,是用一個運作正常的程式組裝出來的 crash loop。要重跑就自己按 `r`,和你對待任何其他死亡空位一樣。
 
 有兩個 shell/agent 面板是伺服器至多只留一個的**單例**,各自以 FLEET 標題上的一個標記呈現,而非卡片。**conductor**
-(`n C`)是一個驅動整支隊伍的控制 agent(見 [CONTROL.md](./CONTROL.md))。**global shell**(`n h`)是伺服器開在
+(`n C`)是一個驅動整支隊伍的控制 agent(見 [CONTROL.md](./CONTROL.zh-TW.md))。**global shell**(`n h`)是伺服器開在
 `$HOME` 的純宿主 shell——一個永遠一個按鍵之遙的主基地;與 conductor 不同,它不驅動任何東西(沒有受限角色、沒有受管理
 的工作區)。兩者重啟後都會以已結束的空位保留,按 `r` 重跑。
 
