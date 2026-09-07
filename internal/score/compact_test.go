@@ -190,7 +190,7 @@ func TestCompactionKeepsEveryIdItHasEverNamed(t *testing.T) {
 		t.Fatalf("pass = %+v, want the two deleted lines retired", d)
 	}
 	s.mu.Lock()
-	before := len(s.burned)
+	before := s.burned.len()
 	s.mu.Unlock()
 	written := compactNow(t, s) // every log is over a threshold of zero
 	if written != 3 {
@@ -204,11 +204,11 @@ func TestCompactionKeepsEveryIdItHasEverNamed(t *testing.T) {
 	re.mu.Lock()
 	after := re.burned
 	re.mu.Unlock()
-	if len(after) != before {
-		t.Fatalf("burned holds %d ids after compaction, want the %d it named before", len(after), before)
+	if after.len() != before {
+		t.Fatalf("burned holds %d ids after compaction, want the %d it named before", after.len(), before)
 	}
 	for _, id := range []string{keep.Id, gone.Id, extra.Id} {
-		if _, ok := after[id]; !ok {
+		if !after.has(id) {
 			t.Errorf("id %s was un-burned by compaction; it is free to be reissued", id)
 		}
 	}
@@ -432,7 +432,7 @@ func TestCompactionSurvivesACrashMidRewrite(t *testing.T) {
 		t.Fatalf("the store after a failed compaction holds %+v", re.Render(Context{}))
 	}
 	re.mu.Lock()
-	_, burned := re.burned[gone.Id]
+	burned := re.burned.has(gone.Id)
 	re.mu.Unlock()
 	if !burned {
 		t.Error("the retired id was lost by a compaction that never landed")
@@ -693,7 +693,7 @@ func TestARecordThisBuildDoesNotKnowStillBurnsItsId(t *testing.T) {
 	// The id is BURNED, so nothing can be issued it and pick up whatever the
 	// record was about.
 	s.mu.Lock()
-	_, burned := s.burned["abc123"]
+	burned := s.burned.has("abc123")
 	s.mu.Unlock()
 	if !burned {
 		t.Fatal("an unknown record's id was not burned; it is free to be reissued")
@@ -998,7 +998,7 @@ func TestCompactionReportsItselfWithoutABoot(t *testing.T) {
 	writeMD(t, dir, "- ["+keep.Id+"] the fleet keeps the build green\n")
 	reconcile(t, s)
 	s.mu.Lock()
-	_, burned := s.burned[gone.Id]
+	burned := s.burned.has(gone.Id)
 	s.mu.Unlock()
 	if !burned {
 		t.Fatal("the fixture retired nothing, so the record count below asserts nothing")

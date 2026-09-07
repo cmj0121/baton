@@ -496,7 +496,7 @@ func TestIdsAreNeverReusedAcrossARetire(t *testing.T) {
 	if s.indexLocked(e.Id) >= 0 {
 		t.Fatalf("%s is still live after its line was deleted", e.Id)
 	}
-	if _, burned := s.burned[e.Id]; !burned {
+	if !s.burned.has(e.Id) {
 		t.Fatalf("%s left the burned set when it retired — a later draw could reissue it", e.Id)
 	}
 
@@ -504,7 +504,7 @@ func TestIdsAreNeverReusedAcrossARetire(t *testing.T) {
 	// survives a restart as well as a retire.
 	s.Close()
 	re := openStore(t, dir)
-	if _, burned := re.burned[e.Id]; !burned {
+	if !re.burned.has(e.Id) {
 		t.Fatalf("%s was forgotten across a restart; the log names it, so it stays spent", e.Id)
 	}
 	if re.Len() != 0 {

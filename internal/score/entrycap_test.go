@@ -248,7 +248,7 @@ func TestTheCapCountsLiveEntriesAndNotBurnedIds(t *testing.T) {
 		}
 	}
 	s.mu.Lock()
-	burned := len(s.burned)
+	burned := s.burned.len()
 	s.mu.Unlock()
 	if burned < 9 {
 		t.Fatalf("burned ids = %d, want at least 9 — the churn did not happen", burned)

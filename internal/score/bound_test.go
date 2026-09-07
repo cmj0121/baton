@@ -317,7 +317,7 @@ func TestTheRuntimeTriggerFiresPastAThresholdOfGrowth(t *testing.T) {
 			t.Errorf("entry = %+v, want the live entry carried across the runtime rewrite", got)
 		}
 		s.mu.Lock()
-		_, burned := s.burned[gone.Id]
+		burned := s.burned.has(gone.Id)
 		s.mu.Unlock()
 		if !burned {
 			t.Error("a retired id was freed by a runtime rewrite; the next newcomer can inherit its history")
@@ -402,7 +402,7 @@ func TestACompactionDoesNotDoubleCountWhatLandedDuringIt(t *testing.T) {
 	// And the retired entry's id survived the rewrite that dropped its records,
 	// which is the property a tail must not be allowed to quietly undo either.
 	re.mu.Lock()
-	_, burned := re.burned[leaves.Id]
+	burned := re.burned.has(leaves.Id)
 	re.mu.Unlock()
 	if !burned {
 		t.Error("an id retired during the marshal was freed by the rewrite")

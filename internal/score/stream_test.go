@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -185,10 +186,7 @@ func fingerprint(s *Store) string {
 		fmt.Fprintf(&b, "entry id=%s text=%q tier=%d prov=%+v reinf=%d usersig=%d aliases=%q lastAt=%d\n",
 			e.Id, e.Text, e.Tier, e.Provenance, e.Reinforcements, e.UserSignals, e.Aliases, s.lastAt[e.Id])
 	}
-	burned := make([]string, 0, len(s.burned))
-	for id := range s.burned {
-		burned = append(burned, id)
-	}
+	burned := s.burned.list()
 	slicesSort(burned)
 	fmt.Fprintf(&b, "burned=%q\n", burned)
 	owed := make([]string, 0, len(s.owed))
@@ -520,15 +518,37 @@ func TestAnOversizedEventLogHealsItself(t *testing.T) {
 	}
 }
 
+// replayHeapAllowance is how much uncollected garbage the reading below tolerates,
+// and it exists because the collector's own allowance is the wrong shape for a
+// measurement.
+//
+// The heap is sampled with NO collection between the replay and the sample, and
+// that is deliberate: what #56 cost was a PEAK — "a 1.217 GB log peaked at 2373
+// MB and was OOM-killed inside Open" — and a whole-file read is dead by the time
+// replay returns, so a reading taken after a collection would see none of it.
+// What the sample therefore holds is live heap plus whatever the collector has
+// not got to, and that second half is bounded by the pacer's goal, which is a
+// MULTIPLE of the live heap: two hundred tests into this package about twenty
+// stores from finished tests are still reachable, so the goal here is a multiple
+// of a number that has nothing to do with the scan.
+//
+// #88 found that the hard way. It made a Store 2 MiB bigger, which took the live
+// floor from 0.4 MiB to 44 MiB, the goal from 4 MiB to 89 MiB, and this reading
+// from 1.3 MiB to 26 MiB — a test failure earned by a change that made the store
+// SMALLER on every store the measurement is about. So the allowance is pinned to
+// an absolute eight mebibytes here rather than left proportional: a streaming
+// replay cannot exceed it whatever else the binary is carrying, and a replay
+// holding a 48 MiB file exceeds it six times over.
+const replayHeapAllowance = 8 << 20
+
 // TestReplayHoldsTheLogARecordAtATime is the memory claim, measured rather than
 // described: a log many times larger than anything the scan may hold must not
-// take the heap with it. Before streaming this same log cost live heap
-// proportional to the FILE — 134 MiB on 60 MiB — which is what made #56's boot
-// unhealable.
+// take the heap with it. Before streaming this same log cost heap proportional
+// to the FILE — 134 MiB on 60 MiB — which is what made #56's boot unhealable.
 //
 // The bound is deliberately loose. What it has to catch is a replay that went
 // back to holding the file, and that is an order of magnitude away from anything
-// timing noise or a GC that has not run yet can produce.
+// timing noise can produce once the collector's allowance is pinned.
 func TestReplayHoldsTheLogARecordAtATime(t *testing.T) {
 	if testing.Short() {
 		t.Skip("writes a multi-megabyte log")
@@ -539,6 +559,11 @@ func TestReplayHoldsTheLogARecordAtATime(t *testing.T) {
 
 	s := newStore(dir, Policy{})
 	runtime.GC()
+	var probe runtime.MemStats
+	runtime.ReadMemStats(&probe)
+	defer debug.SetGCPercent(debug.SetGCPercent(max(1, int(replayHeapAllowance*100/probe.HeapAlloc))))
+
+	runtime.GC()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	if err := s.replayLocked(); err != nil {
@@ -546,6 +571,7 @@ func TestReplayHoldsTheLogARecordAtATime(t *testing.T) {
 	}
 	runtime.ReadMemStats(&after)
 	held := after.HeapAlloc - min(before.HeapAlloc, after.HeapAlloc)
+	t.Logf("replay of a %d-byte log holds %d bytes over a live floor of %d", size, held, before.HeapAlloc)
 
 	if held > size/4 {
 		t.Errorf("replay is holding %d bytes of a %d-byte log; it must hold records, not the file", held, size)
