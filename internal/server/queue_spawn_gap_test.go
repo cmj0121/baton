@@ -188,6 +188,26 @@ func TestTheFleetCeilingIsTheSameRuleOnBothRoads(t *testing.T) {
 // choice.
 func conductorWire(t *testing.T, s *Server) (func(proto.Command), func(...string) proto.ServerMsg) {
 	t.Helper()
+	return wireAs(t, s, proto.Command{Action: "hello", Role: roleConductor, Self: "c1"})
+}
+
+// cockpitWire greets the same wire as the OPERATOR: no role and no self, so
+// guardConductor returns on its first line and nothing fences the connection.
+//
+// It is conductorWire's other half, and the pair is what lets a test ask what one
+// road costs an agent and what the identical road costs the person. Asking only
+// the first is how a refactor that quietly starts metering the cockpit passes
+// every test there is.
+func cockpitWire(t *testing.T, s *Server) (func(proto.Command), func(...string) proto.ServerMsg) {
+	t.Helper()
+	return wireAs(t, s, proto.Command{Action: "hello"})
+}
+
+// wireAs is the codec the two share, greeting with whatever hello it is handed.
+// They differ by one command, and the comment above conductorWire is the reason
+// they differ by nothing else.
+func wireAs(t *testing.T, s *Server, hello proto.Command) (func(proto.Command), func(...string) proto.ServerMsg) {
+	t.Helper()
 	srvEnd, cliEnd := net.Pipe()
 	go s.handle(srvEnd)
 	t.Cleanup(func() { _ = cliEnd.Close() })
@@ -213,7 +233,7 @@ func conductorWire(t *testing.T, s *Server) (func(proto.Command), func(...string
 		t.Fatalf("never saw any of %v", want)
 		return proto.ServerMsg{}
 	}
-	send(proto.Command{Action: "hello", Role: roleConductor, Self: "c1"})
+	send(hello)
 	until("panels")
 	return send, until
 }
