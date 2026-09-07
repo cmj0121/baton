@@ -86,18 +86,18 @@ named "report" and pause for me.
 | `baton ctl worktree sweep [--yes]`                                    | 移除其中的孤兒樹;在終端機會先確認,在指令稿裡需要 `--yes`                  |
 
 ```sh
-# Stand up a reviewer next to a worker and hand it the task.
+# 在一個 worker 旁邊立一個 reviewer,然後把任務交給它。
 id=$(baton ctl spawn --agent claude --dir ~/src/api)
 baton ctl group review "$id"
 baton ctl dispatch "$id" "review the open diff and list correctness risks"
 
-# Or queue a batch and let the scheduler fan it across whoever comes free.
+# 或者排入一整批,讓排程器把它們散給任何空出來的人。
 baton ctl queue add "audit the auth module"   --group review
 baton ctl queue add "audit the billing module" --group review
 baton ctl queue list
 
-# Burst a fresh worker fleet through the backlog: each task spawns its own
-# ephemeral agent when none is free, and closes it when the task is done.
+# 讓一支全新的 worker 隊伍衝過待辦:沒人空閒時,每項任務就開出自己的
+# 臨時 agent,而任務做完就把它關掉。
 baton ctl queue add "port module A" --command claude --dir ~/src --close
 baton ctl queue add "port module B" --command claude --dir ~/src --close
 
