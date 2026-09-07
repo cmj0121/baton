@@ -59,8 +59,22 @@ func termiosOf(t *testing.T, p any) *unix.Termios {
 // Every setting the operator can name actually lands on the descriptor. Framing
 // is the one thing nothing downstream can detect for itself: a port running 7E2
 // while the code believes 8N1 delivers plausible-looking wrong bytes.
+//
+// A pty stands in for a port here, and WHICH settings it honours is a property of
+// the platform, not of this code: darwin's keeps all four rows, linux's forces
+// CS8 and drops 5, 6 and 7 data bits. That is not a reason to skip those rows —
+// it is the other half of the same guarantee. A row the pty keeps must land
+// exactly; a row it drops must be REFUSED by the read-back check rather than
+// silently running at a framing nobody asked for, which is the failure the check
+// exists for and the one hardware taught us the driver will not report.
+//
+// So both outcomes are asserted, and the run is required to have seen at least
+// one of each kind it can see — a platform where everything landed still proves
+// the landing, and one where nothing did would mean the pty had stopped being a
+// stand-in for a port at all.
 func TestOpenSetsEverySettingItWasGiven(t *testing.T) {
 	dev := openPTY(t)
+	var landed, refused int
 	for _, tc := range []struct {
 		cfg    Config
 		parenb bool
@@ -77,9 +91,17 @@ func TestOpenSetsEverySettingItWasGiven(t *testing.T) {
 		t.Run(tc.cfg.Line(), func(t *testing.T) {
 			p, err := Open(tc.cfg)
 			if err != nil {
-				t.Fatalf("Open(%s): %v", tc.cfg.Line(), err)
+				// Only the read-back refusal is an acceptable failure: any other error
+				// means Open broke somewhere this test is not looking at.
+				if !strings.Contains(err.Error(), "the driver accepted the setting and dropped it") {
+					t.Fatalf("Open(%s): %v", tc.cfg.Line(), err)
+				}
+				refused++
+				t.Logf("this platform's pty drops a setting in %s, and Open said so: %v", tc.cfg.Line(), err)
+				return
 			}
 			defer func() { _ = p.Close() }()
+			landed++
 			got := termiosOf(t, p)
 
 			// The expected CSIZE is built here rather than tabulated, because the
@@ -119,6 +141,11 @@ func TestOpenSetsEverySettingItWasGiven(t *testing.T) {
 				t.Errorf("the port is not running at %d baud", tc.cfg.Baud)
 			}
 		})
+	}
+	// Without this the table could go all-refused and assert nothing about a
+	// setting ever reaching the descriptor, which is what the test is named for.
+	if landed == 0 {
+		t.Fatalf("no row landed (%d refused): the pty honoured nothing, so nothing here checked that a setting arrives", refused)
 	}
 }
 
