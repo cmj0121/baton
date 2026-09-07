@@ -1237,40 +1237,9 @@ type Store struct {
 	dir     string
 	entries []Entry // score.md file order; the RENDER order is the ranking's
 
-	// burned is every id the log has ever named, live or retired, and its one
-	// consumer is newIDLocked: an id whose entry was deleted is RETIRED, not
-	// free, and reissuing it would graft that entry's log history onto the
-	// newcomer that drew it.
-	//
-	// IT HAS NO BOUND, and that is a decision rather than an oversight, so say
-	// what was weighed. #83 measured it as the store's largest remaining shape —
-	// 256 MiB of log describing nothing but distinct retired ids costs 632 MiB of
-	// live heap, which a compaction shrinks to 98 MiB and no further, because a
-	// million and a bit ids is genuinely what the store then holds. Policy.
-	// MaxEntries bounds the LIVE set and does not touch this one: no door an
-	// agent can reach retires an entry, so an unattended fleet cannot burn a
-	// second id per slot, but an operator emptying score.md and letting the fleet
-	// refill it burns a fresh cap's worth every round.
-	//
-	// #83 asks whether a compacted store could record a WATERMARK instead of the
-	// whole set. It cannot, and the reason is one line of newIDLocked: an id is
-	// three bytes out of crypto/rand rendered as hex. A watermark is an ORDER —
-	// "everything below this is spent" — and random ids have none, so no scalar
-	// can answer "has this id been issued" for them. The guarantee would have to
-	// be bought by making ids monotonic, and every id already written into an
-	// operator's score.md and into every record of their log is not.
-	//
-	// What WOULD express it exactly is the id space itself: three bytes is
-	// 16,777,216 ids, so a bitset over it is 2 MiB flat, whatever fraction is
-	// burned — exact, with no false positive, and no ordering asked of anything.
-	// That is a bound of 2 MiB against today's 98, and it would also close the
-	// hazard this map has and does not report: newIDLocked retries until it
-	// misses, so a store approaching the id space stops terminating in any
-	// bounded time. Neither is urgent — the first needs an operator churning
-	// millions of lines, the second needs a store eight million ids deep — and
-	// both are one change to two functions rather than a bound bolted onto this
-	// one. They are left written down here rather than half-built.
-	burned map[string]struct{}
+	// burned is every id the log has ever named, live or retired. See burnedSet
+	// for what it holds and what it costs.
+	burned burnedSet
 
 	boot   Delta // what Open's recovery pass did to the operator's files
 	health Health
@@ -1442,6 +1411,67 @@ type Store struct {
 	// could not provide one. See Open.
 	release  func()
 	unlocked bool
+}
+
+// burnedSet is every id the store's log has ever named, live or retired. Its
+// one consumer is newIDLocked: an id whose entry was deleted is RETIRED, not
+// free, and reissuing it would graft that entry's log history onto the newcomer
+// that drew it.
+//
+// IT HAS NO BOUND, and that is a decision rather than an oversight, so say what
+// was weighed. #83 measured it as the store's largest remaining shape — 256 MiB
+// of log describing nothing but distinct retired ids costs 632 MiB of live heap,
+// which a compaction shrinks to 98 MiB and no further, because a million and a
+// bit ids is genuinely what the store then holds. Policy.MaxEntries bounds the
+// LIVE set and does not touch this one: no door an agent can reach retires an
+// entry, so an unattended fleet cannot burn a second id per slot, but an
+// operator emptying score.md and letting the fleet refill it burns a fresh cap's
+// worth every round.
+//
+// #83 asks whether a compacted store could record a WATERMARK instead of the
+// whole set. It cannot, and the reason is one line of newIDLocked: an id is
+// three bytes out of crypto/rand rendered as hex. A watermark is an ORDER —
+// "everything below this is spent" — and random ids have none, so no scalar can
+// answer "has this id been issued" for them.
+//
+// It is a type rather than a bare map so that the representation can be argued
+// in one place and changed in one place; see #88.
+type burnedSet struct {
+	ids map[string]struct{}
+}
+
+func newBurnedSet() burnedSet {
+	return burnedSet{ids: map[string]struct{}{}}
+}
+
+// add spends id and reports whether it was FRESH — false means the store had
+// already named it, which is the answer newIDLocked redraws on.
+func (b *burnedSet) add(id string) bool {
+	if _, taken := b.ids[id]; taken {
+		return false
+	}
+	b.ids[id] = struct{}{}
+	return true
+}
+
+// has asks whether the log has ever named id.
+func (b *burnedSet) has(id string) bool {
+	_, ok := b.ids[id]
+	return ok
+}
+
+// len is how many ids are spent.
+func (b *burnedSet) len() int { return len(b.ids) }
+
+// list is every spent id as a fresh slice, in NO order — the one caller sorts
+// it, because map order reaching the compacted log would give one store two
+// logs on two machines (invariant I1).
+func (b *burnedSet) list() []string {
+	out := make([]string, 0, len(b.ids))
+	for id := range b.ids {
+		out = append(out, id)
+	}
+	return out
 }
 
 // errDisabled is returned by mutations on the disabled (nil) store.
@@ -1745,7 +1775,7 @@ func (s *Store) sweepTempLocked() {
 // reload retunes it. Open adds the directory claim and the recovery pass.
 func newStore(dir string, p Policy) *Store {
 	return &Store{
-		dir: dir, burned: map[string]struct{}{}, policy: p.clamp(),
+		dir: dir, burned: newBurnedSet(), policy: p.clamp(),
 		lastAt:     map[string]int{},
 		mdPath:     filepath.Join(dir, scoreMD),
 		eventsPath: filepath.Join(dir, scoreEvents),
@@ -3682,7 +3712,7 @@ func (s *Store) replayLocked() error {
 	placed := map[string]bool{} // ids already in order; a retire-then-restore must not re-add
 	var order []string
 	torn, err := scanRecordsFrom(f, func(ev *event) {
-		s.burned[ev.Id] = struct{}{}
+		s.burned.add(ev.Id)
 		s.noteEventLocked(ev)
 		switch ev.Event {
 		case EventSubmitted, EventCompacted:
@@ -4176,7 +4206,7 @@ func (s *Store) snapshotCompactionLocked(maxBytes int64) (*compaction, error) {
 		return nil, nil
 	case err != nil:
 		return nil, err
-	case fi.Size() <= maxBytes, len(s.owed) > 0, len(s.burned) == 0:
+	case fi.Size() <= maxBytes, len(s.owed) > 0, s.burned.len() == 0:
 		return nil, nil
 	}
 
@@ -4197,10 +4227,7 @@ func (s *Store) snapshotCompactionLocked(maxBytes int64) (*compaction, error) {
 	for i, e := range s.entries {
 		c.pos[i] = s.lastAt[e.Id]
 	}
-	c.dead = make([]string, 0, len(s.burned))
-	for id := range s.burned {
-		c.dead = append(c.dead, id)
-	}
+	c.dead = s.burned.list()
 	return c, nil
 }
 
@@ -4539,7 +4566,7 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 			Schema: Schema, Event: EventSubmitted, Id: id, At: now,
 			Source: userProv.Source, Text: text, Prov: &userProv,
 		})
-		s.burned[id] = struct{}{}
+		s.burned.add(id)
 		resolved[id] = true
 		delta.Admitted++
 		return newEntry(id, text, userProv)
@@ -4650,7 +4677,7 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 				converged = append(converged, converge{at: len(next) - 1, line: len(out) - 1, prior: joined})
 			}
 		default:
-			if _, seen := s.burned[id]; seen {
+			if s.burned.has(id) {
 				// The log knows this id but has no live entry for it: its
 				// submission was torn away or retired, so whatever provenance it
 				// carried is gone and the entry re-enters as the operator's.
@@ -5484,8 +5511,7 @@ func (s *Store) newIDLocked() (string, error) {
 			return "", err
 		}
 		id := hex.EncodeToString(b[:])
-		if _, taken := s.burned[id]; !taken {
-			s.burned[id] = struct{}{}
+		if s.burned.add(id) {
 			return id, nil
 		}
 	}

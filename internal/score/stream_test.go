@@ -185,10 +185,7 @@ func fingerprint(s *Store) string {
 		fmt.Fprintf(&b, "entry id=%s text=%q tier=%d prov=%+v reinf=%d usersig=%d aliases=%q lastAt=%d\n",
 			e.Id, e.Text, e.Tier, e.Provenance, e.Reinforcements, e.UserSignals, e.Aliases, s.lastAt[e.Id])
 	}
-	burned := make([]string, 0, len(s.burned))
-	for id := range s.burned {
-		burned = append(burned, id)
-	}
+	burned := s.burned.list()
 	slicesSort(burned)
 	fmt.Fprintf(&b, "burned=%q\n", burned)
 	owed := make([]string, 0, len(s.owed))
