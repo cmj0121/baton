@@ -168,15 +168,22 @@ func DefaultInterval(p Provider) time.Duration {
 // subscription nothing is actually charged. The cost is dropped when there is
 // none, and an empty snapshot renders "" so the footer stays clean until real
 // usage lands.
-func Format(s Snapshot) string {
-	if s.Empty() {
+func Format(s Snapshot) string { return FormatTotals(s.TotalTokens(), s.CostUSD) }
+
+// FormatTotals is Format over a token count and a cost that did not arrive as a
+// Snapshot. The per-vendor rows carry exactly those two numbers and no buckets,
+// so they would otherwise have to fake a Snapshot to be rendered the same way —
+// and a footer that formatted the default agent's spend differently from the
+// account's would read as two different measurements of the same thing.
+func FormatTotals(tokens int64, cost float64) string {
+	if tokens == 0 && cost == 0 {
 		return ""
 	}
-	tok := humanTokens(s.TotalTokens())
-	if s.CostUSD <= 0 {
+	tok := humanTokens(tokens)
+	if cost <= 0 {
 		return tok + " tok"
 	}
-	return fmt.Sprintf("%s tok · ≈$%.2f API", tok, s.CostUSD)
+	return fmt.Sprintf("%s tok · ≈$%.2f API", tok, cost)
 }
 
 // FormatCountdown renders how long is left, in one of exactly two forms.

@@ -67,7 +67,7 @@ func TestAFifoTranscriptDoesNotStallTheScan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := &LocalProvider{dir: dir, window: time.Hour, now: time.Now}
+	p := &LocalProvider{format: claudeFormat(), dir: dir, window: time.Hour, now: time.Now}
 	got := make(chan Snapshot, 1)
 	go func() {
 		snap, _ := p.Fetch(context.Background())

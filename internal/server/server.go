@@ -277,6 +277,12 @@ type Server struct {
 	usageWarn     float64
 	usageAlarm    float64
 
+	// usageWindow is how long a usage window lasts, kept so the per-vendor readers
+	// can be built with the same window the main provider was. It is zero when the
+	// per-vendor list is off, which is what makes that list opt-in: a fleet that
+	// never asked for it pays no extra scan.
+	usageWindow time.Duration
+
 	// The account's rate-limit standing (internal/usage). limitsProvider is the
 	// source and limitsInfo the last reading it gave, held so a reading survives a
 	// poll that had nothing new — the statusline source is a push, and an idle
@@ -826,6 +832,17 @@ func WithUsage(p usage.Provider, interval time.Duration, display UsageDisplay) O
 		s.usageWarn = display.WarnAt
 		s.usageAlarm = display.AlarmAt
 	}
+}
+
+// WithVendorUsage turns on the per-vendor usage list: on every poll the daemon
+// says, for each agent backend it detected, whether it read that vendor's books,
+// could not because baton has no reader for it, or found the command missing.
+//
+// window is the window length the per-vendor readers measure against — the same
+// one the main provider uses, so the two never describe different windows. A
+// non-positive window leaves the list off entirely.
+func WithVendorUsage(window time.Duration) Option {
+	return func(s *Server) { s.usageWindow = window }
 }
 
 // WithUsageLimits wires the account's rate-limit bars: p reads the current standing,
@@ -1425,11 +1442,17 @@ func (s *Server) refreshUsage() {
 		}
 	}
 
+	// The per-vendor sweep runs OUTSIDE the lock: it scans other vendors' session
+	// directories, which is disk work of the same order as the main provider's, and
+	// holding mu across it would stall every panel event for the length of a walk.
+	vendors := s.vendorUsage(ctx)
+
 	s.mu.Lock()
 	info := s.usageInfoLocked(snap)
 	if hold {
 		text, info = s.usageText, attachLimits(s.usageInfo, s.limitsInfo)
 	}
+	info = attachVendors(info, vendors)
 	changed := s.usageText != text || !sameUsageInfo(s.usageInfo, info)
 	s.usageText, s.usageInfo = text, info
 	s.mu.Unlock()
@@ -1498,6 +1521,66 @@ func limitWindow(w *usage.Window) *proto.LimitWindow {
 		out.ResetsAt = w.ResetsAt.UTC().Format(time.RFC3339)
 	}
 	return out
+}
+
+// vendorUsage is the per-vendor standing for every agent backend this host
+// detected: a reading where baton has a reader, and a stated reason where it does
+// not. It returns nil when the feature is off or nothing has been detected yet,
+// which is the wire's "the daemon never said" — distinct from an empty list.
+//
+// Callers must NOT hold mu: this walks vendor session directories.
+func (s *Server) vendorUsage(ctx context.Context) []proto.VendorUsage {
+	if s.usageWindow <= 0 {
+		return nil
+	}
+	s.mu.Lock()
+	backends := make([]proto.AgentBackend, len(s.agents))
+	copy(backends, s.agents)
+	s.mu.Unlock()
+	if len(backends) == 0 {
+		return nil // no detection has happened yet; saying "no vendors" would be a claim
+	}
+
+	now := time.Now()
+	out := make([]proto.VendorUsage, 0, len(backends))
+	for _, b := range backends {
+		r := usage.Report(ctx, usage.VendorCandidate{Name: b.Name, Missing: b.Missing}, s.usageWindow, now)
+		v := proto.VendorUsage{
+			Vendor:  r.Vendor,
+			State:   string(r.State),
+			Reason:  r.Reason,
+			Source:  r.Source,
+			Tokens:  r.Tokens,
+			CostUSD: r.CostUSD,
+		}
+		for _, w := range r.Windows {
+			vw := proto.VendorWindow{Label: w.Label, UsedPercent: w.Fraction * 100}
+			if !w.ResetsAt.IsZero() {
+				vw.ResetsAt = w.ResetsAt.Format(time.RFC3339)
+			}
+			v.Windows = append(v.Windows, vw)
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// attachVendors returns info carrying the per-vendor list, without mutating what
+// the caller held — the same rule attachLimits follows, and for the same reason:
+// the value may already be in a client's hands.
+//
+// A nil list leaves info alone rather than building a payload for it, so a fleet
+// with the feature off sends exactly what it always sent.
+func attachVendors(info *proto.UsageInfo, vendors []proto.VendorUsage) *proto.UsageInfo {
+	if vendors == nil {
+		return info
+	}
+	if info == nil {
+		return &proto.UsageInfo{Vendors: vendors}
+	}
+	out := *info
+	out.Vendors = vendors
+	return &out
 }
 
 // attachLimits returns info carrying lim, without mutating what the caller held.
@@ -1588,7 +1671,37 @@ func sameUsageInfo(a, b *proto.UsageInfo) bool {
 			return false
 		}
 	}
+	if !sameVendors(a.Vendors, b.Vendors) {
+		return false
+	}
 	return sameLimits(a.Limits, b.Limits)
+}
+
+// sameVendors reports whether two per-vendor lists say the same thing.
+//
+// A vendor's STATE is compared along with its numbers, and that is the point: an
+// agent CLI being installed or removed changes no token count at all, but it moves
+// the vendor between "absent" and "no-source", which is news the cockpit has to be
+// told. Comparing only the figures would leave that change invisible until some
+// unrelated number moved.
+func sameVendors(a, b []proto.VendorUsage) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		x, y := a[i], b[i]
+		if x.Vendor != y.Vendor || x.State != y.State || x.Reason != y.Reason ||
+			x.Source != y.Source || x.Tokens != y.Tokens || x.CostUSD != y.CostUSD ||
+			len(x.Windows) != len(y.Windows) {
+			return false
+		}
+		for j := range x.Windows {
+			if x.Windows[j] != y.Windows[j] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // sameLimits reports whether two rate-limit payloads say the same thing. The

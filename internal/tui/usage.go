@@ -125,7 +125,101 @@ func (m model) usageSegment() string {
 	case usageLimits:
 		return m.usageLimitsText()
 	}
-	return joinDot(m.usageText, m.usageCountdown())
+	return m.usageWindowText()
+}
+
+// usageWindowText is the window view, named.
+//
+// The segment says whose reading it is — "claude 1.2M tok · ≈$12.34 API" — because
+// the fleet can be configured to spawn something other than Claude Code, and an
+// unlabelled number invites reading it as the account's whole spend across every
+// agent. It is one agent's.
+//
+// It shows the DEFAULT agent's own row rather than the daemon's headline figure,
+// and those are the same number only while the default agent is the one the
+// headline source reads. When it is not, naming the default agent over the
+// headline figure would be a caption on somebody else's number — which is a worse
+// failure than the anonymous segment this replaces, because it reads as
+// authoritative.
+//
+// With no vendor row to draw on — an older daemon, or one that has not detected
+// yet — it falls back to exactly what it always showed, unnamed. There is nothing
+// to name in that case, and guessing from the cockpit's own config would name the
+// agent THIS machine would spawn rather than the one the fleet's did.
+func (m model) usageWindowText() string {
+	row := m.defaultVendorRow()
+	if row == nil {
+		return joinDot(m.usageText, m.usageCountdown())
+	}
+	if row.State != vendorReading {
+		// No figure for this agent. The reason goes in the segment's place rather than
+		// a number, so nothing here can be read as a spend.
+		return joinDot(row.Vendor, vendorReasonText(*row))
+	}
+	return joinDot(row.Vendor+" "+usage.FormatTotals(row.Tokens, row.CostUSD), m.vendorCountdown(*row))
+}
+
+// The vendor states as they arrive on the wire. A state the cockpit does not know
+// is handled as "no reading" everywhere it is tested, never as a reading — an
+// unknown state must not be able to promote a missing figure into a shown one.
+const (
+	vendorReading  = "reading"
+	vendorNoSource = "no-source"
+	vendorAbsent   = "absent"
+)
+
+// defaultVendorRow is the daemon's row for the fleet's default agent, or nil when
+// the daemon sent no vendor list or does not know that name.
+func (m model) defaultVendorRow() *proto.VendorUsage {
+	if m.usageInfo == nil {
+		return nil
+	}
+	want := m.effDefaultAgent()
+	for i := range m.usageInfo.Vendors {
+		if m.usageInfo.Vendors[i].Vendor == want {
+			return &m.usageInfo.Vendors[i]
+		}
+	}
+	return nil
+}
+
+// vendorCountdown is how long until this vendor's window resets, rendered, or ""
+// when it states no reset. It reads the vendor's OWN window rather than the
+// headline one: two agents' windows open at different messages and run out at
+// different times, and borrowing one for the other would count down to an instant
+// that has nothing to do with the number beside it.
+func (m model) vendorCountdown(v proto.VendorUsage) string {
+	for _, w := range v.Windows {
+		if w.ResetsAt == "" {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339, w.ResetsAt)
+		if err != nil {
+			continue
+		}
+		if left := at.Sub(m.now); left > 0 {
+			return usage.FormatCountdown(left)
+		}
+	}
+	return ""
+}
+
+// vendorReasonText is the words shown where a vendor's figure would have gone.
+// The daemon's own reason is preferred; the fallbacks exist so a row from a newer
+// daemon that carries a state this cockpit does not know still says something
+// true rather than nothing at all.
+func vendorReasonText(v proto.VendorUsage) string {
+	if v.Reason != "" {
+		return v.Reason
+	}
+	switch v.State {
+	case vendorAbsent:
+		return "not installed"
+	case vendorNoSource:
+		return "no usage source"
+	default:
+		return "no reading"
+	}
 }
 
 // limitsBarWidth is the bar's cell count in the footer. It is wider than a

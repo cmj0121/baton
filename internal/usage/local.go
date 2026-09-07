@@ -18,13 +18,14 @@ import (
 	"github.com/cmj0121/baton/internal/paths"
 )
 
-// LocalProvider reads Claude Code's session transcripts and aggregates the token
-// usage inside the current window. Every Claude Code run — baton's own agent
-// panels included — appends a JSONL transcript under
+// LocalProvider reads an agent CLI's own session logs off the disk and aggregates
+// the token usage inside the current window. Which CLI's logs, and how a line in
+// them reads, is the format field; the default is Claude Code's, whose every run —
+// baton's own agent panels included — appends a JSONL transcript under
 // $HOME/.claude/projects/<project>/<session>.jsonl, one line per message, with
 // the assistant messages carrying a `usage` block.
 //
-// Because the transcripts are timestamped, this is the one source that can infer
+// Because the logs are timestamped, this is the one kind of source that can infer
 // where the window opened: the message that opened it. That makes the reset a
 // real countdown rather than a guess, and it is why a personal Pro/Max
 // subscription — whose usage never reaches the Admin API — is exactly the case
@@ -36,10 +37,17 @@ import (
 // it drags the window boundaries onto the edge of whatever the scan happened to
 // cover, which moves as the calendar does. So the anchor is carried instead, and
 // derived only when there is none to carry.
+//
+// The walk, the size caps, the dedup, the window chain and the anchor are the
+// same work for any vendor that appends timestamped session logs; only the root,
+// the file names and the line's shape differ. Those three are the format, so a
+// second vendor is a vendorFormat and a registry entry rather than a second copy
+// of everything above.
 type LocalProvider struct {
-	dir    string           // the .../projects root scanned for transcripts
+	dir    string           // the root scanned for session logs
 	window time.Duration    // window length; 0 falls back to a calendar day
 	now    func() time.Time // injectable clock (tests pin "now")
+	format vendorFormat     // which vendor's logs these are, and how a line reads
 
 	mu     sync.Mutex // guards anchor; a Provider is reachable from any goroutine
 	anchor time.Time  // where the window last seen opened, carried across polls
@@ -54,11 +62,18 @@ type LocalProvider struct {
 // that bills on something baton cannot model is better served by no countdown
 // than a wrong one.
 func NewLocalProvider(window time.Duration) *LocalProvider {
-	return &LocalProvider{dir: claudeProjectsDir(), window: window, now: time.Now}
+	return newFormatProvider(claudeFormat(), window)
+}
+
+// newFormatProvider is the constructor every vendor reader goes through: the
+// engine above, pointed at one vendor's logs. It is unexported because a reader
+// is reached through the registry in vendor.go, never built at a call site.
+func newFormatProvider(f vendorFormat, window time.Duration) *LocalProvider {
+	return &LocalProvider{dir: f.root, window: window, now: time.Now, format: f}
 }
 
 // Source implements Provider.
-func (p *LocalProvider) Source() string { return "local" }
+func (p *LocalProvider) Source() string { return p.format.source }
 
 // recall is the anchor to continue the window chain from, or the zero time when
 // there is none to trust. An anchor is trusted only while it sits inside the range
@@ -94,6 +109,52 @@ func (p *LocalProvider) remember(start time.Time) {
 // worth JSON-parsing, and most transcript lines (user turns, tool results) do not.
 var usageKey = []byte(`"usage"`)
 
+// vendorFormat is everything about one vendor's session logs that the engine
+// cannot share: where they live, which files inside carry usage, the substring
+// that makes a line worth parsing, and how one line decodes.
+//
+// Keeping it to four fields is the point. Everything a usage reader gets wrong
+// under load — unbounded lines, FIFOs on a path baton does not own, the same
+// message counted from two files, a window anchored on the clock instead of on a
+// message — is in the engine and is written once. A vendor supplies only what is
+// genuinely its own.
+type vendorFormat struct {
+	source string // the name this reader reports on Snapshot.Source
+	root   string // the directory walked for logs
+	only   string // the base filename that carries usage; "" means every .jsonl
+	gate   []byte // the substring a line must contain to be worth decoding
+
+	// decode turns one line into a record, or reports that it carries no usage.
+	// It does no filtering: the cutoff, the ceiling and the dedup are the engine's,
+	// so every vendor gets them and none can forget one.
+	decode func(line []byte) (record, bool)
+}
+
+// record is one decoded usage line, in the terms every vendor shares.
+//
+// cost is the vendor's own figure where the vendor states one, and baton's
+// per-model arithmetic only where it does not. The distinction is not cosmetic: a
+// price table baked into baton goes stale the day the vendor reprices, and a
+// reader that is handed the number has no reason to keep one.
+type record struct {
+	ts  time.Time
+	key string // dedup key across files; "" means the line can never be a duplicate
+
+	input, output, cacheRead, cacheWrite int64
+	cost                                 float64
+}
+
+// claudeFormat is the Claude Code transcript reader: one JSONL file per session
+// under the projects root, one line per message, usage on the assistant turns.
+func claudeFormat() vendorFormat {
+	return vendorFormat{
+		source: "local",
+		root:   claudeProjectsDir(),
+		gate:   usageKey,
+		decode: decodeClaude,
+	}
+}
+
 // Fetch scans the transcripts for the assistant messages inside the current
 // window and sums their token usage, pricing each message by its own model.
 // Files not touched since the scan floor are skipped whole — an append-only
@@ -119,13 +180,13 @@ func (p *LocalProvider) Fetch(ctx context.Context) (Snapshot, error) {
 		// it whenever there is no anchor to continue from.
 		cutoff = cutoff.Add(-p.window)
 	}
-	sc := newScan(cutoff, now)
+	sc := newFormatScan(cutoff, now, p.format)
 
 	err := filepath.WalkDir(p.dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // an unreadable dir/file is skipped, not fatal to the whole scan
 		}
-		if d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
+		if d.IsDir() || !sc.format.carries(path) {
 			return nil
 		}
 		if info, ierr := d.Info(); ierr != nil || info.ModTime().Before(cutoff) {
@@ -144,7 +205,7 @@ func (p *LocalProvider) Fetch(ctx context.Context) (Snapshot, error) {
 		// window nor a day — it is a fraction of one, with no way to say which. Report
 		// nothing and let the caller hold whatever it had; a number that looks like a
 		// reading but under-counts by an unknown amount is the one thing worse.
-		return Snapshot{Source: "local"}, err
+		return Snapshot{Source: p.format.source}, err
 	}
 	// A dropped line is spend this reading does not carry, so the reading is a
 	// little low and nothing on screen says why. Once per poll, with a count.
@@ -163,7 +224,7 @@ func (p *LocalProvider) Fetch(ctx context.Context) (Snapshot, error) {
 		// account is no longer in — and rather than the spend of a window that is over,
 		// which would read as this window's. Since stays zero: there is no window for it
 		// to be the start of, and the scan floor is not one.
-		return Snapshot{Source: "local"}, nil
+		return Snapshot{Source: p.format.source}, nil
 	}
 	snap := sc.snapshot(start)
 	snap.Until, snap.Resets = start.Add(p.window), true
@@ -215,6 +276,7 @@ type counted struct {
 type scan struct {
 	cutoff  time.Time
 	now     time.Time
+	format  vendorFormat
 	seen    map[string]struct{}
 	entries []counted
 
@@ -226,7 +288,26 @@ type scan struct {
 }
 
 func newScan(cutoff, now time.Time) *scan {
-	return &scan{cutoff: cutoff, now: now, seen: make(map[string]struct{})}
+	return newFormatScan(cutoff, now, claudeFormat())
+}
+
+// newFormatScan is newScan for a named vendor's log format.
+func newFormatScan(cutoff, now time.Time, f vendorFormat) *scan {
+	return &scan{cutoff: cutoff, now: now, format: f, seen: make(map[string]struct{})}
+}
+
+// carries reports whether a walked path is a file this format keeps usage in.
+//
+// The `only` filter is not an optimisation. A vendor that writes several JSONL
+// files per session — a chat history, an event log, a usage log — has the same
+// turn described in more than one of them, and reading them all would count the
+// spend once per file that happens to mention it. Naming the one file that is the
+// accounting record is how a reader says which of them is the books.
+func (f vendorFormat) carries(path string) bool {
+	if f.only != "" {
+		return filepath.Base(path) == f.only
+	}
+	return strings.HasSuffix(path, ".jsonl")
 }
 
 // window is the window in progress at now. The chain starts at anchor — where the
@@ -267,7 +348,7 @@ func (sc *scan) window(now time.Time, length time.Duration, anchor time.Time) (s
 // in would carry a finished window's spend into the current one — which is the
 // number the whole footer is read off.
 func (sc *scan) snapshot(since time.Time) Snapshot {
-	snap := Snapshot{Since: since, Source: "local"}
+	snap := Snapshot{Since: since, Source: sc.format.source}
 	for _, e := range sc.entries {
 		if e.ts.Before(since) {
 			continue
@@ -329,7 +410,7 @@ func (sc *scan) transcript(path, session string) {
 		if over {
 			sc.oversized++
 		}
-		if len(line) > 0 && bytes.Contains(line, usageKey) {
+		if len(line) > 0 && bytes.Contains(line, sc.format.gate) {
 			sc.fold(line, session)
 		}
 		if err != nil {
@@ -394,27 +475,58 @@ type transcriptEntry struct {
 // the same spend genuinely appears in two files, and without the dedup it would
 // be counted — and attributed — twice.
 func (sc *scan) fold(line []byte, session string) {
-	var e transcriptEntry
-	if json.Unmarshal(line, &e) != nil || e.Message.Usage == nil {
+	r, ok := sc.format.decode(line)
+	if !ok {
 		return
 	}
-	ts, err := time.Parse(time.RFC3339, e.Timestamp)
-	if err != nil || ts.Before(sc.cutoff) {
+	sc.keep(r, session)
+}
+
+// keep places one decoded record in the scan, or drops it. Every test a record
+// has to pass lives here rather than in a decoder, so a new vendor cannot ship
+// without the cutoff, the ceiling or the dedup.
+func (sc *scan) keep(r record, session string) {
+	if r.ts.Before(sc.cutoff) {
 		return
 	}
-	if ts.After(sc.now) {
-		// A message stamped after now — a clock corrected backwards, a ~/.claude synced
-		// from a machine running ahead — cannot be placed in a window that has begun.
-		// Counted, it would open a window in the future and leave the countdown showing
-		// more time than a window is long.
+	if r.ts.After(sc.now) {
+		// A message stamped after now — a clock corrected backwards, a vendor directory
+		// synced from a machine running ahead — cannot be placed in a window that has
+		// begun. Counted, it would open a window in the future and leave the countdown
+		// showing more time than a window is long.
 		return
 	}
-	if e.Message.ID != "" || e.RequestID != "" {
-		key := e.Message.ID + "|" + e.RequestID
-		if _, dup := sc.seen[key]; dup {
+	if r.key != "" {
+		if _, dup := sc.seen[r.key]; dup {
 			return
 		}
-		sc.seen[key] = struct{}{}
+		sc.seen[r.key] = struct{}{}
+	}
+	sc.entries = append(sc.entries, counted{
+		ts:         r.ts,
+		session:    session,
+		input:      r.input,
+		output:     r.output,
+		cacheRead:  r.cacheRead,
+		cacheWrite: r.cacheWrite,
+		cost:       r.cost,
+	})
+}
+
+// decodeClaude reads one Claude Code transcript line. Cost is baton's own
+// arithmetic here because the transcript states tokens and a model but no price.
+func decodeClaude(line []byte) (record, bool) {
+	var e transcriptEntry
+	if json.Unmarshal(line, &e) != nil || e.Message.Usage == nil {
+		return record{}, false
+	}
+	ts, err := time.Parse(time.RFC3339, e.Timestamp)
+	if err != nil {
+		return record{}, false
+	}
+	key := ""
+	if e.Message.ID != "" || e.RequestID != "" {
+		key = e.Message.ID + "|" + e.RequestID
 	}
 	u := e.Message.Usage
 	tu := tokenUsage{Uncached: u.InputTokens, Output: u.OutputTokens, CacheRead: u.CacheReadInputTokens}
@@ -426,15 +538,15 @@ func (sc *scan) fold(line []byte, session string) {
 		// common default, rather than dropping it.
 		tu.CacheWrite5m = u.CacheCreationInputTokens
 	}
-	sc.entries = append(sc.entries, counted{
+	return record{
 		ts:         ts,
-		session:    session,
+		key:        key,
 		input:      u.InputTokens,
 		output:     u.OutputTokens,
 		cacheRead:  u.CacheReadInputTokens,
 		cacheWrite: u.CacheCreationInputTokens,
 		cost:       costUSD(e.Message.Model, tu),
-	})
+	}, true
 }
 
 // claudeProjectsDir locates Claude Code's transcript root: $CLAUDE_CONFIG_DIR/projects

@@ -171,3 +171,109 @@ func TestConstants(t *testing.T) {
 		t.Errorf("EventBufferSize = %d, must be positive", EventBufferSize)
 	}
 }
+
+// The per-vendor usage list is an additive field, and the thing that makes it
+// additive is that absent and empty decode differently. An old daemon sends no
+// key at all; a current one always sends at least the presets it could not find.
+// If both landed as an empty slice the cockpit could not tell "this daemon does
+// not know about vendors" from "this machine has no agent backends", and would
+// have to guess which — so this is a wire contract, not a detail.
+func TestVendorsAbsentIsNotVendorsEmpty(t *testing.T) {
+	// What an older daemon sends: a usage payload with no vendors key.
+	var old UsageInfo
+	if err := json.Unmarshal([]byte(`{"tokens":42}`), &old); err != nil {
+		t.Fatal(err)
+	}
+	if old.Vendors != nil {
+		t.Errorf("a payload with no vendors key decoded to %#v, want nil", old.Vendors)
+	}
+
+	// What a daemon that scanned and found nothing would send.
+	var empty UsageInfo
+	if err := json.Unmarshal([]byte(`{"tokens":42,"vendors":[]}`), &empty); err != nil {
+		t.Fatal(err)
+	}
+	if empty.Vendors == nil {
+		t.Error("an explicit empty vendors list decoded as nil; it is a different statement")
+	}
+	if len(empty.Vendors) != 0 {
+		t.Errorf("an explicit empty vendors list decoded to %d entries", len(empty.Vendors))
+	}
+}
+
+// Down-level: an old cockpit reading a new daemon's payload must still get the
+// Anthropic quota bars, untouched. This encodes a payload carrying both shapes
+// and decodes it into a struct that predates the vendor field.
+func TestVendorsDoNotDisturbTheAnthropicLimits(t *testing.T) {
+	pct := 61.5
+	out := UsageInfo{
+		Tokens: 1000,
+		Limits: &LimitsInfo{
+			FiveHour: &LimitWindow{UsedPercent: pct, ResetsAt: "2026-09-06T18:00:00Z"},
+			Source:   "oauth",
+		},
+		Vendors: []VendorUsage{
+			{Vendor: "claude", State: "reading", Tokens: 1000},
+			{Vendor: "codex", State: "no-source", Reason: "baton has no usage source for this agent"},
+		},
+	}
+	raw, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The shape an older client compiled against: no Vendors field at all.
+	var oldClient struct {
+		Tokens int64       `json:"tokens"`
+		Limits *LimitsInfo `json:"limits"`
+	}
+	if err := json.Unmarshal(raw, &oldClient); err != nil {
+		t.Fatalf("an old client could not decode a new payload: %v", err)
+	}
+	if oldClient.Limits == nil || oldClient.Limits.FiveHour == nil {
+		t.Fatal("the Anthropic limits did not survive the round trip")
+	}
+	if oldClient.Limits.FiveHour.UsedPercent != pct {
+		t.Errorf("five-hour window = %v, want %v", oldClient.Limits.FiveHour.UsedPercent, pct)
+	}
+	if oldClient.Tokens != 1000 {
+		t.Errorf("tokens = %d, want 1000", oldClient.Tokens)
+	}
+}
+
+// A vendor with no reading must not encode a zero token count that an operator
+// could read as "spent nothing". omitempty is what keeps the number off the wire
+// entirely, so the receiving side sees the state and the reason and no figure.
+func TestAVendorWithNoReadingCarriesNoNumber(t *testing.T) {
+	raw, err := json.Marshal(VendorUsage{
+		Vendor: "gemini",
+		State:  "absent",
+		Reason: "not installed on the fleet's machine",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, banned := range []string{`"tokens"`, `"cost_usd"`, `"windows"`} {
+		if strings.Contains(string(raw), banned) {
+			t.Errorf("a vendor with no reading put %s on the wire: %s", banned, raw)
+		}
+	}
+	if !strings.Contains(string(raw), `"reason"`) {
+		t.Errorf("a vendor with no reading carries no reason: %s", raw)
+	}
+}
+
+// A daemon with nothing to say about vendors must put no vendors key on the wire
+// at all — not "vendors":null. Both decode to nil, so this is not about the
+// reader; it is the claim that turning the feature off leaves the payload byte
+// for byte what it was before the field existed, which is the cheapest possible
+// answer to "what does an old cockpit see".
+func TestNoVendorListPutsNoVendorKeyOnTheWire(t *testing.T) {
+	raw, err := json.Marshal(UsageInfo{Tokens: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "vendors") {
+		t.Errorf("a payload with no vendor list mentions vendors: %s", raw)
+	}
+}
