@@ -81,8 +81,9 @@ func TestLeftShutsThenStepsOut(t *testing.T) {
 // TestLeftAtTheTopStaysPut: a top-level row has no parent to step out to.
 func TestLeftAtTheTopStaysPut(t *testing.T) {
 	m := walkModel()
-	// A fleet big enough that the tree is the layout on its own. On a card-sized
-	// one, ← at the top walks out of the tree instead — TestLeftWalksOutOfTheTree.
+	// A fleet big enough that the tree is the layout on its own. The contrast — a
+	// card-sized fleet, where ← at the top walks out of the tree rather than staying
+	// put — has no test here; this comment named one that has never existed.
 	m.showTree = false
 	m.fleet = append(m.fleet, loosePanels(6)...)
 	m.cursorOnPanel(t, "3")

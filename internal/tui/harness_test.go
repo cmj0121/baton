@@ -159,10 +159,9 @@ func itemForPanel(t *testing.T, m model, id string) dashItem {
 	return dashItem{}
 }
 
-// rowAt renders one dashboard row at a width wide enough for every column, which
-// is what a test asserting a row's CONTENT wants: the narrow cases are the
-// business of the width-breakpoint tests, not of every assertion about what a row
-// says.
+// testRowWidth is wide enough for every column of a dashboard row, which is what
+// a test asserting a row's CONTENT wants: the narrow cases are the business of the
+// width-breakpoint tests, not of every assertion about what a row says.
 const testRowWidth = 160
 
 func (m model) rowOf(it dashItem) string { return m.treeRow(it, false, testRowWidth) }
