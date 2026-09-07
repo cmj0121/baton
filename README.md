@@ -200,23 +200,24 @@ Four more that most of them do not have either:
 
 And the cockpit you would expect of a multiplexer, each a keystroke away:
 
-| Feature              | Key             | What it does                                                                                  |
-| -------------------- | --------------- | --------------------------------------------------------------------------------------------- |
-| Diff                 | `D`             | the agent panel's work-tree diff — staged and unstaged at once, untracked included            |
-| Git                  | `C-t G`         | diff, log, status, stage, commit, push, branch and worktrees — **[docs/GIT.md](docs/GIT.md)** |
-| Signals              | `s`             | any signal to the selection, the focused tile or the whole group                              |
-| Find                 | `f`             | filter the fleet by title or group                                                            |
-| Group layouts        | `+` `-` `L`     | how many members stream as live tiles, and the shape of the split                             |
-| Global shell         | `n h`           | one plain host shell the server holds in `$HOME`, always one keystroke away                   |
-| Remembered directory | `n .`           | panels track their live directory from OSC 7 — **[docs/RESTART.md](docs/RESTART.md)**         |
-| Panel logging        | `C-t l` `C-t L` | pipe a panel's output to a file, and read it back — **[docs/LOGGING.md](docs/LOGGING.md)**    |
-| Persistence          | `r`             | the fleet survives a restart as exited slots you re-run from their retained spec              |
-| Restart policy       | —               | `panel.restart: on-failure` brings a panel back with a backoff and a limit                    |
-| Hot reload           | `C-t R`         | config without restarting the fleet — or a `SIGHUP` to the daemon                             |
-| Appearance           | —               | theme and custom split grids in `$HOME/.baton/TUI.yaml` — **[docs/TUI.md](docs/TUI.md)**      |
-| Mouse                | —               | off by default, so your terminal's own selection stays available                              |
-| Language             | —               | the key list reads in English or 繁體中文 — **[docs/TUI.md](docs/TUI.md#language)**           |
-| Screen protector     | —               | a full-screen digital rain when the cockpit rests — **[docs/TUI.md](docs/TUI.md)**            |
+| Feature              | Key             | What it does                                                                                          |
+| -------------------- | --------------- | ----------------------------------------------------------------------------------------------------- |
+| Diff                 | `D`             | the agent panel's work-tree diff — staged and unstaged at once, untracked included                    |
+| Git                  | `C-t G`         | diff, log, status, stage, commit, push, branch and worktrees — **[docs/GIT.md](docs/GIT.md)**         |
+| Signals              | `s`             | any signal to the selection, the focused tile or the whole group                                      |
+| Find                 | `f`             | filter the fleet by title or group                                                                    |
+| Group layouts        | `+` `-` `L`     | how many members stream as live tiles, and the shape of the split                                     |
+| Global shell         | `n h`           | one plain host shell the server holds in `$HOME`, always one keystroke away                           |
+| Remembered directory | `n .`           | panels track their live directory from OSC 7 — **[docs/RESTART.md](docs/RESTART.md)**                 |
+| Panel logging        | `C-t l` `C-t L` | pipe a panel's output to a file, and read it back — **[docs/LOGGING.md](docs/LOGGING.md)**            |
+| Serial port          | `n c`           | `baton serial /dev/… 115200` — a port in a panel, reconnecting — **[docs/SERIAL.md](docs/SERIAL.md)** |
+| Persistence          | `r`             | the fleet survives a restart as exited slots you re-run from their retained spec                      |
+| Restart policy       | —               | `panel.restart: on-failure` brings a panel back with a backoff and a limit                            |
+| Hot reload           | `C-t R`         | config without restarting the fleet — or a `SIGHUP` to the daemon                                     |
+| Appearance           | —               | theme and custom split grids in `$HOME/.baton/TUI.yaml` — **[docs/TUI.md](docs/TUI.md)**              |
+| Mouse                | —               | off by default, so your terminal's own selection stays available                                      |
+| Language             | —               | the key list reads in English or 繁體中文 — **[docs/TUI.md](docs/TUI.md#language)**                   |
+| Screen protector     | —               | a full-screen digital rain when the cockpit rests — **[docs/TUI.md](docs/TUI.md)**                    |
 
 ## Architecture
 
@@ -250,6 +251,8 @@ through one `baton` object. See **[docs/PLUGIN.md](docs/PLUGIN.md)**.
   roll, and what it is not a boundary for.
 - **[docs/REMOTE.md](docs/REMOTE.md)** — remote access over SSH: the `--stdio` bridge, the passkey and what it is and
   is not, the `C-t @` connection list, and the failures it reports.
+- **[docs/SERIAL.md](docs/SERIAL.md)** — serial ports: `baton serial`, the line settings and which the platform can
+  set, the `cu.`/`tty.` trap, what happens when the cable is pulled, and why a dispatch reaches the device.
 - **[docs/USAGE.md](docs/USAGE.md)** — the account usage footer and quota bars: every source, the config, and caveats.
 - **[docs/PLUGIN.md](docs/PLUGIN.md)** — the Lua plugin API: the `baton` object, events, commands, and config.
 - **[docs/CONTROL.md](docs/CONTROL.md)** — driving the fleet by agent: the conductor, the `baton ctl` CLI, the

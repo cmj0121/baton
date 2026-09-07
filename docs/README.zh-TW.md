@@ -189,23 +189,24 @@ Baton 不是 tmux 的替代品,也不想接管你的 shell——你如果活在 
 
 以及一個多工器該有的座艙,每一項都只差一個按鍵:
 
-| 功能         | 按鍵            | 做什麼                                                                                  |
-| ------------ | --------------- | --------------------------------------------------------------------------------------- |
-| Diff         | `D`             | 該 agent 面板的工作樹 diff——已暫存與未暫存一次看,含未追蹤檔                             |
-| Git          | `C-t G`         | diff、log、status、暫存、commit、push、分支與 worktree——**[docs/GIT.md](GIT.zh-TW.md)** |
-| 訊號         | `s`             | 對所選、聚焦的磚、或整個群組送出任何訊號                                                |
-| 尋找         | `f`             | 依標題或群組過濾整隊                                                                    |
-| 群組版面     | `+` `-` `L`     | 多少成員以即時磚串流,以及分割畫面的形狀                                                 |
-| Global shell | `n h`           | 伺服器持有的單一純宿主 shell,固定開在 `$HOME`,永遠一個按鍵之遙                          |
-| 記住工作目錄 | `n .`           | 面板從 OSC 7 學到自己目前的目錄——**[docs/RESTART.md](RESTART.zh-TW.md)**                |
-| 面板記錄     | `C-t l` `C-t L` | 把面板輸出導向檔案,再讀回來——**[docs/LOGGING.md](LOGGING.zh-TW.md)**                    |
-| 持久化       | `r`             | 隊伍跨重啟留下來,成為你可以依保留規格重跑的已結束空位                                   |
-| 重啟策略     | —               | `panel.restart: on-failure` 讓面板帶著退避與上限自己回來                                |
-| 熱重載       | `C-t R`         | 不重啟整隊就重載設定——或對常駐程式送一個 `SIGHUP`                                       |
-| 外觀         | —               | 主題與自訂分割網格寫在 `$HOME/.baton/TUI.yaml`——**[docs/TUI.md](TUI.zh-TW.md)**         |
-| 螢幕保護     | —               | 座艙靜下來時的一整面數位雨——**[docs/TUI.md](TUI.zh-TW.md)**                             |
-| 滑鼠         | —               | 預設關閉,好讓終端機自己的選取仍可用                                                     |
-| 語言         | —               | 按鍵清單可讀英文或繁體中文——**[docs/TUI.md](TUI.zh-TW.md#語言)**                        |
+| 功能         | 按鍵            | 做什麼                                                                                         |
+| ------------ | --------------- | ---------------------------------------------------------------------------------------------- |
+| Diff         | `D`             | 該 agent 面板的工作樹 diff——已暫存與未暫存一次看,含未追蹤檔                                    |
+| Git          | `C-t G`         | diff、log、status、暫存、commit、push、分支與 worktree——**[docs/GIT.md](GIT.zh-TW.md)**        |
+| 訊號         | `s`             | 對所選、聚焦的磚、或整個群組送出任何訊號                                                       |
+| 尋找         | `f`             | 依標題或群組過濾整隊                                                                           |
+| 群組版面     | `+` `-` `L`     | 多少成員以即時磚串流,以及分割畫面的形狀                                                        |
+| Global shell | `n h`           | 伺服器持有的單一純宿主 shell,固定開在 `$HOME`,永遠一個按鍵之遙                                 |
+| 記住工作目錄 | `n .`           | 面板從 OSC 7 學到自己目前的目錄——**[docs/RESTART.md](RESTART.zh-TW.md)**                       |
+| 面板記錄     | `C-t l` `C-t L` | 把面板輸出導向檔案,再讀回來——**[docs/LOGGING.md](LOGGING.zh-TW.md)**                           |
+| 序列埠       | `n c`           | `baton serial /dev/… 115200`——面板裡的一個埠,會自己重連——**[docs/SERIAL.md](SERIAL.zh-TW.md)** |
+| 持久化       | `r`             | 隊伍跨重啟留下來,成為你可以依保留規格重跑的已結束空位                                          |
+| 重啟策略     | —               | `panel.restart: on-failure` 讓面板帶著退避與上限自己回來                                       |
+| 熱重載       | `C-t R`         | 不重啟整隊就重載設定——或對常駐程式送一個 `SIGHUP`                                              |
+| 外觀         | —               | 主題與自訂分割網格寫在 `$HOME/.baton/TUI.yaml`——**[docs/TUI.md](TUI.zh-TW.md)**                |
+| 螢幕保護     | —               | 座艙靜下來時的一整面數位雨——**[docs/TUI.md](TUI.zh-TW.md)**                                    |
+| 滑鼠         | —               | 預設關閉,好讓終端機自己的選取仍可用                                                            |
+| 語言         | —               | 按鍵清單可讀英文或繁體中文——**[docs/TUI.md](TUI.zh-TW.md#語言)**                               |
 
 ## 架構
 
@@ -236,6 +237,8 @@ socket 接上——指令往上、事件往下——所以你卸離再重新接�
   以及它不是什麼邊界。
 - **[docs/REMOTE.md](REMOTE.zh-TW.md)** — 透過 SSH 遠端連線:`--stdio` 橋接、passkey 是什麼與不是什麼、`C-t @`
   的連線清單,以及它會回報的失敗。
+- **[docs/SERIAL.md](SERIAL.zh-TW.md)** — 序列埠:`baton serial`、線路設定與平台設得動哪些鮑率、`cu.`/`tty.`
+  的陷阱、線被拔掉時會怎樣,以及為什麼一個 dispatch 會直接打到裝置上。
 - **[docs/USAGE.md](USAGE.zh-TW.md)** — 帳號用量頁尾:本機與 Admin-API 兩種來源、設定,以及注意事項。
 - **[docs/PLUGIN.md](PLUGIN.zh-TW.md)** — Lua 外掛 API:`baton` 物件、事件、指令,以及設定。
 - **[docs/CONTROL.md](CONTROL.zh-TW.md)** — 以 agent 驅動整隊:conductor、`baton ctl` CLI、`baton mcp`
