@@ -109,8 +109,11 @@ func TestRunServerOnBadConfigFiles(t *testing.T) {
 // TestABootConfigNobodyCouldReadCarriesOnlyScore is #48's rule at the one seam
 // applyConfig cannot reach.
 //
-// A failed load returns a struct beside its error, and it is not the zero one:
-// the decoder fills what it read before it gave up. applyConfig's NEVER-HAD-ONE
+// config.LoadPartial returns a struct beside its error, and it is not the zero
+// one: the decoder fills what it read before it gave up. That residue is what
+// this seam reads score.dir and score.enabled from, on purpose, and it is the
+// only thing in the daemon that may (#77 moved every other caller to Load,
+// which returns the defaults it names). applyConfig's NEVER-HAD-ONE
 // branch throws that away and comes up on the defaults — but usageOption and
 // limitsOption are spent when the server is BUILT, off serverBoot.cfg, and
 // srv.Reload never revisits them. So a file that failed AFTER its usage section
@@ -155,7 +158,7 @@ func TestABootConfigNobodyCouldReadCarriesOnlyScore(t *testing.T) {
 
 	// The file must fail to parse AND have decoded the usage section, or this
 	// test is asserting over a case that cannot arise.
-	raw, err := config.Load()
+	raw, err := config.LoadPartial()
 	if err == nil {
 		t.Fatal("the config parsed; this test needs one that does not")
 	}

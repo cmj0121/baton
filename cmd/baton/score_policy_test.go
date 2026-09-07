@@ -48,9 +48,11 @@ func TestScorePolicyTranslatesTheFileAndNothingElse(t *testing.T) {
 // which is the one place the daemon still starts on defaults after #48, and the
 // reason applyConfig's half is written differently rather than shared.
 //
-// The file matters: config.Load hands back what it decoded BEFORE it gave up,
-// so `promote-at: 8` and `working-set: 9` are sitting in the struct it returns
-// alongside the error. Deleting the boot gate makes the store come up on them.
+// The file matters: config.LoadPartial hands back what it decoded BEFORE it
+// gave up, so `promote-at: 8` and `working-set: 9` are sitting in the struct it
+// returns alongside the error — and this seam calls LoadPartial rather than
+// Load precisely because it wants score.dir and score.enabled out of it (#77).
+// Deleting the boot gate makes the store come up on them.
 func TestBootOnAFileThatWillNotParseTakesTheDefaultPolicy(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -321,5 +323,27 @@ func TestARealSIGHUPSaysTheScoreDirectoryDidNotMove(t *testing.T) {
 	}
 	if !strings.Contains(got, booted) {
 		t.Errorf("the warning does not name the directory still in force:\n%s", got)
+	}
+}
+
+// TestABootOnAMistypedScoreNumberNamesTheKey is what makes applyConfig's use of
+// config.LoadPartial load-bearing.
+//
+// The name of the mistyped key is the ONE thing applyConfig takes from a file
+// that did not parse, and it is not a setting: nothing from that file is applied
+// at boot or on a reload, so BadNumbers only ever reaches a log line. Nothing
+// asserted that line, which left the choice of loader there unfalsifiable —
+// swapping LoadPartial for Load deleted the warning from every failed load with
+// the whole package still green (measured, #77). The decoder's own error names a
+// line and a type; this is the only thing that names the key.
+func TestABootOnAMistypedScoreNumberNamesTheKey(t *testing.T) {
+	home := t.TempDir()
+	writeConfig(t, home, "score:\n  promote-at: soon\n")
+
+	logs := captureBootLog(t)
+	bootFleet(t, home)
+
+	if got := logs(); !strings.Contains(got, "score.promote-at") {
+		t.Fatalf("the boot log never named the key that took the whole file down:\n%s", got)
 	}
 }

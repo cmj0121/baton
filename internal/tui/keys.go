@@ -338,11 +338,19 @@ type prefs struct {
 }
 
 // loadPrefs reads the config file, returning defaults for anything missing or on
-// any read error (so the cockpit always comes up). Defaults: prefix "ctrl+t",
+// any load failure (so the cockpit always comes up). Defaults: prefix "ctrl+t",
 // confirm-on-close on, system shell. It is the cockpit's bootstrap; the daemon then
 // pushes its merged effective config (config.get → prefsFromConfig), which wins.
+//
+// The comment on the line below used to say "a read error", and it was true of
+// the case it named and false of the one that matters. A file that PARSED
+// halfway is not a read error: config.Load handed back what the decoder had
+// filled in before it stopped, so a typo on the last line of a config brought
+// the cockpit up on the keys, the prefix and the agent list above it and on the
+// defaults for everything below — with no error path anywhere to say so, since
+// this call discards the error on purpose (#77).
 func loadPrefs() prefs {
-	cfg, _ := config.Load() // a read error yields a zero cfg → all defaults below
+	cfg, _ := config.Load() // any load failure yields the zero cfg → all defaults below
 	return prefsFromConfig(cfg)
 }
 
