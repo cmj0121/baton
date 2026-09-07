@@ -201,6 +201,37 @@ func TestNoRoadIsChargedAtCreatePanel(t *testing.T) {
 	}
 }
 
+// TestConnOriginReadsTheRoleAndNothingElse pins the discrimination the origin
+// parameter exists to carry, and it is pinned on its own because nothing else
+// can pin it: the four origins cost the same at the door today, so a connection
+// handed the wrong one would spawn exactly the same panel.
+//
+// The third case is the one worth having. A remote cockpit declares a role, so
+// "has a role" is not the test — being the SCOPED CONDUCTOR role is. A cockpit
+// that reached the daemon over the ssh bridge is still the operator's own hand,
+// and guardConductor fences it no more than it fences a local one.
+func TestConnOriginReadsTheRoleAndNothingElse(t *testing.T) {
+	local := conn("")
+	remote := conn("")
+	remote.role = roleRemote
+	conductor := conn("c1")
+	conductor.role = roleConductor
+
+	for _, tc := range []struct {
+		name string
+		cc   *clientConn
+		want panelOrigin
+	}{
+		{"cockpit", local, originOperator},
+		{"remote cockpit", remote, originOperator},
+		{"conductor", conductor, originConductor},
+	} {
+		if got := connOrigin(tc.cc); got != tc.want {
+			t.Errorf("connOrigin(%s) = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
 // TestAFifthRoadMustNameItself is what the parameter buys, and it is the whole of
 // #79's complaint answered: a road that reaches this door without an answer
 // written for it now spawns nothing, where before it spawned freely and silently.
