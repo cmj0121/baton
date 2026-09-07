@@ -325,3 +325,25 @@ func TestARealSIGHUPSaysTheScoreDirectoryDidNotMove(t *testing.T) {
 		t.Errorf("the warning does not name the directory still in force:\n%s", got)
 	}
 }
+
+// TestABootOnAMistypedScoreNumberNamesTheKey is what makes applyConfig's use of
+// config.LoadPartial load-bearing.
+//
+// The name of the mistyped key is the ONE thing applyConfig takes from a file
+// that did not parse, and it is not a setting: nothing from that file is applied
+// at boot or on a reload, so BadNumbers only ever reaches a log line. Nothing
+// asserted that line, which left the choice of loader there unfalsifiable —
+// swapping LoadPartial for Load deleted the warning from every failed load with
+// the whole package still green (measured, #77). The decoder's own error names a
+// line and a type; this is the only thing that names the key.
+func TestABootOnAMistypedScoreNumberNamesTheKey(t *testing.T) {
+	home := t.TempDir()
+	writeConfig(t, home, "score:\n  promote-at: soon\n")
+
+	logs := captureBootLog(t)
+	bootFleet(t, home)
+
+	if got := logs(); !strings.Contains(got, "score.promote-at") {
+		t.Fatalf("the boot log never named the key that took the whole file down:\n%s", got)
+	}
+}
