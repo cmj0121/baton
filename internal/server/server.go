@@ -3446,14 +3446,38 @@ const (
 // question about the FLEET and a constant cannot answer it. The caller holds
 // s.mu, which is why the check sits inside createPanel's lock rather than at its
 // door.
+// budgetCeilingLocked is the ceiling half of a road's answer and only that half.
+//
+// It exists so a road can ask for the ceiling WITHOUT risking the gap. Today the
+// two are the same call for the roads that pay here, because both are gap-exempt
+// — but the plugin's exemption is a hold, and the day it is lifted
+// budgetReasonLocked starts stamping. A caller that asks early to protect a side
+// effect, as worktreeSpawn does, would then be double-charging without a line of
+// its own having changed. This is the axis with no slot to spend, named so it
+// stays that way.
+//
+// The caller holds s.mu.
+func (s *Server) budgetCeilingLocked(o panelOrigin) string {
+	switch o {
+	case originOperator, originPlugin:
+		return s.fleetFullLocked()
+	case originConductor, originScheduler:
+		// Paid upstream — at the fence and at the decision — so the ceiling is not
+		// re-read on their behalf here either.
+		return ""
+	default:
+		return fmt.Sprintf("spawn refused: no spawn ceiling is written for panel origin %d", o)
+	}
+}
+
 func (s *Server) budgetReasonLocked(o panelOrigin) string {
 	switch o {
 	case originOperator:
 		// Ceiling: charged, here. Gap: exempt — a person does not loop.
-		return s.fleetFullLocked()
+		return s.budgetCeilingLocked(o)
 	case originPlugin:
 		// Ceiling: charged, here. Gap: exempt, and held rather than decided.
-		return s.fleetFullLocked()
+		return s.budgetCeilingLocked(o)
 	case originConductor:
 		// Both, spent at the fence, before any worktree exists on disk.
 		return ""
@@ -5992,7 +6016,26 @@ func (s *Server) agentTargetSpec(targetID, label string) (spawnSpec, error) {
 func (s *Server) worktreeSpawn(origin panelOrigin, repo, branch string, spec spawnSpec) error {
 	s.mu.Lock()
 	base := s.worktreeDir
+	// The ceiling is read HERE as well as at the door, because this road has a side
+	// effect the door is downstream of: git makes the tree on disk, and a refusal
+	// after that leaves the operator a worktree they asked for an agent in. A
+	// conductor never saw it — guardConductor fences before any git runs — and the
+	// operator only began paying the ceiling in #86, which added the payer without
+	// moving where it pays.
+	//
+	// Asking twice is free on this axis and only on this axis: fleetFullLocked
+	// reads and never stamps, which its own doc says is what lets two callers ask
+	// without either knowing what the other did. The gap is NOT asked here — the
+	// operator does not pay it, and it would spend a slot this road may not use.
+	//
+	// The race stays: a fleet that fills between here and createPanel still refuses
+	// at the door, and the reply still says the tree was made. This closes the
+	// ordinary case, not the window.
+	full := s.budgetCeilingLocked(origin)
 	s.mu.Unlock()
+	if full != "" {
+		return errors.New(full)
+	}
 
 	// The branch is checked FIRST, ahead of the repository, so a call that names no
 	// branch is refused before any git runs at all — gitops.WorktreeAdd validates
