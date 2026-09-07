@@ -131,7 +131,7 @@ each can take next.
 |             | `v l`             | the dashboard layout: cards or tree                          |
 |             | `m`               | pick a row up — arrows carry it, `enter` drops it            |
 |             | `enter`           | open / zoom the selection                                    |
-|             | `p` / `A` / `n c` | new shell / agent / pick-command panel                       |
+|             | `p` / `A` / `n c` | new shell / agent / command panel                            |
 |             | `n .`             | new shell panel in the focused panel's directory             |
 |             | `n C`             | open the conductor (an agent that drives the fleet)          |
 |             | `n h`             | open the global shell (a host shell in `$HOME`)              |

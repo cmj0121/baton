@@ -35,14 +35,14 @@ A panel is one PTY (pseudo-terminal) the server owns. There are three kinds:
   the agent CLI _is_ the program the PTY runs.
 - **Shell panel** — runs a plain host shell, for ad-hoc commands on the machine.
 - **Command panel** — runs a plain binary as the panel's process: a build, a test run, a `tail -f`. It spawns like an
-  agent (`baton ctl spawn --run make --arg test`) and is watched like one — same tiles, same output capture, same
-  signals — but it is not an agent, so the scheduler never offers it queued work, it is outside the attention ladder,
-  and the agent-only surfaces (diff, the git menu, the worktree verbs) refuse it — they need a checkout to reason
-  about, and a process is not a worker in one. **Dispatch is not among them.** A dispatch writes bytes into a PTY, and
-  a command panel has one, so it takes a dispatch exactly as a shell panel does — the group fan-out included — and the
-  brief carries the same score block. Use it to answer a binary sitting on a prompt. Nothing in baton distinguishes the
-  two non-agent kinds here, and the score block is deliberately not gated on kind: it is advice attached to the
-  delivery, not to what is listening.
+  agent (`baton ctl spawn --run make --arg test`, or `n c` in the cockpit) and is watched like one — same tiles, same
+  output capture, same signals — but it is not an agent, so the scheduler never offers it queued work, it is outside
+  the attention ladder, and the agent-only surfaces (diff, the git menu, the worktree verbs) refuse it — they need
+  a checkout to reason about, and a process is not a worker in one. **Dispatch is not among them.** A dispatch writes
+  bytes into a PTY, and a command panel has one, so it takes a dispatch exactly as a shell panel does — the group
+  fan-out included — and the brief carries the same score block. Use it to answer a binary sitting on a prompt.
+  Nothing in baton distinguishes the two non-agent kinds here, and the score block is deliberately not gated on kind:
+  it is advice attached to the delivery, not to what is listening.
 
 All three are ordinary PTYs and share the lifecycle below; they differ in what process they launch and in how loudly the
 Monitor flags them for your attention.
@@ -53,6 +53,13 @@ slot an agent leaves, meaning something else. The card says `finished` rather th
 when it is non-zero, because for a command a non-zero exit is the answer and not a fault. Nothing brings it back: the
 restart policy skips command panels outright, since re-running a failing test five times on a backoff is a crash loop
 assembled out of a program working correctly. Re-run it yourself with `r`, exactly as you would any other dead slot.
+
+`n c` is the cockpit's way to one, and it is the same keystroke it has always been. The box opens empty: enter alone
+spawns a plain shell panel, exactly as it did before, and anything you type is run as a command panel — the first word
+is the program, the rest are its arguments. Quote a path or an argument that contains a space, with either `'` or `"`;
+there is no backslash escape, and a quote you never close is refused rather than guessed at. The one thing to know is
+what a typed shell now means: `/bin/zsh` here used to give a shell panel that vanished the moment you exited it, and
+now gives a command panel that holds as a dead slot until you close it. `p` still spawns a plain shell.
 
 Two shell/agent panels are **singletons** the server holds at most one of, each surfaced as a mark in the FLEET heading
 rather than a card. The **conductor** (`n C`) is a control agent that drives the fleet (see [CONTROL.md](./CONTROL.md)). The
@@ -516,7 +523,7 @@ after `settings.key-timeout` (default `1.2s`).
 |                        | `m`                         | pick a row up — arrows carry it, `enter` drops  |
 |                        | `S-←` / `S-→`               | reorder the selected item                       |
 |                        | `p` / `A`                   | new shell panel / new agent panel               |
-|                        | `n c` / `n .`               | shell running a program you name / shell here   |
+|                        | `n c` / `n .`               | shell, or a command panel you name / shell here |
 |                        | `n C` / `n h`               | the conductor / the global shell                |
 |                        | `n w`                       | a worktree on a new branch + an agent in it     |
 |                        | `w` / `r`                   | close the selection / re-run its exited panels  |
