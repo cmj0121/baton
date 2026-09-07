@@ -112,10 +112,11 @@ diff --git a/two.go b/two.go
 index 3333333..4444444 100644
 --- a/two.go
 +++ b/two.go
-@@ -1,0 +2 @@
+@@ -1,0 +2,2 @@
 +/* a block that begins
-++++ b/not-a-header.go
-+   and ends */
++++ b/not-a-header.go
+@@ -20,0 +30 @@
++// after the trap
 `
 
 func TestParseDiffReadsTheHunkHeaders(t *testing.T) {
@@ -132,16 +133,21 @@ func TestParseDiffReadsTheHunkHeaders(t *testing.T) {
 	if added.lines["one.go"][6] {
 		t.Error("one.go line 6 should not be added -- the hunk covers two lines")
 	}
-	if !added.lines["two.go"][2] || len(added.lines["two.go"]) != 1 {
-		t.Errorf("two.go %v, wanted only line 2 -- a bare +N means one line", added.lines["two.go"])
-	}
-	// An added line inside a block comment can itself begin "++" and arrive
-	// looking exactly like a "+++ b/..." header. It must not become a file.
+	// An added line whose own text begins "++" arrives in the diff with git's
+	// "+" in front of it, looking exactly like a "+++ b/..." header. Read as
+	// one, it steals every hunk after it -- so line 30 is the assertion, not
+	// the bogus path.
 	if _, ok := added.lines["not-a-header.go"]; ok {
 		t.Error("a '+++ b/' line inside a hunk was read as a file header")
 	}
-	if raw != 4 {
-		t.Errorf("raw comment lines %d, wanted 4", raw)
+	if !added.lines["two.go"][30] {
+		t.Error("the hunk after the '+++' trap was attributed to the wrong file")
+	}
+	if !added.lines["two.go"][2] || !added.lines["two.go"][3] || len(added.lines["two.go"]) != 3 {
+		t.Errorf("two.go %v, wanted lines 2, 3 and 30", added.lines["two.go"])
+	}
+	if raw != 5 {
+		t.Errorf("raw comment lines %d, wanted 5", raw)
 	}
 }
 
