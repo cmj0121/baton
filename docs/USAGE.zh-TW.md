@@ -115,6 +115,10 @@ Baton 認得六個 agent CLI,能讀到其中兩個的帳。這份清單直接說
 | `local` | `~/.claude/projects` 底下 Claude Code 自己的 session transcript | 個人的 **Pro/Max 訂閱**(以及 API 金鑰使用皆可) |
 | `api`   | Anthropic **Admin** 用量與成本 API                              | 一個 **Console／API 金鑰組織**                 |
 
+這個設定挑的是**頁尾的頭條來源**,也就是 Anthropic 的那一份。總覽裡的 agent 清單是
+每個 agent 各用自己的 reader 讀來的,它們列在
+[Baton 讀得到哪些 agent 的用量](#baton-讀得到哪些-agent-的用量)。
+
 **local** 來源是預設,也是訂閱可用的那一種:每次 Claude Code 執行——包括 Baton 開出的
 agent 面板——都會附加一份 JSONL transcript,記錄每則訊息的 token 數,而 Baton 會加總
 窗口內的訊息,並依各自的模型計價。它只讀取近期被異動、有可能裝著這些訊息的檔案
@@ -125,6 +129,54 @@ agent 面板——都會附加一份 JSONL transcript,記錄每則訊息的 toke
 **api** 來源會從 Admin API 回報你整個組織的 Console／API 金鑰帳務。它需要一把
 **Admin API 金鑰**(`sk-ant-admin01-…`),Baton 從 `BATON_ANTHROPIC_ADMIN_KEY`
 環境變數讀取它——絕不從設定檔讀。資料會比實際用量落後約五分鐘。
+
+### 額度進度條 —— `usage.limits`
+
+| 來源         | 讀取                                      | 給你的東西                              |
+| ------------ | ----------------------------------------- | --------------------------------------- |
+| `statusline` | Baton 開出的那些 Claude Code 面板的狀態列 | 5 小時 + 每週窗口                       |
+| `oauth`      | 直接查帳號用量端點                        | ……再加上每個模型的每週額度,以及點數餘額 |
+| `off`        | 什麼都不讀                                | —                                       |
+
+**`statusline` 是預設,而且它不花你任何東西。** Claude Code 會把整份 session 狀態交
+給被設成它狀態列的那個指令,而那份狀態帶著帳號的 rate-limit 窗口。Baton 本來就在開
+這些面板,所以它就用 `baton usage-sink` 當它們的狀態列:沒有網路請求、沒有憑證、不
+花一個 token。
+
+它是把你的狀態列**包起來**,而不是取代掉。Baton 會解析你設定的那一個——
+`.claude/settings.local.json`,接著是專案的 `.claude/settings.json`,再來是
+`~/.claude/settings.json`——用同一份輸入執行它,並把它的輸出原樣印出。**Baton 裡的
+面板,畫出來的和它在 Baton 外面完全一樣。** 有三種情況根本不會注入,因為每一種都會
+改動不該由 Baton 改動的東西:
+
+- 這個面板不是 Claude Code(其他 agent CLI 都沒有這個選項);
+- 你自己在面板的引數裡傳了 `--settings`;
+- 你的狀態列是 Baton 沒辦法重現的形式。
+
+> **如果你原本沒有設定狀態列,Baton 的注入就會多出一列**——一列本來不存在、顯示著額
+> 度進度條的東西。只要設了任何狀態列,Claude Code 就會藏起它頁尾的一部分按鍵提示
+> (`esc to interrupt`、`? for shortcuts`),所以這是看得見的改變。如果你寧可留著那
+> 些提示,就設 `usage.limits: off`。
+
+這個讀數只會**在 Claude.ai 訂閱(Pro/Max)上、而且要等到一個 session 的第一則 API 回
+應之後**才出現——那是 Claude Code 自己的約定,不是 Baton 的。在那之前沒有東西可以顯
+示,Baton 也就什麼都不顯示。
+
+**`oauth` 要自己打開,而且它是唯一能看到額外點數餘額、以及每個模型每週上限的路。** 它
+直接查詢帳號用量端點。買到的更多,代價也更高:
+
+- 它會讀你的 Claude Code **OAuth access token**——從 `~/.claude/.credentials.json`,或
+  macOS 上的登入鑰匙圈。Baton 每次請求才讀它一次,只送往一個固定的主機,從不寫到任何
+  地方,也絕不放進 log 或錯誤訊息裡。refresh token 甚至不會被解碼。見
+  [SECURITY.md](../SECURITY.md)。
+- 這個端點**不是有文件的 API**。它可能改變、也可能消失,所以每一次失敗都降級成「沒有
+  讀數」,而不是降級成一個錯的讀數。
+- 它被**限得很硬**。Baton 最多每三分鐘取一次——這個下限設定檔調不下去——而一次被拒會
+  退避到最長半小時,而不是接著重試。問得太勤,花掉的正是它存在要回報的那份額度。
+
+不論用的是哪個來源,失敗時 Baton 會**扣住最後一次讀數**,而不是把它清空。一個被拒的
+端點、或一支安靜下來的艦隊,並沒有讓額度變得不真;它只是讓 Baton 不再聽到它的消息,
+而標頭上那個「多舊」正是為此存在的。
 
 ## 窗口與倒數
 
