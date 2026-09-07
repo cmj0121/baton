@@ -35,9 +35,9 @@ import (
 //
 // The flag is kept after the open rather than cleared, and what that buys is
 // narrower than it first looks — measured, because the obvious answer was wrong.
-// Go registers a kindOpenFile descriptor with its poller either way, setting it
-// non-blocking itself when the caller did not, so reads park rather than spin on
-// EAGAIN and a Close from another goroutine ends a read in flight either way.
+// Go registers a descriptor opened this way with its poller either way, setting
+// it non-blocking itself when the caller did not, so reads park rather than spin
+// on EAGAIN and a Close from another goroutine ends a read in flight either way.
 // The difference is os.File.Fd, which un-registers the descriptor ONLY when Go
 // was the one that made it non-blocking. So passing the flag here is what makes
 // this port immune to a later Fd call quietly putting it back into blocking

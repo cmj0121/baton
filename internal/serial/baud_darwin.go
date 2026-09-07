@@ -48,7 +48,8 @@ var baudCodes = map[int]uint64{
 var supportedBauds = sortedBauds(baudCodes)
 
 // setBaud writes the rate into the termios, reporting false for a rate darwin
-// cannot set. darwin's cfsetspeed sets both speeds and nothing in c_cflag.
+// cannot set. darwin keeps the speed in the two speed fields and nowhere else,
+// which is what its own cfsetspeed writes.
 func setBaud(t *unix.Termios, baud int) bool {
 	code, ok := baudCodes[baud]
 	if !ok {

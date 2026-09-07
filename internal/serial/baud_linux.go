@@ -53,10 +53,10 @@ var supportedBauds = sortedBauds(baudCodes)
 // setBaud writes the rate into the termios, reporting false for a rate linux
 // cannot set.
 //
-// The speed goes in the CBAUD bits of c_cflag and nowhere else. The Ispeed and
-// Ospeed fields this struct also has belong to termios2, past the end of the
-// `struct termios` that TCGETS fills and TCSETS reads, so writing them would
-// look like it set the speed twice and would in fact set it zero times.
+// The speed goes in the unix.CBAUD bits of the control flags and nowhere else.
+// The Ispeed and Ospeed fields this struct also has belong to termios2, past the
+// end of the `struct termios` that TCGETS fills and TCSETS reads, so writing them
+// would look like it set the speed twice and would in fact set it zero times.
 func setBaud(t *unix.Termios, baud int) bool {
 	code, ok := baudCodes[baud]
 	if !ok {

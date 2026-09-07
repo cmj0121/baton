@@ -81,8 +81,8 @@ func (b *Bridge) Run(ctx context.Context) error {
 		port, err := b.open()
 		if err != nil {
 			if msg := err.Error(); msg != last {
-				// The error names the device itself — os.OpenFile's PathError does, and so
-				// does every refusal Open raises — so prefixing it here would say it twice.
+				// The error names the device itself — os.OpenFile's carries the path it failed
+				// on, and so does every refusal Open raises — prefixing it would say it twice.
 				b.say("%v", err)
 				b.say("waiting for the port; close the panel to give up")
 				last = msg
