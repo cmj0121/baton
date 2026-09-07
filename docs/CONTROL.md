@@ -294,6 +294,17 @@ always speak the socket directly).
 A worktree spawn is a spawn, so it draws on the same two limits from the same purse: the fleet ceiling and the rate cap
 count `spawn --worktree` exactly as they count `spawn`, and a conductor cannot dodge one by switching to the other.
 
+**The fleet ceiling is not a conductor rule** — it is the only line in that table that is not. It counts panels rather
+than askers, so the cockpit's own `p` is refused at sixty-four exactly as a conductor's `spawn` is, and so is a
+plugin's `baton.spawn`. A ceiling one hand could walk past would not be one: the panels it spent are gone whoever
+opened them, and the next agent to ask would be refused for something it did not do. The **rate cap** is the half that
+_is_ about who is asking — it exists to stop something looping — and the operator never pays it, because a person at a
+keyboard does not loop.
+
+A spawn refused at the ceiling says what to do about it: close a panel, or purge the exited ones. Purging is usually
+the cheaper of the two, because an **exited panel still holds its slot** until something drops it — a fleet that feels
+half empty can be sitting flat on the ceiling.
+
 **Queueing work is not spawning, and the backlog is not a way round the rate cap either.** A task that provisions its
 own agent (`enqueue` with an agent command) is admitted freely — filling a backlog over a minute is what a backlog is
 for, and the conductor is not spawning when it does so. The scheduler is, later and on its own tick, and it is the
