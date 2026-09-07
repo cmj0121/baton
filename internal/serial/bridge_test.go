@@ -131,17 +131,26 @@ func runBridge(t *testing.T, b *serial.Bridge, ctx context.Context) func() {
 			if err != nil {
 				t.Fatalf("Run = %v, want nil", err)
 			}
-		case <-time.After(2 * time.Second):
+		case <-time.After(testDeadline):
 			t.Fatal("Run did not return")
 		}
 	}
 }
 
+// testDeadline is how long these tests wait for something that is supposed to
+// happen, and it is generous because only a failure ever pays it.
+//
+// A satisfied condition returns on the first poll and waits none of it; two
+// seconds was a bet that the machine has cores to spare, and this suite lost it
+// once under load on two cores under -race. Nothing here waits on purpose, so
+// there is no test this slows down and no reason to keep the bet.
+const testDeadline = 30 * time.Second
+
 // waitFor polls until cond holds, and fails with what the panel showed if it
 // never does.
 func waitFor(t *testing.T, out *panelOut, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(testDeadline)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return
