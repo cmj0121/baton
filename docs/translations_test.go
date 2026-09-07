@@ -89,3 +89,61 @@ func TestEveryPageHasATranslation(t *testing.T) {
 		}
 	}
 }
+
+// headingsOutsideFences counts the markdown headings in a page, skipping fenced
+// code blocks.
+//
+// The fences matter and a naive count is wrong: CONTROL's examples are shell, and
+// their `#` comments read as headings to anything scanning line starts. A check
+// built on that would have called the pair mismatched forever and been switched
+// off, which is worse than not having it.
+func headingsOutsideFences(t *testing.T, path string) int {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	n, fenced := 0, false
+	for _, line := range strings.Split(string(raw), "\n") {
+		trimmed := strings.TrimLeft(line, " \t")
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			fenced = !fenced
+			continue
+		}
+		if fenced || !strings.HasPrefix(line, "#") {
+			continue
+		}
+		if i := strings.IndexByte(line, ' '); i > 0 && strings.Trim(line[:i], "#") == "" {
+			n++
+		}
+	}
+	return n
+}
+
+// A translated page has the same number of sections as its English twin.
+//
+// It is a count and not a comparison on purpose: what the sections SAY is the
+// translator's, and holding the wording would make every honest rewrite a
+// failure. What a count catches is the thing that has actually happened here --
+// USAGE.zh-TW.md was missing the whole of "Quota bars", a section with its own
+// heading, for as long as anyone had looked, and nothing in the pipeline could
+// say so because both files existed and both parsed.
+//
+// If a translation deliberately splits or merges a section, this test is where
+// that decision gets written down rather than discovered.
+func TestEveryTranslationHasAsManySectionsAsItsTwin(t *testing.T) {
+	for _, name := range englishPages(t) {
+		twin := strings.TrimSuffix(name, ".md") + ".zh-TW.md"
+		if _, err := os.Stat(twin); err != nil {
+			continue // TestEveryPageHasATranslation owns that failure
+		}
+		en, zh := headingsOutsideFences(t, name), headingsOutsideFences(t, twin)
+		if en == 0 {
+			t.Errorf("%s has no headings at all; the count below would prove nothing", name)
+			continue
+		}
+		if en != zh {
+			t.Errorf("%s has %d sections and %s has %d; a section is translated or it is missing", name, en, twin, zh)
+		}
+	}
+}
