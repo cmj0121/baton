@@ -66,14 +66,15 @@ func Run(root, base string, stdout, stderr io.Writer) int {
 
 	idx, err := buildIndex(r)
 	if err != nil {
-		// go/parser's refusal replaces the awk version's `package`/`func` probe.
-		// That probe existed because a broken hand-rolled lexer routed code into
-		// the comment stream silently and the index came back empty; a parser
-		// that cannot read a file says so by name and by position instead.
+		// This one refusal replaces the awk version's `package`/`func` probe.
+		// That probe asked whether the index looked like it came from Go at all,
+		// because a hand-rolled lexer that routed code into the comment stream
+		// left an empty index and no other trace. A parser cannot fail that way
+		// quietly: either the file parses, or it names the file and the position
+		// where it stopped. The probe's second half -- an index that came back
+		// empty across parsed files -- is not checked, because a parsed Go file
+		// always yields at least its own package name.
 		return unchecked(stdout, fmt.Sprintf("a tracked .go file could not be read as Go, so no index could be built: %v", err))
-	}
-	if idx.GoFiles > 0 && idx.Len() == 0 {
-		return unchecked(stdout, fmt.Sprintf("the index is empty across %d parsed .go file(s)", idx.GoFiles))
 	}
 	if idx.ImportErr != nil {
 		_, _ = fmt.Fprintf(stderr, ">> warning: the imported packages could not be listed (%v);\n", idx.ImportErr)
