@@ -144,7 +144,7 @@ settings:
 ```yaml
 # $HOME/.baton/config
 settings:
-  keycast: true # 顯示按鍵提示(也可用 K 即時切換)
+  keycast: true # 顯示按鍵提示(也可用 v k 即時切換)
 ```
 
 ## 記住的檢視設定 —— `TUI.state.json`
