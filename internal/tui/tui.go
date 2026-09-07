@@ -2041,7 +2041,7 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 	case inputLimit:
 		return m.commitLimit(buf), nil
 	case inputNewPanelCmd:
-		return m.spawnPanel(buf), nil
+		return m.spawnFromForm(buf), nil
 	case inputAgentDir:
 		return m.spawnAgent(buf), nil
 	case inputGroupName:
@@ -2089,6 +2089,55 @@ func (m model) spawnPanel(command string) model {
 		}
 	}
 	m.status = "spawning " + shellLabel(command)
+	return m
+}
+
+// spawnFromForm commits the new-panel form (`n c`). An EMPTY box spawns a plain
+// shell panel, exactly as enter on it always has and exactly as `p` does; a line
+// typed into it is run as a COMMAND panel — proto.KindCommand, the program in
+// Path and the rest in Args, the shape control.SpawnCommand has sent since #54.
+//
+// The kind is what changed, and it is the point (#84). The form used to send
+// KindShell with the whole line as Path, so `make test` was not even expressible
+// and `make` gave a panel that vanished the moment make finished, with the
+// restart policy free to bring it back. A command panel HOLDS when its process
+// exits — the exit is the result, superviseExitLocked skips the kind outright,
+// and the card reads finished rather than exited — which is the standing a build,
+// a test run or a tail -f wants.
+//
+// It costs the operator who types /bin/zsh here to get a different shell: they
+// now get a panel that stays as a dead slot when they exit it rather than one
+// that disappears. That is why the box is no longer prefilled with the default
+// shell — a prefilled path reads as "this is what enter will run", which is the
+// opposite of what enter alone now means — and why docs/SPEC.md says it in the
+// panel-kinds section rather than leaving it to be met.
+//
+// A line whose first token is empty or begins with a dash is refused here rather
+// than sent. `--foo` alone is an operator who typed the arguments and forgot the
+// program, and the server would answer that with an exec failure inside a panel;
+// the cockpit has the line in hand and can say so on the status bar instead.
+func (m model) spawnFromForm(line string) model {
+	argv, err := splitCommandLine(line)
+	if err != nil {
+		m.status = "not spawned · " + err.Error()
+		return m
+	}
+	if len(argv) == 0 {
+		return m.spawnPanel("")
+	}
+	prog, args := argv[0], argv[1:]
+	if prog == "" || strings.HasPrefix(prog, "-") {
+		m.status = "not spawned · name the program to run before its arguments"
+		return m
+	}
+	if m.client != nil {
+		cmd := proto.Command{Action: "panel.create", Kind: proto.KindCommand, Path: prog, Args: args}
+		if err := m.client.Send(cmd); err != nil {
+			m.status = "send failed: " + err.Error()
+			return m
+		}
+	}
+	m.status = "spawning " + strings.Join(argv, " ")
 	return m
 }
 
@@ -2469,9 +2518,14 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 	case actNewHere:
 		return m.spawnPanelHere(), nil
 	case actNewForm:
+		// Opened EMPTY. The box used to arrive holding the default shell, which read
+		// as "this is what enter will run" — true then, and the opposite of true now
+		// that enter on an empty box is the shell and anything typed is a command
+		// panel. The status line carries both halves instead, the new meaning first
+		// because statusBar truncates to whatever the caps leave it.
 		m.input = inputNewPanelCmd
-		m.inputBuf = m.shellPath
-		m.status = "new panel · type the command, enter to spawn"
+		m.inputBuf = ""
+		m.status = "new panel · a program = a command panel · enter = a shell"
 	case actNewAgent:
 		// More than one backend on the machine and the choice is real, so make it
 		// before asking where: the picker opens with the cursor on the default, and
@@ -4611,7 +4665,7 @@ func (m model) inputView() string {
 			title, prompt = f.title, f.prompt
 		}
 	case inputNewPanelCmd:
-		title, prompt, action = "NEW PANEL", "command to run  (blank = system shell)", "spawn"
+		title, prompt, action = "NEW PANEL", "program and arguments  (blank = a shell)", "spawn"
 	case inputAgentDir:
 		title, prompt, action = "NEW AGENT", "working directory  (blank = home)", "spawn"
 	case inputGroupName:
