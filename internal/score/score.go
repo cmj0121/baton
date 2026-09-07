@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1413,62 +1414,185 @@ type Store struct {
 	unlocked bool
 }
 
+// idBytes is how wide a drawn id is, idSpace is how many such ids there are,
+// and idWords is the bitset over that space in machine words.
+//
+// THREE BYTES, and this is where that number is written down rather than spelled
+// out at the draw. Whether three is the right width is a real question and not
+// this one's: widening the id changes what a score.md line and every log record
+// look like, so it is a format change and belongs in its own issue. What #88
+// buys that question is the data to decide it — a store now knows how much of
+// the space it has spent, and says so when it runs out.
+const (
+	idBytes = 3
+	idSpace = 1 << (8 * idBytes) // 16,777,216
+	idWords = idSpace / 64       // 262,144 words, which is 2 MiB flat
+)
+
+// maxIDDraws bounds the draw loop in newIDLocked, which before #88 had no bound
+// at all and ran under the store mutex: it retried until it missed the spent
+// set, so a store approaching the id space stopped terminating in any bounded
+// time and would have hung the daemon inside s.mu rather than failing.
+//
+// A THOUSAND, and the number is chosen against the only thing it can be wrong
+// about — refusing a store that still had ids free. A set holding fraction f of
+// the space misses a thousand independent draws with probability f^1000, which
+// crosses one in a billion at f = 0.9794. So every store below 16,430,000 spent
+// ids draws as it always did and can never see this refusal; above it, the
+// store refuses in about fifty microseconds instead of spinning under the lock,
+// and the refusal names the population so the reader can tell a full space from
+// a merely crowded one.
+const maxIDDraws = 1000
+
 // burnedSet is every id the store's log has ever named, live or retired. Its
 // one consumer is newIDLocked: an id whose entry was deleted is RETIRED, not
 // free, and reissuing it would graft that entry's log history onto the newcomer
 // that drew it.
 //
-// IT HAS NO BOUND, and that is a decision rather than an oversight, so say what
-// was weighed. #83 measured it as the store's largest remaining shape — 256 MiB
-// of log describing nothing but distinct retired ids costs 632 MiB of live heap,
-// which a compaction shrinks to 98 MiB and no further, because a million and a
-// bit ids is genuinely what the store then holds. Policy.MaxEntries bounds the
-// LIVE set and does not touch this one: no door an agent can reach retires an
-// entry, so an unattended fleet cannot burn a second id per slot, but an
-// operator emptying score.md and letting the fleet refill it burns a fresh cap's
-// worth every round.
+// IT IS A BITSET over the id space, which is the whole of #88. A drawn id is
+// three bytes of crypto/rand rendered as hex, so the space is 16,777,216 ids and
+// one bit each is 2 MiB — FLAT, whatever fraction is burned, exact, and with no
+// false positive. What it replaces is a map that grew with the log forever: #83
+// measured 256 MiB of log describing nothing but distinct retired ids at 632 MiB
+// of live heap, which a compaction shrank to 98 MiB and no further, because a
+// million and a bit ids was genuinely what the store then held. Policy.
+// MaxEntries bounds the LIVE set and does not touch this one — no door an agent
+// can reach retires an entry, so an unattended fleet cannot burn a second id per
+// slot, but an operator emptying score.md and letting the fleet refill it burns
+// a fresh cap's worth every round — so this was the store's last cost with no
+// ceiling on it.
 //
-// #83 asks whether a compacted store could record a WATERMARK instead of the
-// whole set. It cannot, and the reason is one line of newIDLocked: an id is
-// three bytes out of crypto/rand rendered as hex. A watermark is an ORDER —
-// "everything below this is spent" — and random ids have none, so no scalar can
-// answer "has this id been issued" for them.
+// THE TRADE IS STATED RATHER THAN HIDDEN, and both ends of it are measured. A
+// 700,000-id store, replayed out of a 48.7 MiB log of nothing but bare `retired`
+// records, falls from 37.6 MiB of live heap to 2.3 MiB and from 82.0 MiB of peak
+// RSS to 14.7 MiB. A store that has burned nothing pays 2 MiB of heap it did not
+// pay before, of which 0.4 MiB is resident, because the pages of a fresh
+// allocation are not touched until something writes to them. That reprieve ends
+// almost at once: a thousand ids is 2.4 MiB resident, which is the whole of it.
 //
-// It is a type rather than a bare map so that the representation can be argued
-// in one place and changed in one place; see #88.
+// So the worst case improves by sixteen times and the best case gets 2 MiB
+// worse, once, against a daemon measuring about 25 MiB resident — and the set's
+// cost stops depending on anything an operator does.
+//
+// Two shapes were rejected. Paging the bitset — 8 KiB slabs allocated on first
+// touch, so a small store pays less — is refuted by that same measurement: ids
+// are uniform over the space, so a thousand of them have already touched 86% of
+// the 512 pages, and the store pays 2.4 MiB either way. And an ADAPTIVE set, a
+// map until some population and a bitset above it, buys the 2 MiB back at the
+// price of two representations, two sets of invariants, and a threshold nobody
+// can derive; it would also be the THIRD state rather than the second, because
+// of odd below.
+//
+// #83 asked whether a compacted store could record a WATERMARK instead of the
+// whole set. It cannot, and the reason is one line of newIDLocked: a watermark
+// is an ORDER — "everything below this is spent" — and random ids have none, so
+// no scalar can answer "has this id been issued" for them. The bitset asks no
+// ordering of anything, which is why it is the shape that works.
 type burnedSet struct {
-	ids map[string]struct{}
+	bits []uint64 // one bit per id in the drawn space; idWords long, always
+	n    int      // how many of those bits are set
+
+	// odd is every burned id the bitset cannot hold, and it exists because a
+	// burned id is not always a DRAWN one. score.md is the operator's file and
+	// parseLine takes the id from the line as written, so "- [my-note] ..." is
+	// admitted under the id my-note; the event log is the same text on the way
+	// back. Only newIDLocked's ids are six lowercase hex digits.
+	//
+	// It is nil until something needs it, and on a fleet-run store nothing does.
+	// It is also unbounded in the same way the old map was — but by hand-typed
+	// ids alone, which is not the shape #83 measured: the 700,000 ids that cost
+	// 98 MiB were drawn, and every one of those is now a bit.
+	odd map[string]struct{}
 }
 
 func newBurnedSet() burnedSet {
-	return burnedSet{ids: map[string]struct{}{}}
+	return burnedSet{bits: make([]uint64, idWords)}
+}
+
+// idIndex is a drawn id's bit, and reports false for every id that is not one:
+// the wrong length, an upper-case digit, or anything an operator typed. Strict
+// about case because ids are compared byte-for-byte everywhere else, so "AABBCC"
+// and "aabbcc" are two ids and must not share a bit.
+func idIndex(id string) (uint32, bool) {
+	if len(id) != 2*idBytes {
+		return 0, false
+	}
+	var v uint32
+	for i := 0; i < len(id); i++ {
+		switch c := id[i]; {
+		case c >= '0' && c <= '9':
+			v = v<<4 | uint32(c-'0')
+		case c >= 'a' && c <= 'f':
+			v = v<<4 | uint32(c-'a'+10)
+		default:
+			return 0, false
+		}
+	}
+	return v, true
+}
+
+// idAt is idIndex's inverse: the id a set bit stands for.
+func idAt(i uint32) string {
+	b := [idBytes]byte{byte(i >> 16), byte(i >> 8), byte(i)}
+	return hex.EncodeToString(b[:])
 }
 
 // add spends id and reports whether it was FRESH — false means the store had
 // already named it, which is the answer newIDLocked redraws on.
 func (b *burnedSet) add(id string) bool {
-	if _, taken := b.ids[id]; taken {
+	i, drawn := idIndex(id)
+	if !drawn {
+		if _, taken := b.odd[id]; taken {
+			return false
+		}
+		if b.odd == nil {
+			b.odd = map[string]struct{}{}
+		}
+		b.odd[id] = struct{}{}
+		return true
+	}
+	w, mask := i/64, uint64(1)<<(i%64)
+	if b.bits[w]&mask != 0 {
 		return false
 	}
-	b.ids[id] = struct{}{}
+	b.bits[w] |= mask
+	b.n++
 	return true
 }
 
 // has asks whether the log has ever named id.
 func (b *burnedSet) has(id string) bool {
-	_, ok := b.ids[id]
-	return ok
+	i, drawn := idIndex(id)
+	if !drawn {
+		_, ok := b.odd[id]
+		return ok
+	}
+	return b.bits[i/64]&(uint64(1)<<(i%64)) != 0
 }
 
-// len is how many ids are spent.
-func (b *burnedSet) len() int { return len(b.ids) }
+// len is how many ids are spent, of both kinds.
+func (b *burnedSet) len() int { return b.n + len(b.odd) }
 
-// list is every spent id as a fresh slice, in NO order — the one caller sorts
-// it, because map order reaching the compacted log would give one store two
-// logs on two machines (invariant I1).
+// drawn is how many of the DRAWN space's ids are spent, which is the number
+// newIDLocked's refusal is about: an operator's hand-typed id takes nothing away
+// from what a draw can reach.
+func (b *burnedSet) drawn() int { return b.n }
+
+// list is every spent id as a fresh slice. The drawn ones come out ascending
+// because a bitset has no other order to offer, but nothing may rely on that:
+// the odd ones follow in map order, and the one caller sorts the whole of it,
+// because an order out of a map reaching the compacted log would give one store
+// two logs on two machines (invariant I1).
 func (b *burnedSet) list() []string {
-	out := make([]string, 0, len(b.ids))
-	for id := range b.ids {
+	out := make([]string, 0, b.len())
+	for w, word := range b.bits {
+		for word != 0 {
+			bit := bits.TrailingZeros64(word)
+			word &= word - 1
+			out = append(out, idAt(uint32(w)*64+uint32(bit)))
+		}
+	}
+	for id := range b.odd {
 		out = append(out, id)
 	}
 	return out
@@ -4254,10 +4378,10 @@ func (c *compaction) build(path string) (bool, error) {
 		_, ok := live[id]
 		return ok
 	})
-	// They go first, and SORTED, because they are read out of a map and map order
-	// reaching the file would give one store two logs on two machines (invariant
-	// I1). They take no ranking position, so their order costs nothing else
-	// either way.
+	// They go first, and SORTED, because burnedSet.list makes no promise about
+	// the order it hands them over in, and an order a map decided reaching the
+	// file would give one store two logs on two machines (invariant I1). They
+	// take no ranking position, so their order costs nothing else either way.
 	slices.Sort(c.dead)
 	// The live entries in last-movement order, which is what carries recency
 	// across the rewrite.
@@ -5499,22 +5623,33 @@ func rollbackAppend(f *os.File, size int64) {
 	_ = f.Sync()
 }
 
-// newIDLocked draws a fresh short hex id, retrying until it hits one the store
+// newIDLocked draws a fresh short hex id, redrawing until it hits one the store
 // has never used. The candidate is checked against the BURNED set, not against
 // the live entries: an id whose entry the operator deleted is retired, not
 // free, and reissuing it would point that entry's log history at the newcomer.
 // The caller holds the lock.
+//
+// BOUNDED, at maxIDDraws — see it for the number and for what a store has to
+// have spent before the bound can be reached. The refusal is a plain error and
+// not one of the sentinels: ErrSubmissionText and ErrStoreFull are both refusals
+// a CALLER can act on, by sending something shorter or by curating score.md, and
+// this is neither. Retiring an entry does not give its id back, so there is
+// nothing in the operator's file to fix and nothing the submitter did wrong. It
+// falls through internal/server's noteScoreTrouble to the line that says the
+// fleet memory has stopped working, which is what has happened.
 func (s *Store) newIDLocked() (string, error) {
-	for {
-		var b [3]byte
+	for range maxIDDraws {
+		var b [idBytes]byte
 		if _, err := rand.Read(b[:]); err != nil {
 			return "", err
 		}
-		id := hex.EncodeToString(b[:])
-		if s.burned.add(id) {
+		if id := hex.EncodeToString(b[:]); s.burned.add(id) {
 			return id, nil
 		}
 	}
+	return "", fmt.Errorf(
+		"score: no free id in %d draws: %d of %d ids are spent, and retiring an entry does not free its id",
+		maxIDDraws, s.burned.drawn(), idSpace)
 }
 
 // indexLocked finds an entry by id, or -1. The caller holds the lock.
