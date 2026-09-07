@@ -221,9 +221,13 @@ func TestOpenRefusesABaudThePlatformCannotSet(t *testing.T) {
 // reconnect loop and the cancel path both let go of a device that way, and a
 // Close that queued up behind the read instead would wedge the panel.
 //
-// This is what keeping O_NONBLOCK past the open buys: the runtime polls the
-// descriptor, so the Close lands as an error on the pending Read. Take the flag
-// off and the descriptor goes back to blocking mode, where it does not.
+// It guards a CONJUNCTION, and neither half alone: taking O_NONBLOCK off the
+// open leaves this passing, and so does reaching the descriptor through Fd
+// instead of SyscallConn. Do both and the read blocks for good — Fd un-registers
+// the descriptor from the runtime's poller only when Go was the one that made it
+// non-blocking, which is the case the flag removes. Measured, not reasoned:
+// three of the four combinations end the read in under a millisecond and the
+// fourth was still blocked after two seconds.
 func TestClosingThePortEndsAReadAlreadyWaiting(t *testing.T) {
 	p, err := Open(line(openPTY(t), 115200, 8, ParityNone, 1, FlowNone))
 	if err != nil {

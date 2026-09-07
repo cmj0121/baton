@@ -33,13 +33,16 @@ import (
 // because that is what every tutorial shows, and a panel that hangs on open
 // looks like a panel that is broken.
 //
-// The flag is kept after the open rather than cleared, which is the second half
-// of the decision. Go's runtime registers a non-blocking character device with
-// its poller, so a Read on it parks the goroutine instead of spinning on EAGAIN,
-// AND a Close from another goroutine unblocks that Read — which is exactly what
-// the reconnect loop and the cancel path need. Clearing the flag would put the
-// descriptor back in blocking mode, where a pending Read cannot be interrupted
-// at all. VMIN/VTIME are set below anyway so the settings are right either way.
+// The flag is kept after the open rather than cleared, and what that buys is
+// narrower than it first looks — measured, because the obvious answer was wrong.
+// Go registers a kindOpenFile descriptor with its poller either way, setting it
+// non-blocking itself when the caller did not, so reads park rather than spin on
+// EAGAIN and a Close from another goroutine ends a read in flight either way.
+// The difference is os.File.Fd, which un-registers the descriptor ONLY when Go
+// was the one that made it non-blocking. So passing the flag here is what makes
+// this port immune to a later Fd call quietly putting it back into blocking
+// mode, where the reconnect loop's Close would never reach the read it has to
+// end. See configure, which reaches the descriptor the other way for that reason.
 func Open(cfg Config) (io.ReadWriteCloser, error) {
 	f, err := os.OpenFile(cfg.Device, os.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK, 0)
 	if err != nil {
@@ -63,9 +66,9 @@ func Open(cfg Config) (io.ReadWriteCloser, error) {
 
 // configure sets the line on an already-open port.
 //
-// It reaches the descriptor through SyscallConn rather than Fd, because Fd takes
-// the file out of the runtime's poller and back into blocking mode — the very
-// property Open's comment explains it is keeping. internal/server's peercred
+// It reaches the descriptor through SyscallConn rather than Fd, because Fd can
+// take the file out of the runtime's poller and back into blocking mode — the
+// property Open's comment explains it is defending. internal/server's peercred
 // files reach for a descriptor the same way.
 func configure(f *os.File, cfg Config) error {
 	raw, err := f.SyscallConn()
