@@ -9,16 +9,20 @@ import (
 	"github.com/cmj0121/baton/internal/task"
 )
 
-// The fleet spawn budget reaches createPanel down four roads and charges them
-// three different ways. These tests pin WHAT EACH ROAD PAYS, in both directions:
-// that the metered ones are still metered, and — the half a refusal test cannot
-// give — that the exempt ones are still exempt.
+// The fleet spawn budget reaches createPanel down four roads, and it is TWO
+// LIMITS rather than one: a ceiling, which is a statement about the host, and a
+// rate gap, which is a statement about how fast something is asking. Each road
+// answers each of them on its own (#86). These tests pin WHAT EACH ROAD PAYS ON
+// EACH AXIS, in both directions: that the metered ones are still metered, and —
+// the half a refusal test cannot give — that the exempt ones are still exempt.
 //
 // A test asserting only "a conductor spawning too fast is refused" passes just as
 // happily against a change that quietly starts charging the operator's own hand
-// as against one that does not. So each road here is read off the DOOR'S STAMP
-// rather than off a refusal: the budget's rate slot either was spent or was not,
-// and that is the quantity the roads actually differ in.
+// as against one that does not. So the GAP is read off the DOOR'S STAMP rather
+// than off a refusal: the budget's rate slot either was spent or was not, and
+// that is the quantity the roads actually differ in. The CEILING has no stamp to
+// read — it charges nothing and only refuses — so it is read the only way it can
+// be, by packing the fleet and asking.
 
 // doorSlotSpent reports whether the fleet spawn budget's rate slot has been spent
 // — whether the gapStamp keyed on spawnDoor carries a stamp for it. A spend is
@@ -39,27 +43,47 @@ func packFleet(s *Server) {
 	s.panels = fullFleet()
 }
 
-// TestTheOperatorsCreatePaysNothing is the exemption nobody wrote down, read from
-// the wire: guardConductor returns on its first line for a connection that is not
-// a conductor, so the cockpit's panel.create reaches neither cap. It spawns on a
-// fleet already at the ceiling, twice in the same instant, and both go through.
+// TestTheOperatorsCreatePaysTheCeilingAndNotTheGap is #86's decision read from
+// the wire, and it is one test rather than two because the point is the pair: the
+// SAME hand, at the SAME door, is refused by one limit and waved through by the
+// other. A test of either half alone reads as an accident of where a check sits.
 //
-// This is the assertion that fails the moment the charge is moved somewhere that
-// cannot tell the operator's hand from an agent's.
-func TestTheOperatorsCreatePaysNothing(t *testing.T) {
+// The ceiling is new. Until #86 guardConductor returned on its first line for a
+// connection that was not a conductor, so the cockpit reached neither cap and
+// could quietly take the fleet past 64 — and the conductor that hit the wall
+// afterwards was refused for it. The gap is unchanged, and stays unchanged for a
+// reason the ceiling does not share: it exists to stop something LOOPING, and a
+// person at a keyboard does not loop.
+func TestTheOperatorsCreatePaysTheCeilingAndNotTheGap(t *testing.T) {
 	s := newHostServer(t)
 	packFleet(s)
 	send, until := cockpitWire(t, s)
 
+	send(proto.Command{Action: "panel.create", Kind: proto.KindShell})
+	msg := until("panels", "error")
+	if msg.Type != "error" || !strings.Contains(msg.Error, "capacity") {
+		t.Fatalf("the operator's create onto a full fleet got a %q (%q), want the capacity "+
+			"refusal: a ceiling the cockpit walks past is not a ceiling", msg.Type, msg.Error)
+	}
+	if doorSlotSpent(s) {
+		t.Fatal("the capacity refusal spent the fleet's spawn slot: being told the fleet is " +
+			"full is about the fleet, and must not also cost the next caller its quarter-second")
+	}
+
+	// Room made, and now the other axis on the identical road: two creates in the
+	// same instant, both admitted, and the slot still unspent.
+	s.mu.Lock()
+	s.panels = nil
+	s.mu.Unlock()
 	for i := range 2 {
 		send(proto.Command{Action: "panel.create", Kind: proto.KindShell})
 		if msg := until("panels", "error"); msg.Type != "panels" {
-			t.Fatalf("the operator's create #%d was refused on a full fleet: %q", i, msg.Error)
+			t.Fatalf("the operator's create #%d was refused with room to spare: %q", i, msg.Error)
 		}
 	}
 	if doorSlotSpent(s) {
-		t.Fatal("the cockpit spent the fleet's spawn slot: the operator's own hand is unmetered " +
-			"today, and metering it is a policy change rather than a move")
+		t.Fatal("the cockpit spent the fleet's spawn slot: the operator's hand does not pay " +
+			"the gap, and charging it there is a second policy change rather than this one")
 	}
 }
 
@@ -86,31 +110,42 @@ func TestTheConductorsCreateIsCharged(t *testing.T) {
 	}
 }
 
-// TestThePluginsSpawnIsExempt pins the argued exemption rather than merely
-// leaving it unasserted. baton.spawn is a plugin the OPERATOR installed acting as
-// the operator's hand, so it is charged neither cap — it spawns twice in the same
-// instant onto a fleet already at the ceiling.
+// TestThePluginsBurstIsStillAdmitted is #86's MARKED HOLD in the only form a hold
+// survives in: a test. baton.spawn spawns twice in the same instant and both go
+// through, because the plugin host pays the ceiling and not the gap.
 //
-// Whether that exemption deserves to survive is a separate question. What this
-// asserts is only that a refactor of where the charge lives does not answer it by
-// accident.
-func TestThePluginsSpawnIsExempt(t *testing.T) {
+// The hold is not that a plugin SHOULD be exempt. The argument the other way is
+// good and is written on originPlugin — a plugin is unattended code running a
+// loop, which is exactly the failure the gap exists for, and the same API already
+// meters baton.enqueue against queueMax, so "a plugin is the operator's hand"
+// does not survive contact with the rest of the design. What #86 declined to do
+// is take that decision on the operator's behalf, because charging the gap breaks
+// a working plugin at a limit it has never hit, silently, on an upgrade.
+//
+// So this is the assertion that fails when someone makes the one-line change, and
+// it is here so that making it is a decision rather than a drift. #51's
+// authorAgent hold and TestAFanoutCountsNoUserSignal are the same pattern, and
+// the reason for it: that hold was a comment for a while, and a comment is
+// something a green suite lets you walk past.
+func TestThePluginsBurstIsStillAdmitted(t *testing.T) {
 	s := newHostServer(t)
-	packFleet(s)
 	dir := os.Getenv("BATON_TEST_DIR")
 
 	for i := range 2 {
 		if _, err := s.Spawn(proto.KindShell, "", nil, dir, ""); err != nil {
-			t.Fatalf("baton.spawn #%d was refused on a full fleet: %v", i, err)
+			t.Fatalf("baton.spawn #%d was refused in a burst: %v — the gap exemption is the "+
+				"hold #86 left standing, and closing it is the operator's call", i, err)
 		}
 	}
 	if doorSlotSpent(s) {
-		t.Fatal("baton.spawn spent the fleet's spawn slot: the plugin host is deliberately exempt")
+		t.Fatal("baton.spawn spent the fleet's spawn slot: the plugin host is held exempt from " +
+			"the rate gap, and the argument for charging it is on originPlugin rather than lost")
 	}
 }
 
 // TestTheSchedulerIsChargedOnceAndNotTwice is the specific bug an origin
-// parameter invites, as an assertion.
+// parameter invites, as an assertion, and it is the GAP half of "exactly once" —
+// the ceiling half is TestEachRoadsCeilingAtTheDoor's scheduler cell.
 //
 // The scheduler spends its slot when it DECIDES — inside scheduleLocked, holding
 // s.mu — and creates the panel later, without it. A charge that also fired at
@@ -118,6 +153,10 @@ func TestThePluginsSpawnIsExempt(t *testing.T) {
 // `spawn failed: spawning too fast`. So the panel existing and the task being
 // DISPATCHED rather than FAILED is exactly the double charge's absence, and it is
 // why this asserts the task's fate and not only the fleet's size.
+//
+// BOTH DIRECTIONS ARE HERE, which is what makes it a charge rather than a hole:
+// the slot must be spent (or the backlog is a door out of the rate gap) and it
+// must be spent once (or the backlog is a door into a refusal it was granted).
 func TestTheSchedulerIsChargedOnceAndNotTwice(t *testing.T) {
 	s := newHostServer(t)
 	id, err := s.enqueueTask(conn(""), "build it", "",
@@ -167,16 +206,17 @@ func TestTheWorktreeRoadIsChargedAtTheFenceAndNotOnTheRoad(t *testing.T) {
 	}
 }
 
-// TestNoRoadIsChargedAtCreatePanel is #79's refactor read as the thing it had to
-// be: a move of WHERE each road's answer is written, and of nothing else.
+// TestNoRoadSpendsTheGapAtCreatePanel is the GAP axis, and it is the axis on
+// which the door still charges nobody — which #86 did not change and had no
+// reason to.
 //
-// Every road's answer now lives on its panelOrigin constant, and for all four of
-// them the answer is that createPanel takes nothing — two are exempt, and the
-// other two spend their slot upstream, each at the last point where a refusal can
-// still land before that road's own side effects. So the door itself charges
-// none of them, and this is the assertion that fails the moment an arm starts to.
-// A road that paid at the fence AND at the door would pay twice.
-func TestNoRoadIsChargedAtCreatePanel(t *testing.T) {
+// Two roads are exempt from it: the operator's hand, and the plugin's under a
+// marked hold. The other two spend their slot upstream, each at the last point
+// where a refusal can still land before that road's own side effects, so a road
+// that paid at the fence AND here would pay twice — and the second charge would
+// find the stamp the first just left and refuse the spawn it had just admitted.
+// This is the assertion that fails the moment any arm starts to spend here.
+func TestNoRoadSpendsTheGapAtCreatePanel(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		origin panelOrigin
@@ -193,9 +233,9 @@ func TestNoRoadIsChargedAtCreatePanel(t *testing.T) {
 				t.Fatalf("createPanel: %v", err)
 			}
 			if doorSlotSpent(s) {
-				t.Fatal("createPanel spent the fleet's spawn slot for this road; today every " +
-					"road's charge is answered before it gets here, and adding one at the door " +
-					"charges the two metered roads a second time")
+				t.Fatal("createPanel spent the fleet's spawn slot for this road; the gap is " +
+					"answered before any road gets here, and adding a charge at the door " +
+					"charges the two upstream roads a second time")
 			}
 		})
 	}
@@ -208,19 +248,22 @@ func TestNoRoadIsChargedAtCreatePanel(t *testing.T) {
 // its own. One table per axis is what lets a cell move and be seen to move; the
 // single-answer version above could only ever say "all four the same".
 //
-// Every road is admitted onto a fleet already sitting on maxConductorFleet today.
-// Two of those four are the cells #86 changes; the other two are the ones it must
-// not, and they are here so a change to them cannot pass unnoticed.
+// The two hands that reach the ceiling for the first time are refused here (#86);
+// the two that have already paid it upstream are admitted, and their two cells
+// are the ones this table exists to hold still. The SCHEDULER'S is the sharpest
+// of the four: it asked the ceiling at its decision and creates the panel later,
+// so a fleet that filled up in between must not refuse it a second time — that is
+// what "charged exactly once" means on an axis with no stamp to read.
 func TestEachRoadsCeilingAtTheDoor(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		origin      panelOrigin
 		wantRefused bool
 	}{
-		{"operator", originOperator, false},
+		{"operator", originOperator, true},
 		{"conductor", originConductor, false},
 		{"scheduler", originScheduler, false},
-		{"plugin", originPlugin, false},
+		{"plugin", originPlugin, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newHostServer(t)
