@@ -258,7 +258,7 @@ func TestFoldSimilarStaysLinear(t *testing.T) {
 	}
 }
 
-// TestFoldSimilarPrefDefaultsOn checks the setting reaches the split: unset means
+// TestFoldSimilarPrefReachesTheSplit checks the setting reaches the split: unset means
 // on (the fleet case is the one the fold exists for), and false switches it off.
 func TestFoldSimilarPrefReachesTheSplit(t *testing.T) {
 	m := baseModel().applyPrefs(prefsFromConfig(config.Config{}))
