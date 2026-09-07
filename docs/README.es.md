@@ -121,41 +121,42 @@ teclas.
 Cuatro teclas son _landings_: no hacen nada por sí solas y abren una familia — `n` abre, `v` dibuja, `g` agrupa,
 `x` es el doble toque que se confirma a sí mismo — y la barra de estado dice qué acepta cada una a continuación.
 
-| Dónde       | Tecla                 | Hace                                                                  |
-| ----------- | --------------------- | --------------------------------------------------------------------- |
-| After `C-t` | `d` / `b`             | ir al tablero / volver un nivel                                       |
-|             | `a`                   | bandeja de atención — despachar lo que necesita a alguien             |
-|             | `[`                   | entrar en modo de desplazamiento                                      |
-|             | `l` / `L`             | registrar el panel en un archivo / releer ese registro                |
-|             | `R` / `S`             | recargar la configuración / forzar reinicio del servidor              |
-|             | `q`                   | desacoplarse (el servidor sigue en marcha)                            |
-| Dashboard   | `jk` / `↑↓`           | mover el cursor                                                       |
-|             | `hl` / `←→`           | mover una tarjeta · en el árbol: plegar / desplegar un work item      |
-|             | `space`               | mostrar / ocultar lo que hay anidado bajo la fila                     |
-|             | `v p` / `v g`         | panel de detalle / agrupar por: work item, directorio, perfil, estado |
-|             | `v l`                 | el diseño del tablero: tarjetas o árbol                               |
-|             | `m`                   | coger una fila — las flechas la llevan, `enter` la suelta             |
-|             | `enter`               | abrir / hacer zoom en la selección                                    |
-|             | `p` / `A` / `n c`     | nuevo panel de shell / agente / elegir comando                        |
-|             | `n .`                 | nuevo panel de shell en el directorio del panel enfocado              |
-|             | `n C`                 | abrir el conductor (un agente que maneja la flota)                    |
-|             | `n h`                 | abrir la global shell (una shell del anfitrión en `$HOME`)            |
-|             | `w` / `x x`           | cerrar la selección / purgar los terminados                           |
-|             | `r`                   | reejecutar los paneles terminados bajo el foco                        |
-|             | `g g` / `g c` / `g u` | marcar / agrupar los marcados / desagrupar                            |
-|             | `s` / `f` / `D`       | enviar señal / buscar / diff de la selección                          |
-|             | `/`                   | buscar en la salida de todos los paneles (grep a la flota)            |
-|             | `T` / `Q`             | despachar una tarea / gestionar la cola de tareas                     |
-|             | `v u`                 | alternar el pie de uso: apagado / ventana / panel enfocado / cuota    |
-|             | `v U`                 | uso de la cuenta — barras de cuota y quién las consume                |
-|             | `v k`                 | alternar el indicador de teclas en el pie                             |
-| Group       | `tab`                 | dar el foco al siguiente panel                                        |
-|             | `+` / `-`             | mostrar más / menos mosaicos en vivo                                  |
-|             | `L`                   | rotar la disposición de los mosaicos                                  |
-|             | `p` / `i`             | fijar / interactuar con el panel enfocado                             |
-|             | `enter`               | hacer zoom en el panel enfocado                                       |
-| Zoom        | escribir              | manejar el programa directamente                                      |
-|             | `C-t f` / `C-t G`     | buscar en el historial / menú de git (agente)                         |
+| Dónde       | Tecla             | Hace                                                                  |
+| ----------- | ----------------- | --------------------------------------------------------------------- |
+| After `C-t` | `d` / `b`         | ir al tablero / volver un nivel                                       |
+|             | `a`               | bandeja de atención — despachar lo que necesita a alguien             |
+|             | `[`               | entrar en modo de desplazamiento                                      |
+|             | `l` / `L`         | registrar el panel en un archivo / releer ese registro                |
+|             | `R` / `S`         | recargar la configuración / forzar reinicio del servidor              |
+|             | `q`               | desacoplarse (el servidor sigue en marcha)                            |
+| Dashboard   | `jk` / `↑↓`       | mover el cursor                                                       |
+|             | `hl` / `←→`       | mover una tarjeta · en el árbol: plegar / desplegar un work item      |
+|             | `space`           | mostrar / ocultar lo que hay anidado bajo la fila                     |
+|             | `v p` / `v g`     | panel de detalle / agrupar por: work item, directorio, perfil, estado |
+|             | `v l`             | el diseño del tablero: tarjetas o árbol                               |
+|             | `m`               | coger una fila — las flechas la llevan, `enter` la suelta             |
+|             | `enter`           | abrir / hacer zoom en la selección                                    |
+|             | `p` / `A` / `n c` | nuevo panel de shell / agente / command                               |
+|             | `n .`             | nuevo panel de shell en el directorio del panel enfocado              |
+|             | `n C`             | abrir el conductor (un agente que maneja la flota)                    |
+|             | `n h`             | abrir la global shell (una shell del anfitrión en `$HOME`)            |
+|             | `w` / `x x`       | cerrar la selección / purgar los terminados                           |
+|             | `r`               | reejecutar los paneles terminados bajo el foco                        |
+|             | `g g` / `g c`     | marcar / agrupar los marcados                                         |
+|             | `g a` / `g u`     | añadir al work item seleccionado / desagrupar                         |
+|             | `s` / `f` / `D`   | enviar señal / buscar / diff de la selección                          |
+|             | `/`               | buscar en la salida de todos los paneles (grep a la flota)            |
+|             | `T` / `Q`         | despachar una tarea / gestionar la cola de tareas                     |
+|             | `v u`             | alternar el pie de uso: apagado / ventana / panel enfocado / cuota    |
+|             | `v U`             | uso de la cuenta — barras de cuota y quién las consume                |
+|             | `v k`             | alternar el indicador de teclas en el pie                             |
+| Group       | `tab`             | dar el foco al siguiente panel                                        |
+|             | `+` / `-`         | mostrar más / menos mosaicos en vivo                                  |
+|             | `L`               | rotar la disposición de los mosaicos                                  |
+|             | `p` / `i`         | fijar / interactuar con el panel enfocado                             |
+|             | `enter`           | hacer zoom en el panel enfocado                                       |
+| Zoom        | escribir          | manejar el programa directamente                                      |
+|             | `C-t f` / `C-t G` | buscar en el historial / menú de git (agente)                         |
 
 Consulta **[docs/KEYS.md](KEYS.md)** para la referencia completa de teclas, y **[docs/SPEC.md](SPEC.md)** para el diseño
 que hay detrás de cada
