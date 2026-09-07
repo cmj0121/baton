@@ -213,6 +213,14 @@ func TestLogRotatorSwapsGenerationsUnderLiveWriters(t *testing.T) {
 	for range rolls {
 		r.n.Store(r.max)
 		r.roll()
+		// Yield between rolls, or this loop is the whole machine. Rotations are
+		// rare and writes are constant in the life this models, and a tight loop
+		// inverts that: on two cores under -race the writers were scheduled about
+		// fifteen times across four hundred rotations and the vacuity guard below
+		// fired -- correctly, because at that rate almost nothing WAS written
+		// through a swap. Yielding makes the overlap the test is named for actually
+		// happen rather than hoping the machine has cores to spare.
+		runtime.Gosched()
 	}
 	during := wrote.Load() - before
 	close(stop)
