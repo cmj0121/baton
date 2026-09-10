@@ -113,6 +113,17 @@ func (b *Bridge) Run(ctx context.Context) error {
 			break
 		}
 		b.say("%s: the port is gone — waiting for it to come back", b.Cfg.Device)
+		// The same wait as the failed-open path, and for the same reason. A device
+		// that opens and then fails its first read — a cable half out of its socket,
+		// a board re-enumerating, a node the kernel has not finished tearing down —
+		// comes back here with no time spent, and this loop's only cost per turn is
+		// an open(2) and two lines of prose. Measured without this: 67,930 opens in
+		// 300ms, and 6.2MB of notices in 200ms, every byte of which a panel writes
+		// to its ring and to its log file on disk. The pacing belongs on the loop,
+		// not on one of its two exits.
+		if !sleep(ctx, b.retry()) {
+			break
+		}
 	}
 	return nil
 }

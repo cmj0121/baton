@@ -435,3 +435,49 @@ func TestBridgeEndsItsLinesWithCRLF(t *testing.T) {
 		}
 	}
 }
+
+// A device that opens and then fails its very first read is the flap: a cable
+// half out of its socket, a board re-enumerating, an adapter whose node the
+// kernel has not torn down yet. The reconnect loop paced only the path where the
+// OPEN failed, so this one ran with nothing pacing it at all — measured before
+// the fix at 31,751 opens and 6.2MB of notices in 200ms, every byte of which a
+// panel writes to its ring and to its log file on disk.
+func TestBridgeWaitsBeforeReopeningAPortThatDiesAtOnce(t *testing.T) {
+	const retry = 20 * time.Millisecond
+	const window = 300 * time.Millisecond
+
+	var mu sync.Mutex
+	opens := 0
+	out := &panelOut{}
+	in := newPanelIn()
+	defer in.close()
+
+	b := &serial.Bridge{
+		Cfg:   good(),
+		In:    in,
+		Out:   out,
+		Retry: retry,
+		OpenPort: func(serial.Config) (io.ReadWriteCloser, error) {
+			mu.Lock()
+			opens++
+			mu.Unlock()
+			p := newFakePort()
+			p.vanish() // already gone, so the copy's first read fails at once
+			return p, nil
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), window)
+	defer cancel()
+	runBridge(t, b, ctx)()
+
+	mu.Lock()
+	n := opens
+	mu.Unlock()
+	// No turn of the loop can cost less than the retry, so the window bounds the
+	// count. The slack is for a machine that takes longer — never for one that
+	// manages more turns than there was time for.
+	if limit := int(window/retry) + 2; n > limit {
+		t.Errorf("opened the device %d times in %v at a %v retry, want at most %d: the loop is not pacing itself",
+			n, window, retry, limit)
+	}
+}
