@@ -131,6 +131,65 @@ func TestTheStragglerIsReported(t *testing.T) {
 	}
 }
 
+// The report is drawn on a real terminal: `make stale-comments` runs in a
+// developer's shell and in the pre-commit hook. The evidence it quotes is a
+// comment somebody else wrote, and baton's whole premise is agents editing files
+// in panels, so "somebody else" includes one that was prompt-injected.
+//
+// Measured before the fix, against a comment carrying ESC ] 0 ; PWNED BEL: the
+// OSC sequence reached stdout byte for byte, and would have retitled the window
+// of whoever ran the sweep. The name itself needs no filter -- identOnly admits
+// nothing but letters, digits and underscore -- but the comment line printed
+// beneath it is arbitrary bytes out of a file the sweep did not write.
+func TestTheEvidenceIsScrubbedBeforeItReachesATerminal(t *testing.T) {
+	f := newRepo(t)
+	f.write("a.go", "package p\n\nfunc F() {}\n")
+	f.commit("baseline")
+	f.write("b.go", "package p\n\n// \x1b]0;PWNED\x07 the zzQuuxWidget went away\nfunc G() {}\n")
+	f.commit("a comment carrying an escape sequence")
+
+	code, out := f.sweep("HEAD~1")
+	if code != ExitStale {
+		t.Fatalf("exit %d, wanted %d\n%s", code, ExitStale, out)
+	}
+	if !strings.Contains(out, "zzQuuxWidget") {
+		t.Fatalf("the straggler is not named in the report:\n%q", out)
+	}
+	for _, r := range []rune{0x1b, 0x07} {
+		if strings.ContainsRune(out, r) {
+			t.Errorf("the comment's %#x reached the report; a terminal would act on it:\n%q", r, out)
+		}
+	}
+	// Scrubbed, not swallowed: the reader still sees that something tried.
+	if !strings.Contains(out, "]0;PWNED") {
+		t.Errorf("the escape's payload was dropped along with its introducer, so nothing says it was there:\n%q", out)
+	}
+}
+
+// The other half of the same boundary, and the reason unchecked scrubs rather
+// than only the evidence line. A refusal names a path, and `git ls-files -z`
+// hands paths over raw -- git quotes them only when it is writing them for a
+// human. So a tracked file whose NAME carries an escape puts it on stdout
+// through the one message that is printed when the sweep is at its least
+// suspicious: the one that says it could not look.
+func TestThePathInARefusalIsScrubbedToo(t *testing.T) {
+	f := newRepo(t)
+	f.write("a.go", "package p\n")
+	f.commit("baseline")
+	f.write("b\x1b]0;PWNED\x07.go", "package p\n\n// naming zzQuuxWidget\nthis is not go\n")
+	f.commit("a tracked file whose name carries an escape")
+
+	code, out := f.sweep("HEAD~1")
+	if code != ExitUnchecked {
+		t.Fatalf("exit %d, wanted %d\n%q", code, ExitUnchecked, out)
+	}
+	for _, r := range []rune{0x1b, 0x07} {
+		if strings.ContainsRune(out, r) {
+			t.Errorf("the path's %#x reached the report; a terminal would act on it:\n%q", r, out)
+		}
+	}
+}
+
 func TestTheCorrectedCommentIsQuiet(t *testing.T) {
 	f := newRepo(t)
 	f.write("lock.go", lockBaseline)

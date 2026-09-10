@@ -6,6 +6,8 @@ import (
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/cmj0121/baton/internal/scrub"
 )
 
 // Main runs the sweep and returns the process exit code.
@@ -34,9 +36,14 @@ func Main(args []string, stdout, stderr io.Writer) int {
 // a pass. The version of this sweep that was thrown away exited 0 on an empty
 // range: a check that cannot distinguish "I looked and found nothing" from "I
 // never looked" reports a green light for work it never read.
+//
+// The reason is scrubbed because two of the callers below build it out of bytes
+// the sweep did not write: go/parser's message quotes the source it stopped on,
+// and both it and the read error name a path out of the tree. See Run's evidence
+// line for why that matters on a terminal.
 func unchecked(w io.Writer, reason string) int {
 	_, _ = fmt.Fprintln(w, "")
-	_, _ = fmt.Fprintf(w, "!! NOTHING CHECKED: %s\n", reason)
+	_, _ = fmt.Fprintf(w, "!! NOTHING CHECKED: %s\n", scrub.Text(reason))
 	_, _ = fmt.Fprintln(w, "   This is a failure, not a pass. The sweep did not examine any")
 	_, _ = fmt.Fprintln(w, "   comment line, so it cannot vouch for this range.")
 	return ExitUnchecked
@@ -121,8 +128,21 @@ func Run(root, base string, stdout, stderr io.Writer) int {
 	_, _ = fmt.Fprintln(stdout, "------------------------------------------------------------")
 	for _, name := range stale {
 		_, _ = fmt.Fprintf(stdout, "  %s\n", name)
+		// The name needs no filter -- identOnly admits letters, digits and
+		// underscore and nothing else -- but the line printed under it is whatever
+		// bytes the comment held, and the path beside it comes out of a diff header.
+		// This report is drawn on a real terminal: `make stale-comments` runs in a
+		// developer's shell and in the pre-commit hook, and baton's premise is agents
+		// editing files in panels, so the comment's author may well be one of them.
+		// Measured: an ESC ] 0 ; … BEL in a comment retitled the window of whoever
+		// ran the sweep.
+		//
+		// Scrubbed rather than %q, because "path:line" is a location an editor and a
+		// terminal both jump to and quoting it breaks that -- and because scrub keeps
+		// an escape's payload while dropping its introducer, so the line still reads
+		// as something that tried.
 		for _, ev := range evidence(comments, name, 3) {
-			_, _ = fmt.Fprintf(stdout, "      %s:%d  %s\n", ev.File, ev.Line, ev.Text)
+			_, _ = fmt.Fprintf(stdout, "      %s:%d  %s\n", scrub.Text(ev.File), ev.Line, scrub.Text(ev.Text))
 		}
 	}
 	_, _ = fmt.Fprintln(stdout, "------------------------------------------------------------")
