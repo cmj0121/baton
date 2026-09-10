@@ -481,3 +481,50 @@ func TestBridgeWaitsBeforeReopeningAPortThatDiesAtOnce(t *testing.T) {
 			n, window, retry, limit)
 	}
 }
+
+// brokenOut is a terminal that will not take a byte: a panel whose far end has
+// closed, or a redirected stdout on a filesystem that is full.
+type brokenOut struct{}
+
+func (brokenOut) Write([]byte) (int, error) { return 0, errors.New("input/output error") }
+
+// A terminal that cannot be written to is the panel going away, exactly like the
+// input side's EOF, and it has to end the bridge. io.Copy folds the read error
+// and the write error into one, so the loop read a broken terminal as a dead
+// port: it re-opened a device that was never gone, for as long as the process
+// lived, telling an operator who by then could not see the message to go and
+// check the cable.
+func TestBridgeStopsWhenTheTerminalCannotBeWrittenTo(t *testing.T) {
+	var mu sync.Mutex
+	opens := 0
+	var last *fakePort
+	in := newPanelIn()
+	defer in.close() // the input side stays open: the write failure is the only way out
+
+	b := &serial.Bridge{
+		Cfg:   good(),
+		In:    in,
+		Out:   brokenOut{},
+		Retry: time.Millisecond,
+		OpenPort: func(serial.Config) (io.ReadWriteCloser, error) {
+			p := newFakePort()
+			p.in <- []byte("something for the copy to try to write")
+			mu.Lock()
+			opens++
+			last = p
+			mu.Unlock()
+			return p, nil
+		},
+	}
+	runBridge(t, b, context.Background())()
+
+	mu.Lock()
+	n, port := opens, last
+	mu.Unlock()
+	if n != 1 {
+		t.Errorf("opened the device %d times, want 1: a terminal that cannot be written to was mistaken for a dead port", n)
+	}
+	if port != nil && !port.wasClosed() {
+		t.Error("the port was left open after the terminal went away")
+	}
+}

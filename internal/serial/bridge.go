@@ -47,11 +47,12 @@ type Bridge struct {
 	port io.ReadWriteCloser // the open port, nil while disconnected
 }
 
-// Run bridges the terminal and the port until ctx is cancelled or the terminal's
-// input ends, which for a panel means the panel was closed.
+// Run bridges the terminal and the port until ctx is cancelled or the terminal
+// goes away, which for a panel means the panel was closed. The terminal goes
+// away in either direction: its input ends, or it stops taking bytes.
 //
-// It returns nil for both of those: neither is a failure, and a command panel
-// that exited non-zero would be reported by baton as one that crashed.
+// It returns nil for all of those: none is a failure, and a command panel that
+// exited non-zero would be reported by baton as one that crashed.
 func (b *Bridge) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -106,10 +107,10 @@ func (b *Bridge) Run(ctx context.Context) error {
 		}
 		b.say("%s open at %s — every byte passes through, close the panel to leave", b.Cfg.Device, b.Cfg.Line())
 
-		_, _ = io.Copy(b.Out, port)
+		terminalGone := b.copyOut(port)
 
 		b.swap(nil)
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || terminalGone {
 			break
 		}
 		b.say("%s: the port is gone — waiting for it to come back", b.Cfg.Device)
@@ -126,6 +127,35 @@ func (b *Bridge) Run(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// copyOut copies the port's bytes to the terminal until one of the two ends,
+// and reports which one it was.
+//
+// It is here rather than io.Copy because io.Copy folds the two directions into
+// one error, and the difference is the whole diagnosis. A port that stopped is
+// worth waiting for — that is what the loop around this is. A terminal that
+// stopped is the panel going away, the same event as the input side's EOF, and
+// re-opening the device after it means re-opening a device that was never gone,
+// for as long as the process lives, while telling an operator who can no longer
+// read the message to go and check the cable.
+//
+// The buffer is io.Copy's own size and is the only thing accumulated: nothing
+// here is kept per line, per frame or per session, so a device that never sends
+// a newline is a device that sends bytes, not one that fills memory.
+func (b *Bridge) copyOut(port io.Reader) (terminalGone bool) {
+	buf := make([]byte, 32*1024)
+	for {
+		n, rerr := port.Read(buf)
+		if n > 0 {
+			if _, werr := b.Out.Write(buf[:n]); werr != nil {
+				return true
+			}
+		}
+		if rerr != nil {
+			return false
+		}
+	}
 }
 
 // pumpIn copies the terminal's input to whatever port is open, forever, or until
