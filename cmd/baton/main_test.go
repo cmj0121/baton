@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/rs/zerolog/log"
 
 	"github.com/cmj0121/baton/internal/client"
@@ -277,7 +277,7 @@ type restartModel struct{ restart bool }
 
 func (m restartModel) Init() tea.Cmd                       { return nil }
 func (m restartModel) Update(tea.Msg) (tea.Model, tea.Cmd) { return m, nil }
-func (m restartModel) View() string                        { return "" }
+func (m restartModel) View() tea.View                      { return tea.NewView("") }
 func (m restartModel) RestartRequested() bool              { return m.restart }
 
 // plainModel is a tea.Model without a RestartRequested method.
@@ -285,7 +285,7 @@ type plainModel struct{}
 
 func (plainModel) Init() tea.Cmd                       { return nil }
 func (plainModel) Update(tea.Msg) (tea.Model, tea.Cmd) { return plainModel{}, nil }
-func (plainModel) View() string                        { return "" }
+func (plainModel) View() tea.View                      { return tea.NewView("") }
 
 func TestRestartRequested(t *testing.T) {
 	if restartRequested(plainModel{}) {

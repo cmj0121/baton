@@ -229,9 +229,9 @@ func TestPreviewIsOffByDefault(t *testing.T) {
 
 	// With the pane hidden the tree spends the whole width: a row reaches the task
 	// column, which it could not if 48 columns were going to a pane beside it.
-	wide := stripANSI(m.View())
+	wide := stripANSI(m.frame())
 	m.preview = true
-	narrow := stripANSI(m.View())
+	narrow := stripANSI(m.frame())
 	if len(wide) == 0 || len(narrow) == 0 {
 		t.Fatal("both layouts should render")
 	}
@@ -269,7 +269,7 @@ func TestPreviewNotOfferedWhenItWouldCrampTheTree(t *testing.T) {
 	m.fleet = []panel.Panel{{ID: "1", Title: "solo", State: panel.Running}}
 
 	m.width = 80 // 80 - chrome - 48 leaves the tree under previewMinTree
-	if strings.Contains(stripANSI(m.View()), "state") {
+	if strings.Contains(stripANSI(m.frame()), "state") {
 		t.Fatal("a narrow terminal should keep the whole width for the tree")
 	}
 }

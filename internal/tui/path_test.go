@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestDeleteLastWord(t *testing.T) {
@@ -102,7 +100,7 @@ func TestInputTabAndCtrlB(t *testing.T) {
 	m := baseModel()
 	m.input = inputAgentDir
 	m.inputBuf = filepath.Join(dir, "be")
-	next, _ := m.handleInput(tea.KeyMsg{Type: tea.KeyTab})
+	next, _ := m.handleInput(key("tab"))
 	m = next.(model)
 	if m.inputBuf != filepath.Join(dir, "beta.txt") {
 		t.Fatalf("tab should complete the workdir path, got %q", m.inputBuf)
@@ -111,7 +109,7 @@ func TestInputTabAndCtrlB(t *testing.T) {
 		t.Fatal("tab should leave a hint under the field")
 	}
 
-	next, _ = m.handleInput(tea.KeyMsg{Type: tea.KeyCtrlB})
+	next, _ = m.handleInput(key("ctrl+b"))
 	m = next.(model)
 	if !strings.HasSuffix(m.inputBuf, string(os.PathSeparator)) {
 		t.Fatalf("Ctrl-B should drop the last path segment, got %q", m.inputBuf)
@@ -122,7 +120,7 @@ func TestInputTabAndCtrlB(t *testing.T) {
 
 	// A name overlay is not a path: tab is inert.
 	m.input, m.inputBuf = inputGroupName, "wo"
-	next, _ = m.handleInput(tea.KeyMsg{Type: tea.KeyTab})
+	next, _ = m.handleInput(key("tab"))
 	m = next.(model)
 	if m.inputBuf != "wo" {
 		t.Fatalf("tab should not complete a non-path overlay, got %q", m.inputBuf)

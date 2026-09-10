@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	vt "github.com/charmbracelet/x/vt"
 
 	"github.com/cmj0121/baton/internal/panel"
@@ -150,14 +150,14 @@ func TestSearchFindsAndNavigates(t *testing.T) {
 
 	// n steps to an older hit (a larger scroll offset).
 	before := m.scrollOff
-	next, _ := m.handleScrollKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	next, _ := m.handleScrollKey(key("n"))
 	m = next.(model)
 	if m.searchAt != len(m.searchHits)-2 || m.scrollOff <= before {
 		t.Fatalf("n should walk to an older hit, at=%d off=%d (was %d)", m.searchAt, m.scrollOff, before)
 	}
 
 	// N steps back toward the newest hit.
-	next, _ = m.handleScrollKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
+	next, _ = m.handleScrollKey(key("N"))
 	m = next.(model)
 	if m.searchAt != len(m.searchHits)-1 {
 		t.Fatalf("N should walk back to the newer hit, at=%d", m.searchAt)
@@ -210,7 +210,7 @@ func TestUpdateRoutesSearchPrompt(t *testing.T) {
 	m.prefixKey = "ctrl+t"
 	m.input = inputSearch // a find prompt is open in the zoom
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	next, _ := m.Update(tea.KeyPressMsg(key("x")))
 	m = next.(model)
 	if m.inputBuf != "x" {
 		t.Fatalf("a key with the prompt open should type into the field, buf=%q", m.inputBuf)
@@ -220,7 +220,7 @@ func TestUpdateRoutesSearchPrompt(t *testing.T) {
 	m.input = inputNone
 	m.scrolling = true
 	m.scrollOff = 0
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	next, _ = m.Update(tea.KeyPressMsg(key("up")))
 	if next.(model).scrollOff != 1 {
 		t.Fatalf("with no overlay, a key should reach the scroll handler, off=%d", next.(model).scrollOff)
 	}
@@ -252,9 +252,9 @@ func TestSearchOpensFromZoom(t *testing.T) {
 	m.binds = append([]binding(nil), bindings...)
 	m.prefixKey = "ctrl+t"
 
-	next, _ := m.handleZoomKey(tea.KeyMsg{Type: tea.KeyCtrlT})
+	next, _ := m.handleZoomKey(key("ctrl+t"))
 	m = next.(model)
-	next, _ = m.handleZoomKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	next, _ = m.handleZoomKey(key("f"))
 	m = next.(model)
 	if m.input != inputSearch {
 		t.Fatalf("C-t f should open the search prompt, input=%v", m.input)

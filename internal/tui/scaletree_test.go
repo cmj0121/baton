@@ -81,7 +81,7 @@ func TestTreeStaysLegibleAtScale(t *testing.T) {
 
 	// A row still reaches every panel that is asking for something, so the fleet is
 	// navigable from here without entering a split.
-	view := stripANSI(m.View())
+	view := stripANSI(m.frame())
 	for _, want := range []string{"claude · auth", "claude · seed", "▸ add per-key limits", "/w/baton/db"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("the dashboard should carry %q at this width", want)

@@ -508,7 +508,7 @@ func TestInboxViewRows(t *testing.T) {
 		}
 	}
 	m.width = 120
-	if !strings.Contains(m.View(), spaced("INBOX")) {
+	if !strings.Contains(m.frame(), spaced("INBOX")) {
 		t.Error("modeInbox should render through the cockpit's own View")
 	}
 }

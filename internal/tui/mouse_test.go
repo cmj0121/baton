@@ -3,15 +3,17 @@ package tui
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	vt "github.com/charmbracelet/x/vt"
 
 	"github.com/cmj0121/baton/internal/panel"
 )
 
-// wheel builds a press event for a wheel button.
-func wheel(btn tea.MouseButton) tea.MouseMsg {
-	return tea.MouseMsg{Action: tea.MouseActionPress, Button: btn}
+// wheel builds the mouse event a wheel turn carries. Which turn it is lives in
+// the button; that it is a turn at all is the message type Update matched, and
+// by here that is already decided.
+func wheel(btn tea.MouseButton) tea.Mouse {
+	return tea.Mouse{Button: btn}
 }
 
 // TestMouseSetting covers the mouse toggle row: its label, its value tracking the
@@ -40,18 +42,18 @@ func TestMouseWheelDashboard(t *testing.T) {
 		{ID: "a", Title: "a"}, {ID: "b", Title: "b"}, {ID: "c", Title: "c"},
 	}}
 
-	next, _ := m.handleMouse(wheel(tea.MouseButtonWheelDown))
+	next, _ := m.handleMouse(wheel(tea.MouseWheelDown))
 	m = next.(model)
 	if m.cursor != 1 {
 		t.Fatalf("wheel down should advance the selection, cursor = %d", m.cursor)
 	}
-	next, _ = m.handleMouse(wheel(tea.MouseButtonWheelUp))
+	next, _ = m.handleMouse(wheel(tea.MouseWheelUp))
 	m = next.(model)
 	if m.cursor != 0 {
 		t.Fatalf("wheel up should step back, cursor = %d", m.cursor)
 	}
 	// At the top, wheel up holds rather than wrapping.
-	next, _ = m.handleMouse(wheel(tea.MouseButtonWheelUp))
+	next, _ = m.handleMouse(wheel(tea.MouseWheelUp))
 	m = next.(model)
 	if m.cursor != 0 {
 		t.Fatalf("wheel up at the top should clamp, cursor = %d", m.cursor)
@@ -65,7 +67,7 @@ func TestMouseWheelZoomScroll(t *testing.T) {
 	fillLines(emu, 30)
 	m := model{emu: emu, mode: modeZoom, zoomID: "1", width: 20, height: 5, mouseEnabled: true}
 
-	next, _ := m.handleMouse(wheel(tea.MouseButtonWheelUp))
+	next, _ := m.handleMouse(wheel(tea.MouseWheelUp))
 	m = next.(model)
 	if !m.scrolling {
 		t.Fatal("wheel up should open scroll mode")
@@ -76,7 +78,7 @@ func TestMouseWheelZoomScroll(t *testing.T) {
 
 	// Wheel back down past the bottom: clamps to 0 and leaves scroll mode.
 	for i := 0; i < 3; i++ {
-		next, _ = m.handleMouse(wheel(tea.MouseButtonWheelDown))
+		next, _ = m.handleMouse(wheel(tea.MouseWheelDown))
 		m = next.(model)
 	}
 	if m.scrolling || m.scrollOff != 0 {
@@ -89,7 +91,7 @@ func TestMouseWheelZoomScroll(t *testing.T) {
 func TestMouseWheelInZoomNoFallthrough(t *testing.T) {
 	m := model{mode: modeZoom, mouseEnabled: true, emu: nil, fleet: []panel.Panel{{ID: "a"}, {ID: "b"}}}
 	m.cursor = 0
-	for _, b := range []tea.MouseButton{tea.MouseButtonWheelDown, tea.MouseButtonWheelUp} {
+	for _, b := range []tea.MouseButton{tea.MouseWheelDown, tea.MouseWheelUp} {
 		next, _ := m.handleMouse(wheel(b))
 		if next.(model).cursor != 0 {
 			t.Fatal("a wheel in a zoom must not move the dashboard cursor")
@@ -103,7 +105,7 @@ func TestMouseIgnoredWithOverlay(t *testing.T) {
 	m := model{mode: modeDashboard, mouseEnabled: true, input: inputFilter,
 		fleet: []panel.Panel{{ID: "a"}, {ID: "b"}, {ID: "c"}}}
 	m.cursor = 1
-	next, _ := m.handleMouse(wheel(tea.MouseButtonWheelDown))
+	next, _ := m.handleMouse(wheel(tea.MouseWheelDown))
 	if next.(model).cursor != 1 {
 		t.Fatal("the wheel should be ignored while an input overlay is open")
 	}
@@ -114,7 +116,7 @@ func TestMouseIgnoredWithOverlay(t *testing.T) {
 func TestMouseNonWheelIgnored(t *testing.T) {
 	m := model{mode: modeDashboard, mouseEnabled: true, fleet: []panel.Panel{{ID: "a"}, {ID: "b"}}}
 	m.cursor = 1
-	next, _ := m.handleMouse(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	next, _ := m.handleMouse(tea.Mouse{Button: tea.MouseLeft})
 	if next.(model).cursor != 1 {
 		t.Fatal("a non-wheel click should not move the selection")
 	}

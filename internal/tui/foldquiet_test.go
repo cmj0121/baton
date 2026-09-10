@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
@@ -328,7 +326,7 @@ func TestFoldRowRefusesEveryPanelVerb(t *testing.T) {
 // than just saying no, and the refused verb does nothing at all.
 func TestFoldRowRefusalSaysWhatToDo(t *testing.T) {
 	m := foldedModel(t)
-	out, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	out, _ := m.handleKey(key(string('w')))
 	mm, _ := out.(model)
 	if mm.status != "expand the quiet group first" {
 		t.Fatalf("status = %q, want the expand hint", mm.status)
@@ -342,17 +340,17 @@ func TestFoldRowRefusalSaysWhatToDo(t *testing.T) {
 // them do the same one thing.
 func TestFoldRowTogglesOnEnterRightAndEsc(t *testing.T) {
 	m := foldedModel(t)
-	out, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	out, _ := m.handleKey(key("enter"))
 	mm, _ := out.(model)
 	if !mm.foldOpen[""] {
 		t.Fatal("enter should expand the quiet row")
 	}
-	out, _ = mm.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	out, _ = mm.handleKey(key("esc"))
 	mm, _ = out.(model)
 	if mm.foldOpen[""] {
 		t.Fatal("esc should fold the quiet row back up")
 	}
-	out, _ = mm.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	out, _ = mm.handleKey(key(string('l')))
 	mm, _ = out.(model)
 	if !mm.foldOpen[""] {
 		t.Fatal("l should expand the quiet row")
@@ -365,7 +363,7 @@ func TestFoldEscKeepsTheFilter(t *testing.T) {
 	m := foldedModel(t)
 	m.filter = "quiet"
 	m.foldOpen = map[string]bool{"": true}
-	out, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	out, _ := m.handleKey(key("esc"))
 	mm, _ := out.(model)
 	if mm.foldOpen[""] {
 		t.Fatal("esc should fold first")
@@ -385,7 +383,7 @@ func TestFoldEscFallsThroughWithNoRow(t *testing.T) {
 	if m.foldRowShowing() {
 		t.Fatal("the filtered dashboard should hold no fold row")
 	}
-	out, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	out, _ := m.handleKey(key("esc"))
 	mm, _ := out.(model)
 	if mm.filter != "" {
 		t.Fatalf("esc should have cleared the filter, got %q", mm.filter)
@@ -622,7 +620,7 @@ func TestFoldRowRefusesReorder(t *testing.T) {
 	m := foldedModel(t)
 	m.client = c
 
-	out, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyShiftDown})
+	out, _ := m.handleKey(key("shift+down"))
 	mm, _ := out.(model)
 	if mm.status != "expand the quiet group first" {
 		t.Fatalf("status = %q, want the expand hint", mm.status)

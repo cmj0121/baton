@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	vt "github.com/charmbracelet/x/vt"
 
 	"github.com/cmj0121/baton/internal/vtirm"
@@ -64,13 +64,13 @@ func TestZoomVimDetach(t *testing.T) {
 	drainInput(emu)
 	for _, s := range vimSeqs {
 		writeEmu(emu, m.emuIRM, []byte(s))
-		_ = m.View()
+		_ = m.frame()
 	}
 	m2, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
 	m = m2.(model)
-	_ = m.View()
+	_ = m.frame()
 	next, _ := m.zoomDetach()
-	_ = next.(model).View()
+	_ = next.(model).frame()
 }
 
 // TestZoomRealVimOutput feeds bytes captured from a real vim PTY session into the
@@ -88,11 +88,11 @@ func TestZoomRealVimOutput(t *testing.T) {
 	for i := 0; i < len(raw); i += 37 {
 		end := min(i+37, len(raw))
 		writeEmu(emu, m.emuIRM, raw[i:end])
-		_ = m.View()
+		_ = m.frame()
 	}
 	m2, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
 	m = m2.(model)
-	_ = m.View()
+	_ = m.frame()
 	next, _ := m.zoomDetach()
-	_ = next.(model).View()
+	_ = next.(model).frame()
 }

@@ -264,7 +264,7 @@ func TestGoldenFrames(t *testing.T) {
 
 	for _, st := range frameStates() {
 		t.Run(st.name, func(t *testing.T) {
-			got := st.build(t).View()
+			got := st.build(t).View().Content
 			// .bin, not .txt: a frame's trailing spaces and escapes ARE the
 			// content, and the whitespace hooks are excluded from that suffix.
 			path := filepath.Join(dir, st.name+".bin")
@@ -292,7 +292,7 @@ func TestGoldenFramesAreDeterministic(t *testing.T) {
 	trueColor(t)
 	for _, st := range frameStates() {
 		t.Run(st.name, func(t *testing.T) {
-			if a, b := st.build(t).View(), st.build(t).View(); a != b {
+			if a, b := st.build(t).View().Content, st.build(t).View().Content; a != b {
 				t.Errorf("frame is not reproducible:\n%s\n--- vs ---\n%s", a, b)
 			}
 		})

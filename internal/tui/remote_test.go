@@ -5,8 +5,6 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-
 	"github.com/cmj0121/baton/internal/proto"
 )
 
@@ -274,7 +272,7 @@ func TestRemoteIsReachedFromThePrefixInEveryView(t *testing.T) {
 
 	// Through the real dispatch: C-t @ opens it from the dashboard.
 	m.prefix = true
-	next, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(keyRemote)})
+	next, _ := m.handleKey(key(keyRemote))
 	if got := next.(model).mode; got != modeRemote {
 		t.Fatalf("C-t %s left the cockpit in %v", keyRemote, got)
 	}

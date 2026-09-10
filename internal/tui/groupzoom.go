@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	vt "github.com/charmbracelet/x/vt"
@@ -399,7 +399,7 @@ func shiftWeight(w []float64, a, b int, amt float64) {
 // focused tile, tab moves the focus to a different tile to resize, and z / esc
 // leave. The prefix is not consumed here — a leader press just falls through to the
 // caller after resize exits — keeping the mode a thin, self-contained loop.
-func (m model) handleGroupResizeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleGroupResizeKey(k tea.Key) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case keyResize, "esc", "enter":
 		return m.exitResize(), nil
@@ -900,7 +900,7 @@ func partitionSimilar(all []panel.Panel, pinned map[string]bool, n int) (tiles, 
 
 // handleGroupZoomKey drives the split: cycle the focused tile, zoom into it, or
 // leave. Movement wraps so tab walks the whole group.
-func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleGroupZoomKey(k tea.Key) (tea.Model, tea.Cmd) {
 	// Interact mode hands the keyboard to the focused tile; the prefix is still the
 	// only way back out, exactly as in a zoom.
 	if m.groupInteract {
@@ -1058,7 +1058,7 @@ func (m model) handleGroupZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // C-t i stops interacting and returns to navigation, C-t d leaves for the
 // dashboard, C-t q detaches, and C-t C-t sends a literal prefix. This mirrors a
 // zoom's input model, but on one tile of the split rather than a full screen.
-func (m model) handleGroupInteractKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleGroupInteractKey(k tea.Key) (tea.Model, tea.Cmd) {
 	key := k.String()
 	if m.groupArmed {
 		m.groupArmed = false
@@ -1117,7 +1117,7 @@ func (m model) exitInteract() model {
 // feedFocused routes a keystroke to the focused tile's emulator, which encodes it
 // in the program's mode; the tile's reader forwards the bytes to the PTY. A no-op
 // when the focus has no live emulator.
-func (m model) feedFocused(k tea.KeyMsg) {
+func (m model) feedFocused(k tea.Key) {
 	p, ok := m.focusedMember()
 	if !ok {
 		return

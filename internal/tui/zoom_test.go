@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	vt "github.com/charmbracelet/x/vt"
 
 	"github.com/cmj0121/baton/internal/client"
@@ -28,19 +28,28 @@ func TestFeedKey(t *testing.T) {
 	}
 
 	cases := []struct {
-		k    tea.KeyMsg
+		k    tea.Key
 		want string
 	}{
-		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")}, "a"},
-		{tea.KeyMsg{Type: tea.KeySpace}, " "},
-		{tea.KeyMsg{Type: tea.KeyEnter}, "\r"},
-		{tea.KeyMsg{Type: tea.KeyTab}, "\t"},
-		{tea.KeyMsg{Type: tea.KeyEsc}, "\x1b"},
-		{tea.KeyMsg{Type: tea.KeyBackspace}, "\x7f"},
-		{tea.KeyMsg{Type: tea.KeyCtrlC}, "\x03"},
-		{tea.KeyMsg{Type: tea.KeyUp}, "\x1b[A"}, // normal cursor-key mode
-		{tea.KeyMsg{Type: tea.KeyDelete}, "\x1b[3~"},
-		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x"), Alt: true}, "\x1bx"},
+		{key("a"), "a"},
+		{key("space"), " "},
+		{key("enter"), "\r"},
+		{key("tab"), "\t"},
+		{key("esc"), "\x1b"},
+		{key("backspace"), "\x7f"},
+		{key("ctrl+c"), "\x03"},
+		{key("up"), "\x1b[A"}, // normal cursor-key mode
+		{key("delete"), "\x1b[3~"},
+		{key("alt+x"), "\x1bx"},
+		// A capital is a lower-case code carrying shift, and only its Text says
+		// which letter the program should see — send the code and htop gets "a".
+		{key("A"), "A"},
+		// shift+tab used to need a line of its own to become tab-with-shift. It
+		// arrives that way now, and the pass-through has to keep the modifier.
+		{key("shift+tab"), "\x1b[Z"},
+		{key("f5"), "\x1b[15~"},
+		{key("pgup"), "\x1b[5~"},
+		{key("home"), "\x1b[H"},
 	}
 	for _, c := range cases {
 		emu := vt.NewSafeEmulator(20, 5)
@@ -63,7 +72,7 @@ func TestFeedKey(t *testing.T) {
 		n, _ := emu.Read(buf)
 		got <- string(buf[:n])
 	}()
-	feedKey(emu, tea.KeyMsg{Type: tea.KeyUp})
+	feedKey(emu, key("up"))
 	if g := <-got; g != "\x1bOA" {
 		t.Errorf("up arrow in DECCKM = %q, want %q", g, "\x1bOA")
 	}
@@ -131,10 +140,10 @@ func TestZoomEmulatesShell(t *testing.T) {
 
 	// Type a command through the zoom key path.
 	for _, r := range "echo zoomemu" {
-		next, _ := m.handleZoomKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(string(r))})
+		next, _ := m.handleZoomKey(key(string(r)))
 		m = next.(model)
 	}
-	next, _ := m.handleZoomKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ := m.handleZoomKey(key("enter"))
 	m = next.(model)
 
 	// Pump the shell's output into the emulator until it renders the result.
@@ -155,7 +164,7 @@ func TestZoomEmulatesShell(t *testing.T) {
 
 detach:
 	// The view renders the screen plus a footer.
-	if v := m.View(); !strings.Contains(v, "ZOOM") {
+	if v := m.frame(); !strings.Contains(v, "ZOOM") {
 		t.Fatal("zoom view should include the footer")
 	}
 
@@ -172,12 +181,12 @@ func TestZoomDetachKey(t *testing.T) {
 	m = m.zoomInto(panel.Panel{ID: id, Title: "sh"})
 
 	// prefix arms; the dashboard key then detaches.
-	next, _ := m.handleZoomKey(tea.KeyMsg{Type: tea.KeyCtrlT})
+	next, _ := m.handleZoomKey(key("ctrl+t"))
 	m = next.(model)
 	if !m.zoomArmed {
 		t.Fatal("prefix should arm inside a zoom")
 	}
-	next, _ = m.handleZoomKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	next, _ = m.handleZoomKey(key("d"))
 	m = next.(model)
 	if m.mode != modeDashboard {
 		t.Fatalf("prefix+d should detach, mode=%v", m.mode)
@@ -241,8 +250,8 @@ func TestZoomBareKeysGoToProgram(t *testing.T) {
 	// Bare PgUp and bare shift+up both belong to the program — baton never scrolls
 	// on them (the Mac terminal that collapses shift+up to a plain up is harmless),
 	// and stays out of scroll mode.
-	for _, k := range []tea.KeyType{tea.KeyPgUp, tea.KeyShiftUp} {
-		n, _ := m.handleZoomKey(tea.KeyMsg{Type: k})
+	for _, k := range []string{"pgup", "shift+up"} {
+		n, _ := m.handleZoomKey(key(k))
 		m = n.(model)
 		if m.scrollOff != 0 || m.scrolling {
 			t.Fatalf("%v should pass through to the program, not scroll baton", k)
@@ -250,9 +259,9 @@ func TestZoomBareKeysGoToProgram(t *testing.T) {
 	}
 
 	// Scrollback is reached only through the leader's scroll mode: C-t [.
-	n, _ := m.handleZoomKey(tea.KeyMsg{Type: tea.KeyCtrlT})
+	n, _ := m.handleZoomKey(key("ctrl+t"))
 	m = n.(model)
-	n, _ = m.handleZoomKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[")})
+	n, _ = m.handleZoomKey(key("["))
 	m = n.(model)
 	if !m.scrolling {
 		t.Fatal("C-t [ should enter scroll mode")

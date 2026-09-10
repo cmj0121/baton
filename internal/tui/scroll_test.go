@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	vt "github.com/charmbracelet/x/vt"
 
 	"github.com/cmj0121/baton/internal/panel"
@@ -84,32 +84,32 @@ func TestZoomScrollKeys(t *testing.T) {
 		binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
 
 	// Enter scroll mode with the leader: C-t [.
-	next, _ := m.handleZoomKey(tea.KeyMsg{Type: tea.KeyCtrlT})
+	next, _ := m.handleZoomKey(key("ctrl+t"))
 	m = next.(model)
-	next, _ = m.handleZoomKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[")})
+	next, _ = m.handleZoomKey(key("["))
 	m = next.(model)
 	if !m.scrolling {
 		t.Fatal("C-t [ should enter scroll mode")
 	}
 
 	// In scroll mode the keys navigate history (routed through handleScrollKey).
-	scroll := func(k tea.KeyMsg) {
+	scroll := func(k tea.Key) {
 		next, _ := m.handleScrollKey(k)
 		m = next.(model)
 	}
-	scroll(tea.KeyMsg{Type: tea.KeyUp})
+	scroll(key("up"))
 	if m.scrollOff != 1 {
 		t.Fatalf("↑ should scroll one line, off = %d", m.scrollOff)
 	}
 	page := m.scrollOff
-	scroll(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
+	scroll(key("b"))
 	if m.scrollOff <= page+1 {
 		t.Fatalf("b should page up, off = %d", m.scrollOff)
 	}
-	scroll(tea.KeyMsg{Type: tea.KeyDown})
+	scroll(key("down"))
 
 	// esc leaves scroll mode and returns to the live bottom.
-	scroll(tea.KeyMsg{Type: tea.KeyEsc})
+	scroll(key("esc"))
 	if m.scrolling || m.scrollOff != 0 {
 		t.Fatalf("esc should exit scroll mode at the bottom, scrolling=%v off=%d", m.scrolling, m.scrollOff)
 	}
@@ -125,21 +125,21 @@ func TestGroupScrollKeys(t *testing.T) {
 		groupFocus: 0, binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
 
 	// Enter scroll mode (C-t [), then b pages the focused tile.
-	next, _ := m.handleGroupZoomKey(tea.KeyMsg{Type: tea.KeyCtrlT})
+	next, _ := m.handleGroupZoomKey(key("ctrl+t"))
 	m = next.(model)
-	next, _ = m.handleGroupZoomKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[")})
+	next, _ = m.handleGroupZoomKey(key("["))
 	m = next.(model)
 	if !m.scrolling {
 		t.Fatal("C-t [ should enter scroll mode in the group split")
 	}
-	next, _ = m.handleScrollKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
+	next, _ = m.handleScrollKey(key("b"))
 	m = next.(model)
 	if m.scrollOff <= 0 {
 		t.Fatalf("b should scroll the focused tile, off = %d", m.scrollOff)
 	}
 
 	// esc leaves scroll mode at the live bottom.
-	next, _ = m.handleScrollKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = m.handleScrollKey(key("esc"))
 	m = next.(model)
 	if m.scrolling || m.scrollOff != 0 {
 		t.Fatalf("esc should exit scroll mode, scrolling=%v off=%d", m.scrolling, m.scrollOff)
@@ -155,7 +155,7 @@ func TestScrollModeKeys(t *testing.T) {
 		binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
 
 	scroll := func(r string) {
-		next, _ := m.handleScrollKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(r)})
+		next, _ := m.handleScrollKey(key(r))
 		m = next.(model)
 	}
 
@@ -189,7 +189,7 @@ func TestScrollRestoreStaleOffset(t *testing.T) {
 	// scrollOff restored from a deeper original zoom, far beyond this buffer.
 	m := model{emu: emu, mode: modeZoom, width: 20, height: 8, scrolling: true, scrollOff: 300}
 
-	next, _ := m.handleScrollKey(tea.KeyMsg{Type: tea.KeyDown})
+	next, _ := m.handleScrollKey(key("down"))
 	m = next.(model)
 	if m.scrollOff >= depth {
 		t.Fatalf("one ↓ should move off the clamped top: off=%d depth=%d", m.scrollOff, depth)
@@ -209,22 +209,22 @@ func TestScrollLeaderToDashboard(t *testing.T) {
 		scrollMem: map[string]scrollState{},
 		binds:     append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
 
-	drive := func(k tea.KeyMsg) {
+	drive := func(k tea.Key) {
 		next, _ := m.handleScrollKey(k)
 		m = next.(model)
 	}
 
-	drive(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")}) // scroll to the oldest line
+	drive(key("g")) // scroll to the oldest line
 	off := m.scrollOff
 	if off == 0 {
 		t.Fatal("g should scroll back before we leave")
 	}
 
-	drive(tea.KeyMsg{Type: tea.KeyCtrlT}) // arm the leader
+	drive(key("ctrl+t")) // arm the leader
 	if !m.scrollArmed {
 		t.Fatal("the prefix should arm the leader in scroll mode")
 	}
-	drive(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")}) // C-t d → dashboard
+	drive(key("d")) // C-t d → dashboard
 
 	if m.mode != modeDashboard {
 		t.Fatalf("C-t d should leave for the dashboard, mode = %v", m.mode)
@@ -269,16 +269,16 @@ func TestScrollLeaderStaysInScroll(t *testing.T) {
 	m := model{emu: emu, mode: modeZoom, zoomID: "A", width: 20, height: 8, scrolling: true,
 		binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
 
-	drive := func(k tea.KeyMsg) {
+	drive := func(k tea.Key) {
 		next, _ := m.handleScrollKey(k)
 		m = next.(model)
 	}
 
-	drive(tea.KeyMsg{Type: tea.KeyCtrlT}) // arm
+	drive(key("ctrl+t")) // arm
 	if !m.scrollArmed {
 		t.Fatal("the prefix should arm the leader")
 	}
-	drive(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")}) // C-t l → toggle logging
+	drive(key("l")) // C-t l → toggle logging
 
 	if m.scrollArmed {
 		t.Fatal("the follow-up key should disarm the leader")
@@ -304,16 +304,16 @@ func TestScrollLeaderGroupToDashboard(t *testing.T) {
 		groupEmus:  map[string]*vt.SafeEmulator{"A": emu},
 		groupFocus: 0, binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
 
-	drive := func(k tea.KeyMsg) {
+	drive := func(k tea.Key) {
 		next, _ := m.handleScrollKey(k)
 		m = next.(model)
 	}
 
-	drive(tea.KeyMsg{Type: tea.KeyCtrlT}) // arm the leader in the split's scroll mode
+	drive(key("ctrl+t")) // arm the leader in the split's scroll mode
 	if !m.scrollArmed {
 		t.Fatal("the prefix should arm the leader in group scroll mode")
 	}
-	drive(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")}) // C-t d → dashboard
+	drive(key("d")) // C-t d → dashboard
 
 	if m.mode != modeDashboard {
 		t.Fatalf("C-t d should leave the split for the dashboard, mode = %v", m.mode)
@@ -331,13 +331,13 @@ func TestExitScrollThenReZoomFromBottom(t *testing.T) {
 		scrollMem: map[string]scrollState{},
 		binds:     append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
 
-	drive := func(k tea.KeyMsg) {
+	drive := func(k tea.Key) {
 		next, _ := m.handleScrollKey(k)
 		m = next.(model)
 	}
 
-	drive(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")}) // scroll back
-	drive(tea.KeyMsg{Type: tea.KeyEsc})                       // esc: leave scroll mode at the bottom
+	drive(key("g"))   // scroll back
+	drive(key("esc")) // esc: leave scroll mode at the bottom
 	if m.scrolling {
 		t.Fatal("esc should leave scroll mode")
 	}

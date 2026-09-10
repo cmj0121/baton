@@ -3,7 +3,7 @@ package tui
 import (
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -65,16 +65,16 @@ func (m remoteFormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
-	case tea.KeyMsg:
-		return m.key(msg)
+	case tea.KeyPressMsg:
+		return m.key(msg.Key())
 	}
 	return m, nil
 }
 
 // key drives the form. Enter advances from the address to the passkey and
 // submits from the passkey; tab and the arrows move either way; esc quits.
-func (m remoteFormModel) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+func (m remoteFormModel) key(k tea.Key) (tea.Model, tea.Cmd) {
+	switch k.String() {
 	case "esc", "ctrl+c":
 		m.cancelled, m.done = true, true
 		return m, tea.Quit
@@ -103,12 +103,12 @@ func (m remoteFormModel) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.passkey = ""
 		}
 	default:
-		if r := msg.Runes; len(r) > 0 {
+		if k.Text != "" {
 			m.problem = ""
 			if m.focus == 0 {
-				m.address += string(r)
+				m.address += k.Text
 			} else {
-				m.passkey += string(r)
+				m.passkey += k.Text
 			}
 		}
 	}
@@ -140,7 +140,16 @@ func dropLastRune(s string) string {
 	return string(r[:len(r)-1])
 }
 
-func (m remoteFormModel) View() string {
+// View draws the form on its own alt screen. The form runs before there is a
+// client, so it is a whole program of its own and owns the screen the same way
+// the cockpit does.
+func (m remoteFormModel) View() tea.View {
+	v := tea.NewView(m.frame())
+	v.AltScreen = true
+	return v
+}
+
+func (m remoteFormModel) frame() string {
 	width := clampInt(m.width-16, 32, 60)
 
 	rows := []string{

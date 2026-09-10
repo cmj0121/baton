@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 	vt "github.com/charmbracelet/x/vt"
 
@@ -387,7 +387,7 @@ func TestGroupZoomRenders(t *testing.T) {
 	m := baseModel()
 	m.fleet = groupedFleet()
 	m = m.zoomGroup(m.dashItems()[0])
-	if m.View() == "" {
+	if m.frame() == "" {
 		t.Fatal("group zoom should render its split")
 	}
 }
@@ -419,7 +419,7 @@ func TestGroupZoomLiveTileRenders(t *testing.T) {
 	if !strings.Contains(strings.Join(cursored, ""), "\x1b[7m") {
 		t.Fatalf("the interacting tile should overlay a reverse-video cursor, got %q", strings.Join(cursored, ""))
 	}
-	if m.View() == "" {
+	if m.frame() == "" {
 		t.Fatal("live group zoom should render")
 	}
 	m.closeGroupEmus()
@@ -489,7 +489,7 @@ func TestGroupZoomLiveMosaic(t *testing.T) {
 		}
 	}
 
-	if !strings.Contains(m.View(), "GROUP") {
+	if !strings.Contains(m.frame(), "GROUP") {
 		t.Fatal("group split view should show its footer")
 	}
 
@@ -989,10 +989,10 @@ func TestGroupInteractDrivesPanel(t *testing.T) {
 		t.Fatalf("i should interact in place, got interact=%v mode=%v", m.groupInteract, m.mode)
 	}
 	for _, r := range "echo grp-interact" {
-		nm, _ := m.handleGroupZoomKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(string(r))})
+		nm, _ := m.handleGroupZoomKey(key(string(r)))
 		m = nm.(model)
 	}
-	nm, _ = m.handleGroupZoomKey(tea.KeyMsg{Type: tea.KeyEnter})
+	nm, _ = m.handleGroupZoomKey(key("enter"))
 	m = nm.(model)
 
 	// a's tile echoes the typed command; b's must never see it.
@@ -1107,7 +1107,7 @@ func TestGroupZoomResizeReflows(t *testing.T) {
 	if after >= before {
 		t.Fatalf("shrinking the window should shrink the tiles: before=%d after=%d", before, after)
 	}
-	if m.View() == "" {
+	if m.frame() == "" {
 		t.Fatal("the reflowed split should still render")
 	}
 }

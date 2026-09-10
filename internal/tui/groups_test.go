@@ -245,7 +245,7 @@ func TestGroupViewsRender(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m := baseModel()
 			tc.mut(&m)
-			if m.View() == "" {
+			if m.frame() == "" {
 				t.Fatal("expected a non-empty render")
 			}
 		})
@@ -568,7 +568,7 @@ func TestGroupOverlaysRender(t *testing.T) {
 		m.fleet = groupedFleet()
 		m.input = in
 		m.inputBuf = "x"
-		if m.View() == "" {
+		if m.frame() == "" {
 			t.Fatalf("overlay %v should render", in)
 		}
 	}

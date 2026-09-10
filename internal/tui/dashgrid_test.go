@@ -62,7 +62,7 @@ func TestDashboardPicksCardsOrTree(t *testing.T) {
 			if cols := m.cols(); (cols > 1) != tc.grid {
 				t.Fatalf("cols() = %d in grid=%v", cols, tc.grid)
 			}
-			if m.View() == "" {
+			if m.frame() == "" {
 				t.Fatal("the dashboard should render")
 			}
 		})
@@ -193,12 +193,12 @@ func TestCardsCarryTheRowMarks(t *testing.T) {
 	if !m.grabbing() {
 		t.Fatalf("the row should be carried: %s", m.status)
 	}
-	if got := stripANSI(m.View()); !strings.Contains(got, "⇅") {
+	if got := stripANSI(m.frame()); !strings.Contains(got, "⇅") {
 		t.Fatal("a carried card is not marked where it sits")
 	}
 
 	m.fleet[0].Favourite = true
-	if got := stripANSI(m.View()); !strings.Contains(got, "⊙") {
+	if got := stripANSI(m.frame()); !strings.Contains(got, "⊙") {
 		t.Fatal("a favourited card lost its mark")
 	}
 }
@@ -290,9 +290,9 @@ func TestTheHeadingCountsTheFleetsGroups(t *testing.T) {
 	}
 
 	m := model{mode: modeDashboard, fleet: fleet, width: 120, height: 40}
-	grid := stripANSI(m.View())
+	grid := stripANSI(m.frame())
 	m.showTree = true
-	tree := stripANSI(m.View())
+	tree := stripANSI(m.frame())
 	for name, view := range map[string]string{"cards": grid, "tree": tree} {
 		if !strings.Contains(view, "2 group") {
 			t.Fatalf("the %s heading should count both work items:\n%s", name, view)
@@ -389,18 +389,18 @@ func TestOpeningTheFoldKeepsTheLayout(t *testing.T) {
 func TestTheHeadingSaysTheTreeWasChosen(t *testing.T) {
 	m := baseModel()
 	m.mode, m.fleet = modeDashboard, loosePanels(3)
-	if got := stripANSI(m.View()); strings.Contains(got, "for cards") {
+	if got := stripANSI(m.frame()); strings.Contains(got, "for cards") {
 		t.Fatal("the cards do not need to explain themselves")
 	}
 
 	m.showTree = true
-	if got := stripANSI(m.View()); !strings.Contains(got, seqLabel(keyDashLayout)+" for cards") {
+	if got := stripANSI(m.frame()); !strings.Contains(got, seqLabel(keyDashLayout)+" for cards") {
 		t.Fatalf("a chosen tree should name the key back:\n%s", got)
 	}
 
 	// On a fleet that would be a tree anyway there is nothing to explain.
 	m.fleet = loosePanels(8)
-	if got := stripANSI(m.View()); strings.Contains(got, "for cards") {
+	if got := stripANSI(m.frame()); strings.Contains(got, "for cards") {
 		t.Fatal("a tree the fleet earned is not a choice to announce")
 	}
 }

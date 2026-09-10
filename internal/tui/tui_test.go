@@ -1,33 +1,101 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 	"testing"
+	"unicode"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 )
 
-// key builds a tea.KeyMsg for a single rune or a named special key.
-func key(s string) tea.KeyMsg {
+// key builds the key event a terminal decoder would hand the cockpit for a
+// keystroke written the way the key map writes it: "a", "esc", "ctrl+t",
+// "shift+tab". Cases name the keystroke and this is the one place that knows how
+// a decoder spells it, so a case cannot get Code and Mod subtly wrong on its own.
+//
+// It follows the decoder in the two places that matter: Text carries the
+// printable characters and is EMPTY once a modifier is involved, and an
+// upper-case letter is a lower-case Code with shift.
+func key(s string) tea.Key {
+	var k tea.Key
+	mods := map[string]tea.KeyMod{"ctrl": tea.ModCtrl, "alt": tea.ModAlt, "shift": tea.ModShift}
+	for {
+		// A bare "+" is the key itself, not a prefix with nothing after it.
+		name, rest, ok := strings.Cut(s, "+")
+		mod, isMod := mods[name]
+		if !ok || rest == "" || !isMod {
+			break
+		}
+		k.Mod |= mod
+		s = rest
+	}
 	switch s {
 	case "enter":
-		return tea.KeyMsg{Type: tea.KeyEnter}
+		k.Code = tea.KeyEnter
 	case "tab":
-		return tea.KeyMsg{Type: tea.KeyTab}
+		k.Code = tea.KeyTab
 	case "esc":
-		return tea.KeyMsg{Type: tea.KeyEsc}
+		k.Code = tea.KeyEsc
 	case "backspace":
-		return tea.KeyMsg{Type: tea.KeyBackspace}
+		k.Code = tea.KeyBackspace
 	case "space":
-		return tea.KeyMsg{Type: tea.KeySpace}
+		k.Code = tea.KeySpace
+	case "up":
+		k.Code = tea.KeyUp
+	case "down":
+		k.Code = tea.KeyDown
+	case "left":
+		k.Code = tea.KeyLeft
+	case "right":
+		k.Code = tea.KeyRight
+	case "home":
+		k.Code = tea.KeyHome
+	case "end":
+		k.Code = tea.KeyEnd
+	case "pgup":
+		k.Code = tea.KeyPgUp
+	case "pgdown":
+		k.Code = tea.KeyPgDown
+	case "delete":
+		k.Code = tea.KeyDelete
+	case "insert":
+		k.Code = tea.KeyInsert
+	case "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12":
+		n, _ := strconv.Atoi(s[1:])
+		k.Code = tea.KeyF1 + rune(n-1)
 	default:
-		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+		if r := []rune(s); len(r) == 1 {
+			k.Code = r[0]
+			if unicode.IsUpper(k.Code) {
+				k.Code, k.ShiftedCode = unicode.ToLower(k.Code), r[0]
+				k.Mod |= tea.ModShift
+			}
+		} else {
+			k.Code = tea.KeyExtended
+		}
 	}
+	// A printable key carries its characters; a chord does not. The special keys
+	// sit above unicode.MaxRune, so they are printable-looking runes that are not
+	// characters at all — hence the range check before IsPrint.
+	switch {
+	case k.Mod&(tea.ModCtrl|tea.ModAlt) != 0:
+	case k.Code == tea.KeySpace:
+		k.Text = " " // printable, yet named — which is why its String() is "space"
+	case k.Code == tea.KeyExtended, k.Code <= unicode.MaxRune && unicode.IsPrint(k.Code):
+		k.Text = s
+	}
+	return k
 }
+
+// typed is the text a paste or a run of ordinary characters delivers, as one
+// key. Nothing but Text: that is what the decoder produces for printable input,
+// and it is what a bracketed paste becomes on the way in.
+func typed(s string) tea.Key { return tea.Key{Text: s} }
 
 // press feeds keys through handleKey and returns the final model. An argument
 // may be a whole binding rather than one key — "g c", or the keyGroup constant
@@ -319,13 +387,13 @@ func TestDispatchedBriefShowsOnCardAndPreview(t *testing.T) {
 
 	// The row headlines the brief once the terminal is wide enough for the task
 	// column — for an agent at work the objective says more than "running · 3m".
-	row := model{mode: modeDashboard, fleet: fleet, width: 160, height: 40, showTree: true}.View()
+	row := model{mode: modeDashboard, fleet: fleet, width: 160, height: 40, showTree: true}.frame()
 	if !strings.Contains(row, brief) || !strings.Contains(row, "▸") {
 		t.Fatalf("the row should headline the brief with ▸; got:\n%s", row)
 	}
 
 	// The preview pane carries it too, as a labelled row, when it is switched on.
-	prev := model{mode: modeDashboard, fleet: fleet, width: 160, height: 44, preview: true, showTree: true}.View()
+	prev := model{mode: modeDashboard, fleet: fleet, width: 160, height: 44, preview: true, showTree: true}.frame()
 	if !strings.Contains(prev, "task") || !strings.Contains(prev, brief) {
 		t.Fatalf("the preview should carry a task row with the brief; got:\n%s", prev)
 	}
@@ -431,7 +499,7 @@ func TestBigFleetIsAlwaysATree(t *testing.T) {
 			if got := m.cols(); got != 1 {
 				t.Fatalf("a tree is one column, got %d", got)
 			}
-			if m.View() == "" {
+			if m.frame() == "" {
 				t.Fatal("the dashboard should render")
 			}
 		})
@@ -440,7 +508,7 @@ func TestBigFleetIsAlwaysATree(t *testing.T) {
 
 func TestKeyMapShowsPurposeSections(t *testing.T) {
 	m := model{mode: modeKeyMap, width: 120, height: 80, binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
-	v := m.View()
+	v := m.frame()
 	for _, sec := range []string{"Panels", "View", "Work items", "Session"} {
 		if !strings.Contains(v, sec) {
 			t.Fatalf("key map should show the %q purpose section", sec)

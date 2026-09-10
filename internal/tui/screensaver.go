@@ -6,7 +6,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // The hidden screensaver Easter egg (modeScreensaver): a full-screen Matrix

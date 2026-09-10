@@ -261,7 +261,7 @@ func TestKeyMapQuietOnAPlainRebind(t *testing.T) {
 func TestKeyMapDescriptionsShareAColumn(t *testing.T) {
 	m := model{width: 120, height: 60, fleet: sampleFleet(), prefixKey: keyPrefix,
 		binds: append([]binding(nil), bindings...), mode: modeKeyMap}
-	view := stripANSI(m.View())
+	view := stripANSI(m.frame())
 
 	// One row per key width: a single key, a landing run, and a prefixed escape.
 	probes := map[string]string{

@@ -4,29 +4,30 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // typeInto feeds a string to the form one keystroke at a time, the way a person
 // would, so the rune path is exercised rather than the field being assigned.
 func typeInto(m tea.Model, s string) tea.Model {
 	for _, r := range s {
-		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m, _ = m.Update(tea.KeyPressMsg(key(string(r))))
 	}
 	return m
 }
 
-func formKey(m tea.Model, k tea.KeyType) tea.Model {
-	m, _ = m.Update(tea.KeyMsg{Type: k})
+// formKey presses one named keystroke on the form.
+func formKey(m tea.Model, name string) tea.Model {
+	m, _ = m.Update(tea.KeyPressMsg(key(name)))
 	return m
 }
 
 func TestRemoteFormCollectsAnAddressAndAPasskey(t *testing.T) {
 	m := NewRemoteForm("", "")
 	m = typeInto(m, "cmj@laptop.lan")
-	m = formKey(m, tea.KeyEnter) // address accepted, cursor moves to the passkey
+	m = formKey(m, "enter") // address accepted, cursor moves to the passkey
 	m = typeInto(m, "K7m2QxP9")
-	m = formKey(m, tea.KeyEnter) // submit
+	m = formKey(m, "enter") // submit
 
 	got, ok := RemoteResult(m)
 	if !ok {
@@ -40,7 +41,7 @@ func TestRemoteFormCollectsAnAddressAndAPasskey(t *testing.T) {
 func TestRemoteFormEscCancels(t *testing.T) {
 	m := NewRemoteForm("", "")
 	m = typeInto(m, "laptop.lan")
-	m = formKey(m, tea.KeyEsc)
+	m = formKey(m, "esc")
 	if _, ok := RemoteResult(m); ok {
 		t.Fatal("esc should cancel rather than submit")
 	}
@@ -48,7 +49,7 @@ func TestRemoteFormEscCancels(t *testing.T) {
 
 func TestRemoteFormNeedsBothFields(t *testing.T) {
 	m := NewRemoteForm("", "")
-	m = formKey(m, tea.KeyEnter) // empty address
+	m = formKey(m, "enter") // empty address
 	if _, ok := RemoteResult(m); ok {
 		t.Fatal("an empty address must not submit")
 	}
@@ -57,8 +58,8 @@ func TestRemoteFormNeedsBothFields(t *testing.T) {
 	}
 
 	m = typeInto(m, "laptop.lan")
-	m = formKey(m, tea.KeyEnter) // to the passkey
-	m = formKey(m, tea.KeyEnter) // empty passkey
+	m = formKey(m, "enter") // to the passkey
+	m = formKey(m, "enter") // empty passkey
 	if _, ok := RemoteResult(m); ok {
 		t.Fatal("an empty passkey must not submit")
 	}
@@ -73,7 +74,7 @@ func TestRemoteFormRetryKeepsTheAddressAndLandsOnThePasskey(t *testing.T) {
 	if f.focus != 1 {
 		t.Fatalf("a retry should open on the passkey, focus=%d", f.focus)
 	}
-	if !strings.Contains(f.View(), "wrong passkey") {
+	if !strings.Contains(f.frame(), "wrong passkey") {
 		t.Fatal("the failure that sent the person back should be shown")
 	}
 
@@ -87,24 +88,24 @@ func TestRemoteFormRetryKeepsTheAddressAndLandsOnThePasskey(t *testing.T) {
 func TestRemoteFormEditingKeys(t *testing.T) {
 	m := NewRemoteForm("", "")
 	m = typeInto(m, "labtop")
-	m = formKey(m, tea.KeyBackspace)
+	m = formKey(m, "backspace")
 	m = typeInto(m, "op.lan")
 	if got := m.(remoteFormModel).address; got != "labtoop.lan" {
 		t.Fatalf("address = %q", got)
 	}
 
 	// ctrl+u clears the focused field only.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	m, _ = m.Update(tea.KeyPressMsg(key("ctrl+u")))
 	if got := m.(remoteFormModel).address; got != "" {
 		t.Fatalf("ctrl+u should clear the field, got %q", got)
 	}
 
 	// tab moves between the fields either way.
-	m = formKey(m, tea.KeyTab)
+	m = formKey(m, "tab")
 	if got := m.(remoteFormModel).focus; got != 1 {
 		t.Fatalf("tab moved to %d", got)
 	}
-	m = formKey(m, tea.KeyShiftTab)
+	m = formKey(m, "shift+tab")
 	if got := m.(remoteFormModel).focus; got != 0 {
 		t.Fatalf("shift-tab moved to %d", got)
 	}
@@ -112,7 +113,7 @@ func TestRemoteFormEditingKeys(t *testing.T) {
 
 func TestRemoteFormBackspaceOnAnEmptyFieldIsSafe(t *testing.T) {
 	m := NewRemoteForm("", "")
-	m = formKey(m, tea.KeyBackspace)
+	m = formKey(m, "backspace")
 	if got := m.(remoteFormModel).address; got != "" {
 		t.Fatalf("address = %q", got)
 	}
@@ -128,7 +129,7 @@ func TestRemoteFormBackspaceOnAnEmptyFieldIsSafe(t *testing.T) {
 func TestRemoteFormViewShowsTheFieldsAndTheDefaults(t *testing.T) {
 	m := NewRemoteForm("", "")
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	out := m.View()
+	out := m.View().Content
 	for _, want := range []string{"ADDRESS", "PASSKEY", "port defaults to 22", "ssh", "attach"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("the form should show %q:\n%s", want, out)
