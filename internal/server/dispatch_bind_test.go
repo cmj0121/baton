@@ -218,10 +218,10 @@ func TestADispatchToASettledPanelIsStillRefusedSynchronously(t *testing.T) {
 func TestAParkedDispatchKeepsItsSubmitSequence(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		author taskAuthor
+		author task.Author
 	}{
-		{"a plugin's bare brief", authorPlugin},
-		{"a brief bound at delivery", authorAgent},
+		{"a plugin's bare brief", task.AuthorPlugin},
+		{"a brief bound at delivery", task.AuthorAgent},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, clk, written := gateServer(panel.Panel{ID: "p1", Kind: panel.Agent, State: panel.Spawning})
@@ -290,7 +290,7 @@ func TestASupersededParkedDispatchIsDropped(t *testing.T) {
 func TestAParkedDispatchIsClaimedBeforeItIsWritten(t *testing.T) {
 	s, clk, written := gateServer(panel.Panel{ID: "p1", Kind: panel.Agent, State: panel.Spawning})
 
-	if _, err := s.dispatchScored("p1", "first", "", authorAgent); err != nil {
+	if _, err := s.dispatchScored("p1", "first", "", task.AuthorAgent); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 
@@ -301,7 +301,7 @@ func TestAParkedDispatchIsClaimedBeforeItIsWritten(t *testing.T) {
 	s.onFilterTask = func(b TaskBrief) (TaskBrief, bool) {
 		if !landed {
 			landed = true
-			if _, err := s.dispatchScored("p1", "second", "", authorAgent); err != nil {
+			if _, err := s.dispatchScored("p1", "second", "", task.AuthorAgent); err != nil {
 				t.Errorf("the dispatch that supersedes: %v", err)
 			}
 		}
@@ -369,5 +369,80 @@ func TestAPanelThatGoesBusyMidBindDiscardsTheBoundBytes(t *testing.T) {
 	}
 	if len(*written) != 1 || (*written)[0] != "p1:run the migration\n" {
 		t.Fatalf("delivered %v, want exactly one write, at settle", *written)
+	}
+}
+
+// TestADispatchedTaskNamesWhoDispatchedIt is the other door #82 has to cover.
+// task.enqueue was never the only road onto the backlog: panel.dispatch records
+// a task too, and a fleet that stamped only the enqueue road would answer
+// "unknown" for half its own tasks — which would make AuthorUnknown mean "we
+// did not bother" as often as it means "the file predates the field", and a
+// state that means two things answers neither.
+//
+// Both readiness paths are here because they create the task in different
+// places: a settled panel takes the brief at the command, and a busy one parks
+// it and records the task in holdDispatchLocked. The author is concluded once,
+// at the command, and carried to whichever of the two runs.
+func TestADispatchedTaskNamesWhoDispatchedIt(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		busy bool
+		self string
+		want task.Author
+	}{
+		{"the cockpit, to a settled panel", false, "", task.AuthorUser},
+		{"an agent, to a settled panel", false, "p9", task.AuthorAgent},
+		{"the cockpit, to a busy panel", true, "", task.AuthorUser},
+		{"an agent, to a busy panel", true, "p9", task.AuthorAgent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, _ := scoreServer(nil)
+			if tc.busy {
+				s.panels[0].State = panel.Spawning
+			}
+			dispatchTo(t, s, conn(tc.self), "go")
+
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if len(s.tasks) != 1 {
+				t.Fatalf("backlog holds %d tasks, want one", len(s.tasks))
+			}
+			for _, got := range s.tasks {
+				if got.Author != tc.want {
+					t.Fatalf("task = %+v, want author=%q", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// TestARedispatchNamesTheAuthorOfTheBriefItCarries pins the one place the author
+// is written more than once. A dispatch onto a panel whose task is still live
+// keeps the task id and replaces the prompt: a different brief on the same
+// record, and the author of a brief is whoever sent THAT one. Leaving the first
+// author in place would leave the field naming somebody who did not write the
+// words beside it.
+func TestARedispatchNamesTheAuthorOfTheBriefItCarries(t *testing.T) {
+	s, _, _ := scoreServer(nil)
+	dispatchTo(t, s, conn("p9"), "first")
+
+	s.mu.Lock()
+	first := len(s.tasks)
+	s.mu.Unlock()
+	if first != 1 {
+		t.Fatalf("backlog holds %d tasks after the first dispatch, want one", first)
+	}
+
+	dispatchTo(t, s, conn(""), "second")
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.tasks) != 1 {
+		t.Fatalf("the re-dispatch made a second task: %+v", s.tasks)
+	}
+	for _, got := range s.tasks {
+		if got.Prompt != "second" || got.Author != task.AuthorUser {
+			t.Fatalf("task = %+v, want the second brief and author=%q", got, task.AuthorUser)
+		}
 	}
 }

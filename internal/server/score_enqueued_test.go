@@ -356,24 +356,29 @@ func TestAPluginEnqueuedBriefCountsNothing(t *testing.T) {
 //
 // It reads the task table rather than an entry because the subject is the record
 // itself, which is what a restart replays and what a frontend is shown.
+//
+// The author is asserted rather than a pair of bools, and the middle case is why
+// that matters: an agent's enqueue is now a positive record and not the absence
+// of two flags. Nothing here may read AuthorUnknown — an unknown author is a
+// file written before the field, never something a running fleet mints.
 func TestTheEnqueueStampIsTheServersConclusion(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		enqueue    func(*Server)
 		wantUser   bool
-		wantPlugin bool
+		wantAuthor task.Author
 	}{
 		{"the cockpit's connection", func(s *Server) {
 			s.onCommand(conn(""), proto.Command{Action: "task.enqueue", Prompt: "go"})
-		}, true, false},
+		}, true, task.AuthorUser},
 		{"an agent panel's connection", func(s *Server) {
 			s.onCommand(conn("p1"), proto.Command{Action: "task.enqueue", Prompt: "go"})
-		}, false, false},
+		}, false, task.AuthorAgent},
 		{"baton.enqueue, which has no connection", func(s *Server) {
 			if _, err := s.Enqueue("go", ""); err != nil {
 				t.Fatalf("enqueue: %v", err)
 			}
-		}, false, true},
+		}, false, task.AuthorPlugin},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _, _ := scoreServer(nil)
@@ -385,8 +390,8 @@ func TestTheEnqueueStampIsTheServersConclusion(t *testing.T) {
 				t.Fatalf("backlog holds %d tasks, want one", len(s.tasks))
 			}
 			for _, got := range s.tasks {
-				if got.UserSignal != tc.wantUser || got.Plugin != tc.wantPlugin {
-					t.Fatalf("task = %+v, want user=%v plugin=%v", got, tc.wantUser, tc.wantPlugin)
+				if got.UserSignal != tc.wantUser || got.Author != tc.wantAuthor {
+					t.Fatalf("task = %+v, want user=%v author=%q", got, tc.wantUser, tc.wantAuthor)
 				}
 			}
 		})

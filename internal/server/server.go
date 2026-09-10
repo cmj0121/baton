@@ -2036,18 +2036,19 @@ type delivery struct {
 	// standing agent goes back to the pool, an ephemeral one is reaped with it.
 	spawned bool
 	// plugin marks a brief a plugin originated — a task baton.enqueue queued
-	// (task.Task.Plugin) or a baton.dispatch held for a busy panel. It is carried
-	// here rather than looked up at delivery so that deliver — which runs off
-	// s.mu, and must, because it binds — needs no lock take of its own to know it.
-	// Task.Plugin is written once, under the lock that creates the task, and never
-	// mutated after, so there is no drift for the copy to protect against.
+	// (task.Task.Author == task.AuthorPlugin) or a baton.dispatch held for a busy
+	// panel. It is carried here rather than looked up at delivery so that
+	// deliver — which runs off s.mu, and must, because it binds — needs no lock
+	// take of its own to know it. The author is written under the lock that
+	// creates the task and only ever rewritten with the prompt beside it, so
+	// there is no drift for the copy to protect against.
 	plugin bool
 	// signal is the operator's ONE reinforcement, riding along with this delivery
 	// and spent when the delivery is assigned (task.Task.UserSignal). It is not
 	// plugin's opposite, and reading the two as an either/or is the mistake the
-	// pair invites: plugin is a durable fact about where the brief came from and
-	// holds for the brief's whole life, signal is a permission that is gone once
-	// taken. What is true is narrower — they are never BOTH set, because neither
+	// pair invites: plugin is read from a durable fact about where the brief came
+	// from and holds for the brief's whole life, signal is a permission that is
+	// gone once taken. What is true is narrower — they are never BOTH set, because neither
 	// baton.enqueue nor baton.dispatch is the operator — and it does not make
 	// either one the other's absence.
 	//
@@ -3366,9 +3367,9 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 // budget was charged by agreement at the call sites, and why a fourth road could
 // reach this door with nothing here noticing (#79).
 //
-// It is one value rather than a pair of bools for the reason taskAuthor is: the
+// It is one value rather than a pair of bools for the reason task.Author is: the
 // roads are mutually exclusive, and two adjacent bools at a call site can be
-// swapped without breaking a build. Like taskAuthor it is the SERVER'S
+// swapped without breaking a build. Like task.Author it is the SERVER'S
 // CONCLUSION and never a claim — no command carries an origin field, and the two
 // wire roads reach theirs through connOrigin, from the connection alone.
 type panelOrigin int
@@ -4469,7 +4470,7 @@ func briefBytes(scoreBlock, prompt, submit string) []byte {
 // unknown panel, or empty prompt errors — dispatch is "assign a task", not
 // "clear it".
 func (s *Server) dispatchPanel(id, prompt, submit string) error {
-	_, err := s.dispatchScored(id, prompt, submit, authorPlugin)
+	_, err := s.dispatchScored(id, prompt, submit, task.AuthorPlugin)
 	return err
 }
 
@@ -4518,15 +4519,16 @@ var errVetoed = errors.New(vetoReason)
 // now, so there is nothing to swap.
 //
 // author is the server's conclusion about who asked (#38 §4), never a claim: it
-// decides whether the chain runs at all (authorPlugin skips it) and whether the
-// delivery reinforces what it repeats (authorUser). See connAuthor.
+// decides whether the chain runs at all (task.AuthorPlugin skips it) and
+// whether the delivery reinforces what it repeats (task.AuthorUser). See
+// connAuthor.
 //
 // It returns how long the bind took, because that is what a fan-out's budget
 // charges — the same value and the same clock bindBrief hands the monitor tick,
 // so one bind cannot cost two different things depending on which side of the
 // server asked for it. A dispatch that parked, or one a plugin sent, binds
 // nothing and costs nothing.
-func (s *Server) dispatchScored(id, prompt, submit string, author taskAuthor) (time.Duration, error) {
+func (s *Server) dispatchScored(id, prompt, submit string, author task.Author) (time.Duration, error) {
 	if id == "" {
 		return 0, fmt.Errorf("panel.dispatch needs an id")
 	}
@@ -4537,8 +4539,8 @@ func (s *Server) dispatchScored(id, prompt, submit string, author taskAuthor) (t
 		panel:  id,
 		prompt: prompt,
 		submit: submit,
-		plugin: author == authorPlugin,
-		signal: author == authorUser,
+		plugin: author == task.AuthorPlugin,
+		signal: author == task.AuthorUser,
 	}
 
 	s.mu.Lock()
@@ -4548,7 +4550,7 @@ func (s *Server) dispatchScored(id, prompt, submit string, author taskAuthor) (t
 		return 0, fmt.Errorf("no panel with id %q", id)
 	}
 	if !dispatchReady(s.panels[idx].State) {
-		s.holdDispatchLocked(idx, d)
+		s.holdDispatchLocked(idx, d, author)
 		s.mu.Unlock()
 		s.markDirty() // persist the brief so a restart restores it
 		return 0, nil
@@ -4579,14 +4581,14 @@ func (s *Server) dispatchScored(id, prompt, submit string, author taskAuthor) (t
 		// any other. The chain will be asked again at settle: the cost of the race
 		// is a hook run twice over a window no wider than one bind, and the
 		// alternative is the stale write #51 closed.
-		s.holdDispatchLocked(idx, d)
+		s.holdDispatchLocked(idx, d, author)
 		s.mu.Unlock()
 		s.markDirty()
 		return took, nil
 	}
 	s.panels[idx].Task = prompt
 	delete(s.pendingDispatch, id) // a fresh immediate dispatch supersedes a held one
-	t := s.upsertTaskLocked(id, prompt, s.panels[idx].Group, task.Dispatched)
+	t := s.upsertTaskLocked(id, prompt, s.panels[idx].Group, task.Dispatched, author)
 	d.task, d.attempt = t.ID, t.Attempts
 	s.mu.Unlock()
 
@@ -4606,9 +4608,9 @@ func (s *Server) dispatchScored(id, prompt, submit string, author taskAuthor) (t
 // parked as finished bytes — it was the one delivery nobody re-checked. The task
 // is Queued, which is what it is: a brief the fleet has accepted and not yet
 // delivered, and the status the walk-back's terminal transition advances from.
-func (s *Server) holdDispatchLocked(idx int, d delivery) {
+func (s *Server) holdDispatchLocked(idx int, d delivery, author task.Author) {
 	s.panels[idx].Task = d.prompt
-	t := s.upsertTaskLocked(d.panel, d.prompt, s.panels[idx].Group, task.Queued)
+	t := s.upsertTaskLocked(d.panel, d.prompt, s.panels[idx].Group, task.Queued, author)
 	d.task, d.attempt = t.ID, t.Attempts
 	s.pendingDispatch[d.panel] = d // deliver when the panel next settles
 }
@@ -4677,11 +4679,18 @@ func taskFields(t *task.Task) map[string]any {
 // whose current task is still live is re-dispatched in place — same id, a bumped
 // Attempts — so iterating on a busy agent keeps one task; otherwise a new task is
 // created. Caller holds s.mu.
-func (s *Server) upsertTaskLocked(panelID, prompt, group string, status task.Status) *task.Task {
+//
+// author is stamped in BOTH branches, beside the prompt and never apart from it.
+// It is the only road onto task.Task.Author, which is what keeps AuthorUnknown
+// meaning what it says: a task this fleet queued always names who queued it, so
+// an unknown author is only ever a file written before the field existed. The
+// re-dispatch branch replaces the prompt wholesale — a different brief on the
+// same record — and the author of that brief is the one asking now.
+func (s *Server) upsertTaskLocked(panelID, prompt, group string, status task.Status, author task.Author) *task.Task {
 	now := s.mon.now()
 	if tid, ok := s.panelTask[panelID]; ok {
 		if t := s.tasks[tid]; t != nil && !t.Status.Terminal() {
-			t.Prompt, t.Group, t.Status = prompt, group, status
+			t.Prompt, t.Group, t.Status, t.Author = prompt, group, status, author
 			t.Attempts++
 			t.Updated = now
 			s.emit("task.change", taskFields(t))
@@ -4692,7 +4701,7 @@ func (s *Server) upsertTaskLocked(panelID, prompt, group string, status task.Sta
 	s.taskSeq++
 	t := &task.Task{
 		ID: fmt.Sprintf("t%d", s.taskSeq), Prompt: prompt, Status: status,
-		Panel: panelID, Group: group, Attempts: 1, Created: now, Updated: now,
+		Panel: panelID, Group: group, Author: author, Attempts: 1, Created: now, Updated: now,
 	}
 	s.tasks[t.ID] = t
 	if panelID != "" {
@@ -4872,30 +4881,6 @@ func (s *Server) declaredLocked(id string) bool {
 	return d != nil && d.Reason != ""
 }
 
-// taskAuthor is the server's conclusion about WHO put a task in the backlog. It
-// is one value rather than a pair of bools because the three states are mutually
-// exclusive and two adjacent bools at a call site can be swapped without breaking
-// a build — the same hazard dispatchScored takes its brief whole to avoid, and
-// here the swap would silently let a plugin's own enqueue reach the tier #37
-// reserves for the operator.
-//
-// It is decided from the CONNECTION and from nothing else (#38 §4). No enqueue
-// command carries an author field, so there is nothing for a client to assert.
-type taskAuthor int
-
-const (
-	// authorAgent is a connection that declared a self on hello: an agent inside a
-	// panel driving the backlog. The default, and the safe one — a stamp that goes
-	// wrong in this direction only loses a reinforcement.
-	authorAgent taskAuthor = iota
-	// authorUser is a connection that declared no self: the TUI, or `baton ctl`
-	// from the operator's own shell. See connProvenance for what that rests on.
-	authorUser
-	// authorPlugin is baton.enqueue, called from inside the Lua worker. There is no
-	// connection at all, and it is emphatically not the user.
-	authorPlugin
-)
-
 // enqueueTask adds an unassigned task that arrived over the SOCKET to the backlog
 // for the scheduler to drain onto a free agent. It errors when the queued backlog
 // is at queueMax — the cap is backpressure on a runaway producer, counting only
@@ -4910,9 +4895,9 @@ func (s *Server) enqueueTask(cc *clientConn, prompt, group string, spawn *task.S
 	return s.enqueueTaskFrom(prompt, group, spawn, s.connAuthor(cc))
 }
 
-// connAuthor is the taskAuthor a live connection amounts to: authorUser when
-// connProvenance reads it as the operator's, authorAgent otherwise. authorPlugin
-// never comes from here — a plugin has no connection at all.
+// connAuthor is the task.Author a live connection amounts to: task.AuthorUser
+// when connProvenance reads it as the operator's, task.AuthorAgent otherwise.
+// task.AuthorPlugin never comes from here — a plugin has no connection at all.
 //
 // It exists so the two doors a brief can arrive at — panel.dispatch and
 // task.enqueue — reach #38 §4's discrimination by the same road. They asked the
@@ -4921,17 +4906,17 @@ func (s *Server) enqueueTask(cc *clientConn, prompt, group string, spawn *task.S
 // keep two copies of. It must be asked while the socket is open: by delivery time
 // the connection may be long gone, which is why the conclusion is carried on the
 // task (#50) and on the delivery (#51) rather than looked up later.
-func (s *Server) connAuthor(cc *clientConn) taskAuthor {
+func (s *Server) connAuthor(cc *clientConn) task.Author {
 	if s.connProvenance(cc).Source == score.SourceUser {
-		return authorUser
+		return task.AuthorUser
 	}
-	return authorAgent
+	return task.AuthorAgent
 }
 
-// enqueueTaskFrom is enqueueTask with the origin spelled out: authorPlugin marks a
-// task baton.enqueue created, which is delivered bare — no score, no task.pre
-// chain — exactly as baton.dispatch is, and authorUser marks one the operator
-// typed, whose delivery reinforces what it repeats (#50).
+// enqueueTaskFrom is enqueueTask with the origin spelled out: task.AuthorPlugin
+// marks a task baton.enqueue created, which is delivered bare — no score, no
+// task.pre chain — exactly as baton.dispatch is, and task.AuthorUser marks one
+// the operator typed, whose delivery reinforces what it repeats (#50).
 //
 // The stamp goes on under the SAME lock that creates the task. Setting it
 // afterwards would leave a window in which a monitor tick could drain the task
@@ -4940,7 +4925,7 @@ func (s *Server) connAuthor(cc *clientConn) taskAuthor {
 // itself when the task it queued is delivered. The user stamp needs the same
 // window closed for the mirror-image reason — a task drained before it was
 // stamped would deliver, and the operator's brief would count for nothing.
-func (s *Server) enqueueTaskFrom(prompt, group string, spawn *task.SpawnSpec, author taskAuthor) (string, error) {
+func (s *Server) enqueueTaskFrom(prompt, group string, spawn *task.SpawnSpec, author task.Author) (string, error) {
 	if prompt == "" {
 		return "", fmt.Errorf("task.enqueue needs a prompt")
 	}
@@ -4952,12 +4937,11 @@ func (s *Server) enqueueTaskFrom(prompt, group string, spawn *task.SpawnSpec, au
 	if s.queueMax > 0 && s.queuedBacklogLenLocked() >= s.queueMax {
 		return "", fmt.Errorf("queue is full (%d queued); raise queue.max or let it drain", s.queueMax)
 	}
-	t := s.upsertTaskLocked("", prompt, group, task.Queued)
-	t.Plugin = author == authorPlugin
-	t.UserSignal = author == authorUser
+	t := s.upsertTaskLocked("", prompt, group, task.Queued, author)
+	t.UserSignal = author == task.AuthorUser
 	t.Spawn = spawn
-	if spawn != nil || author != authorAgent {
-		s.markTaskDirtyLocked(t.ID) // persist the spawn spec and the origin alongside the task
+	if spawn != nil || author != task.AuthorAgent {
+		s.markTaskDirtyLocked(t.ID) // persist the spawn spec and the signal alongside the task
 	}
 	return t.ID, nil
 }
@@ -5001,7 +4985,7 @@ func (s *Server) enqueueTaskFrom(prompt, group string, spawn *task.SpawnSpec, au
 // invariant and an accident: the replay was systematic, on EVERY restart that
 // caught a user task in flight and again on the one after that, and it is now
 // reachable only by dying inside one saver hop. It is the same class of cost
-// task.Task.Plugin already carries and states — a stamp the saver has not
+// task.Task.Author already carries and states — a stamp the saver has not
 // written yet is a stamp a reboot reads as absent — and it is accepted here on
 // the same terms rather than paid for with a synchronous write on the delivery
 // path. The tests wait for the assignment to reach the file for this reason; see
@@ -5149,7 +5133,7 @@ func (s *Server) scheduleLocked() ([]delivery, []spawnRequest) {
 		groupRunning[t.Group]++ // the fresh dispatch counts against the cap for later tasks
 		s.emit("task.change", taskFields(t))
 		s.markTaskDirtyLocked(t.ID)
-		deliver = append(deliver, delivery{panel: pid, task: t.ID, prompt: t.Prompt, plugin: t.Plugin, signal: s.takeUserSignalLocked(t), attempt: t.Attempts})
+		deliver = append(deliver, delivery{panel: pid, task: t.ID, prompt: t.Prompt, plugin: t.Author == task.AuthorPlugin, signal: s.takeUserSignalLocked(t), attempt: t.Attempts})
 	}
 	return deliver, spawns
 }
@@ -5192,7 +5176,7 @@ func (s *Server) applyScheduledSpawns(spawns []spawnRequest) bool {
 		s.panelTask[pid] = t.ID
 		// Unbound: the panel was created a moment ago and has not settled, so its
 		// brief is bound when the monitor delivers it rather than here (#44).
-		s.pendingDispatch[pid] = delivery{panel: pid, task: t.ID, prompt: t.Prompt, spawned: true, plugin: t.Plugin, signal: s.takeUserSignalLocked(t), attempt: t.Attempts}
+		s.pendingDispatch[pid] = delivery{panel: pid, task: t.ID, prompt: t.Prompt, spawned: true, plugin: t.Author == task.AuthorPlugin, signal: s.takeUserSignalLocked(t), attempt: t.Attempts}
 		s.emit("task.change", taskFields(t))
 		s.markTaskDirtyLocked(t.ID)
 		s.mu.Unlock()
@@ -5308,7 +5292,7 @@ func (s *Server) tasksMsg() proto.ServerMsg {
 		wire[i] = proto.Task{
 			ID: t.ID, Prompt: t.Prompt, Status: string(t.Status), Panel: t.Panel,
 			Group: t.Group, Result: t.Result, Priority: t.Priority, Attempts: t.Attempts,
-			Spawn: t.Spawn != nil,
+			Spawn: t.Spawn != nil, Author: string(t.Author),
 		}
 	}
 	return proto.ServerMsg{Type: "tasks", Tasks: wire}
@@ -5541,21 +5525,22 @@ func (s *Server) dispatchGroupBound(group, prompt, submit string) (fanout, error
 			f.add(id, outcomeSkipped) // never asked, so never dispatched
 			continue
 		}
-		// authorAgent, and it is a HOLD rather than a reading of the connection: a
-		// cockpit fan-out records no user signal today, while the same words sent as
-		// a direct dispatch record one. That asymmetry is #50's family and neither
-		// #50 nor #51 rules on it — closing it means deciding whether one command
-		// fanned to ten panels is one reinforcement or ten, and the per-member
-		// reading inflates a single brief the operator typed once into ten.
+		// task.AuthorAgent, and it is a HOLD rather than a reading of the
+		// connection: a cockpit fan-out records no user signal today, while the same
+		// words sent as a direct dispatch record one. That asymmetry is #50's family
+		// and neither #50 nor #51 rules on it — closing it means deciding whether
+		// one command fanned to ten panels is one reinforcement or ten, and the
+		// per-member reading inflates a single brief the operator typed once into
+		// ten.
 		//
-		// THE HOLD IS HELD BY A TEST, not by this paragraph. It said authorUser was
-		// the one-line change that closes it and nothing stopped that line being
+		// THE HOLD IS HELD BY A TEST, not by this paragraph. It said task.AuthorUser
+		// was the one-line change that closes it and nothing stopped that line being
 		// written: made, it counted N reinforcements for one command and the suite
 		// stayed green. TestAFanoutCountsNoUserSignal is the assertion now — a
 		// cockpit fan-out counts zero, and the same words dispatched directly still
 		// count one, so the decision has to be taken deliberately, against a test
 		// that names both sides of it, rather than by editing a token here.
-		took, err := s.dispatchScored(id, prompt, submit, authorAgent)
+		took, err := s.dispatchScored(id, prompt, submit, task.AuthorAgent)
 		spent += took
 		switch {
 		case errors.Is(err, errVetoed):

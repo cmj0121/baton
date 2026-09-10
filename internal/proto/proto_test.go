@@ -277,3 +277,56 @@ func TestNoVendorListPutsNoVendorKeyOnTheWire(t *testing.T) {
 		t.Errorf("a payload with no vendor list mentions vendors: %s", raw)
 	}
 }
+
+// TestATaskAuthorDegradesBothWays holds the claim ProtocolVersion's comment
+// makes for the first shape, for the key #82 appends to the backlog snapshot.
+//
+// Down: a tasks payload from a daemon that predates the author decodes with an
+// empty Author, which is the documented "the daemon never said" and not one of
+// the three values — so a frontend that reads it as an author is reading a
+// silence as a claim. Up: an old cockpit decoding a new daemon's payload keeps
+// every field it already rendered; the key it does not know costs it nothing.
+func TestATaskAuthorDegradesBothWays(t *testing.T) {
+	var old Task
+	if err := json.Unmarshal([]byte(`{"id":"t1","prompt":"x","status":"queued"}`), &old); err != nil {
+		t.Fatal(err)
+	}
+	if old.Author != "" {
+		t.Errorf("a task with no author key decoded to %q, want the empty never-said", old.Author)
+	}
+
+	blob, err := json.Marshal(Task{ID: "t1", Prompt: "x", Status: "queued", Attempts: 2, Author: "plugin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before struct {
+		ID       string `json:"id"`
+		Prompt   string `json:"prompt"`
+		Status   string `json:"status"`
+		Attempts int    `json:"attempts"`
+	}
+	if err := json.Unmarshal(blob, &before); err != nil {
+		t.Fatal(err)
+	}
+	if before.ID != "t1" || before.Prompt != "x" || before.Status != "queued" || before.Attempts != 2 {
+		t.Errorf("a cockpit predating the author key decoded %+v, want the queue row unchanged", before)
+	}
+}
+
+// TestATaskWithNoAuthorSendsNoAuthorKey is the other half of the down
+// direction, and the one omitempty has to do: an unknown author must not reach
+// the wire as an empty string, because a key naming "" and no key at all would
+// be two spellings of the same silence.
+func TestATaskWithNoAuthorSendsNoAuthorKey(t *testing.T) {
+	blob, err := json.Marshal(Task{ID: "t1", Prompt: "x", Status: "queued"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(blob, &keys); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := keys["author"]; ok {
+		t.Errorf("an unknown author reached the wire: %s", blob)
+	}
+}

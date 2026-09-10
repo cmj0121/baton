@@ -10,6 +10,7 @@ import (
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/ptymgr"
 	"github.com/cmj0121/baton/internal/restart"
+	"github.com/cmj0121/baton/internal/task"
 )
 
 // The tests below are the REFUSALS. A third panel kind is only worth having if
@@ -235,7 +236,7 @@ func TestCommandPanelTakesADispatchLikeAShell(t *testing.T) {
 	WithScore(ScoreState{Store: st, Enabled: true})(s)
 
 	for _, id := range []string{"c1", "s1"} {
-		if _, err := s.dispatchScored(id, "status", "", authorUser); err != nil {
+		if _, err := s.dispatchScored(id, "status", "", task.AuthorUser); err != nil {
 			t.Fatalf("dispatch to %s: %v", id, err)
 		}
 	}

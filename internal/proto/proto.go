@@ -330,6 +330,13 @@ type Panel struct {
 // Task is the wire view of a backlog task: a prompt assigned (or waiting to be
 // assigned) to a panel, with its lifecycle status. Frontends render the set as the
 // queue/kanban; the status string matches task.Status.
+//
+// Author is the ONE thing here a frontend could not work out for itself, and it
+// is what #82 makes askable: the server's conclusion about who queued the task,
+// decided from the connection at the door and never a field a client filled.
+// Empty means the daemon did not say — an older one, or a task whose backlog
+// file predates the field — and a frontend must read that as unknown rather than
+// as any particular author. The string matches task.Author.
 type Task struct {
 	ID       string `json:"id"`
 	Prompt   string `json:"prompt"`
@@ -340,6 +347,7 @@ type Task struct {
 	Priority int    `json:"priority,omitempty"` // scheduler order among queued tasks: higher drains first
 	Attempts int    `json:"attempts,omitempty"` // how many times its prompt has been delivered
 	Spawn    bool   `json:"spawn,omitempty"`    // the task provisions its own agent when none is free
+	Author   string `json:"author,omitempty"`   // agent | user | plugin, or empty when the daemon never said
 }
 
 // DiffFile is one changed path in the structured "diff" reply: its staged and

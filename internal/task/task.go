@@ -5,7 +5,10 @@
 // wire and (later) the on-disk store, with no dependency on the server.
 package task
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Status is where a task sits in its lifecycle.
 type Status string
@@ -46,6 +49,42 @@ func CanAdvance(from, to Status) bool {
 	return false
 }
 
+// Author is the conclusion about WHO put a task in the backlog. It is one value
+// rather than a pair of bools because the states are mutually exclusive and two
+// adjacent bools at a call site can be swapped without breaking a build — and
+// here the swap would silently let a plugin's own enqueue reach the tier #37
+// reserves for the operator.
+//
+// It is decided from the CONNECTION and from nothing else (#38 §4). No enqueue
+// command carries an author field, so there is nothing for a client to assert.
+//
+// It lives in this package rather than in the server because it is a fact about
+// a TASK, and a task outlives the daemon that took it in: whatever reads a
+// backlog file back has to be able to spell it. It is a string for the same
+// reason Status is one — the store's own doc promises a task file is inspectable
+// and editable from outside baton, which an integer enum on disk is not, besides
+// renumbering every stored task the day a value is inserted in the middle.
+type Author string
+
+const (
+	// AuthorUnknown is the zero value, and it is a state rather than a default:
+	// nobody was concluded. A task file written before the author was recorded
+	// says nothing about who queued it that is not already in the plugin key, so
+	// reading its absence as any of the three below would be a guess wearing the
+	// authority of a record. No live road mints it; see Task.Author.
+	AuthorUnknown Author = ""
+	// AuthorAgent is a connection that declared a self on hello: an agent inside a
+	// panel driving the backlog. The commonest, and the safe one — a stamp that
+	// goes wrong in this direction only loses a reinforcement.
+	AuthorAgent Author = "agent"
+	// AuthorUser is a connection that declared no self: the TUI, or `baton ctl`
+	// from the operator's own shell.
+	AuthorUser Author = "user"
+	// AuthorPlugin is baton.enqueue, called from inside the Lua worker. There is no
+	// connection at all, and it is emphatically not the user.
+	AuthorPlugin Author = "plugin"
+)
+
 // SpawnSpec is a queued task's optional request to provision its own agent: when
 // the scheduler finds no free agent, it spawns one running Command with Args in
 // Dir, dispatches the task there, and — if CloseOnDone — closes that panel once the
@@ -65,22 +104,45 @@ type SpawnSpec struct {
 // work, not the panel — the same Task id survives a reassign or respawn, with
 // Attempts counting each delivery.
 //
-// Plugin records WHO queued the task, and it is here rather than in the server
+// Author records WHO queued the task, and it is here rather than in the server
 // because it has to survive a restart: a plugin's task.pre filter runs when the
 // task is delivered, so the daemon that delivers it may not be the one that took
 // it in. A plugin-originated task is delivered bare, bypassing that filter, which
 // is what stops a hook that calls baton.enqueue from re-entering itself once per
 // delivery.
 //
-// Absent on a task written by a build that predates the field, so those restore
-// as "not plugin-originated" and are filtered once, at their first delivery after
-// the upgrade — a hook that enqueues would see its own earlier task exactly once.
-// That is a one-shot, bounded by the backlog that survived the restart, and it
-// only ever runs the chain over work the chain was going to see anyway: it is
-// accepted, not covered.
+// It is the ONLY stored answer to who queued a task, deliberately. What it
+// replaces answered a third of the question with a bool that said only whether a
+// plugin queued it, and keeping that bool beside this field would be two
+// spellings of one fact with nothing holding them together. Plugin-originated is
+// asked as Author == AuthorPlugin at the two sites that care.
 //
-// UserSignal is NOT the other half of Plugin, and the name is the difference.
-// Plugin is a durable fact about where the task came from, true for as long as
+// It is also the only DURABLE answer, which is the defect it closes. UserSignal
+// below is spent at the assignment that delivers the task, so it correctly reads
+// false on every task in flight — and "not a plugin, no signal" was therefore
+// indistinguishable from "the operator's, already delivered". Nothing could ask
+// who queued a task. The author is a separate fact for that reason, and never a
+// second permission.
+//
+// A backlog file written before this field carries the old plugin key and no
+// author, and UnmarshalJSON promotes it to AuthorPlugin — a migration on read,
+// so no file has to be rewritten. A file with NEITHER restores as AuthorUnknown,
+// which is the truth: the old shape recorded a plugin's authorship and nothing
+// else, and the operator's stamp it did carry was a permission already spent.
+// Reading that absence as AuthorAgent because agent is the zero value would be a
+// guess wearing the authority of a record.
+//
+// One consequence is accepted rather than covered, and it is the one this field
+// inherited: a baton.enqueue task predating BOTH keys restores as AuthorUnknown,
+// so it is filtered once, at its first delivery after the upgrade — a hook that
+// enqueues would see its own earlier task exactly once. That is a one-shot,
+// bounded by the backlog that survived the restart, and it only ever runs the
+// chain over work the chain was going to see anyway. Downgrading costs exactly
+// the same and no more: the plugin key is no longer written, so a task queued by
+// this build and read by one predating Author is filtered once on those terms.
+//
+// UserSignal is NOT the other half of Author, and the name is the difference.
+// Author is a durable fact about where the task came from, true for as long as
 // the task exists. UserSignal is a PERMISSION, worth exactly one reinforcement,
 // and the scheduler spends it on the assignment that takes it — so on a task in
 // flight it reads false, and that is the field working, not the field lying. See
@@ -124,8 +186,33 @@ type Task struct {
 	Priority   int        `json:"priority,omitempty"` // scheduler order among queued tasks: higher drains first (default 0, ties break oldest-first)
 	Attempts   int        `json:"attempts"`           // how many times its prompt has been delivered
 	Spawn      *SpawnSpec `json:"spawn,omitempty"`    // provision a fresh agent for this task when none is free (nil = existing agents only)
-	Plugin     bool       `json:"plugin,omitempty"`   // queued by a plugin (baton.enqueue) rather than over the socket; see below
+	Author     Author     `json:"author,omitempty"`   // WHO queued it, durable and never mutated; absent means AuthorUnknown, see below
 	UserSignal bool       `json:"user,omitempty"`     // ONE-SHOT permission to count the operator's reinforcement, spent at assignment; see below
 	Created    time.Time  `json:"created"`
 	Updated    time.Time  `json:"updated"`
+}
+
+// UnmarshalJSON restores a task, promoting the plugin key a build before Author
+// wrote to AuthorPlugin when the file names no author of its own. That is the
+// whole of the migration: a backlog on disk is read forward and never rewritten,
+// and a file carrying both is read by its author, which is the newer fact.
+//
+// A file with neither is left at AuthorUnknown rather than filled in. The
+// information was never recorded — the only other origin the old shape kept was
+// a one-shot permission, spent at the first delivery — so there is nothing to
+// migrate from, and a guess here would put a claim where a gap belongs.
+func (t *Task) UnmarshalJSON(data []byte) error {
+	type stored Task // stripped of this method, so decoding it cannot re-enter here
+	var v struct {
+		stored
+		Plugin bool `json:"plugin"` // the pre-Author spelling of AuthorPlugin
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*t = Task(v.stored)
+	if t.Author == AuthorUnknown && v.Plugin {
+		t.Author = AuthorPlugin
+	}
+	return nil
 }
