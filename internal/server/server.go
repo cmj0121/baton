@@ -1142,7 +1142,7 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 			delete(s.declared, id)        // …and its raised hand goes with it
 			delete(s.acked, id)           // …and any acknowledgement of it
 			delete(s.taskSettled, id)     // …as does any pending done edge
-			delete(s.pendingDispatch, id) // a held dispatch dies with the process
+			delete(s.pendingDispatch, id) // a held dispatch dies with its panel, as it does with the process
 			// A task in flight died with its panel — fail it with the exit code.
 			s.advanceTaskLocked(id, task.Failed, fmt.Sprintf("panel exited (code %d)", exitCode))
 			// The restart policy decides whether this is the end of the panel or a
@@ -1834,6 +1834,29 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 			if dispatchReady(ns) {
 				if held, ok := s.pendingDispatch[p.ID]; ok {
 					delete(s.pendingDispatch, p.ID)
+					// THIS IS THE PARKED ROAD'S ASSIGNMENT, so this is where its
+					// permission is spent (#82). A parked delivery arrives here with
+					// signal false and the operator's stamp still on the task —
+					// holdDispatchLocked and applyScheduledSpawns both leave it there,
+					// because a delivery in a map dies with the process and the task does
+					// not. Spending it HERE rather than at the park is what makes the two
+					// roads one idea: the stamp is taken at the moment the delivery is
+					// assigned, exactly as scheduleLocked takes it, and a restart that
+					// catches the brief still parked finds the stamp unspent and re-drives
+					// it for exactly one reinforcement.
+					//
+					// claimedLocked is the lookup rather than s.tasks, and the two agree
+					// on every path there is: a parked delivery is dropped from
+					// pendingDispatch the moment it stops being the panel's — a panel
+					// exit, a superseding dispatch, a drain — so its extra conditions are
+					// unreachable from here and NO TEST CAN TELL THE TWO APART. It is the
+					// lookup anyway because it is the one that carries the meaning: the
+					// permission is spent for a delivery that is still real, and if that
+					// ever stops being true here, the answer that costs a reinforcement is
+					// better than the one that spends it on a write claimDelivery refuses.
+					if t := s.claimedLocked(held); t != nil {
+						held.signal = s.takeUserSignalLocked(t)
+					}
 					deliver = append(deliver, held)
 					s.advanceTaskLocked(p.ID, task.Dispatched, "")
 				} else {
@@ -2058,6 +2081,16 @@ type delivery struct {
 	// It is the server's conclusion about the connection and never a field a
 	// client filled (#38 §4): connAuthor decides it while the socket is still
 	// open, and nothing on the wire carries an author.
+	//
+	// A PARKED DELIVERY NEVER CARRIES IT. It is set only on a delivery about to
+	// be carried out now — the immediate dispatchScored write, and the assignment
+	// scheduleLocked hands the tick — because it is a permission in flight and
+	// this struct does not survive a restart. Everything that waits in
+	// pendingDispatch leaves the permission on the task and takes it, through
+	// takeUserSignalLocked, at the settle that assigns it (#82). Two records of
+	// one permission is how a single operator act comes to count twice, so there
+	// is never a moment at which both this field and the task's stamp are set for
+	// the same brief.
 	signal bool
 	// attempt is the task's Attempts as the assignment left it — the delivery's
 	// claim on the panel, re-checked before the write. See claimDelivery.
@@ -4608,10 +4641,43 @@ func (s *Server) dispatchScored(id, prompt, submit string, author task.Author) (
 // parked as finished bytes — it was the one delivery nobody re-checked. The task
 // is Queued, which is what it is: a brief the fleet has accepted and not yet
 // delivered, and the status the walk-back's terminal transition advances from.
+//
+// THE OPERATOR'S STAMP MOVES ONTO THE TASK HERE, and moves rather than copies
+// (#82). A parked delivery lives only in memory — onPanelExit drops it, and a
+// restart never sees it — so a brief the operator aimed at a BUSY panel lost its
+// reinforcement to a reboot while the identical brief sent to the backlog kept
+// it. The task is the thing that survives, so the permission goes where the
+// backlog road already keeps it, and is spent at delivery by the one thing that
+// spends it: takeUserSignalLocked, at the settle site in monitorTick.
+//
+// The MOVE is what keeps the fix from double counting, and copying is the
+// obvious wrong shape. A parked delivery that kept d.signal as well would be a
+// SECOND record of one permission: with no restart the panel settles and the
+// in-memory bool counts one, and the stamp is still on the task for a re-drive
+// or a reboot to spend again. That is the replay #50 closed on the backlog road,
+// re-entered from the other end and costing a tier on a single operator act.
+// There is one record of the permission and it is the task's.
+//
+// It is an assignment rather than an |=, which answers the superseding case
+// correctly: upsertTaskLocked re-dispatches a panel's still-live task in place,
+// so an agent's brief landing on top of the operator's parked one discards a
+// permission whose delivery has just been superseded — and a superseded delivery
+// reaches no agent, which R4 says counts nothing.
 func (s *Server) holdDispatchLocked(idx int, d delivery, author task.Author) {
 	s.panels[idx].Task = d.prompt
 	t := s.upsertTaskLocked(d.panel, d.prompt, s.panels[idx].Group, task.Queued, author)
 	d.task, d.attempt = t.ID, t.Attempts
+	t.UserSignal = d.signal
+	d.signal = false
+	if t.UserSignal {
+		// Re-nudged on enqueueTaskFrom's terms, and NO TEST CAN FAIL ON THIS LINE:
+		// upsertTaskLocked already nudged under the lock the caller still holds, and
+		// the saver snapshots the task under that same lock, so it cannot read the
+		// task before the stamp is on it. What the second send buys is the dropped
+		// nudge — taskDirty is non-blocking and a full channel discards one — which
+		// is the same slim thing the stamp beside the spawn spec buys there.
+		s.markTaskDirtyLocked(t.ID)
+	}
 	s.pendingDispatch[d.panel] = d // deliver when the panel next settles
 }
 
@@ -4990,6 +5056,26 @@ func (s *Server) enqueueTaskFrom(prompt, group string, spawn *task.SpawnSpec, au
 // the same terms rather than paid for with a synchronous write on the delivery
 // path. The tests wait for the assignment to reach the file for this reason; see
 // waitForBacklogInFlight, which is where the window is visible.
+//
+// THE PARKED ROAD NOW ENTERS THAT SAME WINDOW, and #82 says so here rather than
+// leaving the next reader to discover it. A dispatch to a busy panel used to
+// keep its permission only on the in-memory delivery, so it had no window at all
+// — and no durability either: a reboot before the panel settled dropped the
+// reinforcement outright, while the identical brief queued through task.enqueue
+// kept it. Both roads now leave the stamp on the task and spend it HERE, so a
+// brief parked across a restart is re-driven and counted once.
+//
+// The window that buys is not a second one of its own and it is NOT WIDER than
+// the backlog road's, because it is the backlog road's: the spend is under this
+// same lock, the count is after the write in the same deliver, and the same
+// saver goroutine carries the same non-blocking nudge to the same file. If
+// anything it is marginally narrower within one tick — monitorTick appends a
+// settled panel's parked delivery to the deliver list before scheduleLocked
+// appends the backlog's, and the list is walked in order, so a parked spend has
+// fewer binds standing between it and its count than a queued one assigned on
+// the same tick. What it is NOT is a window at the PARK: a stamp sitting unspent
+// while the panel is busy is a brief nothing has delivered, which is a case that
+// must count, and counting it after a reboot is the fix rather than the cost.
 func (s *Server) takeUserSignalLocked(t *task.Task) bool {
 	if !t.UserSignal {
 		return false
@@ -5176,7 +5262,14 @@ func (s *Server) applyScheduledSpawns(spawns []spawnRequest) bool {
 		s.panelTask[pid] = t.ID
 		// Unbound: the panel was created a moment ago and has not settled, so its
 		// brief is bound when the monitor delivers it rather than here (#44).
-		s.pendingDispatch[pid] = delivery{panel: pid, task: t.ID, prompt: t.Prompt, spawned: true, plugin: t.Author == task.AuthorPlugin, signal: s.takeUserSignalLocked(t), attempt: t.Attempts}
+		//
+		// And UNSPENT: the stamp stays on the task, for the settle site in
+		// monitorTick to spend when this delivery is actually assigned (#82). This
+		// road parks like holdDispatchLocked's and loses its delivery to a restart
+		// the same way, so spending here bought nothing a reboot could keep — it
+		// only made a provisioned worker that died before settling lose the
+		// operator's reinforcement outright.
+		s.pendingDispatch[pid] = delivery{panel: pid, task: t.ID, prompt: t.Prompt, spawned: true, plugin: t.Author == task.AuthorPlugin, attempt: t.Attempts}
 		s.emit("task.change", taskFields(t))
 		s.markTaskDirtyLocked(t.ID)
 		s.mu.Unlock()
