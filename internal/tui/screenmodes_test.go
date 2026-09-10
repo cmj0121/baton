@@ -8,8 +8,8 @@ import (
 	vt "github.com/charmbracelet/x/vt"
 )
 
-// The terminal modes the cockpit asks for used to be program options and
-// commands — WithAltScreen at three call sites, and an enable/disable command
+// The terminal modes the cockpit asks for used to be arguments to the program —
+// an alt-screen option repeated at three launch sites, and a pair of commands
 // fired at the moments the mouse toggle changed. They are fields on the frame
 // now, which means the cockpit states them again on every render rather than
 // remembering to send them. These are the guards on that: a frame that forgot to

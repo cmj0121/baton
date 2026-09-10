@@ -25,9 +25,12 @@ func TestHandleInputPlainRunes(t *testing.T) {
 }
 
 // TestHandleInputIgnoresAltChord proves an Alt/Meta chord (e.g. Alt+f) is treated
-// as a shortcut and does not leak its base rune into the field. The bug was that
-// KeyRunes appended regardless of k.Alt, so any Meta chord typed over an open
-// overlay dropped a stray character into the buffer.
+// as a shortcut and does not leak its base rune into the field. The bug it stands
+// on was a rune branch that appended whatever the key carried without asking
+// whether Meta was held, so any Meta chord typed over an open overlay dropped a
+// stray character into the buffer. What keeps it fixed is now upstream: a
+// decoder clears a key's text the moment it sets the Alt modifier, so a chord
+// reaches the field with nothing to append.
 func TestHandleInputIgnoresAltChord(t *testing.T) {
 	m := model{input: inputDispatch, inputBuf: "hi"}
 	m = typeInput(m, key("alt+f"))
