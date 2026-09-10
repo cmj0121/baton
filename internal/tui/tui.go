@@ -1036,11 +1036,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	// A bracketed paste is its own message now rather than a run of runes with a
-	// flag. It is fed in as a key that is nothing but text, which is what it was
-	// under the old model: no binding can match it, and every field and emulator
-	// that takes typed text takes it unchanged.
+	// flag. It goes to whatever is taking text and never near the binding layer.
 	case tea.PasteMsg:
-		return m.Update(tea.KeyPressMsg{Text: msg.Content})
+		m.lastInput = m.now
+		return m.handlePaste(msg.Content)
 
 	case tea.KeyPressMsg:
 		k := msg.Key()
@@ -1313,6 +1312,41 @@ func (m *model) applyTelemetry(sm proto.ServerMsg) {
 	}
 	m.observeWire(sm.Panels) // the inbox reads Since/Acked, which the fleet model does not carry
 	m.refreshAttention()
+}
+
+// handlePaste delivers pasted text to whatever is taking text right now, and
+// nowhere else. Every branch below is one an ordinary keystroke reaches too;
+// what is deliberately missing is the binding layer, because pasted characters
+// are not keystrokes.
+//
+// v1 said the same thing by wrapping a paste's String() in brackets so no
+// binding could match it. v2 has no such flag — a key's String() IS its text —
+// so a one-character paste of "w" run through handleKey would close the panel
+// under the cursor instead of typing a w. Keeping the paste off that road is
+// what replaces the brackets.
+func (m model) handlePaste(content string) (tea.Model, tea.Cmd) {
+	k := tea.Key{Text: content}
+	switch {
+	case m.input != inputNone:
+		return m.handleInput(k)
+	case m.scrolling:
+		return m, nil // scrollback is history; there is nothing here to type into
+	case m.mode == modeZoom:
+		// Text is not the continuation of a leader, so an armed one is dropped
+		// rather than left waiting to swallow the next real key.
+		m.zoomArmed, m.scrollOff = false, 0
+		if m.emu != nil {
+			feedKey(m.emu, k)
+		}
+	case m.mode == modeGroupZoom && m.groupInteract:
+		m.groupArmed, m.scrollOff = false, 0
+		m.feedFocused(k)
+	case m.mode == modeInbox && m.inboxComposing:
+		return m.handleInboxCompose("", k)
+	case m.mode == modeDirPick && m.dirPickTyping:
+		return m.handleDirPickFilter("", k)
+	}
+	return m, nil
 }
 
 func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
