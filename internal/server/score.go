@@ -1127,6 +1127,28 @@ func (a *mergeAlarm) note(before, after, floor int, now time.Time) (from int, ov
 		// Everything the store did between the last merge and this one was done by
 		// something else — a submission, or the operator's own editor — so the
 		// baseline moves with it. Only the merges are held against the run.
+		//
+		// EXCEPT that since #52 one of those things is a merge. An operator editing
+		// a line in score.md into what another entry already says makes the two
+		// converge, and reconcile retires one — a merge, by the store's own count
+		// (score.Delta.Merged), reached through a door this alarm cannot see. It is
+		// not merely uncounted here: the drop lands in `before - a.after`, so the
+		// baseline moves DOWN by it, and the run is then measured against a store
+		// the file door already shrank.
+		//
+		// Which masks rather than under-reports. A run opening at 100 whose file
+		// door retires 60 leaves the next conductor merge measuring 38 against a
+		// baseline of 40 — nothing to say — where the same 62 entries lost against
+		// the run's real opening of 100 would have fired. The alarm is quietest
+		// exactly when both doors have been busy.
+		//
+		// Left as it is, deliberately, and #80 holds the decision. Feeding it the
+		// store's own merge counter would make the file door visible, and would
+		// also fire on an operator tidying their own file — which is the noise the
+		// current shape avoids by not looking, and #38 declines to be a boundary
+		// against a same-uid agent editing score.md anyway. Choosing a threshold
+		// for that door needs false-positive data nobody has, and a threshold
+		// nobody can derive gets raised until it means nothing.
 		a.from += before - a.after
 	}
 	a.last, a.after = now, after
