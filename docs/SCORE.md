@@ -148,9 +148,11 @@ arrived on, never by anyone's claim about it. Three things count as you saying i
 - `baton ctl score submit` from your own shell
 - **dispatching or queuing a brief that matches an existing entry** — a prompt you type is you saying the thing,
   whether you sent it with `baton ctl dispatch` or left it in the backlog with `baton ctl queue add`. **A brief
-  counts when it is delivered**, never when it is typed: a queued one when the scheduler drains it, which may be after
-  a restart, and a dispatch to a busy panel when that panel settles. One a `task.pre` hook refuses at delivery counts
-  nothing, one parked for a panel that never settles counts nothing, and neither does a task `baton.enqueue` queued.
+  counts when it is delivered**, never when it is typed: a queued one when the scheduler drains it, and a dispatch to
+  a busy panel when that panel settles. **Either may be after a restart** — the permission is recorded on the task, so
+  a daemon restarted while the brief is still waiting re-drives it and counts it once, and one already delivered is not
+  counted again. One a `task.pre` hook refuses at delivery counts nothing, one parked for a panel that never settles
+  counts nothing, and neither does a task `baton.enqueue` queued.
 
 A user signal lifts the ceiling; it does not skip a rung. The entry still climbs the ordinary ladder to get there.
 

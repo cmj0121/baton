@@ -144,7 +144,7 @@ type SpawnSpec struct {
 // UserSignal is NOT the other half of Author, and the name is the difference.
 // Author is a durable fact about where the task came from, true for as long as
 // the task exists. UserSignal is a PERMISSION, worth exactly one reinforcement,
-// and the scheduler spends it on the assignment that takes it — so on a task in
+// and the daemon spends it on the assignment that takes it — so on a task in
 // flight it reads false, and that is the field working, not the field lying. See
 // Server.takeUserSignalLocked, which is the only thing that spends it, and which
 // says which way the spend is lossy.
@@ -155,6 +155,15 @@ type SpawnSpec struct {
 // time the scheduler drains the task onto a panel, and a queued task routinely
 // outlives the daemon that took it in. Persisting it is what carries the
 // server's reading of that connection across both gaps.
+//
+// It carries a DISPATCH to a busy panel across the same gaps, which is #82's
+// second half. That brief is parked for the panel to settle, and the park is a
+// map in one process: the permission used to live there and die with the daemon,
+// so the same operator act kept its reinforcement over a restart when it was
+// queued and lost it when it was dispatched. It is now recorded here on both
+// roads, and taken by takeUserSignalLocked on both — at the settle for a parked
+// brief, at the drain for a queued one. One record, one spend, and never two of
+// either for one act.
 //
 // IT IS THE SERVER'S CONCLUSION, NOT A CLAIM. Nothing on the wire can set it: the
 // enqueue command carries no such field, and the value is decided at enqueue from
