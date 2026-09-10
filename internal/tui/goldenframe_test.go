@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	vt "github.com/charmbracelet/x/vt"
+	"github.com/mattn/go-runewidth"
 	"github.com/muesli/termenv"
 
 	"github.com/cmj0121/baton/internal/config"
@@ -24,18 +25,29 @@ import (
 // and read the diff before committing it. A frame that changes without a reason
 // you can name in the commit message is a regression, not an update.
 
-// trueColor pins lipgloss's global colour profile for the duration of a frame
-// test. Under `go test` stdout is not a terminal, so the default profile is
-// Ascii and every colour lipgloss would emit is dropped — which would leave the
-// frames blind to exactly the styling regressions they exist to catch.
-func trueColor(t *testing.T) {
+// pinRender fixes everything outside the model that the drawing reads, so a
+// frame is a function of the cockpit's state and nothing else.
+//
+// Three things, each of which has already been caught moving. The colour
+// profile: under `go test` stdout is not a terminal, so the default is Ascii and
+// every colour lipgloss would emit is dropped before it reaches the file, which
+// would leave the frames blind to the styling regressions they exist to catch.
+// The palette: package state a cockpit's prefs overwrite, so a case that applied
+// a custom theme would repaint these. And the ambiguous-width rule, which
+// runewidth reads from the developer's LANG at init — on a zh_TW machine a
+// bullet is two cells and on a CI runner it is one, so twelve of these frames
+// changed shape between a laptop and a container until this line existed.
+func pinRender(t *testing.T) {
 	t.Helper()
-	prev := lipgloss.ColorProfile()
+	prevProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
-	// The palette is package state a cockpit's prefs overwrite, so an earlier
-	// case that applied a custom theme would otherwise repaint these frames.
+	prevEA := runewidth.DefaultCondition.EastAsianWidth
+	runewidth.DefaultCondition.EastAsianWidth = false
 	applyTheme(config.Theme{})
-	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(prevProfile)
+		runewidth.DefaultCondition.EastAsianWidth = prevEA
+	})
 }
 
 // frameState is one named cockpit state and the model it renders from.
@@ -253,7 +265,7 @@ func frameStates() []frameState {
 // TestGoldenFrames renders each state and compares it byte-for-byte with the
 // committed frame.
 func TestGoldenFrames(t *testing.T) {
-	trueColor(t)
+	pinRender(t)
 	update := os.Getenv("BATON_UPDATE_FRAMES") != ""
 	dir := filepath.Join("testdata", "frames")
 	if update {
@@ -289,7 +301,7 @@ func TestGoldenFrames(t *testing.T) {
 // same state rendered twice is the same bytes, so a diff after the migration
 // means the drawing changed and not that the snapshot was noise.
 func TestGoldenFramesAreDeterministic(t *testing.T) {
-	trueColor(t)
+	pinRender(t)
 	for _, st := range frameStates() {
 		t.Run(st.name, func(t *testing.T) {
 			if a, b := st.build(t).View().Content, st.build(t).View().Content; a != b {
