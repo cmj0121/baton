@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	vt "github.com/charmbracelet/x/vt"
 	"github.com/mattn/go-runewidth"
 	"github.com/rs/zerolog/log"
@@ -294,83 +294,24 @@ func closeZoom(emu *vt.SafeEmulator) {
 	}
 }
 
-// feedKey encodes a bubbletea key event into the zoomed emulator. Printable runes
-// (and pastes) go through as text; everything else is sent as a key event so the
-// emulator emits the mode-correct bytes — notably application-cursor-key (DECCKM)
-// sequences for the arrows when a full-screen program asks for them. Alt prefixes
-// the Meta modifier (an ESC lead-in).
-func feedKey(emu *vt.SafeEmulator, k tea.KeyMsg) {
-	if k.Type == tea.KeyRunes {
-		if k.Alt {
-			for _, r := range k.Runes {
-				emu.SendKey(vt.KeyPressEvent{Code: r, Mod: vt.ModAlt})
-			}
-			return
-		}
-		emu.SendText(string(k.Runes))
+// feedKey encodes a bubbletea key event into the zoomed emulator. A key that
+// stands for printable characters carries them in Text and goes through as text;
+// everything else is sent as a key event so the emulator emits the mode-correct
+// bytes — notably application-cursor-key (DECCKM) sequences for the arrows when a
+// full-screen program asks for them.
+//
+// This used to be a translation table. It is not one any more: bubbletea and the
+// emulator now name keys with the same ultraviolet code, so Code and Mod cross
+// the boundary as themselves.
+//
+// The event carries no Text because there is none left to carry — the branch
+// above took every key that has any. That matters more than it looks: the
+// emulator's encoder matches on the WHOLE struct, so a key that arrived here
+// still holding its text would match none of its cases and encode to nothing.
+func feedKey(emu *vt.SafeEmulator, k tea.Key) {
+	if k.Text != "" {
+		emu.SendText(k.Text)
 		return
 	}
-	ev, ok := keyEvent(k)
-	if !ok {
-		return
-	}
-	if k.Alt {
-		ev.Mod |= vt.ModAlt
-	}
-	emu.SendKey(ev)
-}
-
-// specialKey maps bubbletea's named (negative) key types to the ultraviolet key
-// code the emulator understands, so it can encode them in the program's mode.
-var specialKey = map[tea.KeyType]rune{
-	tea.KeyUp:     vt.KeyUp,
-	tea.KeyDown:   vt.KeyDown,
-	tea.KeyRight:  vt.KeyRight,
-	tea.KeyLeft:   vt.KeyLeft,
-	tea.KeyHome:   vt.KeyHome,
-	tea.KeyEnd:    vt.KeyEnd,
-	tea.KeyPgUp:   vt.KeyPgUp,
-	tea.KeyPgDown: vt.KeyPgDown,
-	tea.KeyInsert: vt.KeyInsert,
-	tea.KeyDelete: vt.KeyDelete,
-	tea.KeyF1:     vt.KeyF1,
-	tea.KeyF2:     vt.KeyF2,
-	tea.KeyF3:     vt.KeyF3,
-	tea.KeyF4:     vt.KeyF4,
-	tea.KeyF5:     vt.KeyF5,
-	tea.KeyF6:     vt.KeyF6,
-	tea.KeyF7:     vt.KeyF7,
-	tea.KeyF8:     vt.KeyF8,
-	tea.KeyF9:     vt.KeyF9,
-	tea.KeyF10:    vt.KeyF10,
-	tea.KeyF11:    vt.KeyF11,
-	tea.KeyF12:    vt.KeyF12,
-}
-
-// keyEvent converts a bubbletea key event into an ultraviolet key-press event,
-// reporting false for keys with no emulator equivalent. Enter, tab, esc, and
-// backspace share ASCII codes with control keys, so they are matched by name
-// first; the remaining 1..26 range encodes Ctrl-A..Ctrl-Z.
-func keyEvent(k tea.KeyMsg) (vt.KeyPressEvent, bool) {
-	switch k.Type {
-	case tea.KeySpace:
-		return vt.KeyPressEvent{Code: vt.KeySpace}, true
-	case tea.KeyEnter:
-		return vt.KeyPressEvent{Code: vt.KeyEnter}, true
-	case tea.KeyTab:
-		return vt.KeyPressEvent{Code: vt.KeyTab}, true
-	case tea.KeyEsc:
-		return vt.KeyPressEvent{Code: vt.KeyEscape}, true
-	case tea.KeyBackspace:
-		return vt.KeyPressEvent{Code: vt.KeyBackspace}, true
-	case tea.KeyShiftTab:
-		return vt.KeyPressEvent{Code: vt.KeyTab, Mod: vt.ModShift}, true
-	}
-	if r, ok := specialKey[k.Type]; ok {
-		return vt.KeyPressEvent{Code: r}, true
-	}
-	if k.Type >= tea.KeyCtrlA && k.Type <= tea.KeyCtrlZ {
-		return vt.KeyPressEvent{Code: 'a' + rune(k.Type-tea.KeyCtrlA), Mod: vt.ModCtrl}, true
-	}
-	return vt.KeyPressEvent{}, false
+	emu.SendKey(vt.KeyPressEvent{Code: k.Code, Mod: k.Mod})
 }

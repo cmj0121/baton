@@ -3,6 +3,8 @@ package tui
 import (
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/cmj0121/baton/internal/proto"
 )
 
@@ -50,7 +52,7 @@ func splitAt(interact bool) model {
 func updateKeys(t *testing.T, m model, keys ...string) model {
 	t.Helper()
 	for _, k := range keys {
-		out, _ := m.Update(key(k))
+		out, _ := m.Update(tea.KeyPressMsg(key(k)))
 		next, ok := out.(model)
 		if !ok {
 			t.Fatalf("Update returned something other than a model for %q", k)

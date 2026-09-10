@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/cmj0121/baton/internal/scrub"
@@ -200,7 +200,7 @@ func (m model) moveDirPick(delta int) model {
 
 // handleDirPickKey drives the picker. The filter takes the keyboard while it is
 // open (any rune types into it), so its keys are read first.
-func (m model) handleDirPickKey(key string, k tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleDirPickKey(key string, k tea.Key) (tea.Model, tea.Cmd) {
 	if m.dirPickTyping {
 		return m.handleDirPickFilter(key, k)
 	}
@@ -244,25 +244,22 @@ func (m model) handleDirPickKey(key string, k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // handleDirPickFilter feeds the filter field: runes narrow the listing as they
 // are typed, enter keeps the narrowed list and hands the keyboard back, esc drops
 // the filter entirely.
-func (m model) handleDirPickFilter(key string, k tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch k.Type {
-	case tea.KeyEsc:
+func (m model) handleDirPickFilter(key string, k tea.Key) (tea.Model, tea.Cmd) {
+	switch {
+	case k.Code == tea.KeyEsc:
 		m.dirPickTyping, m.dirPickFilter = false, ""
 		return m.browseDir(m.dirPickDir), nil
-	case tea.KeyEnter:
+	case k.Code == tea.KeyEnter:
 		m.dirPickTyping = false
 		m.status = m.dirPickLegend()
 		return m, nil
-	case tea.KeyBackspace:
+	case k.Code == tea.KeyBackspace:
 		if r := []rune(m.dirPickFilter); len(r) > 0 {
 			m.dirPickFilter = string(r[:len(r)-1])
 		}
 		return m.browseDir(m.dirPickDir), nil
-	case tea.KeyRunes:
-		if k.Alt {
-			return m, nil
-		}
-		m.dirPickFilter += printableRunes(k.Runes)
+	case k.Text != "":
+		m.dirPickFilter += printableRunes([]rune(k.Text))
 		return m.browseDir(m.dirPickDir), nil
 	}
 	_ = key

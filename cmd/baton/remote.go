@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/rs/zerolog/log"
 
 	"github.com/cmj0121/baton/internal/client"
@@ -62,7 +62,7 @@ func attachRemote(cfg config.Config) error {
 // promptRemoteTarget runs the connection form as its own program. It is split
 // out so attachRemoteWith can be driven without a terminal.
 func promptRemoteTarget(address, problem string) (tui.RemoteTarget, bool, error) {
-	final, err := tea.NewProgram(tui.NewRemoteForm(address, problem), tea.WithAltScreen()).Run()
+	final, err := tea.NewProgram(tui.NewRemoteForm(address, problem)).Run()
 	if err != nil {
 		return tui.RemoteTarget{}, false, fmt.Errorf("remote form: %w", err)
 	}
@@ -113,7 +113,7 @@ func attachRemoteWith(cfg config.Config, prompt promptFunc, cockpit cockpitFunc)
 // server sent, and it is printed once the alt screen is down: a cockpit that
 // vanishes should always say why.
 func runRemoteCockpit(c *client.Client, addr remote.Address) error {
-	_, runErr := tea.NewProgram(tui.New(c, version), tea.WithAltScreen()).Run()
+	_, runErr := tea.NewProgram(tui.New(c, version)).Run()
 	bye := c.Bye()
 	_ = c.Close()
 	if runErr != nil {

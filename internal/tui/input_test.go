@@ -4,11 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // typeInput feeds one key event to the input overlay and returns the next model.
-func typeInput(m model, k tea.KeyMsg) model {
+func typeInput(m model, k tea.Key) model {
 	next, _ := m.handleInput(k)
 	return next.(model)
 }
@@ -17,20 +17,23 @@ func typeInput(m model, k tea.KeyMsg) model {
 // a wide CJK glyph) lands in the buffer verbatim.
 func TestHandleInputPlainRunes(t *testing.T) {
 	m := model{input: inputDispatch}
-	m = typeInput(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("ab")})
-	m = typeInput(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("字")}) // a wide CJK glyph
+	m = typeInput(m, key("ab"))
+	m = typeInput(m, key("字")) // a wide CJK glyph
 	if m.inputBuf != "ab字" {
 		t.Fatalf("plain runes should append verbatim, inputBuf=%q", m.inputBuf)
 	}
 }
 
 // TestHandleInputIgnoresAltChord proves an Alt/Meta chord (e.g. Alt+f) is treated
-// as a shortcut and does not leak its base rune into the field. The bug was that
-// KeyRunes appended regardless of k.Alt, so any Meta chord typed over an open
-// overlay dropped a stray character into the buffer.
+// as a shortcut and does not leak its base rune into the field. The bug it stands
+// on was a rune branch that appended whatever the key carried without asking
+// whether Meta was held, so any Meta chord typed over an open overlay dropped a
+// stray character into the buffer. What keeps it fixed is now upstream: a
+// decoder clears a key's text the moment it sets the Alt modifier, so a chord
+// reaches the field with nothing to append.
 func TestHandleInputIgnoresAltChord(t *testing.T) {
 	m := model{input: inputDispatch, inputBuf: "hi"}
-	m = typeInput(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f"), Alt: true})
+	m = typeInput(m, key("alt+f"))
 	if m.inputBuf != "hi" {
 		t.Fatalf("an Alt chord must not append to the field, inputBuf=%q", m.inputBuf)
 	}
@@ -43,7 +46,7 @@ func TestHandleInputFiltersPastedControls(t *testing.T) {
 	m := model{input: inputDispatch}
 	esc, bel := string(rune(0x1b)), string(rune(0x07))
 	paste := "line1\nline2\tend" + esc + "[31m" + bel + "!"
-	m = typeInput(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(paste), Paste: true})
+	m = typeInput(m, typed(paste))
 	if want := "line1line2end[31m!"; m.inputBuf != want {
 		t.Fatalf("paste should keep only printable runes, inputBuf=%q want %q", m.inputBuf, want)
 	}

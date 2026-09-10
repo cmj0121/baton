@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-
 	"github.com/cmj0121/baton/internal/panel"
 )
 
@@ -203,7 +201,7 @@ func TestDirPickerOnlyForDirectoryPrompts(t *testing.T) {
 	}
 
 	m := model{mode: modeDashboard, input: inputNewPanelCmd, inputBuf: "/bin/ba"}
-	next, _ := m.handleInput(tea.KeyMsg{Type: tea.KeyCtrlO})
+	next, _ := m.handleInput(key("ctrl+o"))
 	if next.(model).mode == modeDirPick {
 		t.Fatal("a command prompt should not open a directory picker")
 	}

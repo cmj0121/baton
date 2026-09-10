@@ -242,12 +242,12 @@ func TestLensShowsInTheHeading(t *testing.T) {
 	m := lensModel()
 	m.width, m.height = 160, 40
 
-	if strings.Contains(stripANSI(m.View()), "group by") {
+	if strings.Contains(stripANSI(m.frame()), "group by") {
 		t.Fatal("the real tree is the default and needs no badge")
 	}
 	m.lens = lensState
-	if !strings.Contains(stripANSI(m.View()), "group by: state") {
-		t.Fatalf("a lens must be stated on the heading, got:\n%s", stripANSI(m.View()))
+	if !strings.Contains(stripANSI(m.frame()), "group by: state") {
+		t.Fatalf("a lens must be stated on the heading, got:\n%s", stripANSI(m.frame()))
 	}
 }
 

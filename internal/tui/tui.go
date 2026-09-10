@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 	vt "github.com/charmbracelet/x/vt"
 	"github.com/mattn/go-runewidth"
@@ -906,21 +906,7 @@ func tick() tea.Cmd {
 }
 
 func (m model) Init() tea.Cmd {
-	cmds := []tea.Cmd{waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), waitTelemetry(m.client.Telemetry), waitConfig(m.client.Config), waitFooter(m.client.Footer), waitUsage(m.client.Usage), waitRemote(m.client.Remote), tick()}
-	if m.mouseEnabled {
-		cmds = append(cmds, tea.EnableMouseCellMotion) // honour the persisted mouse toggle on attach
-	}
-	return tea.Batch(cmds...)
-}
-
-// mouseCmd turns the terminal's mouse reporting on or off, matching the toggle.
-// Cell-motion mode reports clicks and the wheel without the noise of every
-// pointer move, which is all the cockpit's wheel handling needs.
-func mouseCmd(on bool) tea.Cmd {
-	if on {
-		return tea.EnableMouseCellMotion
-	}
-	return tea.DisableMouse
+	return tea.Batch(waitEvent(m.client.Events), waitOutput(m.client.Output), waitStats(m.client.Stats), waitTelemetry(m.client.Telemetry), waitConfig(m.client.Config), waitFooter(m.client.Footer), waitUsage(m.client.Usage), waitRemote(m.client.Remote), tick())
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1032,38 +1018,49 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.saver.step()
 		return m, saverTick()
 
-	case tea.MouseMsg:
+	// A click, a release, the wheel and bare motion are four types now, where they
+	// were one message carrying an Action. The two the cockpit acts on are named
+	// together because the old model called them both a press: a wheel turn is as
+	// much a deliberate act as a click, so both reset the idle timer and both
+	// dismiss the screensaver.
+	case tea.MouseClickMsg, tea.MouseWheelMsg:
+		m.lastInput = m.now // only a deliberate act counts for the idle timer
 		if m.mode == modeScreensaver {
-			if msg.Action == tea.MouseActionPress { // a click dismisses; motion/release is ignored
-				m.lastInput = m.now
-				return m.exitScreensaver(), nil
-			}
-			return m, nil // do not let cell-motion noise leak into the covered view
+			return m.exitScreensaver(), nil
 		}
-		if msg.Action == tea.MouseActionPress {
-			m.lastInput = m.now // only a real click counts as activity for the idle timer
-		}
-		return m.handleMouse(msg)
+		return m.handleMouse(msg.(tea.MouseMsg).Mouse())
 
-	case tea.KeyMsg:
+	// Release and motion are not acts. Dropping them is what keeps cell-motion
+	// noise from leaking into a view the screensaver is covering.
+	case tea.MouseReleaseMsg, tea.MouseMotionMsg:
+		return m, nil
+
+	// A bracketed paste is its own message now rather than a run of runes with a
+	// flag. It goes to whatever is taking text and never near the binding layer.
+	case tea.PasteMsg:
+		m.lastInput = m.now
+		return m.handlePaste(msg.Content)
+
+	case tea.KeyPressMsg:
+		k := msg.Key()
 		m.lastInput = m.now // any key resets the idle timer, in every mode
 		m = m.noteKey(msg.String())
 		if m.mode == modeScreensaver {
 			return m.exitScreensaver(), nil // any key dismisses the saver, swallowed whole
 		}
 		if m.input != inputNone { // a text-input overlay (incl. zoom search) captures keys in every mode
-			return m.handleInput(msg)
+			return m.handleInput(k)
 		}
 		if m.scrolling { // scroll mode owns the keyboard until esc/q
-			return m.handleScrollKey(msg)
+			return m.handleScrollKey(k)
 		}
 		switch m.mode {
 		case modeZoom:
-			return m.handleZoomKey(msg)
+			return m.handleZoomKey(k)
 		case modeGroupZoom:
-			return m.handleGroupZoomKey(msg)
+			return m.handleGroupZoomKey(k)
 		}
-		return m.handleKey(msg)
+		return m.handleKey(k)
 	}
 	return m, nil
 }
@@ -1317,7 +1314,42 @@ func (m *model) applyTelemetry(sm proto.ServerMsg) {
 	m.refreshAttention()
 }
 
-func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+// handlePaste delivers pasted text to whatever is taking text right now, and
+// nowhere else. Every branch below is one an ordinary keystroke reaches too;
+// what is deliberately missing is the binding layer, because pasted characters
+// are not keystrokes.
+//
+// v1 said the same thing by wrapping a paste's String() in brackets so no
+// binding could match it. v2 has no such flag — a key's String() IS its text —
+// so a one-character paste of "w" run through handleKey would close the panel
+// under the cursor instead of typing a w. Keeping the paste off that road is
+// what replaces the brackets.
+func (m model) handlePaste(content string) (tea.Model, tea.Cmd) {
+	k := tea.Key{Text: content}
+	switch {
+	case m.input != inputNone:
+		return m.handleInput(k)
+	case m.scrolling:
+		return m, nil // scrollback is history; there is nothing here to type into
+	case m.mode == modeZoom:
+		// Text is not the continuation of a leader, so an armed one is dropped
+		// rather than left waiting to swallow the next real key.
+		m.zoomArmed, m.scrollOff = false, 0
+		if m.emu != nil {
+			feedKey(m.emu, k)
+		}
+	case m.mode == modeGroupZoom && m.groupInteract:
+		m.groupArmed, m.scrollOff = false, 0
+		m.feedFocused(k)
+	case m.mode == modeInbox && m.inboxComposing:
+		return m.handleInboxCompose("", k)
+	case m.mode == modeDirPick && m.dirPickTyping:
+		return m.handleDirPickFilter("", k)
+	}
+	return m, nil
+}
+
+func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 	// The space bar answers to two names depending on the terminal and the
 	// bubbletea version; tok settles on the one the key map is written in, so a
 	// binding on space cannot half-work and no handler has to check for both.
@@ -1862,40 +1894,36 @@ func (m model) commitLimit(s string) model {
 
 // handleInput routes a keystroke to the active text-input overlay: printable
 // runes append, backspace deletes, enter submits, esc cancels.
-func (m model) handleInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch k.Type {
-	case tea.KeyEsc:
+func (m model) handleInput(k tea.Key) (tea.Model, tea.Cmd) {
+	switch {
+	case k.Code == tea.KeyEsc:
 		if m.input == inputFilter { // esc out of the filter clears it back to the whole fleet
 			m.filter, m.cursor = "", 0
 		}
 		m.input, m.inputHint = inputNone, ""
 		m.status = "cancelled"
-	case tea.KeyEnter:
+	case k.Code == tea.KeyEnter:
 		return m.commitInput()
-	case tea.KeyBackspace:
+	case k.Code == tea.KeyBackspace:
 		if r := []rune(m.inputBuf); len(r) > 0 {
 			m.inputBuf = string(r[:len(r)-1])
 		}
 		m.inputHint = ""
-	case tea.KeyCtrlB: // delete the word (path segment) before the cursor
+	case k.Code == 'b' && k.Mod&tea.ModCtrl != 0: // delete the word (path segment) before the cursor
 		m.inputBuf = deleteLastWord(m.inputBuf)
 		m.inputHint = ""
-	case tea.KeyTab: // complete a path input toward an existing directory entry
+	case k.Code == tea.KeyTab: // complete a path input toward an existing directory entry
 		if inputIsPath(m.input) {
 			m.inputBuf, m.inputHint = completePath(m.inputBuf)
 		}
-	case tea.KeyCtrlO: // browse for the directory instead of spelling it
+	case k.Code == 'o' && k.Mod&tea.ModCtrl != 0: // browse for the directory instead of spelling it
 		if inputIsDir(m.input) {
 			return m.openDirPicker(m.mode), nil
 		}
-	case tea.KeySpace:
-		m.inputBuf += " "
-		m.inputHint = ""
-	case tea.KeyRunes:
-		if k.Alt { // an Alt/Meta chord (e.g. Alt+f) is a shortcut, not text — don't leak its rune into the field
-			return m, nil
-		}
-		m.inputBuf += printableRunes(k.Runes) // a paste can carry newlines / ESC / control bytes; keep only what a field may show
+	case k.Text != "":
+		// An Alt/Meta chord (e.g. Alt+f) is a shortcut, not text, and never reaches
+		// here: the decoder clears Text the moment it sets ModAlt.
+		m.inputBuf += printableRunes([]rune(k.Text)) // a paste can carry newlines / ESC / control bytes; keep only what a field may show
 		m.inputHint = ""
 	}
 	// The filter narrows the dashboard live as you type, so mirror the field into
@@ -2810,7 +2838,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		m.sendf(proto.Command{Action: "server.reload"})
 		m = m.applyPrefs(loadPrefs())
 		m.status = "config reloaded · backend + cockpit"
-		return m, mouseCmd(m.mouseEnabled) // re-assert mouse reporting to match the reloaded toggle
+		return m, nil // the reloaded mouse toggle rides out on the next frame's View
 	case actDetach:
 		m.quitting = true
 		return m, tea.Quit
@@ -2885,15 +2913,15 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 		case rowBinding:
 			return m.runAction(m.keymap()[idx].act)
 		case rowSetting:
-			var cmd tea.Cmd
 			switch idx {
 			case settingBell:
 				m.bellEnabled = !m.bellEnabled
 				m.status = "bell: " + onOff(m.bellEnabled)
 			case settingMouse:
+				// The terminal's mouse reporting is a property of the frame now, so
+				// flipping the toggle IS the flip — the next View carries it.
 				m.mouseEnabled = !m.mouseEnabled
 				m.status = "mouse: " + onOff(m.mouseEnabled)
-				cmd = mouseCmd(m.mouseEnabled) // flip the terminal's mouse reporting now
 			case settingLanguage:
 				m.lang = i18n.Next(m.effLang()) // a cycle, not a toggle: enter advances it
 				m.langChosen = true             // now it is a choice, and worth persisting
@@ -2905,7 +2933,7 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 			if err := m.saveConfig(); err != nil {
 				m.status = "toggled, but save failed: " + err.Error()
 			}
-			return m, cmd
+			return m, nil
 		}
 		return m, nil
 	}
@@ -3018,7 +3046,7 @@ func (m *model) requestDiff(p panel.Panel) {
 // a leader: every bare key drives the program, and a baton action is the leader
 // then whatever that action is bound to — the same sequence the dashboard uses,
 // landings included, so C-t v u works here exactly as v u works there.
-func (m model) handleZoomKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleZoomKey(k tea.Key) (tea.Model, tea.Cmd) {
 	key := tok(k.String())
 
 	// The leader is down, or a landing it opened is still waiting for its next
@@ -3200,7 +3228,7 @@ func (m model) scrollTarget() (*vt.SafeEmulator, int) {
 // handleScrollKey drives scroll mode: arrows / k / j move a line, b / space /
 // PgUp / PgDn move a page, and esc or q leaves. Other keys are ignored so a
 // stray press never drops you out mid-scroll.
-func (m model) handleScrollKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleScrollKey(k tea.Key) (tea.Model, tea.Cmd) {
 	emu, rows := m.scrollTarget()
 	if emu == nil {
 		return m.exitScroll(), nil
@@ -3276,17 +3304,14 @@ const mouseWheelLines = 3
 // selection like the arrow keys. The toggle is off by default, so these only fire
 // once the user has opted into mouse reporting. Non-wheel buttons are ignored, so
 // a stray click never disturbs the view.
-func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+func (m model) handleMouse(msg tea.Mouse) (tea.Model, tea.Cmd) {
 	if m.input != inputNone {
 		return m, nil // a prompt (filter, search, rename…) owns the view — don't scroll behind it
-	}
-	if msg.Action != tea.MouseActionPress {
-		return m, nil
 	}
 	// A left click in the group split focuses the tile under the pointer, so you can
 	// jump straight to a member instead of tabbing to it. It is ignored in interact
 	// mode (where clicks belong to the program) and when it lands off any tile.
-	if msg.Button == tea.MouseButtonLeft {
+	if msg.Button == tea.MouseLeft {
 		if m.mode == modeGroupZoom && !m.groupInteract {
 			if idx, ok := m.tileAtPoint(msg.X, msg.Y); ok {
 				m.groupFocus = idx
@@ -3295,8 +3320,8 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	up := msg.Button == tea.MouseButtonWheelUp
-	down := msg.Button == tea.MouseButtonWheelDown
+	up := msg.Button == tea.MouseWheelUp
+	down := msg.Button == tea.MouseWheelDown
 	if !up && !down {
 		return m, nil
 	}
@@ -3575,7 +3600,25 @@ func (m model) cols() int {
 // untrusted program output (a misbehaving full-screen program, or an emulator
 // parser edge case): rather than crash the whole TUI, it logs the stack and shows
 // a recoverable placeholder so the next frame redraws clean.
-func (m model) View() (out string) {
+//
+// The alt screen and mouse reporting ride on the frame rather than on the
+// program: they are properties of what the cockpit is showing right now, so the
+// toggle that owns each one is read here, once, on the way out.
+func (m model) View() tea.View {
+	v := tea.NewView(m.frame())
+	v.AltScreen = true
+	if m.mouseEnabled {
+		// Cell motion reports clicks and the wheel without the noise of every
+		// pointer move, which is all the cockpit's wheel handling needs.
+		v.MouseMode = tea.MouseModeCellMotion
+	}
+	return v
+}
+
+// frame is the cockpit's screen as a string — everything View draws, minus the
+// terminal modes it carries. Kept apart from View so the render's panic guard
+// wraps only the drawing, and so a test can read the frame it produced.
+func (m model) frame() (out string) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().Interface("panic", r).Bytes("stack", debug.Stack()).Msg("recovered a render panic")

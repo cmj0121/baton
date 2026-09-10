@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
 	vt "github.com/charmbracelet/x/vt"
 )
 
@@ -53,7 +52,7 @@ func TestCopySelectionYank(t *testing.T) {
 		t.Fatalf("a 3-line scroll past the anchor should span 4 lines, got [%d,%d] ok=%v (anchor top %d)", lo, hi, ok, anchorTop)
 	}
 
-	next, cmd := m.handleScrollKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	next, cmd := m.handleScrollKey(key("y"))
 	m = next.(model)
 	if cmd == nil {
 		t.Fatal("y should emit a clipboard command")

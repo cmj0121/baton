@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	vt "github.com/charmbracelet/x/vt"
 
 	"github.com/cmj0121/baton/internal/vtirm"
@@ -88,7 +88,7 @@ func TestClickFocusesTile(t *testing.T) {
 	}
 	// Click inside the second tile's box (offset into the grid by the header).
 	r := rects[1]
-	click := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: r.x + 1, Y: r.y + groupHeaderRows + 1}
+	click := tea.Mouse{Button: tea.MouseLeft, X: r.x + 1, Y: r.y + groupHeaderRows + 1}
 	next, _ := m.handleMouse(click)
 	if got := next.(model).groupFocus; got != 1 {
 		t.Fatalf("click in tile 1 should focus it, groupFocus=%d", got)
@@ -96,7 +96,7 @@ func TestClickFocusesTile(t *testing.T) {
 
 	// A click on the header row resolves to no tile and leaves the focus put.
 	m.groupFocus = 2
-	header := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 0, Y: 0}
+	header := tea.Mouse{Button: tea.MouseLeft, X: 0, Y: 0}
 	next, _ = m.handleMouse(header)
 	if got := next.(model).groupFocus; got != 2 {
 		t.Fatalf("a header click should not change the focus, groupFocus=%d", got)

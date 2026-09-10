@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/cmj0121/baton/internal/client"
@@ -86,7 +86,7 @@ func TestViewRendersEveryMode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m := baseModel()
 			tc.mut(&m)
-			if m.View() == "" && m.width != 0 {
+			if m.frame() == "" && m.width != 0 {
 				t.Fatal("non-zero-size view should render something")
 			}
 		})
@@ -100,7 +100,7 @@ func TestPreviewAcrossCursor(t *testing.T) {
 	m.height = 40
 	for i := range m.fleet {
 		m.cursor = i
-		_ = m.View()
+		_ = m.frame()
 	}
 }
 
@@ -176,7 +176,7 @@ func TestUpdateBranches(t *testing.T) {
 		t.Fatal("tick not applied")
 	}
 
-	m2, _ = m.Update(key("ctrl+t"))
+	m2, _ = m.Update(tea.KeyPressMsg(key("ctrl+t")))
 	m = m2.(model)
 	if !m.prefix {
 		t.Fatal("key event not routed to handleKey")

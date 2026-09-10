@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/cmj0121/baton/internal/panel"
@@ -449,7 +449,7 @@ func withoutID(ids []string, drop string) []string {
 // handleInboxKey drives the overlay. The composer, when open, owns the keyboard
 // outright: the queue's own verbs are inert while you are typing, so a reply
 // containing the letter x cannot dismiss the row you are answering.
-func (m model) handleInboxKey(key string, k tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleInboxKey(key string, k tea.Key) (tea.Model, tea.Cmd) {
 	if m.inboxComposing {
 		return m.handleInboxCompose(key, k)
 	}
@@ -593,7 +593,7 @@ func (m model) startInboxReply() (tea.Model, tea.Cmd) {
 // handleInboxCompose is the composer's keyboard. Deliberately tiny: runes append,
 // backspace deletes one, ctrl+u clears the line, esc/ctrl+c cancel and leave the
 // row exactly where it was, enter sends. No other key is consulted.
-func (m model) handleInboxCompose(key string, k tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleInboxCompose(key string, k tea.Key) (tea.Model, tea.Cmd) {
 	switch key {
 	case "esc", "ctrl+c":
 		m.inboxComposing, m.inboxReply = false, ""
@@ -613,8 +613,8 @@ func (m model) handleInboxCompose(key string, k tea.KeyMsg) (tea.Model, tea.Cmd)
 		m.inboxReply += " "
 		return m, nil
 	}
-	if k.Type == tea.KeyRunes {
-		m.inboxReply += string(k.Runes)
+	if k.Text != "" {
+		m.inboxReply += k.Text
 	}
 	return m, nil
 }

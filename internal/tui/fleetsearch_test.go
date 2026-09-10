@@ -98,7 +98,7 @@ func TestFleetSearchResultsOpen(t *testing.T) {
 		t.Fatalf("k at the top should clamp, got %d", m.fsCursor)
 	}
 	// The view renders without panicking, showing the panel a hit belongs to.
-	if !strings.Contains(m.View(), "auth") {
+	if !strings.Contains(m.frame(), "auth") {
 		t.Fatal("the results view should render its panel-group header")
 	}
 }

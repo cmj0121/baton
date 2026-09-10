@@ -35,8 +35,8 @@ import (
 	"syscall"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/alecthomas/kong"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/shirou/gopsutil/v4/process"
@@ -1793,7 +1793,7 @@ func runClient(verbose int, logPath, pluginPath string) error {
 			return fmt.Errorf("attach to baton server at %s: %w", sock, err)
 		}
 
-		final, runErr := tea.NewProgram(tui.New(c, version), tea.WithAltScreen()).Run()
+		final, runErr := tea.NewProgram(tui.New(c, version)).Run()
 		_ = c.Close()
 		if runErr != nil {
 			return fmt.Errorf("tui: %w", runErr)

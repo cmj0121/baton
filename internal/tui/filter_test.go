@@ -3,8 +3,6 @@ package tui
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-
 	"github.com/cmj0121/baton/internal/panel"
 )
 
@@ -73,7 +71,7 @@ func TestFilterLiveTyping(t *testing.T) {
 	}
 
 	type_ := func(s string) {
-		next, _ := m.handleInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)})
+		next, _ := m.handleInput(key(s))
 		m = next.(model)
 	}
 	type_("w")
@@ -82,7 +80,7 @@ func TestFilterLiveTyping(t *testing.T) {
 	}
 
 	// esc clears the filter and closes the overlay.
-	next, _ := m.handleInput(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ := m.handleInput(key("esc"))
 	m = next.(model)
 	if m.filter != "" || m.input != inputNone {
 		t.Fatalf("esc should clear the filter and close the overlay, filter=%q input=%v", m.filter, m.input)
@@ -98,7 +96,7 @@ func TestFilterCommitKeeps(t *testing.T) {
 	m := model{mode: modeDashboard, fleet: filterFleet()}
 	m = m.openFilter()
 	m.inputBuf = "ui"
-	next, _ := m.handleInput(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ := m.handleInput(key("enter"))
 	m = next.(model)
 	if m.input != inputNone {
 		t.Fatal("enter should close the overlay")

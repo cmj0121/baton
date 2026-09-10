@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -136,7 +136,7 @@ func TestEnterExitScreensaver(t *testing.T) {
 func TestScreensaverDismissAnyKeySwallowed(t *testing.T) {
 	m := baseModel()
 	m = m.enterScreensaver() // from the dashboard
-	tm, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(keyDetach)})
+	tm, cmd := m.Update(tea.KeyPressMsg(key(keyDetach)))
 	nm := tm.(model)
 	if nm.mode != modeDashboard {
 		t.Fatalf("mode = %v, want the dashboard restored", nm.mode)
@@ -149,18 +149,31 @@ func TestScreensaverDismissAnyKeySwallowed(t *testing.T) {
 	}
 }
 
-// TestScreensaverDismissMouse: a click dismisses the saver; motion is ignored so
-// cell-motion noise neither dismisses nor leaks into the covered view.
+// TestScreensaverDismissMouse: a click or a wheel turn dismisses the saver;
+// motion and release are ignored, so cell-motion noise neither dismisses it nor
+// leaks into the covered view.
 func TestScreensaverDismissMouse(t *testing.T) {
 	m := baseModel()
 	m = m.enterScreensaver()
 
-	tm, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionMotion})
+	tm, _ := m.Update(tea.MouseMotionMsg{})
 	if tm.(model).mode != modeScreensaver {
 		t.Fatal("mouse motion should not dismiss the saver")
 	}
 
-	tm, _ = tm.(model).Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	tm, _ = tm.(model).Update(tea.MouseReleaseMsg{Button: tea.MouseLeft})
+	if tm.(model).mode != modeScreensaver {
+		t.Fatal("a button release should not dismiss the saver")
+	}
+
+	// The wheel dismisses too. It is a deliberate act, and it always has been
+	// one here — it just used to arrive labelled a press.
+	wheeled, _ := tm.(model).Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	if wheeled.(model).mode != modeDashboard {
+		t.Fatal("the wheel should dismiss the saver")
+	}
+
+	tm, _ = tm.(model).Update(tea.MouseClickMsg{Button: tea.MouseLeft})
 	if tm.(model).mode != modeDashboard {
 		t.Fatal("a click should dismiss the saver")
 	}
@@ -255,7 +268,7 @@ func TestSaverTickReArmsOnlyWhenActive(t *testing.T) {
 func TestSummonFromDashboard(t *testing.T) {
 	m := baseModel()
 	m.prefix = true // leader already pressed
-	tm, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(keyScreensaver)})
+	tm, cmd := m.handleKey(key(keyScreensaver))
 	if tm.(model).mode != modeScreensaver {
 		t.Fatal("C-t E should summon the saver")
 	}
@@ -275,7 +288,7 @@ func TestSummonFromZoom(t *testing.T) {
 	m := baseModel()
 	m.mode = modeZoom
 	m.zoomArmed = true // leader already pressed inside the zoom
-	tm, cmd := m.handleZoomKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(keyScreensaver)})
+	tm, cmd := m.handleZoomKey(key(keyScreensaver))
 	nm := tm.(model)
 	if nm.mode != modeScreensaver {
 		t.Fatal("C-t E should summon the saver from a zoom")
@@ -297,7 +310,7 @@ func TestSummonFromGroupSplit(t *testing.T) {
 	m := baseModel()
 	m.mode = modeGroupZoom
 	m.groupArmed = true // leader already pressed inside the split
-	tm, cmd := m.handleGroupZoomKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(keyScreensaver)})
+	tm, cmd := m.handleGroupZoomKey(key(keyScreensaver))
 	nm := tm.(model)
 	if nm.mode != modeScreensaver {
 		t.Fatal("C-t E should summon the saver from the group split")
