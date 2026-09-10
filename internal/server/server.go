@@ -5292,7 +5292,7 @@ func (s *Server) tasksMsg() proto.ServerMsg {
 		wire[i] = proto.Task{
 			ID: t.ID, Prompt: t.Prompt, Status: string(t.Status), Panel: t.Panel,
 			Group: t.Group, Result: t.Result, Priority: t.Priority, Attempts: t.Attempts,
-			Spawn: t.Spawn != nil,
+			Spawn: t.Spawn != nil, Author: string(t.Author),
 		}
 	}
 	return proto.ServerMsg{Type: "tasks", Tasks: wire}

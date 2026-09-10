@@ -149,3 +149,32 @@ func TestTaskTransitionGuards(t *testing.T) {
 		t.Fatal("a running task can finish")
 	}
 }
+
+// TestTheBacklogSnapshotCarriesTheAuthor is the last hop of #82: a durable
+// author nothing can ask for is the defect it set out to fix, and task.list is
+// where a frontend asks. It walks all three values through the reply rather than
+// one, because the middle case is the one a bool could not have carried — an
+// agent's task is a positive answer here, not the absence of a flag.
+func TestTheBacklogSnapshotCarriesTheAuthor(t *testing.T) {
+	s, _, _ := scoreServer(nil)
+	s.mu.Lock()
+	s.tasks = map[string]*task.Task{
+		"t1": {ID: "t1", Prompt: "a", Status: task.Queued, Author: task.AuthorUser, Priority: 3},
+		"t2": {ID: "t2", Prompt: "b", Status: task.Queued, Author: task.AuthorAgent, Priority: 2},
+		"t3": {ID: "t3", Prompt: "c", Status: task.Queued, Author: task.AuthorPlugin, Priority: 1},
+		"t4": {ID: "t4", Prompt: "d", Status: task.Queued, Author: task.AuthorUnknown},
+	}
+	s.mu.Unlock()
+
+	msg := s.tasksMsg()
+	got := map[string]string{}
+	for _, w := range msg.Tasks {
+		got[w.ID] = w.Author
+	}
+	want := map[string]string{"t1": "user", "t2": "agent", "t3": "plugin", "t4": ""}
+	for id, w := range want {
+		if got[id] != w {
+			t.Fatalf("task %s went out as author=%q, want %q", id, got[id], w)
+		}
+	}
+}
