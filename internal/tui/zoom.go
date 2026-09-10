@@ -302,9 +302,12 @@ func closeZoom(emu *vt.SafeEmulator) {
 //
 // This used to be a translation table. It is not one any more: bubbletea and the
 // emulator now name keys with the same ultraviolet code, so Code and Mod cross
-// the boundary as themselves. Text is dropped from the event on purpose — the
-// emulator's encoder matches on the whole struct, and a stray Text would miss
-// every case in it.
+// the boundary as themselves.
+//
+// The event carries no Text because there is none left to carry — the branch
+// above took every key that has any. That matters more than it looks: the
+// emulator's encoder matches on the WHOLE struct, so a key that arrived here
+// still holding its text would match none of its cases and encode to nothing.
 func feedKey(emu *vt.SafeEmulator, k tea.Key) {
 	if k.Text != "" {
 		emu.SendText(k.Text)

@@ -168,8 +168,16 @@ func TestPasteReachesEveryTextSink(t *testing.T) {
 
 		m := baseModel()
 		m.mode, m.zoomID, m.emu = modeZoom, "1", emu
-		if _, _ = m.Update(tea.PasteMsg{Content: "make test"}); <-got != "make test" {
-			t.Error("a paste should reach the zoomed program")
+		_, _ = m.Update(tea.PasteMsg{Content: "make test"})
+		// A deadline, not a bare receive: a paste that never arrives is the
+		// failure this case is for, and it must be reported rather than hung on.
+		select {
+		case sent := <-got:
+			if sent != "make test" {
+				t.Errorf("the zoomed program got %q", sent)
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("a paste should reach the zoomed program; nothing arrived")
 		}
 	})
 
@@ -193,11 +201,24 @@ func TestPasteReachesEveryTextSink(t *testing.T) {
 	})
 
 	t.Run("scrollback takes none", func(t *testing.T) {
+		emu := vt.NewSafeEmulator(20, 5)
+		sent := make(chan string, 1)
+		go func() {
+			buf := make([]byte, 64)
+			n, _ := emu.Read(buf)
+			sent <- string(buf[:n])
+		}()
+
 		m := baseModel()
-		m.mode, m.emu, m.scrolling = modeZoom, vt.NewSafeEmulator(20, 5), true
+		m.mode, m.emu, m.scrolling = modeZoom, emu, true
 		next, _ := m.Update(tea.PasteMsg{Content: "q"})
 		if !next.(model).scrolling {
 			t.Error("a paste should not drop scroll mode")
+		}
+		select {
+		case s := <-sent:
+			t.Errorf("scroll mode forwarded %q to the program; scrollback is history", s)
+		case <-time.After(200 * time.Millisecond):
 		}
 	})
 }
