@@ -182,11 +182,12 @@ func TestGroupDispatchBindsEachMember(t *testing.T) {
 }
 
 // TestAFanoutCountsNoUserSignal pins #51's marked hold, which was a comment and
-// nothing else. dispatchGroupBound passes authorAgent with a paragraph above it
-// saying so, and that authorUser is the one-line change that would close the
-// asymmetry — so the paragraph names the exact edit and nothing stopped anyone
-// making it. Made, it turned one command the operator typed once into N user
-// reinforcements of whatever entry it repeated, and the suite stayed green.
+// nothing else. dispatchGroupBound passes task.AuthorAgent with a paragraph
+// above it saying so, and that task.AuthorUser is the one-line change that would
+// close the asymmetry — so the paragraph names the exact edit and nothing
+// stopped anyone making it. Made, it turned one command the operator typed once
+// into N user reinforcements of whatever entry it repeated, and the suite stayed
+// green.
 //
 // The hold is not that a fan-out SHOULD count nothing. It is that #50 and #51
 // both declined to rule on whether one command fanned to ten panels is one

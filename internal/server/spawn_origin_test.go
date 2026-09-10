@@ -150,8 +150,8 @@ func TestThePluginPaysTheCeilingAndNotTheGap(t *testing.T) {
 //
 // So this is the assertion that fails when someone makes the one-line change, and
 // it is here so that making it is a decision rather than a drift. #51's
-// authorAgent hold and TestAFanoutCountsNoUserSignal are the same pattern, and
-// the reason for it: that hold was a comment for a while, and a comment is
+// task.AuthorAgent hold and TestAFanoutCountsNoUserSignal are the same pattern,
+// and the reason for it: that hold was a comment for a while, and a comment is
 // something a green suite lets you walk past.
 func TestThePluginsBurstIsStillAdmitted(t *testing.T) {
 	s := newHostServer(t)

@@ -46,6 +46,42 @@ func CanAdvance(from, to Status) bool {
 	return false
 }
 
+// Author is the conclusion about WHO put a task in the backlog. It is one value
+// rather than a pair of bools because the states are mutually exclusive and two
+// adjacent bools at a call site can be swapped without breaking a build — and
+// here the swap would silently let a plugin's own enqueue reach the tier #37
+// reserves for the operator.
+//
+// It is decided from the CONNECTION and from nothing else (#38 §4). No enqueue
+// command carries an author field, so there is nothing for a client to assert.
+//
+// It lives in this package rather than in the server because it is a fact about
+// a TASK, and a task outlives the daemon that took it in: whatever reads a
+// backlog file back has to be able to spell it. It is a string for the same
+// reason Status is one — the store's own doc promises a task file is inspectable
+// and editable from outside baton, which an integer enum on disk is not, besides
+// renumbering every stored task the day a value is inserted in the middle.
+type Author string
+
+const (
+	// AuthorUnknown is the zero value, and it is a state rather than a default:
+	// nobody was concluded. A task file written before the author was recorded
+	// says nothing about who queued it that is not already in the plugin key, so
+	// reading its absence as any of the three below would be a guess wearing the
+	// authority of a record. No live road mints it; see Task.Author.
+	AuthorUnknown Author = ""
+	// AuthorAgent is a connection that declared a self on hello: an agent inside a
+	// panel driving the backlog. The commonest, and the safe one — a stamp that
+	// goes wrong in this direction only loses a reinforcement.
+	AuthorAgent Author = "agent"
+	// AuthorUser is a connection that declared no self: the TUI, or `baton ctl`
+	// from the operator's own shell.
+	AuthorUser Author = "user"
+	// AuthorPlugin is baton.enqueue, called from inside the Lua worker. There is no
+	// connection at all, and it is emphatically not the user.
+	AuthorPlugin Author = "plugin"
+)
+
 // SpawnSpec is a queued task's optional request to provision its own agent: when
 // the scheduler finds no free agent, it spawns one running Command with Args in
 // Dir, dispatches the task there, and — if CloseOnDone — closes that panel once the

@@ -218,10 +218,10 @@ func TestADispatchToASettledPanelIsStillRefusedSynchronously(t *testing.T) {
 func TestAParkedDispatchKeepsItsSubmitSequence(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		author taskAuthor
+		author task.Author
 	}{
-		{"a plugin's bare brief", authorPlugin},
-		{"a brief bound at delivery", authorAgent},
+		{"a plugin's bare brief", task.AuthorPlugin},
+		{"a brief bound at delivery", task.AuthorAgent},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, clk, written := gateServer(panel.Panel{ID: "p1", Kind: panel.Agent, State: panel.Spawning})
@@ -290,7 +290,7 @@ func TestASupersededParkedDispatchIsDropped(t *testing.T) {
 func TestAParkedDispatchIsClaimedBeforeItIsWritten(t *testing.T) {
 	s, clk, written := gateServer(panel.Panel{ID: "p1", Kind: panel.Agent, State: panel.Spawning})
 
-	if _, err := s.dispatchScored("p1", "first", "", authorAgent); err != nil {
+	if _, err := s.dispatchScored("p1", "first", "", task.AuthorAgent); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 
@@ -301,7 +301,7 @@ func TestAParkedDispatchIsClaimedBeforeItIsWritten(t *testing.T) {
 	s.onFilterTask = func(b TaskBrief) (TaskBrief, bool) {
 		if !landed {
 			landed = true
-			if _, err := s.dispatchScored("p1", "second", "", authorAgent); err != nil {
+			if _, err := s.dispatchScored("p1", "second", "", task.AuthorAgent); err != nil {
 				t.Errorf("the dispatch that supersedes: %v", err)
 			}
 		}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/task"
 )
 
 // This file is the server's side of the Lua plugin subsystem (docs/PLUGIN.md): the
@@ -268,7 +269,7 @@ func (s *Server) DispatchGroup(group, prompt string) (int, error) {
 // enqueue again: not a recursion the Lua worker could deadlock on, since the
 // chain runs later on the monitor goroutine, but an unbounded one all the same.
 func (s *Server) Enqueue(prompt, group string) (string, error) {
-	id, err := s.enqueueTaskFrom(prompt, group, nil, authorPlugin)
+	id, err := s.enqueueTaskFrom(prompt, group, nil, task.AuthorPlugin)
 	if err != nil {
 		return "", err
 	}
