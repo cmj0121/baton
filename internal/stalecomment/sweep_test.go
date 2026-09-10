@@ -166,6 +166,30 @@ func TestTheEvidenceIsScrubbedBeforeItReachesATerminal(t *testing.T) {
 	}
 }
 
+// The other half of the same boundary, and the reason unchecked scrubs rather
+// than only the evidence line. A refusal names a path, and `git ls-files -z`
+// hands paths over raw -- git quotes them only when it is writing them for a
+// human. So a tracked file whose NAME carries an escape puts it on stdout
+// through the one message that is printed when the sweep is at its least
+// suspicious: the one that says it could not look.
+func TestThePathInARefusalIsScrubbedToo(t *testing.T) {
+	f := newRepo(t)
+	f.write("a.go", "package p\n")
+	f.commit("baseline")
+	f.write("b\x1b]0;PWNED\x07.go", "package p\n\n// naming zzQuuxWidget\nthis is not go\n")
+	f.commit("a tracked file whose name carries an escape")
+
+	code, out := f.sweep("HEAD~1")
+	if code != ExitUnchecked {
+		t.Fatalf("exit %d, wanted %d\n%q", code, ExitUnchecked, out)
+	}
+	for _, r := range []rune{0x1b, 0x07} {
+		if strings.ContainsRune(out, r) {
+			t.Errorf("the path's %#x reached the report; a terminal would act on it:\n%q", r, out)
+		}
+	}
+}
+
 func TestTheCorrectedCommentIsQuiet(t *testing.T) {
 	f := newRepo(t)
 	f.write("lock.go", lockBaseline)
