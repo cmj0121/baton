@@ -52,10 +52,7 @@ func readFile(t *testing.T, dir, name string) string {
 func TestOpenStartsEmptyWithNoEntriesOnFirstRun(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "score")
 
-	s, err := Open(dir, Policy{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := openStore(t, dir)
 
 	if s.Len() != 0 {
 		t.Fatalf("a fresh store holds %d entries, want 0", s.Len())
@@ -108,10 +105,7 @@ func TestOpenExistingNeverReseeds(t *testing.T) {
 				t.Fatalf("write score.md: %v", err)
 			}
 
-			s, err := Open(dir, Policy{})
-			if err != nil {
-				t.Fatalf("Open: %v", err)
-			}
+			s := openStore(t, dir)
 			entries := s.Render(Context{})
 			if len(entries) != tt.want {
 				t.Fatalf("entries = %d, want %d", len(entries), tt.want)
@@ -130,10 +124,7 @@ func TestOpenExistingNeverReseeds(t *testing.T) {
 // absence is the property worth pinning rather than its contents.
 func TestSubmitAppendsBothFiles(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir, Policy{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := openStore(t, dir)
 
 	prov := Provenance{SourcePanel: "p1", SourceProfile: "dev", SourceCwd: "/work", Source: "agent"}
 	e := submitAs(t, s, "  ship it\nby friday  ", prov)
@@ -196,10 +187,7 @@ func TestSubmitAppendsBothFiles(t *testing.T) {
 // terminal.
 func TestSubmitNeutralisesControlSequences(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir, Policy{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := openStore(t, dir)
 
 	// OSC 52 clipboard write, a CSI colour + cursor move, a bidi override, a
 	// zero-width space, and a bare CR that would rewrite the line in place.
@@ -241,10 +229,7 @@ func TestSubmitNeutralisesControlSequences(t *testing.T) {
 // count.
 func TestSubmitRefusesOverLong(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir, Policy{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := openStore(t, dir)
 	before := readFile(t, dir, scoreMD)
 
 	if _, _, err := s.Submit(strings.Repeat("é", maxEntryRunes), Provenance{Source: "user"}); err != nil {
@@ -284,10 +269,7 @@ func TestLoadSanitisesOperatorEdits(t *testing.T) {
 		t.Fatalf("write score.md: %v", err)
 	}
 
-	s, err := Open(dir, Policy{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := openStore(t, dir)
 	block := s.RenderBlock(Context{Panel: "p1"})
 	for _, r := range block {
 		if r == '\n' {
@@ -309,10 +291,7 @@ func TestLoadSanitisesOperatorEdits(t *testing.T) {
 }
 
 func TestSubmitRejectsEmpty(t *testing.T) {
-	s, err := Open(t.TempDir(), Policy{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := openStore(t, t.TempDir())
 	// Blank, then a payload of nothing but scrubbed classes: ESC, BEL, U+200B
 	// ZERO WIDTH SPACE, U+202E RIGHT-TO-LEFT OVERRIDE, U+FFFD REPLACEMENT.
 	for _, text := range []string{"  \n ", "\x1b\x07\u200b\u202e\ufffd"} {
@@ -336,10 +315,7 @@ func TestSubmitRejectsEmpty(t *testing.T) {
 // whole path — file, Render, and the block a dispatch actually writes to a pty.
 func TestAFreshInstallInjectsNothing(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir, Policy{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := openStore(t, dir)
 	if got := memoryLines(readFile(t, dir, scoreMD)); got != nil {
 		t.Errorf("a fresh score.md carries %d lines that are memory, want none: %q", len(got), got)
 	}
@@ -351,10 +327,7 @@ func TestAFreshInstallInjectsNothing(t *testing.T) {
 	}
 
 	s.Close() // one writer per directory; hand the claim over
-	re, err := Open(dir, Policy{})
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
+	re := openStore(t, dir)
 	if re.Len() != 0 {
 		t.Errorf("Len on the second boot = %d, want 0", re.Len())
 	}
@@ -371,17 +344,11 @@ func TestAFreshInstallInjectsNothing(t *testing.T) {
 
 func TestSubmitSurvivesReopen(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir, Policy{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := openStore(t, dir)
 	e := submit(t, s, "persisted")
 
 	s.Close()
-	re, err := Open(dir, Policy{})
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
+	re := openStore(t, dir)
 	entries := re.Render(Context{})
 	if len(entries) != 1 {
 		t.Fatalf("entries after reopen = %d, want 1", len(entries))
@@ -395,10 +362,7 @@ func TestSubmitSurvivesReopen(t *testing.T) {
 }
 
 func TestSubmitConcurrent(t *testing.T) {
-	s, err := Open(t.TempDir(), Policy{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := openStore(t, t.TempDir())
 
 	const n = 16
 	var wg sync.WaitGroup
@@ -432,10 +396,7 @@ func TestRender(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s, err := Open(t.TempDir(), Policy{})
-			if err != nil {
-				t.Fatalf("Open: %v", err)
-			}
+			s := openStore(t, t.TempDir())
 			for i := 0; i < tt.submits; i++ {
 				if _, _, err := s.Submit(fmt.Sprintf("note %d", i), Provenance{Source: "user"}); err != nil {
 					t.Fatalf("Submit: %v", err)
@@ -453,10 +414,7 @@ func TestRenderEmptyAndDisabled(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, scoreMD), nil, 0o600); err != nil {
 		t.Fatalf("write score.md: %v", err)
 	}
-	s, err := Open(dir, Policy{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := openStore(t, dir)
 	if got := s.Render(Context{}); got != nil {
 		t.Errorf("empty store Render = %v, want nil", got)
 	}
@@ -512,10 +470,7 @@ func TestRenderBlockWording(t *testing.T) {
 
 func TestReinforce(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir, Policy{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := openStore(t, dir)
 	e := submit(t, s, "reinforce me")
 
 	if err := s.Reinforce(e.Id, "agent"); err != nil {
@@ -531,10 +486,7 @@ func TestReinforce(t *testing.T) {
 	// The counter is replayed from the log, and so is the tier those two
 	// reinforcements earned: three occurrences is the default threshold.
 	s.Close()
-	re, err := Open(dir, Policy{})
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
+	re := openStore(t, dir)
 	entries := re.Render(Context{})
 	got := entries[len(entries)-1]
 	if got.Reinforcements != 2 || got.Tier != 2 {
@@ -587,10 +539,7 @@ func TestRefineRefusesWhatItDoesNotKnow(t *testing.T) {
 
 func TestReconcilePicksUpOperatorEdits(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir, Policy{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := openStore(t, dir)
 
 	// Operator appends a line by hand.
 	md := readFile(t, dir, scoreMD) + "- [abc123] handwritten wisdom\n"
@@ -645,10 +594,7 @@ func TestAnOldSnapshotIsIgnoredAndLeftAlone(t *testing.T) {
 		t.Fatalf("write the old snapshot: %v", err)
 	}
 
-	s, err := Open(dir, Policy{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	s := openStore(t, dir)
 	// The file's tier 3 is not granted and its text is not adopted: score.md
 	// decides both, and the boot pass admits the line at tier 1.
 	entries := s.Render(Context{})
@@ -672,10 +618,7 @@ func TestTornEventLogTailTolerated(t *testing.T) {
 		t.Fatalf("write events: %v", err)
 	}
 
-	s, err := Open(dir, Policy{})
-	if err != nil {
-		t.Fatalf("Open with torn log tail: %v", err)
-	}
+	s := openStore(t, dir)
 	submit(t, s, "after the tear")
 
 	// The new event landed on its own line; only the torn line stays broken.
