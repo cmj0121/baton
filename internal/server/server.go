@@ -2036,18 +2036,19 @@ type delivery struct {
 	// standing agent goes back to the pool, an ephemeral one is reaped with it.
 	spawned bool
 	// plugin marks a brief a plugin originated — a task baton.enqueue queued
-	// (task.Task.Plugin) or a baton.dispatch held for a busy panel. It is carried
-	// here rather than looked up at delivery so that deliver — which runs off
-	// s.mu, and must, because it binds — needs no lock take of its own to know it.
-	// Task.Plugin is written once, under the lock that creates the task, and never
-	// mutated after, so there is no drift for the copy to protect against.
+	// (task.Task.Author == task.AuthorPlugin) or a baton.dispatch held for a busy
+	// panel. It is carried here rather than looked up at delivery so that
+	// deliver — which runs off s.mu, and must, because it binds — needs no lock
+	// take of its own to know it. The author is written under the lock that
+	// creates the task and only ever rewritten with the prompt beside it, so
+	// there is no drift for the copy to protect against.
 	plugin bool
 	// signal is the operator's ONE reinforcement, riding along with this delivery
 	// and spent when the delivery is assigned (task.Task.UserSignal). It is not
 	// plugin's opposite, and reading the two as an either/or is the mistake the
-	// pair invites: plugin is a durable fact about where the brief came from and
-	// holds for the brief's whole life, signal is a permission that is gone once
-	// taken. What is true is narrower — they are never BOTH set, because neither
+	// pair invites: plugin is read from a durable fact about where the brief came
+	// from and holds for the brief's whole life, signal is a permission that is
+	// gone once taken. What is true is narrower — they are never BOTH set, because neither
 	// baton.enqueue nor baton.dispatch is the operator — and it does not make
 	// either one the other's absence.
 	//
@@ -4549,7 +4550,7 @@ func (s *Server) dispatchScored(id, prompt, submit string, author task.Author) (
 		return 0, fmt.Errorf("no panel with id %q", id)
 	}
 	if !dispatchReady(s.panels[idx].State) {
-		s.holdDispatchLocked(idx, d)
+		s.holdDispatchLocked(idx, d, author)
 		s.mu.Unlock()
 		s.markDirty() // persist the brief so a restart restores it
 		return 0, nil
@@ -4580,14 +4581,14 @@ func (s *Server) dispatchScored(id, prompt, submit string, author task.Author) (
 		// any other. The chain will be asked again at settle: the cost of the race
 		// is a hook run twice over a window no wider than one bind, and the
 		// alternative is the stale write #51 closed.
-		s.holdDispatchLocked(idx, d)
+		s.holdDispatchLocked(idx, d, author)
 		s.mu.Unlock()
 		s.markDirty()
 		return took, nil
 	}
 	s.panels[idx].Task = prompt
 	delete(s.pendingDispatch, id) // a fresh immediate dispatch supersedes a held one
-	t := s.upsertTaskLocked(id, prompt, s.panels[idx].Group, task.Dispatched)
+	t := s.upsertTaskLocked(id, prompt, s.panels[idx].Group, task.Dispatched, author)
 	d.task, d.attempt = t.ID, t.Attempts
 	s.mu.Unlock()
 
@@ -4607,9 +4608,9 @@ func (s *Server) dispatchScored(id, prompt, submit string, author task.Author) (
 // parked as finished bytes — it was the one delivery nobody re-checked. The task
 // is Queued, which is what it is: a brief the fleet has accepted and not yet
 // delivered, and the status the walk-back's terminal transition advances from.
-func (s *Server) holdDispatchLocked(idx int, d delivery) {
+func (s *Server) holdDispatchLocked(idx int, d delivery, author task.Author) {
 	s.panels[idx].Task = d.prompt
-	t := s.upsertTaskLocked(d.panel, d.prompt, s.panels[idx].Group, task.Queued)
+	t := s.upsertTaskLocked(d.panel, d.prompt, s.panels[idx].Group, task.Queued, author)
 	d.task, d.attempt = t.ID, t.Attempts
 	s.pendingDispatch[d.panel] = d // deliver when the panel next settles
 }
@@ -4678,11 +4679,18 @@ func taskFields(t *task.Task) map[string]any {
 // whose current task is still live is re-dispatched in place — same id, a bumped
 // Attempts — so iterating on a busy agent keeps one task; otherwise a new task is
 // created. Caller holds s.mu.
-func (s *Server) upsertTaskLocked(panelID, prompt, group string, status task.Status) *task.Task {
+//
+// author is stamped in BOTH branches, beside the prompt and never apart from it.
+// It is the only road onto task.Task.Author, which is what keeps AuthorUnknown
+// meaning what it says: a task this fleet queued always names who queued it, so
+// an unknown author is only ever a file written before the field existed. The
+// re-dispatch branch replaces the prompt wholesale — a different brief on the
+// same record — and the author of that brief is the one asking now.
+func (s *Server) upsertTaskLocked(panelID, prompt, group string, status task.Status, author task.Author) *task.Task {
 	now := s.mon.now()
 	if tid, ok := s.panelTask[panelID]; ok {
 		if t := s.tasks[tid]; t != nil && !t.Status.Terminal() {
-			t.Prompt, t.Group, t.Status = prompt, group, status
+			t.Prompt, t.Group, t.Status, t.Author = prompt, group, status, author
 			t.Attempts++
 			t.Updated = now
 			s.emit("task.change", taskFields(t))
@@ -4693,7 +4701,7 @@ func (s *Server) upsertTaskLocked(panelID, prompt, group string, status task.Sta
 	s.taskSeq++
 	t := &task.Task{
 		ID: fmt.Sprintf("t%d", s.taskSeq), Prompt: prompt, Status: status,
-		Panel: panelID, Group: group, Attempts: 1, Created: now, Updated: now,
+		Panel: panelID, Group: group, Author: author, Attempts: 1, Created: now, Updated: now,
 	}
 	s.tasks[t.ID] = t
 	if panelID != "" {
@@ -4929,12 +4937,11 @@ func (s *Server) enqueueTaskFrom(prompt, group string, spawn *task.SpawnSpec, au
 	if s.queueMax > 0 && s.queuedBacklogLenLocked() >= s.queueMax {
 		return "", fmt.Errorf("queue is full (%d queued); raise queue.max or let it drain", s.queueMax)
 	}
-	t := s.upsertTaskLocked("", prompt, group, task.Queued)
-	t.Plugin = author == task.AuthorPlugin
+	t := s.upsertTaskLocked("", prompt, group, task.Queued, author)
 	t.UserSignal = author == task.AuthorUser
 	t.Spawn = spawn
 	if spawn != nil || author != task.AuthorAgent {
-		s.markTaskDirtyLocked(t.ID) // persist the spawn spec and the origin alongside the task
+		s.markTaskDirtyLocked(t.ID) // persist the spawn spec and the signal alongside the task
 	}
 	return t.ID, nil
 }
@@ -4978,7 +4985,7 @@ func (s *Server) enqueueTaskFrom(prompt, group string, spawn *task.SpawnSpec, au
 // invariant and an accident: the replay was systematic, on EVERY restart that
 // caught a user task in flight and again on the one after that, and it is now
 // reachable only by dying inside one saver hop. It is the same class of cost
-// task.Task.Plugin already carries and states — a stamp the saver has not
+// task.Task.Author already carries and states — a stamp the saver has not
 // written yet is a stamp a reboot reads as absent — and it is accepted here on
 // the same terms rather than paid for with a synchronous write on the delivery
 // path. The tests wait for the assignment to reach the file for this reason; see
@@ -5126,7 +5133,7 @@ func (s *Server) scheduleLocked() ([]delivery, []spawnRequest) {
 		groupRunning[t.Group]++ // the fresh dispatch counts against the cap for later tasks
 		s.emit("task.change", taskFields(t))
 		s.markTaskDirtyLocked(t.ID)
-		deliver = append(deliver, delivery{panel: pid, task: t.ID, prompt: t.Prompt, plugin: t.Plugin, signal: s.takeUserSignalLocked(t), attempt: t.Attempts})
+		deliver = append(deliver, delivery{panel: pid, task: t.ID, prompt: t.Prompt, plugin: t.Author == task.AuthorPlugin, signal: s.takeUserSignalLocked(t), attempt: t.Attempts})
 	}
 	return deliver, spawns
 }
@@ -5169,7 +5176,7 @@ func (s *Server) applyScheduledSpawns(spawns []spawnRequest) bool {
 		s.panelTask[pid] = t.ID
 		// Unbound: the panel was created a moment ago and has not settled, so its
 		// brief is bound when the monitor delivers it rather than here (#44).
-		s.pendingDispatch[pid] = delivery{panel: pid, task: t.ID, prompt: t.Prompt, spawned: true, plugin: t.Plugin, signal: s.takeUserSignalLocked(t), attempt: t.Attempts}
+		s.pendingDispatch[pid] = delivery{panel: pid, task: t.ID, prompt: t.Prompt, spawned: true, plugin: t.Author == task.AuthorPlugin, signal: s.takeUserSignalLocked(t), attempt: t.Attempts}
 		s.emit("task.change", taskFields(t))
 		s.markTaskDirtyLocked(t.ID)
 		s.mu.Unlock()

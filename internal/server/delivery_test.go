@@ -389,12 +389,12 @@ func TestAPluginQueuedTaskIsDeliveredBare(t *testing.T) {
 	}
 }
 
-// TestAPluginOriginOutlivesTheDaemon is why the stamp lives on task.Task rather
+// TestAPluginOriginOutlivesTheDaemon is why the author lives on task.Task rather
 // than in the server: a queued task can outlive the daemon that took it in, and
-// the one that delivers it has only the backlog file to go on. A task written by
-// a build without the field reads as socket-borne — accepted rather than
-// covered, for the reason task.Task's own doc gives: a baton.enqueue task that
-// predates the field is filtered once, at its first delivery after the upgrade.
+// the one that delivers it has only the backlog file to go on. The migration
+// itself is held by the file fixtures in internal/task and internal/queue; what
+// this holds is the near end of it — the task baton.enqueue creates goes to disk
+// naming a plugin, so there is something for a later daemon to read at all.
 func TestAPluginOriginOutlivesTheDaemon(t *testing.T) {
 	s, _ := deliveryServer()
 	id, err := s.Enqueue("later", "auth")
@@ -410,15 +410,7 @@ func TestAPluginOriginOutlivesTheDaemon(t *testing.T) {
 	if err := json.Unmarshal(blob, &back); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if !back.Plugin {
-		t.Fatalf("task round-tripped as %+v, want its plugin origin kept", back)
-	}
-
-	var older task.Task
-	if err := json.Unmarshal([]byte(`{"id":"t9","prompt":"x","status":"queued","attempts":1}`), &older); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if older.Plugin {
-		t.Fatalf("a task file with no origin field read as %+v, want it socket-borne", older)
+	if back.Author != task.AuthorPlugin {
+		t.Fatalf("task round-tripped as %+v, want its author kept as %q", back, task.AuthorPlugin)
 	}
 }

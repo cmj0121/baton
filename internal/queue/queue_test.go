@@ -225,3 +225,50 @@ func TestSaveUnwritableDir(t *testing.T) {
 		t.Fatal("Save into an unwritable parent should error")
 	}
 }
+
+// TestABacklogWrittenBeforeTheAuthorField loads files this build cannot write.
+// The store's package doc promises a task file is inspectable and editable from
+// outside baton, so these are what an upgrade actually finds on disk: a plugin's
+// task stamped with the old plugin key, and a task from any other road, which
+// recorded nothing about where it came from at all.
+//
+// It is here rather than only over task.Task's own decoder because the store is
+// what an upgrade runs: a record wrapper, a schema check and a file per task all
+// sit between the bytes and the field, and each is a place the promotion could
+// be lost without the decoder test noticing.
+func TestABacklogWrittenBeforeTheAuthorField(t *testing.T) {
+	s := newStore(t)
+	if err := os.MkdirAll(s.Dir(), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	files := map[string]string{
+		"t1.json": `{"schema":1,"task":{"id":"t1","prompt":"queued by a hook","status":"queued","plugin":true,"attempts":1}}`,
+		"t2.json": `{"schema":1,"task":{"id":"t2","prompt":"queued by someone","status":"queued","attempts":1}}`,
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(s.Dir(), name), []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	got, bad, err := s.LoadAll()
+	if err != nil || len(bad) != 0 {
+		t.Fatalf("LoadAll err=%v bad=%v", err, bad)
+	}
+	byID := map[string]task.Task{}
+	for _, tk := range got {
+		byID[tk.ID] = tk
+	}
+	if len(byID) != 2 {
+		t.Fatalf("want 2 tasks, got %d: %+v", len(byID), got)
+	}
+	if byID["t1"].Author != task.AuthorPlugin {
+		t.Fatalf("t1 author = %q, want the plugin key promoted to %q", byID["t1"].Author, task.AuthorPlugin)
+	}
+	// Not AuthorAgent. Nothing recorded who queued t2, and the zero value of the
+	// enum is not evidence — reading it as an agent's would be this fleet
+	// inventing a record it never kept.
+	if byID["t2"].Author != task.AuthorUnknown {
+		t.Fatalf("t2 author = %q, want %q — nothing on disk said", byID["t2"].Author, task.AuthorUnknown)
+	}
+}
