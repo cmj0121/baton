@@ -4,6 +4,32 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v2.0.0](https://github.com/cmj0121/baton/releases/tag/v2.0.0) — the fleet remembers, and says what it cannot see
+
+2026-09-11
+
+- **Score, a fleet-scope memory** — a store of what the fleet has learned, folded from repeats, promoted by recurrence,
+  and prepended to the briefs agents receive. It is a file an operator owns (`score.md`) with an append-only event log
+  beside it, and every door into it is argued: what an agent may submit, what only the conductor may merge or reword,
+  and what only a person editing the file can do.
+- **Worktrees as a first-class verb** — open a branch in its own checkout with an agent in it, from the dashboard, from
+  `baton ctl`, or from MCP; list what has accumulated and sweep it with a confirmation. A tree baton did not create is
+  never touched.
+- **A third kind of panel** — `command` runs a plain binary as the panel's process. It is watched like an agent and
+  never given work, and it HOLDS when it finishes rather than vanishing, so a build or a test run leaves its output on
+  the screen. `n c` is how the cockpit opens one.
+- **Serial ports** — `baton serial /dev/… 115200` puts a port in a panel, with the line settings named and a reconnect
+  that outlives the cable. No `screen`, no second prefix key, and the panel's own close is how you leave.
+- **Usage stops being one vendor's** — the footer names the agent whose reading it shows, and the overlay lists every
+  agent baton detected with an honest word for each: a reading, no usage source, or not installed. `grok` reads its own
+  accounting; a vendor that keeps none is said to keep none rather than drawn as a zero.
+- **Ten rounds of hardening** — an ssh destination read as an option, two atomic writers that silently ignored the mode
+  they were given, an `open(2)` on a FIFO that never returned and stopped the daemon before it served, a score store
+  whose one boot failure could not heal. Each round is in the tag's note.
+- **Upgrading**: the daemon must be restarted rather than reloaded, a `plug-in.lua` that anyone but you can write is now
+  refused loudly, `n c` opens a command panel rather than a shell running a command, and the cockpit now pays the fleet
+  ceiling it was previously exempt from. The wire is unchanged — still `baton/1` — and nothing on disk needs migrating.
+
 ## [v1.6.0](https://github.com/cmj0121/baton/releases/tag/v1.6.0) — the backends you have not installed
 
 2026-08-25
