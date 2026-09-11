@@ -155,7 +155,7 @@ func (m model) advanceSeq(key string, want func(binding) bool, run func(model, b
 		return m.clearPending(), nil
 	}
 
-	tokens := append(append([]string(nil), m.pending...), tok(key))
+	tokens := append(append([]string(nil), m.pending...), key)
 	b, res := matchSeq(m.keymap(), tokens, want)
 	switch res {
 	case seqExact:

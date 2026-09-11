@@ -831,12 +831,12 @@ func (m *model) ensureBinds() {
 // callers are the places that answer one key at a time (the escapes, which are
 // single by design, and the split's leader).
 func (m model) lookupCmd(key string) (binding, bool) {
-	b, res := matchSeq(m.keymap(), []string{tok(key)}, cmdBinding)
+	b, res := matchSeq(m.keymap(), []string{key}, cmdBinding)
 	return b, res == seqExact || res == seqExactPartial // it ends here either way
 }
 
 func (m model) lookupEscape(key string) (binding, bool) {
-	b, res := matchSeq(m.keymap(), []string{tok(key)}, escBinding)
+	b, res := matchSeq(m.keymap(), []string{key}, escBinding)
 	return b, res == seqExact || res == seqExactPartial
 }
 
@@ -1353,7 +1353,7 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 	// The space bar answers to two names depending on the terminal and the
 	// bubbletea version; tok settles on the one the key map is written in, so a
 	// binding on space cannot half-work and no handler has to check for both.
-	key := tok(k.String())
+	key := k.String()
 
 	// The send-signal picker owns the keyboard until a signal is chosen or esc.
 	if m.mode == modeSignal {
@@ -1464,7 +1464,7 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 			}
 			return m.commitRebind()
 		}
-		m.editBuf = append(m.editBuf, tok(key))
+		m.editBuf = append(m.editBuf, key)
 		m.status = "… " + strings.Join(labelTokens(m.editBuf), " ") + "  ·  enter binds  ·  esc cancels"
 		return m, nil
 	}
@@ -3047,7 +3047,7 @@ func (m *model) requestDiff(p panel.Panel) {
 // then whatever that action is bound to — the same sequence the dashboard uses,
 // landings included, so C-t v u works here exactly as v u works there.
 func (m model) handleZoomKey(k tea.Key) (tea.Model, tea.Cmd) {
-	key := tok(k.String())
+	key := k.String()
 
 	// The leader is down, or a landing it opened is still waiting for its next
 	// key. Both belong to baton rather than to the program.

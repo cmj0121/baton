@@ -46,7 +46,6 @@ func (m model) noteKey(key string) model {
 		return m
 	}
 
-	key = tok(key)
 	switch {
 	case armed:
 		// The first key after the leader: an escape, a whole command, or the
