@@ -18,19 +18,19 @@ import (
 // free, and it keeps "what does this sequence mean" answerable by reading one
 // function instead of a data structure built somewhere else.
 
-// tok canonicalises a bubbletea key name into a sequence token. Only the space
-// bar needs it: bubbletea calls it " ", which cannot survive a space-separated
-// sequence, so it is written and matched as "space".
-func tok(key string) string {
-	if key == " " {
-		return "space"
-	}
-	return key
-}
-
 // normSeq canonicalises a configured key into a space-separated sequence: runs
 // of whitespace collapse, and a key that is nothing but a space (how an older
 // config spells the space bar) becomes the "space" token.
+//
+// This is the only side that still has to do it. A LIVE key needed the same
+// canonicalisation under bubbletea v1, which named the space bar " " -- a name
+// no space-separated sequence can carry -- so every call site ran it through a
+//
+//	helper first. v2 names that key "space" itself, so the helper was an
+//
+// identity function on every input a live key can produce and is gone. A config
+// file written by hand still says whatever its author typed, which is why this
+// one stays.
 func normSeq(key string) string {
 	if strings.TrimSpace(key) == "" {
 		if key == "" {

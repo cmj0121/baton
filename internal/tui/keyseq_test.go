@@ -3,6 +3,8 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // bindsOf builds a throwaway key map from "name=key" pairs, so a case reads as
@@ -16,19 +18,20 @@ func bindsOf(pairs ...string) []binding {
 	return out
 }
 
-func TestTokAndNormSeq(t *testing.T) {
-	cases := []struct{ in, tok, norm string }{
-		{" ", "space", "space"},
-		{"p", "p", "p"},
-		{"ctrl+t", "ctrl+t", "ctrl+t"},
-		{"", "", ""},
-		{"g  c", "g  c", "g c"},
-		{" g c ", " g c ", "g c"},
+// normSeq is the config side, and it is the only side left: a live key under
+// bubbletea v2 already names the space bar "space", so the helper that used to
+// canonicalise one is gone. A hand-written config still says whatever its author
+// typed, including a line that is nothing but a space.
+func TestNormSeq(t *testing.T) {
+	cases := []struct{ in, norm string }{
+		{" ", "space"},
+		{"p", "p"},
+		{"ctrl+t", "ctrl+t"},
+		{"", ""},
+		{"g  c", "g c"},
+		{" g c ", "g c"},
 	}
 	for _, c := range cases {
-		if got := tok(c.in); got != c.tok {
-			t.Errorf("tok(%q) = %q, want %q", c.in, got, c.tok)
-		}
 		if got := normSeq(c.in); got != c.norm {
 			t.Errorf("normSeq(%q) = %q, want %q", c.in, got, c.norm)
 		}
@@ -203,6 +206,24 @@ func TestDefaultKeyMapTokenises(t *testing.T) {
 	for _, b := range bindings {
 		if len(b.seq()) == 0 {
 			t.Errorf("binding %q has no key", b.name)
+		}
+	}
+}
+
+// The space bar names itself, which is what let the old canonicaliser go.
+//
+// That helper existed for one input: bubbletea v1 called the space bar " ", a name no
+// space-separated sequence can carry, so every live key was canonicalised before
+// it reached the binding layer. v2 names it "space" already. If that ever stops
+// being true the helper has to come back, and this is what says so.
+func TestTheSpaceBarNamesItselfUnderV2(t *testing.T) {
+	for _, k := range []tea.Key{
+		{Code: tea.KeySpace},
+		{Code: tea.KeySpace, Text: " "},
+		{Code: ' ', Text: " "},
+	} {
+		if got := tea.KeyPressMsg(k).String(); got != "space" {
+			t.Errorf("a space key with Code=%q Text=%q is named %q, want \"space\"; the binding layer cannot carry that and the canonicaliser has to come back", k.Code, k.Text, got)
 		}
 	}
 }
