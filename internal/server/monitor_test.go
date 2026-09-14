@@ -175,31 +175,87 @@ func TestRenderSpark(t *testing.T) {
 	}
 }
 
-// TestLooksLikeAttention checks the prompt sniff: questions and confirmations on
-// the last line flag attention, ordinary output and shell prompts do not, and
-// colour codes are seen through.
+// TestLooksLikeAttention checks the prompt sniff: last-content-line questions and
+// confirmations flag attention, permission overlays whose last physical line is a
+// box-drawing border still flag, and ordinary output does not. Catalogue names
+// are fixtures for representative tails, not parsers.
 func TestLooksLikeAttention(t *testing.T) {
-	yes := []string{
-		"Do you want to continue?",
-		"building...\nProceed with the migration? (y/n)",
-		"Overwrite the file [Y/n]",
-		"\x1b[1;32mApply this change?\x1b[0m",
-		"Press enter to continue",
+	cases := []struct {
+		name string
+		tail string
+		want bool
+	}{
+		{"a trailing question", "Do you want to continue?", true},
+		{"y/n on the last line", "building...\nProceed with the migration? (y/n)", true},
+		{"bracketed Y/n", "Overwrite the file [Y/n]", true},
+		{"CSI-coloured question", "\x1b[1;32mApply this change?\x1b[0m", true},
+		{"press to continue", "Press enter to continue", true},
+
+		{"claude permission box ending on a border", "" +
+			"╭────────────────────────────────────────╮\n" +
+			"│ Do you want to proceed?                │\n" +
+			"│  2. Yes, and don't ask again           │\n" +
+			"│  3. No                                 │\n" +
+			"╰────────────────────────────────────────╯", true},
+		{"csi-coloured claude permission box", "" +
+			"\x1b[90m╭────────────────────────────────────────╮\x1b[0m\n" +
+			"\x1b[1;37m│ Do you want to proceed?                │\x1b[0m\n" +
+			"\x1b[32m│  2. Yes, and don't ask again           │\x1b[0m\n" +
+			"\x1b[31m│  3. No                                 │\x1b[0m\n" +
+			"\x1b[90m╰────────────────────────────────────────╯\x1b[0m", true},
+		{"gemini/aider question sitting above a border", "" +
+			"Allow this tool?\n" +
+			"╰──────────────────────────╯", true},
+		{"codex grant-permissions overlay", "" +
+			"Would you like to grant these permissions?\n" +
+			"❯ 1. Yes\n" +
+			"  2. No\n" +
+			"────────", true},
+		{"opencode overlay uses allow command", "" +
+			"╭──────────────────────────╮\n" +
+			"│ Allow command            │\n" +
+			"│ 1. Yes                   │\n" +
+			"│ 2. No                    │\n" +
+			"╰──────────────────────────╯", true},
+		{"grok overlay uses do not ask again", "" +
+			"Allow this\n" +
+			"do not ask again\n" +
+			"└────────────────┘", true},
+		{"CR-redrawn border does not hide the question", "Allow this tool?\r╰──────────────────────────╯", true},
+		{"side-bordered allow-this is content", "" +
+			"│ Allow this? │\n" +
+			"╰─────────────╯", true},
+
+		{"empty", "", false},
+		{"compile output", "compiling main.go\nok  baton  0.3s", false},
+		{"shell prompt", "user@host:~/baton$ ", false},
+		{"streaming work", "streaming tokens, still working", false},
+		{"mid-file question then more prose", "" +
+			"What is baton?\n" +
+			"Baton is an agent multiplexer.\n" +
+			"It runs locally.", false},
+		{"numbered Yes without a numbered No", "" +
+			"Summary of the run:\n" +
+			"1. Yes, tests pass\n" +
+			"2. Coverage holds", false},
+		{"overlay phrase older than the last dozen content lines", "" +
+			"don't ask again\n" +
+			"still compiling\n" +
+			"still compiling\n" +
+			"still compiling\n" +
+			"still compiling\n" +
+			"still compiling\n" +
+			"still compiling\n" +
+			"still compiling\n" +
+			"still compiling\n" +
+			"still compiling\n" +
+			"still compiling\n" +
+			"still compiling\n" +
+			"ok", false},
 	}
-	for _, s := range yes {
-		if !looksLikeAttention([]byte(s)) {
-			t.Errorf("expected attention for %q", s)
-		}
-	}
-	no := []string{
-		"",
-		"compiling main.go\nok  baton  0.3s",
-		"user@host:~/baton$ ",
-		"streaming tokens, still working",
-	}
-	for _, s := range no {
-		if looksLikeAttention([]byte(s)) {
-			t.Errorf("did not expect attention for %q", s)
+	for _, tc := range cases {
+		if got := looksLikeAttention([]byte(tc.tail)); got != tc.want {
+			t.Errorf("%s: looksLikeAttention() = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

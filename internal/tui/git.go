@@ -216,6 +216,31 @@ func (m model) commitWorktreeBranch(branch string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// commitIsolateBranch is A's isolate path after the here/isolate offer. Same
+// wire form as commitWorktreeBranch (empty ID, Dir = the parked workdir) but
+// the spec is resolveAgent — the picker choice — not the fleet default. A
+// shared prompt sequence would mix those two resolutions.
+func (m model) commitIsolateBranch(branch string) (tea.Model, tea.Cmd) {
+	if branch == "" {
+		m.input, m.status = inputIsolateBranch, "new worktree · a branch name is required"
+		return m, nil
+	}
+	prof, name, ok := m.resolveAgent()
+	dir := m.spawnDir
+	m.pendingAgent, m.spawnDir = "", ""
+	if !ok {
+		m.status = m.agentUnavailable(name)
+		return m, nil
+	}
+	m.sendf(proto.Command{
+		Action: "panel.git", Git: "worktree-add",
+		Dir: dir, Name: branch,
+		Path: prof.Command, Args: prof.Args, Profile: name,
+	})
+	m.status = "worktree + " + name + " on " + branch
+	return m, nil
+}
+
 // commitGitWorktree creates a worktree on the typed branch and spawns an agent in
 // it. It is a fleet change (no auto-zoom): the new agent appears on the dashboard,
 // grouped under the branch.

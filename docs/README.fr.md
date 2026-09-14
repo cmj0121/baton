@@ -57,7 +57,7 @@ baton
 Baton démarre son serveur en arrière-plan et vous dépose sur le **tableau de bord** — votre camp de base. Votre première
 minute :
 
-1. Appuyez sur **`A`** pour lancer un agent (vous choisirez un répertoire de travail pour lui).
+1. Appuyez sur **`A`** pour lancer un agent (vous choisirez un répertoire de travail ; entrée le pose ici, `w` l'isole sur une branche).
 2. Appuyez sur **`enter`** pour zoomer et le regarder travailler ; **`C-t d`** vous ramène au tableau de bord.
 3. Appuyez sur **`q`** pour vous détacher et partir — tout continue de tourner. Revenez quand vous voulez avec `baton`.
 
@@ -78,6 +78,23 @@ contient un agent, et tout le reste en découle :
 | Savoir ce que coûte la flotte      | rien                                   | les tokens et le coût de la fenêtre de facturation, et vos barres de quota, rattachés à un panneau |
 
 Baton ne remplace pas tmux et ne veut pas de vos shells — lancez-le dans tmux si c'est là que vous vivez.
+
+## Et les autres ?
+
+tmux n'est la bonne comparaison que pour la moitié de tout ça. herdr, Claude Squad et cmux partent déjà du principe que
+le panneau contient un agent. Ce n'est pas le même produit dans d'autres habits :
+
+|                                        | Baton                                 | herdr                  | Claude Squad      | cmux                  |
+| -------------------------------------- | ------------------------------------- | ---------------------- | ----------------- | --------------------- |
+| Exécution                              | démon PTY à soi                       | démon PTY à soi        | enveloppe tmux    | terminal GPU          |
+| Qui vous attend                        | boîte `C-t a`                         | barre blocked          | liste de sessions | notification rings    |
+| Isolation                              | offre sur `A` ; `n w` de premier rang | workspaces             | spawn = worktree  | workspaces            |
+| Score, file de tâches, plafonds, usage | Baton seulement                       | —                      | —                 | —                     |
+| Licence                                | `MIT`                                 | `Apache 2.0`           | `AGPL-3.0`        | `GPL-3.0-or-later`    |
+| vs tmux                                | pas un remplaçant                     | en forme de remplaçant | l'enveloppe       | un terminal, pas tmux |
+
+Score, la file de tâches, les plafonds sur l'arbre de processus et le pied de page d'usage n'ont pas d'équivalent chez
+les trois autres.
 
 ## Concept
 
@@ -136,7 +153,9 @@ Quatre touches sont des _landings_ : elles n'agissent pas seules et ouvrent une 
 |                 | `v l`             | la mise en page du tableau : cartes ou arbre                            |
 |                 | `m`               | saisir une ligne — les flèches la portent, `enter` la dépose            |
 |                 | `enter`           | ouvrir / zoomer la sélection                                            |
-|                 | `p` / `A` / `n c` | nouveau panneau shell / agent / command                                 |
+|                 | `p` / `n c`       | nouveau panneau shell / command                                         |
+|                 | `A`               | nouvel agent — répertoire, puis entrée ici ou `w` isoler                |
+|                 | `n w`             | isoler d'abord : dépôt, puis branche, agent par défaut                  |
 |                 | `n .`             | nouveau panneau shell dans le répertoire du panneau focalisé            |
 |                 | `n C`             | ouvrir le conductor (un agent qui pilote la flotte)                     |
 |                 | `n h`             | ouvrir le global shell (un shell hôte dans `$HOME`)                     |
