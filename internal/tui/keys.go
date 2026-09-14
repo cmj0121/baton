@@ -241,7 +241,7 @@ var bindings = []binding{
 	{"new-panel", keyNewPanel, "spawn a new shell panel", actNewPanel, "Panels", "shell"},
 	{"new-panel-here", keyNewHere, "spawn a shell panel in the focused panel's directory", actNewHere, "Panels", "here"},
 	{"new-panel-form", keyNewForm, "spawn a shell, or a command panel running the program you name", actNewForm, "Panels", "program"},
-	{"new-agent", keyNewAgent, "spawn an agent panel in a workdir", actNewAgent, "Panels", "agent"},
+	{"new-agent", keyNewAgent, "spawn an agent in a workdir, or isolate on a branch", actNewAgent, "Panels", "agent"},
 	{"conductor", keyConductor, "open the conductor — an agent that drives the fleet", actConductor, "Panels", "conductor"},
 	{"global-shell", keyGlobalShell, "open the global shell — a host shell always one key away", actGlobalShell, "Panels", "global shell"},
 	{"new-worktree", keyNewWorktree, "spawn an agent isolated in a new worktree on a new branch", actNewWorktree, "Panels", "worktree"},

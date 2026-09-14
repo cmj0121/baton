@@ -140,7 +140,7 @@ func (m model) chooseAgent(name string) (tea.Model, tea.Cmd) {
 		m.pendingAgent = name
 		m.input = inputAgentDir
 		m.inputBuf = m.defaultWorkdir()
-		m.status = "new " + name + " agent · type the workdir, enter to spawn"
+		m.status = "new " + name + " agent · type the workdir"
 		return m, nil
 	}
 }

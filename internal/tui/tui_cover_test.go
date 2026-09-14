@@ -74,6 +74,8 @@ func TestViewRendersEveryMode(t *testing.T) {
 		}},
 		{"input-shell", func(m *model) { m.input = inputShellPath; m.inputBuf = "/bin/zsh" }},
 		{"input-new-panel", func(m *model) { m.input = inputNewPanelCmd; m.inputBuf = "/bin/sh" }},
+		{"input-agent-dir", func(m *model) { m.input = inputAgentDir; m.inputBuf = "~/work" }},
+		{"input-isolate-branch", func(m *model) { m.input = inputIsolateBranch; m.inputBuf = "feat/x" }},
 		{"zoom", func(m *model) { m.mode = modeZoom; m.zoomTitle = "shell #1" }},
 		{"prefix-armed", func(m *model) { m.fleet = sampleFleet()[:3]; m.prefix = true }},
 		{"error", func(m *model) { m.fleet = sampleFleet()[:3]; m.status = "error: boom" }},

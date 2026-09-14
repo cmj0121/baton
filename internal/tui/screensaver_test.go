@@ -222,6 +222,7 @@ func TestCanAutoSaverGuards(t *testing.T) {
 		{"rebinding", func(m *model) { m.editing = true }, false},
 		{"backend-down", func(m *model) { m.backendDown = true }, false},
 		{"pending-close", func(m *model) { m.pendingClose = true }, false},
+		{"pending-spawn", func(m *model) { m.pendingSpawn = true }, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

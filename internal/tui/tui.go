@@ -198,6 +198,7 @@ type model struct {
 	mouseEnabled       bool      // mouse reporting on — the wheel scrolls and moves the selection (toggled in the key map)
 	pendingClose       bool      // a close is awaiting y/n confirmation
 	pendingRestart     bool      // a force-restart is awaiting y/n confirmation
+	pendingSpawn       bool      // A's workdir is awaiting here/isolate; handled beside pendingClose so w/n cannot leak
 	pendingConductor   bool      // a conductor spawn is in flight; zoom it when it lands in a snapshot
 	pendingGlobalShell bool      // a global-shell spawn is in flight; zoom it when it lands in a snapshot
 	now                time.Time // wall clock shown in the footer, ticked every second
@@ -277,13 +278,14 @@ type model struct {
 	// The agent backends the daemon detected on the machine the panels are spawned
 	// from, and the picker that offers them. pendingAgent is the backend the
 	// in-flight new-agent spawn chose; it is held rather than passed because the
-	// choice and the workdir are two overlays, and the spawn happens on the second.
+	// choice, the workdir, and the here/isolate confirm are separate steps, and
+	// only spawnAgent or commitIsolateBranch spends it.
 	backends     []proto.AgentBackend // detected agent backends, pushed by the daemon on config
 	agentList    []proto.AgentBackend // the picker's rows, frozen when it opened so a refresh cannot move them under the cursor
 	agentFrom    mode                 // the view the agent picker was opened from, restored on esc
 	agentPurpose agentPurpose         // what the picker will do with the choice: spawn with it, or make it the default
 	agentCursor  int                  // highlighted row in the agent picker
-	pendingAgent string               // the backend the workdir prompt will spawn ("" = the fleet default)
+	pendingAgent string               // the backend the in-flight A spawn will use ("" = the fleet default)
 	pluginFooter string               // a plugin-set persistent footer segment (baton.footer), shown in every view's footer
 	usageText    string               // the account usage/cost footer segment (internal/usage), pushed by the daemon
 	usageInfo    *proto.UsageInfo     // the same usage as structured data, so the segment can be re-rendered per mode and the countdown ticked on the cockpit's own clock
@@ -320,6 +322,11 @@ type model struct {
 	// inputGitWorktree), which esc already resets, so a stale value here can never
 	// reach the git menu's verb.
 	wtRepo string
+
+	// spawnDir is the expanded workdir parked for A's here/isolate confirm.
+	// Dedicated so it cannot leak into n w — wtRepo is that verb's payload, and
+	// TestNWNoLeakIntoMenu exists because that field is for n w only.
+	spawnDir string
 
 	// The diff popup (modeDiff): a master-detail overlay fed by the server's
 	// structured "diff" reply. diffFiles is the changed-file set; diffCursor selects
@@ -579,6 +586,7 @@ const (
 	inputGitRemove                   // worktree path to remove for the git menu (x)
 	inputWorktreeRepo                // the repository the dashboard's n w opens a worktree on, asked before the branch
 	inputWorktreeBranch              // the branch for that repository — the git menu's field, committing to the targetless form
+	inputIsolateBranch               // A's isolate path after the here/isolate offer — not n w's field, so the two cannot share a prompt sequence
 )
 
 // RestartRequested reports whether the cockpit exited because the user asked to
@@ -1481,6 +1489,25 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// A's workdir is waiting on here/isolate. These keys have to be taken here,
+	// beside pendingClose: later, w closes a panel and n opens the spawn family.
+	if m.pendingSpawn {
+		switch key {
+		case "enter", "n":
+			m.pendingSpawn = false
+			dir := m.spawnDir
+			m.spawnDir = ""
+			return m.spawnAgent(dir), nil
+		case "w":
+			m.pendingSpawn = false
+			m.input, m.inputBuf = inputIsolateBranch, ""
+			m.status = "new worktree in " + dirLabel(m.spawnDir) + " · type a branch, enter creates"
+			return m, nil
+		default:
+			return m.abortSpawnOffer(), nil
+		}
+	}
+
 	// A force-restart is waiting on a y/n answer. It tears down the daemon and the
 	// whole fleet, so it always confirms; only an explicit yes goes through.
 	if m.pendingRestart {
@@ -1900,7 +1927,11 @@ func (m model) handleInput(k tea.Key) (tea.Model, tea.Cmd) {
 		if m.input == inputFilter { // esc out of the filter clears it back to the whole fleet
 			m.filter, m.cursor = "", 0
 		}
+		isolate := m.input == inputIsolateBranch
 		m.input, m.inputHint = inputNone, ""
+		if isolate {
+			return m.abortSpawnOffer(), nil
+		}
 		m.status = "cancelled"
 	case k.Code == tea.KeyEnter:
 		return m.commitInput()
@@ -2071,7 +2102,7 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 	case inputNewPanelCmd:
 		return m.spawnFromForm(buf), nil
 	case inputAgentDir:
-		return m.spawnAgent(buf), nil
+		return m.parkSpawnOffer(buf), nil
 	case inputGroupName:
 		return m.commitGroup(buf), nil
 	case inputRename:
@@ -2103,6 +2134,8 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		return m.commitWorktreeRepo(buf)
 	case inputWorktreeBranch:
 		return m.commitWorktreeBranch(buf)
+	case inputIsolateBranch:
+		return m.commitIsolateBranch(buf)
 	}
 	return m, nil
 }
@@ -2226,6 +2259,29 @@ func (m model) cwdSource() (panel.Panel, bool) {
 		return panel.Panel{}, false
 	}
 	return it.panel, true
+}
+
+// parkSpawnOffer holds the typed workdir on a here/isolate confirm instead of
+// spawning immediately. Enter still means here; w is the isolate path. Those
+// keys are handled beside pendingClose — if they fall through, w closes a
+// panel and n opens the spawn family.
+func (m model) parkSpawnOffer(dir string) model {
+	m.spawnDir = expandDir(dir)
+	m.pendingSpawn = true
+	_, name, _ := m.resolveAgent()
+	m.status = fmt.Sprintf("spawn %s in %s · enter here · w isolate on a branch", name, dirLabel(m.spawnDir))
+	return m
+}
+
+// abortSpawnOffer drops a parked A spawn, including the picker choice. Cancel
+// is not "keep pendingAgent until spawn fires" — that only holds while the
+// offer is still live.
+func (m model) abortSpawnOffer() model {
+	m.pendingSpawn = false
+	m.spawnDir = ""
+	m.pendingAgent = ""
+	m.status = "spawn cancelled"
+	return m
 }
 
 // spawnAgent asks the server to create an agent panel: the resolved profile's
@@ -2571,7 +2627,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		}
 		m.input = inputAgentDir
 		m.inputBuf = m.defaultWorkdir()
-		m.status = fmt.Sprintf("new %s agent · type the workdir, enter to spawn", name)
+		m.status = fmt.Sprintf("new %s agent · type the workdir", name)
 	case actConductor:
 		// Open the conductor: since it is a mark in the FLEET heading, not a card, C
 		// is how you reach it. Zoom a live one to watch its work; re-run an exited one
@@ -4710,7 +4766,7 @@ func (m model) inputView() string {
 	case inputNewPanelCmd:
 		title, prompt, action = "NEW PANEL", "program and arguments  (blank = a shell)", "spawn"
 	case inputAgentDir:
-		title, prompt, action = "NEW AGENT", "working directory  (blank = home)", "spawn"
+		title, prompt, action = "NEW AGENT", "working directory  (blank = home)", "next"
 	case inputGroupName:
 		title, prompt, action = "NEW GROUP", "work-item name", "create"
 	case inputRename:
@@ -4729,9 +4785,9 @@ func (m model) inputView() string {
 		title, prompt, action = "FLEET SEARCH", "grep every panel's output  (regexp)", "search"
 	case inputGitBranch:
 		title, prompt, action = "NEW BRANCH", "branch name  (git checkout -b)", "create"
-	case inputGitWorktree, inputWorktreeBranch:
-		// One field, two verbs: the reader sees the same prompt either way, and
-		// which command it commits to is the purpose's business, not the label's.
+	case inputGitWorktree, inputWorktreeBranch, inputIsolateBranch:
+		// The reader sees the same prompt either way; which command it commits
+		// to is the purpose's business, not the label's.
 		title, prompt, action = "NEW WORKTREE", "branch name  (worktree + agent)", "create"
 	case inputGitRemove:
 		title, prompt, action = "REMOVE WORKTREE", "worktree path  (then confirm)", "next"

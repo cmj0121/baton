@@ -55,10 +55,20 @@ func TestNewAgentPicksThenAsksWhere(t *testing.T) {
 		t.Fatalf("the choice should be carried into the prompt, pending=%q status=%q", m.pendingAgent, m.status)
 	}
 
-	m.inputBuf = "~/work"
+	m = parkedAgentOffer(t, m, "~/work")
+	if m.pendingAgent != "codex" {
+		t.Fatalf("the choice is held until spawn fires, pending=%q", m.pendingAgent)
+	}
+	if !strings.Contains(m.status, "codex") || !strings.Contains(m.status, "here") {
+		t.Fatalf("the offer should name the chosen backend and both answers, got %q", m.status)
+	}
+
 	m = press(m, "enter")
 	if !strings.Contains(m.status, "codex") {
 		t.Fatalf("the spawn should name the chosen backend, got %q", m.status)
+	}
+	if strings.Contains(m.status, "isolate") {
+		t.Fatalf("here-spawn status must not imply isolate happened, got %q", m.status)
 	}
 	if m.pendingAgent != "" {
 		t.Fatal("the choice is spent once spawned — the next A starts from the default again")
@@ -176,5 +186,33 @@ func TestConfigMessageCarriesTheBackends(t *testing.T) {
 	m.applyEvent(proto.ServerMsg{Type: "config", Agents: detected("claude", "aider")})
 	if len(m.backends) != 2 || m.backends[1].Name != "aider" {
 		t.Fatalf("the config push should land the detected backends, got %+v", m.backends)
+	}
+}
+
+// TestNewAgentPicksThenIsolates is why A+w cannot share n w's profile: the
+// isolate send has to carry the picker choice, not the fleet default.
+func TestNewAgentPicksThenIsolates(t *testing.T) {
+	c, cmds := recordingServer(t)
+	m := baseModel()
+	m.client = c
+	m.backends = detected("claude", "codex")
+
+	m = press(m, keyNewAgent)
+	m = press(m, "down", "enter") // codex
+	if m.pendingAgent != "codex" {
+		t.Fatalf("the choice should be carried into the prompt, pending=%q", m.pendingAgent)
+	}
+	m = parkedAgentOffer(t, m, "/tmp/proj")
+	m = press(m, "w")
+	m.inputBuf = "feature/iso"
+	nm, _ := m.commitInput()
+	m = nm.(model)
+
+	got := waitCmd(t, cmds, isGit("worktree-add"))
+	if got.Profile != "codex" || got.Path != "codex" {
+		t.Fatalf("isolate should carry the picker choice, not the fleet default, got %+v", got)
+	}
+	if got.ID != "" || got.Dir != expandDir("/tmp/proj") || got.Name != "feature/iso" {
+		t.Fatalf("worktree-add should be targetless against the typed workdir, got %+v", got)
 	}
 }
