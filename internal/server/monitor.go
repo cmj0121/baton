@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/cmj0121/baton/internal/panel"
 )
@@ -339,20 +340,80 @@ func renderSpark(buckets []int) string {
 	return sb.String()
 }
 
+// overlayAttnLines is how many trailing content lines the overlay sniff may
+// search. Inbox trust beats recall: a distinctive phrase further up the
+// attnTailBytes tail is ordinary log, not a live permission TUI.
+const overlayAttnLines = 12
+
+// overlayAttnPhrases are distinctive permission-TUI tokens. A bare "allow" or
+// a "?" earlier in the attnTailBytes window is not enough.
+var overlayAttnPhrases = []string{
+	"don't ask again",
+	"do not ask again",
+	"do you want to proceed",
+	"allow this",
+	"allow command",
+	"allow tool",
+}
+
+// optionYes / optionNo match a permission overlay's numbered choices. The pair
+// together is the signal; either token alone (or a bare "No") is ordinary prose.
+var (
+	optionYes = regexp.MustCompile(`(?:^|[^0-9])(?:❯\s*)?1\.\s+yes\b`)
+	optionNo  = regexp.MustCompile(`(?:^|[^0-9])(?:❯\s*)?[23]\.\s+no\b`)
+)
+
 // looksLikeAttention reports whether a quiet panel's trailing output reads like it
-// is waiting on you — the last line is a question or a yes/no-style confirmation.
-// It is deliberately conservative: the safe default is idle, since over-flagging
-// attention cries wolf. Process completion is handled separately, as the exited
-// state.
+// is waiting on you. Last-line rules run on the last content line so a question
+// sitting above a box-drawing border still flags; overlay phrases scan the last
+// overlayAttnLines content lines of the same attnTailBytes tail. Conservative on
+// purpose: the safe default is idle, since over-flagging attention cries wolf.
+// Process completion is handled separately, as the exited state.
 func looksLikeAttention(tail []byte) bool {
-	text := strings.TrimRight(ansiSeq.ReplaceAllString(string(tail), ""), " \t\r\n")
-	if text == "" {
+	lines := attnContentLines(ansiSeq.ReplaceAllString(string(tail), ""))
+	n := len(lines)
+	if n == 0 {
 		return false
 	}
-	line := text
-	if nl := strings.LastIndexByte(text, '\n'); nl >= 0 {
-		line = text[nl+1:]
+	if attnLastLine(lines[n-1]) {
+		return true
 	}
+	start := 0
+	if n > overlayAttnLines {
+		start = n - overlayAttnLines
+	}
+	return attnOverlay(lines[start:])
+}
+
+// attnContentLines splits on \n and \r the way lineShape does, then drops a line
+// only when every visible rune is whitespace or Unicode Box Drawing
+// (U+2500–U+257F). A permission TUI's last physical line is often only a border;
+// a line like "│ Allow this? │" is content.
+func attnContentLines(text string) []string {
+	raw := strings.FieldsFunc(text, func(r rune) bool { return r == '\n' || r == '\r' })
+	out := make([]string, 0, len(raw))
+	for _, line := range raw {
+		if boxBorderLine(line) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func boxBorderLine(s string) bool {
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			continue
+		}
+		if r < '\u2500' || r > '\u257F' {
+			return false
+		}
+	}
+	return true
+}
+
+func attnLastLine(line string) bool {
 	line = strings.TrimSpace(line)
 	lower := strings.ToLower(line)
 	switch {
@@ -367,6 +428,28 @@ func looksLikeAttention(tail []byte) bool {
 		return true
 	}
 	return false
+}
+
+// attnOverlay flags a permission TUI whose prompt is not on the last content
+// line. Phrases are distinctive on purpose; optionYes without optionNo is a
+// changelog, not a chooser.
+func attnOverlay(lines []string) bool {
+	var sawYes, sawNo bool
+	for _, line := range lines {
+		lower := strings.ToLower(line)
+		for _, p := range overlayAttnPhrases {
+			if strings.Contains(lower, p) {
+				return true
+			}
+		}
+		if optionYes.MatchString(lower) {
+			sawYes = true
+		}
+		if optionNo.MatchString(lower) {
+			sawNo = true
+		}
+	}
+	return sawYes && sawNo
 }
 
 // activityText is the live status line for a state and how long it has held —
