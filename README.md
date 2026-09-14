@@ -55,7 +55,7 @@ baton
 
 Baton starts its background server and drops you on the **dashboard** — your home base. Your first minute:
 
-1. Press **`A`** to spawn an agent (you'll pick a working directory for it).
+1. Press **`A`** to spawn an agent (you'll pick a working directory; enter lands here, `w` isolates on a branch).
 2. Press **`enter`** to zoom in and watch it work; **`C-t d`** pops you back to the dashboard.
 3. Press **`q`** to detach and walk away — everything keeps running. Come back any time with `baton`.
 
@@ -76,6 +76,22 @@ agent, and the rest follows from that:
 | Knowing what the fleet costs  | nothing                               | the billing window's tokens and cost, and your quota bars, traced to a panel      |
 
 Baton is not a tmux replacement and does not want your shells — run it inside tmux if that is where you live.
+
+## And the others?
+
+tmux is the wrong comparison for half of this. herdr, Claude Squad and cmux already assume the pane holds an agent. They
+are not the same product in different clothes:
+
+|                                | Baton                           | herdr              | Claude Squad     | cmux                 |
+| ------------------------------ | ------------------------------- | ------------------ | ---------------- | -------------------- |
+| Runtime                        | own PTY daemon                  | own PTY daemon     | tmux wrap        | GPU terminal         |
+| Who needs you                  | `C-t a` inbox                   | blocked sidebar    | session list     | notification rings   |
+| Isolation                      | offer on `A`; first-class `n w` | workspaces         | spawn = worktree | workspaces           |
+| Score, task queue, caps, usage | Baton only                      | —                  | —                | —                    |
+| License                        | `MIT`                           | `Apache 2.0`       | `AGPL-3.0`       | `GPL-3.0-or-later`   |
+| vs tmux                        | not a replacement               | replacement-shaped | wraps it         | a terminal, not tmux |
+
+Score, the task queue, the process-tree caps and the usage footer have no counterpart on the other three.
 
 ## Concept
 
@@ -131,7 +147,9 @@ each can take next.
 |             | `v l`             | the dashboard layout: cards or tree                          |
 |             | `m`               | pick a row up — arrows carry it, `enter` drops it            |
 |             | `enter`           | open / zoom the selection                                    |
-|             | `p` / `A` / `n c` | new shell / agent / command panel                            |
+|             | `p` / `n c`       | new shell / command panel                                    |
+|             | `A`               | new agent — workdir, then enter here or `w` isolate          |
+|             | `n w`             | isolate first: repo, then branch, fleet-default agent        |
 |             | `n .`             | new shell panel in the focused panel's directory             |
 |             | `n C`             | open the conductor (an agent that drives the fleet)          |
 |             | `n h`             | open the global shell (a host shell in `$HOME`)              |

@@ -56,7 +56,7 @@ baton
 
 Baton startet seinen Hintergrund-Server und setzt dich auf dem **Dashboard** ab — deiner Heimatbasis. Deine erste Minute:
 
-1. Drücke **`A`**, um einen Agent zu starten (du wählst dabei ein Arbeitsverzeichnis für ihn aus).
+1. Drücke **`A`**, um einen Agent zu starten (du wählst ein Arbeitsverzeichnis; Enter landet hier, `w` isoliert auf einem Branch).
 2. Drücke **`enter`**, um hineinzuzoomen und ihm bei der Arbeit zuzusehen; **`C-t d`** bringt dich zurück zum Dashboard.
 3. Drücke **`q`**, um dich abzukoppeln und wegzugehen — alles läuft weiter. Komm jederzeit mit `baton` zurück.
 
@@ -77,6 +77,23 @@ ein Agent sitzt, und alles Weitere folgt daraus:
 | Wissen, was die Flotte kostet    | nichts                          | Tokens und Kosten des Abrechnungsfensters und deine Quota-Balken, einem Panel zuordenbar             |
 
 Baton ist kein Ersatz für tmux und will deine Shells nicht — lass es in tmux laufen, wenn du dort zu Hause bist.
+
+## Und die anderen?
+
+tmux ist nur für die Hälfte dieses Vergleichs die richtige Folie. herdr, Claude Squad und cmux setzen bereits voraus,
+dass im Pane ein Agent sitzt. Das ist nicht dasselbe Produkt in anderen Kleidern:
+
+|                                          | Baton                                | herdr                | Claude Squad     | cmux                     |
+| ---------------------------------------- | ------------------------------------ | -------------------- | ---------------- | ------------------------ |
+| Laufzeit                                 | eigener PTY-Daemon                   | eigener PTY-Daemon   | tmux-Hülle       | GPU-Terminal             |
+| Wer dich braucht                         | `C-t a`-Posteingang                  | blocked-Seitenleiste | Sitzungsliste    | notification rings       |
+| Isolation                                | Angebot auf `A`; erstklassiges `n w` | workspaces           | spawn = worktree | workspaces               |
+| Score, Task-Warteschlange, Caps, Nutzung | nur Baton                            | —                    | —                | —                        |
+| Lizenz                                   | `MIT`                                | `Apache 2.0`         | `AGPL-3.0`       | `GPL-3.0-or-later`       |
+| vs tmux                                  | kein Ersatz                          | ersatzförmig         | wickelt es ein   | ein Terminal, nicht tmux |
+
+Score, die Task-Warteschlange, die Prozessbaum-Caps und die Nutzungs-Fußzeile haben bei den anderen dreien kein
+Gegenstück.
 
 ## Konzept
 
@@ -119,42 +136,44 @@ Tastenbelegung zu bearbeiten.
 Vier Tasten sind _Landings_: Sie tun allein nichts und öffnen eine Familie — `n` startet, `v` zeichnet, `g` gruppiert,
 `x` ist der Doppeltipp, der sich selbst bestätigt — und die Statuszeile nennt, was jede als Nächstes annimmt.
 
-| Where       | Taste             | Wirkung                                                             |
-| ----------- | ----------------- | ------------------------------------------------------------------- |
-| After `C-t` | `d` / `b`         | zum Dashboard springen / eine Ebene zurück                          |
-|             | `a`               | Attention-Posteingang — erledigen, was einen Menschen braucht       |
-|             | `[`               | in den Scroll-Modus wechseln                                        |
-|             | `l` / `L`         | Panel in eine Datei protokollieren / dieses Protokoll lesen         |
-|             | `R` / `S`         | Konfiguration neu laden / Server-Neustart erzwingen                 |
-|             | `q`               | abkoppeln (der Server läuft weiter)                                 |
-| Dashboard   | `jk` / `↑↓`       | den Cursor bewegen                                                  |
-|             | `hl` / `←→`       | eine Karte weiter · im Baum: Work Item ein-/ausklappen              |
-|             | `space`           | zeigen / verbergen, was unter der Zeile verschachtelt ist           |
-|             | `v p` / `v g`     | Detailspalte / Gruppierung: Work Item, Verzeichnis, Profil, Status  |
-|             | `v l`             | das Dashboard-Layout: Karten oder Baum                              |
-|             | `m`               | eine Zeile aufnehmen — Pfeile tragen sie, `enter` legt sie ab       |
-|             | `enter`           | die Auswahl öffnen / hineinzoomen                                   |
-|             | `p` / `A` / `n c` | neues shell- / agent- / command-Panel                               |
-|             | `n .`             | neues Shell-Panel im Verzeichnis des fokussierten Panels            |
-|             | `n C`             | den Conductor öffnen (ein Agent, der die Flotte steuert)            |
-|             | `n h`             | die Global Shell öffnen (eine Host-Shell in `$HOME`)                |
-|             | `w` / `x x`       | die Auswahl schließen / Beendete entfernen                          |
-|             | `r`               | die beendeten Panels unter dem Fokus erneut ausführen               |
-|             | `g g` / `g c`     | markieren / markierte Panels gruppieren                             |
-|             | `g a` / `g u`     | zum gewählten Work Item hinzufügen / Gruppierung aufheben           |
-|             | `s` / `f` / `D`   | der Auswahl ein Signal senden / sie finden / diffen                 |
-|             | `/`               | die Ausgabe jedes Panels durchsuchen (die Flotte greppen)           |
-|             | `T` / `Q`         | eine Task vergeben / die Task-Warteschlange verwalten               |
-|             | `v u`             | Nutzungs-Fußzeile durchschalten: aus / Fenster / Panel / Kontingent |
-|             | `v U`             | Kontonutzung — Kontingentbalken und wer sie verbraucht              |
-|             | `v k`             | die Tastenanzeige in der Fußzeile umschalten                        |
-| Group       | `tab`             | das nächste Panel fokussieren                                       |
-|             | `+` / `-`         | mehr / weniger Live-Kacheln zeigen                                  |
-|             | `L`               | das Kachel-Layout durchschalten                                     |
-|             | `p` / `i`         | das fokussierte Panel anpinnen / damit interagieren                 |
-|             | `enter`           | das fokussierte Panel zoomen                                        |
-| Zoom        | tippen            | das Programm direkt steuern                                         |
-|             | `C-t f` / `C-t G` | den Scrollback durchsuchen / Git-Menü (agent)                       |
+| Where       | Taste             | Wirkung                                                              |
+| ----------- | ----------------- | -------------------------------------------------------------------- |
+| After `C-t` | `d` / `b`         | zum Dashboard springen / eine Ebene zurück                           |
+|             | `a`               | Attention-Posteingang — erledigen, was einen Menschen braucht        |
+|             | `[`               | in den Scroll-Modus wechseln                                         |
+|             | `l` / `L`         | Panel in eine Datei protokollieren / dieses Protokoll lesen          |
+|             | `R` / `S`         | Konfiguration neu laden / Server-Neustart erzwingen                  |
+|             | `q`               | abkoppeln (der Server läuft weiter)                                  |
+| Dashboard   | `jk` / `↑↓`       | den Cursor bewegen                                                   |
+|             | `hl` / `←→`       | eine Karte weiter · im Baum: Work Item ein-/ausklappen               |
+|             | `space`           | zeigen / verbergen, was unter der Zeile verschachtelt ist            |
+|             | `v p` / `v g`     | Detailspalte / Gruppierung: Work Item, Verzeichnis, Profil, Status   |
+|             | `v l`             | das Dashboard-Layout: Karten oder Baum                               |
+|             | `m`               | eine Zeile aufnehmen — Pfeile tragen sie, `enter` legt sie ab        |
+|             | `enter`           | die Auswahl öffnen / hineinzoomen                                    |
+|             | `p` / `n c`       | neues shell- / command-Panel                                         |
+|             | `A`               | neuer Agent — Arbeitsverzeichnis, dann Enter hier oder `w` isolieren |
+|             | `n w`             | zuerst isolieren: Repo, dann Branch, Flotten-Standard-Agent          |
+|             | `n .`             | neues Shell-Panel im Verzeichnis des fokussierten Panels             |
+|             | `n C`             | den Conductor öffnen (ein Agent, der die Flotte steuert)             |
+|             | `n h`             | die Global Shell öffnen (eine Host-Shell in `$HOME`)                 |
+|             | `w` / `x x`       | die Auswahl schließen / Beendete entfernen                           |
+|             | `r`               | die beendeten Panels unter dem Fokus erneut ausführen                |
+|             | `g g` / `g c`     | markieren / markierte Panels gruppieren                              |
+|             | `g a` / `g u`     | zum gewählten Work Item hinzufügen / Gruppierung aufheben            |
+|             | `s` / `f` / `D`   | der Auswahl ein Signal senden / sie finden / diffen                  |
+|             | `/`               | die Ausgabe jedes Panels durchsuchen (die Flotte greppen)            |
+|             | `T` / `Q`         | eine Task vergeben / die Task-Warteschlange verwalten                |
+|             | `v u`             | Nutzungs-Fußzeile durchschalten: aus / Fenster / Panel / Kontingent  |
+|             | `v U`             | Kontonutzung — Kontingentbalken und wer sie verbraucht               |
+|             | `v k`             | die Tastenanzeige in der Fußzeile umschalten                         |
+| Group       | `tab`             | das nächste Panel fokussieren                                        |
+|             | `+` / `-`         | mehr / weniger Live-Kacheln zeigen                                   |
+|             | `L`               | das Kachel-Layout durchschalten                                      |
+|             | `p` / `i`         | das fokussierte Panel anpinnen / damit interagieren                  |
+|             | `enter`           | das fokussierte Panel zoomen                                         |
+| Zoom        | tippen            | das Programm direkt steuern                                          |
+|             | `C-t f` / `C-t G` | den Scrollback durchsuchen / Git-Menü (agent)                        |
 
 Die vollständige Tastenreferenz steht in **[docs/KEYS.md](KEYS.md)**, die Gestaltung hinter jeder Ansicht in
 **[docs/SPEC.md](SPEC.md)**.

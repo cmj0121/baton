@@ -54,7 +54,7 @@ baton
 
 Baton 會啟動它的背景伺服器,並把你帶到**儀表板**——你的大本營。你的第一分鐘:
 
-1. 按 **`A`** 開一個 agent(你會替它挑一個工作目錄)。
+1. 按 **`A`** 開一個 agent(你會替它挑一個工作目錄;enter 就開在這裡,`w` 則隔離到新分支)。
 2. 按 **`enter`** 放大進去看它工作;**`C-t d`** 把你帶回儀表板。
 3. 按 **`q`** 卸離走人——一切都繼續在跑。隨時用 `baton` 回來。
 
@@ -74,6 +74,21 @@ Baton 會啟動它的背景伺服器,並把你帶到**儀表板**——你的大
 | 知道整隊花了多少   | 沒有                    | 計費窗口的 token 與成本、你的額度進度條,而且能歸屬到面板            |
 
 Baton 不是 tmux 的替代品,也不想接管你的 shell——你如果活在 tmux 裡,就把它跑在 tmux 裡。
+
+## 那其餘的呢?
+
+tmux 只對得上這件事的一半。herdr、Claude Squad 與 cmux 早已假設 pane 裡裝的是 agent。它們不是同一件產品換了件衣服:
+
+|                             | Baton                         | herdr             | Claude Squad     | cmux               |
+| --------------------------- | ----------------------------- | ----------------- | ---------------- | ------------------ |
+| 執行時                      | 自己的 PTY daemon             | 自己的 PTY daemon | 包著 tmux        | GPU 終端機         |
+| 誰在等你                    | `C-t a` 收件匣                | blocked 側欄      | session 清單     | notification rings |
+| 隔離                        | `A` 上的提議;一等公民的 `n w` | workspaces        | spawn = worktree | workspaces         |
+| Score、任務佇列、上限、用量 | 只有 Baton                    | —                 | —                | —                  |
+| 授權                        | `MIT`                         | `Apache 2.0`      | `AGPL-3.0`       | `GPL-3.0-or-later` |
+| 對 tmux                     | 不是替代品                    | 替代品的形狀      | 包著它           | 是終端機,不是 tmux |
+
+Score、任務佇列、行程樹上限與用量頁尾,在另外三個身上沒有對應物。
 
 ## 概念
 
@@ -125,7 +140,9 @@ Baton 不是 tmux 的替代品,也不想接管你的 shell——你如果活在 
 |            | `v l`             | 儀表板版面:卡片或樹狀                                |
 |            | `m`               | 抓起一列——方向鍵搬運,`enter` 放下                    |
 |            | `enter`           | 開啟 / 放大所選                                      |
-|            | `p` / `A` / `n c` | 新增 shell / agent / command 面板                    |
+|            | `p` / `n c`       | 新增 shell / command 面板                            |
+|            | `A`               | 新增 agent——工作目錄,然後 enter 開在這裡或 `w` 隔離  |
+|            | `n w`             | 先隔離:版本庫、再分支,艦隊預設的 agent               |
 |            | `n .`             | 在聚焦面板的目錄開新 shell 面板                      |
 |            | `n C`             | 開啟 conductor(替你驅動整隊的 agent)                 |
 |            | `n h`             | 開啟 global shell(開在 `$HOME` 的宿主 shell)         |

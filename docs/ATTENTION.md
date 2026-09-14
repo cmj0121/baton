@@ -75,11 +75,11 @@ spelling, everywhere.
 
 Three things can claim a quiet panel, and they are not equally trustworthy. Higher wins:
 
-| Priority | Source                                                       | Reliability | Works with                        |
-| -------- | ------------------------------------------------------------ | ----------- | --------------------------------- |
-| **1**    | the agent **declares** it — `baton ctl attention --why "…"`  | certain     | anything that knows Baton         |
-| **2**    | a **timer** — quiet for `stuck-after`, or a task finished    | certain     | everything                        |
-| **3**    | the **tail heuristic** — the last line reads like a question | a guess     | any CLI that never heard of Baton |
+| Priority | Source                                                                                | Reliability | Works with                        |
+| -------- | ------------------------------------------------------------------------------------- | ----------- | --------------------------------- |
+| **1**    | the agent **declares** it — `baton ctl attention --why "…"`                           | certain     | anything that knows Baton         |
+| **2**    | a **timer** — quiet for `stuck-after`, or a task finished                             | certain     | everything                        |
+| **3**    | the **tail heuristic** — last content line, or a permission overlay in the last dozen | a guess     | any CLI that never heard of Baton |
 
 Two orderings inside that are load-bearing rather than incidental, and both come out of the same principle — a certain
 signal beats a guess, and an answerable item beats a reviewable one:
@@ -89,6 +89,15 @@ signal beats a guess, and an answerable item beats a reviewable one:
 - **The tail heuristic beats the `done` timer.** A tail reading `Apply this refactor? [y/N]` at twenty seconds is a
   question _now_. Making it wait out `done-after` to be called `done` would bury something you can answer in one
   keystroke underneath something you have to go and read.
+
+The tail is a guess about text, and it is no longer "whatever sits on the last physical line". CSI is stripped; the
+window is split on `\n` and `\r`; a line whose visible runes are only whitespace or Unicode Box Drawing (U+2500–U+257F)
+is dropped, because a permission TUI's last line is often a border. The existing last-line rules then run on the last
+**content** line — that is what catches a `?` or a `(y/n)` sitting above a box. Distinctive overlay phrases may also
+flag, looking only at the last dozen content lines of the same tail: `don't ask again`, `do you want to proceed`,
+`allow this` / `allow command` / `allow tool`, or a numbered `1. Yes` together with a numbered `2. No` / `3. No`. A
+bare `Yes`, a lone `allow`, or a `?` further up the log is ordinary prose. Inbox trust beats recall. It is still one
+sniff and still `attention`.
 
 The same logic keeps a task-completion event from demoting a panel already in `attention`: a dispatched task can settle
 in the very tick the tail raised its hand, and letting the event win would turn "answer me" into "review me" one tick

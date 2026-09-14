@@ -57,7 +57,7 @@ baton
 
 Baton arranca su servidor en segundo plano y te deja en el **tablero**, tu base de operaciones. Tu primer minuto:
 
-1. Pulsa **`A`** para abrir un agente (elegirás un directorio de trabajo para él).
+1. Pulsa **`A`** para abrir un agente (elegirás un directorio de trabajo; intro lo deja aquí, `w` lo aísla en una rama).
 2. Pulsa **`enter`** para hacer zoom y verlo trabajar; **`C-t d`** te devuelve al tablero.
 3. Pulsa **`q`** para desacoplarte y marcharte: todo sigue en marcha. Vuelve cuando quieras con `baton`.
 
@@ -78,6 +78,22 @@ sale de ahí:
 | Saber lo que cuesta la flota     | nada                                       | los tokens y el coste de la ventana de facturación, y tus barras de cuota, atribuibles a un panel |
 
 Baton no sustituye a tmux ni quiere tus shells: si vives dentro de tmux, ejecútalo ahí.
+
+## ¿Y los demás?
+
+tmux solo cubre la mitad de esta comparación. herdr, Claude Squad y cmux ya dan por hecho que en el panel hay un agente.
+No son el mismo producto con otra ropa:
+
+|                                    | Baton                                | herdr                  | Claude Squad       | cmux                 |
+| ---------------------------------- | ------------------------------------ | ---------------------- | ------------------ | -------------------- |
+| Tiempo de ejecución                | demonio PTY propio                   | demonio PTY propio     | envoltorio de tmux | terminal GPU         |
+| Quién te necesita                  | bandeja `C-t a`                      | barra blocked          | lista de sesiones  | notification rings   |
+| Aislamiento                        | oferta en `A`; `n w` de primer orden | workspaces             | spawn = worktree   | workspaces           |
+| Score, cola de tareas, techos, uso | solo Baton                           | —                      | —                  | —                    |
+| Licencia                           | `MIT`                                | `Apache 2.0`           | `AGPL-3.0`         | `GPL-3.0-or-later`   |
+| frente a tmux                      | no es un reemplazo                   | con forma de reemplazo | lo envuelve        | un terminal, no tmux |
+
+Score, la cola de tareas, los techos sobre el árbol de procesos y el pie de uso no tienen equivalente en los otros tres.
 
 ## Concepto
 
@@ -136,7 +152,9 @@ Cuatro teclas son _landings_: no hacen nada por sí solas y abren una familia �
 |             | `v l`             | el diseño del tablero: tarjetas o árbol                               |
 |             | `m`               | coger una fila — las flechas la llevan, `enter` la suelta             |
 |             | `enter`           | abrir / hacer zoom en la selección                                    |
-|             | `p` / `A` / `n c` | nuevo panel de shell / agente / command                               |
+|             | `p` / `n c`       | nuevo panel de shell / command                                        |
+|             | `A`               | nuevo agente — directorio, luego intro aquí o `w` aislar              |
+|             | `n w`             | aislar primero: repo, luego rama, agente por defecto                  |
 |             | `n .`             | nuevo panel de shell en el directorio del panel enfocado              |
 |             | `n C`             | abrir el conductor (un agente que maneja la flota)                    |
 |             | `n h`             | abrir la global shell (una shell del anfitrión en `$HOME`)            |

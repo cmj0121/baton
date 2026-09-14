@@ -71,9 +71,10 @@ in the sequence after that needs a live agent sitting in the repo. A path that i
 not a git repository is refused with `not a git repository: …`, and there is no
 fallback onto a plain spawn.
 
-There is a **second caller**, and it is the reason the path takes no panel id.
+There are **two more callers**, and they are the reason the path takes no panel id.
 `n w` on the **dashboard** starts the same sequence from a directory instead of
-from an agent — see [two ways in](#two-ways-in) below.
+from an agent; `A` then `w` starts it from the workdir `A` just asked for, with
+the profile `A` already picked. See [three ways in](#three-ways-in) below.
 
 - **`w` (worktree + agent)** asks for a branch name, then runs that path with the
   zoomed agent's repo and its command, args and profile — so the new tree gets the
@@ -89,15 +90,17 @@ from an agent — see [two ways in](#two-ways-in) below.
   the live agent's own workdir, so you cannot pull a tree out from under a running
   agent by accident.
 
-### Two ways in
+### Three ways in
 
-The same tree, agent and group are reached by two verbs, and which one you want is
-decided by whether you are already watching an agent.
+The same tree, agent and group are reached by three verbs, and which one you want
+is decided by whether you are already watching an agent, and whether `A` already
+chose the backend.
 
-| Verb        | Where          | Repo comes from      | Agent profile         |
-| ----------- | -------------- | -------------------- | --------------------- |
-| `n w`       | the dashboard  | a directory you pick | the **fleet default** |
-| `C-t G` `w` | a zoomed agent | that agent's workdir | **that agent's** spec |
+| Verb         | Where          | Repo comes from            | Agent profile          |
+| ------------ | -------------- | -------------------------- | ---------------------- |
+| `n w`        | the dashboard  | a directory you pick       | the **fleet default**  |
+| `C-t G` `w`  | a zoomed agent | that agent's workdir       | **that agent's** spec  |
+| `A` then `w` | the dashboard  | the workdir you just typed | the **picked** profile |
 
 **`n w`** is how you start isolated when there is nothing to fan out from. It asks
 for the repository first — a typed path with `tab` completion, `C-b` to delete a
@@ -106,17 +109,25 @@ for the branch, in the same field `C-t G` `w` opens. It has no source panel, so 
 new agent is the **fleet default** profile (what `A` spawns when you pick nothing),
 never a copy of whatever the dashboard cursor happened to be on.
 
+**`A` then `w`** is the third. After the workdir, Baton parks a confirm rather than
+spawning: enter or `n` still lands **in** that directory (the default, the muscle
+memory); `w` asks for a branch and runs the same targetless `panel.git`
+`worktree-add` as `n w`, with the profile `A` already picked. Cancel clears that
+pick so it cannot leak into the next spawn. The cockpit does not probe whether the
+directory is a git repository — a remote fleet may not even be this machine, and a
+non-repo is a status-bar refusal from the server, the same as `n w`.
+
 A directory that is not a git repository is **refused**: nothing spawns, no
-directory is created, and there is no fallback onto a plain `A`. `A` in that same
-directory still does what it always did — it lands an agent **in** the repo and
-grows no tree.
+directory is created, and there is no fallback onto a plain create. `A` then enter
+in that same directory still does what it always did — it lands an agent **in** the
+repo and grows no tree.
 
 **`C-t G` `w`** is the other end: you are watching an agent, and you want another
 one like it on a branch of its own. It copies that agent's command, args and
 profile, so the new tree gets the same kind of agent under the same resource caps.
 
-Closing the new panel leaves the tree standing, whichever verb opened it. Neither
-verb removes anything; `x` in the git menu is the only way a tree goes.
+Closing the new panel leaves the tree standing, whichever verb opened it. None of
+them removes anything; `x` in the git menu is the only way a tree goes.
 
 ### Trees baton opened, and trees you did
 
@@ -221,14 +232,15 @@ server resolves the op to a concrete command in [`internal/gitops`](../internal/
   cockpit auto-zooms it (the `openEphemeral` engine the explicit `diff-command` uses);
 - **worktree-add** resolves the repo and the spec, then calls the shared
   repo + branch + spec path, which creates the tree, records it, spawns + groups the
-  agent, and broadcasts the fleet — neither verb keeps a private copy of that
-  sequence. **How** it resolves is the only difference between the two: an `id`
-  names a panel and both come from it, while an **empty `id`** is the dashboard's
-  form, where `dir` names the repo and `path`/`args`/`profile` carry the spec the
-  cockpit resolved from the fleet default. Both verbs send the same command, so no
+  agent, and broadcasts the fleet — no caller keeps a private copy of that
+  sequence. **How** it resolves is the only difference among the callers: an `id`
+  names a panel and both come from it (`C-t G` `w`), while an **empty `id`** is the
+  dashboard form, where `dir` names the repo and `path`/`args`/`profile` carry the
+  spec the cockpit already resolved — the **fleet default** for `n w`, the
+  **picked** profile for `A` then `w`. All three send the same command, so no
   second wire action was added and the protocol version did not move; an older
-  daemon, which knows only the first form, answers the second with `no panel with
-id ""` — a refusal, not a misread. For a **conductor** connection BOTH forms are
+  daemon, which knows only the first form, answers the empty-id form with
+  `no panel with id ""` — a refusal, not a misread. For a **conductor** connection BOTH forms are
   charged `panel.create`'s fleet ceiling and rate cap, because a worktree-add is a
   spawn wearing a git op's name. Charging only the targetless one would shut
   nothing: a conductor refused at the ceiling could fan its own agent onto branch

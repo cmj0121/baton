@@ -91,7 +91,7 @@ dashboard row — the work-item verbs — is refused in a zoom with the way forw
 | Purpose         | Leader | Landing | Key                 | Does                                                   |
 | --------------- | ------ | ------- | ------------------- | ------------------------------------------------------ |
 | **Panels**      | (C-t)  | ·       | `p`                 | new shell panel                                        |
-|                 | (C-t)  | ·       | `A`                 | new agent panel                                        |
+|                 | (C-t)  | ·       | `A`                 | new agent — workdir, then enter here or `w` isolate    |
 |                 | (C-t)  | `n`     | `c`                 | new panel, choosing the command                        |
 |                 | (C-t)  | `n`     | `.`                 | new shell in the focused panel's directory             |
 |                 | (C-t)  | `n`     | `C`                 | the conductor, found or created                        |
@@ -185,11 +185,13 @@ dashboard row — the work-item verbs — is refused in a zoom with the way forw
 |                 | ·      | ·       | `a` `c` `p`         | stage all · commit · push                              |
 |                 | ·      | ·       | `b` `w` `W` `x`     | branch · worktree · worktrees · remove worktree        |
 
-Two keys open a worktree and an agent in it, and they differ in what they resolve from. `n w` works on the
+Three verbs isolate an agent in a worktree, and they differ in what they resolve from. `n w` works on the
 **dashboard**, asks for a repository and then a branch, and spawns the **fleet default** agent — it has no source panel,
 so there is nothing to copy. `C-t G` `w` works on a **zoomed agent**, asks only for a branch, and copies that agent's
-own profile. A directory that is not a git repository is refused by both, and by `n w` before anything is created. See
-[GIT.md](./GIT.md).
+own profile. `A` then `w` is the third: after the workdir, `w` asks for a branch and uses the **picked** profile (`A`
+already chose the backend); enter or `n` still spawns **here**, which is the default. Cancel (esc, or any other key on
+the offer) clears the picker choice so it cannot leak into the next spawn. A directory that is not a git repository is
+refused by all three — the server says so, and nothing is created. See [GIT.md](./GIT.md).
 
 Everything from **Panels** through **Session** is rebindable. Navigation and the per-view keys below it are fixed: they
 are what the view _is_, and a movable `enter` would leave a view with no way in.

@@ -169,8 +169,9 @@ distinction exists to prevent. A shell still reaches `attention` when its own ou
 
 **How a state is decided.** Higher wins, and the first that matches decides: an agent's own **declaration**
 (`panel.attention`, which carries a reason) beats every guess baton makes from the outside; the **`stuck` timer** beats
-the **tail heuristic** (the last line reads like a question), because a certain timer outranks a guess about text; and
-the tail heuristic in turn beats the **`done` timer**, because a question asked _now_ outranks a review that could wait.
+the **tail heuristic** (the last content line, or a permission overlay in the last dozen, reads like a
+question), because a certain timer outranks a guess about text; and the tail heuristic in turn beats the
+**`done` timer**, because a question asked _now_ outranks a review that could wait.
 Full precedence, and what each rung is for, in **[ATTENTION.md](ATTENTION.md#how-a-state-is-decided)**.
 
 **`failed` is not a state.** A panel that exited badly is `exited` with a non-zero exit code, and the cockpit renders
@@ -355,15 +356,17 @@ the target id, and a branch or worktree path; the agent-only and work-tree gates
 commit editor and the worktree base directory are `panel.editor` / `panel.worktree-dir`, hot-reloaded like the rest. See
 [GIT.md](./GIT.md) for the full op table and the config.
 
-**The isolation bridge has two callers.** The server path is one function taking a repo, a branch and an agent spec, and
+**The isolation bridge has three callers.** The server path is one function taking a repo, a branch and an agent spec, and
 **no panel id** — nothing after the resolve needs a live panel. `C-t G` `w` resolves both from the zoomed agent, so it
 fans an agent out onto a branch of its own under the same profile and caps. `n w` on the **dashboard** resolves neither
 from a panel, because it has none: it asks for the repository (`A`'s prompt — typed path, `tab` completion, `C-o`
-picker), then for the branch (the git menu's own field), and spawns the **fleet default** profile. A directory that is
-not a repository is refused before anything is made — no spawn, no directory, no fallback onto `A`. Both verbs send the
-same `panel.git` `worktree-add`; the dashboard's form leaves `id` **empty** and puts the repo in `dir` with the spec in
-`path`/`args`/`profile`, which is why this added no second wire action and did not move `ProtocolVersion` — an older
-daemon reads the empty id and refuses with `no panel with id ""` rather than misreading it.
+picker), then for the branch (the git menu's own field), and spawns the **fleet default** profile. `A` then `w` is the
+third: after the workdir, a parked confirm offers here (enter / `n`) or isolate (`w`); isolate asks for a branch and
+sends the same empty-`id` form as `n w`, with the **picked** profile rather than the fleet default. Cancel clears that
+pick. A directory that is not a repository is refused before anything is made — no spawn, no directory, no fallback onto
+a plain create. All three send the same `panel.git` `worktree-add`; the dashboard forms leave `id` **empty** and put the
+repo in `dir` with the spec in `path`/`args`/`profile`, which is why this added no second wire action and did not move
+`ProtocolVersion` — an older daemon reads the empty id and refuses with `no panel with id ""` rather than misreading it.
 
 **Persistence and respawn.** The daemon survives its own restart. On every structural change it writes the fleet to a
 **state file** (`internal/state`, derived from the socket path like the pid file, one per fleet) —
@@ -504,63 +507,63 @@ Four keys are **landings**: they do nothing alone and open a family. `n` spawns,
 double tap that confirms itself. Press one and the status bar names what it takes next; leave it hanging and it expires
 after `settings.key-timeout` (default `1.2s`).
 
-| Where                  | Key                         | Does                                            |
-| ---------------------- | --------------------------- | ----------------------------------------------- |
-| Anywhere (after `C-t`) | `C-t d`                     | go to the dashboard                             |
-|                        | `C-t a`                     | the attention inbox — clear what needs a human  |
-|                        | `C-t o`                     | the process tree (daemon → panels → OS)         |
-|                        | `C-t @`                     | remote access — the passkey and the connections |
-|                        | `C-t c`                     | open the plugin command picker                  |
-|                        | `C-t k`                     | edit the key map                                |
-|                        | `C-t P`                     | panel config (shell, agent, replay, limits)     |
-|                        | `C-t [`                     | enter scroll mode                               |
-|                        | `C-t l` / `C-t L`           | log the panel to a file / open that log         |
-|                        | `C-t G`                     | git menu (zoomed agent panel)                   |
-|                        | `C-t S`                     | force-restart the server (kills the fleet)      |
-| Dashboard              | `hjkl` / arrows             | move the cursor; on the tree, fold and unfold   |
-|                        | `space`                     | show / hide what is nested under the row        |
-|                        | `enter`                     | open / zoom the selection                       |
-|                        | `m`                         | pick a row up — arrows carry it, `enter` drops  |
-|                        | `S-←` / `S-→`               | reorder the selected item                       |
-|                        | `p` / `A`                   | new shell panel / new agent panel               |
-|                        | `n c` / `n .`               | shell, or a command panel you name / shell here |
-|                        | `n C` / `n h`               | the conductor / the global shell                |
-|                        | `n w`                       | a worktree on a new branch + an agent in it     |
-|                        | `w` / `r`                   | close the selection / re-run its exited panels  |
-|                        | `x x`                       | purge every exited panel                        |
-|                        | `s`                         | send a signal to the selection                  |
-|                        | `f` / `/`                   | find panels / fleet search across every panel   |
-|                        | `g g`                       | mark / unmark a panel                           |
-|                        | `g c` / `g a` / `g u`       | create a work item / add to it / dissolve it    |
-|                        | `e` / `*`                   | rename / favourite the panel or work item       |
-|                        | `D` / `T` / `t` / `Q`       | diff / dispatch / enqueue / the task queue      |
-|                        | `v u` / `v k` / `v p`       | usage footer / keycast / the detail pane        |
-|                        | `v l` / `v g`               | cards-or-tree / cycle the group-by lens         |
-|                        | `R` / `q`                   | reload config / detach                          |
-| Group view             | `tab`                       | focus the next panel                            |
-|                        | `+` / `-`                   | show more / fewer live tiles                    |
-|                        | `L`                         | cycle the tile layout (see [TUI.md](./TUI.md))  |
-|                        | `z`                         | resize mode — arrows grow / shrink the tile     |
-|                        | `p`                         | pin / unpin the focused panel                   |
-|                        | `s` / `S`                   | signal the focused panel / every member         |
-|                        | `i`                         | interact (type into the focused tile)           |
-|                        | `x`                         | remove the focused panel from the group         |
-|                        | `S-←` / `S-→`               | reorder the focused panel                       |
-|                        | `D`                         | diff the focused agent panel                    |
-|                        | `b` / `esc`                 | back one level (sub-group → parent → dashboard) |
-|                        | `enter`                     | zoom a panel, or descend into a sub-group       |
-| Zoom / interact        | type                        | drive the program directly                      |
-|                        | `C-t` + any dashboard key   | run that command against the zoomed panel       |
-|                        | `C-t b`                     | back to the group / dashboard                   |
-|                        | `C-t C-t`                   | send a literal `C-t`                            |
-| Scroll mode (`C-t [`)  | `↑` / `↓` (`k`/`j`)         | scroll a line                                   |
-|                        | `b` / `Spc` (`PgUp`/`PgDn`) | scroll a page                                   |
-|                        | `g` / `G`                   | jump to top / bottom                            |
-|                        | `v` / `y`                   | start a selection / copy to the clipboard       |
-|                        | `V` (then `h`/`l`)          | start a block selection / set its columns       |
-|                        | `n` / `N`                   | next / previous search match                    |
-|                        | `esc` / `q`                 | exit scroll mode                                |
-|                        | `C-t d` / `C-t b` / …       | leave for dashboard / back (leader stays live)  |
+| Where                  | Key                         | Does                                              |
+| ---------------------- | --------------------------- | ------------------------------------------------- |
+| Anywhere (after `C-t`) | `C-t d`                     | go to the dashboard                               |
+|                        | `C-t a`                     | the attention inbox — clear what needs a human    |
+|                        | `C-t o`                     | the process tree (daemon → panels → OS)           |
+|                        | `C-t @`                     | remote access — the passkey and the connections   |
+|                        | `C-t c`                     | open the plugin command picker                    |
+|                        | `C-t k`                     | edit the key map                                  |
+|                        | `C-t P`                     | panel config (shell, agent, replay, limits)       |
+|                        | `C-t [`                     | enter scroll mode                                 |
+|                        | `C-t l` / `C-t L`           | log the panel to a file / open that log           |
+|                        | `C-t G`                     | git menu (zoomed agent panel)                     |
+|                        | `C-t S`                     | force-restart the server (kills the fleet)        |
+| Dashboard              | `hjkl` / arrows             | move the cursor; on the tree, fold and unfold     |
+|                        | `space`                     | show / hide what is nested under the row          |
+|                        | `enter`                     | open / zoom the selection                         |
+|                        | `m`                         | pick a row up — arrows carry it, `enter` drops    |
+|                        | `S-←` / `S-→`               | reorder the selected item                         |
+|                        | `p` / `A`                   | new shell / agent — workdir, then here or isolate |
+|                        | `n c` / `n .`               | shell, or a command panel you name / shell here   |
+|                        | `n C` / `n h`               | the conductor / the global shell                  |
+|                        | `n w`                       | a worktree on a new branch + an agent in it       |
+|                        | `w` / `r`                   | close the selection / re-run its exited panels    |
+|                        | `x x`                       | purge every exited panel                          |
+|                        | `s`                         | send a signal to the selection                    |
+|                        | `f` / `/`                   | find panels / fleet search across every panel     |
+|                        | `g g`                       | mark / unmark a panel                             |
+|                        | `g c` / `g a` / `g u`       | create a work item / add to it / dissolve it      |
+|                        | `e` / `*`                   | rename / favourite the panel or work item         |
+|                        | `D` / `T` / `t` / `Q`       | diff / dispatch / enqueue / the task queue        |
+|                        | `v u` / `v k` / `v p`       | usage footer / keycast / the detail pane          |
+|                        | `v l` / `v g`               | cards-or-tree / cycle the group-by lens           |
+|                        | `R` / `q`                   | reload config / detach                            |
+| Group view             | `tab`                       | focus the next panel                              |
+|                        | `+` / `-`                   | show more / fewer live tiles                      |
+|                        | `L`                         | cycle the tile layout (see [TUI.md](./TUI.md))    |
+|                        | `z`                         | resize mode — arrows grow / shrink the tile       |
+|                        | `p`                         | pin / unpin the focused panel                     |
+|                        | `s` / `S`                   | signal the focused panel / every member           |
+|                        | `i`                         | interact (type into the focused tile)             |
+|                        | `x`                         | remove the focused panel from the group           |
+|                        | `S-←` / `S-→`               | reorder the focused panel                         |
+|                        | `D`                         | diff the focused agent panel                      |
+|                        | `b` / `esc`                 | back one level (sub-group → parent → dashboard)   |
+|                        | `enter`                     | zoom a panel, or descend into a sub-group         |
+| Zoom / interact        | type                        | drive the program directly                        |
+|                        | `C-t` + any dashboard key   | run that command against the zoomed panel         |
+|                        | `C-t b`                     | back to the group / dashboard                     |
+|                        | `C-t C-t`                   | send a literal `C-t`                              |
+| Scroll mode (`C-t [`)  | `↑` / `↓` (`k`/`j`)         | scroll a line                                     |
+|                        | `b` / `Spc` (`PgUp`/`PgDn`) | scroll a page                                     |
+|                        | `g` / `G`                   | jump to top / bottom                              |
+|                        | `v` / `y`                   | start a selection / copy to the clipboard         |
+|                        | `V` (then `h`/`l`)          | start a block selection / set its columns         |
+|                        | `n` / `N`                   | next / previous search match                      |
+|                        | `esc` / `q`                 | exit scroll mode                                  |
+|                        | `C-t d` / `C-t b` / …       | leave for dashboard / back (leader stays live)    |
 
 Everything above is rebindable in the key map (`C-t k`), where a binding is a **space-separated sequence** of keys;
 press `?` for the live list of the current view. The complete reference — every overlay, the timeout, the config

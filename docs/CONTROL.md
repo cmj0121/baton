@@ -165,10 +165,10 @@ daemon answers `no panel id, and this connection declared no self` rather than a
 connection may only ever name itself (see [Guardrails](#guardrails)).
 
 **Why this outranks everything else.** Baton has two ways to notice a panel needs you, and both are guesses from the
-outside: a **timer** that reads silence, and a **heuristic** that reads the last line of output for a question. A
-declaration is the only signal that came from the thing being described, so it wins — see
-[the lifecycle](./SPEC.md#lifecycle) for the states, and [ATTENTION.md](./ATTENTION.md) for the full precedence and the
-queue a raised hand lands in. Concretely:
+outside: a **timer** that reads silence, and a **heuristic** that reads the last content line — and a handful of overlay
+phrases above it — for a question. A declaration is the only signal that came from the thing being described, so it
+wins — see [the lifecycle](./SPEC.md#lifecycle) for the states, and [ATTENTION.md](./ATTENTION.md) for the full
+precedence and the queue a raised hand lands in. Concretely:
 
 - **It takes effect immediately**, not on the next monitor tick. The task scheduler's free pool reads the panel's state,
   so a tick's delay would be a window in which baton hands queued backlog work to an agent that has already said it is
