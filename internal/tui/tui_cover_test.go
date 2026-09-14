@@ -463,8 +463,9 @@ func TestKeyMapScrollsOnSmallScreen(t *testing.T) {
 		t.Fatal("the legend should stay pinned below the scrolling body")
 	}
 
-	// A tall screen shows everything with no counter.
-	full := model{mode: modeKeyMap, width: 90, height: 80,
+	// A tall screen shows everything with no counter. Height has to clear the
+	// banner stack as well as the map's own chrome, or the leftover still clips.
+	full := model{mode: modeKeyMap, width: 90, height: 120,
 		binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}.keyMapView()
 	if !strings.Contains(full, "prefix · leader key") || !strings.Contains(full, m.settingLabel(settingBell)) {
 		t.Fatal("a tall screen should render the whole key map")

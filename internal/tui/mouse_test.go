@@ -101,6 +101,23 @@ func TestMouseWheelInZoomNoFallthrough(t *testing.T) {
 
 // TestMouseIgnoredWithOverlay proves the wheel is inert while an input overlay
 // (filter, search, rename…) is open, so it never scrolls behind a prompt.
+// TestMouseWheelHelpScrolls: the wheel drives the help list, not the dashboard
+// cursor sitting under it.
+func TestMouseWheelHelpScrolls(t *testing.T) {
+	m := model{mode: modeHelp, helpFrom: modeDashboard, width: 120, height: 40,
+		mouseEnabled: true, helpTab: 1, fleet: []panel.Panel{{ID: "a"}, {ID: "b"}},
+		binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+	m.cursor = 1
+	next, _ := m.handleMouse(wheel(tea.MouseWheelDown))
+	m = next.(model)
+	if m.helpScroll != mouseWheelLines {
+		t.Fatalf("wheel down should scroll the help list, off = %d", m.helpScroll)
+	}
+	if m.cursor != 1 {
+		t.Fatalf("the dashboard cursor under the help must not move, cursor = %d", m.cursor)
+	}
+}
+
 func TestMouseIgnoredWithOverlay(t *testing.T) {
 	m := model{mode: modeDashboard, mouseEnabled: true, input: inputFilter,
 		fleet: []panel.Panel{{ID: "a"}, {ID: "b"}, {ID: "c"}}}

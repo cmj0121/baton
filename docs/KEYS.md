@@ -4,7 +4,7 @@
 
 The complete key reference. [SPEC.md](./SPEC.md) covers the views and the model behind them; this page covers only how
 you drive them. Press `?` in any view for the live list of that view's keys — it is tabbed by purpose, `←`/`→` walk the
-tabs and `↑`/`↓` scroll one — and `C-t k` to rebind anything here.
+tabs and `↑`/`↓` (or the wheel, or `PgUp`/`PgDn`) scroll the open tab — and `C-t k` to rebind anything here.
 
 ## The model
 

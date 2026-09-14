@@ -1601,6 +1601,16 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 		}
 		m.move(m.cols())
 		return m, nil
+	case "pgup", "ctrl+b", "ctrl+u":
+		if m.mode == modeHelp {
+			m.scrollHelp(-m.helpPage())
+			return m, nil
+		}
+	case "pgdown", "ctrl+f", "ctrl+d":
+		if m.mode == modeHelp {
+			m.scrollHelp(m.helpPage())
+			return m, nil
+		}
 	case "left", "h":
 		if m.mode == modeHelp { // the key list is tabbed; the arrows walk the tabs
 			m.cycleHelpTab(-1)
@@ -2484,6 +2494,13 @@ func (m model) openHelp(from mode) model {
 func (m *model) scrollHelp(delta int) {
 	m.helpScroll += delta
 	m.clampHelp()
+}
+
+// helpPage is one page of the open tab, for PgUp/PgDn. At least one row so a
+// tiny leftover still moves.
+func (m model) helpPage() int {
+	_, secs := m.helpSections()
+	return max(1, m.helpVisibleRows(secs)-1)
 }
 
 // cycleHelpTab moves the key list to the next or previous purpose tab, wrapping
@@ -3399,6 +3416,16 @@ func (m model) handleMouse(msg tea.Mouse) (tea.Model, tea.Cmd) {
 	// In a zoom or split with nothing to scroll (no tile focused, no emulator yet),
 	// the wheel does nothing — it must never reach back and move the hidden dashboard.
 	if m.mode == modeZoom || m.mode == modeGroupZoom {
+		return m, nil
+	}
+	// The help list is its own scroller. Stepping the dashboard cursor under it
+	// is how a wheel turn used to look like "the ? widget does not scroll".
+	if m.mode == modeHelp {
+		if up {
+			m.scrollHelp(-mouseWheelLines)
+		} else {
+			m.scrollHelp(mouseWheelLines)
+		}
 		return m, nil
 	}
 	// Anywhere else the wheel steps the selection, like the arrow keys.
@@ -4536,10 +4563,23 @@ func (m model) panelVisibleRows(reserved int) int {
 	if m.height <= 0 {
 		return 1 << 30
 	}
-	if v := m.height - reserved; v > 3 {
+	// Overlays sit under the banner. Size the body to the leftover so the
+	// composed frame fits and ↑↓ can actually move, rather than overflowing
+	// the terminal while the clamp thinks everything already fits.
+	if v := m.height - reserved - m.overlayStack(); v > 3 {
 		return v
 	}
 	return 3
+}
+
+// overlayStack is the rows the cockpit keeps outside an overlay popup: the
+// banner and the blank JoinVertical puts under it. The footer is already
+// outside Place (height-1). Unsized models size the popup alone.
+func (m model) overlayStack() int {
+	if m.height <= 0 {
+		return 0
+	}
+	return lipgloss.Height(m.headerBlock()) + 1
 }
 
 // windowAround clips rows to a visible-row window centred on anchor (the selected

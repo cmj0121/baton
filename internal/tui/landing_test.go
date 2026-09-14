@@ -546,3 +546,34 @@ func TestHelpPadDoesNotScroll(t *testing.T) {
 		t.Errorf("a tab that fits should not scroll at all, got offset %d", m.helpScroll)
 	}
 }
+
+// The help popup sits under the banner. If it sizes itself against the full
+// terminal, the composed frame overflows and ↑↓ never move — the clamp thinks
+// the tab already fits. The leftover after the banner is the height it may use.
+func TestHelpFrameFitsUnderTheBanner(t *testing.T) {
+	for _, height := range []int{24, 30, 40} {
+		m := model{mode: modeHelp, helpFrom: modeDashboard, width: 120, height: height,
+			binds: append([]binding(nil), bindings...), prefixKey: keyPrefix, version: "test"}
+		if h := lipgloss.Height(m.frame()); h > height {
+			t.Errorf("height %d: frame is %d rows and must fit", height, h)
+		}
+	}
+}
+
+// On the default 40-row cockpit the Panels tab is longer than the leftover
+// under the banner, so j (via the key path, not scrollHelp directly) must move.
+func TestHelpScrollsUnderTheBanner(t *testing.T) {
+	m := model{mode: modeHelp, helpFrom: modeDashboard, width: 120, height: 40,
+		binds: append([]binding(nil), bindings...), prefixKey: keyPrefix, helpTab: 1}
+	if !strings.Contains(m.helpView(), "↑↓ scroll") {
+		t.Fatal("the Panels tab should clip under the banner so the list can scroll")
+	}
+	m = press(m, "j")
+	if m.helpScroll != 1 {
+		t.Fatalf("j should scroll one row, got %d", m.helpScroll)
+	}
+	m = press(m, "pgdown")
+	if m.helpScroll <= 1 {
+		t.Fatalf("PgDn should page, got %d", m.helpScroll)
+	}
+}
