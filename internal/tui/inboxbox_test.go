@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/cmj0121/baton/internal/proto"
 )
 
@@ -76,5 +78,75 @@ func TestInboxBoxClosesWhileComposing(t *testing.T) {
 		if got := strings.Count(view, "\n") + 1; got > height {
 			t.Errorf("at height %d the composing frame is %d rows — it overflows", height, got)
 		}
+	}
+}
+
+// TestInboxBoxIsTheSameSizeInEveryState is the size constancy the overlay owes
+// the operator: tab changes WHAT is listed, never how big the thing listing it
+// is. An empty bucket used to collapse the box and the next stop bounced it
+// open again, which reads as the overlay closing and reopening.
+//
+// It asserts the rendered height of the popup itself rather than the whole
+// frame, so a change in the banner cannot make this pass by accident.
+func TestInboxBoxIsTheSameSizeInEveryState(t *testing.T) {
+	pinRender(t)
+	failed := wire("4", "exited", time.Minute)
+	failed.ExitCode = 3
+	m := openedInbox(t,
+		wire("1", "attention", 90*time.Second),
+		wire("2", "stuck", 3*time.Hour),
+		wire("3", "done", 20*time.Second),
+		failed,
+	)
+	m.inboxDone = true
+	m.width, m.height = 120, 40
+
+	want := lipgloss.Height(m.inboxView())
+	for _, f := range m.inboxStops() {
+		m.inboxFilter = f
+		m = m.snapInboxCursor()
+		if got := lipgloss.Height(m.inboxView()); got != want {
+			t.Errorf("the %q filter draws a %d-row box, want %d — tab must not resize the overlay",
+				inboxFilterName(f), got, want)
+		}
+	}
+
+	// A bucket that is genuinely empty is the case that used to collapse.
+	only := openedInbox(t, wire("1", "attention", 90*time.Second))
+	only.width, only.height = 120, 40
+	full := lipgloss.Height(only.inboxView())
+	only.inboxFilter = inboxFailed
+	if got := lipgloss.Height(only.inboxView()); got != full {
+		t.Errorf("an empty bucket draws a %d-row box, want %d", got, full)
+	}
+
+	// …and so did an empty queue.
+	empty := openedInbox(t)
+	empty.width, empty.height = 120, 40
+	if got := lipgloss.Height(empty.inboxView()); got != want {
+		t.Errorf("an empty queue draws a %d-row box, want %d", got, want)
+	}
+}
+
+// TestInboxEmptyStatesSayWhichEmptinessItIs keeps the two apart. A filter with
+// nothing in it while other buckets hold rows must not claim the queue is
+// clear — that is a sentence the operator would act on.
+func TestInboxEmptyStatesSayWhichEmptinessItIs(t *testing.T) {
+	pinRender(t)
+	empty := openedInbox(t)
+	empty.width, empty.height = 120, 40
+	if v := empty.inboxView(); !strings.Contains(v, "nothing needs a human right now") {
+		t.Errorf("an empty QUEUE does not say so:\n%s", v)
+	}
+
+	filtered := openedInbox(t, wire("1", "attention", 90*time.Second))
+	filtered.width, filtered.height = 120, 40
+	filtered.inboxFilter = inboxFailed
+	v := filtered.inboxView()
+	if !strings.Contains(v, "no failed panels") {
+		t.Errorf("an empty FILTER does not name the bucket:\n%s", v)
+	}
+	if strings.Contains(v, "nothing needs a human right now") {
+		t.Error("an empty filter claims the whole queue is clear, which is a lie")
 	}
 }

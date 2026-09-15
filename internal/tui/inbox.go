@@ -747,43 +747,25 @@ func (m model) inboxLayout() (listW, tailW, rows int) {
 // inboxView renders the master-detail overlay: the queue (left) and the tail that
 // raised the selected row's flag (right).
 func (m model) inboxView() string {
-	if len(m.inboxRows) == 0 {
-		return m.popupBox(lipgloss.JoinVertical(lipgloss.Left,
-			sectionStyle.Render(spaced("INBOX")),
-			"",
-			mutedStyle.Render("nothing needs a human right now"),
-			"",
-			legend("esc", "close"),
-		))
-	}
-	if vis := m.inboxVisible(); len(vis) == 0 {
-		// A filter with nothing in it is NOT an empty queue, and must not read
-		// like one: other buckets still hold rows, and saying "nothing needs a
-		// human right now" here would be a lie the operator would act on. The
-		// bar stays so tab has somewhere to go.
-		return m.popupBox(lipgloss.JoinVertical(lipgloss.Left,
-			sectionStyle.Render(spaced("INBOX")),
-			m.inboxTabBar(),
-			"",
-			mutedStyle.Render("no "+inboxFilterName(m.inboxFilter)+" panels"),
-			"",
-			m.inboxFooter(),
-		))
-	}
 	listW, tailW, rows := m.inboxLayout()
-	left := padBlock(m.inboxRowLines(listW, rows), rows, listW)
-	right := padBlock(m.inboxDetailBlock(tailW, rows), rows, tailW)
-	sepStyle := lipgloss.NewStyle().Foreground(colFaint)
-	sep := make([]string, rows)
-	for i := range sep {
-		sep[i] = sepStyle.Render(" │ ")
-	}
-	body := lipgloss.JoinHorizontal(lipgloss.Top,
-		lipgloss.JoinVertical(lipgloss.Left, left...),
-		lipgloss.JoinVertical(lipgloss.Left, sep...),
-		lipgloss.JoinVertical(lipgloss.Left, right...),
-	)
 	vis := m.inboxVisible()
+
+	var body string
+	if len(vis) == 0 {
+		body = m.inboxEmptyBody(listW+tailW+3, rows)
+	} else {
+		sepStyle := lipgloss.NewStyle().Foreground(colFaint)
+		sep := make([]string, rows)
+		for i := range sep {
+			sep[i] = sepStyle.Render(" │ ")
+		}
+		body = lipgloss.JoinHorizontal(lipgloss.Top,
+			lipgloss.JoinVertical(lipgloss.Left, padBlock(m.inboxRowLines(listW, rows), rows, listW)...),
+			lipgloss.JoinVertical(lipgloss.Left, sep...),
+			lipgloss.JoinVertical(lipgloss.Left, padBlock(m.inboxDetailBlock(tailW, rows), rows, tailW)...),
+		)
+	}
+
 	at := 0
 	for n, i := range vis {
 		if i == m.inboxCursor {
@@ -792,10 +774,37 @@ func (m model) inboxView() string {
 		}
 	}
 	header := sectionStyle.Render(spaced("INBOX")) + "  " +
-		mutedStyle.Render(fmt.Sprintf("%d of %d", at+1, len(vis)))
+		mutedStyle.Render(fmt.Sprintf("%d of %d", min(at+1, len(vis)), len(vis)))
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		header, m.inboxTabBar(), "", body, "", m.inboxFooter())
 	return m.popupBox(content)
+}
+
+// inboxEmptyBody is the body when the mask shows nothing — and it is the SAME
+// HEIGHT as a body full of rows, because the overlay must not change size under
+// a key that only changes what is listed. Tabbing past an empty bucket used to
+// collapse the box and the next stop bounced it open again, which reads as the
+// overlay closing and reopening rather than as a list with nothing in it.
+//
+// The message is on the first line rather than centred: the eye is already at
+// the top of the list after the tab bar, and a line that moves with the
+// terminal's height is one more thing that is not where it was last time.
+//
+// What it says depends on whether the QUEUE is empty or only this bucket is.
+// The two are different facts and the second must never wear the first's words:
+// other buckets still hold rows, and "nothing needs a human right now" is a
+// sentence the operator would act on.
+func (m model) inboxEmptyBody(width, rows int) string {
+	msg := "nothing needs a human right now"
+	if len(m.inboxRows) > 0 {
+		msg = "no " + inboxFilterName(m.inboxFilter) + " panels"
+	}
+	lines := make([]string, rows)
+	for i := range lines {
+		lines[i] = lipgloss.NewStyle().Width(width).Render("")
+	}
+	lines[0] = lipgloss.NewStyle().Width(width).Render(mutedStyle.Render(msg))
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
 // inboxRowLines builds the queue column: the state LED, the panel's title, and its
