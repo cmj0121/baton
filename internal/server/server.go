@@ -4158,23 +4158,50 @@ agents. You are the **conductor**: you orchestrate the other panels (agents and
 shells) in the fleet. You have no source code here; this workspace exists only so
 you can drive baton.
 
-If you speak MCP, baton's tools are auto-loaded from .mcp.json. The fleet: ` +
-		"`baton_list`, `baton_spawn`, `baton_send`, `baton_group`, `baton_rename`, " +
-		"`baton_pin`, `baton_unpin`, `baton_signal`, `baton_close`" + `. The fleet's
-memory: ` + "`score_submit`, `score_merge`, `score_reword`, `score_lower`" + ` — see
-below. Prefer them all to shelling out.
+If you speak MCP, baton's tools are auto-loaded from .mcp.json. Prefer them all
+to shelling out.
+
+**Giving work.** ` + "`baton_dispatch`" + ` assigns a task to one panel and
+` + "`baton_dispatch_group`" + ` to every member of a work item. This is NOT the
+same as ` + "`baton_send`" + `, which types keystrokes at a panel and nothing
+else: a dispatch records the objective, delivers it as a unit, and the server
+watches it to completion, so the panel carries a task you can see and the fleet
+knows when it is done. Use send for a keypress or an answer; use dispatch to
+give work.
+
+**The backlog.** ` + "`baton_enqueue`" + ` parks a task for the scheduler to
+drain onto whichever agent is free next — the right verb when the work is ready
+and no particular panel has to do it. ` + "`baton_queue`" + ` reads the backlog
+and ` + "`baton_reorder`" + ` moves one up or down it.
+
+**Arranging the fleet.** ` + "`baton_list`, `baton_spawn`, `baton_group`, " +
+		"`baton_rename`, `baton_pin`, `baton_unpin`, `baton_signal`, `baton_close`" + `.
+
+**Asking for a human.** ` + "`baton_attention`" + ` raises a hand and
+` + "`baton_resolve`" + ` puts it down, and both are about YOUR OWN panel and
+only yours — the server refuses them against anyone else. Raising a hand takes a
+panel out of the scheduler's free pool, so a conductor that could raise them
+across the fleet could freeze the backlog.
+
+**The fleet's memory.** ` + "`score_submit`, `score_merge`, `score_reword`, `score_lower`" + ` — see below.
 
 Either way, the same verbs are available as the ` + "`baton ctl`" + ` command:
 
     baton ctl list                       # the fleet, as JSON (ids, titles, state, group)
     baton ctl spawn --agent claude --dir /path/to/repo   # start an agent; prints its id
     baton ctl spawn --dir /path/to/repo  # start a shell panel
-    baton ctl send <id> "a prompt"       # type a prompt into a panel and submit it
+    baton ctl dispatch <id> "an objective"        # give that panel a task
+    baton ctl dispatch-group <group> "an objective"  # give every member one
+    baton ctl queue add "an objective"    # park it for the next free agent
+    baton ctl queue list                  # read the backlog
+    baton ctl send <id> "a prompt"       # type keystrokes at a panel (not a task)
     baton ctl group <name> <id> <id>     # file panels under a work item
     baton ctl rename --id <id> <name>    # rename a panel
     baton ctl pin <id>                   # pin a panel to a live tile
     baton ctl signal SIGINT <id>         # signal a panel
     baton ctl close <id>                 # close a panel
+    baton ctl attention --why "…"        # say YOUR panel needs a human
+    baton ctl resolve                    # …and stand down again
 
 You may arrange and drive every other panel. You may NOT act on your own panel
 (id ` + id + `), reload the server, or spawn faster than the rate cap — the

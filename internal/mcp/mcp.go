@@ -256,6 +256,24 @@ func (s *Server) lookup(name string) (tool, bool) {
 	return tool{}, false
 }
 
+// ToolNames is every tool this server registers, in registration order.
+//
+// It is exported for ONE caller: the test that holds the conductor's briefing
+// to the truth. The briefing is the only text an agent reads as instruction, so
+// the list of tools in it is a claim about this package — and a tool added here
+// without a word there is a capability the conductor has and does not know it
+// has, which is how the whole task-assignment surface came to be invisible to
+// it (#99). Deriving the check from the registry is what makes the two fail
+// together instead of drifting apart.
+func ToolNames() []string {
+	tools := defaultTools()
+	out := make([]string, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, t.name)
+	}
+	return out
+}
+
 // defaultTools is the fleet-control tool set, mirroring `baton ctl`.
 func defaultTools() []tool {
 	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
