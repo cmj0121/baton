@@ -451,10 +451,12 @@ var refineScratch int
 // surface, which is what TestEveryStoreMethodIsClassified checks — a method
 // added later is unclassified until someone decides which of the two it is.
 var closedDoors = map[string]string{
+	"BeginEdit":    "a reconcile pass and a read of score.md, for an operator about to open it in $EDITOR",
 	"Boot":         "reports what Open's recovery pass did; writes nothing",
 	"Close":        "releases the directory claim",
 	"Dir":          "reports the directory",
 	"DrainFolds":   "hands back fold records already made; changes no entry",
+	"EndEdit":      "re-appends an existing entry's CURRENT line, so the pass that reads it back finds the wording unchanged: no supersede, no user signal, no tier",
 	"Explain":      "a read; its reconcile pass acts on score.md, which is the user's file",
 	"Health":       "reports counters",
 	"Len":          "counts entries",
