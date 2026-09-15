@@ -272,3 +272,76 @@ func TestLabelIsTheLastSegment(t *testing.T) {
 	}
 	t.Fatal("no row for backend/api")
 }
+
+// TestFlattenCarriesTheAncestorChain: every row knows, for each work item it sits
+// inside, whether that work item had anything left below it. A row's own `last`
+// closes its own branch and nothing else; the chain is what the levels ABOVE it
+// are drawn from, and without it a nested level has nothing to hang off.
+//
+// The fleet is shaped so the two failures that matter both show. `deep` is the
+// LAST row of its level while `api` is not, so the rows beneath them must record
+// different chains at the same depth — something carried from depth alone cannot
+// tell them apart. And `a` and `b` are siblings deep enough that their two
+// subtrees are walked from one parent chain with room left in it, which is where
+// a chain extended in place rather than copied lets the second subtree overwrite
+// the entry the first one's rows are still holding.
+func TestFlattenCarriesTheAncestorChain(t *testing.T) {
+	m := treeModel([]panel.Panel{
+		{ID: "1", Title: "smith", Group: "sova"},
+		{ID: "2", Title: "hale", Group: "sova/api"},
+		{ID: "3", Title: "ward", Group: "sova/api/deep/a"},
+		{ID: "4", Title: "page", Group: "sova/api/deep/b"},
+		{ID: "5", Title: "twain", Group: "sova/web"},
+		{ID: "6", Title: "lone"},
+	})
+
+	want := map[string]string{
+		"sova":            "",     // a top-level row sits inside nothing
+		"#1":              "-",    // inside sova, which still has `lone` below it
+		"sova/api":        "-",    // a sibling of web, so its own level stays open
+		"#2":              "--",   // inside sova and api, both still open below
+		"sova/api/deep":   "--",   // last of api's level — which its CHILDREN record, not it
+		"sova/api/deep/a": "--x",  // ... here: deep closed, so the column goes blank
+		"#3":              "--x-", // a is not last: b follows it
+		"sova/api/deep/b": "--x",  // the chain a's subtree left behind, unaltered
+		"#4":              "--xx", // and b closes the level
+		"sova/web":        "-",    // last of sova's level
+		"#5":              "-x",
+		"#6":              "",
+	}
+
+	for _, it := range m.dashItems() {
+		name := "#" + it.panel.ID
+		if it.kind == itemGroup {
+			name = it.name
+		}
+		w, ok := want[name]
+		if !ok {
+			t.Fatalf("unexpected row %q", name)
+		}
+		if got := chainText(it); got != w {
+			t.Errorf("row %q chain = %q, want %q", name, got, w)
+		}
+		if len(it.guides) != it.depth {
+			t.Errorf("row %q carries %d guides at depth %d", name, len(it.guides), it.depth)
+		}
+		delete(want, name)
+	}
+	for name := range want {
+		t.Errorf("no row for %q", name)
+	}
+}
+
+// chainText spells a row's ancestor chain as one character per level: "-" for an
+// ancestor with rows still below it, "x" for one that closed its level.
+func chainText(it dashItem) string {
+	var b strings.Builder
+	for _, closed := range it.guides {
+		if closed {
+			b.WriteString("x")
+			continue
+		}
+		b.WriteString("-")
+	}
+	return b.String()
+}

@@ -103,7 +103,7 @@ func buildTree(fleet []panel.Panel) *groupNode {
 func (m model) dashTree() []dashItem {
 	root := buildTree(m.lensFleet())
 	need := m.needByGroup()
-	return m.flatten(root, 0, need, nil)
+	return m.flatten(root, nil, need, nil)
 }
 
 // The filter narrows which ROWS are drawn. It deliberately does not narrow what a
@@ -144,14 +144,22 @@ func (m model) groupMatches(n *groupNode) bool {
 	return false
 }
 
-// flatten walks a node's children into rows at the given depth, appending to out.
+// flatten walks a node's children into rows under the given ancestor chain,
+// appending to out. guides is one bool per ancestor level — see dashItem.guides —
+// so its length is the depth the rows land at.
 //
 // The order of operations is the same at every level and matters: build the level's
 // items in fleet order, float the favourites, fold the quiet ones, mark the last
 // row so the branch glyphs close, and only then recurse into whatever is expanded.
 // Folding before recursing is what keeps a fold row's count honest — it counts the
 // rows at ITS level, not the panels somewhere below them.
-func (m model) flatten(n *groupNode, depth int, need map[string]int, out []dashItem) []dashItem {
+//
+// The guides are stamped onto the level in that same pass, AFTER the float and the
+// fold, for the reason last is: both say where a row sits among the rows finally
+// drawn, and a rail computed before the fold moved them would be drawn against a
+// level that no longer exists.
+func (m model) flatten(n *groupNode, guides []bool, need map[string]int, out []dashItem) []dashItem {
+	depth := len(guides)
 	level := make([]dashItem, 0, len(n.children))
 	for _, c := range n.children {
 		if c.panel != nil {
@@ -180,9 +188,16 @@ func (m model) flatten(n *groupNode, depth int, need map[string]int, out []dashI
 
 	for i := range level {
 		level[i].last = i == len(level)-1
+		level[i].guides = guides
 		out = append(out, level[i])
 		if level[i].kind == itemGroup && level[i].expanded && level[i].node != nil {
-			out = m.flatten(level[i].node, depth+1, need, out)
+			// A fresh slice per child, never append-in-place: siblings would otherwise
+			// share one backing array, and the second work item at a level would
+			// overwrite the rails the first one's subtree is still holding.
+			kid := make([]bool, depth+1)
+			copy(kid, guides)
+			kid[depth] = level[i].last
+			out = m.flatten(level[i].node, kid, need, out)
 		}
 	}
 	return out
