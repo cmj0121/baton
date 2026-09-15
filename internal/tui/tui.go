@@ -192,16 +192,32 @@ type model struct {
 	attnSeen    map[string]bool // panel ids currently flagged for attention, to fire the notification only on the rising edge
 	bellPending bool            // a panel just entered attention — ring the terminal bell on the next render
 
-	confirmClose       bool      // ask y/n before closing a panel (toggled in the key map)
-	allowNameConflict  bool      // let two work items share a name (server enforces; kept to round-trip config)
-	bellEnabled        bool      // ring the terminal bell when a panel needs you (toggled in the key map)
-	mouseEnabled       bool      // mouse reporting on — the wheel scrolls and moves the selection (toggled in the key map)
-	pendingClose       bool      // a close is awaiting y/n confirmation
-	pendingRestart     bool      // a force-restart is awaiting y/n confirmation
-	pendingSpawn       bool      // A's workdir is awaiting here/isolate; handled beside pendingClose so w/n cannot leak
-	pendingConductor   bool      // a conductor spawn is in flight; zoom it when it lands in a snapshot
-	pendingGlobalShell bool      // a global-shell spawn is in flight; zoom it when it lands in a snapshot
-	now                time.Time // wall clock shown in the footer, ticked every second
+	confirmClose       bool // ask y/n before closing a panel (toggled in the key map)
+	allowNameConflict  bool // let two work items share a name (server enforces; kept to round-trip config)
+	bellEnabled        bool // ring the terminal bell when a panel needs you (toggled in the key map)
+	mouseEnabled       bool // mouse reporting on — the wheel scrolls and moves the selection (toggled in the key map)
+	pendingClose       bool // a close is awaiting y/n confirmation
+	pendingRestart     bool // a force-restart is awaiting y/n confirmation
+	pendingSpawn       bool // A's workdir is awaiting here/isolate; handled beside pendingClose so w/n cannot leak
+	pendingConductor   bool // a conductor spawn is in flight; zoom it when it lands in a snapshot
+	pendingGlobalShell bool // a global-shell spawn is in flight; zoom it when it lands in a snapshot
+	// pendingReveal is an ORDINARY spawn from this cockpit in flight: put the
+	// cursor on the panel when it lands, so the operator can see the thing they
+	// just asked for (#98).
+	//
+	// The tree is windowed around the cursor and a new panel is appended at the
+	// END of the fleet, so on a fleet that scrolls it is drawn nowhere — the key
+	// reads as having done nothing, while the only evidence is a count in the
+	// heading. pendingConductor and pendingGlobalShell already solve exactly this
+	// for the two SINGLETON spawns; A, p, n c and n . had no equivalent, which is
+	// the whole of the bug.
+	//
+	// It is armed by this cockpit's own spawn and spent once, because the rule it
+	// must not break is restoreCursor's: a snapshot arriving because someone else
+	// spawned something, or because an agent finished, must never move the
+	// selection under the operator's hand.
+	pendingReveal bool
+	now           time.Time // wall clock shown in the footer, ticked every second
 
 	cpuPct   float64 // system-wide CPU load %, sampled each tick for the footer
 	memUsed  uint64  // system memory in use, bytes
@@ -1166,6 +1182,17 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		if onDash {
 			selKind, selID, selGroup, hadSel = m.selectedKey()
 		}
+		// The ids this cockpit already knew, so an arrival can be told from a
+		// panel that was simply re-reported. Taken only when a spawn of ours is in
+		// flight — it is one allocation per snapshot otherwise, on the path that
+		// runs every telemetry tick.
+		var known map[string]bool
+		if m.pendingReveal {
+			known = make(map[string]bool, len(m.fleet))
+			for _, p := range m.fleet {
+				known[p.ID] = true
+			}
+		}
 		m.fleet = mergeFleet(sm.Panels)
 		m.observeWire(sm.Panels) // the inbox reads Since/Acked, which the fleet model does not carry
 		m.groupShown = shownForGroups(sm.Groups)
@@ -1197,6 +1224,28 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 				m.pendingConductor = false
 				if m.mode == modeDashboard {
 					*m = m.zoomInto(p)
+				}
+			}
+		}
+		// An ordinary spawn of ours landed: put the cursor on it so the operator
+		// can SEE the panel they just asked for. The tree windows around the
+		// cursor and a new panel is appended at the end, so on a fleet that
+		// scrolls this is the difference between the key working and the key
+		// appearing to do nothing (#98).
+		//
+		// Scrolled to, not zoomed: A is "add to the fleet", not "go and drive it",
+		// and a zoom would take the operator off the dashboard they are building
+		// up. That is where this differs from the two singletons below, which are
+		// heading marks with no card to select at all.
+		//
+		// The flag is spent whether or not it could act, exactly as those two are:
+		// a reveal left armed would fire on whatever unrelated snapshot arrived
+		// once the operator came back from a zoom.
+		if m.pendingReveal {
+			m.pendingReveal = false
+			if onDash {
+				if id := newestArrival(known, m.fleet); id != "" {
+					m.restoreCursor(itemPanel, id, "", true)
 				}
 			}
 		}
@@ -2197,6 +2246,9 @@ func (m model) spawnPanel(command string) model {
 			return m
 		}
 	}
+	// Armed only past the error return: a send that failed produces no panel, and
+	// a reveal left armed would fire on whatever unrelated snapshot arrived next.
+	m.pendingReveal = true
 	m.status = "spawning " + shellLabel(command)
 	return m
 }
@@ -2246,6 +2298,9 @@ func (m model) spawnFromForm(line string) model {
 			return m
 		}
 	}
+	// Armed only past the error return: a send that failed produces no panel, and
+	// a reveal left armed would fire on whatever unrelated snapshot arrived next.
+	m.pendingReveal = true
 	m.status = "spawning " + strings.Join(argv, " ")
 	return m
 }
@@ -2278,6 +2333,9 @@ func (m model) spawnPanelHere() model {
 			return m
 		}
 	}
+	// Armed only past the error return: a send that failed produces no panel, and
+	// a reveal left armed would fire on whatever unrelated snapshot arrived next.
+	m.pendingReveal = true
 	m.status = "spawning in " + p.Cwd
 	return m
 }
@@ -2350,6 +2408,9 @@ func (m model) spawnAgent(dir string) model {
 			return m
 		}
 	}
+	// Armed only past the error return: a send that failed produces no panel, and
+	// a reveal left armed would fire on whatever unrelated snapshot arrived next.
+	m.pendingReveal = true
 	m.status = fmt.Sprintf("spawning %s · %s", name, dirLabel(dir))
 	return m
 }
@@ -5155,4 +5216,26 @@ func truncate(s string, width int) string {
 		w += rw
 	}
 	return b.String() + "…"
+}
+
+// newestArrival is the id of the last panel in fleet that known did not carry —
+// the one a spawn of ours has just produced. Empty when nothing is new.
+//
+// It reads the fleet ORDER rather than comparing ids as numbers, because the
+// order is the server's and the ids are only decimal by convention: an
+// ephemeral is "diff:3", and a reader that sorted would have to decide what
+// that means. Last-new is the right answer either way, since the server appends
+// and a spawn produces at most one panel the operator asked for — the worktree
+// verbs produce one too, and it is the one they named a branch for.
+func newestArrival(known map[string]bool, fleet []panel.Panel) string {
+	if known == nil {
+		return ""
+	}
+	id := ""
+	for _, p := range fleet {
+		if !known[p.ID] && !p.Conductor && !p.GlobalShell {
+			id = p.ID
+		}
+	}
+	return id
 }
