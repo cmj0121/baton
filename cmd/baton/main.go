@@ -722,12 +722,21 @@ func sweepLegacyConductorWorkspaces(sock string) {
 		log.Warn().Err(err).Msg("could not resolve the conductor workspace; skipping the legacy sweep")
 		return
 	}
-	for _, ws := range paths.LegacyConductorWorkspaces(current) {
-		if err := os.RemoveAll(ws); err != nil {
-			log.Warn().Err(err).Str("workspace", ws).Msg("could not remove a legacy conductor workspace")
+	// Through paths.RemoveConductorWorkspace rather than a bare RemoveAll, because
+	// removing a workspace has TWO halves — the directory and its boot stamp — and
+	// for a long time this loop did only the first. The stamp is filtered out of
+	// the workspace list by design (it is not a workspace), so nothing collected
+	// it: twenty-two orphans on one machine before this was fixed (#100). One
+	// function owns what removal means, so the halves cannot come apart again.
+	//
+	// The list is AllConductorLeaks, which adds the stamps already orphaned by
+	// that loop — stopping the leak does not clear what has leaked.
+	for _, leak := range paths.AllConductorLeaks(current) {
+		if err := paths.RemoveConductorLeak(leak); err != nil {
+			log.Warn().Err(err).Str("workspace", leak).Msg("could not remove a legacy conductor workspace")
 			continue
 		}
-		log.Info().Str("workspace", ws).Msg("removed a legacy conductor workspace")
+		log.Info().Str("workspace", leak).Msg("removed a legacy conductor workspace")
 	}
 }
 
