@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 
@@ -16,13 +18,13 @@ import (
 // with a hint when no plugin has registered a command.
 func (m model) openCommandPicker(from mode) model {
 	if len(m.pluginCommands) == 0 {
-		m.status = "no plugin commands · add baton.command in " + pluginHint()
+		m.status = m.tr("cmds.none", "no plugin commands · add baton.command in") + " " + pluginHint()
 		return m
 	}
 	m.commandFrom = from
 	m.commandCursor = 0
 	m.mode = modeCommand
-	m.status = "run a plugin command · enter runs · esc cancels"
+	m.status = m.tr("cmds.status.open", "run a plugin command · enter runs · esc cancels")
 	return m
 }
 
@@ -32,7 +34,7 @@ func (m model) handleCommandKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "esc":
 		m.mode = m.commandFrom
-		m.status = "command cancelled"
+		m.status = m.tr("cmds.status.cancelled", "command cancelled")
 		return m, nil
 	case "up", "k":
 		m.commandCursor = wrapIndex(m.commandCursor, -1, len(m.pluginCommands))
@@ -70,15 +72,15 @@ func (m model) commandPickerView() string {
 	}
 
 	rows := []string{
-		sectionStyle.Render(spaced("PLUGIN COMMANDS")),
+		sectionStyle.Render(spaced(m.tr("cmds.title", "PLUGIN COMMANDS"))),
 		"",
 	}
 	for i, c := range m.pluginCommands {
 		rows = append(rows, caret(m.commandCursor == i)+nameStyle.Render(c.Name)+mutedStyle.Render(c.Desc))
 	}
 
-	rows = append(rows, "", mutedStyle.Render("registered by your Lua plugin · "+keyLabel(m.effPrefix())+" R reloads it"), "",
-		legend("↑↓", "move", "enter", "run", "esc", "cancel"))
+	rows = append(rows, "", mutedStyle.Render(fmt.Sprintf(m.tr("cmds.hint", "registered by your Lua plugin · %s R reloads it"), keyLabel(m.effPrefix()))), "",
+		legend("↑↓", m.tr("legend.move", "move"), "enter", m.tr("legend.run", "run"), "esc", m.tr("legend.cancel", "cancel")))
 	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
 

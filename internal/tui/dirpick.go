@@ -90,7 +90,7 @@ func startDir(typed, fallback string) string {
 func (m model) browseDir(dir string) model {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		m.status = "cannot read " + dirLabel(dir)
+		m.status = fmt.Sprintf(m.tr("dir.status.unreadable", "cannot read %s"), dirLabel(dir))
 		return m
 	}
 	m.dirPickDir = dir
@@ -106,11 +106,11 @@ func (m model) browseDir(dir string) model {
 func (m model) dirRows(entries []os.DirEntry) []dirRow {
 	var rows []dirRow
 	if used := m.inUseDirs(); len(used) > 0 {
-		rows = append(rows, dirRow{label: "IN USE", header: true})
+		rows = append(rows, dirRow{label: m.tr("dir.in-use", "IN USE"), header: true})
 		rows = append(rows, used...)
 	}
 	rows = append(rows,
-		dirRow{label: "BROWSE", header: true},
+		dirRow{label: m.tr("dir.browse", "BROWSE"), header: true},
 		dirRow{label: dirLabel(m.dirPickDir), caption: true})
 	if parent := filepath.Dir(m.dirPickDir); parent != m.dirPickDir {
 		rows = append(rows, dirRow{path: parent, label: "..", up: true})
@@ -232,7 +232,7 @@ func (m model) handleDirPickKey(key string, k tea.Key) (tea.Model, tea.Cmd) {
 		return m.closeDirPick(r.path), nil
 	case keyDirPickFilter:
 		m.dirPickTyping, m.dirPickFilter = true, ""
-		m.status = "filter · type to narrow · enter keeps it · esc clears"
+		m.status = m.tr("dir.status.filter", "filter · type to narrow · enter keeps it · esc clears")
 		return m, nil
 	case keyDirPickHidden:
 		m.dirPickHidden = !m.dirPickHidden
@@ -283,22 +283,22 @@ func (m model) closeDirPick(pick string) model {
 	m.mode, m.input = m.dirPickFrom, m.dirPickInput
 	m.dirPickRows, m.dirPickTyping = nil, false
 	if pick == "" {
-		m.status = "workdir · cancelled the picker · enter spawns"
+		m.status = m.tr("dir.status.cancelled", "workdir · cancelled the picker · enter spawns")
 		return m
 	}
 	m.inputBuf = dirLabel(pick)
-	m.status = "workdir · " + m.inputBuf + " · enter spawns"
+	m.status = fmt.Sprintf(m.tr("dir.status.picked", "workdir · %s · enter spawns"), m.inputBuf)
 	return m
 }
 
 // dirPickLegend is the status line for the picker's resting state.
 func (m model) dirPickLegend() string {
-	hidden := "show"
+	hidden := m.tr("dir.show", "show")
 	if m.dirPickHidden {
-		hidden = "hide"
+		hidden = m.tr("dir.hide", "hide")
 	}
-	return "workdir · jk move · → enter dir · ← up · ⏎ pick · " +
-		keyDirPickFilter + " filter · " + keyDirPickHidden + " " + hidden + " dotdirs · esc closes"
+	return fmt.Sprintf(m.tr("dir.status.open", "workdir · jk move · → enter dir · ← up · ⏎ pick · %s filter · %s %s dotdirs · esc closes"),
+		keyDirPickFilter, keyDirPickHidden, hidden)
 }
 
 // dirPickView renders the picker: the two sections, the cursor, and the legend.
@@ -311,7 +311,7 @@ func (m model) dirPickView() string {
 	}
 	nameCol := lipgloss.NewStyle().Width(38)
 
-	rows := []string{sectionStyle.Render(spaced("WORKDIR")), ""}
+	rows := []string{sectionStyle.Render(spaced(m.tr("dir.title", "WORKDIR"))), ""}
 	for i, r := range m.dirPickRows {
 		switch {
 		case r.header:
@@ -323,23 +323,25 @@ func (m model) dirPickView() string {
 		default:
 			line := caret(m.dirPickCursor == i) + nameCol.Render(truncate(r.label, 36))
 			if r.panels > 0 {
-				line += mutedStyle.Render(fmt.Sprintf("%d panel(s)", r.panels))
+				line += mutedStyle.Render(fmt.Sprintf(m.tr("fleet.panels", "%d panel(s)"), r.panels))
 			}
 			rows = append(rows, line)
 		}
 	}
 	if m.firstSelectable() == 0 && len(m.dirPickRows) > 0 && !m.dirPickRows[0].selectable() {
-		rows = append(rows, "", mutedStyle.Render("no subdirectories here"))
+		rows = append(rows, "", mutedStyle.Render(m.tr("dir.no-subdirs", "no subdirectories here")))
 	}
 
 	rows = append(rows, "")
 	if m.dirPickTyping {
 		rows = append(rows,
-			inkStyle.Render("filter  "+m.dirPickFilter+"▏"),
-			"", legend("⏎", "keep", "esc", "clear"))
+			inkStyle.Render(m.tr("legend.filter", "filter")+"  "+m.dirPickFilter+"▏"),
+			"", legend("⏎", m.tr("legend.keep", "keep"), "esc", m.tr("legend.clear", "clear")))
 	} else {
-		rows = append(rows, legend("jk", "move", "→", "enter", "←", "up", "⏎", "pick",
-			keyDirPickFilter, "filter", keyDirPickHidden, "dotdirs", "esc", "close"))
+		rows = append(rows, legend("jk", m.tr("legend.move", "move"), "→", m.tr("legend.enter-dir", "enter"),
+			"←", m.tr("legend.up", "up"), "⏎", m.tr("legend.pick", "pick"),
+			keyDirPickFilter, m.tr("legend.filter", "filter"), keyDirPickHidden, m.tr("dir.dotdirs", "dotdirs"),
+			"esc", m.tr("legend.close", "close")))
 	}
 	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }

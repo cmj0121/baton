@@ -420,5 +420,5 @@ func (m model) usageReadingAge() (time.Duration, bool) {
 
 // usageLegend is the overlay's key hint.
 func (m model) usageLegend() string {
-	return legend("u", "cycle footer", "esc", "close")
+	return legend("u", m.tr("usage.legend.cycle", "cycle footer"), "esc", m.tr("legend.close", "close"))
 }

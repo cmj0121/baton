@@ -437,3 +437,73 @@ func TestDashboardChromeLeavesNoEnglishBehind(t *testing.T) {
 		}
 	}
 }
+
+// TestOverlaysLeaveNoEnglishBehind sweeps every pop-up the cockpit draws and
+// fails on any English word left in the zh-TW render.
+//
+// It is the completeness check for the surfaces that have no fixture worth
+// comparing against their English selves: an overlay's chrome is a title, an
+// empty state and a legend, and the line-by-line comparisons elsewhere in this
+// file cannot see a single unkeyed word inside a line that is otherwise
+// translated. The scanner can, which is the same reason the dashboard has one.
+//
+// The allowlist is per overlay and short on purpose. A word earns its place
+// there by belonging to something other than the cockpit — git's own
+// subcommands, the wire words of a protocol, a plugin language's name — and each
+// entry is a claim that translating it would be wrong, not that nobody got to it
+// yet.
+func TestOverlaysLeaveNoEnglishBehind(t *testing.T) {
+	// Big enough that every overlay draws its whole body: a pop-up squeezed by a
+	// short terminal drops rows, and an empty state that is not on screen is one
+	// this test would pass without reading.
+	m := baseModel()
+	m.lang, m.width, m.height = i18n.ZhTW, 160, 48
+
+	// Everywhere: the KEY NAMES, which are never translated because a translated
+	// key is a key nobody can press; the product; and baton's own words for the
+	// things it spawns.
+	common := []string{
+		"esc", "tab", "enter", "ctrl", "alt", "shift", "space", "backspace",
+		"home", "end", "pgup", "pgdn",
+		"baton", "agent", "shell", "command",
+	}
+
+	for _, tc := range []struct {
+		name    string
+		view    func() string
+		allowed []string
+	}{
+		{"inbox", m.inboxView, nil},
+		{"queue", m.queueView, nil},
+		{"proc tree", m.procTreeView, nil},
+		{"fleet search", m.fleetSearchView, nil},
+		{"remote", m.remoteView, []string{"passkey"}},
+		{"dir picker", m.dirPickView, nil},
+		{"commands", m.commandPickerView, []string{"lua"}},
+		// The git menu runs git's own ops and names each one as git does.
+		{"git menu", m.gitPickerView, []string{
+			"git", "diff", "log", "status", "stage", "all", "commit", "push",
+			"branch", "worktree", "worktrees", "rm", "editor", "add", "repo",
+		}},
+		{"git output", func() string {
+			return m.openGitOutPopup("git status", "on branch main", false).gitOutView()
+		}, []string{"git", "status", "on", "branch", "main"}}, // the op and its output
+		{"diff", m.diffView, nil},
+		{"usage", m.usageView, []string{"claude", "code"}}, // the backend that reports quota
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			allowed := map[string]bool{}
+			for _, w := range append(append([]string(nil), common...), tc.allowed...) {
+				allowed[w] = true
+			}
+			word := regexp.MustCompile(`[A-Za-z]{3,}`)
+			for _, line := range strings.Split(ansi.Strip(tc.view()), "\n") {
+				for _, w := range word.FindAllString(line, -1) {
+					if !allowed[strings.ToLower(w)] {
+						t.Errorf("untranslated English: %q in %q", w, strings.TrimSpace(line))
+					}
+				}
+			}
+		})
+	}
+}
