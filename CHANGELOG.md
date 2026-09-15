@@ -4,6 +4,24 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v2.1.1](https://github.com/cmj0121/baton/releases/tag/v2.1.1) — panels the fleet could not see
+
+2026-09-15
+
+- **A panel that exited before it was registered is no longer alive forever** — `createPanel` forked the child twenty-eight
+  lines before it appended the panel, so an exit that landed in between reached `onPanelExit`, found no such panel, and
+  was dropped: no state change, no log line, no broadcast. The panel then joined the fleet as `spawning` for a process
+  that was already dead. This is the cause of the intermittent CI red that had been chased three times as a flaky test.
+- **The panel you spawn is put on screen** — on a fleet whose tree scrolls, `A` created the panel at the end of the list
+  and left the cursor where it was, so the key read as having done nothing. The cockpit already did this for the
+  conductor and the global shell; `A`, `p`, `n c` and `n .` never got the same treatment.
+- **A new panel is sized for your screen** rather than the 24x80 floor, so a TUI agent's first paint is already right.
+- **The conductor's briefing names every tool it has** — it named 13 of 20, and the seven it omitted were between them
+  the whole task-assignment surface, so the agent whose job is handing work to panels had never been told it could.
+  The list is derived from the registry now, in both directions.
+- **A swept conductor workspace takes its boot stamp with it** — 22 orphaned stamps had accumulated on one machine.
+- **Two polling loops let go of the CPU**, and a guard reads the suite for the next copy of that loop.
+
 ## [v2.1.0](https://github.com/cmj0121/baton/releases/tag/v2.1.0) — the memory gets a door, and the boxes close
 
 2026-09-15
