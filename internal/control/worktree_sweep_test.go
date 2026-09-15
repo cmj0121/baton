@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -71,7 +72,7 @@ func wtOrphan(t *testing.T, c *control.Client, repo, branch string) string {
 		}
 		select {
 		case <-deadline:
-			t.Fatalf("the worktree agent never exited, panels %+v", panels)
+			t.Fatalf("the worktree agent never exited, panels %+v\n\nall goroutines:\n%s", panels, dumpStacks())
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
@@ -181,4 +182,20 @@ func TestWorktreeVerbsOnAClosedClient(t *testing.T) {
 	if _, err := c.SweepWorktrees(); err == nil {
 		t.Fatal("SweepWorktrees on a closed client should fail")
 	}
+}
+
+// dumpStacks is every goroutine's stack, for a failure that has been silent.
+//
+// This wait has gone red on CI three times and reproduces nowhere else — not at
+// two cores, not at one, not under -race, not with the whole suite running. And
+// it is MUTE: the daemon logs nothing at all for the whole deadline, so the
+// report says only that something did not happen. The agent is `sh -c "exit 0"`
+// and the exit is observed by ptymgr's pump, so the one fact worth having is
+// where that goroutine actually is — blocked on a PTY read that never returned
+// EIO, on the server mutex, or not there at all.
+//
+// Printed on the give-up path only, so a passing run pays nothing (#101).
+func dumpStacks() string {
+	buf := make([]byte, 1<<20)
+	return string(buf[:runtime.Stack(buf, true)])
 }
