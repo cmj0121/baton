@@ -244,8 +244,11 @@ func TestGroupDispatchDropsOnlyTheVetoedMember(t *testing.T) {
 	if _, sent := got["p1"]; sent {
 		t.Fatalf("the vetoed member received %q", got["p1"])
 	}
-	if got["p2"] != "race it\n" {
-		t.Fatalf("p2 received %q, want the fan-out to have reached it anyway", got["p2"])
+	// Exact rather than a contains: the store here is empty, so the whole score
+	// section is the feedback hint, and spelling the delivery out is what would
+	// catch the hint going missing as well as the prompt.
+	if want := scoreHintLine + "\n\nrace it\n"; got["p2"] != want {
+		t.Fatalf("p2 received %q, want %q — the fan-out should have reached it anyway", got["p2"], want)
 	}
 
 	// And with every member refused there is nobody left to reach, so the command
