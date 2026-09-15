@@ -126,6 +126,7 @@ dashboard row — the work-item verbs — is refused in a zoom with the way forw
 |                 | (C-t)  | ·       | `b`                 | back one level: zoom, group, dashboard                 |
 | **Escapes**     | C-t    | ·       | `d`                 | go to the dashboard                                    |
 |                 | C-t    | ·       | `a`                 | the attention inbox                                    |
+|                 | C-t    | ·       | `tab`               | in the inbox: cycle which bucket the list shows        |
 |                 | C-t    | ·       | `o`                 | the process tree                                       |
 |                 | C-t    | ·       | `@`                 | remote access                                          |
 |                 | C-t    | ·       | `c`                 | the plugin command picker                              |

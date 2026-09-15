@@ -137,13 +137,14 @@ time, never carried on a snapshot, so what you read is literally what made the d
 ```text
 ╭──────────────────────────────────────────────────────────────────────────╮
 │ I N B O X   1 of 3                                                       │
+│ all 3 · attention 1 · stuck 1 · failed 0 · done 1                        │
 │                                                                          │
 │ ▸ ◆ refactor-api           4m │ ▸ two migrations conflict — which wins?   │
 │   ◈ migrate-db            11m │                                           │
 │   ◇ docs-sweep            26m │ Files to change: internal/server/server.go│
 │                               │ Apply this refactor? [y/N]                │
 │                                                                          │
-│ j/k move  ·  enter zoom  ·  r re-sort  ·  esc close                      │
+│ j/k move · tab filter · enter zoom · r re-sort · esc close               │
 │ i reply  ·  - snooze  ·  x dismiss                                       │
 ╰──────────────────────────────────────────────────────────────────────────╯
 ```
@@ -160,6 +161,7 @@ bottom-aligned, because the question is always the last thing a program printed.
 | `enter`              | zoom the panel — and acknowledge **nothing**                                      |
 | `-`                  | snooze the row for `settings.inbox-snooze`                                        |
 | `x`                  | dismiss the row until the panel next produces output                              |
+| `tab` / `shift+tab`  | cycle which bucket the list shows                                                 |
 | `r`                  | re-sort the queue                                                                 |
 | `esc` / `q`          | close                                                                             |
 
@@ -193,6 +195,29 @@ infrastructure, always present, and a queue with a permanent floor of two is a q
 snapshot may change what a row _says_, may append a new qualifier at the tail where it cannot jump the selection, and
 greys out a row that stopped qualifying — but it never pulls a row out from under the hand about to act on it. A queue
 that re-sorts under you is a queue where the thing you press `x` on is not the thing you read.
+
+### `tab` chooses a bucket
+
+Seeing all four at once is right until you are doing one kind of thing. Clearing failed rows means walking past every
+question first; a `done` review sits buried under questions you are not doing right now. `tab` cycles which bucket the
+list shows, `shift+tab` the other way:
+
+```text
+all → attention → stuck → failed → done → all
+```
+
+**It is a mask, not a re-sort.** The order does not move — filtering hides rows, it never re-derives the queue, so
+everything the freeze above buys you still holds. `j`/`k` walk the rows you can see, `r` still re-sorts the whole queue
+and then re-applies the mask, and `x` can never act on a row that is not on screen.
+
+Every open starts on `all`. `C-t a` exists to clear what needs a human, and a filter remembered from last time would
+hide `attention` behind a key you did not press. Empty buckets are **not** skipped either: a cycle whose next stop
+depends on the fleet is the same disorientation a re-sorting queue is, so the names stay put and an empty one says so.
+`done` is the one stop that can be missing, because with `settings.inbox-done` off the bucket does not exist.
+
+An empty filter keeps the overlay open and says `no failed panels` — not `nothing needs a human right now`, which would
+be a lie while other buckets still hold rows. The header names every stop with its count, so you can see whether the
+next press is worth it before you press it.
 
 ### Nothing leaves by accident, and nothing comes back by surprise
 
@@ -395,6 +420,7 @@ panel:
 | Inbox       | `i`           | reply in place and clear the row                                                           |
 |             | `-` / `x`     | snooze / dismiss the row                                                                   |
 |             | `enter` / `r` | zoom the panel (clears nothing) / re-sort the queue                                        |
+|             | `tab`         | cycle the bucket the inbox shows                                                           |
 | Dashboard   | `enter`       | on the `▸ N quiet` row: expand it (`esc` folds it again)                                   |
 |             | `space`       | the same fold, from the disclosure key every other row answers to                          |
 | Group split | `p`           | pin a member — under the similarity fold a pin adds a tile rather than hiding the outliers |

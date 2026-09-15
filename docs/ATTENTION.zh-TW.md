@@ -123,13 +123,14 @@ conductor 可以舉自己的手卻不能舉別人的——見 **[CONTROL.zh-TW.m
 ```text
 ╭──────────────────────────────────────────────────────────────────────────╮
 │ I N B O X   1 of 3                                                       │
+│ all 3 · attention 1 · stuck 1 · failed 0 · done 1                        │
 │                                                                          │
 │ ▸ ◆ refactor-api           4m │ ▸ two migrations conflict — which wins?   │
 │   ◈ migrate-db            11m │                                           │
 │   ◇ docs-sweep            26m │ Files to change: internal/server/server.go│
 │                               │ Apply this refactor? [y/N]                │
 │                                                                          │
-│ j/k move  ·  enter zoom  ·  r re-sort  ·  esc close                      │
+│ j/k move · tab filter · enter zoom · r re-sort · esc close               │
 │ i reply  ·  - snooze  ·  x dismiss                                       │
 ╰──────────────────────────────────────────────────────────────────────────╯
 ```
@@ -146,6 +147,7 @@ conductor 可以舉自己的手卻不能舉別人的——見 **[CONTROL.zh-TW.m
 | `enter`              | 放大該面板——而且**什麼都不確認**                   |
 | `-`                  | 把該列延後 `settings.inbox-snooze` 那麼久          |
 | `x`                  | 把該列撤掉,直到該面板下次產生輸出                  |
+| `tab` / `shift+tab`  | 切換清單顯示哪一個 bucket                          |
 | `r`                  | 重新排序待辦                                       |
 | `esc` / `q`          | 關閉                                               |
 
@@ -176,6 +178,27 @@ conductor 可以舉自己的手卻不能舉別人的——見 **[CONTROL.zh-TW.m
 **而且只要游標還在裡面,順序就凍結。** 它只在打開時與按 `r` 時重排,其餘時候都不重排。一份抵達的快照可以改變某一列
 _說了什麼_,可以在尾端追加一個新的合格者(那裡跳不過選取),也可以把一列不再合格的列變灰——但它絕不會把一列從那隻
 正要動作的手底下抽走。一份會在你手下重排的待辦,是一份你按 `x` 的東西跟你讀到的東西不是同一個的待辦。
+
+### `tab` 選一個 bucket
+
+四個 bucket 同時看得到,在你沒有專做某一類事情之前都是對的。要清掉 failed 的列,就得先走過每一個問題;而一個
+`done` 的複查,會被埋在你現在並不打算處理的問題底下。`tab` 切換清單顯示哪一個 bucket,`shift+tab` 反方向:
+
+```text
+all → attention → stuck → failed → done → all
+```
+
+**它是遮罩,不是重新排序。**順序不會動——過濾只是把列藏起來,從不重新推導佇列,所以上面那個凍結替你買到的東西
+全部仍然成立。`j`/`k` 只走你看得見的列,`r` 依然重新排序**整個**佇列然後重新套用遮罩,而 `x` 永遠不可能作用在
+一列不在畫面上的東西。
+
+每次打開都從 `all` 開始。`C-t a` 存在的理由是清掉需要人的東西,而一個從上次記住的過濾條件,會把 `attention`
+藏在一個你這次並沒有按的鍵後面。空的 bucket 也**不會**被跳過:一個下一站取決於艦隊狀態的循環,和一個會在你
+底下重排的佇列是同一種迷失方向,所以名字固定在那裡,空的就說自己是空的。`done` 是唯一可能不存在的那一站,因為
+`settings.inbox-done` 關掉時那個 bucket 根本不存在。
+
+空的過濾條件會讓覆蓋層保持開啟並顯示 `no failed panels`——而不是 `nothing needs a human right now`,後者在其他
+bucket 還有列的時候是一句謊話。標題列會把每一站和它的數量都列出來,所以你在按下去之前就看得出下一按值不值得。
 
 ### 沒有東西會意外離開,也沒有東西會意外回來
 
