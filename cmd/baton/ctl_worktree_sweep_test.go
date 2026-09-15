@@ -84,7 +84,18 @@ func ctlOrphan(t *testing.T, c *control.Client, repo, branch string) string {
 
 	// Wait for the agent to exit, then purge the slot it leaves. Only then does
 	// nothing in the fleet name the tree.
-	deadline := time.Now().Add(15 * time.Second)
+	// 20ms between round-trips, matching waitOrphan in internal/server. The agent
+	// is `sh -c "exit 0"` and exits in milliseconds; what this loop is waiting for
+	// is the daemon NOTICING, and a loop that re-asks as fast as the daemon can
+	// answer competes with the goroutine doing the noticing. On two cores under
+	// -race that starves it, so the loop burns its whole deadline and reports a
+	// timeout for work that was already done — the bug ab7a7dc diagnosed and
+	// fixed in six loops, which never reached this one (#101).
+	//
+	// The deadline is not the problem and must not become the fix: fifteen
+	// seconds is 750 samples at this interval, and a bigger number would only
+	// hide the starvation and make the eventual failure slower to report.
+	deadline := time.After(15 * time.Second)
 	for {
 		panels, err := c.List()
 		if err != nil {
@@ -99,8 +110,10 @@ func ctlOrphan(t *testing.T, c *control.Client, repo, branch string) string {
 		if done {
 			break
 		}
-		if time.Now().After(deadline) {
+		select {
+		case <-deadline:
 			t.Fatalf("the worktree agent never exited, panels %+v", panels)
+		case <-time.After(20 * time.Millisecond):
 		}
 	}
 	if err := c.Do(proto.Command{Action: "panel.purge"}); err != nil {
