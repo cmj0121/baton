@@ -2183,8 +2183,7 @@ func (s *Store) EndEdit(opened map[string]struct{}) ([]string, Delta, error) {
 	if exists {
 		// s.entries order, so several restores land in the file in the order the
 		// fleet learned them.
-		for i := range s.entries {
-			e := s.entries[i]
+		for _, e := range s.entries {
 			if _, kept := saved[e.Id]; kept {
 				continue
 			}

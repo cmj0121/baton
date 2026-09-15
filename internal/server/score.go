@@ -1707,21 +1707,12 @@ func (s *Server) broadcastScoreEdit(restored []string) {
 	}
 	// "the editor", not "your editor": this reaches every attached cockpit, and
 	// on a fleet with two operators only one of them was typing.
-	notice := fmt.Sprintf("score.md: restored %d entr%s added while the editor was open",
-		len(restored), plural(len(restored), "y", "ies"))
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for cc := range s.clients {
-		send(cc, proto.ServerMsg{Type: "notice", Notice: notice})
+	noun := "entries"
+	if len(restored) == 1 {
+		noun = "entry"
 	}
-}
-
-// plural picks the ending for n.
-func plural(n int, one, many string) string {
-	if n == 1 {
-		return one
-	}
-	return many
+	notice := fmt.Sprintf("score.md: restored %d %s added while the editor was open", len(restored), noun)
+	s.broadcast(proto.ServerMsg{Type: "notice", Notice: notice})
 }
 
 // editorCommand resolves the editor an operator's score.md opens in, as a
@@ -1740,11 +1731,11 @@ func plural(n int, one, many string) string {
 // it reaches the editor as one argument.
 func editorCommand(configured, path string) (string, []string) {
 	ed := configured
-	for _, env := range []string{"VISUAL", "EDITOR"} {
-		if ed != "" {
-			break
-		}
-		ed = strings.TrimSpace(os.Getenv(env))
+	if ed == "" {
+		ed = strings.TrimSpace(os.Getenv("VISUAL"))
+	}
+	if ed == "" {
+		ed = strings.TrimSpace(os.Getenv("EDITOR"))
 	}
 	if ed == "" {
 		ed = "vi"
