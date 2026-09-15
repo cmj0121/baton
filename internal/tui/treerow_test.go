@@ -273,3 +273,49 @@ func TestPreviewNotOfferedWhenItWouldCrampTheTree(t *testing.T) {
 		t.Fatal("a narrow terminal should keep the whole width for the tree")
 	}
 }
+
+// TestTreeRailsHangNestedRowsOffTheirOwnGroup: the rails are drawn from the
+// ancestor chain, so what a nested row hangs from is the work item that HOLDS it
+// rather than whatever the indentation happens to line up with.
+//
+// The shape is the one a fleet breaks on: a sub-group nested inside a work item
+// that is itself not the last of its level. Drawn on indentation alone, `web`'s
+// panel sits three columns in with nothing beside it and reads as a root of its
+// own — which is what a reader has to disentangle by counting columns, and what
+// the └─ above it is no help with, because it has already closed.
+func TestTreeRailsHangNestedRowsOffTheirOwnGroup(t *testing.T) {
+	m := treeModel([]panel.Panel{
+		{ID: "1", Title: "smith", Group: "sova"},
+		{ID: "2", Title: "hale", Group: "sova/api"},
+		{ID: "3", Title: "ward", Group: "sova/api/deep"},
+		{ID: "4", Title: "twain", Group: "sova/web"},
+		{ID: "5", Title: "lone"},
+	})
+
+	want := []string{
+		"sova",
+		"├─ smith",
+		"├─ api",
+		"│  ├─ hale",
+		"│  └─ deep",
+		"│     └─ ward",
+		"└─ web",
+		"   └─ twain",
+		"lone",
+	}
+
+	items := m.dashItems()
+	if len(items) != len(want) {
+		t.Fatalf("got %d rows, want %d", len(items), len(want))
+	}
+	for i, it := range items {
+		if got := treeRails(it) + it.label(); got != want[i] {
+			t.Errorf("row %d = %q, want %q", i, got, want[i])
+		}
+		// The rails are only a tree if they reach the screen: a row draws its own
+		// prefix before anything else it says about itself.
+		if row := stripANSI(m.treeRow(it, false, 80)); !strings.HasPrefix(row, treeRails(it)) {
+			t.Errorf("row %d does not lead with its rails: %q", i, row)
+		}
+	}
+}

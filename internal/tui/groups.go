@@ -67,6 +67,14 @@ type dashItem struct {
 	parent string
 	last   bool
 
+	// guides is one entry per ANCESTOR level, outermost first: true where that
+	// ancestor was the last row of its own level. It is what lets a nested row draw
+	// the stems of the work items it sits inside — a row knows its own branch glyph
+	// from last, but without this it cannot know whether the group two levels up is
+	// still open below it, and a tree drawn on indentation alone leaves every
+	// sub-group's contents floating loose under it. len(guides) == depth.
+	guides []bool
+
 	// expanded is an itemGroup's open/shut state. It is a VIEW state and never a
 	// selection one: members is the whole subtree either way, so every bulk verb
 	// means the same thing on an open group as on a closed one. Getting that wrong

@@ -57,9 +57,10 @@ const (
 	wSpark = 9
 	wTask  = 28
 
-	// indentStep is one level of nesting. Two columns reads as a step without a
-	// deep tree walking off the right-hand side.
-	indentStep = 2
+	// indentStep is one level of nesting: the width of a branch glyph, so a child's
+	// ├ lands directly under the stem of the row it hangs from. Three columns reads
+	// as a step without a deep tree walking off the right-hand side.
+	indentStep = 3
 
 	// minNameWidth floors the name column. A column only joins the row if the name
 	// can keep this much, so the thing that identifies a panel is never squeezed
@@ -139,18 +140,11 @@ func rowStyle(selected bool, width int) lipgloss.Style {
 	return s.Foreground(colInk)
 }
 
-// rowLead is everything before the name: the indentation, the branch glyph, the
+// rowLead is everything before the name: the guide rails, the branch glyph, the
 // selection mark, the favourite and log badges, and the status glyph.
 func (m model) rowLead(it dashItem) string {
 	var b strings.Builder
-	b.WriteString(strings.Repeat(" ", it.depth*indentStep))
-	if it.depth > 0 {
-		if it.last {
-			b.WriteString("└─ ")
-		} else {
-			b.WriteString("├─ ")
-		}
-	}
+	b.WriteString(treeRails(it))
 	b.WriteString(m.rowMarks(it))
 
 	switch it.kind {
@@ -171,6 +165,50 @@ func (m model) rowLead(it dashItem) string {
 		b.WriteString(lipgloss.NewStyle().Foreground(info.color).Render(info.led))
 	}
 	b.WriteString(" ")
+	return b.String()
+}
+
+// treeRails is a row's box-drawing prefix: one stem per ancestor level, then the
+// row's own branch glyph. A top-level row draws nothing.
+//
+// The stems are what make the tree a tree. Drawing a row at an indent and closing
+// it with ├─/└─ is enough while the nesting is one level deep, because the group
+// it belongs to is the row directly above the first child and never far above the
+// last. It stops being enough the moment a work item holds another one: the
+// sub-group's contents sit two indents in with nothing beside them, so the eye has
+// to count columns to find out which of the work items above owns them — and where
+// the sub-group was the LAST row of its level, the run of blanks it leaves behind
+// makes its children read as a second root of their own rather than as its
+// contents.
+//
+// A guide entry is true where that ancestor was the last of its level, which is
+// exactly where its stem must stop: there is nothing more of it below, so the
+// column goes blank and the tree closes off. Every other ancestor is still open
+// underneath, and its │ says so. This is the same shape internal/proctree draws
+// for `baton ctl tree`, and the two trees in one cockpit are meant to look alike.
+func treeRails(it dashItem) string {
+	if it.depth == 0 {
+		return ""
+	}
+	var b strings.Builder
+	// From depth 1, not 0: a top-level row is drawn flush with no branch glyph of
+	// its own, so it owns no column for a stem to run down. Each remaining ancestor
+	// contributes the column its own glyph sits in.
+	for d := 1; d < it.depth; d++ {
+		// An item built without its chain (len(guides) < depth) indents rather than
+		// inventing a stem: a rail that is not backed by a row above it is a lie
+		// about the shape, and blank space is merely silent.
+		if d < len(it.guides) && !it.guides[d] {
+			b.WriteString("\u2502" + strings.Repeat(" ", indentStep-1))
+			continue
+		}
+		b.WriteString(strings.Repeat(" ", indentStep))
+	}
+	if it.last {
+		b.WriteString("\u2514\u2500 ")
+		return b.String()
+	}
+	b.WriteString("\u251c\u2500 ")
 	return b.String()
 }
 
