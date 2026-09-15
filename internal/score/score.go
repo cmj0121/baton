@@ -2098,6 +2098,140 @@ func (s *Store) Reconcile() (Delta, error) {
 	return s.reconcileGatedLocked(fi, exists)
 }
 
+// BeginEdit prepares score.md for an operator's editing session and reports the
+// ids the file carries as they open it — the set EndEdit needs in order to tell
+// a line the operator DELETED from one they never saw.
+//
+// It reconciles first, unconditionally. That is what lets the editor open a
+// file that exists and that the store agrees with: a pending edit is folded in,
+// and an absent score.md is re-projected from the log (see projectLocked), so a
+// fleet that has never written one still gets a file with the header in it
+// rather than an empty buffer.
+//
+// The ids come from the FILE and not from s.entries. The two agree the moment
+// the pass returns, so this is one parse spent on not having to argue that they
+// still do — and the operator's snapshot is the file by definition.
+func (s *Store) BeginEdit() (map[string]struct{}, error) {
+	if s == nil {
+		return nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.reconcileNowLocked(); err != nil {
+		return nil, err
+	}
+	ids, _, err := s.mdIDsLocked()
+	return ids, err
+}
+
+// EndEdit folds an operator's save back in, restoring the entries they cannot
+// have meant to delete. opened is what BeginEdit returned; it returns the ids
+// restored, alongside the pass's own delta.
+//
+// A save is a write-back of the snapshot the editor opened with, so every line
+// the fleet appended while it was open is missing from it. Reconcile reads a
+// missing line as a retirement, which for every line the operator could SEE is
+// exactly right — deleting a line is how an entry is retired by hand. opened
+// separates the two cases, which are otherwise identical in the saved file: an
+// entry absent from the save whose id the snapshot never carried was never on
+// the operator's screen, so its absence is not a decision.
+//
+// Those lines are appended back BEFORE the pass reads the file, so a restore
+// reaches the store as the file continuing to say what it always said, rather
+// than as a second kind of admission with its own event and its own id. The
+// entry is untouched: same id, same tier, same counters.
+//
+// Without this the loss is real and it is silent. An editor open for five
+// minutes is five minutes of submissions that vanish on save, and reconcile has
+// no complaint to make about it — from the store's side the operator removed
+// some notes. Store.Reconcile's own guarantee points the other way: it stops
+// the DAEMON overwriting a save it has not read, and nothing binds the
+// operator's editor to the same rule.
+//
+// Two cases this cannot see, both named here rather than left to be
+// discovered.
+//
+// A submission that FOLDS into an entry the snapshot already had moves a
+// counter and mints no id, so the reinforcement goes with the write-back and no
+// id-shaped guard can tell. That is a smaller loss than an entry and it has no
+// fix of this shape.
+//
+// And the snapshot is taken before the editor is spawned, not when the editor
+// reads the file, so an entry appended in between IS on the operator's screen
+// while its id is absent from opened — and deleting it deliberately gets it
+// restored anyway. That window is milliseconds against an editing session's
+// minutes, and the error is in the safe direction on purpose: a line that comes
+// back is visible and can be deleted again, where a line that is silently
+// retired is the failure this whole pair exists to stop. Taking the snapshot
+// LATER would move the error to the other side, where it is invisible.
+func (s *Store) EndEdit(opened map[string]struct{}) ([]string, Delta, error) {
+	if s == nil {
+		return nil, Delta{}, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	saved, exists, err := s.mdIDsLocked()
+	if err != nil {
+		return nil, Delta{}, err
+	}
+	var restored []string
+	// An operator who deleted the whole FILE is not describing any entry, and
+	// the pass answers that case already by re-projecting the log — which
+	// restores everything, the lines they could see included. Appending into the
+	// gap first would only write a headerless file for it to overwrite.
+	if exists {
+		// s.entries order, so several restores land in the file in the order the
+		// fleet learned them.
+		for _, e := range s.entries {
+			if _, kept := saved[e.Id]; kept {
+				continue
+			}
+			if _, seen := opened[e.Id]; seen {
+				continue // on their screen, and gone: a retirement they meant
+			}
+			if err := s.appendMDLocked(formatLine(e.Id, e.Text)); err != nil {
+				return restored, Delta{}, err
+			}
+			restored = append(restored, e.Id)
+		}
+	}
+	delta, err := s.reconcileNowLocked()
+	return restored, delta, err
+}
+
+// MDPath is the score.md an operator edits, in full. It exists so the server
+// can point an editor at the file without a second copy of the filename living
+// outside this package — a copy that would keep working right up until the
+// projection was renamed, and then open an empty buffer.
+func (s *Store) MDPath() string {
+	if s == nil {
+		return ""
+	}
+	return s.mdPath // immutable after Open
+}
+
+// mdIDsLocked reads the ids score.md currently carries, and whether the file is
+// there at all. It parses with the same parseLine the pass uses, so a line the
+// pass would skip is skipped here too and the two can never disagree about what
+// the file says. The caller holds the lock.
+func (s *Store) mdIDsLocked() (map[string]struct{}, bool, error) {
+	data, err := readScoreFile(s.mdPath)
+	switch {
+	case os.IsNotExist(err):
+		return nil, false, nil
+	case err != nil:
+		return nil, false, err
+	}
+	ids := make(map[string]struct{}, len(s.entries))
+	for _, line := range strings.Split(string(data), "\n") {
+		if id, _, ok := parseLine(line); ok {
+			ids[id] = struct{}{}
+		}
+	}
+	return ids, true, nil
+}
+
 // View reconciles score.md and answers from the result WITHOUT letting go of
 // the lock in between. It is the DISPATCH path's read: the entries a dispatch
 // would inject and the block they render as, the totals a status reply reports,

@@ -338,4 +338,13 @@ A spawn from a conductor has its **profile name stripped**, so the panels it cre
 [resource limits](LIMITS.md) rather than to any profile's own. The name is what a panel's caps resolve through, so an
 agent free to name one would be an agent free to name its way into wider caps than the fleet's.
 
+The score editor (`n s`, [SCORE.md](SCORE.md)) is refused for the same reason, and the distinction is worth being
+precise about: the **memory** is not fenced from an agent in any direction that matters. `score.submit` is
+deliberately ungated — the memory is fed by agents and operators alike — and the reads answer anyone. What is fenced
+is the **editor**: an interactive program, on the daemon's host, as you, which is `panel.log`'s shape exactly. It also
+has an edge `panel.log` does not, because the reply hands back an ephemeral panel id that is not the conductor's own,
+so the self-fence does not cover it and `panel.input` would drive the editor — and every editor worth setting
+`$EDITOR` to can run a shell. Nothing is taken away: an agent that wants to change the memory has `score.submit`, and
+a conductor that wants to correct it has the three refine verbs.
+
 A plain cockpit connection declares no role and is never fenced.

@@ -41,7 +41,8 @@ never come near the score.
 ## The file
 
 Your entire interface to Score is a plain markdown file you open in your own editor. There is no accept, no reject, no
-pin and no promote — importance is earned, not granted.
+pin and no promote — importance is earned, not granted. From the cockpit, `n s` opens it for you, in the editor your
+`$EDITOR` names, as a panel like any other.
 
 ```txt
 - [e7f3a2] the agent was asked to gain permission it already had
@@ -76,6 +77,26 @@ being withheld under `oversized`.
 
 Baton rewrites the file for exactly two reasons: to append a line for a new entry, and to write back an id it assigned.
 Every write is read-reconcile-write, so a save of yours that lands in between is never lost.
+
+### While your editor is open
+
+That guarantee runs one way, and the other way needs a guard.
+
+An editor writes back the buffer it opened with. Anything baton appended while you were typing is not in that buffer,
+so your save deletes it — and since deleting a line is exactly how you retire an entry, nothing about the save looks
+wrong. The window is the whole editing session, not a narrow race: five minutes with the file open is five minutes of
+entries that go away on `:w`.
+
+The ids are what make the two cases separable. Baton remembers which ids the file carried when your editor opened it,
+and after you save it restores only the entries that are missing **and** whose ids you never had on screen. A line you
+could see and deleted stays deleted. You are told in the panel when anything came back.
+
+One case this cannot catch: if a repeat of something already in your file arrives while you are editing, it moves that
+entry's counter without adding a line, and your save takes the count with it. You lose a reinforcement, never an
+entry.
+
+If you edit `score.md` outside baton — in another window, over ssh, from a script — none of this applies, because
+nothing marked when you opened it. The next dispatch reconciles whatever it finds.
 
 ### Starting an entry over
 

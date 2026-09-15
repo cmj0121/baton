@@ -2687,6 +2687,8 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		m.input = inputWorktreeRepo
 		m.inputBuf = m.defaultWorkdir()
 		m.status = "new worktree · type the repository, enter, then a branch"
+	case actScoreEdit:
+		return m.editScore()
 	case actClose:
 		it, ok := m.selectedItem()
 		switch {
