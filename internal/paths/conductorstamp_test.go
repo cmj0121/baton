@@ -143,3 +143,29 @@ func TestRemoveConductorLeakTakesEitherShape(t *testing.T) {
 		t.Error("the live workspace or its stamp was swept")
 	}
 }
+
+// TestTheLiveStampIsSparedEvenWithNoWorkspaceYet pins the guard that the
+// ordinary fixture cannot reach. A live stamp beside a live directory is
+// already spared by "a stamp with a workspace is that workspace's business" —
+// the explicit check exists for the window where the workspace is not there
+// yet, or has been removed under a daemon that is still running.
+//
+// Without this the guard is unfalsifiable: deleting it leaves every other test
+// green, because every other fixture has the directory.
+func TestTheLiveStampIsSparedEvenWithNoWorkspaceYet(t *testing.T) {
+	base := t.TempDir()
+	live := filepath.Join(base, "conductor-live")
+	if err := os.WriteFile(ConductorStampFile(live), []byte("1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if exists(t, live) {
+		t.Fatal("the fixture created the workspace; it must NOT, or the other guard covers this")
+	}
+
+	for _, p := range LegacyConductorLeaks(base, live) {
+		if p == ConductorStampFile(live) {
+			t.Error("the live boot stamp was swept while its workspace was absent — " +
+				"the running conductor's directory will look foreign on the next start")
+		}
+	}
+}
