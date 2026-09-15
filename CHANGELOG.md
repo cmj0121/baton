@@ -4,6 +4,29 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v2.1.0](https://github.com/cmj0121/baton/releases/tag/v2.1.0) — the memory gets a door, and the boxes close
+
+2026-09-15
+
+- **`n s` opens the fleet memory in your `$EDITOR`** — v2.0.0 gave the fleet a memory and left it reachable only by
+  knowing where the daemon put the file. It now opens as a server-owned panel, which is what makes it work under
+  `--remote` too. It sits under `n` and not the free `v s`, because every member of the view family is read-only and
+  this one writes.
+- **An editor left open no longer eats what the fleet learned** — an editor writes back the buffer it opened with, so
+  entries submitted while you were typing vanished on save, silently, because deleting a line is how you retire one.
+  Ids separate the two cases: an entry missing from the save whose id your snapshot never carried was never on your
+  screen, so it comes back.
+- **A panel's PTY is no longer born 0x0** — `pty.Start` set no winsize, so every panel began in a zero-row terminal
+  until a cockpit attached. Shells never noticed; anything that draws a screen painted nothing. The git menu's commit
+  had always had this and escaped it by accident.
+- **`tab` cycles which bucket the inbox shows**, and both the inbox and the diff popup now fit the terminal — they were
+  six and five rows taller than the screen at every height, so the bottom edge of the box was never drawn.
+- **A `score.md` written before the bare-bullet rule existed is brought forward** — matched byte for byte against the
+  headers baton has shipped, so a header you edited or deleted stays exactly as you left it.
+- **The commit editor is fenced from the conductor role** — `panel.git commit` opens `$EDITOR` on the daemon's host, as
+  you, which is `panel.log`'s shape and `score.edit`'s. The capture ops stay open; the line is "spawns an interactive
+  program", not "touches git".
+
 ## [v2.0.0](https://github.com/cmj0121/baton/releases/tag/v2.0.0) — the fleet remembers, and says what it cannot see
 
 2026-09-11
