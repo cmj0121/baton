@@ -6,12 +6,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/i18n"
+	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/signals"
 )
 
 // helpModel is a cockpit sized to render a whole key list, in the given language
@@ -307,4 +310,83 @@ func TestInputOverlaysAreFullyTranslated(t *testing.T) {
 	}
 	// The generic overlay an input with no table row falls back to.
 	check("the fallback overlay", inputNone, 0)
+}
+
+// TestPickersAreFullyTranslated: the two centred pickers — pick an agent, send a
+// signal — read differently in zh-TW than in English on every line that is not a
+// name the machine owns.
+//
+// Those names are the point of the exemption. A backend is called claude because
+// that is the binary on the PATH, and a signal is called SIGINT because that is
+// the word `kill` takes; a row that renamed either would be naming something that
+// does not exist. So a line carrying one of those may read the same in both
+// languages — and every other line, being prose, may not.
+func TestPickersAreFullyTranslated(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		view func(model) string
+		mut  func(*model)
+	}{
+		{"agent picker", model.agentPickerView, func(m *model) {
+			m.agentList = []proto.AgentBackend{{Name: "claude", Command: "claude"}}
+		}},
+		{"default-agent picker", model.agentPickerView, func(m *model) {
+			m.agentPurpose = agentForDefault
+			m.agentList = []proto.AgentBackend{{Name: "claude", Command: "claude"}}
+		}},
+		{"signal picker", model.signalPickerView, func(m *model) {
+			m.signalScope, m.signalTargets = "shell #1", []string{"1"}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lines := func(lang i18n.Lang) []string {
+				m := baseModel()
+				m.lang = lang
+				tc.mut(&m)
+				var out []string
+				for _, line := range strings.Split(ansi.Strip(tc.view(m)), "\n") {
+					if line = strings.TrimSpace(strings.Trim(line, "│╭╮╰╯─ ")); line != "" {
+						out = append(out, line)
+					}
+				}
+				return out
+			}
+			en, zh := lines(i18n.EN), lines(i18n.ZhTW)
+			if len(en) != len(zh) {
+				t.Fatalf("translating changed the line count, %d → %d", len(en), len(zh))
+			}
+			for i := range en {
+				// Compare what is left of the line once the machine's own words are
+				// taken out of it, not the line. A gloss left in English sits on the
+				// same row as SIGHUP, and a whole-line exemption would let the name
+				// cover for it.
+				a, b := prose(en[i]), prose(zh[i])
+				if a == b && hasLetters(a) {
+					t.Errorf("line %d is untranslated: %q", i, en[i])
+				}
+			}
+		})
+	}
+}
+
+// prose strips the names the machine owns out of a picker line — the signal wire
+// names and the agent backend in the fixture — leaving the text that a
+// translation is answerable for.
+func prose(line string) string {
+	for _, s := range signals.Choices {
+		line = strings.ReplaceAll(line, s.Name, "")
+	}
+	return strings.TrimSpace(strings.ReplaceAll(line, "claude", ""))
+}
+
+// hasLetters reports whether a string still says anything a reader would read —
+// so a row that is nothing but a keycap and a machine name is not demanded of the
+// catalog.
+func hasLetters(s string) bool {
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			return true
+		}
+	}
+	return false
 }

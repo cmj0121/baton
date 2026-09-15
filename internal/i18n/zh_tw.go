@@ -263,6 +263,31 @@ var zhTW = map[string]string{
 	"input.worktree-repo.title":  "新 worktree",
 	"input.worktree-repo.prompt": "要從哪個 git repository 開分支",
 
+	// --- the pickers ----------------------------------------------------------
+	//
+	// A backend's name and the command behind it are what this machine has
+	// installed, and a signal's wire name is the word `kill` takes. Both stay in
+	// English; the prose beside them does not.
+	"agent.pick.title":         "選擇 agent",
+	"agent.pick.default.title": "預設 agent",
+	"agent.pick.is-default":    "預設",
+	"agent.pick.hint":          "在艦隊執行的那台機器上偵測到的 · 按 %s R 重新偵測",
+	"agent.pick.status":        "新的 %s agent · 輸入工作目錄",
+
+	"signal.to":         "送到",
+	"signal.other":      "其他…",
+	"signal.other.desc": "任何名稱或編號",
+	"signal.hint":       "送到面板的行程群組 · 按 %s R 重新載入 baton 設定",
+	"signal.unknown":    "不認得的 signal %q · 請輸入名稱或編號",
+
+	"signal.desc.SIGINT":  "中斷（Ctrl-C）",
+	"signal.desc.SIGTERM": "終止",
+	"signal.desc.SIGKILL": "強制砍掉",
+	"signal.desc.SIGHUP":  "掛斷",
+	"signal.desc.SIGQUIT": "結束並產生 core",
+	"signal.desc.SIGUSR1": "使用者自訂 1",
+	"signal.desc.SIGUSR2": "使用者自訂 2",
+
 	// Values and legend words shared by more than one surface.
 	"legend.move":      "移動",
 	"legend.edit":      "編輯",

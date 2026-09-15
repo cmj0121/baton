@@ -140,7 +140,7 @@ func (m model) chooseAgent(name string) (tea.Model, tea.Cmd) {
 		m.pendingAgent = name
 		m.input = inputAgentDir
 		m.inputBuf = m.defaultWorkdir()
-		m.status = "new " + name + " agent · type the workdir"
+		m.status = fmt.Sprintf(m.tr("agent.pick.status", "new %s agent · type the workdir"), name)
 		return m, nil
 	}
 }
@@ -157,21 +157,23 @@ func (m model) agentPickerView() string {
 		return "  "
 	}
 
-	title := "PICK AGENT"
+	title := m.tr("agent.pick.title", "PICK AGENT")
 	if m.agentPurpose == agentForDefault {
-		title = "DEFAULT AGENT"
+		title = m.tr("agent.pick.default.title", "DEFAULT AGENT")
 	}
 	rows := []string{sectionStyle.Render(spaced(title)), ""}
 	for i, b := range m.agentList {
+		// The backend's name and the command behind it are what this machine has
+		// installed, so both stay exactly as the machine spells them.
 		tail := b.Command
 		if b.Name == m.effDefaultAgent() {
-			tail += "  · default"
+			tail += "  · " + m.tr("agent.pick.is-default", "default")
 		}
 		rows = append(rows, caret(m.agentCursor == i)+nameStyle.Render(b.Name)+mutedStyle.Render(tail))
 	}
 
-	rows = append(rows, "", mutedStyle.Render("found on the machine the fleet runs on · "+keyLabel(m.effPrefix())+" R re-detects"), "",
-		legend("↑↓", "move", "enter", "choose", "esc", "cancel"))
+	rows = append(rows, "", mutedStyle.Render(fmt.Sprintf(m.tr("agent.pick.hint", "found on the machine the fleet runs on · %s R re-detects"), keyLabel(m.effPrefix()))), "",
+		legend("↑↓", m.tr("legend.move", "move"), "enter", m.tr("legend.choose", "choose"), "esc", m.tr("legend.cancel", "cancel")))
 	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
 

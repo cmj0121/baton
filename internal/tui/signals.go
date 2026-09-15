@@ -93,7 +93,7 @@ func (m model) openOtherSignal() model {
 func (m model) commitOtherSignal(token string) (tea.Model, tea.Cmd) {
 	if !signals.Valid(token) {
 		m.input = inputSignalName // reopen on the bad entry
-		m.status = fmt.Sprintf("unknown signal %q · try a name or number", token)
+		m.status = fmt.Sprintf(m.tr("signal.unknown", "unknown signal %q · try a name or number"), token)
 		return m, nil
 	}
 	return m.sendSignal(token), nil
@@ -114,19 +114,23 @@ func (m model) signalPickerView() string {
 	}
 
 	rows := []string{
-		sectionStyle.Render(spaced("SEND SIGNAL")),
+		sectionStyle.Render(spaced(m.tr("input.signal.title", "SEND SIGNAL"))),
 		"",
-		mutedStyle.Render("to " + m.signalScope),
+		mutedStyle.Render(m.tr("signal.to", "to") + " " + m.signalScope),
 		"",
 	}
 	for i, s := range signals.Choices {
-		rows = append(rows, caret(m.signalCursor == i)+keyCol.Render(kc(s.Key))+nameStyle.Render(s.Name)+mutedStyle.Render(s.Desc))
+		// The wire name is the signal, and it is the word `kill` takes: it is never
+		// translated. The gloss beside it is prose, keyed by that same wire name so
+		// the catalog and the table cannot drift apart on an order change.
+		desc := m.tr("signal.desc."+s.Name, s.Desc)
+		rows = append(rows, caret(m.signalCursor == i)+keyCol.Render(kc(s.Key))+nameStyle.Render(s.Name)+mutedStyle.Render(desc))
 	}
 	otherSel := m.signalCursor >= len(signals.Choices)
-	rows = append(rows, caret(otherSel)+keyCol.Render(kc(otherSignalKey))+nameStyle.Render("other…")+mutedStyle.Render("any name or number"))
+	rows = append(rows, caret(otherSel)+keyCol.Render(kc(otherSignalKey))+nameStyle.Render(m.tr("signal.other", "other…"))+mutedStyle.Render(m.tr("signal.other.desc", "any name or number")))
 
 	rows = append(rows, "",
-		mutedStyle.Render("delivered to the panel's process group · "+keyLabel(m.effPrefix())+" R reloads baton"),
-		"", legend("↑↓", "move", "enter", "send", "esc", "cancel"))
+		mutedStyle.Render(fmt.Sprintf(m.tr("signal.hint", "delivered to the panel's process group · %s R reloads baton"), keyLabel(m.effPrefix()))),
+		"", legend("↑↓", m.tr("legend.move", "move"), "enter", m.tr("legend.send", "send"), "esc", m.tr("legend.cancel", "cancel")))
 	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
