@@ -22,7 +22,7 @@ import (
 // fakeEditor writes a script that behaves like an editor holding a file open:
 // it snapshots its argument, signals that it has it, waits to be told to save,
 // writes the snapshot back and exits. The test drives the window in between.
-func fakeEditor(t *testing.T) (path, ready, save string) {
+func fakeEditor(t *testing.T) (path, ready, save, buffer string) {
 	t.Helper()
 	dir := t.TempDir()
 	path = filepath.Join(dir, "editor.sh")
@@ -37,7 +37,7 @@ func fakeEditor(t *testing.T) (path, ready, save string) {
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatalf("write editor script: %v", err)
 	}
-	return path, ready, save
+	return path, ready, save, snap
 }
 
 // waitFor polls until cond holds, failing the test with why if it never does.
@@ -69,7 +69,7 @@ func scoreServer(t *testing.T, opts ...server.Option) (*server.Server, string, *
 // with a "score:"-prefixed transient panel id, which is what the cockpit
 // auto-zooms.
 func TestScoreEditOpens(t *testing.T) {
-	editor, ready, save := fakeEditor(t)
+	editor, ready, save, _ := fakeEditor(t)
 	srv, sock, _, _ := scoreServer(t, server.WithEditor(editor))
 	c := dialReady(t, sock)
 	defer func() { _ = os.WriteFile(save, nil, 0o600) }() // let the editor exit
@@ -95,7 +95,7 @@ func TestScoreEditOpens(t *testing.T) {
 // editor is open, the editor writes back the buffer it opened with, and the
 // entry must still be there afterwards.
 func TestScoreEditRestores(t *testing.T) {
-	editor, ready, save := fakeEditor(t)
+	editor, ready, save, _ := fakeEditor(t)
 	srv, sock, st, dir := scoreServer(t, server.WithEditor(editor))
 	c := dialReady(t, sock)
 
@@ -156,4 +156,52 @@ func readMD(t *testing.T, dir string) string {
 		t.Fatalf("read score.md: %v", err)
 	}
 	return string(data)
+}
+
+// TestScoreEditDropped covers the operator whose cockpit went away mid-edit —
+// a dropped ssh session, a killed client. The editor is SIGKILLed with every
+// other ephemeral, so nothing will ever write the buffer back; but a save they
+// already made is on disk and is now their last word on the file, and the
+// session measuring the window has to close or its restore is never made.
+//
+// Without the fold on the disconnect path this passes right up to the last
+// assertion: the file keeps the save, and the entry submitted during the window
+// is simply gone.
+func TestScoreEditDropped(t *testing.T) {
+	editor, ready, _, buffer := fakeEditor(t)
+	srv, sock, st, dir := scoreServer(t, server.WithEditor(editor))
+	c := dialReady(t, sock)
+
+	if err := c.Send(proto.Command{Action: "score.edit"}); err != nil {
+		t.Fatalf("score.edit: %v", err)
+	}
+	recvUntil(t, c, "ephemeral")
+	waitUntil(t, "the editor to snapshot score.md", func() bool {
+		_, err := os.Stat(ready)
+		return err == nil
+	})
+
+	late, _, err := st.Submit("the linter runs before the tests", score.Provenance{Source: "agent"})
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	// :w, and no :q — the buffer is on disk and the editor is still sitting there.
+	buf, err := os.ReadFile(buffer)
+	if err != nil {
+		t.Fatalf("read the editor buffer: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "score.md"), buf, 0o600); err != nil {
+		t.Fatalf("simulate the save: %v", err)
+	}
+	if strings.Contains(readMD(t, dir), late.Id) {
+		t.Fatal("the save did not drop the late entry, so this test proves nothing")
+	}
+
+	_ = c.Close() // the cockpit goes away
+
+	waitUntil(t, "the editor panel to be reaped", func() bool { return srv.EphemeralCount() == 0 })
+	waitUntil(t, "the entry to be restored", func() bool {
+		return strings.Contains(readMD(t, dir), late.Id)
+	})
 }
