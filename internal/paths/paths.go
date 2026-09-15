@@ -214,8 +214,13 @@ func ConductorWorkspace(socket string) (string, error) {
 // so a conductor that rewrites its cwd cannot rewrite the record of which boot it
 // belongs to.
 func ConductorStampFile(workspace string) string {
-	return workspace + ".boot"
+	return workspace + stampSuffix
 }
+
+// stampSuffix is the boot stamp's extension, named because three places have to
+// agree on it: the one that writes a stamp, the one that removes it with its
+// workspace, and the one that recognises a stamp left without one.
+const stampSuffix = ".boot"
 
 // RemoveConductorWorkspace deletes a conductor workspace and its boot stamp. It
 // is the escape hatch behind `baton ctl conductor reset`, for a workspace whose
@@ -224,7 +229,80 @@ func RemoveConductorWorkspace(workspace string) error {
 	if err := os.RemoveAll(workspace); err != nil {
 		return err
 	}
-	return os.Remove(ConductorStampFile(workspace))
+	// A workspace with no stamp is not a failure: an older build wrote none, and
+	// an interrupted write leaves the directory without one. Reporting that as an
+	// error gives the operator a warning they can do nothing about, and makes a
+	// caller sweeping a LIST abandon the rest of it for a file that is already in
+	// the state being asked for.
+	if err := os.Remove(ConductorStampFile(workspace)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// RemoveConductorLeak removes one entry from AllConductorLeaks. An entry is
+// either a workspace — in which case its stamp goes with it — or a stamp whose
+// workspace is already gone, which has no directory to remove.
+//
+// It exists so the caller does not have to know which it is holding, and so the
+// stamp case is spelled rather than working by accident: passing a stamp to
+// RemoveConductorWorkspace does the right thing today only because RemoveAll
+// happens to delete a plain file and the stamp-of-a-stamp is tolerated as
+// missing. That is two coincidences, and neither is what the name says.
+func RemoveConductorLeak(path string) error {
+	if strings.HasSuffix(path, stampSuffix) {
+		return os.Remove(path)
+	}
+	return RemoveConductorWorkspace(path)
+}
+
+// AllConductorLeaks is LegacyConductorLeaks across every base a workspace can
+// live in — the production sweep's list.
+func AllConductorLeaks(current string) []string {
+	var found []string
+	for _, base := range conductorBases() {
+		found = append(found, LegacyConductorLeaks(base, current)...)
+	}
+	return found
+}
+
+// LegacyConductorLeaks is everything the boot sweep should collect under base:
+// the legacy workspaces, and the boot stamps whose workspace is already gone.
+//
+// The two are one list because removing a workspace has two halves, and for a
+// long time the sweep did only the first — it removed the directory with a bare
+// RemoveAll and left the stamp, which the workspace list deliberately filters
+// out, so nothing could ever collect it. Measured on one machine before this
+// existed: six workspaces, twenty-eight stamps (#100).
+//
+// The current workspace and ITS stamp are never returned. The stamp is what
+// decides whether a workspace belongs to this host boot, so sweeping the live
+// one would make the running conductor's own directory look foreign on the next
+// start — which is the failure this whole pairing exists to prevent.
+func LegacyConductorLeaks(base, current string) []string {
+	found := legacyWorkspacesIn(base, current)
+	matches, err := filepath.Glob(filepath.Join(base, "conductor-*"+stampSuffix))
+	if err != nil {
+		return found
+	}
+	for _, m := range matches {
+		if m == ConductorStampFile(current) {
+			continue
+		}
+		// A stamp beside a workspace is that workspace's business — removing the
+		// directory takes it. Only a stamp with nothing to pair with is a leak.
+		if ws := strings.TrimSuffix(m, stampSuffix); dirExists(ws) {
+			continue
+		}
+		found = append(found, m)
+	}
+	return found
+}
+
+// dirExists reports whether path is a directory.
+func dirExists(path string) bool {
+	fi, err := os.Lstat(path)
+	return err == nil && fi.IsDir()
 }
 
 // LegacyConductorWorkspaces lists the throwaway conductor directories left behind
@@ -237,25 +315,46 @@ func RemoveConductorWorkspace(workspace string) error {
 // are directories the user never asked for, but they are still the user's.
 func LegacyConductorWorkspaces(current string) []string {
 	var found []string
+	for _, base := range conductorBases() {
+		found = append(found, legacyWorkspacesIn(base, current)...)
+	}
+	return found
+}
+
+// conductorBases are the directories a conductor workspace can live in, without
+// repeats — the two have been the same path on some systems since the runtime
+// dir was introduced, and a sweep that walked it twice would list every leak
+// twice and log every removal twice.
+func conductorBases() []string {
+	var out []string
 	seen := map[string]bool{}
 	for _, base := range []string{conductorBase(), runtimeDir()} {
 		if seen[base] {
 			continue
 		}
 		seen[base] = true
-		matches, err := filepath.Glob(filepath.Join(base, "conductor-*"))
-		if err != nil {
+		out = append(out, base)
+	}
+	return out
+}
+
+// legacyWorkspacesIn is LegacyConductorWorkspaces for one base. It exists so the
+// leak list and the production sweep read the same directory the same way, and
+// so a test can point either at a directory it made.
+func legacyWorkspacesIn(base, current string) []string {
+	matches, err := filepath.Glob(filepath.Join(base, "conductor-*"))
+	if err != nil {
+		return nil
+	}
+	var found []string
+	for _, m := range matches {
+		if m == current || m == ConductorStampFile(current) {
 			continue
 		}
-		for _, m := range matches {
-			if m == current || m == ConductorStampFile(current) {
-				continue
-			}
-			if fi, err := os.Lstat(m); err != nil || !fi.IsDir() {
-				continue // a stamp file, or something that vanished under us
-			}
-			found = append(found, m)
+		if fi, err := os.Lstat(m); err != nil || !fi.IsDir() {
+			continue // a stamp file, or something that vanished under us
 		}
+		found = append(found, m)
 	}
 	return found
 }
