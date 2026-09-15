@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/i18n"
@@ -220,4 +221,41 @@ func helpRows(m model) (string, []string) {
 		all = append(all, sec.rows...)
 	}
 	return title, all
+}
+
+// TestPanelConfigIsFullyTranslated is the completeness check for the prefix + P
+// page, and it works the way the key list's does: every line the page draws must
+// read differently in zh-TW than in English. A string someone forgot to key falls
+// back to its English and shows up here as an identical line.
+//
+// It holds for EVERY line because this page has no data on it. The rows are the
+// fleet's own settings, and the two things on it that stay English in both
+// languages — the resource-limit keys (cpus, nofile) and the values beside them —
+// share a line with a label or a value that does not, so no line is English in
+// full. A page state that puts a machine's own words on a line of their own (the
+// KNOWN, NOT INSTALLED roll, which lists backend names and homepages) is left out
+// of the fixture for that reason, not because it is exempt.
+func TestPanelConfigIsFullyTranslated(t *testing.T) {
+	page := func(lang i18n.Lang) []string {
+		m := baseModel()
+		m.mode, m.lang, m.height = modePanelConfig, lang, 44
+		m.shellPath = "/bin/zsh"
+		var out []string
+		for _, line := range strings.Split(ansi.Strip(m.panelConfigView()), "\n") {
+			if line = strings.TrimSpace(strings.Trim(line, "│╭╮╰╯─ ")); line != "" {
+				out = append(out, line)
+			}
+		}
+		return out
+	}
+
+	en, zh := page(i18n.EN), page(i18n.ZhTW)
+	if len(en) != len(zh) {
+		t.Fatalf("translating changed the line count, %d → %d", len(en), len(zh))
+	}
+	for i := range en {
+		if en[i] == zh[i] {
+			t.Errorf("line %d is untranslated: %q", i, en[i])
+		}
+	}
 }

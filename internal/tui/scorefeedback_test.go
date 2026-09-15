@@ -65,7 +65,7 @@ func TestFeedbackLabelNamesWhatIsInherited(t *testing.T) {
 		{"explicit no against a fleet that says yes", boolPtr(false), true, "off"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := feedbackLabel(tc.own, tc.fleet); got != tc.want {
+			if got := (model{}).feedbackLabel(tc.own, tc.fleet); got != tc.want {
 				t.Errorf("feedbackLabel() = %q; want %q", got, tc.want)
 			}
 		})
@@ -138,7 +138,7 @@ func TestThePageGrowsWithTheProfiles(t *testing.T) {
 // one wrong conclusion — that submission is blocked — and this is the only place
 // the page can say otherwise.
 func TestThePageHintSaysWhatTheSwitchDoesNotDo(t *testing.T) {
-	hint := feedbackHintLine()
+	hint := (model{}).feedbackHintLine()
 	if !strings.Contains(hint, "not the submitting") {
 		t.Errorf("hint = %q; want it to say the switch stops the telling and not the submitting", hint)
 	}

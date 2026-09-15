@@ -1862,34 +1862,48 @@ const (
 	firstLimitRow = panelRowCPUs // where the resource-limits section starts
 )
 
+// panelLabelWidth is the label column of the panel-config page, in display cells.
+const panelLabelWidth = 16
+
 // limitField describes one editable row of the resource-limits section: where it
 // reads and writes on limits.Limits, and how it is labelled in the row and in the
 // edit overlay. One table drives the rendering, the editor, and the commit, so a
 // new limit is a single entry rather than five parallel switch arms.
 type limitField struct {
-	label  string // the row label in the panel-config list
-	title  string // the edit overlay's title
-	prompt string // the edit overlay's prompt line
-	get    func(limits.Limits) string
-	set    func(*limits.Limits, string)
+	// label is the row label AND the config key it writes (cpus, memory-high,
+	// nofile). It is never translated: it is the word someone types into their
+	// config file, and a row that named it in another language would not be
+	// findable from the file or the docs.
+	label string
+
+	// title and prompt are what the edit overlay says, and they are prose. Both are
+	// message keys resolved at render time — the English written here is the source
+	// string and the fallback, which is what keeps this table readable as the
+	// overlay it describes.
+	titleKey  string
+	title     string
+	promptKey string
+	prompt    string
+	get       func(limits.Limits) string
+	set       func(*limits.Limits, string)
 }
 
 // limitFields lists the resource-limit rows in display order, matching the
 // panelRow* constants above.
 var limitFields = []limitField{
-	{"cpus", "CPU LIMIT", "CPU cores, e.g. 2 or 1.5  (blank = no cap)",
+	{"cpus", "limit.cpus.title", "CPU LIMIT", "limit.cpus.prompt", "CPU cores, e.g. 2 or 1.5  (blank = no cap)",
 		func(l limits.Limits) string { return l.CPUs },
 		func(l *limits.Limits, v string) { l.CPUs = v }},
-	{"memory", "MEMORY LIMIT", "hard cap, e.g. 4Gi  (blank = no cap)",
+	{"memory", "limit.memory.title", "MEMORY LIMIT", "limit.memory.prompt", "hard cap, e.g. 4Gi  (blank = no cap)",
 		func(l limits.Limits) string { return l.Memory },
 		func(l *limits.Limits, v string) { l.Memory = v }},
-	{"memory-high", "MEMORY WATERMARK", "throttle before kill, e.g. 3Gi  (blank = no cap)",
+	{"memory-high", "limit.memory-high.title", "MEMORY WATERMARK", "limit.memory-high.prompt", "throttle before kill, e.g. 3Gi  (blank = no cap)",
 		func(l limits.Limits) string { return l.MemoryHigh },
 		func(l *limits.Limits, v string) { l.MemoryHigh = v }},
-	{"pids", "PROCESS LIMIT", "most processes in the panel tree  (blank = no cap)",
+	{"pids", "limit.pids.title", "PROCESS LIMIT", "limit.pids.prompt", "most processes in the panel tree  (blank = no cap)",
 		func(l limits.Limits) string { return l.Pids },
 		func(l *limits.Limits, v string) { l.Pids = v }},
-	{"nofile", "OPEN FILES", "open file descriptors per process  (blank = no cap)",
+	{"nofile", "limit.nofile.title", "OPEN FILES", "limit.nofile.prompt", "open file descriptors per process  (blank = no cap)",
 		func(l limits.Limits) string { return l.NOFile },
 		func(l *limits.Limits, v string) { l.NOFile = v }},
 }
@@ -1930,7 +1944,7 @@ func (m model) editPanelRow() (tea.Model, tea.Cmd) {
 func (m model) editShellPath() model {
 	m.input = inputShellPath
 	m.inputBuf = m.shellPath
-	m.status = "default shell · type a path (blank = system), enter to save"
+	m.status = m.tr("panel.cfg.status.shell", "default shell · type a path (blank = system), enter to save")
 	return m
 }
 
@@ -1942,15 +1956,15 @@ func (m model) editReplayKB() model {
 	if m.replayKB > 0 {
 		m.inputBuf = strconv.Itoa(m.replayKB)
 	}
-	m.status = "replay buffer · KiB per panel (blank = default), enter to save"
+	m.status = m.tr("panel.cfg.status.replay", "replay buffer · KiB per panel (blank = default), enter to save")
 	return m
 }
 
 // replayLabel describes the configured replay buffer for the panel-config row; an
 // unset (zero) value reads as the server default.
-func replayLabel(kb int) string {
+func (m model) replayLabel(kb int) string {
 	if kb <= 0 {
-		return "default"
+		return m.tr("panel.cfg.server-default", "default")
 	}
 	return fmt.Sprintf("%d KiB", kb)
 }
@@ -1976,7 +1990,7 @@ func (m model) commitReplayKB(s string) model {
 		m.status = "save failed: " + err.Error()
 		return m
 	}
-	m.status = "replay buffer · " + replayLabel(m.replayKB) + " · restart to apply"
+	m.status = m.tr("panel.cfg.replay", "replay buffer") + " · " + m.replayLabel(m.replayKB) + " · " + m.tr("panel.cfg.status.restart", "restart to apply")
 	return m
 }
 
@@ -2001,21 +2015,24 @@ func (m model) editLimit(row int) model {
 func (m model) enforceLabel() string {
 	switch cgroup.Mode(m.enforce) {
 	case "":
-		return "enforcement unknown until attached"
+		return m.tr("panel.cfg.enforce.unknown", "enforcement unknown until attached")
 	case cgroup.ModeNone:
-		return "NOT enforced here · " + m.enforceWhy
+		// enforceWhy is the daemon's own sentence about the host and is not
+		// translated: it names cgroup paths and kernel features, which are the words
+		// someone searches for when they want the cap back.
+		return m.tr("panel.cfg.enforce.none", "NOT enforced here") + " · " + m.enforceWhy
 	default:
-		return "enforced by " + m.enforce
+		return m.tr("panel.cfg.enforce.by", "enforced by") + " " + m.enforce
 	}
 }
 
 // limitLabel describes a resource-limit value for its panel-config row. An unset
 // field and an explicit "unlimited" both mean the same thing to the fleet, so
 // they read the same way — "no cap" — rather than leaking the config spelling.
-func limitLabel(v string) string {
+func (m model) limitLabel(v string) string {
 	trimmed, uncapped := limits.Uncapped(v)
 	if uncapped {
-		return "no cap"
+		return m.tr("panel.cfg.no-cap", "no cap")
 	}
 	return trimmed
 }
@@ -2041,7 +2058,7 @@ func (m model) commitLimit(s string) model {
 		m.status = "save failed: " + err.Error()
 		return m
 	}
-	m.status = f.label + " · " + limitLabel(f.get(m.limits)) + " · applies to new panels"
+	m.status = f.label + " · " + m.limitLabel(f.get(m.limits)) + " · " + m.tr("panel.cfg.status.new-panels", "applies to new panels")
 	return m
 }
 
@@ -2219,7 +2236,7 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		if err := m.saveConfig(); err != nil {
 			m.status = "save failed: " + err.Error()
 		} else {
-			m.status = "default shell · " + shellLabel(buf)
+			m.status = m.tr("panel.cfg.shell", "default shell") + " · " + m.shellLabel(buf)
 		}
 	case inputReplayKB:
 		return m.commitReplayKB(buf), nil
@@ -2278,7 +2295,7 @@ func (m model) spawnPanel(command string) model {
 	// Armed only past the error return: a send that failed produces no panel, and
 	// a reveal left armed would fire on whatever unrelated snapshot arrived next.
 	m.pendingReveal = true
-	m.status = "spawning " + shellLabel(command)
+	m.status = m.tr("status.spawning", "spawning") + " " + m.shellLabel(command)
 	return m
 }
 
@@ -2598,9 +2615,9 @@ func dirLabel(dir string) string {
 
 // shellLabel describes a configured shell path; an empty path means the system
 // default.
-func shellLabel(path string) string {
+func (m model) shellLabel(path string) string {
 	if path == "" {
-		return "system default"
+		return m.tr("panel.cfg.system-default", "system default")
 	}
 	return path
 }
@@ -4870,32 +4887,38 @@ func (m model) panelConfigView() string {
 			labelStyle = inkStyle
 			selLine = len(body)
 		}
-		// Pad the label BEFORE styling it. Rendering wraps the text in escape
-		// sequences, and %-16s counts those, so padding the rendered string is a
-		// no-op that leaves every value butted straight against its label
-		// ("default shellsystem default").
-		body = append(body, caret+labelStyle.Render(fmt.Sprintf("%-16s", label))+valueStyle.Render(value))
+		// The label column is padded by lipgloss, which measures DISPLAY CELLS.
+		// fmt's %-16s counts runes, so a translated label pads by its rune count and
+		// lands two cells short per CJK character — "預設 shell" is 9 runes and 14
+		// columns, and the values downhill of it come out ragged. Padding inside the
+		// style also keeps the old rule that made this comment necessary: the padding
+		// is applied to the PLAIN text, not to a string already wrapped in escape
+		// sequences, where it would count the escapes and do nothing.
+		body = append(body, caret+labelStyle.Width(panelLabelWidth).Render(label)+valueStyle.Render(value))
 	}
 
-	row(panelRowShell, "default shell", shellLabel(m.shellPath))
-	row(panelRowAgent, "default agent", m.defaultAgentLabel())
-	row(panelRowReplayKB, "replay buffer", replayLabel(m.replayKB))
+	row(panelRowShell, m.tr("panel.cfg.shell", "default shell"), m.shellLabel(m.shellPath))
+	row(panelRowAgent, m.tr("panel.cfg.agent", "default agent"), m.defaultAgentLabel())
+	row(panelRowReplayKB, m.tr("panel.cfg.replay", "replay buffer"), m.replayLabel(m.replayKB))
 	body = append(body, m.missingAgentsSection()...)
-	body = append(body, "", sectionStyle.Render(spaced("RESOURCE LIMITS")), "")
+	body = append(body, "", sectionStyle.Render(spaced(m.tr("panel.cfg.limits", "RESOURCE LIMITS"))), "")
 	for i, f := range limitFields {
-		row(firstLimitRow+i, f.label, limitLabel(f.get(m.limits)))
+		// The row label is the CONFIG key (cpus, memory-high, nofile) and stays in
+		// English in every language, for the reason the key names do: it is the word
+		// someone types into their config file, and a translated one is unsearchable.
+		row(firstLimitRow+i, f.label, m.limitLabel(f.get(m.limits)))
 	}
 	body = append(body, m.feedbackSection(row)...)
-	hints := legend("↑↓", "move", "e", "edit", "esc", "back")
+	hints := legend("↑↓", m.tr("legend.move", "move"), "e", m.tr("legend.edit", "edit"), "esc", m.tr("legend.back", "back"))
 
 	return m.renderScrollPanel(scrollPanel{
-		title: "PANEL CONFIG",
+		title: m.tr("panel.cfg.title", "PANEL CONFIG"),
 		body:  body,
 		footer: []string{"",
-			mutedStyle.Render("default agent is what " + seqLabel(m.bindingKey(actNewAgent)) + " spawns · detected on the fleet's machine"),
-			mutedStyle.Render("replay buffer seeds scrollback · change applies on server restart"),
-			mutedStyle.Render("limits cap a panel's whole process tree · " + m.enforceLabel()),
-			feedbackHintLine(),
+			mutedStyle.Render(fmt.Sprintf(m.tr("panel.cfg.hint.agent", "default agent is what %s spawns · detected on the fleet's machine"), seqLabel(m.bindingKey(actNewAgent)))),
+			mutedStyle.Render(m.tr("panel.cfg.hint.replay", "replay buffer seeds scrollback · change applies on server restart")),
+			mutedStyle.Render(m.tr("panel.cfg.hint.limits", "limits cap a panel's whole process tree") + " · " + m.enforceLabel()),
+			m.feedbackHintLine(),
 			"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(hints))), hints},
 		reserved: panelConfigReserved,
 		anchor:   selLine,
@@ -4921,7 +4944,7 @@ func (m model) missingAgentsSection() []string {
 	if len(miss) == 0 {
 		return nil
 	}
-	out := []string{"", sectionStyle.Render(spaced("KNOWN, NOT INSTALLED")), ""}
+	out := []string{"", sectionStyle.Render(spaced(m.tr("panel.cfg.not-installed", "KNOWN, NOT INSTALLED"))), ""}
 	for _, b := range miss {
 		where := trimScheme(b.Homepage)
 		if where == "" {
@@ -4932,7 +4955,7 @@ func (m model) missingAgentsSection() []string {
 	// The prefix has to be spelled out: reload is a prefixed binding, and seqLabel
 	// on the action alone renders a bare "R" — a key that on its own does nothing.
 	// agentpick.go says it the same way for the same reason.
-	return append(out, "", mutedStyle.Render("install one, then "+keyLabel(m.effPrefix())+" R re-detects"))
+	return append(out, "", mutedStyle.Render(fmt.Sprintf(m.tr("panel.cfg.install-hint", "install one, then %s R re-detects"), keyLabel(m.effPrefix()))))
 }
 
 // inputView renders the active text-input overlay as a centred popup.
@@ -4945,7 +4968,7 @@ func (m model) inputView() string {
 		title, prompt = "REPLAY BUFFER", "KiB of history per panel  (blank = default)"
 	case inputLimit:
 		if f, ok := limitFieldFor(m.limitRow); ok {
-			title, prompt = f.title, f.prompt
+			title, prompt = m.tr(f.titleKey, f.title), m.tr(f.promptKey, f.prompt)
 		}
 	case inputNewPanelCmd:
 		title, prompt, action = "NEW PANEL", "program and arguments  (blank = a shell)", "spawn"

@@ -176,12 +176,13 @@ func TestPanelConfigViewScrollsToEveryRow(t *testing.T) {
 // TestLimitLabel pins how the two "no cap" spellings read: an absent field and an
 // explicit unlimited mean the same thing to the fleet, so they show the same way.
 func TestLimitLabel(t *testing.T) {
+	m := model{}
 	for _, in := range []string{"", "   ", limits.Unlimited, "UNLIMITED"} {
-		if got := limitLabel(in); got != "no cap" {
+		if got := m.limitLabel(in); got != "no cap" {
 			t.Errorf("limitLabel(%q) = %q, want %q", in, got, "no cap")
 		}
 	}
-	if got := limitLabel("4Gi"); got != "4Gi" {
+	if got := m.limitLabel("4Gi"); got != "4Gi" {
 		t.Errorf(`limitLabel("4Gi") = %q`, got)
 	}
 }

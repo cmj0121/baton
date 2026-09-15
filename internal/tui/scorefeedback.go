@@ -51,12 +51,12 @@ func (m model) feedbackProfiles() []string {
 // than as a file with no profiles in it.
 func (m model) feedbackSection(row func(idx int, label, value string)) []string {
 	names := m.feedbackProfiles()
-	head := []string{"", sectionStyle.Render(spaced("SCORE FEEDBACK")), ""}
+	head := []string{"", sectionStyle.Render(spaced(m.tr("panel.cfg.feedback", "SCORE FEEDBACK"))), ""}
 	if len(names) == 0 {
-		return append(head, mutedStyle.Render("   no agent profiles configured · panel.agents in your config names them"))
+		return append(head, mutedStyle.Render("   "+m.tr("panel.cfg.no-profiles", "no agent profiles configured · panel.agents in your config names them")))
 	}
 	for i, name := range names {
-		row(numPanelConfigRows+i, name, feedbackLabel(m.agents[name].ScoreFeedback, m.scoreFeedback))
+		row(numPanelConfigRows+i, name, m.feedbackLabel(m.agents[name].ScoreFeedback, m.scoreFeedback))
 	}
 	return head
 }
@@ -66,22 +66,22 @@ func (m model) feedbackSection(row func(idx int, label, value string)) []string 
 // it currently resolves to would make the fleet-wide key look like it had been
 // copied onto every profile — after which switching the fleet over would appear
 // to do nothing.
-func feedbackLabel(own *bool, fleet bool) string {
+func (m model) feedbackLabel(own *bool, fleet bool) string {
 	if own == nil {
-		return "inherit · " + feedbackOnOff(fleet)
+		return m.tr("feedback.inherit", "inherit") + " · " + m.feedbackOnOff(fleet)
 	}
-	return feedbackOnOff(*own)
+	return m.feedbackOnOff(*own)
 }
 
 // feedbackOnOff is lower case and unpadded, which is why it is not the onOff
 // beside it: that one renders a fixed-width "ON "/"OFF" for a column in another
 // view, and its trailing space would show up mid-sentence here ("inherit · ON ").
 // Every other value on this page is lower case prose.
-func feedbackOnOff(b bool) string {
+func (m model) feedbackOnOff(b bool) string {
 	if b {
-		return "on"
+		return m.tr("value.on", "on")
 	}
-	return "off"
+	return m.tr("value.off", "off")
 }
 
 // cycleFeedback advances one profile's switch: inherit → on → off → inherit, and
@@ -122,7 +122,7 @@ func (m model) cycleFeedback(i int) model {
 		return m
 	}
 	m.sendf(proto.Command{Action: "server.reload"})
-	m.status = "score feedback · " + name + " · " + feedbackLabel(prof.ScoreFeedback, m.scoreFeedback)
+	m.status = m.tr("feedback.score", "score feedback") + " · " + name + " · " + m.feedbackLabel(prof.ScoreFeedback, m.scoreFeedback)
 	return m
 }
 
@@ -144,6 +144,6 @@ func nextFeedback(cur *bool) *bool {
 // the switch does NOT do, because that is the half a reader will otherwise assume
 // from a row that says "off": submission stays open to every panel, and what this
 // takes away is the telling.
-func feedbackHintLine() string {
-	return mutedStyle.Render("score feedback · off stops the telling, not the submitting")
+func (m model) feedbackHintLine() string {
+	return mutedStyle.Render(m.tr("panel.cfg.hint.feedback", "score feedback · off stops the telling, not the submitting"))
 }

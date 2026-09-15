@@ -176,4 +176,59 @@ var zhTW = map[string]string{
 
 	// The working-directory features.
 	"panel.here.unknown": "那個面板的目錄不明;改在預設工作目錄開啟",
+
+	// --- the panel-config page (the prefix + P screen) ------------------------
+	//
+	// The row labels of the resource-limits section are NOT here: cpus, memory,
+	// memory-high, pids and nofile are the keys someone writes in their config
+	// file, and the same argument that keeps a key name in English keeps those.
+	// Their edit overlays are prose and are translated below.
+	"panel.cfg.title":          "面板設定",
+	"panel.cfg.shell":          "預設 shell",
+	"panel.cfg.agent":          "預設 agent",
+	"panel.cfg.replay":         "重播緩衝區",
+	"panel.cfg.limits":         "資源限制",
+	"panel.cfg.feedback":       "評分回饋",
+	"panel.cfg.not-installed":  "已知但尚未安裝",
+	"panel.cfg.system-default": "系統預設",
+	"panel.cfg.server-default": "預設",
+	"panel.cfg.no-cap":         "不限制",
+
+	"panel.cfg.hint.agent":    "預設 agent 就是 %s 會開的那一個 · 在艦隊執行的機器上偵測",
+	"panel.cfg.hint.replay":   "重播緩衝區決定捲動歷史的起始內容 · 重啟 server 後生效",
+	"panel.cfg.hint.limits":   "限制會套用到面板底下的整棵行程樹",
+	"panel.cfg.hint.feedback": "評分回饋 · 關閉只是不再主動告知,並不會停止回報",
+
+	"panel.cfg.enforce.unknown": "尚未連上,無法得知是否真的生效",
+	"panel.cfg.enforce.none":    "在這台機器上沒有生效",
+	"panel.cfg.enforce.by":      "由以下機制強制執行:",
+	"panel.cfg.no-profiles":     "尚未設定任何 agent profile · 設定檔中的 panel.agents 負責命名",
+	"panel.cfg.install-hint":    "先安裝,然後按 %s R 重新偵測",
+
+	"panel.cfg.status.shell":      "預設 shell · 輸入路徑（留白代表系統預設）,按 enter 儲存",
+	"panel.cfg.status.replay":     "重播緩衝區 · 每個面板的 KiB 數（留白代表預設）,按 enter 儲存",
+	"panel.cfg.status.restart":    "重啟後生效",
+	"panel.cfg.status.new-panels": "套用於新開的面板",
+
+	// The resource limits' edit overlays.
+	"limit.cpus.title":         "CPU 限制",
+	"limit.cpus.prompt":        "CPU 核心數,例如 2 或 1.5（留白代表不限制）",
+	"limit.memory.title":       "記憶體限制",
+	"limit.memory.prompt":      "硬上限,例如 4Gi（留白代表不限制）",
+	"limit.memory-high.title":  "記憶體警戒線",
+	"limit.memory-high.prompt": "在殺掉之前先節流,例如 3Gi（留白代表不限制）",
+	"limit.pids.title":         "行程數限制",
+	"limit.pids.prompt":        "面板行程樹裡最多幾個行程（留白代表不限制）",
+	"limit.nofile.title":       "開啟檔案數",
+	"limit.nofile.prompt":      "每個行程可開啟的檔案描述符數（留白代表不限制）",
+
+	// Values and legend words shared by more than one surface.
+	"legend.move":      "移動",
+	"legend.edit":      "編輯",
+	"legend.back":      "返回",
+	"value.on":         "開",
+	"value.off":        "關",
+	"feedback.inherit": "繼承",
+	"feedback.score":   "評分回饋",
+	"status.spawning":  "正在開啟",
 }
