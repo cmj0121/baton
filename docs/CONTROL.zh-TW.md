@@ -315,4 +315,14 @@ Score 編輯器(`n s`,[SCORE.zh-TW.md](SCORE.zh-TW.md))基於同樣的理由被�
 `panel.input` 就能驅動那個編輯器——而值得設進 `$EDITOR` 的編輯器沒有一個不能開 shell。這並沒有拿走什麼:
 想改記憶的 agent 有 `score.submit`,想修正它的 conductor 有那三個 refine 動詞。
 
+git 選單的 **commit** 也一起,而且只有 commit。`panel.git commit` 會解析成 `sh -c "git add -A && git commit"` 並注入
+`GIT_EDITOR`——同一台主機上的同一個活編輯器——而且和 score 編輯器一樣,它回覆的是一個不等於 conductor 自己的暫時
+面板 id,所以自我圍籬蓋不到它。其他每一個 git 動作都維持開放,因為這裡畫的線是**在主機上開互動式程式**,不是
+**碰到 git**:status、log、diff、add、push、branch 與 worktree-list 回覆的是擷取下來的文字、不留下任何東西,而
+conductor 讀得到 repo 的狀態正是這個角色存在的意義。`worktree-add` 又是第三種情況——一個披著 git op 名字的
+spawn——所以它是**計入 spawn 上限**而不是被拒絕,這正是讓 conductor 仍然能隔離工作、但不能無節制地做的機制。
+
+這一切都不是權限提升,也不該被那樣解讀。conductor 本來就能透過 `panel.create` 和 `panel.input`、在 spawn 上限之下
+拿到主機上的 shell,因為驅動艦隊正是這個角色的本分。`commit` 的問題在於它既沒有被計量,也和旁邊那兩個動詞不一致。
+
 一個純座艙連線不宣告任何角色,也永遠不會被圍上柵欄。

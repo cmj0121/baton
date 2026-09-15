@@ -2870,7 +2870,33 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 		// verb, not the shape of the call: each form ends in createPanel, so a
 		// conductor refused at the ceiling could otherwise walk through the other
 		// door and fan an existing agent onto branch after branch, unmetered.
-		if gitops.Op(cmd.Git) == gitops.OpWorktreeAdd {
+		//
+		// commit is REFUSED rather than charged, because what it costs is not a
+		// slot. gitops.Resolve turns it into `sh -c "git add -A && git commit"`
+		// with GIT_EDITOR injected — a live PTY running the operator's editor on
+		// the daemon's host, as the user — which is panel.log's shape and
+		// score.edit's, and both of those are refused outright.
+		//
+		// The reply makes it drivable rather than merely present: it hands back
+		// an ephemeral id, and panel.input is one line with no ownership check
+		// (`s.pty.Write(cmd.ID, cmd.Data)`), so the self-fence below does not
+		// reach it. Every editor worth setting $EDITOR to can run a shell.
+		//
+		// This is not the escalation it looks like and the fence is not sold as
+		// one: a conductor already reaches a host shell through panel.create and
+		// panel.input, under the spawn caps, because driving the fleet is what
+		// the role is for. What was wrong is that THIS door was neither charged
+		// nor consistent with the two beside it.
+		//
+		// The CAPTURE ops stay open, and the distinction is "spawns an
+		// interactive program on the host" rather than "touches git": status,
+		// log, diff, add, push, branch and worktree-list reply with text and
+		// persist nothing, and a conductor reading the state of a repo is
+		// exactly the thing this role exists to do.
+		switch gitops.Op(cmd.Git) {
+		case gitops.OpCommit:
+			return "conductor role: the commit editor is an operator surface"
+		case gitops.OpWorktreeAdd:
 			return s.spawnCapsReason()
 		}
 	case "panel.create":

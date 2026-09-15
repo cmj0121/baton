@@ -347,4 +347,17 @@ so the self-fence does not cover it and `panel.input` would drive the editor —
 `$EDITOR` to can run a shell. Nothing is taken away: an agent that wants to change the memory has `score.submit`, and
 a conductor that wants to correct it has the three refine verbs.
 
+The git menu's **commit** goes with them, and only commit. `panel.git commit` resolves to `sh -c "git add -A && git
+commit"` with `GIT_EDITOR` injected — the same live editor on the same host — and, like the score editor, it replies
+with an ephemeral panel id that is not the conductor's own, so the self-fence does not reach it. Every other git op
+stays open, because the line being drawn is **spawns an interactive program on the host**, not **touches git**: status,
+log, diff, add, push, branch and worktree-list reply with captured text and persist nothing, and a conductor reading
+the state of a repo is exactly what the role is for. `worktree-add` is the third case again — a spawn wearing a git
+op's name — so it is **charged against the spawn caps** rather than refused, which is what lets a conductor still
+isolate work without doing it unboundedly.
+
+None of this is an escalation, and it should not be read as one. A conductor already reaches a host shell through
+`panel.create` and `panel.input`, under the spawn caps, because driving the fleet is what the role is for. What was
+wrong with `commit` is that it was neither charged nor consistent with the two verbs beside it.
+
 A plain cockpit connection declares no role and is never fenced.
