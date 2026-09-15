@@ -102,3 +102,20 @@ func (m model) logCap() string {
 	}
 	return seg(label, colDark, colBrandHi)
 }
+
+// editScore asks the daemon to open the fleet's memory in the operator's
+// $EDITOR, as a transient panel the cockpit auto-zooms — the same "ephemeral"
+// path the git menu's commit and the log viewer take, and for the same reason:
+// the cockpit owns this terminal, and under `baton --remote` score.md is not on
+// this machine at all.
+//
+// It asks rather than checks. Whether there is a store, whether its directory
+// can be locked, whether the file exists yet — all of that is the daemon's to
+// answer, and it answers with either an "ephemeral" id or an "error" carrying
+// the reason cmd/baton already phrased for an operator to read. A second copy
+// of that decision here would be a copy that could disagree.
+func (m model) editScore() (tea.Model, tea.Cmd) {
+	m.pendingEphemeralTitle = "score · fleet memory"
+	m.sendf(proto.Command{Action: "score.edit"})
+	return m, nil
+}

@@ -30,7 +30,7 @@ import (
 // nothing on their own and open a family — which is what keeps the everyday
 // verbs on one key while the long tail stays reachable and discoverable:
 //
-//	n  new     n c form · n . here · n C conductor · n h global shell · n w worktree
+//	n  new     n c form · n . here · n C conductor · n h global shell · n w worktree · n s score
 //	v  view    v u usage · v U usage detail · v k keycast · v p preview · v l layout · v g lens
 //	g  group   g g mark · g c create · g a add · g u ungroup
 //	x  purge   x x — the second tap is the confirmation
@@ -54,6 +54,12 @@ const (
 	keyConductor   = "n C" // find-or-create the singleton conductor agent
 	keyGlobalShell = "n h" // find-or-create the singleton global shell
 	keyNewWorktree = "n w" // pick a repo, name a branch: a worktree and an agent isolated in it, from the dashboard
+	// The fleet's memory, opened in the operator's own $EDITOR as a server-owned
+	// panel (#93). It sits under `n` and not under `v` because every member of
+	// the view family is read-only and this one writes score.md — a landing whose
+	// members all leave the fleet alone is worth more than the word "new" being
+	// exactly right about a file that already exists.
+	keyScoreEdit   = "n s"
 	keyClose       = "w"
 	keyRespawn     = "r"   // re-run the exited panel(s) under the focus — a lone dead slot, or every exited member of the focused group
 	keyPurge       = "x x" // purge every exited panel — a double tap, because the second one is the confirmation
@@ -140,6 +146,7 @@ const (
 	actConductor
 	actGlobalShell
 	actNewWorktree
+	actScoreEdit
 	actClose
 	actRespawn
 	actPurge
@@ -245,6 +252,7 @@ var bindings = []binding{
 	{"conductor", keyConductor, "open the conductor — an agent that drives the fleet", actConductor, "Panels", "conductor"},
 	{"global-shell", keyGlobalShell, "open the global shell — a host shell always one key away", actGlobalShell, "Panels", "global shell"},
 	{"new-worktree", keyNewWorktree, "spawn an agent isolated in a new worktree on a new branch", actNewWorktree, "Panels", "worktree"},
+	{"score-edit", keyScoreEdit, "open the fleet memory (score.md) in $EDITOR", actScoreEdit, "Panels", "score"},
 	{"close", keyClose, "close the selected panel", actClose, "Panels", "close"},
 	{"respawn", keyRespawn, "re-run exited panel(s) in the selection", actRespawn, "Panels", "re-run"},
 	{"purge-exited", keyPurge, "purge all exited panels", actPurge, "Panels", "purge"},
