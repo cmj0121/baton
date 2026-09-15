@@ -1113,6 +1113,23 @@ func (m model) zoomRows() int {
 	return m.height - 1
 }
 
+// viewGeometry is the size a panel is shown at when this cockpit displays it
+// full-screen: the whole width, and every row but the footer's.
+//
+// It has two callers and that is the point. The zoom sends it because that is
+// the size the panel is about to be drawn at; a freshly spawned panel is sent
+// it because that is the size it will be drawn at the FIRST time anyone looks
+// (#97). A panel born at ptymgr's 24x80 floor and never zoomed lays its
+// interface out for eighty columns, and everything it prints before the first
+// zoom keeps that shape in the replay ring — the live view corrects itself on
+// SIGWINCH, the scrollback above it does not.
+//
+// One function rather than two call sites computing the same thing, because the
+// property that matters is that they AGREE: a spawn sized differently from the
+// zoom would make the first zoom reflow everything the panel had already drawn,
+// which is the reflow this is here to remove.
+func (m model) viewGeometry() (rows, cols int) { return m.zoomRows(), m.width }
+
 // statusTTL is how many idle ticks a transient status survives before the footer
 // settles back to its resting line.
 const statusTTL = 4
@@ -1243,8 +1260,16 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		// once the operator came back from a zoom.
 		if m.pendingReveal {
 			m.pendingReveal = false
-			if onDash {
-				if id := newestArrival(known, m.fleet); id != "" {
+			if id := newestArrival(known, m.fleet); id != "" {
+				// Size it for the screen it will be viewed on, not the 24x80 floor
+				// ptymgr gives every panel at birth (#97). This is sent whatever
+				// view the operator is in, because it is about the PANEL and not
+				// about what is on screen — a spawn that lands while they are
+				// zoomed elsewhere still draws its first frame for the terminal
+				// they will come back to.
+				zr, zc := m.viewGeometry()
+				m.sendf(proto.Command{Action: "panel.resize", ID: id, Rows: zr, Cols: zc})
+				if onDash {
 					m.restoreCursor(itemPanel, id, "", true)
 				}
 			}
@@ -3179,7 +3204,8 @@ func (m model) zoomInto(p panel.Panel) model {
 		// PTY. The goroutine ends when zoomDetach closes the emulator.
 		go zoomReader(m.emu, m.client, p.ID)
 	}
-	m.sendf(proto.Command{Action: "panel.resize", ID: p.ID, Rows: m.zoomRows(), Cols: m.width})
+	zr, zc := m.viewGeometry()
+	m.sendf(proto.Command{Action: "panel.resize", ID: p.ID, Rows: zr, Cols: zc})
 	m.sendf(proto.Command{Action: "panel.attach", ID: p.ID})
 	if m.zoomExited {
 		m.status = "result · " + p.Title + " (exited)"

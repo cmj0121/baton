@@ -148,3 +148,28 @@ func TestEveryOperatorSpawnArmsTheReveal(t *testing.T) {
 		})
 	}
 }
+
+// TestSpawnIsSizedForThisCockpit covers #97: a panel born at ptymgr's 24x80
+// floor lays its interface out for eighty columns until the first zoom, and
+// whatever it printed before that keeps that shape in the replay ring.
+//
+// What this can assert is the DECISION — the geometry a spawn is sized to
+// follows the cockpit rather than the floor. That the resize is actually sent
+// is structural rather than tested: viewGeometry has two callers, the zoom and
+// the spawn, and they cannot drift because there is one function. A send spy
+// would be the only way to assert the wire, and the cockpit has none.
+func TestSpawnIsSizedForThisCockpit(t *testing.T) {
+	m := baseModel()
+	m.width, m.height = 200, 50
+
+	rows, cols := m.viewGeometry()
+	if cols == 80 || rows == 24 {
+		t.Errorf("a spawn on a 200x50 cockpit is sized %dx%d — that is ptymgr's floor, not this screen", cols, rows)
+	}
+	if cols != m.width {
+		t.Errorf("cols = %d, want the cockpit's %d", cols, m.width)
+	}
+	if rows != m.zoomRows() {
+		t.Errorf("rows = %d, want the zoom's %d — a spawn sized differently reflows on the first zoom", rows, m.zoomRows())
+	}
+}
