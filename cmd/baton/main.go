@@ -1532,10 +1532,26 @@ func runServerOn(ln net.Listener, sock string, boot serverBoot) error {
 	}
 	defer cleanup()
 
+	// Both handlers below are given back when this loop returns, and their
+	// goroutines wound up with them. A process runs one daemon and exits with it,
+	// so production never sees the difference — the test binary does: it drives
+	// runServerOn directly, over and over, and a registration that outlives its
+	// loop leaves every daemon this process ever ran subscribed to the next
+	// signal. They all reload, on a closed listener and a store nobody dispatches
+	// against, and all write the same line into the same log; a HUP test can then
+	// be answered by a daemon that returned before the config it is asking about
+	// was written. See TestADaemonThatReturnedNoLongerReloadsOnSIGHUP.
+	//
+	// signal.Stop before the close in each pair, and in that order: Stop returns
+	// only once the runtime will deliver nothing more to the channel, so no
+	// delivery can race the close and send on a closed channel.
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	defer func() { signal.Stop(sigs); close(sigs) }()
 	go func() {
-		<-sigs
+		if _, ok := <-sigs; !ok {
+			return // the loop returned and took the handler with it; nothing was signalled
+		}
 		log.Info().Msg("shutting down")
 		srv.SaveNow()  // flush the last layout before os.Exit skips the saverLoop and the defers
 		srv.Shutdown() // SIGKILL every live panel's process group so no child outlives the daemon
@@ -1554,6 +1570,7 @@ func runServerOn(ln net.Listener, sock string, boot serverBoot) error {
 	// picks up an edited config without a restart, just like the cockpit action.
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
+	defer func() { signal.Stop(hup); close(hup) }()
 	go func() {
 		for range hup {
 			reload()
