@@ -313,17 +313,18 @@ baton ctl score list   | jq '.entries[] | select(.tier > 1)'                   #
 
 `status` 回答的是三個不同的問題,不是一個:
 
-| 欄位                       | 說的是                                         |
-| -------------------------- | ---------------------------------------------- |
-| `enabled`                  | `score.enabled` 要求的是什麼                   |
-| `available`                | 到底有沒有真的開起一個 store                   |
-| `reason`                   | 沒開起來的話是為什麼——或者讀取或寫入已經失效了 |
-| `entries` / `rendered`     | store 握著多少、一次派送會帶多少               |
-| `oversized` / `block_full` | 是哪一個上限讓上面兩個數字對不起來             |
-| `bare_admits`              | 你有幾行光憑一個項目符號就變成了一則           |
-| `promote_at`、`rank`、…    | 實際生效的調校,不見得等於檔案上寫的            |
-| `unlocked`                 | store 正在沒有單一寫入者宣告的情況下跑         |
-| `dir`                      | 檔案在哪裡                                     |
+| 欄位                             | 說的是                                           |
+| -------------------------------- | ------------------------------------------------ |
+| `enabled`                        | `score.enabled` 要求的是什麼                     |
+| `available`                      | 到底有沒有真的開起一個 store                     |
+| `reason`                         | 沒開起來的話是為什麼——或者讀取或寫入已經失效了   |
+| `entries` / `rendered`           | store 握著多少、一次派送會帶多少                 |
+| `oversized` / `block_full`       | 是哪一個上限讓上面兩個數字對不起來               |
+| `bare_admits`                    | 你有幾行光憑一個項目符號就變成了一則             |
+| `promote_at`、`rank`、…          | 實際生效的調校,不見得等於檔案上寫的              |
+| `feedback` / `feedback_profiles` | 簡報有沒有帶著那行提示,以及哪些 profile 覆寫了它 |
+| `unlocked`                       | store 正在沒有單一寫入者宣告的情況下跑           |
+| `dir`                            | 檔案在哪裡                                       |
 
 關掉、拿不到、壞掉,是三種狀態而不是一種。你絕不應該為了知道「隊伍沒有記憶」而去讀 daemon 的記錄檔。
 

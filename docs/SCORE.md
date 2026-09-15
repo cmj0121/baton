@@ -338,17 +338,18 @@ An entry outside the working set carries **one** of three standings, naming the 
 
 `status` answers three questions that are not one question:
 
-| Field                      | Says                                                                    |
-| -------------------------- | ----------------------------------------------------------------------- |
-| `enabled`                  | what `score.enabled` asked for                                          |
-| `available`                | whether a store actually opened                                         |
-| `reason`                   | why not, when it did not — or that reads or writes have stopped working |
-| `entries` / `rendered`     | what the store holds, and what a dispatch would carry                   |
-| `oversized` / `block_full` | which cap made those two disagree                                       |
-| `bare_admits`              | how many of your lines became entries on a bare bullet alone            |
-| `promote_at`, `rank`, …    | the tuning **in force**, which is not always what the file says         |
-| `unlocked`                 | the store is running without its single-writer claim                    |
-| `dir`                      | where the files are                                                     |
+| Field                            | Says                                                                     |
+| -------------------------------- | ------------------------------------------------------------------------ |
+| `enabled`                        | what `score.enabled` asked for                                           |
+| `available`                      | whether a store actually opened                                          |
+| `reason`                         | why not, when it did not — or that reads or writes have stopped working  |
+| `entries` / `rendered`           | what the store holds, and what a dispatch would carry                    |
+| `oversized` / `block_full`       | which cap made those two disagree                                        |
+| `bare_admits`                    | how many of your lines became entries on a bare bullet alone             |
+| `promote_at`, `rank`, …          | the tuning **in force**, which is not always what the file says          |
+| `feedback` / `feedback_profiles` | whether briefs carry the submission hint, and which profiles overrode it |
+| `unlocked`                       | the store is running without its single-writer claim                     |
+| `dir`                            | where the files are                                                      |
 
 Off, unavailable and broken are three states, not one. You must never have to read the daemon log to learn that the
 fleet has no memory.

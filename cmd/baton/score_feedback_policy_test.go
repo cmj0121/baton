@@ -51,3 +51,22 @@ func TestFeedbackPolicyLeavesTheSilentProfilesOut(t *testing.T) {
 		t.Errorf("overrides = %v; want nil -- no profile named the key, so none of them overrides anything", agents)
 	}
 }
+
+// TestReloadableSettingsCarriesTheFeedbackKeys is the link the two tests above do
+// not cover: feedbackPolicy can be right and still never be called. This is the
+// one projection both the boot and the reload path run, so a key that is read
+// here is read on both, and a key missing here is missing on both — silently, in
+// a daemon that comes up looking healthy.
+func TestReloadableSettingsCarriesTheFeedbackKeys(t *testing.T) {
+	off, on := false, true
+	cfg := config.Config{Score: config.ScoreConfig{Feedback: &off}}
+	cfg.Panel.Agents = map[string]config.AgentProfile{"chatty": {Command: "claude", ScoreFeedback: &on}}
+
+	rc := reloadableSettings(cfg)
+	if rc.settings.ScoreFeedback {
+		t.Error("settings.ScoreFeedback = true; want score.feedback: false to have reached the daemon's settings")
+	}
+	if got := rc.settings.AgentScoreFeedback["chatty"]; !got {
+		t.Errorf("settings.AgentScoreFeedback[chatty] = %v; want the profile's override to have reached them too", got)
+	}
+}
