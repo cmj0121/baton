@@ -68,7 +68,7 @@ func (m model) closeFleetResults() (tea.Model, tea.Cmd) {
 	m.fsHits = nil
 	m.fsCursor = 0
 	if m.mode == modeDashboard {
-		m.status = "dashboard"
+		m.status = m.tr("mode.dashboard.status", "dashboard")
 	}
 	return m, nil
 }

@@ -495,6 +495,37 @@ var zhTW = map[string]string{
 
 	"usage.legend.cycle": "切換狀態列",
 
+	// --- the group split ------------------------------------------------------
+	"group.title":           "群組",
+	"group.title.summary":   "摘要",
+	"group.sub-groups":      "%d 個子群組",
+	"group.live-summarised": "%d 個即時 · %d 個摘要",
+	"mode.group":            "群組",
+	"mode.summary":          "摘要",
+	"mode.select":           "選取",
+	"mode.scroll":           "捲動",
+	"mode.resize":           "調整大小",
+	"mode.interact":         "互動",
+	"mode.dashboard.status": "儀表板",
+
+	"group.status.layout":               "版面",
+	"group.status.no-resize-summary":    "摘要檢視不能調整大小",
+	"group.status.resize-needs-split":   "調整大小需要分割版面 — 按 %s 選一個",
+	"group.status.resize":               "調整大小 · %s · 方向鍵放大／縮小 · 按 %s 或 esc 結束",
+	"group.status.resize-limit":         "已經不能再調整了",
+	"group.status.resize-short":         "調整大小",
+	"group.status.emptied":              "群組已清空 · 回儀表板",
+	"group.status.interact-ended":       "互動結束 · 這個面板已經不是即時圖磚",
+	"group.status.not-on-summary":       "摘要檢視不支援這個動作",
+	"group.status.not-on-subgroup":      "子群組不支援這個動作 — 按 enter 進入",
+	"group.status.interact-needs-panel": "互動需要一個還活著的面板",
+	"group.status.interact":             "互動 · %s · 按 %s %s 結束",
+	"group.status.unpinned":             "已取消釘選",
+	"group.status.pin-limit":            "最多只能釘選 %d 個面板 — 請先取消一個",
+	"group.status.shown":                "群組 · 顯示 %d 個",
+	"group.status.summary":              "摘要 · %s（%d 個面板）",
+	"group.status.pinned":               "群組 · %s · %s（已釘選）",
+
 	// Values and legend words shared by more than one surface.
 	"legend.move":        "移動",
 	"legend.edit":        "編輯",

@@ -274,7 +274,7 @@ func (m model) closeInbox() (tea.Model, tea.Cmd) {
 	m.inboxComposing, m.inboxReply = false, ""
 	m.inboxTails, m.inboxTailOrder, m.inboxTailWant = nil, nil, ""
 	if m.mode == modeDashboard {
-		m.status = "dashboard"
+		m.status = m.tr("mode.dashboard.status", "dashboard")
 	}
 	return m, nil
 }

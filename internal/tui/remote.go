@@ -44,7 +44,7 @@ func (m model) openRemote(from mode) (tea.Model, tea.Cmd) {
 func (m model) closeRemote() (tea.Model, tea.Cmd) {
 	m.mode = m.remoteFrom
 	if m.mode == modeDashboard {
-		m.status = "dashboard"
+		m.status = m.tr("mode.dashboard.status", "dashboard")
 	}
 	return m, nil
 }

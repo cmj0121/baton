@@ -3007,7 +3007,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		m.cursor = 0
 		m.scrolling, m.copySelecting = false, false // never carry scroll/copy state to the dashboard
 		m = m.clearSearch()
-		m.status = "dashboard"
+		m.status = m.tr("mode.dashboard.status", "dashboard")
 	case actHelp:
 		return m.openHelp(m.mode), nil
 	case actUsageToggle:
@@ -3611,7 +3611,7 @@ func (m model) zoomDetach() (tea.Model, tea.Cmd) {
 	m = m.clearSearch()
 	m.cursorHidden = nil
 	m.zoomID, m.zoomTitle, m.zoomArmed, m.zoomExited, m.zoomGroupOrigin = "", "", false, false, ""
-	m.status = "dashboard"
+	m.status = m.tr("mode.dashboard.status", "dashboard")
 	if m.client != nil {
 		return m, func() tea.Msg { _ = m.client.Send(proto.Command{Action: "panel.list"}); return nil }
 	}

@@ -44,7 +44,7 @@ func (m model) closeGitOutPopup() (tea.Model, tea.Cmd) {
 	m.gitOutFailed = false
 	m.gitOutScroll = 0
 	if m.mode == modeDashboard {
-		m.status = "dashboard"
+		m.status = m.tr("mode.dashboard.status", "dashboard")
 	}
 	return m, nil
 }

@@ -55,7 +55,7 @@ func (m model) openUsage(from mode) model {
 func (m model) closeUsage() (tea.Model, tea.Cmd) {
 	m.mode = m.usageFrom
 	if m.mode == modeDashboard {
-		m.status = "dashboard"
+		m.status = m.tr("mode.dashboard.status", "dashboard")
 	}
 	return m, nil
 }

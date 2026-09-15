@@ -275,7 +275,7 @@ func (m model) cycleGroupLayout(delta int) model {
 	m.groupLayout[m.groupName] = next
 	m.sendf(proto.Command{Action: "group.layout", Group: m.groupName, Layout: next})
 	m.resizeGroupTiles() // re-fit every tile's emulator to the new layout's boxes
-	m.status = "layout · " + next
+	m.status = m.tr("group.status.layout", "layout") + " · " + next
 	return m
 }
 
@@ -285,16 +285,16 @@ func (m model) cycleGroupLayout(delta int) model {
 // the group is on the default grid, and no-ops in the summary sub-view.
 func (m model) enterResize() model {
 	if m.summaryScope {
-		m.status = "resize is not available in the summary"
+		m.status = m.tr("group.status.no-resize-summary", "resize is not available in the summary")
 		return m
 	}
 	if _, ok := m.layoutRects(); !ok {
-		m.status = "resize needs a split layout — press " + keyLabel(keyLayout) + " to pick one"
+		m.status = fmt.Sprintf(m.tr("group.status.resize-needs-split", "resize needs a split layout — press %s to pick one"), keyLabel(keyLayout))
 		return m
 	}
 	m.groupResize = true
 	m.groupArmed = false
-	m.status = fmt.Sprintf("resize · %s · arrows grow/shrink · %s or esc to finish", m.groupName, keyLabel(keyResize))
+	m.status = fmt.Sprintf(m.tr("group.status.resize", "resize · %s · arrows grow/shrink · %s or esc to finish"), m.groupName, keyLabel(keyResize))
 	return m
 }
 
@@ -341,7 +341,7 @@ func (m model) resizeFocused(dCol, dRow int) model {
 	// nudge that would make any tile too small to render is refused, so resize can
 	// never drop the split back to the even grid.
 	if _, valid := spansToRects(rows, cols, spans, m.width, m.height-1-groupHeaderRows, r.cols, r.rows); !valid {
-		m.status = "can't resize any further"
+		m.status = m.tr("group.status.resize-limit", "can't resize any further")
 		return m
 	}
 	if m.groupRatios == nil {
@@ -349,7 +349,7 @@ func (m model) resizeFocused(dCol, dRow int) model {
 	}
 	m.groupRatios[m.groupName] = r
 	m.resizeGroupTiles() // refit every tile's emulator + PTY to its new box
-	m.status = "resize · " + m.groupName
+	m.status = m.tr("group.status.resize-short", "resize") + " · " + m.groupName
 	return m
 }
 
@@ -590,7 +590,7 @@ func (m *model) reconcileGroupTiles(focusID string) {
 		// The scope lost its last panel AND has no sub-groups left: leave for the
 		// dashboard. A container group with only sub-groups still renders (its
 		// sub-group tiles), so it does not bail.
-		m.resetToDashboard("group emptied · dashboard")
+		m.resetToDashboard(m.tr("group.status.emptied", "group emptied · dashboard"))
 		return
 	}
 
@@ -644,7 +644,7 @@ func (m *model) reconcileGroupTiles(focusID string) {
 	// whatever panel the focus clamped onto instead.
 	if m.groupInteract && indexOfMember(tiles, focusID) < 0 {
 		m.groupInteract = false
-		m.status = "interact ended · panel is no longer a live tile"
+		m.status = m.tr("group.status.interact-ended", "interact ended · panel is no longer a live tile")
 	}
 }
 
@@ -957,14 +957,14 @@ func (m model) handleGroupZoomKey(k tea.Key) (tea.Model, tea.Cmd) {
 	if m.focusedIsSummary() {
 		switch key {
 		case keyPin, keySignal, keyRemove, keyInteract, keyDiff, keyRespawn:
-			m.status = "not available on the summary"
+			m.status = m.tr("group.status.not-on-summary", "not available on the summary")
 			return m, nil
 		}
 	}
 	if _, onGroup := m.focusedChildGroup(); onGroup {
 		switch key {
 		case keyPin, keySignal, keyRemove, keyInteract, keyDiff, keyRespawn:
-			m.status = "not available on a sub-group — enter to descend"
+			m.status = m.tr("group.status.not-on-subgroup", "not available on a sub-group — enter to descend")
 			return m, nil
 		}
 	}
@@ -1096,13 +1096,13 @@ func (m model) enterInteract() model {
 		return m
 	}
 	if m.groupEmus[p.ID] == nil {
-		m.status = "interact needs a live panel"
+		m.status = m.tr("group.status.interact-needs-panel", "interact needs a live panel")
 		return m
 	}
 	m.groupInteract = true
 	m.groupArmed = false
 	m.scrollOff = 0 // typing happens at the live bottom
-	m.status = fmt.Sprintf("interact · %s · %s %s to stop", p.Title, keyLabel(m.effPrefix()), keyInteract)
+	m.status = fmt.Sprintf(m.tr("group.status.interact", "interact · %s · %s %s to stop"), p.Title, keyLabel(m.effPrefix()), keyInteract)
 	return m
 }
 
@@ -1146,10 +1146,10 @@ func (m model) togglePin() model {
 	if m.groupPinned[p.ID] {
 		delete(m.groupPinned, p.ID)
 		m.sendf(proto.Command{Action: "panel.unpin", IDs: []string{p.ID}})
-		m.status = "unpinned " + p.Title
+		m.status = m.tr("group.status.unpinned", "unpinned") + " " + p.Title
 	} else {
 		if m.pinnedCount() >= maxGroupTiles {
-			m.status = fmt.Sprintf("at most %d panels can be pinned — unpin one first", maxGroupTiles)
+			m.status = fmt.Sprintf(m.tr("group.status.pin-limit", "at most %d panels can be pinned — unpin one first"), maxGroupTiles)
 			return m
 		}
 		m.groupPinned[p.ID] = true
@@ -1190,7 +1190,7 @@ func (m model) adjustGroupShown(delta int) model {
 	m.groupShown[m.groupName] = newN
 	delete(m.groupRatios, m.groupName) // a new N reshapes the grid; manual weights reset
 	m.sendf(proto.Command{Action: "group.show", Group: m.groupName, Count: newN})
-	m.status = fmt.Sprintf("group · %d shown", newN)
+	m.status = fmt.Sprintf(m.tr("group.status.shown", "group · %d shown"), newN)
 	return m
 }
 
@@ -1207,7 +1207,7 @@ func (m model) enterSummaryScope() model {
 	parent := m.groupName
 	m = m.retile(func(m *model) { m.summaryScope = true }) // scope to the parent's collapsed half
 	shown := m.tileMembers()
-	status := fmt.Sprintf("summary · %s (%d panels)", groupBreadcrumb(parent), len(collapsed))
+	status := fmt.Sprintf(m.tr("group.status.summary", "summary · %s (%d panels)"), groupBreadcrumb(parent), len(collapsed))
 	if len(collapsed) > len(shown) {
 		status += fmt.Sprintf(" · showing first %d", len(shown))
 	}
@@ -1302,7 +1302,7 @@ func (m model) descendZoom(childPath string, p panel.Panel) (tea.Model, tea.Cmd)
 	m.groupPinned = pinsForMembers(m.fleetGroup()) // rebuild for the child's own scope, so back lands consistent
 	m = m.zoomInto(p)
 	m.zoomGroupOrigin = childPath // back returns to the sub-group's split, not the parent's
-	m.status = fmt.Sprintf("group · %s · %s (pinned)", groupBreadcrumb(childPath), p.Title)
+	m.status = fmt.Sprintf(m.tr("group.status.pinned", "group · %s · %s (pinned)"), groupBreadcrumb(childPath), p.Title)
 	return m, nil
 }
 
@@ -1348,7 +1348,7 @@ func (m *model) resetToDashboard(status string) {
 // exitGroupZoom leaves the split for the dashboard and asks the server for a
 // fresh snapshot so the fleet is current.
 func (m model) exitGroupZoom() (tea.Model, tea.Cmd) {
-	m.resetToDashboard("dashboard")
+	m.resetToDashboard(m.tr("mode.dashboard.status", "dashboard"))
 	if m.client != nil {
 		return m, func() tea.Msg { _ = m.client.Send(proto.Command{Action: "panel.list"}); return nil }
 	}
@@ -1408,19 +1408,19 @@ func (m model) groupZoomView() string {
 		}
 	}
 
-	caption := "GROUP"
+	caption := m.tr("group.title", "GROUP")
 	if m.summaryScope {
-		caption = "SUMMARY"
+		caption = m.tr("group.title.summary", "SUMMARY")
 	}
 	header := sectionStyle.Render(spaced(caption)) + "  " +
 		lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(groupBreadcrumb(m.groupName)) +
-		mutedStyle.Render(fmt.Sprintf("   %d panel(s)  ", len(tiles))) + kindBreakdown(tiles)
+		mutedStyle.Render("   "+fmt.Sprintf(m.tr("fleet.panels", "%d panel(s)"), len(tiles))+"  ") + kindBreakdown(tiles)
 	if ng > 0 {
-		header += lipgloss.NewStyle().Foreground(colBrand).Render(fmt.Sprintf("   ▣ %d sub-group(s)", ng))
+		header += lipgloss.NewStyle().Foreground(colBrand).Render("   ▣ " + fmt.Sprintf(m.tr("group.sub-groups", "%d sub-group(s)"), ng))
 	}
 	if len(collapsed) > 0 {
 		header += lipgloss.NewStyle().Foreground(states[panel.Idle].color).
-			Render(fmt.Sprintf("   · %d live · %d summarised", len(tiles), len(collapsed)))
+			Render("   · " + fmt.Sprintf(m.tr("group.live-summarised", "%d live · %d summarised"), len(tiles), len(collapsed)))
 	}
 
 	grid := m.renderSplitGrid(slots)
@@ -1775,21 +1775,21 @@ func (m model) groupZoomFooter() string {
 	if m.input == inputSearch { // typing a find term over the focused tile
 		return m.searchPromptFooter()
 	}
-	mode := seg("▣ GROUP", colInk, colBlue)
+	mode := seg("▣ "+m.tr("mode.group", "GROUP"), colInk, colBlue)
 	if m.summaryScope {
-		mode = seg("▦ SUMMARY", colDark, colBrandHi) // scoped to the parent's summarised members
+		mode = seg("▦ "+m.tr("mode.summary", "SUMMARY"), colDark, colBrandHi) // scoped to the parent's summarised members
 	}
 	switch {
 	case m.copySelecting:
-		mode = seg("✄ SELECT", colDark, colCyan)
+		mode = seg("✄ "+m.tr("mode.select", "SELECT"), colDark, colCyan)
 	case m.searchActive():
 		mode = m.searchSeg()
 	case m.scrolling:
-		mode = seg("↕ SCROLL", colDark, colScroll)
+		mode = seg("↕ "+m.tr("mode.scroll", "SCROLL"), colDark, colScroll)
 	case m.groupResize:
-		mode = seg("⤢ RESIZE", colDark, colCyan) // arrows grow/shrink the focused tile
+		mode = seg("⤢ "+m.tr("mode.resize", "RESIZE"), colDark, colCyan) // arrows grow/shrink the focused tile
 	case m.groupInteract:
-		mode = seg("⌨ INTERACT", colDark, colGreen) // typing into the focused tile
+		mode = seg("⌨ "+m.tr("mode.interact", "INTERACT"), colDark, colGreen) // typing into the focused tile
 	}
 	left := mode +
 		seg(truncate(groupBreadcrumb(m.groupName), 32), colDark, colBrandHi) +

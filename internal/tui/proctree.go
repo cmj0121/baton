@@ -39,7 +39,7 @@ func (m model) closeProcTree() (tea.Model, tea.Cmd) {
 	m.procLines = nil
 	m.procScroll = 0
 	if m.mode == modeDashboard {
-		m.status = "dashboard"
+		m.status = m.tr("mode.dashboard.status", "dashboard")
 	}
 	return m, nil
 }

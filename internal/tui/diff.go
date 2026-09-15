@@ -65,7 +65,7 @@ func (m model) closeDiffPopup() (tea.Model, tea.Cmd) {
 	m.diffCursor, m.diffScroll = 0, 0
 	m.diffOnDetail = false
 	if m.mode == modeDashboard {
-		m.status = "dashboard"
+		m.status = m.tr("mode.dashboard.status", "dashboard")
 	}
 	return m, nil
 }
