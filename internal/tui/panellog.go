@@ -116,6 +116,10 @@ func (m model) logCap() string {
 // of that decision here would be a copy that could disagree.
 func (m model) editScore() (tea.Model, tea.Cmd) {
 	m.pendingEphemeralTitle = "score · fleet memory"
+	// Leave the zoom when the editor exits. This is the one transient panel with
+	// nothing to read afterwards: a diff or a git log has produced the output the
+	// operator opened it for, and dismissing it would throw that away unread.
+	m.pendingEphemeralClose = true
 	m.sendf(proto.Command{Action: "score.edit"})
 	return m, nil
 }

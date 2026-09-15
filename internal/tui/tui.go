@@ -371,10 +371,19 @@ type model struct {
 	// a way the footer has not.
 	usageFrom mode
 
-	zoomID                string                 // panel being zoomed (modeZoom)
-	zoomTitle             string                 // its title, for the zoom footer
-	zoomEphemeral         bool                   // the current zoom is a transient diff panel — dismissing it closes the panel server-side
-	pendingEphemeralTitle string                 // title for the next transient (diff/git) zoom, stashed when the op is sent, read on the "ephemeral" reply
+	zoomID                string // panel being zoomed (modeZoom)
+	zoomTitle             string // its title, for the zoom footer
+	zoomEphemeral         bool   // the current zoom is a transient diff panel — dismissing it closes the panel server-side
+	pendingEphemeralTitle string // title for the next transient (diff/git) zoom, stashed when the op is sent, read on the "ephemeral" reply
+	// pendingEphemeralClose marks that next zoom as one to LEAVE when its process
+	// ends, rather than one to linger on. It is set per-op rather than for every
+	// transient panel because the two kinds differ in what exiting means: a diff
+	// or a git log has finished producing the output the operator opened it for,
+	// and dismissing it would throw that away unread; an editor has produced
+	// nothing to read, so staying is just a dead pane between them and the
+	// dashboard. Stashed when the op is sent, read on the "ephemeral" reply.
+	pendingEphemeralClose bool
+	zoomEphemeralClose    bool                   // the current transient zoom is one to leave on exit
 	zoomArmed             bool                   // prefix pressed inside a zoom, awaiting the verb
 	zoomExited            bool                   // the zoomed panel has exited — a read-only result view
 	emu                   *vt.SafeEmulator       // terminal emulator rendering the zoomed panel
@@ -1210,6 +1219,7 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		m.pendingEphemeralTitle = ""
 		*m = m.zoomInto(panel.Panel{ID: sm.ID, Title: title, State: panel.Running})
 		m.zoomEphemeral = true
+		m.zoomEphemeralClose, m.pendingEphemeralClose = m.pendingEphemeralClose, false
 	case "diff":
 		// The server computed the target agent's structured work-tree diff. Open the
 		// master-detail popup over the current view; it owns nothing server-side, so
@@ -1288,6 +1298,28 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		m.tasks = sm.Tasks
 		if m.queueCursor >= len(m.tasks) {
 			m.queueCursor = max(0, len(m.tasks)-1)
+		}
+	case "ephemeral-exit":
+		// The transient panel's process ended. Only a zoom that asked to be left
+		// acts on it, and only on a CLEAN exit: a non-zero one means the program
+		// said something about why, and dismissing the pane would take that away
+		// before it could be read — "$EDITOR: command not found" is exactly the
+		// message an operator needs and exactly the one that would flash past.
+		//
+		// It is server-driven rather than a timer or a guess, because the cockpit
+		// cannot see a transient panel's state: an ephemeral is deliberately kept
+		// out of s.panels, so it never appears in a "panels" snapshot.
+		if m.mode == modeZoom && m.zoomID == sm.ID && m.zoomEphemeralClose && !sm.Failed {
+			// The panel is already reaped server-side, so the zoom must not send
+			// panel.close on the way out — that would be a close for an id the
+			// daemon no longer knows, answered with an error the operator did
+			// nothing to earn.
+			m.zoomEphemeral, m.zoomEphemeralClose = false, false
+			// applyEvent mutates in place and returns no command, so the dashboard
+			// refresh zoomDetach would have scheduled is sent directly instead.
+			nm, _ := m.zoomDetach()
+			*m = nm.(model)
+			m.sendf(proto.Command{Action: "panel.list"})
 		}
 	case "notice":
 		// A plugin-originated toast (baton.notify). It rides the transient status line
