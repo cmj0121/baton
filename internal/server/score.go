@@ -463,9 +463,75 @@ func (s *Server) dispatchBrief(id, prompt string) TaskBrief {
 	// runs off both; a nil (disabled) store yields the zero view and nothing is
 	// injected.
 	v := s.scoreView(ctx)
-	b.Score = v.Block
+	b.Score = s.scoreSection(v.Block, ctx.Profile)
 	logScoreInjection(ctx, v)
 	return b
+}
+
+// scoreHintLine is the sentence that closes the loop: the one place an agent is
+// ever told that the memory it is being shown can be written to.
+//
+// It names `baton ctl` rather than the MCP tool because that is the door every
+// panel actually has. score_submit is served from a .mcp.json written into the
+// conductor's workspace and nowhere else — a worker panel runs in the operator's
+// own repository, where baton does not write — while BATON_SOCK and
+// BATON_PANEL_ID are injected into every panel's process (see Server.panelEnv),
+// so the CLI works from inside any of them and stamps the submission with that
+// panel's provenance. One line that works everywhere beats two that each work
+// somewhere.
+//
+// It says what an entry IS, not just how to send one, because the cost of the
+// hint is entirely in what it invites: an entry is a statement about how this
+// fleet behaves, and an agent that reads "record what you learned" with no
+// second clause records facts about the code, which is what CLAUDE.md is for.
+// The wording is score_submit's own, for the same reason it was written there.
+//
+// One line, because it is prepended to EVERY delivered brief.
+const scoreHintLine = `Learned something about how this fleet behaves — a habit of its agents or its ` +
+	`workflow, not a fact about the code? Record it in one short sentence: ` +
+	`baton ctl score submit "..."`
+
+// scoreSection is the score half of a brief: the working-set block, and the hint
+// under it when this panel's profile is told about submitting.
+//
+// The two are independent on purpose, and each of the three combinations is
+// reachable and meant. Block with hint is the steady state. Block without hint is
+// a profile switched off — it still READS the memory, because being shown what
+// the fleet knows is not the same permission as adding to it. And hint without
+// block is the one that makes a fresh install work at all: an empty store renders
+// no block, so on a default install this sentence is the entire score section,
+// and the first entry the fleet ever records is one it was told it could.
+//
+// A store that is off renders neither. The hint would be an instruction to run a
+// command that answers with a refusal, which is worse than silence — the agent
+// spends a turn on it and learns nothing the daemon could not have said by saying
+// nothing.
+func (s *Server) scoreSection(block, profile string) string {
+	if !s.scoreState.available() || !s.hintsFeedback(profile) {
+		return block
+	}
+	return block + scoreHintLine
+}
+
+// hintsFeedback is whether this profile's briefs carry the hint: the profile's
+// own answer when it gave one, else the fleet's.
+//
+// An empty profile — a shell panel, and any panel the fleet has no spec for —
+// takes the fleet-wide answer, because the table is keyed on profile names and
+// "no profile" is not one of them. That is the same resolution the caps and the
+// quiet ladder make for the same panels, and it is the right one here for a
+// reason of its own: the operator's own shell is where `baton ctl score submit`
+// is most likely to be typed by hand.
+//
+// Read under the lock, because a SIGHUP can swap both halves while a dispatch is
+// being bound.
+func (s *Server) hintsFeedback(profile string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if on, ok := s.agentScoreFeedback[profile]; ok {
+		return on
+	}
+	return s.scoreFeedback
 }
 
 // bindBrief binds prompt to a panel: it builds that panel's brief and runs the
@@ -1511,6 +1577,14 @@ func (s *Server) scoreList(cc *clientConn, cmd proto.Command) {
 // that simply did not match — the factor reads 1.0 either way, and only the
 // policy says which happened.
 //
+// feedback and feedback_profiles are the write half's tuning, reported for the
+// reason the ranking's is: it reloads, so what is in force is not always what the
+// file says, and an operator who has just switched the hint off has no other way
+// to see that the daemon took it. The map carries only the profiles that
+// overrode the fleet-wide answer, which is exactly what the daemon holds — a
+// profile absent from it inherits, and listing every profile with its resolved
+// value would turn an inherited yes and an explicit one into the same line.
+//
 // unlocked reports a store running without its single-writer claim, which
 // happens where the filesystem cannot lock — an NFS $HOME being exactly where
 // the default score directory lands. The boot warning is one line in a log
@@ -1533,6 +1607,7 @@ func (s *Server) scoreStatus() json.RawMessage {
 		r := v.Policy.Rank
 		rank = &r
 	}
+	feedback, overrides := s.feedbackInForce()
 	return scoreJSON(struct {
 		Enabled       bool        `json:"enabled"`
 		Available     bool        `json:"available"`
@@ -1548,7 +1623,12 @@ func (s *Server) scoreStatus() json.RawMessage {
 		WorkingSet    int         `json:"working_set,omitempty"`
 		MaxEntries    int         `json:"max_entries,omitempty"`
 		Rank          *score.Rank `json:"rank,omitempty"`
-		Dir           string      `json:"dir,omitempty"`
+		// No omitempty on feedback: false is the value worth seeing, and a field
+		// that elides itself exactly when it is interesting would be the reply
+		// hiding the answer the operator went looking for.
+		Feedback         bool            `json:"feedback"`
+		FeedbackProfiles map[string]bool `json:"feedback_profiles,omitempty"`
+		Dir              string          `json:"dir,omitempty"`
 	}{
 		Enabled:       s.scoreState.Enabled,
 		Available:     s.scoreState.available(),
@@ -1566,10 +1646,33 @@ func (s *Server) scoreStatus() json.RawMessage {
 		// operator whose agents are being refused meets the reason here rather
 		// than in a daemon log that deliberately does not carry it (#83, and see
 		// noteScoreTrouble for why it does not).
-		MaxEntries: v.Policy.MaxEntries,
-		Rank:       rank,
-		Dir:        s.scoreState.Store.Dir(),
+		MaxEntries:       v.Policy.MaxEntries,
+		Rank:             rank,
+		Feedback:         feedback,
+		FeedbackProfiles: overrides,
+		Dir:              s.scoreState.Store.Dir(),
 	})
+}
+
+// feedbackInForce is the hint's tuning as the daemon is actually holding it: the
+// fleet-wide answer, and a COPY of the per-profile overrides.
+//
+// A copy because the map it reads is swapped whole by a reload and read by every
+// delivery. Handing the caller the live one would put an unsynchronised reader on
+// a map another goroutine may be replacing, and a reply that marshals a map while
+// Reload assigns over it is a data race whether or not the bytes come out
+// plausible.
+func (s *Server) feedbackInForce() (bool, map[string]bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.agentScoreFeedback) == 0 {
+		return s.scoreFeedback, nil
+	}
+	out := make(map[string]bool, len(s.agentScoreFeedback))
+	for k, v := range s.agentScoreFeedback {
+		out[k] = v
+	}
+	return s.scoreFeedback, out
 }
 
 // scoreJSON marshals a reply payload built above from in-memory maps, structs,

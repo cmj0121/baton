@@ -228,14 +228,15 @@ type model struct {
 	editing   bool      // capturing the next key press as a rebind
 	editIdx   int       // binding being rebound; editPrefix means the leader key
 
-	shellPath    string                         // configured default shell binary path ("" = system shell)
-	workdir      string                         // configured default working directory for new panels ("" = home)
-	defaultAgent string                         // agent profile the new-agent action spawns ("" = claude)
-	agents       map[string]config.AgentProfile // user-configured agent profiles
-	replayKB     int                            // per-panel replay buffer in KiB, round-tripped so a save never drops it
-	limits       limits.Limits                  // fleet-wide resource caps for new panels (the zero value caps nothing)
-	enforce      string                         // the daemon's resource-limit backend, from the welcome/config ("" until attached)
-	enforceWhy   string                         // why it is not enforcing, when it is not
+	shellPath     string                         // configured default shell binary path ("" = system shell)
+	workdir       string                         // configured default working directory for new panels ("" = home)
+	defaultAgent  string                         // agent profile the new-agent action spawns ("" = claude)
+	agents        map[string]config.AgentProfile // user-configured agent profiles
+	scoreFeedback bool                           // score.feedback in the file: what a profile with no override of its own inherits
+	replayKB      int                            // per-panel replay buffer in KiB, round-tripped so a save never drops it
+	limits        limits.Limits                  // fleet-wide resource caps for new panels (the zero value caps nothing)
+	enforce       string                         // the daemon's resource-limit backend, from the welcome/config ("" until attached)
+	enforceWhy    string                         // why it is not enforcing, when it is not
 	// limitRow is the resource-limit row the inputLimit overlay is editing. It
 	// currently always equals the cursor — nothing moves the cursor while an
 	// overlay is open — but it is held explicitly because the failure mode if that
@@ -674,6 +675,7 @@ func (m model) applyPrefs(p prefs) model {
 	m.workdir = p.workdir
 	m.defaultAgent = p.defaultAgent
 	m.agents = p.agents
+	m.scoreFeedback = p.scoreFeedback
 	m.replayKB = p.replayKB
 	m.limits = p.limits
 	m.diffCommand = p.diffCommand
@@ -1915,6 +1917,8 @@ func (m model) editPanelRow() (tea.Model, tea.Cmd) {
 		return m.openAgentPicker(modePanelConfig, agentForDefault), nil
 	case m.cursor == panelRowReplayKB:
 		return m.editReplayKB(), nil
+	case m.cursor >= numPanelConfigRows:
+		return m.cycleFeedback(m.cursor - numPanelConfigRows), nil
 	case m.cursor >= firstLimitRow:
 		return m.editLimit(m.cursor), nil
 	}
@@ -3684,7 +3688,9 @@ func (m model) itemCount() int {
 	case modeKeyMap:
 		return len(m.keymap()) + 1 + numSettings // prefix row + bindings + the settings toggles
 	case modePanelConfig:
-		return numPanelConfigRows // spawn defaults + the resource-limit rows
+		// The feedback rows are one per CONFIGURED profile, so this page is the one
+		// whose length depends on the user's file rather than on a constant.
+		return numPanelConfigRows + len(m.feedbackProfiles())
 	default:
 		return len(m.dashItems())
 	}
@@ -4879,6 +4885,7 @@ func (m model) panelConfigView() string {
 	for i, f := range limitFields {
 		row(firstLimitRow+i, f.label, limitLabel(f.get(m.limits)))
 	}
+	body = append(body, m.feedbackSection(row)...)
 	hints := legend("↑↓", "move", "e", "edit", "esc", "back")
 
 	return m.renderScrollPanel(scrollPanel{
@@ -4888,11 +4895,12 @@ func (m model) panelConfigView() string {
 			mutedStyle.Render("default agent is what " + seqLabel(m.bindingKey(actNewAgent)) + " spawns · detected on the fleet's machine"),
 			mutedStyle.Render("replay buffer seeds scrollback · change applies on server restart"),
 			mutedStyle.Render("limits cap a panel's whole process tree · " + m.enforceLabel()),
+			feedbackHintLine(),
 			"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(hints))), hints},
 		reserved: panelConfigReserved,
 		anchor:   selLine,
 		centered: true,
-		clipHint: mutedStyle.Render(fmt.Sprintf("   %d/%d", m.cursor+1, numPanelConfigRows)),
+		clipHint: mutedStyle.Render(fmt.Sprintf("   %d/%d", m.cursor+1, m.itemCount())),
 	})
 }
 

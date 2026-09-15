@@ -550,6 +550,29 @@ type AgentProfile struct {
 	// everything typed into a shell to disk.
 	Log bool `yaml:"log,omitempty"`
 
+	// ScoreFeedback overrides score.feedback for this profile: whether the briefs
+	// this profile's panels receive carry the sentence telling the agent it may
+	// record what it learned. It layers the way the caps and the restart policy
+	// do — set here wins, unset inherits the fleet-wide key — which is the whole
+	// reason it is a pointer and not the plain bool Log beside it is. Log has a
+	// fleet-wide counterpart it cannot contradict, so "absent" and "false" are
+	// the same instruction; here they are not, and a profile that must say "not
+	// this one" against a fleet that says yes has no other way to spell it.
+	//
+	// It is the knob that matters in practice. Whether an agent's self-reports
+	// are worth having is a property of the AGENT — a one-shot `--print` runner
+	// has nothing to notice and a long interactive session has plenty — so the
+	// fleet-wide key sets the house rule and this is where the exceptions live.
+	//
+	// It gates the SENTENCE and not the wire. score.submit stays reachable by
+	// every panel whatever this says, for the reason config cannot change: a
+	// panel's profile is read from an identity the connection declares and
+	// nobody verifies, so a refusal here would be a fence that looks like one
+	// and is not. An agent that is not told does not submit; an agent that
+	// submits anyway is recorded, and that is the honest behaviour rather than
+	// the gap in it. See ScoreConfig.Feedback.
+	ScoreFeedback *bool `yaml:"score-feedback,omitempty"`
+
 	// LogDir overrides panel.log-dir for this profile, the same way its caps and
 	// its restart policy restate only what they change.
 	LogDir string `yaml:"log-dir,omitempty"`

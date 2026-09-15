@@ -35,6 +35,10 @@ func gateServer(panels ...panel.Panel) (*Server, *fakeClock, *[]string) {
 		refine:    gapStamp{gap: minRefineGap},
 		submits:   rateBuckets{gap: minSubmitGap, burst: submitBurst},
 		sayCapped: rateBuckets{gap: saySubmitCappedEvery},
+		// Likewise: New defaults the feedback hint ON, so a Server built here
+		// without it would render a score section no daemon renders, and every
+		// assertion about a brief's shape would be made against a fleet nobody runs.
+		scoreFeedback: true,
 	}
 	s.writeInput = func(id string, data []byte) { *written = append(*written, id+":"+string(data)) }
 	for _, p := range panels {

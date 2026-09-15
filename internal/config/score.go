@@ -12,9 +12,11 @@ import (
 // carries, and what each ranking dimension is worth.
 //
 // Everything but Dir and Enabled reloads on SIGHUP — they are numbers the live
-// store compares rather than state to swap — and everything but Dir and Enabled
-// is clamped by the store rather than here; see score.Policy.clamp for the
-// defaults and the floors. UnappliedOnReload is that first claim as code, so a
+// store compares rather than state to swap — and everything but Dir, Enabled and
+// Feedback is clamped by the store rather than here; see score.Policy.clamp for
+// the defaults and the floors. Feedback is the one key the store never sees at
+// all: the daemon's brief builder reads it, so there is nothing to clamp and it
+// reloads by being re-read rather than by being swapped into a live policy. UnappliedOnReload is that first claim as code, so a
 // key that stops reloading is added here and answered there rather than in
 // whatever daemon happens to be reading this.
 type ScoreConfig struct {
@@ -126,6 +128,46 @@ type ScoreConfig struct {
 	// "use the default" (on), which an explicit false must stay distinguishable
 	// from across a rewrite of the file.
 	Enabled *bool `yaml:"enabled,omitempty"`
+
+	// Feedback carries the one sentence that closes the loop: every brief a panel
+	// receives tells the agent it may record what it learned, and names the
+	// command that does it. Unset defaults to ON, for Enabled's reason — the
+	// memory is fed by the fleet, and a fresh config should not need a line to
+	// get the half of it that does the feeding.
+	//
+	// It is a HINT and not a fence, and that is a decision rather than an
+	// omission. score.submit stays reachable by every panel whatever this says:
+	// a panel's identity is self-declared and unverified (the submit cap is
+	// fenced on the same unverified identity and says so), so a refusal built on
+	// it would look like a boundary without being one. What this turns off is the
+	// telling. An agent that is not told does not submit, which is the whole of
+	// the effect at the volumes anyone runs, and an agent that submits anyway is
+	// still recorded — the honest outcome rather than a gap dressed as a rule.
+	//
+	// It is also what makes a fresh install able to start at all. An empty store
+	// renders no block (score.renderBlock returns the empty string for no
+	// entries), so without this sentence a brief carries nothing, the agent never
+	// learns the memory exists, nothing is ever submitted, and the store stays
+	// empty — a subsystem that is on, healthy and permanently silent. So the
+	// sentence is rendered for an empty store too, and it is the only part of the
+	// score section that is.
+	//
+	// AgentProfile.ScoreFeedback overrides it per profile, which is where the
+	// exceptions belong: this sets the house rule.
+	Feedback *bool `yaml:"feedback,omitempty"`
+}
+
+// FeedbackIsOn reports whether briefs carry the submission hint. Unset defaults
+// to on, exactly as IsEnabled does and for the same reason; only an explicit
+// `feedback: false` switches it off.
+//
+// It says nothing about whether a submission would be ACCEPTED — that is
+// IsEnabled's question, and a fleet with the memory switched off has no hint to
+// render whatever this returns. The two are read together by the daemon rather
+// than folded into one here, so "the memory is off" and "the memory is on and
+// quiet" stay separable in the config that is broadcast.
+func (c ScoreConfig) FeedbackIsOn() bool {
+	return c.Feedback == nil || *c.Feedback
 }
 
 // RankConfig weights the ranking's four dimensions (#42). An entry's rank is

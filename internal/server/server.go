@@ -198,6 +198,20 @@ type Settings struct {
 	AgentLogDir map[string]string
 	AgentLog    map[string]bool
 	LogMaxBytes int64
+
+	// ScoreFeedback is whether a delivered brief carries the sentence telling the
+	// agent it may record what it learned, and AgentScoreFeedback the per-profile
+	// overrides layered over it — the same shape as the caps and the restart
+	// policy, resolved the same way and per delivery, so a SIGHUP changes what the
+	// next brief says without touching a live panel.
+	//
+	// The override table differs from AgentLog beside it in one way that matters:
+	// a profile appears here when it named the key AT ALL, false included, because
+	// absent means "inherit the fleet's answer" rather than "no". AgentLog has no
+	// fleet-wide counterpart to inherit from, so there absent and false are the
+	// same thing and only the true entries are carried.
+	ScoreFeedback      bool
+	AgentScoreFeedback map[string]bool
 }
 
 // Server owns all state and every PTY. It is safe for concurrent use.
@@ -351,6 +365,19 @@ type Server struct {
 	logMaxBytes int64
 	logs        map[string]*panellog.Sink
 	logMu       sync.Mutex
+
+	// The fleet memory's write half: whether a brief tells the agent it may submit
+	// what it learned, fleet-wide and per profile (see Settings). Resolved per
+	// delivery from the profile the panel records, which is what lets a reload
+	// change it under a running fleet — the same arrangement the caps, the restart
+	// policy and the quiet ladder are on. Guarded by mu.
+	//
+	// It gates the sentence and nothing else: score.submit is open to every panel
+	// however this resolves, because the profile behind a submission is read from
+	// an identity the connection declares and nobody verifies. See
+	// config.ScoreConfig.Feedback, where that is argued rather than restated.
+	scoreFeedback      bool
+	agentScoreFeedback map[string]bool
 
 	// The quiet ladder. attention is the fleet-wide policy and agentAttention the
 	// per-profile ones layered over it (see Settings), resolved per tick from the
@@ -659,6 +686,17 @@ func WithLogging(dir string, agentDirs map[string]string, agentLog map[string]bo
 	}
 }
 
+// WithScoreFeedback seeds the fleet memory's write half: whether a delivered
+// brief carries the submission hint, and the per-profile overrides layered over
+// it. Reload swaps both together, so this only sets what the daemon boots with.
+//
+// A server built without it hints, which is New's default and the config's; an
+// embedder that wants the memory read-only passes false here rather than relying
+// on a zero value to mean it.
+func WithScoreFeedback(on bool, agents map[string]bool) Option {
+	return func(s *Server) { s.scoreFeedback, s.agentScoreFeedback = on, agents }
+}
+
 // WithVersion sets the server's build version, reported to a frontend in the
 // welcome so it can show the backend version and flag a mismatch.
 func WithVersion(v string) Option {
@@ -874,16 +912,22 @@ func WithUsageLimits(p usage.LimitsProvider, self string) Option {
 // built, so settings like the replay size reach it.
 func New(ln net.Listener, opts ...Option) *Server {
 	s := &Server{
-		ln:              ln,
-		clients:         make(map[*clientConn]struct{}),
-		mon:             newMonitor(),
-		specs:           make(map[string]spawnSpec),
-		sessions:        make(map[string][]string),
-		restarts:        make(map[string]*restartState),
-		osc7Tail:        make(map[string][]byte),
-		reportedCwd:     make(map[string]bool),
-		trackCwd:        cwd.Auto,
-		restoreCwd:      cwd.Shells,
+		ln:          ln,
+		clients:     make(map[*clientConn]struct{}),
+		mon:         newMonitor(),
+		specs:       make(map[string]spawnSpec),
+		sessions:    make(map[string][]string),
+		restarts:    make(map[string]*restartState),
+		osc7Tail:    make(map[string][]byte),
+		reportedCwd: make(map[string]bool),
+		trackCwd:    cwd.Auto,
+		restoreCwd:  cwd.Shells,
+		// On, like the config key it mirrors — and defaulted HERE rather than left
+		// to the zero value so that a server built without the option behaves as a
+		// daemon reading a config that never mentioned the key. The zero value would
+		// make the quiet case the default, and a memory nobody is told about is the
+		// exact failure this exists to end.
+		scoreFeedback:   true,
 		ephemeral:       make(map[string]struct{}),
 		scoreEdits:      make(map[string]map[string]struct{}),
 		logs:            make(map[string]*panellog.Sink),
@@ -972,6 +1016,10 @@ func (s *Server) Reload(set Settings) {
 	// open keep the path they were opened with — a log that moved mid-run would
 	// leave half a transcript in each of two places.
 	s.logDir, s.agentLogDir, s.agentLog, s.logMaxBytes = set.LogDir, set.AgentLogDir, set.AgentLog, set.LogMaxBytes
+	// The hint swaps whole, on the same terms: it is resolved per delivery from the
+	// panel's profile, so there is nothing in flight to migrate and a brief already
+	// built keeps the sentence it was built with.
+	s.scoreFeedback, s.agentScoreFeedback = set.ScoreFeedback, set.AgentScoreFeedback
 	// The backlog caps, on the same terms WithQueue sets them at construction —
 	// except that a config which no longer names queue.max restores the built-in
 	// default rather than keeping the old number, so removing the key from the file

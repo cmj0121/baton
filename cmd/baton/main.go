@@ -644,6 +644,7 @@ func buildServerOptions(rc reloadable, stateF string) []server.Option {
 		server.WithWorktreeDir(rc.settings.WorktreeDir),
 		server.WithLimits(rc.settings.Limits, rc.settings.AgentLimits),
 		server.WithLogging(rc.settings.LogDir, rc.settings.AgentLogDir, rc.settings.AgentLog, rc.settings.LogMaxBytes),
+		server.WithScoreFeedback(rc.settings.ScoreFeedback, rc.settings.AgentScoreFeedback),
 		server.WithStateFile(stateF),
 		server.WithQueue(rc.settings.QueueMax, rc.settings.QueueConcurrency),
 	}
@@ -1603,6 +1604,7 @@ func reloadableSettings(cfg config.Config) reloadable {
 		AgentLimits: agentLimits(cfg.Panel.Agents),
 	}}
 	rc.settings.LogDir, rc.settings.AgentLogDir, rc.settings.AgentLog = logPolicy(cfg)
+	rc.settings.ScoreFeedback, rc.settings.AgentScoreFeedback = feedbackPolicy(cfg)
 	rc.settings.LogMaxBytes = panellog.MaxBytes(cfg.Panel.LogMaxMB)
 	rc.settings.Restart, rc.settings.AgentRestart = restartPolicies(cfg)
 	rc.settings.Attention, rc.settings.AgentAttention = attentionPolicies(cfg)
@@ -1654,6 +1656,35 @@ func logPolicy(cfg config.Config) (dir string, agentDirs map[string]string, agen
 		}
 	}
 	return dir, agentDirs, agentLog
+}
+
+// feedbackPolicy projects the config's two feedback keys onto what the daemon
+// resolves per delivery: the fleet-wide answer, and the per-profile overrides
+// layered over it.
+//
+// A profile is in the override table when it NAMED the key, whichever way it
+// answered — which is why this cannot be written as logPolicy's loop, where only
+// the true entries are carried. There, absent and false say the same thing
+// because there is no fleet-wide key to disagree with; here a profile has to be
+// able to say "not this one" against a fleet that says yes, and dropping its
+// false would hand it back the fleet's answer it was written to refuse.
+//
+// A profile that never mentions the key is left out entirely rather than stored
+// with the fleet's current value, which is what keeps the pair hot-reloadable:
+// flipping score.feedback then moves every profile that did not override it,
+// instead of moving none of them because each had been frozen a copy at load.
+func feedbackPolicy(cfg config.Config) (on bool, agents map[string]bool) {
+	on = cfg.Score.FeedbackIsOn()
+	for name, prof := range cfg.Panel.Agents {
+		if prof.ScoreFeedback == nil {
+			continue
+		}
+		if agents == nil {
+			agents = make(map[string]bool, len(cfg.Panel.Agents))
+		}
+		agents[name] = *prof.ScoreFeedback
+	}
+	return on, agents
 }
 
 // agentLimits projects the configured agent profiles onto the caps-only table the

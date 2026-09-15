@@ -331,6 +331,7 @@ type prefs struct {
 	workdir           string                         // default working directory for new panels ("" = home)
 	defaultAgent      string                         // agent profile the new-agent action spawns
 	agents            map[string]config.AgentProfile // user-configured agent profiles
+	scoreFeedback     bool                           // score.feedback: the fleet's answer, which a profile with no score-feedback of its own inherits
 	replayKB          int                            // per-panel replay buffer in KiB (0 = server default)
 	limits            limits.Limits                  // fleet-wide resource caps for new panels
 	diffCommand       string                         // explicit diff command for the agent diff pop-up ("" = git diff.tool then a built-in diff)
@@ -410,6 +411,11 @@ func prefsFromConfig(cfg config.Config) prefs {
 	p.workdir = cfg.Panel.Workdir
 	p.defaultAgent = cfg.Panel.DefaultAgent
 	p.agents = cfg.Panel.Agents
+	// Read-only here, and deliberately: the panel-config page edits the PROFILE
+	// overrides and never this, so it needs the fleet's answer only to say which
+	// of them an inheriting profile is inheriting. saveConfig starts from the
+	// on-disk config, so score.feedback survives every save untouched.
+	p.scoreFeedback = cfg.Score.FeedbackIsOn()
 	p.replayKB = cfg.Panel.ReplayKB
 	p.limits = cfg.Panel.Limits
 	p.diffCommand = cfg.Panel.DiffCommand
