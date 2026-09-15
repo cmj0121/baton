@@ -647,7 +647,31 @@ func (m model) sendInboxReply() (tea.Model, tea.Cmd) {
 // inboxViewportRows is the overlay's body height. It is deliberately the diff
 // popup's: the two are the same shape, and a queue that sized differently would
 // jump when you moved between them.
-func (m model) inboxViewportRows() int { return m.diffViewportRows() }
+// inboxFixedChrome is every row of the overlay that is not the body and not the
+// footer: popupBoxAt's border and padding (2 + 2), the INBOX header, and the two
+// blanks inboxView puts either side of the body.
+const inboxFixedChrome = 4 + 1 + 1 + 1
+
+// inboxViewportRows is the popup's body height — the rows the queue column and
+// the tail pane each show.
+//
+// It sizes from the LEFTOVER under the banner, through panelVisibleRows, which
+// is what help, the key map and panel-config already do (40e493f fixed the same
+// class of bug for `?`). The old shape asked diffViewportRows, whose
+// `m.height-14` counts neither the banner nor this overlay's own chrome: the
+// composed frame came out twenty rows of chrome around a body sized for
+// fourteen, so it was SIX ROWS TALLER THAN THE TERMINAL at every height — 46
+// rows at 120x40 — and the terminal dropped the bottom edge of the box. The
+// golden frame had been recording those 46 rows all along.
+//
+// The footer is MEASURED rather than counted, because it is the part that
+// moves: fitLegend wraps on a narrow terminal, and the composer swaps the two
+// legend rows for a reply field and a legend of its own. A constant here would
+// be right until someone adds a cell to a legend — which #94 does, since `tab`
+// needs one — and the bottom edge would go again with nothing to say why.
+func (m model) inboxViewportRows() int {
+	return m.panelVisibleRows(inboxFixedChrome + lipgloss.Height(m.inboxFooter()))
+}
 
 // inboxLayout sizes the two columns within the popup — a queue column that
 // shrinks on a narrow terminal and a tail pane taking the rest, with 3 cells for

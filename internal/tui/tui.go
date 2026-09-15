@@ -4583,9 +4583,9 @@ func (m model) keyMapView() string {
 // box border + padding, header, any hint/legend lines, and the cockpit footer —
 // so panelVisibleRows can size the body to never overflow the screen.
 const (
-	keyMapReserved      = 11 // header+blank, body, blank, rule, legend, about
-	panelConfigReserved = 13 // header+blank, body, blank, two hints, blank, rule, legend
-	helpReserved        = 9  // header+blank, body, blank, legend
+	keyMapReserved      = 10 // header+blank, body, blank, rule, legend, about
+	panelConfigReserved = 12 // header+blank, body, blank, two hints, blank, rule, legend
+	helpReserved        = 8  // header+blank, body, blank, legend
 )
 
 // panelVisibleRows is how many body rows an overlay panel shows before it
@@ -4600,7 +4600,16 @@ func (m model) panelVisibleRows(reserved int) int {
 	// Overlays sit under the banner. Size the body to the leftover so the
 	// composed frame fits and ↑↓ can actually move, rather than overflowing
 	// the terminal while the clamp thinks everything already fits.
-	if v := m.height - reserved - m.overlayStack(); v > 3 {
+	//
+	// The -1 is the footer's row. render() places the banner and the overlay
+	// into height-1 and paints the footer on the line below, so an overlay that
+	// fills `height` is one row taller than the space it was given and Place
+	// hands back the overflow rather than clipping it — which is how the inbox
+	// lost the bottom edge of its box (#94). overlayStack's comment has always
+	// said the footer is outside Place; until this line nothing subtracted it,
+	// and each of the three reserved constants below carried a spare row to
+	// cover for it. They no longer need to, and they no longer do.
+	if v := m.height - 1 - reserved - m.overlayStack(); v > 3 {
 		return v
 	}
 	return 3
