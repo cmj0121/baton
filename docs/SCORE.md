@@ -25,6 +25,8 @@ ranked against **that panel**:
 - run the linter before claiming a task is done [note and take care]
 - never force-push a shared branch [important]
 ───────────
+Learned something about how this fleet behaves — a habit of its agents or its workflow, not a fact about the code? Record it in one short sentence: baton ctl score submit "..."
+
 review the diff on feat/api and tell me what is missing
 ```
 
@@ -37,6 +39,49 @@ at the moment it lands** — so a dispatch to a panel that is busy is ranked whe
 directory and the work item it has then, not the ones it had when you typed. **Plugin-originated dispatches are the
 exception** — `baton.dispatch`, `baton.dispatch_group` and a task `baton.enqueue` queued deliver the bare prompt, and
 never come near the score.
+
+## How the fleet feeds it
+
+The last line of that block is the only place an agent is ever told the memory can be written to, and it is what makes
+a fleet able to fill its own. It names `baton ctl` rather than the MCP tool because that is the door every panel has:
+`score_submit` is served from a `.mcp.json` written into the conductor's workspace and nowhere else — a worker panel
+runs in **your** repository, where baton does not write — while the socket and the panel id are in every panel's
+environment, so the CLI works from inside any of them and stamps the submission with that panel's directory, profile
+and work item.
+
+**It is rendered for an empty store too, and it is the only part of the block that is.** Otherwise a fresh install
+could never start: nothing to inject means no block, no block means the agent is never told, never told means nothing
+submitted, and the memory sits enabled, healthy and permanently silent. The first entry a fleet ever records is one it
+was told it could.
+
+**It is a hint, not a fence.** Switching it off stops the telling and nothing else — `score.submit` stays reachable by
+any panel, because the profile behind a submission is read from an identity the connection declares and nobody
+verifies, so a refusal built on it would look like a boundary without being one. An agent that is not told does not
+submit; one that submits anyway is recorded, which is the honest outcome rather than a gap dressed as a rule.
+
+Two switches, and the second is the one you will actually use:
+
+```yaml
+# $HOME/.baton/config
+score:
+  feedback: true # the default — every brief carries the line
+panel:
+  agents:
+    claude:
+      command: claude
+    reviewer:
+      command: claude
+      args: [--print]
+      score-feedback: false # …except this one
+```
+
+A profile that names the key wins; one that does not inherits the fleet's answer. Whether an agent's self-reports are
+worth having is a property of the **agent** — a one-shot `--print` runner has nothing to notice across turns, a long
+interactive session has plenty — so the fleet key sets the house rule and the profile key holds the exceptions. Both
+reload on `SIGHUP`.
+
+Switching a profile's feedback off still shows it the block. Reading the memory and feeding it are different
+permissions, and an agent that cannot usefully contribute should still be told what the fleet already knows.
 
 ## The file
 
@@ -436,6 +481,7 @@ instead.
 # $HOME/.baton/config
 score:
   enabled: true # the default; false switches the whole subsystem off
+  feedback: true # the default; false stops briefs telling agents they may submit
   dir: ~/.baton # where score.md and score-events.jsonl live
   promote-at: 3 # occurrences, from any source, before rung 1 → 2
   user-signals-at: 2 # signals from YOU before rung 3 is reachable
@@ -453,10 +499,11 @@ are read as unset, not as switching the feature off — `enabled` is where that 
 
 **What a `SIGHUP` (or `C-t R`) reloads, and what it does not:**
 
-| Key                                                                                                 | Reloads                                        |
-| --------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| `score.promote-at`, `score.user-signals-at`, `score.rank`, `score.working-set`, `score.max-entries` | yes — each is a number the live store compares |
-| `score.dir`, `score.enabled`                                                                        | **no** — the store is opened once, at boot     |
+| Key                                                                                                 | Reloads                                              |
+| --------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `score.promote-at`, `score.user-signals-at`, `score.rank`, `score.working-set`, `score.max-entries` | yes — each is a number the live store compares       |
+| `score.feedback`, `panel.agents.<name>.score-feedback`                                              | yes — resolved per delivery, never held by the store |
+| `score.dir`, `score.enabled`                                                                        | **no** — the store is opened once, at boot           |
 
 So a fleet whose entries are climbing too eagerly, or whose briefs are carrying the wrong few, is retuned with `C-t R`
 rather than by restarting and returning every panel as exited. Moving the directory or switching the subsystem off

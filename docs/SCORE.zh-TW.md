@@ -22,6 +22,8 @@ conductor 的常設命令。Score 屬於隊伍,說的是這支隊伍怎麼做事
 - run the linter before claiming a task is done [note and take care]
 - never force-push a shared branch [important]
 ───────────
+Learned something about how this fleet behaves — a habit of its agents or its workflow, not a fact about the code? Record it in one short sentence: baton ctl score submit "..."
+
 review the diff on feat/api and tell me what is missing
 ```
 
@@ -33,6 +35,46 @@ review the diff on feat/api and tell me what is missing
 簡報,是等那個面板安定下來才排名,用的是它那時的目錄與工作項目,而不是你打字當下的那一組。外掛發起的派送
 是例外——`baton.dispatch`、`baton.dispatch_group`,以及 `baton.enqueue` 排進去的工作,送出的都是原始
 prompt,完全不經過 Score。
+
+## 隊伍怎麼餵它
+
+那個區塊的最後一行,是 agent 唯一一次被告知這份記憶可以寫。它就是讓一支隊伍能夠自己把記憶填起來的那個
+東西。它寫的是 `baton ctl` 而不是 MCP 工具,因為那才是每一個面板都有的門:`score_submit` 是由一份只寫進
+conductor 專屬工作區、其他地方一概不寫的 `.mcp.json` 供應的——worker 面板跑在你自己的 repository 裡,
+baton 不會往那裡寫東西——而 socket 與面板 id 本來就在每一個面板的環境變數裡,所以那個 CLI 在任何一個面板
+裡都能跑,而且會把那個面板的目錄、profile 與工作項目一起蓋章記下來。
+
+空的 store 也會渲染這一行,而且它是整個區塊裡唯一會這樣的部分。否則一份全新安裝根本無法起步:沒有東西
+可以注入就沒有區塊,沒有區塊 agent 就永遠不會被告知,沒被告知就不會有人提交,於是這份記憶就這樣開著、
+健康著,而且永遠安靜。一支隊伍記下的第一則,就是它被告知可以記的那一則。
+
+它是提示,不是柵欄。把它關掉只會停掉「告知」這件事,其他什麼都不會變——`score.submit` 對任何面板都還是
+通的,因為一筆提交背後的 profile 是從連線自稱、而且沒有人驗證的身分讀來的,所以拿它做出來的拒絕,會長得
+像一道邊界但其實不是。沒被告知的 agent 不會提交;還是提交了的 agent 一樣會被記下來——這是誠實的結果,
+而不是一個被打扮成規則的破洞。
+
+兩個開關,而你真正會用到的是第二個:
+
+```yaml
+# $HOME/.baton/config
+score:
+  feedback: true # 預設值——每一份簡報都帶著那一行
+panel:
+  agents:
+    claude:
+      command: claude
+    reviewer:
+      command: claude
+      args: [--print]
+      score-feedback: false # ……除了這一個
+```
+
+有寫這個鍵的 profile 說了算;沒寫的就繼承隊伍的答案。一個 agent 的自述值不值得收,是那個 agent 的性質
+——一個只跑一次的 `--print` runner 跨不了回合,沒什麼好注意的;一段長長的互動會談則多的是——所以隊伍那個
+鍵定下家規,profile 那個鍵裝的是例外。兩個都會在 `SIGHUP` 時重載。
+
+把某個 profile 的回饋關掉,它還是看得到那個區塊。讀這份記憶和餵這份記憶是兩種不同的權限,一個沒辦法好好
+貢獻的 agent,還是應該被告知隊伍已經知道些什麼。
 
 ## 那個檔案
 
@@ -402,6 +444,7 @@ MiB,而且不會還。
 # $HOME/.baton/config
 score:
   enabled: true # 預設值;false 會把整個子系統關掉
+  feedback: true # 預設值;false 會讓簡報不再告訴 agent 它可以提交
   dir: ~/.baton # score.md 與 score-events.jsonl 放哪裡
   promote-at: 3 # 來源不拘的出現次數,第 1 階升到第 2 階
   user-signals-at: 2 # 要幾次來自你的訊號,第 3 階才搆得到
@@ -419,10 +462,11 @@ score:
 
 `SIGHUP`(或 `C-t R`)會重載什麼、不會重載什麼:
 
-| 鍵                                                                                                  | 會重載嗎                                |
-| --------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| `score.promote-at`、`score.user-signals-at`、`score.rank`、`score.working-set`、`score.max-entries` | 會——每一個都是活著的 store 拿來比的數字 |
-| `score.dir`、`score.enabled`                                                                        | 不會——store 只在開機時開一次            |
+| 鍵                                                                                                  | 會重載嗎                                    |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| `score.promote-at`、`score.user-signals-at`、`score.rank`、`score.working-set`、`score.max-entries` | 會——每一個都是活著的 store 拿來比的數字     |
+| `score.feedback`、`panel.agents.<name>.score-feedback`                                              | 會——每一次派送當下才解析,store 從來不握著它 |
+| `score.dir`、`score.enabled`                                                                        | 不會——store 只在開機時開一次                |
 
 所以,一支項目爬得太快、或簡報帶錯幾則的隊伍,用 `C-t R` 重新調校就好,不必重啟、也不必讓每一個面板都
 變成已結束。搬目錄或把子系統關掉,才需要完整重啟 daemon——而當你剛重新載入的那個檔案要的是不一樣的
