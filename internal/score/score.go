@@ -2148,11 +2148,22 @@ func (s *Store) BeginEdit() (map[string]struct{}, error) {
 // the DAEMON overwriting a save it has not read, and nothing binds the
 // operator's editor to the same rule.
 //
-// One case this cannot see: a submission that FOLDS into an entry the snapshot
-// already had moves a counter and mints no id, so the reinforcement goes with
-// the write-back and no id-shaped guard can tell. That is a smaller loss than
-// an entry and it has no fix of this shape; it is named here rather than left
-// to be discovered.
+// Two cases this cannot see, both named here rather than left to be
+// discovered.
+//
+// A submission that FOLDS into an entry the snapshot already had moves a
+// counter and mints no id, so the reinforcement goes with the write-back and no
+// id-shaped guard can tell. That is a smaller loss than an entry and it has no
+// fix of this shape.
+//
+// And the snapshot is taken before the editor is spawned, not when the editor
+// reads the file, so an entry appended in between IS on the operator's screen
+// while its id is absent from opened — and deleting it deliberately gets it
+// restored anyway. That window is milliseconds against an editing session's
+// minutes, and the error is in the safe direction on purpose: a line that comes
+// back is visible and can be deleted again, where a line that is silently
+// retired is the failure this whole pair exists to stop. Taking the snapshot
+// LATER would move the error to the other side, where it is invisible.
 func (s *Store) EndEdit(opened map[string]struct{}) ([]string, Delta, error) {
 	if s == nil {
 		return nil, Delta{}, nil

@@ -1705,7 +1705,9 @@ func (s *Server) broadcastScoreEdit(restored []string) {
 	if len(restored) == 0 {
 		return
 	}
-	notice := fmt.Sprintf("score.md: restored %d entr%s added while your editor was open",
+	// "the editor", not "your editor": this reaches every attached cockpit, and
+	// on a fleet with two operators only one of them was typing.
+	notice := fmt.Sprintf("score.md: restored %d entr%s added while the editor was open",
 		len(restored), plural(len(restored), "y", "ies"))
 	s.mu.Lock()
 	defer s.mu.Unlock()
