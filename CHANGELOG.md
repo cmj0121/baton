@@ -4,6 +4,29 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v2.1.2](https://github.com/cmj0121/baton/releases/tag/v2.1.2) — the memory learns to ask
+
+2026-09-15
+
+- **Agents are told they may feed the fleet's memory** — v2.0.0 built a memory that learns from repetition and gave
+  every panel the block that reads it, and no panel anything that writes it. `score_submit` is served from a
+  `.mcp.json` written into the conductor's workspace and nowhere else, so an ordinary agent had no door; the brief said
+  nothing about submitting; and `renderBlock` returns the empty string for an empty store, so a fresh install carried
+  no score section at all. The result was a subsystem that was on, healthy and permanently silent — entries 0, and
+  `score-events.jsonl` never created. Briefs now carry one line naming `baton ctl score submit`, which is the door
+  every panel actually has.
+- **It is rendered for an empty store, and it is the only part of the block that is.** That asymmetry is the whole fix:
+  the first entry a fleet records is one it was told it could.
+- **Two switches over it** — `score.feedback` fleet-wide, and `panel.agents.<name>.score-feedback` per profile, layered
+  the way the caps and the restart policy already layer. Both reload on `SIGHUP`.
+- **A hint, not a fence** — switching it off stops the telling and not the submitting. A panel's profile is read from an
+  identity the connection declares and nobody verifies, so a refusal built on it would look like a boundary without
+  being one.
+- **`C-t P` carries a SCORE FEEDBACK section**, one row per configured profile, `e` cycling `inherit → on → off`. The
+  edit is saved and the daemon told to re-read it, so it lands on the next brief.
+- **`score status` reports `feedback` and `feedback_profiles`**, because both keys reload and the page had no other way
+  to show that the daemon took the change.
+
 ## [v2.1.1](https://github.com/cmj0121/baton/releases/tag/v2.1.1) — panels the fleet could not see
 
 2026-09-15
