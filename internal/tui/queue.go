@@ -37,7 +37,7 @@ func (m model) openQueue(from mode) model {
 	m.queueCursor = 0
 	m.mode = modeQueue
 	m.sendf(proto.Command{Action: "task.list"})
-	m.status = "task queue · jk move · S-↑↓ reorder · " + keyQueueCancel + " cancel · " + keyQueueDrain + " drain · esc closes"
+	m.status = fmt.Sprintf(m.tr("queue.status.open", "task queue · jk move · S-↑↓ reorder · %s cancel · %s drain · esc closes"), keyQueueCancel, keyQueueDrain)
 	return m
 }
 
@@ -55,14 +55,14 @@ func (m model) handleQueueKey(key string) (tea.Model, tea.Cmd) {
 		if key == "y" || key == "enter" {
 			return m.drainQueue(), nil
 		}
-		m.status = "drain cancelled"
+		m.status = m.tr("queue.status.drain-cancelled", "drain cancelled")
 		return m, nil
 	}
 
 	switch key {
 	case "esc", "q":
 		m.mode = m.queueFrom
-		m.status = "queue closed"
+		m.status = m.tr("queue.status.closed", "queue closed")
 		return m, nil
 	case "up", "k":
 		if len(m.tasks) > 0 {
@@ -90,17 +90,17 @@ func (m model) handleQueueKey(key string) (tea.Model, tea.Cmd) {
 		return m.cancelQueued(), nil
 	case keyQueueDrain:
 		if len(m.tasks) == 0 {
-			m.status = "queue: already empty"
+			m.status = m.tr("queue.status.empty", "queue: already empty")
 			return m, nil
 		}
 		m.pendingDrain = true
-		m.status = "drain the whole backlog? this cancels every queued task · (y/n)"
+		m.status = m.tr("queue.status.drain-confirm", "drain the whole backlog? this cancels every queued task · (y/n)")
 		return m, nil
 	case keyQueueEdit:
 		// Editing a brief means handing it to $EDITOR, which in baton runs as a
 		// server-owned PTY panel (like a git commit), not a frontend shell-out — a
 		// planned follow-up. Until then the popup manages, not edits.
-		m.status = "edit: not yet — re-dispatch or cancel and re-enqueue for now"
+		m.status = m.tr("queue.status.no-edit", "edit: not yet — re-dispatch or cancel and re-enqueue for now")
 		return m, nil
 	}
 	return m, nil // stay in the popup on any other key
@@ -112,11 +112,11 @@ func (m model) handleQueueKey(key string) (tea.Model, tea.Cmd) {
 func (m model) cancelQueued() model {
 	t, ok := m.taskUnderCursor()
 	if !ok {
-		m.status = "queue: nothing to cancel"
+		m.status = m.tr("queue.status.nothing-cancel", "queue: nothing to cancel")
 		return m
 	}
 	m.sendf(proto.Command{Action: "task.cancel", ID: t.ID})
-	m.status = "cancelling " + t.ID
+	m.status = m.tr("queue.status.cancelling", "cancelling") + " " + t.ID
 	return m
 }
 
@@ -127,15 +127,15 @@ func (m model) cancelQueued() model {
 func (m model) reprioritizeQueued(up bool) model {
 	t, ok := m.taskUnderCursor()
 	if !ok {
-		m.status = "queue: nothing to reorder"
+		m.status = m.tr("queue.status.nothing-reorder", "queue: nothing to reorder")
 		return m
 	}
 	if up {
 		m.sendf(proto.Command{Action: "task.promote", ID: t.ID})
-		m.status = "promoting " + t.ID + " to the head"
+		m.status = fmt.Sprintf(m.tr("queue.status.promoting", "promoting %s to the head"), t.ID)
 	} else {
 		m.sendf(proto.Command{Action: "task.demote", ID: t.ID})
-		m.status = "demoting " + t.ID + " to the tail"
+		m.status = fmt.Sprintf(m.tr("queue.status.demoting", "demoting %s to the tail"), t.ID)
 	}
 	return m
 }
@@ -145,11 +145,11 @@ func (m model) reprioritizeQueued(up bool) model {
 // list to whatever survived.
 func (m model) drainQueue() model {
 	if len(m.tasks) == 0 {
-		m.status = "queue: already empty"
+		m.status = m.tr("queue.status.empty", "queue: already empty")
 		return m
 	}
 	m.sendf(proto.Command{Action: "task.drain"})
-	m.status = "draining the queued backlog"
+	m.status = m.tr("queue.status.draining", "draining the queued backlog")
 	return m
 }
 
@@ -195,20 +195,22 @@ func (m model) queueView() string {
 	grpCol := lipgloss.NewStyle().Foreground(colMuted).Width(10)
 
 	rows := []string{
-		sectionStyle.Render(spaced("TASK QUEUE")),
+		sectionStyle.Render(spaced(m.tr("queue.title", "TASK QUEUE"))),
 		"",
 	}
 	if len(m.tasks) == 0 {
 		rows = append(rows,
-			mutedStyle.Render("the backlog is empty · dispatch or enqueue to fill it"),
+			mutedStyle.Render(m.tr("queue.empty", "the backlog is empty · dispatch or enqueue to fill it")),
 			"",
-			legend("esc", "close"))
+			legend("esc", m.tr("legend.close", "close")))
 		return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 	}
 
-	rows = append(rows, mutedStyle.Render(fmt.Sprintf("%d task(s) · newest first", len(m.tasks))), "")
+	rows = append(rows, mutedStyle.Render(fmt.Sprintf(m.tr("queue.count", "%d task(s) · newest first"), len(m.tasks))), "")
 	for i, t := range m.tasks {
-		st := badge.Foreground(queueStatusColor(t.Status)).Render(t.Status)
+		// The badge is the task's status as a reader reads it. The wire value stays
+		// the key it is looked up by, so the column and the protocol cannot drift.
+		st := badge.Foreground(queueStatusColor(t.Status)).Render(m.tr("task.status."+t.Status, t.Status))
 		grp := ""
 		if t.Group != "" {
 			grp = t.Group
@@ -225,7 +227,9 @@ func (m model) queueView() string {
 	}
 
 	rows = append(rows, "",
-		mutedStyle.Render("in-flight tasks finish on their panel"),
-		"", legend("jk", "move", "S-↑↓", "reorder", keyQueueCancel, "cancel", keyQueueDrain, "drain all", "esc", "close"))
+		mutedStyle.Render(m.tr("queue.in-flight", "in-flight tasks finish on their panel")),
+		"", legend("jk", m.tr("legend.move", "move"), "S-↑↓", m.tr("legend.reorder", "reorder"),
+			keyQueueCancel, m.tr("legend.cancel-task", "cancel"), keyQueueDrain, m.tr("legend.drain", "drain all"),
+			"esc", m.tr("legend.close", "close")))
 	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
