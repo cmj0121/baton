@@ -1,6 +1,8 @@
 package server
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -150,5 +152,64 @@ func TestTheHintNamesTheDoorEveryPanelHas(t *testing.T) {
 	}
 	if strings.Contains(scoreHintLine, "\n") {
 		t.Errorf("hint = %q, want one line — it is prepended to every delivered brief", scoreHintLine)
+	}
+}
+
+// TestStatusReportsTheHintInForce is invariant I8 over the write half: a knob
+// whose effect cannot be observed is one the operator cannot trust. Both keys
+// reload, so what the file says is not always what the daemon is doing, and
+// `score status` is the only place an operator can settle the difference without
+// reading the log.
+func TestStatusReportsTheHintInForce(t *testing.T) {
+	st, _ := scoreStore(t)
+	s, _, _ := scoreServer(st)
+	WithScoreFeedback(false, map[string]bool{"claude": true})(s)
+
+	var got struct {
+		Feedback  bool            `json:"feedback"`
+		Profiles  map[string]bool `json:"feedback_profiles"`
+		Available bool            `json:"available"`
+	}
+	if err := json.Unmarshal(s.scoreStatus(), &got); err != nil {
+		t.Fatalf("unmarshal status: %v", err)
+	}
+	if got.Feedback {
+		t.Error("status feedback = true; want the fleet-wide answer actually in force")
+	}
+	if !reflect.DeepEqual(got.Profiles, map[string]bool{"claude": true}) {
+		t.Errorf("status feedback_profiles = %v; want the overrides the daemon is holding", got.Profiles)
+	}
+}
+
+// TestStatusSaysFalseRatherThanNothing pins the one field in the payload that
+// must not elide itself. Every other tuning number omits its zero because a zero
+// is a value the clamp can never produce; here false is not an impossible value
+// but the interesting one, and a reply that dropped it would go quiet at exactly
+// the moment the operator asked whether the hint was off.
+func TestStatusSaysFalseRatherThanNothing(t *testing.T) {
+	st, _ := scoreStore(t)
+	s, _, _ := scoreServer(st)
+	WithScoreFeedback(false, nil)(s)
+
+	if raw := string(s.scoreStatus()); !strings.Contains(raw, `"feedback":false`) {
+		t.Errorf("status = %s, want it to say feedback is off rather than omit the field", raw)
+	}
+}
+
+// TestStatusHandsOutACopyOfTheOverrides: the map status reports is read by every
+// delivery and swapped whole by a reload, so the reply must never carry the live
+// one. A caller that could edit it would be editing the running policy, which is
+// the same defect as the race and reachable without one.
+func TestStatusHandsOutACopyOfTheOverrides(t *testing.T) {
+	st, _ := scoreStore(t)
+	s, _, _ := scoreServer(st)
+	live := map[string]bool{"claude": true}
+	WithScoreFeedback(false, live)(s)
+
+	_, got := s.feedbackInForce()
+	got["claude"] = false
+	got["codex"] = true
+	if !reflect.DeepEqual(live, map[string]bool{"claude": true}) {
+		t.Fatalf("the running overrides became %v; want the reply to have been handed a copy", live)
 	}
 }
