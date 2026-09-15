@@ -478,6 +478,14 @@ type Server struct {
 	ephemeral map[string]struct{}
 	ephSeq    int
 
+	// scoreEdits is the subset of those that are score.md editing sessions, each
+	// mapped to the ids score.md carried when the editor opened it. The value is
+	// the whole point: without it the pass that runs on the editor's exit cannot
+	// tell a line the operator deleted from one the fleet appended while they
+	// were typing, and silently retires the second (#93; score.Store.EndEdit
+	// carries the reasoning). Guarded by mu.
+	scoreEdits map[string]map[string]struct{}
+
 	// groupShown is the per-group visible count — how many members stream as live
 	// tiles before the rest collapse into the summary tile. Keyed by group name;
 	// an absent or zero entry means "use the client default". Guarded by mu.
@@ -877,6 +885,7 @@ func New(ln net.Listener, opts ...Option) *Server {
 		trackCwd:        cwd.Auto,
 		restoreCwd:      cwd.Shells,
 		ephemeral:       make(map[string]struct{}),
+		scoreEdits:      make(map[string]map[string]struct{}),
 		logs:            make(map[string]*panellog.Sink),
 		groupShown:      make(map[string]int),
 		groupLayout:     make(map[string]string),
@@ -1167,7 +1176,8 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 		}
 	}
 
-	var stop []string // PTYs to reap after the lock: pruned dead slots + a self-exited ephemeral
+	var stop []string    // PTYs to reap after the lock: pruned dead slots + a self-exited ephemeral
+	var scoreEdit string // the id, when the exited ephemeral was a score.md editing session
 	if found {
 		s.emit("panel.exit", fields)
 		stop = s.pruneExitedLocked()
@@ -1181,8 +1191,16 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 			delete(cc.ephemeral, id)
 		}
 		stop = append(stop, id)
+		// A score editor that exited is an editing session that ended, and the
+		// save has to be folded back in before anything else reads score.md.
+		// Off the lock, with the reaping — closeScoreEdit runs a reconcile pass.
+		scoreEdit = id
 	}
 	s.mu.Unlock()
+
+	if scoreEdit != "" {
+		s.closeScoreEdit(scoreEdit)
+	}
 
 	for _, sid := range stop {
 		s.pty.Stop(sid)
@@ -3374,6 +3392,15 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		s.scoreList(cc, cmd)
 	case "score.status":
 		send(cc, proto.ServerMsg{Type: "score", Score: s.scoreStatus()})
+	case "score.edit":
+		// The operator opening the fleet memory in their own editor. Open to any
+		// connection for the same reason score.submit is: score.md is the file
+		// the memory already lives in, and reconcile — not a self-declaration —
+		// is what decides what an edit means (#93, and #38 §4 for why the gate
+		// is not here).
+		if err := s.openScoreEdit(cc); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+		}
 	case "score.merge", "score.reword", "score.lower":
 		// The conductor's three corrections, and the daemon's FIRST surface that
 		// is reserved to it rather than withheld from it. The gate is in
@@ -6287,6 +6314,14 @@ func (s *Server) closeEphemeral(cc *clientConn) {
 		s.pty.Stop(id)
 		s.cg.Release(id)       // the ephemeral is gone; drop its cgroup with it
 		s.releaseContainer(id) // and the container it was launched in, if it had one
+	}
+	// A client that vanished mid-edit still saved, or did not — either way the
+	// file on disk is now the operator's last word on it, and the session that
+	// was measuring the window has to close or its restore is never made. The
+	// editor is already dead above; closeScoreEdit is a no-op for every id that
+	// was not one.
+	for _, id := range ids {
+		s.closeScoreEdit(id)
 	}
 	if len(ids) > 0 {
 		log.Info().Int("count", len(ids)).Msg("reaped ephemeral diff panels on disconnect")

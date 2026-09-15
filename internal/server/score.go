@@ -3,6 +3,9 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -10,6 +13,7 @@ import (
 
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/ptymgr"
 	"github.com/cmj0121/baton/internal/score"
 )
 
@@ -1573,4 +1577,175 @@ func (s *Server) scoreStatus() json.RawMessage {
 func scoreJSON(v any) json.RawMessage {
 	data, _ := json.Marshal(v)
 	return data
+}
+
+// openScoreEdit hands score.md to the operator's $EDITOR in a transient PTY
+// panel — the cockpit's `n s`, and #93's answer to a fleet memory with no
+// surface on the machine that owns it.
+//
+// An editor rather than a widget with verbs, because score.md is already the
+// operator's file and reconcile is already the door for it: an overlay with a
+// retire button would need a second door, and hanging a write surface on a
+// connection's self-declaration is what #38 §4 refuses. It runs as a panel
+// rather than a frontend shell-out for two reasons that are each sufficient —
+// the cockpit is a bubbletea program that owns its terminal, and under
+// `baton --remote` the frontend is not on the machine holding the file. The git
+// menu's commit already works this way.
+//
+// A store that never opened refuses, with the reason cmd/baton wrote for an
+// operator to read. Every other complaint — an unlockable directory, a failing
+// write, a score.md the last pass could not parse — OPENS, and says what is not
+// guaranteed. The file is theirs and it is right there; refusing them the
+// editor because the daemon has a problem with the directory would be the
+// daemon keeping the operator from the one thing that might fix it.
+func (s *Server) openScoreEdit(cc *clientConn) error {
+	st := s.scoreState.Store
+	if st == nil {
+		// reason() phrases the disabled case too, so a nil store always says
+		// something. See scoreState.reason.
+		return errors.New(s.scoreState.reason())
+	}
+
+	// BEFORE the panel, not after: it reconciles, which is what makes the file
+	// exist for a fleet that has never written one, and its result is the
+	// snapshot the exit pass is measured against. A failure here is a file the
+	// editor should not be pointed at.
+	opened, err := st.BeginEdit()
+	if err != nil {
+		log.Warn().Err(err).Str("dir", st.Dir()).Msg("score edit rejected")
+		return fmt.Errorf("could not prepare score.md: %w", err)
+	}
+
+	ephID, unwind, err := s.registerEphemeral(cc, "score")
+	if err != nil {
+		return err
+	}
+	name, args := editorCommand(s.snapEditor(), st.MDPath())
+	// The fleet's memory belongs to nobody's agent, so the editor runs under the
+	// fleet-wide caps rather than under a profile's — openLogView's reasoning.
+	if err := s.startPanel(ephID, "", ptymgr.Spec{Command: name, Args: args, Dir: st.Dir()}); err != nil {
+		unwind()
+		return fmt.Errorf("could not open the editor: %w", err)
+	}
+
+	s.mu.Lock()
+	s.scoreEdits[ephID] = opened
+	s.mu.Unlock()
+
+	log.Info().Str("panel", ephID).Str("dir", st.Dir()).Int("entries", len(opened)).
+		Msg("score editor opened")
+	send(cc, proto.ServerMsg{Type: "ephemeral", ID: ephID})
+	if warn := s.scoreEditWarning(st); warn != "" {
+		send(cc, proto.ServerMsg{Type: "notice", Notice: warn})
+	}
+	return nil
+}
+
+// scoreEditWarning is what an operator is told when the editor opens anyway.
+// Empty when there is nothing to say.
+//
+// The unlocked case is its own sentence rather than reason()'s, because
+// reason() does not carry it at all: cmd/baton's openScore returns an unlocked
+// store with an EMPTY reason and only logs, so by every measure the daemon uses
+// the store is fine. What is absent is the single-writer claim — and that is
+// exactly what makes an editing window unsafe in a way EndEdit cannot fix,
+// since its id arithmetic assumes the other writer is this store.
+func (s *Server) scoreEditWarning(st *score.Store) string {
+	if st.Unlocked() {
+		return "score.md cannot be locked on this filesystem: another daemon writing here would corrupt it, " +
+			"and edits made now are not protected"
+	}
+	return s.scoreState.reason()
+}
+
+// closeScoreEdit folds an editing session's save back in and reports what it
+// restored. It runs when the editor's panel exits — on its own, or because the
+// connection that opened it went away — and is a no-op for any other panel.
+//
+// It must NOT be called with s.mu held: EndEdit takes the store lock across a
+// reconcile pass that reads and may rewrite score.md.
+func (s *Server) closeScoreEdit(id string) {
+	s.mu.Lock()
+	opened, ok := s.scoreEdits[id]
+	delete(s.scoreEdits, id)
+	s.mu.Unlock()
+	if !ok {
+		return
+	}
+	st := s.scoreState.Store
+	if st == nil {
+		return // the store went away under the editor; nothing to fold into
+	}
+
+	restored, delta, err := st.EndEdit(opened)
+	if err != nil {
+		log.Warn().Err(err).Str("panel", id).Str("dir", st.Dir()).
+			Msg("score edit could not be folded back in; the save stands and the next pass will read it")
+		return
+	}
+	if len(restored) > 0 {
+		// One line naming the ids, because this is the store acting on the
+		// operator's file in a way their editor cannot show them. An entry that
+		// came back and was never announced is indistinguishable from one they
+		// failed to delete.
+		log.Info().Str("panel", id).Strs("ids", restored).
+			Msg("score entries submitted while the editor was open were restored")
+	}
+	if delta != (score.Delta{}) {
+		ScoreCounters(log.Info(), delta, st.Health()).Msg("score reconciled the operator's edits")
+	}
+	s.broadcastScoreEdit(restored)
+}
+
+// broadcastScoreEdit tells every attached cockpit what the editing session did,
+// so the restore reaches the operator who made it rather than only the log. A
+// session that restored nothing is silent — the common case is an operator who
+// changed a line and saved, and a notice on every save is a notice nobody reads.
+func (s *Server) broadcastScoreEdit(restored []string) {
+	if len(restored) == 0 {
+		return
+	}
+	notice := fmt.Sprintf("score.md: restored %d entr%s added while your editor was open",
+		len(restored), plural(len(restored), "y", "ies"))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for cc := range s.clients {
+		send(cc, proto.ServerMsg{Type: "notice", Notice: notice})
+	}
+}
+
+// plural picks the ending for n.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// editorCommand resolves the editor an operator's score.md opens in, as a
+// command for a PTY panel.
+//
+// The order is the configured editor (the same `editor:` key the git menu's
+// commit uses), then VISUAL, then EDITOR, then vi. VISUAL comes first of the
+// two because this panel IS a terminal: the variable's whole historical meaning
+// is "the editor to use when the terminal can do more than print lines", and an
+// operator who set both set VISUAL for exactly this case.
+//
+// It goes through `sh -c` because an editor setting is a command LINE and not a
+// path — "code -w", "nvim -u NONE" and "emacsclient -t" are all ordinary values
+// of it, and git resolves core.editor the same way. The file is passed as "$0"
+// rather than pasted into the script, so a directory with a space or a quote in
+// it reaches the editor as one argument.
+func editorCommand(configured, path string) (string, []string) {
+	ed := configured
+	for _, env := range []string{"VISUAL", "EDITOR"} {
+		if ed != "" {
+			break
+		}
+		ed = strings.TrimSpace(os.Getenv(env))
+	}
+	if ed == "" {
+		ed = "vi"
+	}
+	return "sh", []string{"-c", ed + ` "$0"`, path}
 }

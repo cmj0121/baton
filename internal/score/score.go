@@ -2190,6 +2190,17 @@ func (s *Store) EndEdit(opened map[string]struct{}) ([]string, Delta, error) {
 	return restored, delta, err
 }
 
+// MDPath is the score.md an operator edits, in full. It exists so the server
+// can point an editor at the file without a second copy of the filename living
+// outside this package — a copy that would keep working right up until the
+// projection was renamed, and then open an empty buffer.
+func (s *Store) MDPath() string {
+	if s == nil {
+		return ""
+	}
+	return s.mdPath // immutable after Open
+}
+
 // mdIDsLocked reads the ids score.md currently carries, and whether the file is
 // there at all. It parses with the same parseLine the pass uses, so a line the
 // pass would skip is skipped here too and the two can never disagree about what

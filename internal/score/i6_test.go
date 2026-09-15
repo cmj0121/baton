@@ -460,6 +460,7 @@ var closedDoors = map[string]string{
 	"Explain":      "a read; its reconcile pass acts on score.md, which is the user's file",
 	"Health":       "reports counters",
 	"Len":          "counts entries",
+	"MDPath":       "reports the path of score.md",
 	"Policy":       "reports the tuning in force",
 	"Reconcile":    "folds score.md back in; every reinforcement it counts is the USER's, by definition of whose file it is",
 	"Lower":        "the package's one demotion: it takes no target tier at all, so there is no rung for a caller to name",

@@ -89,3 +89,13 @@ func (s *Server) PanelEnv(id string) []string {
 	defer s.mu.Unlock()
 	return s.specs[id].Env
 }
+
+// ScoreEditOpen reports the snapshot recorded for a score editing session, and
+// whether one is still tracked for that panel at all — the bookkeeping that
+// decides whether an editor's exit can still restore anything.
+func (s *Server) ScoreEditOpen(id string) (map[string]struct{}, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	opened, ok := s.scoreEdits[id]
+	return opened, ok
+}
