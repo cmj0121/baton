@@ -69,6 +69,11 @@ panel:
       score-feedback: false # ……除了這一個
 ```
 
+不改檔案也可以:在 cockpit 按 `C-t P` 打開 panel config,裡面有一段 SCORE FEEDBACK,列出每一個設定過的
+profile——`↑↓` 移動,`e` 讓那個 profile 在 `inherit → on → off → inherit` 之間循環。改完會寫進你的設定檔,
+並且叫 daemon 重新讀一次,所以下一份簡報就生效,不必等重啟。`inherit` 是一個獨立的狀態,不是它當下解析出來
+那個值的另一種寫法:留在 inherit 的 profile,之後你改 `score.feedback` 時會跟著走。
+
 有寫這個鍵的 profile 說了算;沒寫的就繼承隊伍的答案。一個 agent 的自述值不值得收,是那個 agent 的性質
 ——一個只跑一次的 `--print` runner 跨不了回合,沒什麼好注意的;一段長長的互動會談則多的是——所以隊伍那個
 鍵定下家規,profile 那個鍵裝的是例外。兩個都會在 `SIGHUP` 時重載。

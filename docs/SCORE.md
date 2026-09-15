@@ -75,6 +75,12 @@ panel:
       score-feedback: false # …except this one
 ```
 
+**From the cockpit, without editing the file:** `C-t P` opens panel config, which carries a **SCORE FEEDBACK** section
+listing every configured profile — `↑↓` to move, `e` to cycle that profile through `inherit → on → off → inherit`. The
+edit is written to your config and the daemon is told to re-read it, so it takes effect on the next brief rather than
+on the next restart. `inherit` is a state of its own and not a spelling of the value it currently resolves to: a
+profile left inheriting follows `score.feedback` when you later change it.
+
 A profile that names the key wins; one that does not inherits the fleet's answer. Whether an agent's self-reports are
 worth having is a property of the **agent** — a one-shot `--print` runner has nothing to notice across turns, a long
 interactive session has plenty — so the fleet key sets the house rule and the profile key holds the exceptions. Both
