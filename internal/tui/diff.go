@@ -150,11 +150,33 @@ func (m model) diffDetailLines() []diffLine {
 	return lines
 }
 
+// diffFixedChrome is every row of the popup that is not the body and not the
+// legend: popupBoxAt's border and padding (2 + 2), the DIFF header, and the two
+// blanks diffView puts either side of the body.
+const diffFixedChrome = 4 + 1 + 1 + 1
+
 // diffViewportRows is the popup's body height — the rows the file list and the
 // detail pane each show. It also bounds the detail scroll. Kept in one place so
 // the key handler and the view agree.
+//
+// It sizes from the LEFTOVER under the banner, through panelVisibleRows, for
+// the reason the inbox does (#94): `m.height-14` counted neither the banner nor
+// this popup's own chrome, so the composed frame came out taller than the
+// terminal at every height and Place handed back the overflow rather than
+// clipping it — the bottom edge of the box being the first thing off-screen.
+//
+// The legend is MEASURED rather than counted because it is the part that moves:
+// diffLegend carries a focus marker and fitLegend wraps on a narrow terminal.
+//
+// inboxViewportRows is deliberately the same arithmetic rather than a call to
+// this one. They were one function, and the shared body was there to stop the
+// frames jumping when the operator moves between the two overlays — but the
+// inbox grew a filter bar and the diff did not, so a single number could no
+// longer be right for both. What has to match is the FRAME, not the body, and
+// TestDiffAndInboxAgreeOnSize asserts that directly instead of inferring it
+// from a shared call.
 func (m model) diffViewportRows() int {
-	return clampInt(m.height-14, 5, 40)
+	return m.panelVisibleRows(diffFixedChrome + lipgloss.Height(m.diffLegend()))
 }
 
 // diffLayout sizes the two columns within the popup: a file column that shrinks on
@@ -172,23 +194,35 @@ func (m model) diffLayout() (fileColW, detailW, rows int) {
 // diffView renders the master-detail popup: the file list (left) and the selected
 // file's diff (right), divided by a hairline, under a header and a key legend.
 func (m model) diffView() string {
-	if len(m.diffFiles) == 0 {
-		return m.popupBox(mutedStyle.Render("no changes to diff"))
-	}
 	fileColW, detailW, rows := m.diffLayout()
 
-	left := padBlock(m.diffFileRows(fileColW, rows), rows, fileColW)
-	right := padBlock(m.diffDetailBlock(detailW, rows), rows, detailW)
-	sepStyle := lipgloss.NewStyle().Foreground(colFaint)
-	sep := make([]string, rows)
-	for i := range sep {
-		sep[i] = sepStyle.Render(" │ ")
+	var body string
+	if len(m.diffFiles) == 0 {
+		// The same height as a body full of files, for the reason the inbox's
+		// empty state holds its height: a popup that collapses and springs back
+		// reads as the overlay closing and reopening rather than as a list with
+		// nothing in it.
+		lines := make([]string, rows)
+		for i := range lines {
+			lines[i] = lipgloss.NewStyle().Width(fileColW + detailW + 3).Render("")
+		}
+		lines[0] = lipgloss.NewStyle().Width(fileColW + detailW + 3).
+			Render(mutedStyle.Render("no changes to diff"))
+		body = lipgloss.JoinVertical(lipgloss.Left, lines...)
+	} else {
+		left := padBlock(m.diffFileRows(fileColW, rows), rows, fileColW)
+		right := padBlock(m.diffDetailBlock(detailW, rows), rows, detailW)
+		sepStyle := lipgloss.NewStyle().Foreground(colFaint)
+		sep := make([]string, rows)
+		for i := range sep {
+			sep[i] = sepStyle.Render(" │ ")
+		}
+		body = lipgloss.JoinHorizontal(lipgloss.Top,
+			lipgloss.JoinVertical(lipgloss.Left, left...),
+			lipgloss.JoinVertical(lipgloss.Left, sep...),
+			lipgloss.JoinVertical(lipgloss.Left, right...),
+		)
 	}
-	body := lipgloss.JoinHorizontal(lipgloss.Top,
-		lipgloss.JoinVertical(lipgloss.Left, left...),
-		lipgloss.JoinVertical(lipgloss.Left, sep...),
-		lipgloss.JoinVertical(lipgloss.Left, right...),
-	)
 
 	header := sectionStyle.Render(spaced("DIFF")) + "  " +
 		mutedStyle.Render(strings.TrimPrefix(m.diffTitle, "diff · ")) +
