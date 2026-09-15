@@ -93,17 +93,50 @@ func inboxQualifies(p proto.Panel, wantDone bool) (int, bool) {
 	if p.Acked || p.Conductor || p.GlobalShell {
 		return 0, false
 	}
-	switch panel.ParseState(p.State) {
+	return bucketOf(panel.ParseState(p.State), p.ExitCode, wantDone)
+}
+
+// bucketOf is the state-to-bucket mapping on its own, so the wire panel and the
+// frozen row cannot disagree about which bucket a thing is in. inboxQualifies
+// asks it for a panel arriving from the fleet; inboxRow.bucket asks it for a row
+// the queue already froze, and the filter (#94) reads the row's answer — a mask
+// over what the operator is looking at, never a re-derivation from a fleet that
+// has moved on underneath.
+func bucketOf(st panel.State, code int, wantDone bool) (int, bool) {
+	switch st {
 	case panel.Attention:
-		return 0, true
+		return inboxAttention, true
 	case panel.Stuck:
-		return 1, true
+		return inboxStuck, true
 	case panel.Exited:
-		return 2, p.ExitCode != 0 // a clean exit is not news
+		return inboxFailed, code != 0 // a clean exit is not news
 	case panel.Done:
-		return 3, wantDone
+		return inboxDoneBucket, wantDone
 	}
 	return 0, false
+}
+
+// The buckets, named. inboxFilterAll is the mask that hides nothing and is what
+// every open starts on — see cycleInboxFilter for why it is not remembered.
+const (
+	inboxFilterAll  = -1
+	inboxAttention  = 0
+	inboxStuck      = 1
+	inboxFailed     = 2
+	inboxDoneBucket = 3
+)
+
+// inboxBucketNames are the filter's labels, indexed by bucket. They are the
+// words ATTENTION.md uses, so the tab bar names what the docs name.
+var inboxBucketNames = [...]string{"attention", "stuck", "failed", "done"}
+
+// bucket is the row's own bucket, from the state it froze with. The second
+// result is false for a row whose state no longer earns a place — a stale row
+// that woke to running — which the filter shows under `all` and under nothing
+// else: it is still on screen where the hand expects it, and it is not an
+// example of any bucket the operator asked to see.
+func (r inboxRow) bucket(wantDone bool) (int, bool) {
+	return bucketOf(r.state, r.code, wantDone)
 }
 
 // rowOf projects a wire panel onto a queue row. Since is parsed here rather than
@@ -195,6 +228,7 @@ func (m model) openInbox() (tea.Model, tea.Cmd) {
 	m.mode = modeInbox
 	m.inboxRows = m.sortedInboxRows()
 	m.inboxCursor = 0
+	m.inboxFilter = inboxFilterAll // never remembered; see model.inboxFilter
 	m.inboxCleared = nil
 	m.inboxComposing, m.inboxReply = false, ""
 	m.status = m.inboxStatus()
@@ -236,6 +270,7 @@ func (m model) closeInbox() (tea.Model, tea.Cmd) {
 	m.inboxRows = nil
 	m.inboxCleared = nil
 	m.inboxCursor = 0
+	m.inboxFilter = inboxFilterAll
 	m.inboxComposing, m.inboxReply = false, ""
 	m.inboxTails, m.inboxTailOrder, m.inboxTailWant = nil, nil, ""
 	if m.mode == modeDashboard {
@@ -255,7 +290,14 @@ func (m model) inboxSelected() (inboxRow, bool) {
 // inboxStatus is the one-line summary the status bar carries while the overlay is
 // open: how much is left to clear.
 func (m model) inboxStatus() string {
-	switch n := len(m.inboxRows); n {
+	// The MASKED count, not the unfiltered total: the status line describes the
+	// list in front of the operator, and "12 items" beside three visible rows is
+	// the status bar disagreeing with the screen.
+	n := len(m.inboxVisible())
+	if m.inboxFilter != inboxFilterAll {
+		return fmt.Sprintf("inbox: %d %s", n, inboxFilterName(m.inboxFilter))
+	}
+	switch n {
 	case 0:
 		return "inbox: clear"
 	case 1:
@@ -317,6 +359,7 @@ func (m *model) reconcileInbox() {
 		}
 	}
 	m.inboxCursor = clampInt(m.inboxCursor, 0, len(m.inboxRows)-1)
+	*m = m.snapInboxCursor() // a snapshot may have changed the selected row's bucket
 	// A snapshot is the one event that keeps arriving while the human sits still,
 	// so it is also where a tail request the daemon dropped gets asked again —
 	// without it the retry above would be waiting on a cursor move that a reader
@@ -420,6 +463,10 @@ func (m model) clearRow(idx int, until time.Time, sendText string) model {
 	rows = append(rows, m.inboxRows[idx+1:]...)
 	m.inboxRows = rows
 	m.inboxCursor = clampInt(idx, 0, len(m.inboxRows)-1)
+	// The row that slid into this index may be in a bucket the mask hides, which
+	// would leave the caret on something that is not drawn — and the next x on a
+	// row the operator cannot see.
+	m = m.snapInboxCursor()
 	// The eviction ring is kept in step with the cache it evicts from. Dropping
 	// the tail without dropping its id leaves a dead entry occupying one of the
 	// thirty-two slots, lets the same id be enqueued twice if the row comes back,
@@ -457,17 +504,25 @@ func (m model) handleInboxKey(key string, k tea.Key) (tea.Model, tea.Cmd) {
 	case "esc", "q":
 		return m.closeInbox()
 	case "up", "k":
-		m.inboxCursor = clampInt(m.inboxCursor-1, 0, len(m.inboxRows)-1)
+		m = m.moveInboxCursor(-1)
 		m.wantTail()
 	case "down", "j":
-		m.inboxCursor = clampInt(m.inboxCursor+1, 0, len(m.inboxRows)-1)
+		m = m.moveInboxCursor(1)
 		m.wantTail()
 	case "home", "g":
-		m.inboxCursor = 0
+		m = m.inboxEdgeCursor(false)
 		m.wantTail()
 	case "end", "G":
-		m.inboxCursor = max(0, len(m.inboxRows)-1)
+		m = m.inboxEdgeCursor(true)
 		m.wantTail()
+	case "tab":
+		// Only outside the composer: handleInboxCompose owns the keyboard
+		// outright while `i` is open, so the row being answered cannot vanish
+		// under the reply field. The branch at the top of this function is what
+		// makes that true, and this case is unreachable from there.
+		return m.cycleInboxFilter(1)
+	case "shift+tab":
+		return m.cycleInboxFilter(-1)
 	case "r":
 		return m.refreshInbox()
 	case "enter":
@@ -648,9 +703,14 @@ func (m model) sendInboxReply() (tea.Model, tea.Cmd) {
 // popup's: the two are the same shape, and a queue that sized differently would
 // jump when you moved between them.
 // inboxFixedChrome is every row of the overlay that is not the body and not the
-// footer: popupBoxAt's border and padding (2 + 2), the INBOX header, and the two
-// blanks inboxView puts either side of the body.
-const inboxFixedChrome = 4 + 1 + 1 + 1
+// footer: popupBoxAt's border and padding (2 + 2), the INBOX header, the filter
+// tab bar, and the two blanks inboxView puts either side of the body.
+//
+// The tab bar counts as exactly one row and always will: popupBoxAt CLIPS each
+// line to the popup width rather than wrapping it, so a bar too wide for a
+// narrow terminal loses its right-hand stops and not its height. The footer is
+// the only part that can grow, which is why it alone is measured.
+const inboxFixedChrome = 4 + 1 + 1 + 1 + 1
 
 // inboxViewportRows is the popup's body height — the rows the queue column and
 // the tail pane each show.
@@ -696,6 +756,20 @@ func (m model) inboxView() string {
 			legend("esc", "close"),
 		))
 	}
+	if vis := m.inboxVisible(); len(vis) == 0 {
+		// A filter with nothing in it is NOT an empty queue, and must not read
+		// like one: other buckets still hold rows, and saying "nothing needs a
+		// human right now" here would be a lie the operator would act on. The
+		// bar stays so tab has somewhere to go.
+		return m.popupBox(lipgloss.JoinVertical(lipgloss.Left,
+			sectionStyle.Render(spaced("INBOX")),
+			m.inboxTabBar(),
+			"",
+			mutedStyle.Render("no "+inboxFilterName(m.inboxFilter)+" panels"),
+			"",
+			m.inboxFooter(),
+		))
+	}
 	listW, tailW, rows := m.inboxLayout()
 	left := padBlock(m.inboxRowLines(listW, rows), rows, listW)
 	right := padBlock(m.inboxDetailBlock(tailW, rows), rows, tailW)
@@ -709,9 +783,18 @@ func (m model) inboxView() string {
 		lipgloss.JoinVertical(lipgloss.Left, sep...),
 		lipgloss.JoinVertical(lipgloss.Left, right...),
 	)
+	vis := m.inboxVisible()
+	at := 0
+	for n, i := range vis {
+		if i == m.inboxCursor {
+			at = n
+			break
+		}
+	}
 	header := sectionStyle.Render(spaced("INBOX")) + "  " +
-		mutedStyle.Render(fmt.Sprintf("%d of %d", m.inboxCursor+1, len(m.inboxRows)))
-	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", m.inboxFooter())
+		mutedStyle.Render(fmt.Sprintf("%d of %d", at+1, len(vis)))
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		header, m.inboxTabBar(), "", body, "", m.inboxFooter())
 	return m.popupBox(content)
 }
 
@@ -720,11 +803,15 @@ func (m model) inboxView() string {
 // colour with its glyph dropped, so "this is no longer what it said" is visible
 // without the row moving.
 func (m model) inboxRowLines(width, rows int) []string {
-	all := make([]string, len(m.inboxRows))
-	for i, r := range m.inboxRows {
+	vis := m.inboxVisible()
+	all := make([]string, len(vis))
+	anchor := 0
+	for n, i := range vis {
+		r := m.inboxRows[i]
 		info := r.info()
 		caret, fg := "  ", colMuted
 		if i == m.inboxCursor {
+			anchor = n
 			caret, fg = lipgloss.NewStyle().Foreground(colBrand).Bold(true).Render("▸ "), colInk
 		}
 		led := lipgloss.NewStyle().Foreground(info.color).Render(info.led)
@@ -745,11 +832,11 @@ func (m model) inboxRowLines(width, rows int) []string {
 		ageW := lipgloss.Width(age) // cells, not bytes: an em dash is three bytes and one cell
 		name := truncate(sanitizeText(r.title), max(1, width-6-ageW))
 		pad := max(1, width-4-lipgloss.Width(name)-ageW)
-		all[i] = lipgloss.NewStyle().Width(width).Render(
+		all[n] = lipgloss.NewStyle().Width(width).Render(
 			caret + led + " " + lipgloss.NewStyle().Foreground(fg).Render(name) +
 				strings.Repeat(" ", pad) + lipgloss.NewStyle().Foreground(colFaint).Render(age))
 	}
-	shown, _ := windowAround(all, m.inboxCursor, rows)
+	shown, _ := windowAround(all, anchor, rows)
 	return shown
 }
 
@@ -851,7 +938,7 @@ func (m model) inboxFooter() string {
 	// survives a wide terminal and nothing is lost on a narrow one.
 	w := m.popupWidth()
 	return lipgloss.JoinVertical(lipgloss.Left,
-		fitLegend(w, "j/k", "move", "enter", "zoom", "r", "re-sort", "esc", "close"),
+		fitLegend(w, "j/k", "move", "tab", "filter", "enter", "zoom", "r", "re-sort", "esc", "close"),
 		fitLegend(w, "i", "reply", "-", "snooze", "x", "dismiss"),
 	)
 }
@@ -898,4 +985,169 @@ func (m *model) observeWire(panels []proto.Panel) {
 	if m.mode == modeInbox {
 		m.reconcileInbox()
 	}
+}
+
+// --- the bucket filter (#94) --------------------------------------------------
+
+// inboxStops is the filter cycle, in order: all, then each bucket. `done` is not
+// in it when settings.inbox-done is false, because then the bucket does not
+// exist — that is the one exception to showing every stop.
+//
+// Empty buckets are NOT skipped. A cycle whose next stop depends on the fleet is
+// the same disorientation a re-sorting queue is: the names stay put and an empty
+// one says so, rather than tab landing somewhere different each time.
+func (m model) inboxStops() []int {
+	stops := []int{inboxFilterAll, inboxAttention, inboxStuck, inboxFailed}
+	if m.inboxDone {
+		stops = append(stops, inboxDoneBucket)
+	}
+	return stops
+}
+
+// inboxVisible is the indexes of inboxRows the current filter shows, in queue
+// order. It reads each row's OWN frozen bucket, so filtering never calls
+// sortedInboxRows and the order the operator is looking at cannot move.
+func (m model) inboxVisible() []int {
+	out := make([]int, 0, len(m.inboxRows))
+	for i, r := range m.inboxRows {
+		if m.inboxFilter == inboxFilterAll {
+			out = append(out, i)
+			continue
+		}
+		if b, ok := r.bucket(m.inboxDone); ok && b == m.inboxFilter {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// inboxCounts is how many rows each bucket holds, for the tab bar. The count is
+// what makes tab worth pressing or not worth pressing without pressing it.
+func (m model) inboxCounts() map[int]int {
+	counts := map[int]int{inboxFilterAll: len(m.inboxRows)}
+	for _, r := range m.inboxRows {
+		if b, ok := r.bucket(m.inboxDone); ok {
+			counts[b]++
+		}
+	}
+	return counts
+}
+
+// inboxFilterName is the filter's word, for the status line and the empty state.
+func inboxFilterName(f int) string {
+	if f == inboxFilterAll || f < 0 || f >= len(inboxBucketNames) {
+		return "all"
+	}
+	return inboxBucketNames[f]
+}
+
+// cycleInboxFilter moves the mask one stop in dir, wrapping. The cursor then
+// lands on a row the new mask actually shows: the one it was on when that is
+// still visible, else the first visible row — so tab never leaves the caret
+// pointing at something the operator cannot see.
+func (m model) cycleInboxFilter(dir int) (tea.Model, tea.Cmd) {
+	stops := m.inboxStops()
+	at := 0
+	for i, s := range stops {
+		if s == m.inboxFilter {
+			at = i
+			break
+		}
+	}
+	m.inboxFilter = stops[((at+dir)%len(stops)+len(stops))%len(stops)]
+
+	held := ""
+	if r, ok := m.inboxSelected(); ok {
+		held = r.id
+	}
+	vis := m.inboxVisible()
+	switch {
+	case len(vis) == 0:
+		// Nothing to point at. The overlay stays open and says so — see
+		// inboxView's empty state, and afterClear for why an empty FILTER is not
+		// an empty queue.
+		m.inboxCursor = 0
+	default:
+		m.inboxCursor = vis[0]
+		for _, i := range vis {
+			if m.inboxRows[i].id == held {
+				m.inboxCursor = i
+				break
+			}
+		}
+	}
+	m.status = m.inboxStatus()
+	m.wantTail()
+	return m, nil
+}
+
+// moveInboxCursor walks the VISIBLE rows by delta, clamped at both ends. It
+// walks the mask rather than the underlying slice so j and k never stop on a
+// row that is not drawn.
+func (m model) moveInboxCursor(delta int) model {
+	vis := m.inboxVisible()
+	if len(vis) == 0 {
+		return m
+	}
+	at := 0
+	for i, idx := range vis {
+		if idx == m.inboxCursor {
+			at = i
+			break
+		}
+	}
+	m.inboxCursor = vis[clampInt(at+delta, 0, len(vis)-1)]
+	return m
+}
+
+// inboxEdgeCursor puts the cursor on the first or last VISIBLE row (g / G).
+func (m model) inboxEdgeCursor(last bool) model {
+	vis := m.inboxVisible()
+	if len(vis) == 0 {
+		return m
+	}
+	if last {
+		m.inboxCursor = vis[len(vis)-1]
+		return m
+	}
+	m.inboxCursor = vis[0]
+	return m
+}
+
+// inboxTabBar is the filter's header row: the open name lit, its neighbours
+// visible, and a count beside each. It is a HEADER row and not a third legend
+// line — the legend is the verbs, and the filter is which list those verbs act
+// on, so it belongs above the fold rather than below it (and fitLegend already
+// wraps without help).
+func (m model) inboxTabBar() string {
+	counts := m.inboxCounts()
+	parts := make([]string, 0, 5)
+	for _, s := range m.inboxStops() {
+		label := fmt.Sprintf("%s %d", inboxFilterName(s), counts[s])
+		if s == m.inboxFilter {
+			parts = append(parts, tabHotStyle.Render(label))
+			continue
+		}
+		parts = append(parts, tabStyle.Render(label))
+	}
+	return strings.Join(parts, mutedStyle.Render(" · "))
+}
+
+// snapInboxCursor moves the cursor onto a row the current mask shows: the next
+// visible one at or after where it is, else the last visible one. It is a no-op
+// with no filter, and with a filter that hides everything — the latter is the
+// empty state, which has nothing to point at by definition.
+func (m model) snapInboxCursor() model {
+	vis := m.inboxVisible()
+	if len(vis) == 0 {
+		return m
+	}
+	for _, i := range vis {
+		if i >= m.inboxCursor {
+			m.inboxCursor = i
+			return m
+		}
+	}
+	m.inboxCursor = vis[len(vis)-1]
+	return m
 }

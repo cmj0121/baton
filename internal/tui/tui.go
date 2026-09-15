@@ -446,10 +446,16 @@ type model struct {
 	// single request in flight and inboxTailAt when it went out — the daemon may
 	// drop an outbound frame under load, so the gate has to expire or one lost
 	// reply wedges the detail pane for good.
-	inboxWire      []proto.Panel
-	inboxRows      []inboxRow
-	inboxCleared   map[string]bool
-	inboxCursor    int
+	inboxWire    []proto.Panel
+	inboxRows    []inboxRow
+	inboxCleared map[string]bool
+	inboxCursor  int
+	// inboxFilter is which bucket the list SHOWS — a display mask over the
+	// frozen order, never a re-sort (#94). inboxFilterAll hides nothing, and
+	// every open starts there: C-t a exists to clear what needs a human, and a
+	// remembered `done` filter would hide attention behind a key the operator
+	// did not press this time.
+	inboxFilter    int
 	inboxFrom      mode
 	inboxComposing bool
 	inboxReply     string
