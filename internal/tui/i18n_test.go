@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -258,4 +259,52 @@ func TestPanelConfigIsFullyTranslated(t *testing.T) {
 			t.Errorf("line %d is untranslated: %q", i, en[i])
 		}
 	}
+}
+
+// TestInputOverlaysAreFullyTranslated: every text-input popup — its title, its
+// prompt and the verb on enter — reads differently in zh-TW than in English.
+//
+// It walks the table rather than a list written here, so an overlay added to
+// inputSpecs without a catalog entry fails on its first frame instead of
+// appearing in English to the people who cannot read it. The five resource-limit
+// overlays ride on limitFields and are walked with them.
+func TestInputOverlaysAreFullyTranslated(t *testing.T) {
+	// Line by line, not whole overlays: the title, the prompt and the hint line
+	// are three separate strings, and comparing the popup as one blob passes as
+	// soon as ANY of them is keyed — a title left in English hides behind a
+	// translated "cancel" on the line below it.
+	lines := func(lang i18n.Lang, in inputPurpose, limitRow int) []string {
+		m := baseModel()
+		m.lang, m.input, m.limitRow = lang, in, limitRow
+		var out []string
+		for _, line := range strings.Split(ansi.Strip(m.inputView()), "\n") {
+			line = strings.TrimSpace(strings.Trim(line, "│╭╮╰╯─ "))
+			// The field itself is the typed text and is the same in every language.
+			if line == "" || strings.Contains(line, "›") {
+				continue
+			}
+			out = append(out, line)
+		}
+		return out
+	}
+	check := func(what string, in inputPurpose, limitRow int) {
+		en, zh := lines(i18n.EN, in, limitRow), lines(i18n.ZhTW, in, limitRow)
+		if len(en) != len(zh) {
+			t.Fatalf("%s: translating changed the line count, %d → %d", what, len(en), len(zh))
+		}
+		for i := range en {
+			if en[i] == zh[i] {
+				t.Errorf("%s: line %d is untranslated: %q", what, i, en[i])
+			}
+		}
+	}
+
+	for in := range inputSpecs {
+		check(fmt.Sprintf("input %d", in), in, 0)
+	}
+	for i := range limitFields {
+		check("the "+limitFields[i].label+" limit overlay", inputLimit, firstLimitRow+i)
+	}
+	// The generic overlay an input with no table row falls back to.
+	check("the fallback overlay", inputNone, 0)
 }

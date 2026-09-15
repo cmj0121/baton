@@ -4958,54 +4958,61 @@ func (m model) missingAgentsSection() []string {
 	return append(out, "", mutedStyle.Render(fmt.Sprintf(m.tr("panel.cfg.install-hint", "install one, then %s R re-detects"), keyLabel(m.effPrefix()))))
 }
 
+// inputSpec is what one text-input overlay says: its title, the prompt above the
+// field, and the verb on the enter key. Each is a message key paired with the
+// English source string, which is also the fallback — so this table reads as the
+// overlays it describes while carrying the whole of their translation.
+type inputSpec struct {
+	titleKey, title   string
+	promptKey, prompt string
+	actionKey, action string
+}
+
+// inputSpecs is every text-input overlay, keyed by the input it belongs to. The
+// zero entry (an input with no row here) is the generic INPUT / value / save
+// below, which is what an overlay someone adds without a row renders as.
+var inputSpecs = map[inputPurpose]inputSpec{
+	inputShellPath:   {"input.shell.title", "DEFAULT SHELL", "input.shell.prompt", "shell path  (blank = system default)", "legend.save", "save"},
+	inputReplayKB:    {"input.replay.title", "REPLAY BUFFER", "input.replay.prompt", "KiB of history per panel  (blank = default)", "legend.save", "save"},
+	inputNewPanelCmd: {"input.new-panel.title", "NEW PANEL", "input.new-panel.prompt", "program and arguments  (blank = a shell)", "legend.spawn", "spawn"},
+	inputAgentDir:    {"input.agent-dir.title", "NEW AGENT", "input.agent-dir.prompt", "working directory  (blank = home)", "legend.next", "next"},
+	inputGroupName:   {"input.group.title", "NEW GROUP", "input.group.prompt", "work-item name", "legend.create", "create"},
+	inputRename:      {"input.rename.title", "RENAME", "input.rename.prompt", "new name", "legend.save", "save"},
+	inputDispatch:    {"input.dispatch.title", "DISPATCH TASK", "input.dispatch.prompt", "the task brief for the agent", "legend.send", "send"},
+	inputEnqueue:     {"input.enqueue.title", "ENQUEUE TASK", "input.enqueue.prompt", "the task brief to queue for a free agent", "legend.queue", "queue"},
+	inputSignalName:  {"input.signal.title", "SEND SIGNAL", "input.signal.prompt", "signal name or number  (e.g. WINCH, TSTP, 28)", "legend.send", "send"},
+	inputFilter:      {"input.filter.title", "FIND PANELS", "input.filter.prompt", "filter by title or group  (live)", "legend.apply", "apply"},
+	inputSearch:      {"input.search.title", "SEARCH", "input.search.prompt", "find in the scrollback", "legend.find", "find"},
+	inputFleetSearch: {"input.fleet-search.title", "FLEET SEARCH", "input.fleet-search.prompt", "grep every panel's output  (regexp)", "legend.search", "search"},
+	inputGitBranch:   {"input.git-branch.title", "NEW BRANCH", "input.git-branch.prompt", "branch name  (git checkout -b)", "legend.create", "create"},
+	// The three worktree inputs read the same either way; which command one
+	// commits to is the purpose's business, not the label's.
+	inputGitWorktree:    {"input.worktree.title", "NEW WORKTREE", "input.worktree.prompt", "branch name  (worktree + agent)", "legend.create", "create"},
+	inputWorktreeBranch: {"input.worktree.title", "NEW WORKTREE", "input.worktree.prompt", "branch name  (worktree + agent)", "legend.create", "create"},
+	inputIsolateBranch:  {"input.worktree.title", "NEW WORKTREE", "input.worktree.prompt", "branch name  (worktree + agent)", "legend.create", "create"},
+	inputGitRemove:      {"input.worktree-rm.title", "REMOVE WORKTREE", "input.worktree-rm.prompt", "worktree path  (then confirm)", "legend.next", "next"},
+	inputWorktreeRepo:   {"input.worktree-repo.title", "NEW WORKTREE", "input.worktree-repo.prompt", "the git repository to branch from", "legend.next", "next"},
+}
+
 // inputView renders the active text-input overlay as a centred popup.
 func (m model) inputView() string {
-	title, prompt, action := "INPUT", "value", "save"
-	switch m.input {
-	case inputShellPath:
-		title, prompt = "DEFAULT SHELL", "shell path  (blank = system default)"
-	case inputReplayKB:
-		title, prompt = "REPLAY BUFFER", "KiB of history per panel  (blank = default)"
-	case inputLimit:
+	title, prompt, action := m.tr("input.title", "INPUT"), m.tr("input.prompt", "value"), m.tr("legend.save", "save")
+	if spec, ok := inputSpecs[m.input]; ok {
+		title, prompt, action = m.tr(spec.titleKey, spec.title), m.tr(spec.promptKey, spec.prompt), m.tr(spec.actionKey, spec.action)
+	}
+	// The resource limits carry their own title and prompt on the field they edit,
+	// so the one overlay that is five overlays stays in one table rather than five
+	// rows here that have to be kept in step with it.
+	if m.input == inputLimit {
 		if f, ok := limitFieldFor(m.limitRow); ok {
 			title, prompt = m.tr(f.titleKey, f.title), m.tr(f.promptKey, f.prompt)
 		}
-	case inputNewPanelCmd:
-		title, prompt, action = "NEW PANEL", "program and arguments  (blank = a shell)", "spawn"
-	case inputAgentDir:
-		title, prompt, action = "NEW AGENT", "working directory  (blank = home)", "next"
-	case inputGroupName:
-		title, prompt, action = "NEW GROUP", "work-item name", "create"
-	case inputRename:
-		title, prompt, action = "RENAME", "new name", "save"
-	case inputDispatch:
-		title, prompt, action = "DISPATCH TASK", "the task brief for the agent", "send"
-	case inputEnqueue:
-		title, prompt, action = "ENQUEUE TASK", "the task brief to queue for a free agent", "queue"
-	case inputSignalName:
-		title, prompt, action = "SEND SIGNAL", "signal name or number  (e.g. WINCH, TSTP, 28)", "send"
-	case inputFilter:
-		title, prompt, action = "FIND PANELS", "filter by title or group  (live)", "apply"
-	case inputSearch:
-		title, prompt, action = "SEARCH", "find in the scrollback", "find"
-	case inputFleetSearch:
-		title, prompt, action = "FLEET SEARCH", "grep every panel's output  (regexp)", "search"
-	case inputGitBranch:
-		title, prompt, action = "NEW BRANCH", "branch name  (git checkout -b)", "create"
-	case inputGitWorktree, inputWorktreeBranch, inputIsolateBranch:
-		// The reader sees the same prompt either way; which command it commits
-		// to is the purpose's business, not the label's.
-		title, prompt, action = "NEW WORKTREE", "branch name  (worktree + agent)", "create"
-	case inputGitRemove:
-		title, prompt, action = "REMOVE WORKTREE", "worktree path  (then confirm)", "next"
-	case inputWorktreeRepo:
-		title, prompt, action = "NEW WORKTREE", "the git repository to branch from", "next"
 	}
 
 	field := lipgloss.NewStyle().Width(46).Padding(0, 1).Foreground(colInk).Background(colSurface).Render("› " + m.inputBuf + "▌")
-	hints := legend("enter", action, "esc", "cancel")
+	hints := legend("enter", action, "esc", m.tr("legend.cancel", "cancel"))
 	if inputIsPath(m.input) {
-		hints += mutedStyle.Render("  ·  ") + legend("tab", "complete", "C-b", "del word")
+		hints += mutedStyle.Render("  ·  ") + legend("tab", m.tr("legend.complete", "complete"), "C-b", m.tr("legend.del-word", "del word"))
 	}
 
 	rows := []string{sectionStyle.Render(spaced(title)), "", mutedStyle.Render(prompt), field}
