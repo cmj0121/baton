@@ -1195,6 +1195,15 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 		// save has to be folded back in before anything else reads score.md.
 		// Off the lock, with the reaping — closeScoreEdit runs a reconcile pass.
 		scoreEdit = id
+		// Say so on the wire. A transient panel is not in panelsMsg, so its exit
+		// reaches the cockpit only as "[process exited]" painted into the pane —
+		// text, which a frontend can show but cannot act on. A diff or a git log
+		// wants exactly that and nothing more: the output is the point, and the
+		// operator leaves when they have read it. An EDITOR has no output to
+		// read, so the cockpit needs to know the thing it is zoomed on is over.
+		for cc := range s.clients {
+			send(cc, proto.ServerMsg{Type: "ephemeral-exit", ID: id, Failed: exitCode != 0})
+		}
 	}
 	s.mu.Unlock()
 

@@ -16,6 +16,15 @@ import (
 	"github.com/cmj0121/baton/internal/vtquery"
 )
 
+// birthRows and birthCols are the winsize a panel's PTY is created with, before
+// any cockpit has attached to say how big the real terminal is. The classic
+// terminal, because it is the size every program has a sane layout for and the
+// one a bare `stty` reports on a serial line that never negotiated.
+const (
+	birthRows = 24
+	birthCols = 80
+)
+
 // repaintNudgeDelay separates ForceRepaint's two size changes. The kernel only raises
 // SIGWINCH on an actual size change, and a program that reads the size once after both
 // changes would see it unchanged and skip repainting; the gap lets it process the first
@@ -193,7 +202,20 @@ func (m *Manager) StartCmd(id string, spec Spec) error {
 		}
 	}
 
-	f, err := pty.Start(cmd)
+	// StartWithSize rather than Start, so the child is never born into the 0x0
+	// terminal the kernel gives a fresh pty. Start sets no winsize at all, and a
+	// panel keeps 0x0 until a cockpit attaches and sends panel.resize — which is
+	// invisible for a shell and fatal for anything that draws a screen: it asks
+	// the terminal how big it is, is told nothing, and paints zero rows. The
+	// score editor (#93) hit this every time because it execs the editor
+	// immediately; the git menu's commit only escaped it by accident, spending
+	// `git add -A && git commit` first and usually losing the race to the resize.
+	//
+	// The numbers are a floor, not a guess at the operator's terminal: the first
+	// attach overwrites them within milliseconds, and SIGWINCH is how every
+	// full-screen program already learns its real size. What they buy is that the
+	// FIRST paint has somewhere to go.
+	f, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: birthRows, Cols: birthCols})
 	if err != nil {
 		return err
 	}
