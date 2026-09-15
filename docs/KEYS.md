@@ -97,6 +97,7 @@ dashboard row — the work-item verbs — is refused in a zoom with the way forw
 |                 | (C-t)  | `n`     | `C`                 | the conductor, found or created                        |
 |                 | (C-t)  | `n`     | `h`                 | the global shell, found or created                     |
 |                 | (C-t)  | `n`     | `w`                 | a worktree on a new branch + an agent in it            |
+|                 | (C-t)  | `n`     | `s`                 | the fleet memory, in your $EDITOR                      |
 |                 | (C-t)  | ·       | `w`                 | close the selection                                    |
 |                 | (C-t)  | ·       | `r`                 | re-run the exited panels under the focus               |
 |                 | (C-t)  | `x`     | `x`                 | purge every exited panel                               |
