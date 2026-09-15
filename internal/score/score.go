@@ -5254,6 +5254,20 @@ func (s *Store) reconcileLocked(fi os.FileInfo, exists bool) (delta Delta, err e
 		out = kept
 	}
 
+	// A header this store wrote in an older version is brought up to the current
+	// one (#95). It runs on `out` rather than on `lines` because `out` is what
+	// gets written, and because a match that fails simply leaves the file alone —
+	// there is no state to unwind and no second place the two could disagree.
+	//
+	// It forces a rewrite of its own, which is the one pass that costs a write
+	// where nothing else changed. That happens at most once per store: the next
+	// pass reads the CURRENT header, which is not in the table, and matches
+	// nothing. TestMigrationIsIdempotent holds that, and
+	// TestCurrentHeaderIsNotSuperseded holds the reason it is true.
+	if migrated, ok := migrateHeaderLocked(out); ok {
+		out, rewrite = migrated, true
+	}
+
 	if !rewrite {
 		// No line was dropped — every fold asks for a rewrite — so this pass
 		// re-incurred nothing, and it has just read the whole file without finding
@@ -5877,6 +5891,64 @@ var mdHeader = []string{
 	"# Two lines saying the same thing? Edit one to say EXACTLY what the other",
 	"# says. They become one entry, and it remembers both wordings — so a later",
 	"# repeat of either one folds in rather than starting a third entry.",
+}
+
+// supersededHeaders is every header this store has SHIPPED and no longer
+// writes. One entry per past version, each byte for byte as it was written.
+//
+// The table exists because "the header" is two things that look like one: bytes
+// baton wrote, and bytes the operator wrote. Nothing else can tell them apart,
+// and until something could, the only safe move was to touch neither — which
+// left an operator who installed before #57 reading documentation that predates
+// the rule it was rewritten to carry (#95).
+//
+// An exact match is PROOF rather than a heuristic: no one but this store
+// produces these bytes in this order. Anything else — one character edited, one
+// line dropped, no header at all — fails to match and is left exactly as it is,
+// which is the direction that keeps SCORE.md's promise that a deleted header
+// stays deleted.
+//
+// Adding to this table is the whole cost of writing a new header. Forgetting to
+// is not silent: the old one simply stops being upgraded, which is the
+// behaviour that existed before this table did.
+var supersededHeaders = [][]string{
+	// seedLocked's original, from the store skeleton. It says lines may be
+	// edited freely but never says what an ENTRY is, which is the one rule an
+	// operator cannot infer by looking at the file.
+	{
+		"# This file is baton's fleet memory — one entry per line, like:",
+		"#   - [e7f3a2] the agent was asked to gain permission",
+		"# Edit or delete lines freely; anything that is not an entry is ignored.",
+	},
+}
+
+// migrateHeaderLocked brings a header this store wrote in an earlier version up
+// to the current one, and reports whether it changed anything.
+//
+// It replaces ONLY a leading comment block that matches a superseded header in
+// full. Entries are never read, reordered or rewritten here — the caller passes
+// the file's lines and gets them back with the first len(old) replaced, so a
+// line that is not part of the matched block cannot be affected however it is
+// shaped.
+//
+// It is deliberately not a "does the header look old" test. A prefix match, a
+// line count, a search for one recognisable sentence would each also match a
+// header the operator had edited, and rewriting that is the one outcome worth
+// more than the upgrade is. The caller holds the lock.
+func migrateHeaderLocked(lines []string) ([]string, bool) {
+	for _, old := range supersededHeaders {
+		if len(lines) < len(old) {
+			continue
+		}
+		if !slices.Equal(lines[:len(old)], old) {
+			continue
+		}
+		out := make([]string, 0, len(lines)-len(old)+len(mdHeader))
+		out = append(out, mdHeader...)
+		out = append(out, lines[len(old):]...)
+		return out, true
+	}
+	return lines, false
 }
 
 // parseBullet decodes a line the operator wrote as an entry but gave no id: a

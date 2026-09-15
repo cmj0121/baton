@@ -71,6 +71,10 @@ comment lines above the first entry. They are prose by rule 3 and so can never b
 yours, like every other byte — delete them and they stay deleted. If you would rather see how many of your own lines
 have already been taken this way, `baton ctl score status` counts them under `bare_admits`.
 
+One exception, and it is narrow: if your file still carries a header baton wrote in an **older version**, unchanged, it
+is brought up to the current one. The match is byte for byte against the headers baton has shipped, so the moment you
+edit a line — or delete one — the block is yours and stays exactly as you left it. It costs one rewrite, once.
+
 A line longer than 300 runes is kept exactly as you wrote it and simply **not injected** — refusing it would mean
 rewriting your file, and truncating it would silently rewrite what you meant. `baton ctl score status` counts what is
 being withheld under `oversized`.
