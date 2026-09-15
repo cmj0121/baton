@@ -288,6 +288,58 @@ var zhTW = map[string]string{
 	"signal.desc.SIGUSR1": "使用者自訂 1",
 	"signal.desc.SIGUSR2": "使用者自訂 2",
 
+	// --- the frame: the fleet heading, the summary chips, the footer ----------
+	//
+	// The panel KINDS (agent, shell, command) are not here. They are baton's own
+	// words for what it spawns — the ones `ctl spawn` takes and the config file
+	// names — so the badge on a row reads the same in every language, exactly as a
+	// key name does.
+	// The wordmark's line, taken from the zh-TW README rather than written afresh:
+	// the project says one thing about itself, in one voice, wherever it says it.
+	"tagline": "一個可擴充、對 agent 友善的終端機多工器。",
+
+	"fleet.title":         "艦隊",
+	"fleet.panels":        "%d 個面板",
+	"fleet.matches":       "%d 個符合",
+	"fleet.group-by":      "分組方式:",
+	"fleet.tree-chip":     "樹狀  %s 切回卡片",
+	"fleet.empty":         "還沒有任何面板",
+	"fleet.no-match":      "沒有面板符合",
+	"fleet.clears-filter": "清除過濾條件",
+	"footer.backend-down": "後端已中斷",
+
+	"mode.dashboard":    "儀表板",
+	"mode.input":        "輸入",
+	"mode.key-map":      "按鍵設定",
+	"mode.panel-config": "面板設定",
+	"mode.moving":       "搬移中",
+
+	"meta.state": "狀態",
+
+	// The lifecycle states, keyed by the English label the states table already
+	// carries. `failed` is not a state the daemon reports — the cockpit draws it
+	// from a non-zero exit code — and it is translated with the rest.
+	"state.spawning":  "開啟中",
+	"state.running":   "執行中",
+	"state.idle":      "閒置",
+	"state.attention": "需要你",
+	"state.exited":    "已結束",
+	"state.done":      "已完成",
+	"state.stuck":     "卡住",
+	"state.failed":    "失敗",
+
+	// The attention nudges: the status line, the footer cap, and the desktop
+	// notification, which are three renderings of the same fact.
+	"attn.one":    "%s 需要你",
+	"attn.many":   "%d 個面板需要你處理",
+	"attn.count":  "%d 個需要你",
+	"attn.agents": "%d 個 agent 需要你",
+
+	// What the cockpit says on its way out, after the alternate screen is gone.
+	"exit.restarting": "正在重啟 server…",
+	"exit.detached":   "已離開（server 仍在執行）",
+	"exit.glitch":     "已從一次畫面異常中復原 — 按任意鍵重新繪製",
+
 	// Values and legend words shared by more than one surface.
 	"legend.move":      "移動",
 	"legend.edit":      "編輯",

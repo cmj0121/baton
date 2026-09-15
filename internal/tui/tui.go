@@ -1629,7 +1629,7 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 		if key == "y" || key == "enter" {
 			m.restart = true
 			m.quitting = true
-			m.status = "restarting the server…"
+			m.status = m.tr("exit.restarting", "restarting the server…")
 			return m, tea.Quit
 		}
 		m.status = "restart cancelled"
@@ -2509,7 +2509,7 @@ func (m model) conductorMark() string {
 	info := stateInfoFor(p)
 	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
 	name := lipgloss.NewStyle().Foreground(colBrandHi).Render("conductor")
-	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", info.label, seqLabel(m.bindingKey(actConductor))))
+	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", m.stateText(info), seqLabel(m.bindingKey(actConductor))))
 }
 
 // globalShellMark is the FLEET-heading badge for the singleton global shell — the
@@ -2524,7 +2524,7 @@ func (m model) globalShellMark() string {
 	info := stateInfoFor(p)
 	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
 	name := lipgloss.NewStyle().Foreground(colBrandHi).Render("shell")
-	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", info.label, seqLabel(m.bindingKey(actGlobalShell))))
+	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", m.stateText(info), seqLabel(m.bindingKey(actGlobalShell))))
 }
 
 // spawnConductor asks the server to create the conductor: the resolved agent
@@ -3855,7 +3855,7 @@ func (m model) frame() (out string) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().Interface("panic", r).Bytes("stack", debug.Stack()).Msg("recovered a render panic")
-			out = "baton: a render glitch was recovered — press any key to refresh\r\n"
+			out = "baton: " + m.tr("exit.glitch", "a render glitch was recovered — press any key to refresh") + "\r\n"
 		}
 	}()
 	return m.render()
@@ -3864,9 +3864,9 @@ func (m model) frame() (out string) {
 func (m model) render() string {
 	if m.quitting {
 		if m.restart {
-			return "baton: restarting the server…\n"
+			return "baton: " + m.tr("exit.restarting", "restarting the server…") + "\n"
 		}
-		return "baton: detached (server still running)\n"
+		return "baton: " + m.tr("exit.detached", "detached (server still running)") + "\n"
 	}
 	if m.width == 0 || m.height == 0 {
 		return "" // wait for the first size message
@@ -3945,7 +3945,7 @@ func (m model) headerBlock() string {
 	return lipgloss.JoinVertical(lipgloss.Center,
 		bannerStyle.Render(art),
 		"",
-		subStyle.Render(truncate("a next-gen, agent-friendly terminal multiplexer", m.width)),
+		subStyle.Render(truncate(m.tr("tagline", "a next-gen, agent-friendly terminal multiplexer"), m.width)),
 		mutedStyle.Render(truncate(m.versionLine(), m.width)),
 	)
 }
@@ -3990,8 +3990,8 @@ func (m model) zoomView() string {
 func (m model) dashboardView() string {
 	items := m.dashItems() // built once and threaded through the render below
 	shown := m.visibleFleet()
-	heading := sectionStyle.Render(spaced("FLEET")) +
-		mutedStyle.Render(fmt.Sprintf("   %d panel(s)  ", len(shown))) + fleetBreakdown(shown)
+	heading := sectionStyle.Render(spaced(m.tr("fleet.title", "FLEET"))) +
+		mutedStyle.Render(fmt.Sprintf("   "+m.tr("fleet.panels", "%d panel(s)")+"  ", len(shown))) + fleetBreakdown(shown)
 	if mark := m.conductorMark(); mark != "" {
 		heading += mutedStyle.Render("   ·   ") + mark
 	}
@@ -4000,20 +4000,20 @@ func (m model) dashboardView() string {
 	}
 	if m.filter != "" {
 		heading += "  " + seg("⌕ "+truncate(m.filter, 20), colDark, colCyan) +
-			mutedStyle.Render(fmt.Sprintf("  %d match(es)", len(items)))
+			mutedStyle.Render("  "+fmt.Sprintf(m.tr("fleet.matches", "%d match(es)"), len(items)))
 	}
 	// A lens is stated on the heading, always. The tree looks the same under one as
 	// under the fleet's own work items, and a person who cannot tell which they are
 	// looking at will eventually reach for a verb that is refused, or worse, trust a
 	// shape that is not the one they built.
 	if !m.lens.real() {
-		heading += "  " + seg("group by: "+m.lens.String(), colDark, colBrandHi)
+		heading += "  " + seg(m.tr("fleet.group-by", "group by:")+" "+m.lens.String(), colDark, colBrandHi)
 	}
 	// Same argument as the lens chip: a tree on a fleet the cards would have drawn
 	// is a choice someone made, and the dashboard should say so rather than leave
 	// them wondering which of them decided it.
 	if m.treeIsChosen(m.dashTree()) {
-		heading += "  " + seg("tree  "+seqLabel(m.bindingKey(actDashLayout))+" for cards", colDark, colBrand)
+		heading += "  " + seg(fmt.Sprintf(m.tr("fleet.tree-chip", "tree  %s for cards"), seqLabel(m.bindingKey(actDashLayout))), colDark, colBrand)
 	}
 	summary := m.summaryStrip(shown)
 	body := m.treeBody(items)
@@ -4021,9 +4021,9 @@ func (m model) dashboardView() string {
 		body = m.cardGrid(items)
 	}
 	if m.filter != "" && len(items) == 0 {
-		body = noticeBox(mutedStyle.Render("no panels match ") +
+		body = noticeBox(mutedStyle.Render(m.tr("fleet.no-match", "no panels match")+" ") +
 			lipgloss.NewStyle().Foreground(colBrandHi).Render("\""+truncate(m.filter, 24)+"\"") +
-			mutedStyle.Render("  ·  ") + legendKey("esc") + mutedStyle.Render(" clears the filter"))
+			mutedStyle.Render("  ·  ") + legendKey("esc") + mutedStyle.Render(" "+m.tr("fleet.clears-filter", "clears the filter")))
 	}
 	return lipgloss.JoinVertical(lipgloss.Center, heading, "", summary, "", body)
 }
@@ -4045,10 +4045,12 @@ func (m model) summaryStrip(fleet []panel.Panel) string {
 		}
 		info := states[st]
 		led := lipgloss.NewStyle().Foreground(info.color).Render(info.led)
-		chips = append(chips, fmt.Sprintf("%s %s", led, mutedStyle.Render(fmt.Sprintf("%d %s", n, info.label))))
+		chips = append(chips, fmt.Sprintf("%s %s", led, mutedStyle.Render(fmt.Sprintf("%d %s", n, m.stateText(info)))))
 	}
 	if len(chips) == 0 {
-		return noticeBox(mutedStyle.Render("no panels yet  ·  ") +
+		// shell, agent and conductor name the three things the keys spawn, and all
+		// three are baton's own words for them — the same words `ctl spawn` takes.
+		return noticeBox(mutedStyle.Render(m.tr("fleet.empty", "no panels yet")+"  ·  ") +
 			legend(
 				seqLabel(m.bindingKey(actNewPanel)), "shell",
 				seqLabel(m.bindingKey(actNewAgent)), "agent",
@@ -4211,7 +4213,7 @@ func scrollWindow(cursor, count, visible int) (int, int) {
 // renderRows draws the windowed slice [start,end) of the tree, one line each, with
 // the clipped edges marked so it is clear the list continues.
 func (m model) renderRows(items []dashItem, start, end, visible, width int) string {
-	header := sectionStyle.Render(spaced("FLEET"))
+	header := sectionStyle.Render(spaced(m.tr("fleet.title", "FLEET")))
 	if visible < len(items) {
 		header += mutedStyle.Render(fmt.Sprintf("  %d/%d", m.cursor+1, len(items)))
 	}
@@ -4288,11 +4290,11 @@ func (m model) renderPreview(items []dashItem, width int) string {
 
 	title := lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(truncate(p.Title, width))
 	led := lipgloss.NewStyle().Foreground(info.color).Render(info.led)
-	statusLine := led + " " + kindBadge(p.Kind) + "  " + lipgloss.NewStyle().Foreground(info.color).Render(info.label)
+	statusLine := led + " " + kindBadge(p.Kind) + "  " + lipgloss.NewStyle().Foreground(info.color).Render(m.stateText(info))
 	rule := mutedStyle.Render(strings.Repeat("─", width))
 
 	rows := []string{
-		metaRow("state", info.label, info.color),
+		metaRow(m.tr("meta.state", "state"), m.stateText(info), info.color),
 		metaRow("kind", p.Kind.String(), colInk),
 	}
 	if p.Task != "" {
@@ -5052,14 +5054,14 @@ func seg(text string, fg, bg lipgloss.Color) string {
 func (m model) footer() string {
 	// Left cap: the mode. The header already carries the wordmark, so the footer
 	// no longer repeats the brand cap beside it.
-	mode := "DASHBOARD"
+	mode := m.tr("mode.dashboard", "DASHBOARD")
 	switch {
 	case m.input != inputNone:
-		mode = "INPUT"
+		mode = m.tr("mode.input", "INPUT")
 	case m.mode == modeKeyMap:
-		mode = "KEY MAP"
+		mode = m.tr("mode.key-map", "KEY MAP")
 	case m.mode == modePanelConfig:
-		mode = "PANEL CONFIG"
+		mode = m.tr("mode.panel-config", "PANEL CONFIG")
 	}
 	left := seg(mode, colInk, colBlue)
 	// A grab takes over the mode cap and the hint. It is a modal gesture on a view
@@ -5067,7 +5069,7 @@ func (m model) footer() string {
 	// the footer says so and spells out the three keys, rather than leaving a
 	// person to discover that enter now means something different.
 	if m.grabbing() {
-		left = seg("MOVING", colDark, colBrandHi)
+		left = seg(m.tr("mode.moving", "MOVING"), colDark, colBrandHi)
 		return m.statusBar(left, m.grabHint())
 	}
 	return m.statusBar(left, m.helpHint())
@@ -5085,7 +5087,7 @@ func (m model) outageCap() string {
 	if !m.backendDown {
 		return ""
 	}
-	return seg("◼ BACKEND DOWN", colInk, colRed)
+	return seg("◼ "+m.tr("footer.backend-down", "BACKEND DOWN"), colInk, colRed)
 }
 
 // pluginFooterCap renders the plugin's persistent footer segment (baton.footer),

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"unicode"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/i18n"
+	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/signals"
 )
@@ -389,4 +391,49 @@ func hasLetters(s string) bool {
 		}
 	}
 	return false
+}
+
+// TestDashboardChromeLeavesNoEnglishBehind sweeps the whole dashboard frame in
+// zh-TW and fails on any English word still in it.
+//
+// It is a scanner rather than a line-by-line comparison against the English
+// frame, because that comparison is too coarse to catch what actually goes wrong
+// here. A chip strip reading "◆ 1 需要你 · ● 2 idle" differs from its English
+// line in every way a diff can see, and the one word nobody keyed sits in the
+// middle of it. Whole-line equality goes green on exactly the bug this test is
+// for — it did, on both mutations, before it was written this way.
+//
+// The fleet is named in machine words on purpose. A real panel is called
+// "claude · refactor auth", and those are the fleet's words and never the
+// cockpit's, so a fixture full of them would need an allowlist longer than the
+// thing it is checking. With the fleet's own text reduced to p1..p4, every Latin
+// word left on screen belongs to baton, and the allowlist is the short list of
+// the ones that are meant to be there.
+func TestDashboardChromeLeavesNoEnglishBehind(t *testing.T) {
+	// What English on this screen is load-bearing: the product, the wire protocol,
+	// the two panel KINDS (baton's own words, the ones `ctl spawn` takes), and the
+	// host readout's units.
+	allowed := map[string]bool{
+		"baton": true, "protocol": true, "dev": true,
+		"agent": true, "shell": true, "command": true,
+		"cpu": true, "mem": true,
+	}
+
+	m := baseModel()
+	m.lang, m.height = i18n.ZhTW, 40
+	m.fleet = []panel.Panel{
+		{ID: "1", Title: "p1", Kind: panel.Agent, State: panel.Attention},
+		{ID: "2", Title: "p2", Kind: panel.Shell, State: panel.Running},
+		{ID: "3", Title: "p3", Kind: panel.Agent, State: panel.Idle},
+		{ID: "4", Title: "p4", Kind: panel.Agent, State: panel.Exited},
+	}
+
+	word := regexp.MustCompile(`[A-Za-z]{3,}`)
+	for _, line := range strings.Split(ansi.Strip(m.frame()), "\n") {
+		for _, w := range word.FindAllString(line, -1) {
+			if !allowed[strings.ToLower(w)] {
+				t.Errorf("untranslated English on the dashboard: %q in %q", w, strings.TrimSpace(line))
+			}
+		}
+	}
 }

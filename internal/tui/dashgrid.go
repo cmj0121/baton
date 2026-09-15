@@ -216,7 +216,7 @@ func (m model) renderCard(it dashItem, selected bool) string {
 	head := clampWidth(marks+rec+led+" "+title, cardInner)
 
 	badge := kindBadge(p.Kind)
-	state := lipgloss.NewStyle().Foreground(info.color).Render(info.label)
+	state := lipgloss.NewStyle().Foreground(info.color).Render(m.stateText(info))
 	kindLine := badge + "  " + state
 	// The directory rides the state line rather than a line of its own: the card is
 	// three lines by design, and the path is what tells fifty panels called

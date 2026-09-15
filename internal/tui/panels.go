@@ -48,6 +48,17 @@ var colFailed = colRed
 // this; the sites that render a state with no panel behind it (a group's rolled
 // up state, a per-state chip) still read the states map directly, because there
 // is no exit code to consult.
+// stateText is a state's label in the active language. The English label doubles
+// as the message key's tail (state.running, state.attention), so the states table
+// stays one table: a state's presentation is written once, and the catalog keys
+// off the word already there rather than off a parallel list that can drift.
+func (m model) stateText(info stateInfo) string {
+	if info.label == "" {
+		return ""
+	}
+	return m.tr("state."+info.label, info.label)
+}
+
 func stateInfoFor(p panel.Panel) stateInfo {
 	if p.State == panel.Exited && p.ExitCode != 0 {
 		return stateInfo{"✕", "failed", colFailed}
