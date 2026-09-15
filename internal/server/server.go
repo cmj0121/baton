@@ -1303,6 +1303,30 @@ func (s *Server) fanOutput(id string, data []byte) {
 	}
 }
 
+// withdrawPanel removes a panel that was registered before its fork and whose
+// fork then failed — the unwind for createPanel's register-first order (#102).
+//
+// It takes the spec and the Monitor's clock with it. A panel left behind here
+// is a card for a process that never existed, which is the same bug as an exit
+// that never landed, wearing the other face.
+func (s *Server) withdrawPanel(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if i := s.indexLocked(id); i >= 0 {
+		s.panels = append(s.panels[:i], s.panels[i+1:]...)
+	}
+	delete(s.specs, id)
+	s.mon.forget(id)
+}
+
+// afterSpawnForTest runs between a successful fork and the panel's first
+// broadcast. It is nil in every build but a test's, and it exists because #102
+// cannot be reproduced by racing for it: the bug is that a child can exit
+// before the parent's next line, which on any fast machine it never does. A
+// test sets this to wait until the child is certainly gone, so the assertion
+// holds on a laptop and not only on a loaded CI runner.
+var afterSpawnForTest func()
+
 // indexLocked returns the index of the panel with the given id, or -1. The caller
 // must hold s.mu.
 func (s *Server) indexLocked(id string) int {
@@ -3748,19 +3772,6 @@ func (s *Server) createPanel(origin panelOrigin, kind, path string, args []strin
 		return "", fmt.Errorf("unknown panel kind %q", kind)
 	}
 
-	if err := s.startPanel(id, profile, spec); err != nil {
-		if conductor {
-			// The workspace stays: it is this socket's one conductor workspace, and it
-			// may already hold the settings an earlier conductor collected. A failed
-			// spawn is no reason to throw those away — the next attempt reuses it.
-			s.clearConductorPending()
-		}
-		if globalShell {
-			s.clearGlobalShellPending()
-		}
-		return "", err
-	}
-
 	p := panel.Panel{
 		ID:          id,
 		Kind:        panel.ParseKind(kind),
@@ -3776,15 +3787,59 @@ func (s *Server) createPanel(origin panelOrigin, kind, path string, args []strin
 	if globalShell {
 		p.Title = "shell · " + id
 	}
+
+	// REGISTERED BEFORE THE FORK, and that order is the whole of #102.
+	//
+	// startPanel forks a process that can exit before this function's next line
+	// runs — `sh -c "exit 0"` takes microseconds, and there were twenty-eight
+	// lines of parent work between the fork and this append. Its exit reaches
+	// onPanelExit, which scans s.panels, does not find the id, and returns
+	// having done NOTHING: no state change, no log line, no broadcast, because
+	// both halves of that function are inside `if found`. The panel was then
+	// appended as Spawning, for a process that was already dead, and nothing
+	// would ever move it again — the Monitor's clock is started here and its
+	// first-output wake is never coming.
+	//
+	// Registering first makes the callback's precondition true by construction
+	// rather than by being faster than a fork. The unwind below is what that
+	// costs, and it has to be exact: a spawn that fails must leave no panel, no
+	// spec and no Monitor entry, or the same bug is back wearing the other face.
 	s.mu.Lock()
 	s.panels = append(s.panels, p)
 	s.specs[id] = spawnSpec{Spec: spec, Profile: profile} // the exact spec StartCmd launched, so respawn reproduces it
 	s.mon.spawned(id)                                     // start the Monitor's clock; first output wakes it to running
+	s.mu.Unlock()
+
+	if err := s.startPanel(id, profile, spec); err != nil {
+		s.withdrawPanel(id)
+		if conductor {
+			// The workspace stays: it is this socket's one conductor workspace, and it
+			// may already hold the settings an earlier conductor collected. A failed
+			// spawn is no reason to throw those away — the next attempt reuses it.
+			s.clearConductorPending()
+		}
+		if globalShell {
+			s.clearGlobalShellPending()
+		}
+		return "", err
+	}
+	if afterSpawnForTest != nil {
+		afterSpawnForTest()
+	}
+
+	s.mu.Lock()
 	if conductor {
 		s.conductorPending = false // the singleton is now a real panel
 	}
 	if globalShell {
 		s.globalShellPending = false // the singleton is now a real panel
+	}
+	// Read the panel back rather than announcing the value built above: the exit
+	// of an instantly-dying child may already have moved it to Exited, and a
+	// plugin told it spawned as Spawning would be told something that stopped
+	// being true before the message was built.
+	if i := s.indexLocked(id); i >= 0 {
+		p = s.panels[i]
 	}
 	fields := panelFields(p)
 	caps := s.effectiveLimitsLocked(profile).Fields()
