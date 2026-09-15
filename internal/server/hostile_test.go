@@ -45,7 +45,7 @@ var hostileActions = []string{
 	"panel.logview", "fleet.search", "group.show", "group.layout", "group.favourite",
 	"group.unfavourite", "task.enqueue", "task.list", "task.cancel", "task.promote",
 	"task.demote", "task.drain", "config.get", "score.submit", "score.list", "score.status",
-	"score.merge", "score.reword", "score.lower", "worktree.list",
+	"score.merge", "score.reword", "score.lower", "score.edit", "worktree.list",
 	"panel.signal", "panel.respawn", "panel.close", "panel.purge",
 }
 

@@ -3,6 +3,8 @@ package server
 import (
 	"strings"
 	"testing"
+
+	"github.com/cmj0121/baton/internal/proto"
 )
 
 // TestEditorCommandResolutionOrder pins the chain an operator's score.md opens
@@ -66,5 +68,34 @@ func TestEditorCommandKeepsTheEditorsOwnFlags(t *testing.T) {
 	name, args := editorCommand("code -w", "/tmp/score.md")
 	if name != "sh" || args[1] != `code -w "$0"` {
 		t.Fatalf("editorCommand dropped the editor's flags: %q %q", name, args)
+	}
+}
+
+// TestConductorMayNotOpenTheScoreEditor is #93's fence. The memory itself is
+// open to an agent in every direction that matters — score.submit is
+// deliberately ungated and the reads answer anyone — so what this protects is
+// the EDITOR: an interactive program, on the daemon's host, as the user.
+//
+// The sharper half is that the reply hands back an ephemeral id which is not
+// cc.self, so the self-fence does not cover it and panel.input would drive the
+// editor. Every editor worth setting $EDITOR to can run a shell.
+func TestConductorMayNotOpenTheScoreEditor(t *testing.T) {
+	s := &Server{}
+	cc := ctl("c1")
+	cc.role = roleConductor
+
+	if reason := s.guardConductor(cc, proto.Command{Action: "score.edit"}); reason == "" {
+		t.Error("a conductor must not reach the score editor")
+	}
+	// The MEMORY is not what is fenced: the ungated verbs stay ungated, or #38's
+	// "the memory is fed by agents and operators alike" stops being true.
+	for _, open := range []string{"score.submit", "score.list", "score.status"} {
+		if reason := s.guardConductor(cc, proto.Command{Action: open}); reason != "" {
+			t.Errorf("%s is fenced for a conductor (%q); only the editor should be", open, reason)
+		}
+	}
+	// A cockpit connection declares no role and is never fenced.
+	if reason := s.guardConductor(ctl(""), proto.Command{Action: "score.edit"}); reason != "" {
+		t.Errorf("a cockpit connection must not be fenced, got %q", reason)
 	}
 }

@@ -2825,6 +2825,23 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 		// transcript of another panel it can read at leisure, which is the surface the
 		// panel.tail fence exists to keep shut.
 		return "conductor role: panel logging is an operator surface"
+	case "score.edit":
+		// The fleet memory is open to an agent in every direction that matters —
+		// score.submit is deliberately ungated, and score.list and score.status
+		// answer anyone — so this is not the memory being fenced. It is the
+		// EDITOR.
+		//
+		// score.edit asks the daemon to run an interactive program on its own
+		// host, as the user, on the user's own file. That is panel.log's shape
+		// exactly, and it comes with an edge panel.log does not have: the reply
+		// hands back an ephemeral id that is not cc.self, so the self-fence below
+		// does not cover it and panel.input would drive the editor — and every
+		// editor worth setting $EDITOR to can run a shell.
+		//
+		// Nothing is taken away by this. An agent that wants to change the memory
+		// has score.submit, and a conductor that wants to correct it has the three
+		// refine verbs; neither needs a terminal to do it in.
+		return "conductor role: the score editor is an operator surface"
 	case "panel.tail", "panel.ack":
 		// The inbox verbs, and the inbox is an operator surface. There is no conductor
 		// queue — an agent triaging the fleet's attention is a design this round
@@ -3393,11 +3410,9 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 	case "score.status":
 		send(cc, proto.ServerMsg{Type: "score", Score: s.scoreStatus()})
 	case "score.edit":
-		// The operator opening the fleet memory in their own editor. Open to any
-		// connection for the same reason score.submit is: score.md is the file
-		// the memory already lives in, and reconcile — not a self-declaration —
-		// is what decides what an edit means (#93, and #38 §4 for why the gate
-		// is not here).
+		// The operator opening the fleet memory in their own editor (#93). Unlike
+		// the rest of score.*, this one is fenced from a conductor — see
+		// guardConductor, which fences the EDITOR rather than the memory.
 		if err := s.openScoreEdit(cc); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 		}
