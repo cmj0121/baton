@@ -126,7 +126,7 @@ func TestMcpMain(t *testing.T) {
 	os.Stdin = r
 	defer func() { os.Stdin = old; _ = r.Close() }()
 
-	if code := mcpMain(); code != 0 {
+	if code := mcpMain(false); code != 0 {
 		t.Fatalf("mcpMain exit = %d, want 0", code)
 	}
 }

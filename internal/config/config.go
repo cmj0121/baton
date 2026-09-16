@@ -375,6 +375,17 @@ type PanelDefaults struct {
 	// back to the repo's git diff.tool, then a built-in untracked-inclusive diff.
 	DiffCommand string `yaml:"diff-command,omitempty"`
 
+	// AgentMCP is whether an agent panel is launched pointing at baton's own MCP
+	// config, which carries the fleet memory's score_submit tool and nothing else.
+	// Unset defaults to ON — see AgentMCPIsOn.
+	//
+	// It is what closes the memory's loop for a panel nobody dispatches to. The
+	// daemon has never fenced score.submit, so every panel could always write to
+	// the memory; until this existed the only place an agent was ever TOLD so was
+	// a dispatched brief, which an agent you open and talk to yourself never
+	// receives. A tool in the list says it on every turn and costs the agent none.
+	AgentMCP *bool `yaml:"agent-mcp,omitempty"`
+
 	// Editor is the commit editor the git menu's commit op opens (injected as
 	// GIT_EDITOR); empty lets git use its own GIT_EDITOR / core.editor / EDITOR / vi
 	// chain.
@@ -427,6 +438,14 @@ type PanelDefaults struct {
 	// Agents are the named agent profiles, e.g. {"claude": {command: "claude"}}.
 	// A built-in "claude" profile is always available unless overridden here.
 	Agents map[string]AgentProfile `yaml:"agents,omitempty"`
+}
+
+// AgentMCPIsOn reports whether agent panels are launched pointing at baton's own
+// MCP config. Unset defaults to on, for the same reason the memory itself does:
+// the loop it closes is the feature, and a fresh config should not need a line to
+// get it. Only an explicit `agent-mcp: false` switches it off.
+func (p PanelDefaults) AgentMCPIsOn() bool {
+	return p.AgentMCP == nil || *p.AgentMCP
 }
 
 // RestartConfig is the on-disk form of a restart policy: durations as Go duration

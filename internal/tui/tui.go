@@ -173,6 +173,13 @@ type model struct {
 	// which is the only thing that may write settings.language. See saveConfig.
 	langChosen bool
 
+	// feedbackChosen records that the user threw the fleet's score-feedback
+	// switch on the panel-config page, which is the only thing that may write
+	// score.feedback. It is langChosen's twin and exists for the same reason —
+	// see saveConfig, and the comment above it about writing only what has been
+	// changed from the default.
+	feedbackChosen bool
+
 	// keyTimeout is settings.key-timeout: how long a landing waits, carrying
 	// neverKeyTimeout for a configured 0 so a zero-valued model still reads as
 	// "unset" and takes the default.
@@ -232,6 +239,8 @@ type model struct {
 	workdir       string                         // configured default working directory for new panels ("" = home)
 	defaultAgent  string                         // agent profile the new-agent action spawns ("" = claude)
 	agents        map[string]config.AgentProfile // user-configured agent profiles
+	agentMCP      bool                           // panel.agent-mcp: agent panels launch with baton's own MCP config
+	agentMCPSet   bool                           // ... and whether the user threw that switch, which is the only thing that writes it
 	scoreFeedback bool                           // score.feedback in the file: what a profile with no override of its own inherits
 	replayKB      int                            // per-panel replay buffer in KiB, round-tripped so a save never drops it
 	limits        limits.Limits                  // fleet-wide resource caps for new panels (the zero value caps nothing)
@@ -677,6 +686,7 @@ func (m model) applyPrefs(p prefs) model {
 	m.defaultAgent = p.defaultAgent
 	m.agents = p.agents
 	m.scoreFeedback = p.scoreFeedback
+	m.agentMCP = p.agentMCP
 	m.replayKB = p.replayKB
 	m.limits = p.limits
 	m.diffCommand = p.diffCommand
@@ -1859,6 +1869,7 @@ const (
 	panelRowShell      = iota // the default shell new panels run
 	panelRowAgent             // the agent backend the new-agent action spawns
 	panelRowReplayKB          // the per-panel replay buffer (KiB)
+	panelRowAgentMCP          // whether an agent panel is launched with baton's own MCP config
 	panelRowCPUs              // resource limits: CPU cores
 	panelRowMemory            // resource limits: hard memory cap
 	panelRowMemoryHigh        // resource limits: throttle-before-kill watermark
@@ -1952,6 +1963,8 @@ func (m model) editPanelRow() (tea.Model, tea.Cmd) {
 		return m.openAgentPicker(modePanelConfig, agentForDefault), nil
 	case m.cursor == panelRowReplayKB:
 		return m.editReplayKB(), nil
+	case m.cursor == panelRowAgentMCP:
+		return m.toggleAgentMCP(), nil
 	case m.cursor == panelRowFleetFeedback:
 		return m.toggleFleetFeedback(), nil
 	case m.cursor > panelRowFleetFeedback:
@@ -5139,11 +5152,17 @@ func (m model) panelTabBody(tab int) (body, hints []string, selLine int) {
 		row(panelRowShell, m.tr("panel.cfg.shell", "default shell"), m.shellLabel(m.shellPath))
 		row(panelRowAgent, m.tr("panel.cfg.agent", "default agent"), m.defaultAgentLabel())
 		row(panelRowReplayKB, m.tr("panel.cfg.replay", "replay buffer"), m.replayLabel(m.replayKB))
+		// Labelled for the config key it writes (panel.agent-mcp) rather than for
+		// what it does: the label column is sixteen cells and "agent memory tool"
+		// wraps out of it. What it does is the hint below, which has room to say it.
+		row(panelRowAgentMCP, m.tr("panel.cfg.agent-mcp", "agent mcp"), m.feedbackOnOff(m.agentMCP))
 		body = append(body, m.missingAgentsSection()...)
 		hints = []string{
 			mutedStyle.Render(fmt.Sprintf(m.tr("panel.cfg.hint.agent",
 				"default agent is what %s spawns · detected on the fleet's machine"), seqLabel(m.bindingKey(actNewAgent)))),
 			mutedStyle.Render(m.tr("panel.cfg.hint.replay", "replay buffer seeds scrollback · change applies on server restart")),
+			mutedStyle.Render(m.tr("panel.cfg.hint.agent-mcp",
+				"agent mcp gives a new agent panel the memory's submit tool, and nothing else")),
 		}
 	case 1:
 		for i, f := range limitFields {

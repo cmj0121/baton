@@ -34,7 +34,7 @@ func TestMcpMainWriteError(t *testing.T) {
 		_ = outW.Close()
 	}()
 
-	if code := mcpMain(); code != 1 {
+	if code := mcpMain(false); code != 1 {
 		t.Fatalf("mcpMain with a broken stdout = %d, want 1", code)
 	}
 }

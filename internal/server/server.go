@@ -212,6 +212,13 @@ type Settings struct {
 	// same thing and only the true entries are carried.
 	ScoreFeedback      bool
 	AgentScoreFeedback map[string]bool
+
+	// AgentMCP is panel.agent-mcp: whether an agent panel is launched pointing at
+	// baton's own MCP config, so the agent can see the memory's score_submit tool
+	// without waiting to be dispatched to. Reloadable, and read at spawn, so a
+	// SIGHUP changes what the NEXT agent panel starts with and leaves the running
+	// ones alone — an agent's tool list is fixed when its process starts.
+	AgentMCP bool
 }
 
 // Server owns all state and every PTY. It is safe for concurrent use.
@@ -378,6 +385,10 @@ type Server struct {
 	// config.ScoreConfig.Feedback, where that is argued rather than restated.
 	scoreFeedback      bool
 	agentScoreFeedback map[string]bool
+
+	// agentMCP is panel.agent-mcp: whether an agent panel is launched pointing at
+	// baton's own MCP config, which carries score_submit and nothing else.
+	agentMCP bool
 
 	// The quiet ladder. attention is the fleet-wide policy and agentAttention the
 	// per-profile ones layered over it (see Settings), resolved per tick from the
@@ -695,6 +706,14 @@ func WithLogging(dir string, agentDirs map[string]string, agentLog map[string]bo
 // on a zero value to mean it.
 func WithScoreFeedback(on bool, agents map[string]bool) Option {
 	return func(s *Server) { s.scoreFeedback, s.agentScoreFeedback = on, agents }
+}
+
+// WithAgentMCP seeds panel.agent-mcp: whether an agent panel is launched
+// pointing at baton's own MCP config. A server built without it does not, which
+// keeps an embedder's spawns exactly as they were; the daemon passes the config's
+// answer, which defaults to on.
+func WithAgentMCP(on bool) Option {
+	return func(s *Server) { s.agentMCP = on }
 }
 
 // WithVersion sets the server's build version, reported to a frontend in the
@@ -1020,6 +1039,10 @@ func (s *Server) Reload(set Settings) {
 	// panel's profile, so there is nothing in flight to migrate and a brief already
 	// built keeps the sentence it was built with.
 	s.scoreFeedback, s.agentScoreFeedback = set.ScoreFeedback, set.AgentScoreFeedback
+	// Read at spawn, so a SIGHUP decides what the NEXT agent panel starts with and
+	// leaves the running ones alone. An agent's tool list is fixed when its process
+	// starts; there is nothing to migrate into one that is already up.
+	s.agentMCP = set.AgentMCP
 	// The backlog caps, on the same terms WithQueue sets them at construction —
 	// except that a config which no longer names queue.max restores the built-in
 	// default rather than keeping the old number, so removing the key from the file
@@ -3802,6 +3825,14 @@ func (s *Server) createPanel(origin panelOrigin, kind, path string, args []strin
 		if path == "" {
 			s.clearConductorPending()
 			return "", fmt.Errorf("an agent panel needs a command")
+		}
+		// A worker panel is pointed at baton's own MCP config, which carries the
+		// memory's score_submit and nothing else. The conductor is skipped: its
+		// workspace already holds a .mcp.json with the whole fleet-control table,
+		// and a second server offering one of those tools again would be a tool
+		// listed twice under two names.
+		if !conductor {
+			args = append(append([]string(nil), args...), s.agentMCPArgs(path)...)
 		}
 		spec = ptymgr.Spec{Command: path, Args: args, Dir: dir, Env: env}
 	case proto.KindCommand:

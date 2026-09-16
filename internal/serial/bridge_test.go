@@ -357,20 +357,44 @@ func TestBridgeStopsOnCancelAndLetsThePortGo(t *testing.T) {
 	}
 }
 
+// readerFunc adapts a function to io.Reader, so a test can say exactly WHEN the
+// terminal ends rather than only that it has.
+type readerFunc func([]byte) (int, error)
+
+func (f readerFunc) Read(p []byte) (int, error) { return f(p) }
+
 // The terminal ending is the other way out, and it must not depend on where in
 // the open loop the bridge happens to be. The first hardware run of this hung
 // exactly here: stdin was /dev/null, the cancel landed between the open and the
 // swap, so nothing closed the port and the copy blocked for good.
+//
+// The EOF is held back until the open has BEGUN, and that ordering is the whole
+// difference between this test and the flake it used to be. With an
+// already-ended reader (strings.NewReader("")) the race ran the other way about
+// once in four hundred: the input pump reached EOF and cancelled before the loop
+// had checked ctx.Err() even once, so the bridge exited without ever opening a
+// port — and the test then failed for a port that was never opened rather than
+// for one left open. It reproduced under `-race -cpu=2 -count=300` and on CI,
+// where it took down an unrelated pull request.
+//
+// A late cancel is harmless and needs no ordering of its own: the bridge closes
+// the port on its way out of the copy either way, so the test still passes and
+// only loses the window it was aiming at. Missing the open entirely is what it
+// could not survive.
 func TestBridgeStopsWhenTheTerminalEndsDuringAnOpen(t *testing.T) {
 	port := newFakePort()
 	out := &panelOut{}
+	opening := make(chan struct{})
 	b := &serial.Bridge{
 		Cfg: good(),
-		In:  strings.NewReader(""), // an EOF as immediate as /dev/null's
+		In: readerFunc(func([]byte) (int, error) {
+			<-opening // the terminal does not end before the bridge has started opening
+			return 0, io.EOF
+		}),
 		Out: out,
 		OpenPort: func(serial.Config) (io.ReadWriteCloser, error) {
-			// Long enough that the terminal's EOF always lands mid-open, which is the
-			// window the bug lived in.
+			close(opening) // the EOF is now free to land — while this open is in flight
+			// Long enough that it does, which is the window the bug lived in.
 			time.Sleep(30 * time.Millisecond)
 			return port, nil
 		},

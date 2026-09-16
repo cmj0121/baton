@@ -75,6 +75,7 @@ func (m model) feedbackSection(row func(idx int, label, value string)) []string 
 // not overridden it inherits — and persists it.
 func (m model) toggleFleetFeedback() model {
 	m.scoreFeedback = !m.scoreFeedback
+	m.feedbackChosen = true // now it is a choice, and worth persisting
 	if err := m.saveConfig(); err != nil {
 		m.status = m.tr("status.save-failed", "save failed: ") + err.Error()
 		return m
@@ -170,4 +171,26 @@ func nextFeedback(cur *bool) *bool {
 // takes away is the telling.
 func (m model) feedbackHintLine() string {
 	return mutedStyle.Render(m.tr("panel.cfg.hint.feedback", "score feedback · off stops the telling, not the submitting"))
+}
+
+// toggleAgentMCP flips panel.agent-mcp — whether an agent panel is launched
+// pointing at baton's own MCP config, so the agent can see the memory's
+// score_submit tool without waiting to be dispatched to — and persists it.
+//
+// The daemon reads it at SPAWN, so this changes what the next agent panel starts
+// with and leaves every running one alone: an agent's tool list is fixed when its
+// process starts, and there is nothing to migrate into one already up. The status
+// says so, because a switch that appears to do nothing is worse than one that
+// says when it will.
+func (m model) toggleAgentMCP() model {
+	m.agentMCP = !m.agentMCP
+	m.agentMCPSet = true // now it is a choice, and worth persisting
+	if err := m.saveConfig(); err != nil {
+		m.status = m.tr("status.save-failed", "save failed: ") + err.Error()
+		return m
+	}
+	m.sendf(proto.Command{Action: "server.reload"})
+	m.status = m.tr("panel.cfg.agent-mcp", "agent mcp") + " · " + m.feedbackOnOff(m.agentMCP) +
+		" · " + m.tr("panel.cfg.agent-mcp.when", "applies to the next agent panel")
+	return m
 }
