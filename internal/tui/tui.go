@@ -2682,10 +2682,15 @@ func (m *model) clampHelp() {
 	}
 }
 
-// helpVisibleRows is how many rows of the open tab fit, which is what the panel
-// reserves for its chrome plus whatever the tab bar takes.
+// helpVisibleRows is how many rows of the open tab fit. It asks the panel itself
+// what its chrome costs, rather than restating it here — the help view's footer
+// is two lines today and this must not be the place that has to be remembered
+// when it is three.
 func (m model) helpVisibleRows(secs []helpSection) int {
-	return m.panelVisibleRows(helpReserved + len(m.helpTabBar(secs, m.width-8)))
+	return m.panelVisibleRows(scrollPanel{
+		head:   m.helpTabBar(secs, m.width-8),
+		footer: []string{"", ""}, // the blank and the legend; the text is not needed to count them
+	}.reservedRows())
 }
 
 // helpBodyRows is the height every tab is drawn to: the tallest tab, or the
@@ -3670,13 +3675,13 @@ func (m *model) closeSelected() {
 
 // move shifts the cursor by delta within the active list, clamped to its bounds.
 func (m *model) move(delta int) {
-	n := m.itemCount()
-	if n == 0 {
+	lo, n := 0, m.itemCount()
+	if n <= lo {
 		return
 	}
 	m.cursor += delta
-	if m.cursor < 0 {
-		m.cursor = 0
+	if m.cursor < lo {
+		m.cursor = lo
 	}
 	if m.cursor >= n {
 		m.cursor = n - 1
@@ -3927,6 +3932,27 @@ func (m model) render() string {
 	}
 
 	content := lipgloss.JoinVertical(lipgloss.Center, header, "", body)
+	// The wordmark is the first thing to go when the screen is short. What is on
+	// screen is what someone opened; the banner is decoration, and decoration that
+	// pushes a pop-up's legend — and then the footer — off the bottom of the
+	// terminal has stopped being decoration.
+	//
+	// Two conditions, and both are needed. bannerFits is asked BEFORE the body is
+	// built, so an overlay can size itself to the rows the banner is not taking.
+	// The height check here is asked after, because only now is the body's real
+	// height known: a panel with a floor under its body (three rows, so ↑↓ still
+	// mean something) can come out taller than the space a generic estimate said
+	// it would have.
+	if !m.bannerFits() || lipgloss.Height(content) > m.height-1 {
+		content = body
+	}
+	// And whatever is left is cut to the rows there are. A terminal can be smaller
+	// than the smallest thing the cockpit knows how to draw — minHeight is eight
+	// rows, and the fleet heading, its chip strip and one card are already more
+	// than that — so the last word has to be the screen's. Place would otherwise
+	// hand back the overflow and the footer would be pushed off the bottom, which
+	// is how a view too big to draw becomes a view with no status bar.
+	content = clipRows(content, m.height-1)
 	// Center the cockpit over the terminal's own (transparent) background; the
 	// panels are transparent too, so only their borders carry the brand colour.
 	placed := lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Center, content)
@@ -4342,7 +4368,6 @@ func (m model) helpView() string {
 		head:     m.helpTabBar(secs, m.width-8),
 		body:     body,
 		footer:   []string{"", legend},
-		reserved: helpReserved,
 		anchor:   m.helpScroll, // read-only: the arrows drive this offset directly
 		centered: false,
 		clipHint: mutedStyle.Render("   " + m.tr("help.legend.scroll", "↑↓ scroll")),
@@ -4690,7 +4715,6 @@ func (m model) keyMapView() string {
 		title:    m.tr("keymap.title", "KEY BINDINGS"),
 		body:     body,
 		footer:   []string{"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(hints))), hints, about},
-		reserved: keyMapReserved,
 		anchor:   selLine,
 		centered: true,
 		clipHint: mutedStyle.Render(fmt.Sprintf("   %d/%d", m.cursor+1, len(binds)+1+numSettings)),
@@ -4700,11 +4724,7 @@ func (m model) keyMapView() string {
 // The vertical chrome each overlay panel reserves around its scrollable body —
 // box border + padding, header, any hint/legend lines, and the cockpit footer —
 // so panelVisibleRows can size the body to never overflow the screen.
-const (
-	keyMapReserved      = 10 // header+blank, body, blank, rule, legend, about
-	panelConfigReserved = 12 // header+blank, body, blank, two hints, blank, rule, legend
-	helpReserved        = 8  // header+blank, body, blank, legend
-)
+const ()
 
 // panelVisibleRows is how many body rows an overlay panel shows before it
 // scrolls, after reserving `reserved` rows for its chrome and the footer. An
@@ -4740,7 +4760,30 @@ func (m model) overlayStack() int {
 	if m.height <= 0 {
 		return 0
 	}
+	if !m.bannerFits() {
+		return 0
+	}
 	return lipgloss.Height(m.headerBlock()) + 1
+}
+
+// minPopupRows is the smallest pop-up worth drawing: three body rows inside a
+// panel's own chrome. A terminal that cannot hold the banner AND this is a
+// terminal that does not get the banner.
+const minPopupRows = 3 + 2 + 2 + popupChrome // body, title+blank, a one-line footer, the box
+
+// bannerFits reports whether the wordmark block can sit above an overlay and
+// still leave room for the smallest usable pop-up under it.
+//
+// It is the one place that decides, and both the sizing and the drawing read it,
+// because they have to agree: a body sized as though the banner were there and
+// then drawn without it wastes the rows it just gave away, and a body sized
+// without the banner and drawn with it runs off the bottom of the screen — which
+// is the failure this whole file's row arithmetic exists to avoid.
+func (m model) bannerFits() bool {
+	if m.height <= 0 {
+		return true // unsized: the first frame, and unit tests
+	}
+	return m.height-1-(lipgloss.Height(m.headerBlock())+1) >= minPopupRows
 }
 
 // windowAround clips rows to a visible-row window centred on anchor (the selected
@@ -4779,16 +4822,32 @@ type scrollPanel struct {
 	head     []string // pinned lines under the title: a tab bar, a filter echo
 	body     []string // the scrollable rows
 	footer   []string // pinned lines below the body
-	reserved int      // vertical chrome to reserve when sizing the body
 	anchor   int      // the cursor line (centered) or the scroll offset (top)
 	centered bool     // keep anchor in view (cursor panels) vs. anchor-as-offset (help)
 	clipHint string   // appended to the title when the body is clipped
 }
 
+// popupChrome is what the bordered surface costs in rows: the rounded border top
+// and bottom, and popupBoxAt's one row of vertical padding on each side.
+const popupChrome = 4
+
+// reservedRows is every row of this panel that is NOT scrollable body: the title
+// and the blank under it, the pinned head and footer, and the box around the lot.
+//
+// It is COMPUTED and no longer a per-panel constant, because a constant is a
+// second statement of something the struct already says, and the two drift. The
+// panel-config page's said 12 with a note reading "two hints" long after the page
+// had four and a score-feedback line — so it sized its body two rows too tall,
+// the box came out two rows past the bottom of the terminal, and the legend the
+// number was counting was the thing pushed off the screen.
+func (p scrollPanel) reservedRows() int {
+	return 2 + len(p.head) + len(p.footer) + popupChrome // title + blank, head, footer, box
+}
+
 // renderScrollPanel windows p.body to the height and wraps it, the title, and the
 // footer in the shared popupBox.
 func (m model) renderScrollPanel(p scrollPanel) string {
-	visible := m.panelVisibleRows(p.reserved + len(p.head))
+	visible := m.panelVisibleRows(p.reservedRows())
 	body, clipped := windowFrom(p.body, p.anchor, visible)
 	if p.centered {
 		body, clipped = windowAround(p.body, p.anchor, visible)
@@ -4844,7 +4903,52 @@ func (m model) cycleUsageMode() (tea.Model, tea.Cmd) {
 // popupBox wraps a settings/overlay panel in the cockpit's bordered surface at the
 // fixed pop-up width.
 func (m model) popupBox(body string) string {
-	return popupBoxAt(body, m.popupWidth())
+	return popupBoxAt(m.fitPopup(body), m.popupWidth())
+}
+
+// fitPopup clips a pop-up's content to the rows the terminal can actually show.
+//
+// It is the last line of defence, and it exists because not every pop-up is a
+// scroller. The ones built from renderScrollPanel window their own body and reach
+// here already the right height; the fixed ones — the signal picker's seven
+// signals, a form, a menu — are as tall as their content and nothing else was
+// stopping them from being taller than the screen.
+//
+// Overflowing is not a gentler failure than clipping, which is the thing worth
+// being clear about: lipgloss.Place hands back content taller than the box it was
+// given, so the rows past the bottom are lost anyway AND they take the footer with
+// them. Clipping loses the same rows and keeps the footer.
+//
+// What it will not drop is the LAST line. That is the legend — the row that says
+// which key closes the thing — and a person who cannot see it is stuck in an
+// overlay they opened by accident. An ellipsis takes the place of what went, so
+// the cut is visible rather than silent.
+func (m model) fitPopup(body string) string {
+	if m.height <= 0 {
+		return body
+	}
+	room := m.height - 1 - popupChrome
+	lines := strings.Split(body, "\n")
+	if room < 3 || len(lines) <= room {
+		return body
+	}
+	kept := append([]string(nil), lines[:room-2]...)
+	kept = append(kept, mutedStyle.Render("…"), lines[len(lines)-1])
+	return strings.Join(kept, "\n")
+}
+
+// clipRows cuts a block to at most n lines, keeping the top. It is the cockpit's
+// final say on height: everything above it tries to fit, and this is what makes
+// sure the frame handed to the terminal is the size the terminal asked for.
+func clipRows(s string, n int) string {
+	if n < 1 {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) <= n {
+		return s
+	}
+	return strings.Join(lines[:n], "\n")
 }
 
 // popupBoxAt renders body in the bordered surface at an exact content width. Each
@@ -4872,9 +4976,9 @@ func popupBoxAt(body string, width int) string {
 		Render(strings.Join(lines, "\n"))
 }
 
-// panelConfigView renders the panel-defaults tab: the spawn defaults (shell,
-// replay buffer) and, under their own section header, the resource limits new
-// panels are capped by.
+// panelConfigView renders the panel-defaults page: the spawn defaults (shell,
+// replay buffer) and, under their own section headers, the resource limits new
+// panels are capped by and the per-profile score-feedback switches.
 func (m model) panelConfigView() string {
 	body := make([]string, 0, numPanelConfigRows+3) // +3: the section header and its blanks
 	selLine := 0                                    // the selected row's body line, for the scroll anchor
@@ -4922,7 +5026,6 @@ func (m model) panelConfigView() string {
 			mutedStyle.Render(m.tr("panel.cfg.hint.limits", "limits cap a panel's whole process tree") + " · " + m.enforceLabel()),
 			m.feedbackHintLine(),
 			"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(hints))), hints},
-		reserved: panelConfigReserved,
 		anchor:   selLine,
 		centered: true,
 		clipHint: mutedStyle.Render(fmt.Sprintf("   %d/%d", m.cursor+1, m.itemCount())),
