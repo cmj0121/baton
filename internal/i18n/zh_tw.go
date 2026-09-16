@@ -183,6 +183,12 @@ var zhTW = map[string]string{
 	// memory-high, pids and nofile are the keys someone writes in their config
 	// file, and the same argument that keeps a key name in English keeps those.
 	// Their edit overlays are prose and are translated below.
+	// The page's tabs. Each holds its own rows and its own hints, so the page draws
+	// a third of what it once did at once.
+	"panel.cfg.tab.defaults": "開啟預設",
+	"panel.cfg.tab.limits":   "資源限制",
+	"panel.cfg.tab.feedback": "評分回饋",
+
 	"panel.cfg.title":          "面板設定",
 	"panel.cfg.shell":          "預設 shell",
 	"panel.cfg.agent":          "預設 agent",
@@ -741,6 +747,7 @@ var zhTW = map[string]string{
 	// Values and legend words shared by more than one surface.
 	"legend.move":        "移動",
 	"legend.edit":        "編輯",
+	"legend.tab":         "切換分頁",
 	"legend.back":        "返回",
 	"legend.save":        "儲存",
 	"legend.cancel":      "取消",

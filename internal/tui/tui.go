@@ -252,6 +252,7 @@ type model struct {
 	helpFrom    mode             // the view the key map (?) was opened from, to restore on esc
 	helpScroll  int              // scroll offset within the open help tab (the list has no cursor)
 	helpTab     int              // which purpose tab the key list is showing
+	panelTab    int              // which tab the panel-config page is showing
 
 	renameID      string // panel id being renamed via inputRename ("" if a group)
 	renameGroup   string // group being renamed via inputRename ("" if a panel)
@@ -1730,6 +1731,9 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 			m.cycleHelpTab(-1)
 			return m, nil
 		}
+		if m.mode == modePanelConfig { // so is the panel-config page
+			return m.cyclePanelTab(-1), nil
+		}
 		// ← and → walk the dashboard TREE: out and in. On the card grid there is no
 		// tree to walk — a work item is drawn whole — so there they do the only
 		// thing left to do with a horizontal key, which is what the grid always used
@@ -1744,6 +1748,9 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 		if m.mode == modeHelp {
 			m.cycleHelpTab(1)
 			return m, nil
+		}
+		if m.mode == modePanelConfig {
+			return m.cyclePanelTab(1), nil
 		}
 		if m.mode == modeDashboard && !m.gridDash() {
 			return m.expandSelected(), nil
@@ -2747,6 +2754,7 @@ func (m model) commitRebind() (tea.Model, tea.Cmd) {
 func (m model) openPanelConfig(from mode) model {
 	m.helpFrom = from
 	m.mode = modePanelConfig
+	m.panelTab, m.cursor = 0, panelRowShell // open on the defaults, at the top
 	m.cursor = 0
 	m.status = m.tr("status.panel-config", "panel config")
 	return m
@@ -3676,6 +3684,12 @@ func (m *model) closeSelected() {
 // move shifts the cursor by delta within the active list, clamped to its bounds.
 func (m *model) move(delta int) {
 	lo, n := 0, m.itemCount()
+	// The panel-config page partitions one row index across its tabs, so the
+	// cursor moves within the OPEN tab's slice of it. Without this, ↓ off the last
+	// defaults row lands on a resource limit that is not on screen, and e edits it.
+	if m.mode == modePanelConfig {
+		lo, n = m.panelTabRange()
+	}
 	if n <= lo {
 		return
 	}
@@ -4976,15 +4990,80 @@ func popupBoxAt(body string, width int) string {
 		Render(strings.Join(lines, "\n"))
 }
 
-// panelConfigView renders the panel-defaults page: the spawn defaults (shell,
-// replay buffer) and, under their own section headers, the resource limits new
-// panels are capped by and the per-profile score-feedback switches.
-func (m model) panelConfigView() string {
-	body := make([]string, 0, numPanelConfigRows+3) // +3: the section header and its blanks
-	selLine := 0                                    // the selected row's body line, for the scroll anchor
+// The panel-config page's tabs. The page had grown three sections, four footer
+// hints and a roll of uninstalled backends, all drawn at once: on an 80×32
+// terminal that left ONE resource-limit row visible between the headings and the
+// hints, and on anything shorter the legend went off the bottom of the box.
+//
+// A tab carries its own rows and its own hints, so the page draws a third of what
+// it used to and every row of it is a row about the same thing. The sections no
+// longer need headings either — the tab is the heading, which is two more rows
+// back.
+//
+// first is the page-wide row index the tab starts at, and the tabs partition that
+// one index space rather than each having their own. Everything that edits a row
+// — editPanelRow, the limit table, the feedback cycle — reads m.cursor against
+// the panelRow* constants, and a per-tab cursor would have meant every one of
+// them learning which tab was open to know what it was on.
+type panelCfgTab struct {
+	key, name string // the tab's label: message key, and the English source
+	first     int    // the first page row this tab holds
+	rows      func(m model) int
+}
 
-	// The section header makes the body longer than the row count, so the selected
-	// row records the line it landed on rather than assuming the two indexes match.
+var panelCfgTabs = []panelCfgTab{
+	{"panel.cfg.tab.defaults", "DEFAULTS", panelRowShell, func(model) int { return firstLimitRow }},
+	{"panel.cfg.tab.limits", "LIMITS", firstLimitRow, func(model) int { return len(limitFields) }},
+	{"panel.cfg.tab.feedback", "FEEDBACK", numPanelConfigRows, func(m model) int { return len(m.feedbackProfiles()) }},
+}
+
+// panelTabIdx is the open tab, clamped to the tabs that exist.
+func (m model) panelTabIdx() int {
+	return clampInt(m.panelTab, 0, len(panelCfgTabs)-1)
+}
+
+// panelTabRange is the page-row range the open tab holds: the first row, and one
+// past its last. A tab with nothing in it (no agent profiles are configured)
+// reports an empty range, and the cursor stays where it was — there is nothing on
+// that tab to put it on.
+func (m model) panelTabRange() (first, end int) {
+	t := panelCfgTabs[m.panelTabIdx()]
+	return t.first, t.first + t.rows(m)
+}
+
+// cyclePanelTab walks the page's tabs, landing the cursor on the first row of the
+// one it arrives at so ↑↓ and e act on what is actually on screen.
+func (m model) cyclePanelTab(delta int) model {
+	m.panelTab = wrapIndex(m.panelTabIdx(), delta, len(panelCfgTabs))
+	if first, end := m.panelTabRange(); first < end {
+		m.cursor = first
+	}
+	return m
+}
+
+// panelTabBar draws the page's tabs in the key list's style — the cockpit has one
+// look for a tab bar and this is it.
+func (m model) panelTabBar() []string {
+	parts := make([]string, 0, len(panelCfgTabs))
+	for i, t := range panelCfgTabs {
+		name := m.tr(t.key, t.name)
+		if i == m.panelTabIdx() {
+			parts = append(parts, tabHotStyle.Render(name))
+			continue
+		}
+		parts = append(parts, tabStyle.Render(name))
+	}
+	return []string{" " + strings.Join(parts, mutedStyle.Render("│")), ""}
+}
+
+// panelConfigView renders the open tab of the panel-defaults page: its rows, and
+// the hints that belong to them.
+func (m model) panelConfigView() string {
+	body := make([]string, 0, numPanelConfigRows)
+	selLine := 0 // the selected row's body line, for the scroll anchor
+
+	// A tab's body can be longer than its row count (the uninstalled roll), so the
+	// selected row records the line it landed on rather than assuming they match.
 	row := func(idx int, label, value string) {
 		caret := "  "
 		labelStyle := mutedStyle
@@ -5003,32 +5082,48 @@ func (m model) panelConfigView() string {
 		body = append(body, caret+labelStyle.Width(panelLabelWidth).Render(label)+valueStyle.Render(value))
 	}
 
-	row(panelRowShell, m.tr("panel.cfg.shell", "default shell"), m.shellLabel(m.shellPath))
-	row(panelRowAgent, m.tr("panel.cfg.agent", "default agent"), m.defaultAgentLabel())
-	row(panelRowReplayKB, m.tr("panel.cfg.replay", "replay buffer"), m.replayLabel(m.replayKB))
-	body = append(body, m.missingAgentsSection()...)
-	body = append(body, "", sectionStyle.Render(spaced(m.tr("panel.cfg.limits", "RESOURCE LIMITS"))), "")
-	for i, f := range limitFields {
-		// The row label is the CONFIG key (cpus, memory-high, nofile) and stays in
-		// English in every language, for the reason the key names do: it is the word
-		// someone types into their config file, and a translated one is unsearchable.
-		row(firstLimitRow+i, f.label, m.limitLabel(f.get(m.limits)))
+	var hints []string
+	hint := func(key, english string) {
+		hints = append(hints, mutedStyle.Render(m.tr(key, english)))
 	}
-	body = append(body, m.feedbackSection(row)...)
-	hints := legend("↑↓", m.tr("legend.move", "move"), "e", m.tr("legend.edit", "edit"), "esc", m.tr("legend.back", "back"))
 
+	switch m.panelTabIdx() {
+	case 0:
+		row(panelRowShell, m.tr("panel.cfg.shell", "default shell"), m.shellLabel(m.shellPath))
+		row(panelRowAgent, m.tr("panel.cfg.agent", "default agent"), m.defaultAgentLabel())
+		row(panelRowReplayKB, m.tr("panel.cfg.replay", "replay buffer"), m.replayLabel(m.replayKB))
+		body = append(body, m.missingAgentsSection()...)
+		hints = append(hints, mutedStyle.Render(fmt.Sprintf(m.tr("panel.cfg.hint.agent",
+			"default agent is what %s spawns · detected on the fleet's machine"), seqLabel(m.bindingKey(actNewAgent)))))
+		hint("panel.cfg.hint.replay", "replay buffer seeds scrollback · change applies on server restart")
+	case 1:
+		for i, f := range limitFields {
+			// The row label is the CONFIG key (cpus, memory-high, nofile) and stays in
+			// English in every language, for the reason the key names do: it is the word
+			// someone types into their config file, and a translated one is unsearchable.
+			row(firstLimitRow+i, f.label, m.limitLabel(f.get(m.limits)))
+		}
+		hints = append(hints, mutedStyle.Render(m.tr("panel.cfg.hint.limits",
+			"limits cap a panel's whole process tree")+" · "+m.enforceLabel()))
+	default:
+		body = append(body, m.feedbackSection(row)...)
+		hints = append(hints, m.feedbackHintLine())
+	}
+
+	legendLine := legend("↑↓", m.tr("legend.move", "move"), "←→", m.tr("legend.tab", "tab"),
+		"e", m.tr("legend.edit", "edit"), "esc", m.tr("legend.back", "back"))
+	footer := append([]string{""}, hints...)
+	footer = append(footer, "", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(legendLine))), legendLine)
+
+	first, end := m.panelTabRange()
 	return m.renderScrollPanel(scrollPanel{
-		title: m.tr("panel.cfg.title", "PANEL CONFIG"),
-		body:  body,
-		footer: []string{"",
-			mutedStyle.Render(fmt.Sprintf(m.tr("panel.cfg.hint.agent", "default agent is what %s spawns · detected on the fleet's machine"), seqLabel(m.bindingKey(actNewAgent)))),
-			mutedStyle.Render(m.tr("panel.cfg.hint.replay", "replay buffer seeds scrollback · change applies on server restart")),
-			mutedStyle.Render(m.tr("panel.cfg.hint.limits", "limits cap a panel's whole process tree") + " · " + m.enforceLabel()),
-			m.feedbackHintLine(),
-			"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(hints))), hints},
+		title:    m.tr("panel.cfg.title", "PANEL CONFIG"),
+		head:     m.panelTabBar(),
+		body:     body,
+		footer:   footer,
 		anchor:   selLine,
 		centered: true,
-		clipHint: mutedStyle.Render(fmt.Sprintf("   %d/%d", m.cursor+1, m.itemCount())),
+		clipHint: mutedStyle.Render(fmt.Sprintf("   %d/%d", max(0, m.cursor-first)+1, max(1, end-first))),
 	})
 }
 

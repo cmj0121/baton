@@ -33,15 +33,25 @@ func TestPanelConfigWalksToLimitRows(t *testing.T) {
 	if m.mode != modePanelConfig {
 		t.Fatalf("C-t P should open panel config, mode=%v", m.mode)
 	}
-	for i := 0; i < numPanelConfigRows-1; i++ {
+	// ↓ walks the OPEN tab and stops at its end: the page partitions one row index
+	// across its tabs, and the defaults tab ends where the limits tab begins.
+	for i := 0; i < firstLimitRow+2; i++ {
+		m = press(m, "down")
+	}
+	if m.cursor != firstLimitRow-1 {
+		t.Fatalf("down should stop at the last defaults row, cursor=%d", m.cursor)
+	}
+
+	// → opens the limits tab and lands on its first row.
+	m = press(m, "right")
+	if m.cursor != firstLimitRow {
+		t.Fatalf("right should open the limits tab on its first row, cursor=%d", m.cursor)
+	}
+	for i := 0; i < len(limitFields)+2; i++ {
 		m = press(m, "down")
 	}
 	if m.cursor != numPanelConfigRows-1 {
-		t.Fatalf("down should reach the last row, cursor=%d of %d", m.cursor, numPanelConfigRows)
-	}
-	m = press(m, "down") // past the end: the cursor clamps rather than running off
-	if m.cursor != numPanelConfigRows-1 {
-		t.Fatalf("the cursor should clamp at the last row, cursor=%d", m.cursor)
+		t.Fatalf("down should reach the last limit row and clamp there, cursor=%d", m.cursor)
 	}
 
 	for i, f := range limitFields {
@@ -125,6 +135,7 @@ func TestPanelConfigViewRendersLimits(t *testing.T) {
 	m := newLimitsModel(t)
 	m.limits = limits.Limits{CPUs: "2"}
 
+	m.panelTab = 1 // the limits tab
 	out := m.panelConfigView()
 	for _, f := range limitFields {
 		if !strings.Contains(out, f.label) {
@@ -134,8 +145,15 @@ func TestPanelConfigViewRendersLimits(t *testing.T) {
 	if !strings.Contains(out, "no cap") {
 		t.Errorf("an unset limit should read as no cap:\n%s", out)
 	}
-	if !strings.Contains(out, "default shell") || !strings.Contains(out, "replay buffer") {
-		t.Errorf("the spawn defaults should still be shown:\n%s", out)
+	// The spawn defaults are a tab of their own now, and this one does not show
+	// them — which is the point of the split, so it is asserted rather than left
+	// to be noticed.
+	if strings.Contains(out, "default shell") {
+		t.Errorf("the limits tab should hold only limits:\n%s", out)
+	}
+	m.panelTab = 0
+	if out := m.panelConfigView(); !strings.Contains(out, "default shell") || !strings.Contains(out, "replay buffer") {
+		t.Errorf("the defaults tab should show the spawn defaults:\n%s", out)
 	}
 }
 
@@ -156,6 +174,10 @@ func TestPanelConfigViewScrollsToEveryRow(t *testing.T) {
 
 	for row := 0; row < numPanelConfigRows; row++ {
 		m.cursor = row
+		m.panelTab = 0
+		if row >= firstLimitRow {
+			m.panelTab = 1 // the row lives on the limits tab, which is what draws it
+		}
 		out := ansi.Strip(m.panelConfigView())
 		caret := ""
 		for _, l := range strings.Split(out, "\n") {
@@ -235,6 +257,7 @@ func TestEnforceLabelTellsTheTruth(t *testing.T) {
 	}
 
 	// The label reaches the screen, not just the helper.
+	m.panelTab = 1 // the limits tab, which is where the enforcement line belongs
 	if !strings.Contains(m.panelConfigView(), "enforced by cgroup") {
 		t.Error("the panel config should show how the caps are enforced")
 	}

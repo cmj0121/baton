@@ -242,10 +242,10 @@ func helpRows(m model) (string, []string) {
 // KNOWN, NOT INSTALLED roll, which lists backend names and homepages) is left out
 // of the fixture for that reason, not because it is exempt.
 func TestPanelConfigIsFullyTranslated(t *testing.T) {
-	page := func(lang i18n.Lang) []string {
+	page := func(lang i18n.Lang, tab int) []string {
 		m := baseModel()
 		m.mode, m.lang, m.height = modePanelConfig, lang, 44
-		m.shellPath = "/bin/zsh"
+		m.panelTab, m.shellPath = tab, "/bin/zsh"
 		var out []string
 		for _, line := range strings.Split(ansi.Strip(m.panelConfigView()), "\n") {
 			if line = strings.TrimSpace(strings.Trim(line, "│╭╮╰╯─ ")); line != "" {
@@ -255,13 +255,17 @@ func TestPanelConfigIsFullyTranslated(t *testing.T) {
 		return out
 	}
 
-	en, zh := page(i18n.EN), page(i18n.ZhTW)
-	if len(en) != len(zh) {
-		t.Fatalf("translating changed the line count, %d → %d", len(en), len(zh))
-	}
-	for i := range en {
-		if en[i] == zh[i] {
-			t.Errorf("line %d is untranslated: %q", i, en[i])
+	// Every tab, since each draws its own rows and its own hints now — checking
+	// the one that happens to be open would leave two thirds of the page unread.
+	for tab := range panelCfgTabs {
+		en, zh := page(i18n.EN, tab), page(i18n.ZhTW, tab)
+		if len(en) != len(zh) {
+			t.Fatalf("tab %d: translating changed the line count, %d → %d", tab, len(en), len(zh))
+		}
+		for i := range en {
+			if en[i] == zh[i] {
+				t.Errorf("tab %d line %d is untranslated: %q", tab, i, en[i])
+			}
 		}
 	}
 }
