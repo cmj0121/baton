@@ -697,6 +697,47 @@ var zhTW = map[string]string{
 	"status.ran":                             "已執行 ",
 	"status.enter-binds":                     "enter 綁定  ·  esc 取消",
 
+	// --- the preview pane, the quiet fold, the pre-attach connection form ----
+	"preview.none":     "沒有選取任何面板",
+	"preview.panels":   "面板",
+	"meta.kind":        "種類",
+	"meta.task":        "任務",
+	"meta.activity":    "動態",
+	"meta.signal":      "輸出",
+	"fold.quiet-means": "閒置,或乾淨結束",
+	"fold.count":       "已摺疊 %d 個面板:閒置,或乾淨結束。",
+	"fold.note.1":      "這裡沒有任何東西在等你。收藏、釘選、已標記",
+	"fold.note.2":      "的面板,以及游標所在的那一張卡,永遠不會被",
+	"fold.note.3":      "摺疊,所以摺疊絕不會藏起你正看著的東西。",
+
+	"usage.title":   "帳號用量",
+	"rform.address": "位址",
+	// The address FORMS and the word PASSKEY are typed and read exactly as they
+	// are spelled, so neither carries an entry here (see remote.passkey).
+	"rform.passkey.hint": "艦隊那端按 C-t @ 會顯示的 8 個字元",
+	"rform.hint":         "連接埠預設是 22 · 由 ssh 承載這條連線",
+	"rform.attach":       "連上",
+	"rform.field":        "切換欄位",
+
+	// The dashboard's group-by lens. The lens's own String() stays English — it is
+	// what the view state persists and parseLens reads back — so only the word a
+	// reader sees is here.
+	"lens.work-item":          "工作項目",
+	"lens.directory":          "目錄",
+	"lens.profile":            "profile",
+	"lens.state":              "狀態",
+	"lens.not-a-work-item":    " 是一種檢視方式,不是工作項目 — 請按 ",
+	"fold.verb.fold":          "摺疊",
+	"fold.verb.expand":        "展開",
+	"status.already-first":    "已經在最前面了",
+	"status.already-last":     "已經在最後面了",
+	"status.exit-disabled":    "這裡不能直接離開 — 請按 %s 卸離",
+	"status.cards-draw-whole": "卡片會把一個工作項目整個畫出來 — ",
+	"usage.vendor.absent":     "未安裝",
+	"usage.vendor.no-source":  "沒有用量來源",
+	"usage.vendor.no-reading": "還沒有讀數",
+	"notify.a-panel":          "某個面板",
+
 	// Values and legend words shared by more than one surface.
 	"legend.move":        "移動",
 	"legend.edit":        "編輯",
@@ -736,6 +777,7 @@ var zhTW = map[string]string{
 	"legend.pick":        "選定",
 	"legend.walk":        "逐筆移動",
 	"legend.open-panel":  "開啟面板",
+	"legend.quit":        "離開",
 	"value.on":           "開",
 	"value.off":          "關",
 	"feedback.inherit":   "繼承",

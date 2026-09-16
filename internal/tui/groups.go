@@ -538,7 +538,7 @@ func markCell(marked bool) string {
 func (m model) markStatus() string {
 	n := len(m.markedIDs())
 	if n == 0 {
-		return "selection cleared"
+		return m.tr("status.selection-cleared", "selection cleared")
 	}
 	return fmt.Sprintf("%d panel(s) selected · %s to group", n, seqLabel(m.bindingKey(actGroup)))
 }
@@ -1050,9 +1050,9 @@ func (m model) foldGlyph(parent string) string {
 // foldVerb is what enter does next on the fold row.
 func (m model) foldVerb(parent string) string {
 	if m.foldOpen[parent] {
-		return "fold"
+		return m.tr("fold.verb.fold", "fold")
 	}
-	return "expand"
+	return m.tr("fold.verb.expand", "expand")
 }
 
 // renderFoldPreview is the tree pane's right side for the quiet row. It says what
@@ -1068,11 +1068,11 @@ func (m model) renderFoldPreview(it dashItem, width int) string {
 		Render(truncate(m.foldGlyph(it.parent)+" "+it.title(), width))
 	rule := mutedStyle.Render(strings.Repeat("─", width))
 	body := []string{
-		mutedStyle.Render(fmt.Sprintf("%d panel(s) folded away: idle, or exited cleanly.", it.quiet)),
+		mutedStyle.Render(fmt.Sprintf(m.tr("fold.count", "%d panel(s) folded away: idle, or exited cleanly."), it.quiet)),
 		"",
-		mutedStyle.Render("Nothing here is asking for anything. Favourites, pins,"),
-		mutedStyle.Render("marked panels and the card under the cursor are never"),
-		mutedStyle.Render("folded, so the fold can never hide what you are on."),
+		mutedStyle.Render(m.tr("fold.note.1", "Nothing here is asking for anything. Favourites, pins,")),
+		mutedStyle.Render(m.tr("fold.note.2", "marked panels and the card under the cursor are never")),
+		mutedStyle.Render(m.tr("fold.note.3", "folded, so the fold can never hide what you are on.")),
 		"",
 		legend("enter", m.foldVerb(it.parent)),
 	}
@@ -1096,7 +1096,7 @@ func (m model) renderGroupPreview(it dashItem, width int) string {
 	rule := mutedStyle.Render(strings.Repeat("─", width))
 
 	roster := make([]string, 0, len(it.members)+1)
-	roster = append(roster, mutedStyle.Render(spaced("PANELS")))
+	roster = append(roster, mutedStyle.Render(spaced(m.tr("preview.panels", "PANELS"))))
 	for _, p := range it.members {
 		info := stateInfoFor(p)
 		led := lipgloss.NewStyle().Foreground(info.color).Render(info.led)

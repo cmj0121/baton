@@ -72,11 +72,11 @@ func moveTarget(fleet []panel.Panel, units [][]string, sel, dir int) (block []st
 }
 
 // reorderEdgeStatus is the nudge shown when a reorder cannot go further.
-func reorderEdgeStatus(dir int) string {
+func (m model) reorderEdgeStatus(dir int) string {
 	if dir < 0 {
-		return "already first"
+		return m.tr("status.already-first", "already first")
 	}
-	return "already last"
+	return m.tr("status.already-last", "already last")
 }
 
 // reorderSelection asks the server to move the unit at sel one slot in dir among
@@ -87,7 +87,7 @@ func reorderEdgeStatus(dir int) string {
 func (m model) reorderSelection(units [][]string, sel, dir int, title string) model {
 	block, index, ok := moveTarget(m.fleet, units, sel, dir)
 	if !ok {
-		m.status = reorderEdgeStatus(dir)
+		m.status = m.reorderEdgeStatus(dir)
 		return m
 	}
 	m.sendf(proto.Command{Action: "panel.move", IDs: block, Index: index})

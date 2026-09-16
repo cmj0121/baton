@@ -311,7 +311,7 @@ func (m model) toggleExpand() model {
 // walk they move the cursor instead, which is the one thing a horizontal key can
 // usefully do in a grid.
 func (m model) cardsHold() string {
-	return "the cards draw a work item whole — " + seqLabel(m.bindingKey(actDashLayout)) + " shows the tree"
+	return m.tr("status.cards-draw-whole", "the cards draw a work item whole — ") + seqLabel(m.bindingKey(actDashLayout)) + " shows the tree"
 }
 
 // toggleLayout is what V does: ask for the tree on a fleet the cards would draw,

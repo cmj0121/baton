@@ -1160,9 +1160,9 @@ func (m *model) ageStatus() {
 // between actions.
 func (m model) restingStatus() string {
 	if m.endpoint != "" {
-		return "attached · " + m.endpoint
+		return m.tr("status.attached", "attached · ") + m.endpoint
 	}
-	return "dashboard"
+	return m.tr("mode.dashboard.status", "dashboard")
 }
 
 // sendf sends a command if there is a live client (a no-op in tests).
@@ -3638,7 +3638,7 @@ func (m model) bindingKey(a action) string {
 // Ctrl-E) is pressed in command mode, where leaving is only via the detach
 // binding — never an accidental Ctrl-C.
 func (m model) exitHint() string {
-	return "exit is disabled here — press " + seqLabel(m.bindingKey(actDetach)) + " to detach"
+	return fmt.Sprintf(m.tr("status.exit-disabled", "exit is disabled here — press %s to detach"), seqLabel(m.bindingKey(actDetach)))
 }
 
 // closeSelected asks the server to close the highlighted item and drops its
@@ -4007,7 +4007,7 @@ func (m model) dashboardView() string {
 	// looking at will eventually reach for a verb that is refused, or worse, trust a
 	// shape that is not the one they built.
 	if !m.lens.real() {
-		heading += "  " + seg(m.tr("fleet.group-by", "group by:")+" "+m.lens.String(), colDark, colBrandHi)
+		heading += "  " + seg(m.tr("fleet.group-by", "group by:")+" "+m.lensText(m.lens), colDark, colBrandHi)
 	}
 	// Same argument as the lens chip: a tree on a fleet the cards would have drawn
 	// is a choice someone made, and the dashboard should say so rather than leave
@@ -4276,7 +4276,7 @@ func trimFirstCell(row string) string {
 // member roster for the selected group.
 func (m model) renderPreview(items []dashItem, width int) string {
 	if m.cursor < 0 || m.cursor >= len(items) {
-		return mutedStyle.Render("no panel selected")
+		return mutedStyle.Render(m.tr("preview.none", "no panel selected"))
 	}
 	it := items[m.cursor]
 	switch it.kind {
@@ -4295,14 +4295,14 @@ func (m model) renderPreview(items []dashItem, width int) string {
 
 	rows := []string{
 		metaRow(m.tr("meta.state", "state"), m.stateText(info), info.color),
-		metaRow("kind", p.Kind.String(), colInk),
+		metaRow(m.tr("meta.kind", "kind"), p.Kind.String(), colInk),
 	}
 	if p.Task != "" {
-		rows = append(rows, metaRow("task", truncate(p.Task, width), colBrandHi))
+		rows = append(rows, metaRow(m.tr("meta.task", "task"), truncate(p.Task, width), colBrandHi))
 	}
 	rows = append(rows,
-		metaRow("activity", p.Activity, colInk),
-		metaRow("signal", p.Spark, info.color),
+		metaRow(m.tr("meta.activity", "activity"), p.Activity, colInk),
+		metaRow(m.tr("meta.signal", "signal"), p.Spark, info.color),
 	)
 	meta := lipgloss.JoinVertical(lipgloss.Left, rows...)
 

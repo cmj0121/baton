@@ -51,6 +51,14 @@ func (l lens) String() string {
 	}
 }
 
+// lensText is the lens as the heading and the status line say it. String() stays
+// the ENGLISH word in every language because it is what viewstate persists and
+// parseLens reads back; a translated one would be a setting that stopped loading
+// the moment someone switched language.
+func (m model) lensText(l lens) string {
+	return m.tr("lens."+strings.ReplaceAll(l.String(), " ", "-"), l.String())
+}
+
 // parseLens maps a persisted name back to a lens, defaulting to the work items —
 // the fleet's own structure, and the one place a person must always end up when
 // nothing else is known.
@@ -278,7 +286,7 @@ func (m model) cycleLens(delta int) model {
 		}
 	}
 	m.restoreCursor(kind, id, "", had && kind == itemPanel)
-	m.status = m.tr("status.group-by", "group by: ") + m.lens.String()
+	m.status = m.tr("status.group-by", "group by: ") + m.lensText(m.lens)
 	m.rememberLens() // on change, not on exit: a cockpit is usually killed, not closed
 	return m
 }
@@ -305,6 +313,6 @@ func (m model) lensRefusal() string {
 	if m.lens.real() {
 		return ""
 	}
-	return "group by: " + m.lens.String() + " is a view, not a work item — press " +
+	return m.tr("status.group-by", "group by: ") + m.lensText(m.lens) + m.tr("lens.not-a-work-item", " is a view, not a work item — press ") +
 		m.bindingKey(actLens) + " to go back to work items first"
 }

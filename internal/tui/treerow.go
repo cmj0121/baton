@@ -276,7 +276,7 @@ func (m model) rowColumns(it dashItem, n int) string {
 
 	switch it.kind {
 	case itemFold:
-		tail = "idle · exited cleanly"
+		tail = m.tr("fold.quiet-means", "idle · exited cleanly")
 
 	case itemGroup:
 		st := groupState(it.members)

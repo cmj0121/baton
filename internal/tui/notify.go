@@ -230,7 +230,7 @@ func (m *model) queueNotify(fresh []notifyEdge) {
 			m.notifyIDs = make(map[string]bool)
 		}
 		m.notifyIDs[e.id] = true
-		m.notifyPending = append(m.notifyPending, sanitizeNotify(e.title))
+		m.notifyPending = append(m.notifyPending, m.sanitizeNotify(e.title))
 		if m.notifyAt.IsZero() {
 			m.notifyAt = m.now // the first edge opens the window; it does not fire
 		}
@@ -309,10 +309,10 @@ func notify(text string) tea.Cmd {
 // A title that scrubs away to nothing becomes a placeholder rather than being
 // dropped. Losing the alert entirely would hand an agent a way to silence its own
 // escalation just by naming itself in control bytes.
-func sanitizeNotify(title string) string {
+func (m model) sanitizeNotify(title string) string {
 	out := scrub.Capped(title, maxNotifyRunes)
 	if out == "" {
-		return "a panel"
+		return m.tr("notify.a-panel", "a panel")
 	}
 	return out
 }

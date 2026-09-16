@@ -251,18 +251,18 @@ func TestNotifyTitleCannotEscapeTheSequence(t *testing.T) {
 // a title that scrubs away to nothing becomes a placeholder rather than silently
 // costing its panel the alert.
 func TestSanitizeNotifyCapsAndFolds(t *testing.T) {
-	if got := sanitizeNotify("  spaced   out \n"); got != "spaced out" {
+	if got := (model{}).sanitizeNotify("  spaced   out \n"); got != "spaced out" {
 		t.Errorf("whitespace should fold to single spaces, got %q", got)
 	}
 	long := strings.Repeat("な", 200)
-	got := sanitizeNotify(long)
+	got := (model{}).sanitizeNotify(long)
 	if n := len([]rune(got)); n != maxNotifyRunes {
 		t.Errorf("a long title should cap at %d runes, got %d", maxNotifyRunes, n)
 	}
-	if got := sanitizeNotify("\x1b\a\x00"); got != "a panel" {
+	if got := (model{}).sanitizeNotify("\x1b\a\x00"); got != "a panel" {
 		t.Errorf("a title of pure control bytes should fall back, got %q", got)
 	}
-	if got := sanitizeNotify("claude"); got != "claude" {
+	if got := (model{}).sanitizeNotify("claude"); got != "claude" {
 		t.Errorf("an ordinary title should pass through untouched, got %q", got)
 	}
 }

@@ -532,6 +532,8 @@ func TestEveryMessageKeyIsTranslated(t *testing.T) {
 	exempt := map[string]bool{
 		"git.desc.stage-all": true, // a git command line, quoted as it is typed
 		"remote.passkey":     true, // baton's own word for it, in the docs and the CLI
+		"rform.passkey":      true, // the same word, as the field asking for one
+		"rform.address.hint": true, // the three address FORMS, which are typed as shown
 	}
 
 	files, err := filepath.Glob("*.go")

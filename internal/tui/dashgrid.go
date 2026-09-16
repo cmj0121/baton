@@ -303,7 +303,7 @@ func (m model) renderFoldCard(it dashItem, selected bool) string {
 	glyph := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(m.foldGlyph(it.parent))
 	name := lipgloss.NewStyle().Foreground(cardTitleColor(selected)).Bold(true).Render(truncate(it.title(), max(1, cardInner-2)))
 	head := clampWidth(glyph+" "+name, cardInner)
-	kindLine := clampWidth(mutedStyle.Render("idle · exited cleanly"), cardInner)
+	kindLine := clampWidth(mutedStyle.Render(m.tr("fold.quiet-means", "idle · exited cleanly")), cardInner)
 	footer := clampWidth(legend("enter", m.foldVerb(it.parent)), cardInner)
 
 	return cardStyle(selected).Render(lipgloss.JoinVertical(lipgloss.Left, head, kindLine, footer))
