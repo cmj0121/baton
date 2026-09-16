@@ -57,16 +57,16 @@ Baton 顯示帳號的兩件不同的事,而這個區別正是重點:
  ▸ zerg / agent-2               67%  800.0K tok      41%
  ▸ baton / conductor            25%  300.0K tok      16%
 
-   Agent          usage baton can account for
- ▸ claude *       1.2M tok · ≈$12.34 API · resets 2:14:31
- ▸ grok           58.0M tok · ≈$8.08 API
- ◦ codex          baton has no usage source for this agent
- · gemini         not installed on the fleet's machine
- · aider          not installed on the fleet's machine
- · opencode       not installed on the fleet's machine
+   Agent        5h left        7d left        panels
+ ▸ claude *     62% · 2:14:31  71% · 3d4h     1.2M tok · 4 panels
+ ▸ grok         —              —              58.0M tok · 2 panels
+ ◦ codex        baton has no usage source for this agent
+ · gemini       not installed on the fleet's machine
+ · aider        not installed on the fleet's machine
+ · opencode     not installed on the fleet's machine
 ```
 
-最後一欄才是這個畫面存在的理由。面板**佔本窗口 token 的比例**是 Baton 自己的讀數,
+消耗清單的最後一欄才是這個畫面存在的理由。面板**佔本窗口 token 的比例**是 Baton 自己的讀數,
 跟額度無關;**5 小時的使用率**是廠商的讀數,跟面板無關。兩者相乘,說的是這一個面板
 吃掉了你實際天花板的多少——那才是「該關掉誰」真正在問的。
 
@@ -96,6 +96,28 @@ Baton 認得六個 agent CLI,能讀到其中兩個的帳。這份清單直接說
 跟「這個 agent 沒有用量」是相反的兩種說法,而其中只有一種有證據支撐——所以
 沒有數字的 agent 帶的是**原因**,不是進度條。這裡不會有空的進度條,
 也不會有拿 0 頂替讀數的情況。
+
+Baton **讀得到**的 agent 會有三欄,而它們是來自兩個地方的三個問題:
+
+| 欄位      | 誰的讀數 | 說的是什麼                                |
+| --------- | -------- | ----------------------------------------- |
+| `5h left` | 帳號的   | 五小時窗口還剩多少,以及何時重新灌滿       |
+| `7d left` | 帳號的   | 本週還剩多少                              |
+| `panels`  | Baton 的 | 你跑在這個 agent 上的面板本窗口花掉了多少 |
+
+前兩欄對除了一個以外的每個 agent 都畫成破折號,這是誠實的答案,不是留待日後補上的
+坑。Baton 手上唯一的額度讀數來自 Claude Code 的狀態列或 Anthropic 的 OAuth 端點,
+兩者都是同一個帳號自己的帳本。這裡沒有別的廠商公布過可以倒數的天花板,把 Anthropic
+的借過去,等於印出一個從來沒有人說過的上限——而且是印在螢幕上最有說服力的位置:
+一整排長得一模一樣的數字。
+
+上面的進度條顯示的是**用掉的**,這三欄顯示的是**剩下的**。進度條是拿來跟下一條比對
+形狀的;一列三格的數字只會被讀一次,為的是決定要不要在這裡再開一個 agent。
+
+`panels` 這一欄是 Baton 自己的歸屬,依每個面板生成時的 profile 分組——絕不依你的
+預設值,那會把每個 agent 的消耗都堆到同一個名字底下。生成時沒有 profile 的面板不會
+算到任何人頭上。沒有面板的 agent 顯示一個記號而不是 `0 tok`:沒有人證明過它是閒著的,
+而且可能有人正在另一個終端機裡跑它——那是廠商自己的讀取器看得到、而這一欄看不到的。
 
 只有 `◦` 會畫成琥珀色,因為只有它才是 Baton 回報能力上的缺口。
 沒人安裝的 agent 不是缺口。

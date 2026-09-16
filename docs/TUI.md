@@ -139,7 +139,7 @@ where a viewer sees results without the keys that caused them. **`v k`** turns o
 key you just pressed and what it did:
 
 ```text
- DASHBOARD │ ? keys │ G group          CPU 22%  MEM 11.5/16G  ⏱ 09:34:49  ● attached · local
+ DASHBOARD │ ? keys │ G group          CPU 22%  MEM 11.5/16G  ⏱ 09:34:49             ● local
 ```
 
 The leader shows as it is typed: `C-t …` while it waits for the second half, then `C-t d dashboard` once you complete

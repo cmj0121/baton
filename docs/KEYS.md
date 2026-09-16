@@ -50,15 +50,15 @@ Press a landing and the status bar names what it can take next, so a family is d
 reading this page:
 
 ```text
- DASHBOARD │ g …  g mark · c create · a add · u ungroup            ⏱ 09:34:51  ● attached · local
+ DASHBOARD │ g …  g mark · c create · a add · u ungroup            ⏱ 09:34:51             ● local
 ```
 
 The line is fitted to the bar it rides on. Where there is room, each key is labelled; where there is not — a wide family
 on a narrow terminal — the keys go on alone, and a family too wide even for that says how many it left out:
 
 ```text
- DASHBOARD │ v …  u · k · p · l · g · U                            ⏱ 09:34:51  ● attached · local
- DASHBOARD │ v …  u · k · p +3                                     ⏱ 09:34:51  ● attached · local
+ DASHBOARD │ v …  u · k · p · l · g · U                            ⏱ 09:34:51             ● local
+ DASHBOARD │ v …  u · k · p +3                                     ⏱ 09:34:51             ● local
 ```
 
 No landing key is also an action on its own, so a completed sequence fires the moment you press its last key. Nothing

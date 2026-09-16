@@ -64,16 +64,16 @@ extra-usage balance if you have one, and the panels spending them.
  ▸ zerg / agent-2               67%  800.0K tok      41%
  ▸ baton / conductor            25%  300.0K tok      16%
 
-   Agent          usage baton can account for
- ▸ claude *       1.2M tok · ≈$12.34 API · resets 2:14:31
- ▸ grok           58.0M tok · ≈$8.08 API
- ◦ codex          baton has no usage source for this agent
- · gemini         not installed on the fleet's machine
- · aider          not installed on the fleet's machine
- · opencode       not installed on the fleet's machine
+   Agent        5h left        7d left        panels
+ ▸ claude *     62% · 2:14:31  71% · 3d4h     1.2M tok · 4 panels
+ ▸ grok         —              —              58.0M tok · 2 panels
+ ◦ codex        baton has no usage source for this agent
+ · gemini       not installed on the fleet's machine
+ · aider        not installed on the fleet's machine
+ · opencode     not installed on the fleet's machine
 ```
 
-The last column is what the overlay exists for. A panel's **share of the
+The roster's last column is what the overlay exists for. A panel's **share of the
 window's tokens** is baton's own reading and says nothing about limits; the
 **5-hour utilisation** is the vendor's and says nothing about panels. Multiplied,
 they say how much of your actual ceiling one panel has eaten — which is what
@@ -109,6 +109,34 @@ exists. "Baton cannot see this agent's usage" and "this agent has used nothing"
 are opposite claims, and only one of them is ever backed by evidence — so a
 vendor without a figure carries a **reason** rather than a bar. There are no
 empty bars here, and no zeros standing in for a missing reading.
+
+A vendor baton **can** read gets three columns, and they are three different
+questions from two different places:
+
+| Column    | Whose reading | What it says                                                 |
+| --------- | ------------- | ------------------------------------------------------------ |
+| `5h left` | the account's | what is left of the five-hour window, and when it refills    |
+| `7d left` | the account's | what is left of the week                                     |
+| `panels`  | baton's       | what the panels you run on this agent have spent this window |
+
+The first two are dashed out for every agent but one, and that is the honest
+answer rather than a hole to fill in later. The only quota reading baton holds
+arrives from the Claude Code status line or the Anthropic OAuth endpoint, and
+both of those are one account's own books. No other vendor here publishes a
+ceiling to count down from, so lending it Anthropic's would print a limit nobody
+ever stated — in the most convincing place on the screen, a column of figures
+that all look alike.
+
+They show what is **left** where the bars above show what is **gone**. A bar is a
+shape you compare against the bar below it; a cell in a row of three is read once,
+for a decision about whether to start another agent here.
+
+The `panels` column is baton's own attribution, grouped by the profile each panel
+was spawned from — never by your default, which would pile every agent's spend
+under one name. A panel spawned without a profile is charged to nobody. An agent
+with no panels shows a mark rather than `0 tok`: nobody has shown it to be idle,
+and somebody may be running it in another terminal, where the vendor's own reader
+would see it and this column cannot.
 
 The `◦` state is the only one drawn in amber, because it is the only one that is a
 gap in baton's reporting. An agent nobody installed is not a gap.
