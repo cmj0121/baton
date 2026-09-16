@@ -64,9 +64,9 @@ extra-usage balance if you have one, and the panels spending them.
  ▸ zerg / agent-2               67%  800.0K tok      41%
  ▸ baton / conductor            25%  300.0K tok      16%
 
-   Agent        5h left        7d left        panels
- ▸ claude *     62% · 2:14:31  71% · 3d4h     1.2M tok · 4 panels
- ▸ grok         —              —              58.0M tok · 2 panels
+   Agent        5h left        7d left  spent      panels
+ ▸ claude *     62% · 2:14:31  71%      1.2M tok   1.1M tok · 4 panels
+ ▸ grok         —              —        58.0M tok  —
  ◦ codex        baton has no usage source for this agent
  · gemini       not installed on the fleet's machine
  · aider        not installed on the fleet's machine
@@ -110,14 +110,27 @@ are opposite claims, and only one of them is ever backed by evidence — so a
 vendor without a figure carries a **reason** rather than a bar. There are no
 empty bars here, and no zeros standing in for a missing reading.
 
-A vendor baton **can** read gets three columns, and they are three different
-questions from two different places:
+A vendor baton **can** read gets four columns, and they are four different
+questions from three different places:
 
-| Column    | Whose reading | What it says                                                 |
-| --------- | ------------- | ------------------------------------------------------------ |
-| `5h left` | the account's | what is left of the five-hour window, and when it refills    |
-| `7d left` | the account's | what is left of the week                                     |
-| `panels`  | baton's       | what the panels you run on this agent have spent this window |
+| Column    | Whose reading | What it says                                                    |
+| --------- | ------------- | --------------------------------------------------------------- |
+| `5h left` | the account's | what is left of the five-hour window, and when it refills       |
+| `7d left` | the account's | what is left of the week                                        |
+| `spent`   | the vendor's  | what its own reader saw this window, everywhere on this machine |
+| `panels`  | baton's       | what the panels **you** run on this agent have spent            |
+
+`spent` and `panels` are two different measurements and the roll keeps them apart
+on purpose. The vendor's own reader counts every session on the machine, whether
+baton spawned it or not; the `panels` column counts only what your fleet spawned.
+On a machine where you also run the same agent from another terminal, the gap
+between the two columns is itself a reading.
+
+A dash under `panels` on a non-claude agent means **baton cannot attribute this**,
+not that the agent is idle. Attribution runs on a session id, and baton has one to
+hand only to Claude Code — a grok panel cannot reach that column however hard it
+works. The `spent` column beside it is what says whether the agent has been
+working, which is why it is there.
 
 The first two are dashed out for every agent but one, and that is the honest
 answer rather than a hole to fill in later. The only quota reading baton holds

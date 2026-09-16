@@ -57,9 +57,9 @@ Baton 顯示帳號的兩件不同的事,而這個區別正是重點:
  ▸ zerg / agent-2               67%  800.0K tok      41%
  ▸ baton / conductor            25%  300.0K tok      16%
 
-   Agent        5h left        7d left        panels
- ▸ claude *     62% · 2:14:31  71% · 3d4h     1.2M tok · 4 panels
- ▸ grok         —              —              58.0M tok · 2 panels
+   Agent        5h left        7d left  spent      panels
+ ▸ claude *     62% · 2:14:31  71%      1.2M tok   1.1M tok · 4 panels
+ ▸ grok         —              —        58.0M tok  —
  ◦ codex        baton has no usage source for this agent
  · gemini       not installed on the fleet's machine
  · aider        not installed on the fleet's machine
@@ -97,13 +97,23 @@ Baton 認得六個 agent CLI,能讀到其中兩個的帳。這份清單直接說
 沒有數字的 agent 帶的是**原因**,不是進度條。這裡不會有空的進度條,
 也不會有拿 0 頂替讀數的情況。
 
-Baton **讀得到**的 agent 會有三欄,而它們是來自兩個地方的三個問題:
+Baton **讀得到**的 agent 會有四欄,而它們是來自三個地方的四個問題:
 
 | 欄位      | 誰的讀數 | 說的是什麼                                |
 | --------- | -------- | ----------------------------------------- |
 | `5h left` | 帳號的   | 五小時窗口還剩多少,以及何時重新灌滿       |
 | `7d left` | 帳號的   | 本週還剩多少                              |
-| `panels`  | Baton 的 | 你跑在這個 agent 上的面板本窗口花掉了多少 |
+| `spent`   | 廠商的   | 它自己的讀取器在本窗口看到的,整台機器都算 |
+| `panels`  | Baton 的 | **你的**面板跑在這個 agent 上花掉了多少   |
+
+`spent` 跟 `panels` 是兩種不同的量測,這份清單刻意把它們分開。廠商自己的讀取器會數
+這台機器上的每一個 session,不管是不是 Baton 開的;`panels` 只數你的艦隊開出來的。
+如果你同時也在別的終端機裡跑同一個 agent,這兩欄之間的差距本身就是一個讀數。
+
+非 claude 的 agent 在 `panels` 顯示破折號,意思是**Baton 無法歸屬**,不是這個 agent
+閒著。歸屬要靠 session id,而 Baton 只有 Claude Code 這一個可以遞交的對象——grok 的
+面板再怎麼操也進不了那一欄。旁邊的 `spent` 才是說明這個 agent 有沒有在工作的那一欄,
+這也正是它存在的理由。
 
 前兩欄對除了一個以外的每個 agent 都畫成破折號,這是誠實的答案,不是留待日後補上的
 坑。Baton 手上唯一的額度讀數來自 Claude Code 的狀態列或 Anthropic 的 OAuth 端點,
