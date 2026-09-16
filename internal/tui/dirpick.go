@@ -301,7 +301,19 @@ func (m model) dirPickLegend() string {
 		keyDirPickFilter, keyDirPickHidden, hidden)
 }
 
+// dirPickRowsShown is the list height the browser holds, whatever the directory
+// it is showing happens to contain.
+const dirPickRowsShown = 12
+
 // dirPickView renders the picker: the two sections, the cursor, and the legend.
+//
+// It goes through the shared scroller rather than drawing its own rows, and that
+// is what stops it breathing. Browsing is a CONTINUOUS gesture — →, →, ←, and
+// every directory holds a different number of things — so a box sized to its
+// contents changed height under the hand on almost every keystroke, and the row
+// the eye was resting on moved each time. Sized to the screen instead, the frame
+// stays where it is and the list scrolls inside it, which is also the answer to a
+// directory holding two hundred entries.
 func (m model) dirPickView() string {
 	caret := func(on bool) string {
 		if on {
@@ -311,11 +323,20 @@ func (m model) dirPickView() string {
 	}
 	nameCol := lipgloss.NewStyle().Width(38)
 
-	rows := []string{sectionStyle.Render(spaced(m.tr("dir.title", "WORKDIR"))), ""}
+	var rows []string
+	selLine := 0 // the cursor's body line, for the scroll anchor
 	for i, r := range m.dirPickRows {
+		if i == m.dirPickCursor {
+			selLine = len(rows)
+		}
 		switch {
 		case r.header:
-			rows = append(rows, "", sectionStyle.Render(spaced(r.label)))
+			// A section header brings a blank line with it, except the first: the
+			// panel has already drawn one under the title.
+			if len(rows) > 0 {
+				rows = append(rows, "")
+			}
+			rows = append(rows, sectionStyle.Render(spaced(r.label)))
 		case r.caption:
 			rows = append(rows, mutedStyle.Render("  "+r.label))
 		case r.up:
@@ -332,16 +353,26 @@ func (m model) dirPickView() string {
 		rows = append(rows, "", mutedStyle.Render(m.tr("dir.no-subdirs", "no subdirectories here")))
 	}
 
-	rows = append(rows, "")
+	// The filter echo keeps its row when there is no filter being typed, so the
+	// footer is the same height either way and the list does not jump when the
+	// prompt opens.
+	echo := ""
+	hints := legend("jk", m.tr("legend.move", "move"), "→", m.tr("legend.enter-dir", "enter"),
+		"←", m.tr("legend.up", "up"), "⏎", m.tr("legend.pick", "pick"),
+		keyDirPickFilter, m.tr("legend.filter", "filter"), keyDirPickHidden, m.tr("dir.dotdirs", "dotdirs"),
+		"esc", m.tr("legend.close", "close"))
 	if m.dirPickTyping {
-		rows = append(rows,
-			inkStyle.Render(m.tr("legend.filter", "filter")+"  "+m.dirPickFilter+"▏"),
-			"", legend("⏎", m.tr("legend.keep", "keep"), "esc", m.tr("legend.clear", "clear")))
-	} else {
-		rows = append(rows, legend("jk", m.tr("legend.move", "move"), "→", m.tr("legend.enter-dir", "enter"),
-			"←", m.tr("legend.up", "up"), "⏎", m.tr("legend.pick", "pick"),
-			keyDirPickFilter, m.tr("legend.filter", "filter"), keyDirPickHidden, m.tr("dir.dotdirs", "dotdirs"),
-			"esc", m.tr("legend.close", "close")))
+		echo = inkStyle.Render(m.tr("legend.filter", "filter") + "  " + m.dirPickFilter + "▏")
+		hints = legend("⏎", m.tr("legend.keep", "keep"), "esc", m.tr("legend.clear", "clear"))
 	}
-	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
+
+	return m.renderScrollPanel(scrollPanel{
+		title:    m.tr("dir.title", "WORKDIR"),
+		body:     rows,
+		footer:   []string{"", echo, "", hints},
+		anchor:   selLine,
+		centered: true,
+		minBody:  dirPickRowsShown, // the next directory is a different size; the box is not
+		clipHint: mutedStyle.Render(fmt.Sprintf("   %d/%d", m.dirPickCursor+1, max(1, len(m.dirPickRows)))),
+	})
 }

@@ -70,18 +70,15 @@ fleet-wide caps.
 
 ## Editing them in the cockpit
 
-`C-t P` opens **panel config**, which carries the fleet-wide caps under a RESOURCE LIMITS section — `↑↓` to move, `e` to
-edit, `enter` to save. A value baton cannot read is refused with the overlay left open on what you typed, so you correct
-the typo rather than retype the line.
+`C-t P` opens **panel config**; `←→` walks its tabs to **LIMITS**, which carries the fleet-wide caps — `↑↓` to move,
+`e` to edit, `enter` to save. A value baton cannot read is refused with the overlay left open on what you typed, so you
+correct the typo rather than retype the line.
 
 ```txt
 ╭───────────────────────────────────────────────────────────────────────╮
-│   P A N E L   C O N F I G                                             │
+│   P A N E L   C O N F I G   1/5                                       │
 │                                                                       │
-│     default shell   /bin/zsh                                          │
-│     replay buffer   512 KiB                                           │
-│                                                                       │
-│   R E S O U R C E   L I M I T S                                       │
+│     DEFAULTS │ LIMITS │ FEEDBACK                                      │
 │                                                                       │
 │     cpus            2                                                 │
 │   ▸ memory          4Gi                                               │
@@ -90,6 +87,9 @@ the typo rather than retype the line.
 │     nofile          no cap                                            │
 │                                                                       │
 │   limits cap a panel's whole process tree · enforced by cgroup        │
+│                                                                       │
+│   ─────────────────────────────────────────                           │
+│   ↑↓ move  ·  ←→ tab  ·  e edit  ·  esc back                          │
 ╰───────────────────────────────────────────────────────────────────────╯
 ```
 

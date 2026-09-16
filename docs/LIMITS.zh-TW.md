@@ -67,25 +67,25 @@ Profile 只需要重述它要改的部分。Shell 面板(包含 global shell)以
 
 ## 在座艙裡編輯
 
-`C-t P` 打開**面板設定**,全隊上限就在 RESOURCE LIMITS 區塊裡——`↑↓` 移動、`e` 編輯、`enter` 存檔。Baton 讀
-不懂的值會被擋下來,而且 overlay 會停在你剛才輸入的內容上,讓你直接改錯字而不用整行重打。
+`C-t P` 打開**面板設定**,用 `←→` 切到「資源限制」分頁,全隊上限就在裡面——`↑↓` 移動、`e` 編輯、`enter`
+存檔。Baton 讀不懂的值會被擋下來,而且 overlay 會停在你剛才輸入的內容上,讓你直接改錯字而不用整行重打。
 
 ```txt
 ╭───────────────────────────────────────────────────────────────────────╮
-│   P A N E L   C O N F I G                                             │
+│   面 板 設 定   1/5                                                   │
 │                                                                       │
-│     default shell   /bin/zsh                                          │
-│     replay buffer   512 KiB                                           │
-│                                                                       │
-│   R E S O U R C E   L I M I T S                                       │
+│     開啟預設 │ 資源限制 │ 評分回饋                                    │
 │                                                                       │
 │     cpus            2                                                 │
 │   ▸ memory          4Gi                                               │
-│     memory-high     no cap                                            │
+│     memory-high     不限制                                            │
 │     pids            512                                               │
-│     nofile          no cap                                            │
+│     nofile          不限制                                            │
 │                                                                       │
-│   limits cap a panel's whole process tree · enforced by cgroup        │
+│   限制會套用到面板底下的整棵行程樹 · 由 cgroup 強制執行               │
+│                                                                       │
+│   ─────────────────────────────────────────                           │
+│   ↑↓ 移動  ·  ←→ 切換分頁  ·  e 編輯  ·  esc 返回                     │
 ╰───────────────────────────────────────────────────────────────────────╯
 ```
 

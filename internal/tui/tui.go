@@ -4838,7 +4838,19 @@ type scrollPanel struct {
 	footer   []string // pinned lines below the body
 	anchor   int      // the cursor line (centered) or the scroll offset (top)
 	centered bool     // keep anchor in view (cursor panels) vs. anchor-as-offset (help)
-	clipHint string   // appended to the title when the body is clipped
+
+	// minBody is a floor under the body's height, so a panel holding less than that
+	// still draws to it. It is for the panels whose content changes as you MOVE
+	// through them — the directory browser, where the next directory holds a
+	// different number of things and a box sized to its contents changed height on
+	// almost every keystroke.
+	//
+	// A floor and not a fill: padding such a panel out to the whole screen would
+	// hold its size honestly and look like a mostly empty box, which is another way
+	// of being wrong about the same thing. It is capped by the rows the screen
+	// actually has, so a short terminal is never padded past its own edge.
+	minBody  int
+	clipHint string // appended to the title when the body is clipped
 }
 
 // popupChrome is what the bordered surface costs in rows: the rounded border top
@@ -4865,6 +4877,9 @@ func (m model) renderScrollPanel(p scrollPanel) string {
 	body, clipped := windowFrom(p.body, p.anchor, visible)
 	if p.centered {
 		body, clipped = windowAround(p.body, p.anchor, visible)
+	}
+	for floor := min(p.minBody, visible); len(body) < floor; {
+		body = append(body, "")
 	}
 	header := sectionStyle.Render(spaced(p.title))
 	if clipped {
@@ -5056,14 +5071,14 @@ func (m model) panelTabBar() []string {
 	return []string{" " + strings.Join(parts, mutedStyle.Render("│")), ""}
 }
 
-// panelConfigView renders the open tab of the panel-defaults page: its rows, and
-// the hints that belong to them.
-func (m model) panelConfigView() string {
-	body := make([]string, 0, numPanelConfigRows)
-	selLine := 0 // the selected row's body line, for the scroll anchor
-
-	// A tab's body can be longer than its row count (the uninstalled roll), so the
-	// selected row records the line it landed on rather than assuming they match.
+// panelTabBody builds one tab's rows and the hints that belong under them, and
+// says which body line the cursor landed on.
+//
+// It is asked for EVERY tab on every frame, not just the open one, because the
+// page pads itself to the tallest — so it has to be answerable about a tab
+// nobody is looking at. The caret only ever appears on the open tab, since the
+// cursor is a page-wide row index and no two tabs hold the same row.
+func (m model) panelTabBody(tab int) (body, hints []string, selLine int) {
 	row := func(idx int, label, value string) {
 		caret := "  "
 		labelStyle := mutedStyle
@@ -5082,20 +5097,17 @@ func (m model) panelConfigView() string {
 		body = append(body, caret+labelStyle.Width(panelLabelWidth).Render(label)+valueStyle.Render(value))
 	}
 
-	var hints []string
-	hint := func(key, english string) {
-		hints = append(hints, mutedStyle.Render(m.tr(key, english)))
-	}
-
-	switch m.panelTabIdx() {
+	switch tab {
 	case 0:
 		row(panelRowShell, m.tr("panel.cfg.shell", "default shell"), m.shellLabel(m.shellPath))
 		row(panelRowAgent, m.tr("panel.cfg.agent", "default agent"), m.defaultAgentLabel())
 		row(panelRowReplayKB, m.tr("panel.cfg.replay", "replay buffer"), m.replayLabel(m.replayKB))
 		body = append(body, m.missingAgentsSection()...)
-		hints = append(hints, mutedStyle.Render(fmt.Sprintf(m.tr("panel.cfg.hint.agent",
-			"default agent is what %s spawns · detected on the fleet's machine"), seqLabel(m.bindingKey(actNewAgent)))))
-		hint("panel.cfg.hint.replay", "replay buffer seeds scrollback · change applies on server restart")
+		hints = []string{
+			mutedStyle.Render(fmt.Sprintf(m.tr("panel.cfg.hint.agent",
+				"default agent is what %s spawns · detected on the fleet's machine"), seqLabel(m.bindingKey(actNewAgent)))),
+			mutedStyle.Render(m.tr("panel.cfg.hint.replay", "replay buffer seeds scrollback · change applies on server restart")),
+		}
 	case 1:
 		for i, f := range limitFields {
 			// The row label is the CONFIG key (cpus, memory-high, nofile) and stays in
@@ -5103,11 +5115,37 @@ func (m model) panelConfigView() string {
 			// someone types into their config file, and a translated one is unsearchable.
 			row(firstLimitRow+i, f.label, m.limitLabel(f.get(m.limits)))
 		}
-		hints = append(hints, mutedStyle.Render(m.tr("panel.cfg.hint.limits",
-			"limits cap a panel's whole process tree")+" · "+m.enforceLabel()))
+		hints = []string{mutedStyle.Render(m.tr("panel.cfg.hint.limits",
+			"limits cap a panel's whole process tree") + " · " + m.enforceLabel())}
 	default:
 		body = append(body, m.feedbackSection(row)...)
-		hints = append(hints, m.feedbackHintLine())
+		hints = []string{m.feedbackHintLine()}
+	}
+	return body, hints, selLine
+}
+
+// panelConfigView renders the open tab of the panel-defaults page: its rows, and
+// the hints that belong to them.
+//
+// Every tab is drawn to the height of the TALLEST, rows and hints alike, so that
+// walking them with ←→ does not breathe the box in and out under the cursor. It
+// is the rule the key list already follows, and the reason is the same: a panel
+// that resizes as you move through it reads as a panel closing and reopening,
+// and there is nothing to be gained by letting the frame shift under a person
+// who is comparing two of its pages.
+func (m model) panelConfigView() string {
+	body, hints, selLine := m.panelTabBody(m.panelTabIdx())
+
+	tallest, most := len(body), len(hints)
+	for tab := range panelCfgTabs {
+		b, h, _ := m.panelTabBody(tab)
+		tallest, most = max(tallest, len(b)), max(most, len(h))
+	}
+	for len(body) < tallest {
+		body = append(body, "")
+	}
+	for len(hints) < most {
+		hints = append(hints, "")
 	}
 
 	legendLine := legend("↑↓", m.tr("legend.move", "move"), "←→", m.tr("legend.tab", "tab"),

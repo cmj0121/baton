@@ -297,13 +297,19 @@ func (m model) gitPickerView() string {
 		rows = append(rows, caret(m.gitCursor == i)+keyCol.Render(kc(e.key))+nameStyle.Render(e.label)+mutedStyle.Render(m.tr(e.descKey, e.desc)))
 	}
 
+	// The confirm line's two rows are drawn whether or not there is one to show, so
+	// the menu keeps its size. A box that grows the moment you press p is a box
+	// that moves the question you are being asked, and moves the row your eye was
+	// on to make space for it.
 	var hints string
+	confirm := ""
 	if m.gitConfirmOp != "" {
 		hints = legend("y", m.tr("legend.confirm", "confirm"), "n/esc", m.tr("legend.cancel", "cancel"))
-		rows = append(rows, "", lipgloss.NewStyle().Foreground(colBrand).Bold(true).Render(m.statusText()))
+		confirm = lipgloss.NewStyle().Foreground(colBrand).Bold(true).Render(m.statusText())
 	} else {
 		hints = legend("↑↓", m.tr("legend.move", "move"), "enter", m.tr("legend.run", "run"), "esc", m.tr("legend.cancel", "cancel"))
 	}
+	rows = append(rows, "", confirm)
 	rows = append(rows, "",
 		mutedStyle.Render(fmt.Sprintf(m.tr("git.hint", "acts on the zoomed agent · %s R reloads baton"), keyLabel(m.effPrefix()))),
 		"", hints)

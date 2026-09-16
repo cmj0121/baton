@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/cmj0121/baton/internal/i18n"
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/signals"
 )
 
 // TestNoOverlayOutgrowsItsTerminal renders every floating pop-up at every height
@@ -142,5 +145,89 @@ func TestScrollPanelReservesExactlyItsChrome(t *testing.T) {
 			t.Errorf("head=%d footer=%d: the panel draws %d rows of chrome but reserves %d",
 				len(p.head), len(p.footer), got, want)
 		}
+	}
+}
+
+// TestWidgetsKeepTheirSize: walking around inside a floating widget must not
+// change how tall it is.
+//
+// A box that grows and shrinks under the hand reads as the overlay closing and
+// reopening rather than as a list you are moving through, and it takes the row
+// your eye was resting on with it every time. The width has been pinned since
+// the pop-ups were unified; this is the other half.
+//
+// Each case walks the widget the way a person does — tabs, a cursor, a confirm,
+// a directory — and every step must render the same number of rows. What is NOT
+// asserted is that two different widgets agree with each other: a settings page
+// holding three rows has no business being as tall as a browser.
+func TestWidgetsKeepTheirSize(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{"a", "b", "c", "a/x", "a/y", "a/z"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, tc := range []struct {
+		name  string
+		steps int
+		walk  func(m *model, step int) string // render the widget at one step of the walk
+	}{
+		{"panel config tabs", len(panelCfgTabs), func(m *model, step int) string {
+			m.mode, m.panelTab = modePanelConfig, step
+			m.cursor, _ = m.panelTabRange()
+			return m.panelConfigView()
+		}},
+		{"help tabs", 5, func(m *model, step int) string {
+			m.mode, m.helpFrom, m.helpTab = modeHelp, modeDashboard, step
+			return m.helpView()
+		}},
+		{"key map cursor", 6, func(m *model, step int) string {
+			m.mode, m.cursor = modeKeyMap, step*4
+			return m.keyMapView()
+		}},
+		{"signal picker cursor", len(signals.Choices) + 1, func(m *model, step int) string {
+			m.mode, m.signalScope, m.signalCursor = modeSignal, "shell #1", step
+			return m.signalPickerView()
+		}},
+		{"git menu confirm", 2, func(m *model, step int) string {
+			m.mode = modeGit
+			if step == 1 {
+				m.gitConfirmOp, m.status = "push", "push shell #1? · (y/n)"
+			}
+			return m.gitPickerView()
+		}},
+		{"inbox filters", 5, func(m *model, step int) string {
+			m.mode, m.inboxFilter = modeInbox, step-1
+			m.fleet = []panel.Panel{{ID: "1", Title: "p1", State: panel.Attention}}
+			m.inboxRows = m.sortedInboxRows()
+			return m.inboxView()
+		}},
+		{"dir picker browsing", 3, func(m *model, step int) string {
+			at := []string{dir, filepath.Join(dir, "a"), filepath.Join(dir, "b")}[step]
+			m.mode, m.dirPickDir = modeDirPick, at
+			ents, err := os.ReadDir(at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.dirPickRows = m.dirRows(ents)
+			return m.dirPickView()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := 0
+			for step := 0; step < tc.steps; step++ {
+				m := baseModel()
+				m.lang, m.width, m.height = i18n.ZhTW, 120, 44
+				got := lipgloss.Height(tc.walk(&m, step))
+				if step == 0 {
+					want = got
+					continue
+				}
+				if got != want {
+					t.Errorf("step %d renders %d rows, the first rendered %d", step, got, want)
+				}
+			}
+		})
 	}
 }
