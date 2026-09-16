@@ -18,7 +18,10 @@ func newLimitsModel(t *testing.T) model {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir()) // editing a limit persists to $HOME/.baton/config
 	m := baseModel()
-	m.mode, m.cursor = modePanelConfig, firstLimitRow
+	// The tab as well as the row: the page's cursor belongs to the open tab, and a
+	// fixture that set one without the other would be a state the keys cannot
+	// reach — which is the shape of the bug the tabs first shipped with.
+	m.mode, m.panelTab, m.cursor = modePanelConfig, 1, firstLimitRow
 	return m
 }
 
@@ -135,7 +138,6 @@ func TestPanelConfigViewRendersLimits(t *testing.T) {
 	m := newLimitsModel(t)
 	m.limits = limits.Limits{CPUs: "2"}
 
-	m.panelTab = 1 // the limits tab
 	out := m.panelConfigView()
 	for _, f := range limitFields {
 		if !strings.Contains(out, f.label) {
@@ -257,7 +259,6 @@ func TestEnforceLabelTellsTheTruth(t *testing.T) {
 	}
 
 	// The label reaches the screen, not just the helper.
-	m.panelTab = 1 // the limits tab, which is where the enforcement line belongs
 	if !strings.Contains(m.panelConfigView(), "enforced by cgroup") {
 		t.Error("the panel config should show how the caps are enforced")
 	}
@@ -272,4 +273,74 @@ func TestWelcomeCarriesTheEnforcementMode(t *testing.T) {
 	if m.enforce != string(cgroup.ModeNone) || m.enforceWhy != "cgroup v2 is Linux-only" {
 		t.Fatalf("the welcome should carry the mode and the reason, got %q/%q", m.enforce, m.enforceWhy)
 	}
+}
+
+// TestPanelConfigEditsOnlyWhatIsOnScreen: e acts on a row of the tab being
+// looked at, or it refuses — never on a row of the tab you came from.
+//
+// This is the bug the tabs walked into, and it is worth being precise about how
+// it happened. The page's cursor is a page-wide row index that the tabs
+// partition, and switching tabs moved it to the arriving tab's first row — but
+// only when that tab HAD rows. A fleet with no agent profiles has an empty
+// feedback tab, so arriving there from the limits tab left the cursor on `cpus`,
+// and e opened the CPU limit's editor: a row on another tab, not on screen, that
+// nobody had selected.
+//
+// Two things keep it shut. The cursor parks at the tab's first row whether or
+// not the tab has any, and the clamp respects the tab rather than the page —
+// clamping to the page length walked the cursor straight back onto `nofile`.
+func TestPanelConfigEditsOnlyWhatIsOnScreen(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	t.Run("an empty tab refuses", func(t *testing.T) {
+		m := baseModel() // no agent profiles: the feedback tab holds nothing
+		m = press(m, "ctrl+t", "P")
+		m = press(m, "right", "right")
+		if m.panelTab != 2 {
+			t.Fatalf("→→ should reach the feedback tab, got %d", m.panelTab)
+		}
+		first, _ := m.panelTabRange()
+		if m.cursor != first {
+			t.Errorf("the cursor should park on the empty tab at %d, got %d", first, m.cursor)
+		}
+		m.clampCursor() // a snapshot, a resize — anything that re-clamps
+		if m.cursor != first {
+			t.Errorf("the clamp pulled the cursor off the tab to %d", m.cursor)
+		}
+		m = press(m, "e")
+		if m.input != inputNone {
+			t.Errorf("e on an empty tab opened editor %v", m.input)
+		}
+		if !strings.Contains(m.status, "nothing to edit") {
+			t.Errorf("e on an empty tab should say so, got %q", m.status)
+		}
+	})
+
+	t.Run("every tab edits its own rows", func(t *testing.T) {
+		m := baseModel()
+		m.agents = map[string]config.AgentProfile{"claude": {Command: "claude"}}
+		m = press(m, "ctrl+t", "P")
+		for tab := range panelCfgTabs {
+			first, end := m.panelTabRange()
+			for row := first; row < end; row++ {
+				m.cursor, m.input, m.status = row, inputNone, ""
+				next := press(m, "e")
+				switch tab {
+				case 1: // the limits tab opens the limit editor for ITS row
+					if next.input != inputLimit || next.limitRow != row {
+						t.Errorf("tab %d row %d: e opened %v for row %d", tab, row, next.input, next.limitRow)
+					}
+				case 2: // the feedback tab cycles the profile on that row
+					if !strings.Contains(next.status, "score feedback") {
+						t.Errorf("tab %d row %d: e said %q", tab, row, next.status)
+					}
+				default: // the defaults tab: a text overlay or the agent picker
+					if next.input == inputNone && next.mode != modeAgentPick {
+						t.Errorf("tab %d row %d: e did nothing (%q)", tab, row, next.status)
+					}
+				}
+			}
+			m = press(m, "right")
+		}
+	})
 }

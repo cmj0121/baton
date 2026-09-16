@@ -1928,7 +1928,16 @@ func limitFieldFor(row int) (limitField, bool) {
 }
 
 // editPanelRow opens the editor for the selected panel-config row.
+//
+// The first thing it does is check the row is on the tab being looked at. Every
+// arm below resolves m.cursor against the page-wide row constants, and a cursor
+// resting outside the open tab's range would edit something the person cannot
+// see — which is exactly what an empty tab used to hand it.
 func (m model) editPanelRow() (tea.Model, tea.Cmd) {
+	if first, end := m.panelTabRange(); m.cursor < first || m.cursor >= end {
+		m.status = m.tr("panel.cfg.nothing-to-edit", "nothing to edit on this tab")
+		return m, nil
+	}
 	switch {
 	case m.cursor == panelRowAgent:
 		// The one row that is a choice from a known set rather than a typed value, so
@@ -3745,6 +3754,21 @@ func (m model) countState(s panel.State) int {
 }
 
 func (m *model) clampCursor() {
+	// The panel-config page's cursor belongs to the OPEN TAB, not to the page, and
+	// clamping it against the page's total is how it escapes: the feedback tab of a
+	// fleet with no profiles starts one past the last limit row, so a clamp to the
+	// page length lands the cursor back on `nofile` — a row on another tab, and the
+	// one e would then edit.
+	if m.mode == modePanelConfig {
+		first, end := m.panelTabRange()
+		if m.cursor < first {
+			m.cursor = first
+		}
+		if m.cursor > first && m.cursor >= end {
+			m.cursor = max(first, end-1)
+		}
+		return
+	}
 	if n := m.itemCount(); m.cursor >= n {
 		m.cursor = max(0, n-1)
 	}
@@ -5048,11 +5072,16 @@ func (m model) panelTabRange() (first, end int) {
 
 // cyclePanelTab walks the page's tabs, landing the cursor on the first row of the
 // one it arrives at so ↑↓ and e act on what is actually on screen.
+//
+// It parks the cursor there even on a tab that HOLDS no rows — a fleet with no
+// agent profiles configured has an empty feedback tab — and that is the whole
+// point of doing it unconditionally. Leaving the cursor where it was left it
+// pointing into the tab you came FROM: arriving at the empty feedback tab from
+// the limits tab and pressing e opened the CPU limit's editor, a row on another
+// tab that was not on screen and that nobody had selected.
 func (m model) cyclePanelTab(delta int) model {
 	m.panelTab = wrapIndex(m.panelTabIdx(), delta, len(panelCfgTabs))
-	if first, end := m.panelTabRange(); first < end {
-		m.cursor = first
-	}
+	m.cursor, _ = m.panelTabRange()
 	return m
 }
 

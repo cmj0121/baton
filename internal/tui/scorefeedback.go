@@ -51,14 +51,16 @@ func (m model) feedbackProfiles() []string {
 // than as a file with no profiles in it.
 func (m model) feedbackSection(row func(idx int, label, value string)) []string {
 	names := m.feedbackProfiles()
-	head := []string{"", sectionStyle.Render(spaced(m.tr("panel.cfg.feedback", "SCORE FEEDBACK"))), ""}
+	// No heading of its own: these rows are a TAB of the panel-config page now, and
+	// the tab bar above them already says what they are. A section header under it
+	// would be the same word twice, three rows apart.
 	if len(names) == 0 {
-		return append(head, mutedStyle.Render("   "+m.tr("panel.cfg.no-profiles", "no agent profiles configured · panel.agents in your config names them")))
+		return []string{mutedStyle.Render("  " + m.tr("panel.cfg.no-profiles", "no agent profiles configured · panel.agents in your config names them"))}
 	}
 	for i, name := range names {
 		row(numPanelConfigRows+i, name, m.feedbackLabel(m.agents[name].ScoreFeedback, m.scoreFeedback))
 	}
-	return head
+	return nil
 }
 
 // feedbackLabel is how one profile's answer reads. Three states, not two: a
