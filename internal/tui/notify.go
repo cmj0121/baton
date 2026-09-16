@@ -98,9 +98,9 @@ func (m *model) refreshAttention() {
 		return
 	}
 	if len(fresh) == 1 {
-		m.status = "◆ " + fresh[0] + " needs you"
+		m.status = "◆ " + fmt.Sprintf(m.tr("attn.one", "%s needs you"), fresh[0])
 	} else {
-		m.status = fmt.Sprintf("◆ %d panels need your attention", len(fresh))
+		m.status = "◆ " + fmt.Sprintf(m.tr("attn.many", "%d panels need your attention"), len(fresh))
 	}
 }
 
@@ -140,9 +140,9 @@ func (m model) attentionBadge() string {
 	if len(names) == 0 {
 		return ""
 	}
-	label := fmt.Sprintf("◆ %d need you", len(names))
+	label := "◆ " + fmt.Sprintf(m.tr("attn.count", "%d need you"), len(names))
 	if len(names) == 1 {
-		label = "◆ " + truncate(names[0], 16) + " needs you"
+		label = "◆ " + fmt.Sprintf(m.tr("attn.one", "%s needs you"), truncate(names[0], 16))
 	}
 	return seg(label, colDark, states[panel.Attention].color)
 }
@@ -230,7 +230,7 @@ func (m *model) queueNotify(fresh []notifyEdge) {
 			m.notifyIDs = make(map[string]bool)
 		}
 		m.notifyIDs[e.id] = true
-		m.notifyPending = append(m.notifyPending, sanitizeNotify(e.title))
+		m.notifyPending = append(m.notifyPending, m.sanitizeNotify(e.title))
 		if m.notifyAt.IsZero() {
 			m.notifyAt = m.now // the first edge opens the window; it does not fire
 		}
@@ -256,7 +256,7 @@ func (m *model) takeNotify() tea.Cmd {
 	}
 	pending := m.notifyPending
 	m.clearNotify()
-	return notify(notifyText(pending))
+	return notify(m.notifyText(pending))
 }
 
 // clearNotify closes the coalescing window and drops everything it was holding.
@@ -270,11 +270,11 @@ func (m *model) clearNotify() {
 
 // notifyText is what the window says. One panel is named, because with one there
 // is a useful thing to say; several are counted, because there is not.
-func notifyText(titles []string) string {
+func (m model) notifyText(titles []string) string {
 	if len(titles) == 1 {
-		return "baton · " + titles[0] + " needs you"
+		return "baton · " + fmt.Sprintf(m.tr("attn.one", "%s needs you"), titles[0])
 	}
-	return fmt.Sprintf("baton · %d agents need you", len(titles))
+	return "baton · " + fmt.Sprintf(m.tr("attn.agents", "%d agents need you"), len(titles))
 }
 
 // notify writes one OSC 9 notification to the terminal. Like the bell and the OSC
@@ -309,10 +309,10 @@ func notify(text string) tea.Cmd {
 // A title that scrubs away to nothing becomes a placeholder rather than being
 // dropped. Losing the alert entirely would hand an agent a way to silence its own
 // escalation just by naming itself in control bytes.
-func sanitizeNotify(title string) string {
+func (m model) sanitizeNotify(title string) string {
 	out := scrub.Capped(title, maxNotifyRunes)
 	if out == "" {
-		return "a panel"
+		return m.tr("notify.a-panel", "a panel")
 	}
 	return out
 }

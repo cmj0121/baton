@@ -75,8 +75,9 @@ panel:
       score-feedback: false # …except this one
 ```
 
-**From the cockpit, without editing the file:** `C-t P` opens panel config, which carries a **SCORE FEEDBACK** section
-listing every configured profile — `↑↓` to move, `e` to cycle that profile through `inherit → on → off → inherit`. The
+**From the cockpit, without editing the file:** `C-t P` opens panel config; `←→` walks its tabs to **FEEDBACK**. The
+first row is the fleet's own `score.feedback`, which `e` toggles; under it sits one row per configured profile —
+`↑↓` to move, `e` to cycle that profile through `inherit → on → off → inherit`. The
 edit is written to your config and the daemon is told to re-read it, so it takes effect on the next brief rather than
 on the next restart. `inherit` is a state of its own and not a spelling of the value it currently resolves to: a
 profile left inheriting follows `score.feedback` when you later change it.

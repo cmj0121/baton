@@ -276,11 +276,11 @@ func (m model) rowColumns(it dashItem, n int) string {
 
 	switch it.kind {
 	case itemFold:
-		tail = "idle · exited cleanly"
+		tail = m.tr("fold.quiet-means", "idle · exited cleanly")
 
 	case itemGroup:
 		st := groupState(it.members)
-		tint, state = states[st].color, states[st].label
+		tint, state = states[st].color, m.stateText(states[st])
 		// A group's sparkline is the roll-up of its members', so a working work item
 		// animates like a panel does. It is the one process-shaped field a group
 		// earns: "is anything happening in there" is exactly the question a
@@ -293,7 +293,7 @@ func (m model) rowColumns(it dashItem, n int) string {
 	default:
 		p := it.panel
 		info := stateInfoFor(p)
-		tint, state, spark = info.color, info.label, p.Spark
+		tint, state, spark = info.color, m.stateText(info), p.Spark
 		if p.Cwd != "" {
 			dir = shortPath(p.Cwd, wDir-1)
 		}

@@ -44,7 +44,7 @@ func (m model) closeGitOutPopup() (tea.Model, tea.Cmd) {
 	m.gitOutFailed = false
 	m.gitOutScroll = 0
 	if m.mode == modeDashboard {
-		m.status = "dashboard"
+		m.status = m.tr("mode.dashboard.status", "dashboard")
 	}
 	return m, nil
 }
@@ -96,7 +96,7 @@ func (m model) gitOutWidth() int {
 // scroll indicator, the windowed output, and a key legend, in the cockpit's box.
 func (m model) gitOutView() string {
 	if len(m.gitOutLines) == 0 {
-		return m.popupBox(mutedStyle.Render("no output"))
+		return m.popupBox(mutedStyle.Render(m.tr("gitout.empty", "no output")))
 	}
 	width, rows := m.gitOutWidth(), m.gitOutViewportRows()
 	off := clampInt(m.gitOutScroll, 0, max(0, len(m.gitOutLines)-rows))
@@ -112,7 +112,7 @@ func (m model) gitOutView() string {
 	if m.gitOutFailed {
 		titleFg = colRed
 	}
-	header := sectionStyle.Render(spaced("GIT")) + "  " +
+	header := sectionStyle.Render(spaced("GIT")) + "  " + // GIT is git's own name
 		lipgloss.NewStyle().Foreground(titleFg).Render(strings.TrimPrefix(m.gitOutTitle, "git "))
 	if len(m.gitOutLines) > rows { // a scroll indicator only when there is more than one screen
 		header += mutedStyle.Render(fmt.Sprintf("   %d–%d / %d", off+1, end, len(m.gitOutLines)))
@@ -125,5 +125,5 @@ func (m model) gitOutView() string {
 
 // gitOutLegend is the popup's key hint.
 func (m model) gitOutLegend() string {
-	return legend("j/k", "scroll", "g/G", "top · end", "esc", "close")
+	return legend("j/k", m.tr("legend.scroll", "scroll"), "g/G", m.tr("legend.top-end", "top · end"), "esc", m.tr("legend.close", "close"))
 }

@@ -252,6 +252,7 @@ type model struct {
 	helpFrom    mode             // the view the key map (?) was opened from, to restore on esc
 	helpScroll  int              // scroll offset within the open help tab (the list has no cursor)
 	helpTab     int              // which purpose tab the key list is showing
+	panelTab    int              // which tab the panel-config page is showing
 
 	renameID      string // panel id being renamed via inputRename ("" if a group)
 	renameGroup   string // group being renamed via inputRename ("" if a panel)
@@ -1029,7 +1030,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.exitScreensaver() // never mask an outage behind the rain
 		}
 		m.backendDown = true
-		m.status = "error: backend down — " + keyLabel(m.effPrefix()) + " S to restart"
+		m.status = m.tr("status.error-backend-down", "error: backend down — ") + keyLabel(m.effPrefix()) + " S to restart"
 		return m, nil
 
 	case tickMsg:
@@ -1160,9 +1161,9 @@ func (m *model) ageStatus() {
 // between actions.
 func (m model) restingStatus() string {
 	if m.endpoint != "" {
-		return "attached · " + m.endpoint
+		return m.tr("status.attached", "attached · ") + m.endpoint
 	}
-	return "dashboard"
+	return m.tr("mode.dashboard.status", "dashboard")
 }
 
 // sendf sends a command if there is a live client (a no-op in tests).
@@ -1180,9 +1181,9 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		m.enforce, m.enforceWhy = sm.Enforce, sm.EnforceWhy
 		m.backendDown = false // a fresh welcome means the backend is live again
 		if sm.Version != proto.ProtocolVersion {
-			m.status = "error: server speaks " + sm.Version + ", client " + proto.ProtocolVersion
+			m.status = m.tr("status.error-server-speaks", "error: server speaks ") + sm.Version + ", client " + proto.ProtocolVersion
 		} else {
-			m.status = "attached · " + m.endpoint
+			m.status = m.tr("status.attached", "attached · ") + m.endpoint
 		}
 	case "goodbye":
 		// The server is dropping this cockpit on purpose and said why — a kick, or
@@ -1190,7 +1191,7 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		// the channels close a moment later and the runner prints it again once the
 		// screen is back.
 		m.backendDown = true
-		m.status = "disconnected: " + sanitizeText(sm.Error)
+		m.status = m.tr("status.disconnected", "disconnected: ") + sanitizeText(sm.Error)
 	case "panels":
 		// Capture what the cursor and the split focus rest on before the fleet
 		// changes under them, so both can be restored to the same item by identity
@@ -1408,7 +1409,7 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		// and fades like any other one-off message.
 		m.status = sm.Notice
 	case "error":
-		m.status = "error: " + sm.Error
+		m.status = m.tr("status.error", "error: ") + sm.Error
 	}
 }
 
@@ -1559,7 +1560,7 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 	if m.editing {
 		if key == "esc" {
 			m.editing, m.editBuf = false, nil
-			m.status = "rebind cancelled"
+			m.status = m.tr("status.rebind-cancelled", "rebind cancelled")
 			return m, nil
 		}
 		// The leader is one key by definition — it is what the sequences hang off
@@ -1568,9 +1569,9 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 			m.editing = false
 			old := m.effPrefix()
 			m.prefixKey = key
-			m.status = fmt.Sprintf("prefix: %s → %s", keyLabel(old), keyLabel(key))
+			m.status = fmt.Sprintf(m.tr("status.prefix-s-s", "prefix: %s → %s"), keyLabel(old), keyLabel(key))
 			if err := m.saveConfig(); err != nil {
-				m.status = "rebound, but save failed: " + err.Error()
+				m.status = m.tr("status.rebound-but-save-failed", "rebound, but save failed: ") + err.Error()
 			}
 			return m, nil
 		}
@@ -1581,13 +1582,13 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 		// anything started with it.
 		if key == "enter" {
 			if len(m.editBuf) == 0 {
-				m.status = "press the keys for this binding first  ·  esc cancels"
+				m.status = m.tr("status.press-keys-binding-first", "press the keys for this binding first  ·  esc cancels")
 				return m, nil
 			}
 			return m.commitRebind()
 		}
 		m.editBuf = append(m.editBuf, key)
-		m.status = "… " + strings.Join(labelTokens(m.editBuf), " ") + "  ·  enter binds  ·  esc cancels"
+		m.status = "… " + strings.Join(labelTokens(m.editBuf), " ") + "  ·  " + m.tr("status.enter-binds", "enter binds  ·  esc cancels")
 		return m, nil
 	}
 
@@ -1598,7 +1599,7 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 		if key == "y" || key == "enter" {
 			m.closeSelected()
 		} else {
-			m.status = "close cancelled"
+			m.status = m.tr("status.close-cancelled", "close cancelled")
 		}
 		return m, nil
 	}
@@ -1615,7 +1616,7 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 		case "w":
 			m.pendingSpawn = false
 			m.input, m.inputBuf = inputIsolateBranch, ""
-			m.status = "new worktree in " + dirLabel(m.spawnDir) + " · type a branch, enter creates"
+			m.status = m.tr("status.new-worktree", "new worktree in ") + dirLabel(m.spawnDir) + " · type a branch, enter creates"
 			return m, nil
 		default:
 			return m.abortSpawnOffer(), nil
@@ -1629,10 +1630,10 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 		if key == "y" || key == "enter" {
 			m.restart = true
 			m.quitting = true
-			m.status = "restarting the server…"
+			m.status = m.tr("exit.restarting", "restarting the server…")
 			return m, tea.Quit
 		}
-		m.status = "restart cancelled"
+		m.status = m.tr("status.restart-cancelled", "restart cancelled")
 		return m, nil
 	}
 
@@ -1663,7 +1664,7 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 		if key == m.bindingKey(actDetach) { // C-t q detaches from every mode
 			return m.runAction(actDetach)
 		}
-		m.status = "no escape for " + keyLabel(key)
+		m.status = m.tr("status.no-escape", "no escape for ") + keyLabel(key)
 		return m, nil
 	}
 
@@ -1677,12 +1678,12 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 			case rowPrefix:
 				m.editing = true
 				m.editIdx = editPrefix
-				m.status = "press the new prefix key  ·  esc cancels"
+				m.status = m.tr("status.press-new-prefix-key", "press the new prefix key  ·  esc cancels")
 			case rowBinding:
 				m.editing = true
 				m.editIdx = idx
 				m.editBuf = nil
-				m.status = "press the keys for " + fmt.Sprintf("%q", m.keymap()[idx].desc) +
+				m.status = m.tr("status.press-keys", "press the keys for ") + fmt.Sprintf("%q", m.keymap()[idx].desc) +
 					"  ·  enter binds  ·  esc cancels"
 			}
 			return m, nil
@@ -1730,6 +1731,9 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 			m.cycleHelpTab(-1)
 			return m, nil
 		}
+		if m.mode == modePanelConfig { // so is the panel-config page
+			return m.cyclePanelTab(-1), nil
+		}
 		// ← and → walk the dashboard TREE: out and in. On the card grid there is no
 		// tree to walk — a work item is drawn whole — so there they do the only
 		// thing left to do with a horizontal key, which is what the grid always used
@@ -1744,6 +1748,9 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 		if m.mode == modeHelp {
 			m.cycleHelpTab(1)
 			return m, nil
+		}
+		if m.mode == modePanelConfig {
+			return m.cyclePanelTab(1), nil
 		}
 		if m.mode == modeDashboard && !m.gridDash() {
 			return m.expandSelected(), nil
@@ -1829,7 +1836,7 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 		}
 		if m.mode == modeDashboard && m.filter != "" { // esc on the dashboard clears an applied filter first
 			m.filter, m.cursor = "", 0
-			m.status = "filter cleared"
+			m.status = m.tr("status.filter-cleared", "filter cleared")
 			return m, nil
 		}
 		if m.mode != modeDashboard {
@@ -1860,36 +1867,55 @@ const (
 	numPanelConfigRows
 
 	firstLimitRow = panelRowCPUs // where the resource-limits section starts
+
+	// panelRowFleetFeedback is the feedback tab's first row: score.feedback, the
+	// fleet's own answer. The per-profile overrides follow it, one per configured
+	// profile, so that tab is never empty — see feedbackSection.
+	panelRowFleetFeedback = numPanelConfigRows
 )
+
+// panelLabelWidth is the label column of the panel-config page, in display cells.
+const panelLabelWidth = 16
 
 // limitField describes one editable row of the resource-limits section: where it
 // reads and writes on limits.Limits, and how it is labelled in the row and in the
 // edit overlay. One table drives the rendering, the editor, and the commit, so a
 // new limit is a single entry rather than five parallel switch arms.
 type limitField struct {
-	label  string // the row label in the panel-config list
-	title  string // the edit overlay's title
-	prompt string // the edit overlay's prompt line
-	get    func(limits.Limits) string
-	set    func(*limits.Limits, string)
+	// label is the row label AND the config key it writes (cpus, memory-high,
+	// nofile). It is never translated: it is the word someone types into their
+	// config file, and a row that named it in another language would not be
+	// findable from the file or the docs.
+	label string
+
+	// title and prompt are what the edit overlay says, and they are prose. Both are
+	// message keys resolved at render time — the English written here is the source
+	// string and the fallback, which is what keeps this table readable as the
+	// overlay it describes.
+	titleKey  string
+	title     string
+	promptKey string
+	prompt    string
+	get       func(limits.Limits) string
+	set       func(*limits.Limits, string)
 }
 
 // limitFields lists the resource-limit rows in display order, matching the
 // panelRow* constants above.
 var limitFields = []limitField{
-	{"cpus", "CPU LIMIT", "CPU cores, e.g. 2 or 1.5  (blank = no cap)",
+	{"cpus", "limit.cpus.title", "CPU LIMIT", "limit.cpus.prompt", "CPU cores, e.g. 2 or 1.5  (blank = no cap)",
 		func(l limits.Limits) string { return l.CPUs },
 		func(l *limits.Limits, v string) { l.CPUs = v }},
-	{"memory", "MEMORY LIMIT", "hard cap, e.g. 4Gi  (blank = no cap)",
+	{"memory", "limit.memory.title", "MEMORY LIMIT", "limit.memory.prompt", "hard cap, e.g. 4Gi  (blank = no cap)",
 		func(l limits.Limits) string { return l.Memory },
 		func(l *limits.Limits, v string) { l.Memory = v }},
-	{"memory-high", "MEMORY WATERMARK", "throttle before kill, e.g. 3Gi  (blank = no cap)",
+	{"memory-high", "limit.memory-high.title", "MEMORY WATERMARK", "limit.memory-high.prompt", "throttle before kill, e.g. 3Gi  (blank = no cap)",
 		func(l limits.Limits) string { return l.MemoryHigh },
 		func(l *limits.Limits, v string) { l.MemoryHigh = v }},
-	{"pids", "PROCESS LIMIT", "most processes in the panel tree  (blank = no cap)",
+	{"pids", "limit.pids.title", "PROCESS LIMIT", "limit.pids.prompt", "most processes in the panel tree  (blank = no cap)",
 		func(l limits.Limits) string { return l.Pids },
 		func(l *limits.Limits, v string) { l.Pids = v }},
-	{"nofile", "OPEN FILES", "open file descriptors per process  (blank = no cap)",
+	{"nofile", "limit.nofile.title", "OPEN FILES", "limit.nofile.prompt", "open file descriptors per process  (blank = no cap)",
 		func(l limits.Limits) string { return l.NOFile },
 		func(l *limits.Limits, v string) { l.NOFile = v }},
 }
@@ -1907,7 +1933,16 @@ func limitFieldFor(row int) (limitField, bool) {
 }
 
 // editPanelRow opens the editor for the selected panel-config row.
+//
+// The first thing it does is check the row is on the tab being looked at. Every
+// arm below resolves m.cursor against the page-wide row constants, and a cursor
+// resting outside the open tab's range would edit something the person cannot
+// see — which is exactly what an empty tab used to hand it.
 func (m model) editPanelRow() (tea.Model, tea.Cmd) {
+	if first, end := m.panelTabRange(); m.cursor < first || m.cursor >= end {
+		m.status = m.tr("panel.cfg.nothing-to-edit", "nothing to edit on this tab")
+		return m, nil
+	}
 	switch {
 	case m.cursor == panelRowAgent:
 		// The one row that is a choice from a known set rather than a typed value, so
@@ -1917,8 +1952,10 @@ func (m model) editPanelRow() (tea.Model, tea.Cmd) {
 		return m.openAgentPicker(modePanelConfig, agentForDefault), nil
 	case m.cursor == panelRowReplayKB:
 		return m.editReplayKB(), nil
-	case m.cursor >= numPanelConfigRows:
-		return m.cycleFeedback(m.cursor - numPanelConfigRows), nil
+	case m.cursor == panelRowFleetFeedback:
+		return m.toggleFleetFeedback(), nil
+	case m.cursor > panelRowFleetFeedback:
+		return m.cycleFeedback(m.cursor - panelRowFleetFeedback - 1), nil
 	case m.cursor >= firstLimitRow:
 		return m.editLimit(m.cursor), nil
 	}
@@ -1930,7 +1967,7 @@ func (m model) editPanelRow() (tea.Model, tea.Cmd) {
 func (m model) editShellPath() model {
 	m.input = inputShellPath
 	m.inputBuf = m.shellPath
-	m.status = "default shell · type a path (blank = system), enter to save"
+	m.status = m.tr("panel.cfg.status.shell", "default shell · type a path (blank = system), enter to save")
 	return m
 }
 
@@ -1942,15 +1979,15 @@ func (m model) editReplayKB() model {
 	if m.replayKB > 0 {
 		m.inputBuf = strconv.Itoa(m.replayKB)
 	}
-	m.status = "replay buffer · KiB per panel (blank = default), enter to save"
+	m.status = m.tr("panel.cfg.status.replay", "replay buffer · KiB per panel (blank = default), enter to save")
 	return m
 }
 
 // replayLabel describes the configured replay buffer for the panel-config row; an
 // unset (zero) value reads as the server default.
-func replayLabel(kb int) string {
+func (m model) replayLabel(kb int) string {
 	if kb <= 0 {
-		return "default"
+		return m.tr("panel.cfg.server-default", "default")
 	}
 	return fmt.Sprintf("%d KiB", kb)
 }
@@ -1965,7 +2002,7 @@ func (m model) commitReplayKB(s string) model {
 		if err != nil || n < 0 {
 			m.input = inputReplayKB // keep the overlay open with the attempt
 			m.inputBuf = s
-			m.status = "replay buffer · enter a whole number of KiB"
+			m.status = m.tr("status.replay-buffer-enter-whole", "replay buffer · enter a whole number of KiB")
 			return m
 		}
 		m.replayKB = n
@@ -1973,10 +2010,10 @@ func (m model) commitReplayKB(s string) model {
 		m.replayKB = 0 // back to the server default
 	}
 	if err := m.saveConfig(); err != nil {
-		m.status = "save failed: " + err.Error()
+		m.status = m.tr("status.save-failed", "save failed: ") + err.Error()
 		return m
 	}
-	m.status = "replay buffer · " + replayLabel(m.replayKB) + " · restart to apply"
+	m.status = m.tr("panel.cfg.replay", "replay buffer") + " · " + m.replayLabel(m.replayKB) + " · " + m.tr("panel.cfg.status.restart", "restart to apply")
 	return m
 }
 
@@ -2001,21 +2038,24 @@ func (m model) editLimit(row int) model {
 func (m model) enforceLabel() string {
 	switch cgroup.Mode(m.enforce) {
 	case "":
-		return "enforcement unknown until attached"
+		return m.tr("panel.cfg.enforce.unknown", "enforcement unknown until attached")
 	case cgroup.ModeNone:
-		return "NOT enforced here · " + m.enforceWhy
+		// enforceWhy is the daemon's own sentence about the host and is not
+		// translated: it names cgroup paths and kernel features, which are the words
+		// someone searches for when they want the cap back.
+		return m.tr("panel.cfg.enforce.none", "NOT enforced here") + " · " + m.enforceWhy
 	default:
-		return "enforced by " + m.enforce
+		return m.tr("panel.cfg.enforce.by", "enforced by") + " " + m.enforce
 	}
 }
 
 // limitLabel describes a resource-limit value for its panel-config row. An unset
 // field and an explicit "unlimited" both mean the same thing to the fleet, so
 // they read the same way — "no cap" — rather than leaking the config spelling.
-func limitLabel(v string) string {
+func (m model) limitLabel(v string) string {
 	trimmed, uncapped := limits.Uncapped(v)
 	if uncapped {
-		return "no cap"
+		return m.tr("panel.cfg.no-cap", "no cap")
 	}
 	return trimmed
 }
@@ -2033,15 +2073,15 @@ func (m model) commitLimit(s string) model {
 	f.set(&next, s)
 	if err := next.Validate(); err != nil {
 		m.input, m.inputBuf = inputLimit, s // keep the overlay open with the attempt
-		m.status = "limits · " + err.Error()
+		m.status = m.tr("status.limits", "limits · ") + err.Error()
 		return m
 	}
 	m.limits = next
 	if err := m.saveConfig(); err != nil {
-		m.status = "save failed: " + err.Error()
+		m.status = m.tr("status.save-failed", "save failed: ") + err.Error()
 		return m
 	}
-	m.status = f.label + " · " + limitLabel(f.get(m.limits)) + " · applies to new panels"
+	m.status = f.label + " · " + m.limitLabel(f.get(m.limits)) + " · " + m.tr("panel.cfg.status.new-panels", "applies to new panels")
 	return m
 }
 
@@ -2058,7 +2098,7 @@ func (m model) handleInput(k tea.Key) (tea.Model, tea.Cmd) {
 		if isolate {
 			return m.abortSpawnOffer(), nil
 		}
-		m.status = "cancelled"
+		m.status = m.tr("status.cancelled", "cancelled")
 	case k.Code == tea.KeyEnter:
 		return m.commitInput()
 	case k.Code == tea.KeyBackspace:
@@ -2096,7 +2136,7 @@ func (m model) handleInput(k tea.Key) (tea.Model, tea.Cmd) {
 func (m model) openFilter() model {
 	m.input = inputFilter
 	m.inputBuf = m.filter
-	m.status = "filter · type to find panels · enter applies · esc clears"
+	m.status = m.tr("status.filter-type-find-panels", "filter · type to find panels · enter applies · esc clears")
 	return m
 }
 
@@ -2217,9 +2257,9 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 	case inputShellPath:
 		m.shellPath = buf
 		if err := m.saveConfig(); err != nil {
-			m.status = "save failed: " + err.Error()
+			m.status = m.tr("status.save-failed", "save failed: ") + err.Error()
 		} else {
-			m.status = "default shell · " + shellLabel(buf)
+			m.status = m.tr("panel.cfg.shell", "default shell") + " · " + m.shellLabel(buf)
 		}
 	case inputReplayKB:
 		return m.commitReplayKB(buf), nil
@@ -2242,9 +2282,9 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 	case inputFilter:
 		m.filter, m.cursor = buf, 0
 		if buf == "" {
-			m.status = "filter cleared"
+			m.status = m.tr("status.filter-cleared", "filter cleared")
 		} else {
-			m.status = "filter · " + buf
+			m.status = m.tr("status.filter", "filter · ") + buf
 		}
 	case inputSearch:
 		return m.runSearch(buf), nil
@@ -2271,14 +2311,14 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 func (m model) spawnPanel(command string) model {
 	if m.client != nil {
 		if err := m.client.Send(proto.Command{Action: "panel.create", Kind: proto.KindShell, Path: command}); err != nil {
-			m.status = "send failed: " + err.Error()
+			m.status = m.tr("status.send-failed", "send failed: ") + err.Error()
 			return m
 		}
 	}
 	// Armed only past the error return: a send that failed produces no panel, and
 	// a reveal left armed would fire on whatever unrelated snapshot arrived next.
 	m.pendingReveal = true
-	m.status = "spawning " + shellLabel(command)
+	m.status = m.tr("status.spawning", "spawning ") + m.shellLabel(command)
 	return m
 }
 
@@ -2309,7 +2349,7 @@ func (m model) spawnPanel(command string) model {
 func (m model) spawnFromForm(line string) model {
 	argv, err := splitCommandLine(line)
 	if err != nil {
-		m.status = "not spawned · " + err.Error()
+		m.status = m.tr("status.not-spawned", "not spawned · ") + err.Error()
 		return m
 	}
 	if len(argv) == 0 {
@@ -2317,20 +2357,20 @@ func (m model) spawnFromForm(line string) model {
 	}
 	prog, args := argv[0], argv[1:]
 	if prog == "" || strings.HasPrefix(prog, "-") {
-		m.status = "not spawned · name the program to run before its arguments"
+		m.status = m.tr("status.not-spawned-name-program", "not spawned · name the program to run before its arguments")
 		return m
 	}
 	if m.client != nil {
 		cmd := proto.Command{Action: "panel.create", Kind: proto.KindCommand, Path: prog, Args: args}
 		if err := m.client.Send(cmd); err != nil {
-			m.status = "send failed: " + err.Error()
+			m.status = m.tr("status.send-failed", "send failed: ") + err.Error()
 			return m
 		}
 	}
 	// Armed only past the error return: a send that failed produces no panel, and
 	// a reveal left armed would fire on whatever unrelated snapshot arrived next.
 	m.pendingReveal = true
-	m.status = "spawning " + strings.Join(argv, " ")
+	m.status = m.tr("status.spawning", "spawning ") + strings.Join(argv, " ")
 	return m
 }
 
@@ -2345,7 +2385,7 @@ func (m model) spawnFromForm(line string) model {
 func (m model) spawnPanelHere() model {
 	p, ok := m.cwdSource()
 	if !ok {
-		m.status = "no panel selected"
+		m.status = m.tr("status.no-panel-selected", "no panel selected")
 		return m
 	}
 	if p.Cwd == "" {
@@ -2358,14 +2398,14 @@ func (m model) spawnPanelHere() model {
 	if m.client != nil {
 		cmd := proto.Command{Action: "panel.create", Kind: proto.KindShell, Path: m.shellPath, Dir: p.Cwd}
 		if err := m.client.Send(cmd); err != nil {
-			m.status = "send failed: " + err.Error()
+			m.status = m.tr("status.send-failed", "send failed: ") + err.Error()
 			return m
 		}
 	}
 	// Armed only past the error return: a send that failed produces no panel, and
 	// a reveal left armed would fire on whatever unrelated snapshot arrived next.
 	m.pendingReveal = true
-	m.status = "spawning in " + p.Cwd
+	m.status = m.tr("status.spawning-2", "spawning in ") + p.Cwd
 	return m
 }
 
@@ -2404,7 +2444,7 @@ func (m model) parkSpawnOffer(dir string) model {
 	m.spawnDir = expandDir(dir)
 	m.pendingSpawn = true
 	_, name, _ := m.resolveAgent()
-	m.status = fmt.Sprintf("spawn %s in %s · enter here · w isolate on a branch", name, dirLabel(m.spawnDir))
+	m.status = fmt.Sprintf(m.tr("status.spawn-s-s-enter", "spawn %s in %s · enter here · w isolate on a branch"), name, dirLabel(m.spawnDir))
 	return m
 }
 
@@ -2415,7 +2455,7 @@ func (m model) abortSpawnOffer() model {
 	m.pendingSpawn = false
 	m.spawnDir = ""
 	m.pendingAgent = ""
-	m.status = "spawn cancelled"
+	m.status = m.tr("status.spawn-cancelled", "spawn cancelled")
 	return m
 }
 
@@ -2433,14 +2473,14 @@ func (m model) spawnAgent(dir string) model {
 	if m.client != nil {
 		cmd := proto.Command{Action: "panel.create", Kind: proto.KindAgent, Path: prof.Command, Args: prof.Args, Dir: dir, Profile: name}
 		if err := m.client.Send(cmd); err != nil {
-			m.status = "send failed: " + err.Error()
+			m.status = m.tr("status.send-failed", "send failed: ") + err.Error()
 			return m
 		}
 	}
 	// Armed only past the error return: a send that failed produces no panel, and
 	// a reveal left armed would fire on whatever unrelated snapshot arrived next.
 	m.pendingReveal = true
-	m.status = fmt.Sprintf("spawning %s · %s", name, dirLabel(dir))
+	m.status = fmt.Sprintf(m.tr("status.spawning-s-s", "spawning %s · %s"), name, dirLabel(dir))
 	return m
 }
 
@@ -2492,7 +2532,7 @@ func (m model) conductorMark() string {
 	info := stateInfoFor(p)
 	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
 	name := lipgloss.NewStyle().Foreground(colBrandHi).Render("conductor")
-	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", info.label, seqLabel(m.bindingKey(actConductor))))
+	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", m.stateText(info), seqLabel(m.bindingKey(actConductor))))
 }
 
 // globalShellMark is the FLEET-heading badge for the singleton global shell — the
@@ -2507,7 +2547,7 @@ func (m model) globalShellMark() string {
 	info := stateInfoFor(p)
 	led := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(info.led)
 	name := lipgloss.NewStyle().Foreground(colBrandHi).Render("shell")
-	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", info.label, seqLabel(m.bindingKey(actGlobalShell))))
+	return led + " " + name + mutedStyle.Render(fmt.Sprintf(" %s · %s", m.stateText(info), seqLabel(m.bindingKey(actGlobalShell))))
 }
 
 // spawnConductor asks the server to create the conductor: the resolved agent
@@ -2517,17 +2557,17 @@ func (m model) globalShellMark() string {
 func (m model) spawnConductor() model {
 	prof, name, ok := m.resolveAgent()
 	if !ok {
-		m.status = fmt.Sprintf("no agent profile %q for the conductor", name)
+		m.status = fmt.Sprintf(m.tr("status.no-agent-profile-q", "no agent profile %q for the conductor"), name)
 		return m
 	}
 	if m.client != nil {
 		cmd := proto.Command{Action: "panel.create", Kind: proto.KindAgent, Path: prof.Command, Args: prof.Args, Profile: name, Conductor: true}
 		if err := m.client.Send(cmd); err != nil {
-			m.status = "send failed: " + err.Error()
+			m.status = m.tr("status.send-failed", "send failed: ") + err.Error()
 			return m
 		}
 	}
-	m.status = fmt.Sprintf("opening the conductor (%s)", name)
+	m.status = fmt.Sprintf(m.tr("status.opening-conductor-s", "opening the conductor (%s)"), name)
 	return m
 }
 
@@ -2539,11 +2579,11 @@ func (m model) spawnGlobalShell() model {
 	if m.client != nil {
 		cmd := proto.Command{Action: "panel.create", Kind: proto.KindShell, GlobalShell: true}
 		if err := m.client.Send(cmd); err != nil {
-			m.status = "send failed: " + err.Error()
+			m.status = m.tr("status.send-failed", "send failed: ") + err.Error()
 			return m
 		}
 	}
-	m.status = "opening the global shell"
+	m.status = m.tr("status.opening-global-shell", "opening the global shell")
 	return m
 }
 
@@ -2598,9 +2638,9 @@ func dirLabel(dir string) string {
 
 // shellLabel describes a configured shell path; an empty path means the system
 // default.
-func shellLabel(path string) string {
+func (m model) shellLabel(path string) string {
 	if path == "" {
-		return "system default"
+		return m.tr("panel.cfg.system-default", "system default")
 	}
 	return path
 }
@@ -2612,7 +2652,7 @@ func (m model) openHelp(from mode) model {
 	m.helpFrom = from
 	m.mode = modeHelp
 	m.helpScroll, m.helpTab = 0, 0 // open at the top of the first tab
-	m.status = "keys"
+	m.status = m.tr("status.keys", "keys")
 	return m
 }
 
@@ -2665,10 +2705,15 @@ func (m *model) clampHelp() {
 	}
 }
 
-// helpVisibleRows is how many rows of the open tab fit, which is what the panel
-// reserves for its chrome plus whatever the tab bar takes.
+// helpVisibleRows is how many rows of the open tab fit. It asks the panel itself
+// what its chrome costs, rather than restating it here — the help view's footer
+// is two lines today and this must not be the place that has to be remembered
+// when it is three.
 func (m model) helpVisibleRows(secs []helpSection) int {
-	return m.panelVisibleRows(helpReserved + len(m.helpTabBar(secs, m.width-8)))
+	return m.panelVisibleRows(scrollPanel{
+		head:   m.helpTabBar(secs, m.width-8),
+		footer: []string{"", ""}, // the blank and the legend; the text is not needed to count them
+	}.reservedRows())
 }
 
 // helpBodyRows is the height every tab is drawn to: the tallest tab, or the
@@ -2701,7 +2746,7 @@ func (m model) commitRebind() (tea.Model, tea.Cmd) {
 	old, next := b.key, strings.Join(m.editBuf, " ")
 	b.key = next
 	m.editing, m.editBuf = false, nil
-	m.status = fmt.Sprintf("rebound %q: %s → %s", b.desc, seqLabel(old), seqLabel(next))
+	m.status = fmt.Sprintf(m.tr("status.rebound-q-s-s", "rebound %q: %s → %s"), b.desc, seqLabel(old), seqLabel(next))
 
 	half := cmdBinding
 	if isEscape(b.act) {
@@ -2711,13 +2756,13 @@ func (m model) commitRebind() (tea.Model, tea.Cmd) {
 		if pair[0].name != b.name && pair[1].name != b.name {
 			continue
 		}
-		m.status = fmt.Sprintf("%q (%s) starts %q (%s) — %s waits %s before firing",
+		m.status = fmt.Sprintf(m.tr("status.q-s-starts-q", "%q (%s) starts %q (%s) — %s waits %s before firing"),
 			pair[0].name, seqLabel(pair[0].key), pair[1].name, seqLabel(pair[1].key),
 			seqLabel(pair[0].key), m.effKeyTimeout())
 		break
 	}
 	if err := m.saveConfig(); err != nil {
-		m.status = "rebound, but save failed: " + err.Error()
+		m.status = m.tr("status.rebound-but-save-failed", "rebound, but save failed: ") + err.Error()
 	}
 	return m, nil
 }
@@ -2725,8 +2770,9 @@ func (m model) commitRebind() (tea.Model, tea.Cmd) {
 func (m model) openPanelConfig(from mode) model {
 	m.helpFrom = from
 	m.mode = modePanelConfig
+	m.panelTab, m.cursor = 0, panelRowShell // open on the defaults, at the top
 	m.cursor = 0
-	m.status = "panel config"
+	m.status = m.tr("status.panel-config", "panel config")
 	return m
 }
 
@@ -2734,7 +2780,7 @@ func (m model) openEditMap(from mode) model {
 	m.helpFrom = from
 	m.mode = modeKeyMap
 	m.cursor = 0
-	m.status = "key map"
+	m.status = m.tr("status.key-map", "key map")
 	return m
 }
 
@@ -2754,7 +2800,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		// because statusBar truncates to whatever the caps leave it.
 		m.input = inputNewPanelCmd
 		m.inputBuf = ""
-		m.status = "new panel · a program = a command panel · enter = a shell"
+		m.status = m.tr("status.new-panel-program-command", "new panel · a program = a command panel · enter = a shell")
 	case actNewAgent:
 		// More than one backend on the machine and the choice is real, so make it
 		// before asking where: the picker opens with the cursor on the default, and
@@ -2772,7 +2818,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		}
 		m.input = inputAgentDir
 		m.inputBuf = m.defaultWorkdir()
-		m.status = fmt.Sprintf("new %s agent · type the workdir", name)
+		m.status = fmt.Sprintf(m.tr("status.new-s-agent-type", "new %s agent · type the workdir"), name)
 	case actConductor:
 		// Open the conductor: since it is a mark in the FLEET heading, not a card, C
 		// is how you reach it. Zoom a live one to watch its work; re-run an exited one
@@ -2782,7 +2828,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 			if p.State == panel.Exited {
 				m.sendf(proto.Command{Action: "panel.respawn", ID: p.ID})
 				p.State = panel.Spawning // zoom the re-run as a live panel, not a read-only result
-				m.status = "re-running the conductor"
+				m.status = m.tr("status.re-running-conductor", "re-running the conductor")
 			}
 			return m.zoomInto(p), nil
 		}
@@ -2797,7 +2843,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 			if p.State == panel.Exited {
 				m.sendf(proto.Command{Action: "panel.respawn", ID: p.ID})
 				p.State = panel.Spawning // zoom the re-run as a live panel, not a read-only result
-				m.status = "re-running the global shell"
+				m.status = m.tr("status.re-running-global-shell", "re-running the global shell")
 			}
 			return m.zoomInto(p), nil
 		}
@@ -2814,14 +2860,14 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		}
 		m.input = inputWorktreeRepo
 		m.inputBuf = m.defaultWorkdir()
-		m.status = "new worktree · type the repository, enter, then a branch"
+		m.status = m.tr("status.new-worktree-type-repository", "new worktree · type the repository, enter, then a branch")
 	case actScoreEdit:
 		return m.editScore()
 	case actClose:
 		it, ok := m.selectedItem()
 		switch {
 		case !ok:
-			m.status = "no panel to close"
+			m.status = m.tr("status.no-panel-close", "no panel to close")
 		case m.confirmClose || it.kind == itemGroup:
 			// A group close retires every member at once, so w always confirms it; a
 			// lone panel asks only when confirm-on-close is on (it defaults on).
@@ -2838,18 +2884,18 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 			p, ok := m.focusedMember()
 			switch {
 			case !ok:
-				m.status = "no panel to re-run"
+				m.status = m.tr("status.no-panel-re-run", "no panel to re-run")
 			case p.State != panel.Exited:
 				m.status = p.Title + " is still running"
 			default:
 				m.sendf(proto.Command{Action: "panel.respawn", ID: p.ID})
-				m.status = "re-running " + p.Title
+				m.status = m.tr("status.re-running", "re-running ") + p.Title
 			}
 			return m, nil
 		}
 		it, ok := m.selectedItem()
 		if !ok {
-			m.status = "no panel to re-run"
+			m.status = m.tr("status.no-panel-re-run", "no panel to re-run")
 			return m, nil
 		}
 		members := it.members
@@ -2859,25 +2905,25 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		ids := exitedIDs(members)
 		switch {
 		case len(ids) == 0 && it.kind == itemGroup:
-			m.status = "no exited panel in " + it.name
+			m.status = m.tr("status.no-exited-panel", "no exited panel in ") + it.name
 		case len(ids) == 0:
-			m.status = "panel is still running"
+			m.status = m.tr("status.panel-still-running", "panel is still running")
 		default:
 			for _, id := range ids {
 				m.sendf(proto.Command{Action: "panel.respawn", ID: id})
 			}
 			if it.kind == itemGroup {
-				m.status = fmt.Sprintf("re-running %d panel(s) in %s", len(ids), it.name)
+				m.status = fmt.Sprintf(m.tr("status.re-running-d-panel", "re-running %d panel(s) in %s"), len(ids), it.name)
 			} else {
-				m.status = "re-running " + it.panel.Title
+				m.status = m.tr("status.re-running", "re-running ") + it.panel.Title
 			}
 		}
 	case actPurge:
 		if n := m.countState(panel.Exited); n == 0 {
-			m.status = "no exited panels to purge"
+			m.status = m.tr("status.no-exited-panels-purge", "no exited panels to purge")
 		} else {
 			m.sendf(proto.Command{Action: "panel.purge"})
-			m.status = fmt.Sprintf("purging %d exited panel(s)", n)
+			m.status = fmt.Sprintf(m.tr("status.purging-d-exited-panel", "purging %d exited panel(s)"), n)
 		}
 	case actSignal:
 		// From the dashboard the target is the selection: one panel, or every live
@@ -2885,7 +2931,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		// out, so the picker's count is what will actually be delivered.
 		it, ok := m.selectedItem()
 		if !ok {
-			m.status = "no panel to signal"
+			m.status = m.tr("status.no-panel-signal", "no panel to signal")
 			return m, nil
 		}
 		members := it.members
@@ -2894,7 +2940,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		}
 		ids := liveIDs(members)
 		if len(ids) == 0 {
-			m.status = "no live panel to signal"
+			m.status = m.tr("status.no-live-panel-signal", "no live panel to signal")
 			return m, nil
 		}
 		scope := it.title()
@@ -2926,7 +2972,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		default:
 			it, ok := m.selectedItem()
 			if !ok || it.kind != itemPanel {
-				m.status = "diff: select an agent panel"
+				m.status = m.tr("status.diff-select-agent-panel", "diff: select an agent panel")
 				return m, nil
 			}
 			m.requestDiff(it.panel)
@@ -2947,7 +2993,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		default:
 			it, ok := m.selectedItem()
 			if !ok {
-				m.status = "dispatch: select an agent panel or a work item"
+				m.status = m.tr("status.dispatch-select-agent-panel-2", "dispatch: select an agent panel or a work item")
 				return m, nil
 			}
 			if it.kind == itemGroup {
@@ -2990,7 +3036,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		m.cursor = 0
 		m.scrolling, m.copySelecting = false, false // never carry scroll/copy state to the dashboard
 		m = m.clearSearch()
-		m.status = "dashboard"
+		m.status = m.tr("mode.dashboard.status", "dashboard")
 	case actHelp:
 		return m.openHelp(m.mode), nil
 	case actUsageToggle:
@@ -3000,21 +3046,21 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 	case actKeycastToggle:
 		m.keycast = !m.keycast
 		m.keycastKey, m.keycastAct = "", "" // never leave the last key stranded on the bar
-		m.status = "keycast: " + onOff(m.keycast)
+		m.status = m.tr("status.keycast", "keycast: ") + onOff(m.keycast)
 		if err := m.saveConfig(); err != nil {
-			m.status = "toggled, but save failed: " + err.Error()
+			m.status = m.tr("status.toggled-but-save-failed", "toggled, but save failed: ") + err.Error()
 		}
 		return m, nil
 	case actPreviewToggle:
 		m.preview = !m.preview
-		m.status = "preview: " + onOff(m.preview)
+		m.status = m.tr("status.preview", "preview: ") + onOff(m.preview)
 		// The pane lives beside the TREE. Saying "preview: on" while the cards are
 		// drawn would be a toggle that reports a change nothing on screen made.
 		if m.preview && m.gridDash() {
 			m.status += " · it shows beside the tree, not the cards"
 		}
 		if err := m.saveConfig(); err != nil {
-			m.status = "toggled, but save failed: " + err.Error()
+			m.status = m.tr("status.toggled-but-save-failed", "toggled, but save failed: ") + err.Error()
 		}
 		return m, nil
 	case actLens:
@@ -3032,7 +3078,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		// A force-restart stops the daemon and starts a fresh one, ending every
 		// panel it owns — so confirm before pulling the rug.
 		m.pendingRestart = true
-		m.status = "force-restart the server? this ends every panel · (y/n)"
+		m.status = m.tr("status.force-restart-server-ends", "force-restart the server? this ends every panel · (y/n)")
 		return m, nil
 	case actReload:
 		// Tell the daemon to re-read its config in place (the fleet keeps running),
@@ -3040,7 +3086,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		// defaults all update live — no detach, no restart.
 		m.sendf(proto.Command{Action: "server.reload"})
 		m = m.applyPrefs(loadPrefs())
-		m.status = "config reloaded · backend + cockpit"
+		m.status = m.tr("status.config-reloaded-backend-cockpit", "config reloaded · backend + cockpit")
 		return m, nil // the reloaded mouse toggle rides out on the next frame's View
 	case actDetach:
 		m.quitting = true
@@ -3099,7 +3145,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 			}
 			return m.exitGroupZoom()
 		default:
-			m.status = "already at the dashboard"
+			m.status = m.tr("status.already-at-dashboard", "already at the dashboard")
 			return m, nil
 		}
 	}
@@ -3112,29 +3158,29 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 	if m.mode == modeKeyMap {
 		switch kind, idx := m.keyMapRow(); kind {
 		case rowPrefix:
-			m.status = "press e to change the prefix key"
+			m.status = m.tr("status.press-e-change-prefix", "press e to change the prefix key")
 		case rowBinding:
 			return m.runAction(m.keymap()[idx].act)
 		case rowSetting:
 			switch idx {
 			case settingBell:
 				m.bellEnabled = !m.bellEnabled
-				m.status = "bell: " + onOff(m.bellEnabled)
+				m.status = m.tr("status.bell", "bell: ") + onOff(m.bellEnabled)
 			case settingMouse:
 				// The terminal's mouse reporting is a property of the frame now, so
 				// flipping the toggle IS the flip — the next View carries it.
 				m.mouseEnabled = !m.mouseEnabled
-				m.status = "mouse: " + onOff(m.mouseEnabled)
+				m.status = m.tr("status.mouse", "mouse: ") + onOff(m.mouseEnabled)
 			case settingLanguage:
 				m.lang = i18n.Next(m.effLang()) // a cycle, not a toggle: enter advances it
 				m.langChosen = true             // now it is a choice, and worth persisting
-				m.status = "language: " + string(m.lang)
+				m.status = m.tr("status.language", "language: ") + string(m.lang)
 			default:
 				m.confirmClose = !m.confirmClose
-				m.status = "confirm on close: " + onOff(m.confirmClose)
+				m.status = m.tr("status.confirm-close", "confirm on close: ") + onOff(m.confirmClose)
 			}
 			if err := m.saveConfig(); err != nil {
-				m.status = "toggled, but save failed: " + err.Error()
+				m.status = m.tr("status.toggled-but-save-failed", "toggled, but save failed: ") + err.Error()
 			}
 			return m, nil
 		}
@@ -3212,9 +3258,9 @@ func (m model) zoomInto(p panel.Panel) model {
 	m.sendf(proto.Command{Action: "panel.resize", ID: p.ID, Rows: zr, Cols: zc})
 	m.sendf(proto.Command{Action: "panel.attach", ID: p.ID})
 	if m.zoomExited {
-		m.status = "result · " + p.Title + " (exited)"
+		m.status = m.tr("status.result", "result · ") + p.Title + " (exited)"
 	} else {
-		m.status = "zoomed · " + p.Title
+		m.status = m.tr("status.zoomed", "zoomed · ") + p.Title
 	}
 	if m.scrolling { // restored straight into scroll mode — show the scroll hint, not the zoom status
 		m.status = scrollHintStatus
@@ -3238,12 +3284,12 @@ func (m model) fleetPanel(id string) (panel.Panel, bool) {
 // sets a hint and sends nothing.
 func (m *model) requestDiff(p panel.Panel) {
 	if !p.IsAgent() {
-		m.status = "diff: select an agent panel"
+		m.status = m.tr("status.diff-select-agent-panel", "diff: select an agent panel")
 		return
 	}
 	m.pendingEphemeralTitle = "diff · " + p.Title
 	m.sendf(proto.Command{Action: "panel.diff", ID: p.ID})
-	m.status = "diff · " + p.Title
+	m.status = m.tr("status.diff", "diff · ") + p.Title
 }
 
 // handleZoomKey forwards keystrokes to the zoomed panel, treating the prefix as
@@ -3340,7 +3386,7 @@ func runZoomBinding(m model, b binding) (tea.Model, tea.Cmd) {
 		return m.runAction(b.act)
 	case actSignal:
 		if m.zoomExited {
-			m.status = "panel has exited — nothing to signal"
+			m.status = m.tr("status.panel-has-exited-nothing", "panel has exited — nothing to signal")
 			return m, nil
 		}
 		return m.openSignalPicker(modeZoom, []string{m.zoomID}, m.zoomTitle), nil
@@ -3350,12 +3396,12 @@ func runZoomBinding(m model, b binding) (tea.Model, tea.Cmd) {
 		return m.openFleetSearch(), nil
 	case actDiff:
 		if m.zoomEphemeral { // already a diff zoom — no diff-of-a-diff
-			m.status = "diff: already showing a diff"
+			m.status = m.tr("status.diff-already-showing-diff", "diff: already showing a diff")
 			return m, nil
 		}
 		p, ok := m.fleetPanel(m.zoomID)
 		if !ok || !p.IsAgent() {
-			m.status = "diff: select an agent panel"
+			m.status = m.tr("status.diff-select-agent-panel", "diff: select an agent panel")
 			return m, nil
 		}
 		m.requestDiff(p)
@@ -3363,7 +3409,7 @@ func runZoomBinding(m model, b binding) (tea.Model, tea.Cmd) {
 	case actDispatch:
 		p, ok := m.fleetPanel(m.zoomID)
 		if !ok || !p.IsAgent() {
-			m.status = "dispatch: select an agent panel"
+			m.status = m.tr("status.dispatch-select-agent-panel", "dispatch: select an agent panel")
 			return m, nil
 		}
 		return m.startDispatch(p), nil
@@ -3386,7 +3432,7 @@ func runZoomBinding(m model, b binding) (tea.Model, tea.Cmd) {
 // key reaches the program. A no-op where there is nothing to scroll.
 func (m model) enterScroll() model {
 	if emu, _ := m.scrollTarget(); emu == nil {
-		m.status = "nothing to scroll here"
+		m.status = m.tr("status.nothing-scroll-here", "nothing to scroll here")
 		return m
 	}
 	m.scrolling = true
@@ -3594,7 +3640,7 @@ func (m model) zoomDetach() (tea.Model, tea.Cmd) {
 	m = m.clearSearch()
 	m.cursorHidden = nil
 	m.zoomID, m.zoomTitle, m.zoomArmed, m.zoomExited, m.zoomGroupOrigin = "", "", false, false, ""
-	m.status = "dashboard"
+	m.status = m.tr("mode.dashboard.status", "dashboard")
 	if m.client != nil {
 		return m, func() tea.Msg { _ = m.client.Send(proto.Command{Action: "panel.list"}); return nil }
 	}
@@ -3621,7 +3667,7 @@ func (m model) bindingKey(a action) string {
 // Ctrl-E) is pressed in command mode, where leaving is only via the detach
 // binding — never an accidental Ctrl-C.
 func (m model) exitHint() string {
-	return "exit is disabled here — press " + seqLabel(m.bindingKey(actDetach)) + " to detach"
+	return fmt.Sprintf(m.tr("status.exit-disabled", "exit is disabled here — press %s to detach"), seqLabel(m.bindingKey(actDetach)))
 }
 
 // closeSelected asks the server to close the highlighted item and drops its
@@ -3637,7 +3683,7 @@ func (m *model) closeSelected() {
 	// — so the server retires them together and broadcasts a single snapshot.
 	if m.client != nil {
 		if err := m.client.Send(proto.Command{Action: "panel.close", IDs: ids}); err != nil {
-			m.status = "close failed: " + err.Error()
+			m.status = m.tr("status.close-failed", "close failed: ") + err.Error()
 			return
 		}
 	}
@@ -3648,18 +3694,24 @@ func (m *model) closeSelected() {
 	}
 	m.fleet = slices.DeleteFunc(m.fleet, func(p panel.Panel) bool { return gone[p.ID] })
 	m.clampCursor()
-	m.status = "closed · " + it.title()
+	m.status = m.tr("status.closed", "closed · ") + it.title()
 }
 
 // move shifts the cursor by delta within the active list, clamped to its bounds.
 func (m *model) move(delta int) {
-	n := m.itemCount()
-	if n == 0 {
+	lo, n := 0, m.itemCount()
+	// The panel-config page partitions one row index across its tabs, so the
+	// cursor moves within the OPEN tab's slice of it. Without this, ↓ off the last
+	// defaults row lands on a resource limit that is not on screen, and e edits it.
+	if m.mode == modePanelConfig {
+		lo, n = m.panelTabRange()
+	}
+	if n <= lo {
 		return
 	}
 	m.cursor += delta
-	if m.cursor < 0 {
-		m.cursor = 0
+	if m.cursor < lo {
+		m.cursor = lo
 	}
 	if m.cursor >= n {
 		m.cursor = n - 1
@@ -3688,9 +3740,10 @@ func (m model) itemCount() int {
 	case modeKeyMap:
 		return len(m.keymap()) + 1 + numSettings // prefix row + bindings + the settings toggles
 	case modePanelConfig:
-		// The feedback rows are one per CONFIGURED profile, so this page is the one
-		// whose length depends on the user's file rather than on a constant.
-		return numPanelConfigRows + len(m.feedbackProfiles())
+		// The feedback tab carries the fleet's own switch plus one row per CONFIGURED
+		// profile, so this page is the one whose length depends on the user's file
+		// rather than on a constant.
+		return numPanelConfigRows + 1 + len(m.feedbackProfiles())
 	default:
 		return len(m.dashItems())
 	}
@@ -3709,6 +3762,21 @@ func (m model) countState(s panel.State) int {
 }
 
 func (m *model) clampCursor() {
+	// The panel-config page's cursor belongs to the OPEN TAB, not to the page, and
+	// clamping it against the page's total is how it escapes: the feedback tab of a
+	// fleet with no profiles starts one past the last limit row, so a clamp to the
+	// page length lands the cursor back on `nofile` — a row on another tab, and the
+	// one e would then edit.
+	if m.mode == modePanelConfig {
+		first, end := m.panelTabRange()
+		if m.cursor < first {
+			m.cursor = first
+		}
+		if m.cursor > first && m.cursor >= end {
+			m.cursor = max(first, end-1)
+		}
+		return
+	}
 	if n := m.itemCount(); m.cursor >= n {
 		m.cursor = max(0, n-1)
 	}
@@ -3838,7 +3906,7 @@ func (m model) frame() (out string) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().Interface("panic", r).Bytes("stack", debug.Stack()).Msg("recovered a render panic")
-			out = "baton: a render glitch was recovered — press any key to refresh\r\n"
+			out = "baton: " + m.tr("exit.glitch", "a render glitch was recovered — press any key to refresh") + "\r\n"
 		}
 	}()
 	return m.render()
@@ -3847,9 +3915,9 @@ func (m model) frame() (out string) {
 func (m model) render() string {
 	if m.quitting {
 		if m.restart {
-			return "baton: restarting the server…\n"
+			return "baton: " + m.tr("exit.restarting", "restarting the server…") + "\n"
 		}
-		return "baton: detached (server still running)\n"
+		return "baton: " + m.tr("exit.detached", "detached (server still running)") + "\n"
 	}
 	if m.width == 0 || m.height == 0 {
 		return "" // wait for the first size message
@@ -3910,6 +3978,27 @@ func (m model) render() string {
 	}
 
 	content := lipgloss.JoinVertical(lipgloss.Center, header, "", body)
+	// The wordmark is the first thing to go when the screen is short. What is on
+	// screen is what someone opened; the banner is decoration, and decoration that
+	// pushes a pop-up's legend — and then the footer — off the bottom of the
+	// terminal has stopped being decoration.
+	//
+	// Two conditions, and both are needed. bannerFits is asked BEFORE the body is
+	// built, so an overlay can size itself to the rows the banner is not taking.
+	// The height check here is asked after, because only now is the body's real
+	// height known: a panel with a floor under its body (three rows, so ↑↓ still
+	// mean something) can come out taller than the space a generic estimate said
+	// it would have.
+	if !m.bannerFits() || lipgloss.Height(content) > m.height-1 {
+		content = body
+	}
+	// And whatever is left is cut to the rows there are. A terminal can be smaller
+	// than the smallest thing the cockpit knows how to draw — minHeight is eight
+	// rows, and the fleet heading, its chip strip and one card are already more
+	// than that — so the last word has to be the screen's. Place would otherwise
+	// hand back the overflow and the footer would be pushed off the bottom, which
+	// is how a view too big to draw becomes a view with no status bar.
+	content = clipRows(content, m.height-1)
 	// Center the cockpit over the terminal's own (transparent) background; the
 	// panels are transparent too, so only their borders carry the brand colour.
 	placed := lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Center, content)
@@ -3928,7 +4017,7 @@ func (m model) headerBlock() string {
 	return lipgloss.JoinVertical(lipgloss.Center,
 		bannerStyle.Render(art),
 		"",
-		subStyle.Render(truncate("a next-gen, agent-friendly terminal multiplexer", m.width)),
+		subStyle.Render(truncate(m.tr("tagline", "a next-gen, agent-friendly terminal multiplexer"), m.width)),
 		mutedStyle.Render(truncate(m.versionLine(), m.width)),
 	)
 }
@@ -3973,8 +4062,8 @@ func (m model) zoomView() string {
 func (m model) dashboardView() string {
 	items := m.dashItems() // built once and threaded through the render below
 	shown := m.visibleFleet()
-	heading := sectionStyle.Render(spaced("FLEET")) +
-		mutedStyle.Render(fmt.Sprintf("   %d panel(s)  ", len(shown))) + fleetBreakdown(shown)
+	heading := sectionStyle.Render(spaced(m.tr("fleet.title", "FLEET"))) +
+		mutedStyle.Render(fmt.Sprintf("   "+m.tr("fleet.panels", "%d panel(s)")+"  ", len(shown))) + fleetBreakdown(shown)
 	if mark := m.conductorMark(); mark != "" {
 		heading += mutedStyle.Render("   ·   ") + mark
 	}
@@ -3983,20 +4072,20 @@ func (m model) dashboardView() string {
 	}
 	if m.filter != "" {
 		heading += "  " + seg("⌕ "+truncate(m.filter, 20), colDark, colCyan) +
-			mutedStyle.Render(fmt.Sprintf("  %d match(es)", len(items)))
+			mutedStyle.Render("  "+fmt.Sprintf(m.tr("fleet.matches", "%d match(es)"), len(items)))
 	}
 	// A lens is stated on the heading, always. The tree looks the same under one as
 	// under the fleet's own work items, and a person who cannot tell which they are
 	// looking at will eventually reach for a verb that is refused, or worse, trust a
 	// shape that is not the one they built.
 	if !m.lens.real() {
-		heading += "  " + seg("group by: "+m.lens.String(), colDark, colBrandHi)
+		heading += "  " + seg(m.tr("fleet.group-by", "group by:")+" "+m.lensText(m.lens), colDark, colBrandHi)
 	}
 	// Same argument as the lens chip: a tree on a fleet the cards would have drawn
 	// is a choice someone made, and the dashboard should say so rather than leave
 	// them wondering which of them decided it.
 	if m.treeIsChosen(m.dashTree()) {
-		heading += "  " + seg("tree  "+seqLabel(m.bindingKey(actDashLayout))+" for cards", colDark, colBrand)
+		heading += "  " + seg(fmt.Sprintf(m.tr("fleet.tree-chip", "tree  %s for cards"), seqLabel(m.bindingKey(actDashLayout))), colDark, colBrand)
 	}
 	summary := m.summaryStrip(shown)
 	body := m.treeBody(items)
@@ -4004,9 +4093,9 @@ func (m model) dashboardView() string {
 		body = m.cardGrid(items)
 	}
 	if m.filter != "" && len(items) == 0 {
-		body = noticeBox(mutedStyle.Render("no panels match ") +
+		body = noticeBox(mutedStyle.Render(m.tr("fleet.no-match", "no panels match")+" ") +
 			lipgloss.NewStyle().Foreground(colBrandHi).Render("\""+truncate(m.filter, 24)+"\"") +
-			mutedStyle.Render("  ·  ") + legendKey("esc") + mutedStyle.Render(" clears the filter"))
+			mutedStyle.Render("  ·  ") + legendKey("esc") + mutedStyle.Render(" "+m.tr("fleet.clears-filter", "clears the filter")))
 	}
 	return lipgloss.JoinVertical(lipgloss.Center, heading, "", summary, "", body)
 }
@@ -4028,10 +4117,12 @@ func (m model) summaryStrip(fleet []panel.Panel) string {
 		}
 		info := states[st]
 		led := lipgloss.NewStyle().Foreground(info.color).Render(info.led)
-		chips = append(chips, fmt.Sprintf("%s %s", led, mutedStyle.Render(fmt.Sprintf("%d %s", n, info.label))))
+		chips = append(chips, fmt.Sprintf("%s %s", led, mutedStyle.Render(fmt.Sprintf("%d %s", n, m.stateText(info)))))
 	}
 	if len(chips) == 0 {
-		return noticeBox(mutedStyle.Render("no panels yet  ·  ") +
+		// shell, agent and conductor name the three things the keys spawn, and all
+		// three are baton's own words for them — the same words `ctl spawn` takes.
+		return noticeBox(mutedStyle.Render(m.tr("fleet.empty", "no panels yet")+"  ·  ") +
 			legend(
 				seqLabel(m.bindingKey(actNewPanel)), "shell",
 				seqLabel(m.bindingKey(actNewAgent)), "agent",
@@ -4194,7 +4285,7 @@ func scrollWindow(cursor, count, visible int) (int, int) {
 // renderRows draws the windowed slice [start,end) of the tree, one line each, with
 // the clipped edges marked so it is clear the list continues.
 func (m model) renderRows(items []dashItem, start, end, visible, width int) string {
-	header := sectionStyle.Render(spaced("FLEET"))
+	header := sectionStyle.Render(spaced(m.tr("fleet.title", "FLEET")))
 	if visible < len(items) {
 		header += mutedStyle.Render(fmt.Sprintf("  %d/%d", m.cursor+1, len(items)))
 	}
@@ -4257,7 +4348,7 @@ func trimFirstCell(row string) string {
 // member roster for the selected group.
 func (m model) renderPreview(items []dashItem, width int) string {
 	if m.cursor < 0 || m.cursor >= len(items) {
-		return mutedStyle.Render("no panel selected")
+		return mutedStyle.Render(m.tr("preview.none", "no panel selected"))
 	}
 	it := items[m.cursor]
 	switch it.kind {
@@ -4271,19 +4362,19 @@ func (m model) renderPreview(items []dashItem, width int) string {
 
 	title := lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(truncate(p.Title, width))
 	led := lipgloss.NewStyle().Foreground(info.color).Render(info.led)
-	statusLine := led + " " + kindBadge(p.Kind) + "  " + lipgloss.NewStyle().Foreground(info.color).Render(info.label)
+	statusLine := led + " " + kindBadge(p.Kind) + "  " + lipgloss.NewStyle().Foreground(info.color).Render(m.stateText(info))
 	rule := mutedStyle.Render(strings.Repeat("─", width))
 
 	rows := []string{
-		metaRow("state", info.label, info.color),
-		metaRow("kind", p.Kind.String(), colInk),
+		metaRow(m.tr("meta.state", "state"), m.stateText(info), info.color),
+		metaRow(m.tr("meta.kind", "kind"), p.Kind.String(), colInk),
 	}
 	if p.Task != "" {
-		rows = append(rows, metaRow("task", truncate(p.Task, width), colBrandHi))
+		rows = append(rows, metaRow(m.tr("meta.task", "task"), truncate(p.Task, width), colBrandHi))
 	}
 	rows = append(rows,
-		metaRow("activity", p.Activity, colInk),
-		metaRow("signal", p.Spark, info.color),
+		metaRow(m.tr("meta.activity", "activity"), p.Activity, colInk),
+		metaRow(m.tr("meta.signal", "signal"), p.Spark, info.color),
 	)
 	meta := lipgloss.JoinVertical(lipgloss.Left, rows...)
 
@@ -4323,7 +4414,6 @@ func (m model) helpView() string {
 		head:     m.helpTabBar(secs, m.width-8),
 		body:     body,
 		footer:   []string{"", legend},
-		reserved: helpReserved,
 		anchor:   m.helpScroll, // read-only: the arrows drive this offset directly
 		centered: false,
 		clipHint: mutedStyle.Render("   " + m.tr("help.legend.scroll", "↑↓ scroll")),
@@ -4671,7 +4761,6 @@ func (m model) keyMapView() string {
 		title:    m.tr("keymap.title", "KEY BINDINGS"),
 		body:     body,
 		footer:   []string{"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(hints))), hints, about},
-		reserved: keyMapReserved,
 		anchor:   selLine,
 		centered: true,
 		clipHint: mutedStyle.Render(fmt.Sprintf("   %d/%d", m.cursor+1, len(binds)+1+numSettings)),
@@ -4681,11 +4770,7 @@ func (m model) keyMapView() string {
 // The vertical chrome each overlay panel reserves around its scrollable body —
 // box border + padding, header, any hint/legend lines, and the cockpit footer —
 // so panelVisibleRows can size the body to never overflow the screen.
-const (
-	keyMapReserved      = 10 // header+blank, body, blank, rule, legend, about
-	panelConfigReserved = 12 // header+blank, body, blank, two hints, blank, rule, legend
-	helpReserved        = 8  // header+blank, body, blank, legend
-)
+const ()
 
 // panelVisibleRows is how many body rows an overlay panel shows before it
 // scrolls, after reserving `reserved` rows for its chrome and the footer. An
@@ -4721,7 +4806,30 @@ func (m model) overlayStack() int {
 	if m.height <= 0 {
 		return 0
 	}
+	if !m.bannerFits() {
+		return 0
+	}
 	return lipgloss.Height(m.headerBlock()) + 1
+}
+
+// minPopupRows is the smallest pop-up worth drawing: three body rows inside a
+// panel's own chrome. A terminal that cannot hold the banner AND this is a
+// terminal that does not get the banner.
+const minPopupRows = 3 + 2 + 2 + popupChrome // body, title+blank, a one-line footer, the box
+
+// bannerFits reports whether the wordmark block can sit above an overlay and
+// still leave room for the smallest usable pop-up under it.
+//
+// It is the one place that decides, and both the sizing and the drawing read it,
+// because they have to agree: a body sized as though the banner were there and
+// then drawn without it wastes the rows it just gave away, and a body sized
+// without the banner and drawn with it runs off the bottom of the screen — which
+// is the failure this whole file's row arithmetic exists to avoid.
+func (m model) bannerFits() bool {
+	if m.height <= 0 {
+		return true // unsized: the first frame, and unit tests
+	}
+	return m.height-1-(lipgloss.Height(m.headerBlock())+1) >= minPopupRows
 }
 
 // windowAround clips rows to a visible-row window centred on anchor (the selected
@@ -4760,19 +4868,50 @@ type scrollPanel struct {
 	head     []string // pinned lines under the title: a tab bar, a filter echo
 	body     []string // the scrollable rows
 	footer   []string // pinned lines below the body
-	reserved int      // vertical chrome to reserve when sizing the body
 	anchor   int      // the cursor line (centered) or the scroll offset (top)
 	centered bool     // keep anchor in view (cursor panels) vs. anchor-as-offset (help)
-	clipHint string   // appended to the title when the body is clipped
+
+	// minBody is a floor under the body's height, so a panel holding less than that
+	// still draws to it. It is for the panels whose content changes as you MOVE
+	// through them — the directory browser, where the next directory holds a
+	// different number of things and a box sized to its contents changed height on
+	// almost every keystroke.
+	//
+	// A floor and not a fill: padding such a panel out to the whole screen would
+	// hold its size honestly and look like a mostly empty box, which is another way
+	// of being wrong about the same thing. It is capped by the rows the screen
+	// actually has, so a short terminal is never padded past its own edge.
+	minBody  int
+	clipHint string // appended to the title when the body is clipped
+}
+
+// popupChrome is what the bordered surface costs in rows: the rounded border top
+// and bottom, and popupBoxAt's one row of vertical padding on each side.
+const popupChrome = 4
+
+// reservedRows is every row of this panel that is NOT scrollable body: the title
+// and the blank under it, the pinned head and footer, and the box around the lot.
+//
+// It is COMPUTED and no longer a per-panel constant, because a constant is a
+// second statement of something the struct already says, and the two drift. The
+// panel-config page's said 12 with a note reading "two hints" long after the page
+// had four and a score-feedback line — so it sized its body two rows too tall,
+// the box came out two rows past the bottom of the terminal, and the legend the
+// number was counting was the thing pushed off the screen.
+func (p scrollPanel) reservedRows() int {
+	return 2 + len(p.head) + len(p.footer) + popupChrome // title + blank, head, footer, box
 }
 
 // renderScrollPanel windows p.body to the height and wraps it, the title, and the
 // footer in the shared popupBox.
 func (m model) renderScrollPanel(p scrollPanel) string {
-	visible := m.panelVisibleRows(p.reserved + len(p.head))
+	visible := m.panelVisibleRows(p.reservedRows())
 	body, clipped := windowFrom(p.body, p.anchor, visible)
 	if p.centered {
 		body, clipped = windowAround(p.body, p.anchor, visible)
+	}
+	for floor := min(p.minBody, visible); len(body) < floor; {
+		body = append(body, "")
 	}
 	header := sectionStyle.Render(spaced(p.title))
 	if clipped {
@@ -4815,9 +4954,9 @@ func (m model) popupWidth() int {
 // shows is the moment someone is most likely to want to change which view it is.
 func (m model) cycleUsageMode() (tea.Model, tea.Cmd) {
 	m.usageMode = m.usageMode.next()
-	m.status = "usage footer: " + m.usageMode.label(m.effLang())
+	m.status = m.tr("status.usage-footer", "usage footer: ") + m.usageMode.label(m.effLang())
 	if err := m.saveConfig(); err != nil {
-		m.status = "toggled, but save failed: " + err.Error()
+		m.status = m.tr("status.toggled-but-save-failed", "toggled, but save failed: ") + err.Error()
 	}
 	return m, nil
 }
@@ -4825,7 +4964,52 @@ func (m model) cycleUsageMode() (tea.Model, tea.Cmd) {
 // popupBox wraps a settings/overlay panel in the cockpit's bordered surface at the
 // fixed pop-up width.
 func (m model) popupBox(body string) string {
-	return popupBoxAt(body, m.popupWidth())
+	return popupBoxAt(m.fitPopup(body), m.popupWidth())
+}
+
+// fitPopup clips a pop-up's content to the rows the terminal can actually show.
+//
+// It is the last line of defence, and it exists because not every pop-up is a
+// scroller. The ones built from renderScrollPanel window their own body and reach
+// here already the right height; the fixed ones — the signal picker's seven
+// signals, a form, a menu — are as tall as their content and nothing else was
+// stopping them from being taller than the screen.
+//
+// Overflowing is not a gentler failure than clipping, which is the thing worth
+// being clear about: lipgloss.Place hands back content taller than the box it was
+// given, so the rows past the bottom are lost anyway AND they take the footer with
+// them. Clipping loses the same rows and keeps the footer.
+//
+// What it will not drop is the LAST line. That is the legend — the row that says
+// which key closes the thing — and a person who cannot see it is stuck in an
+// overlay they opened by accident. An ellipsis takes the place of what went, so
+// the cut is visible rather than silent.
+func (m model) fitPopup(body string) string {
+	if m.height <= 0 {
+		return body
+	}
+	room := m.height - 1 - popupChrome
+	lines := strings.Split(body, "\n")
+	if room < 3 || len(lines) <= room {
+		return body
+	}
+	kept := append([]string(nil), lines[:room-2]...)
+	kept = append(kept, mutedStyle.Render("…"), lines[len(lines)-1])
+	return strings.Join(kept, "\n")
+}
+
+// clipRows cuts a block to at most n lines, keeping the top. It is the cockpit's
+// final say on height: everything above it tries to fit, and this is what makes
+// sure the frame handed to the terminal is the size the terminal asked for.
+func clipRows(s string, n int) string {
+	if n < 1 {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) <= n {
+		return s
+	}
+	return strings.Join(lines[:n], "\n")
 }
 
 // popupBoxAt renders body in the bordered surface at an exact content width. Each
@@ -4853,15 +5037,85 @@ func popupBoxAt(body string, width int) string {
 		Render(strings.Join(lines, "\n"))
 }
 
-// panelConfigView renders the panel-defaults tab: the spawn defaults (shell,
-// replay buffer) and, under their own section header, the resource limits new
-// panels are capped by.
-func (m model) panelConfigView() string {
-	body := make([]string, 0, numPanelConfigRows+3) // +3: the section header and its blanks
-	selLine := 0                                    // the selected row's body line, for the scroll anchor
+// The panel-config page's tabs. The page had grown three sections, four footer
+// hints and a roll of uninstalled backends, all drawn at once: on an 80×32
+// terminal that left ONE resource-limit row visible between the headings and the
+// hints, and on anything shorter the legend went off the bottom of the box.
+//
+// A tab carries its own rows and its own hints, so the page draws a third of what
+// it used to and every row of it is a row about the same thing. The sections no
+// longer need headings either — the tab is the heading, which is two more rows
+// back.
+//
+// first is the page-wide row index the tab starts at, and the tabs partition that
+// one index space rather than each having their own. Everything that edits a row
+// — editPanelRow, the limit table, the feedback cycle — reads m.cursor against
+// the panelRow* constants, and a per-tab cursor would have meant every one of
+// them learning which tab was open to know what it was on.
+type panelCfgTab struct {
+	key, name string // the tab's label: message key, and the English source
+	first     int    // the first page row this tab holds
+	rows      func(m model) int
+}
 
-	// The section header makes the body longer than the row count, so the selected
-	// row records the line it landed on rather than assuming the two indexes match.
+var panelCfgTabs = []panelCfgTab{
+	{"panel.cfg.tab.defaults", "DEFAULTS", panelRowShell, func(model) int { return firstLimitRow }},
+	{"panel.cfg.tab.limits", "LIMITS", firstLimitRow, func(model) int { return len(limitFields) }},
+	{"panel.cfg.tab.feedback", "FEEDBACK", panelRowFleetFeedback, func(m model) int { return 1 + len(m.feedbackProfiles()) }},
+}
+
+// panelTabIdx is the open tab, clamped to the tabs that exist.
+func (m model) panelTabIdx() int {
+	return clampInt(m.panelTab, 0, len(panelCfgTabs)-1)
+}
+
+// panelTabRange is the page-row range the open tab holds: the first row, and one
+// past its last. A tab with nothing in it (no agent profiles are configured)
+// reports an empty range, and the cursor stays where it was — there is nothing on
+// that tab to put it on.
+func (m model) panelTabRange() (first, end int) {
+	t := panelCfgTabs[m.panelTabIdx()]
+	return t.first, t.first + t.rows(m)
+}
+
+// cyclePanelTab walks the page's tabs, landing the cursor on the first row of the
+// one it arrives at so ↑↓ and e act on what is actually on screen.
+//
+// It parks the cursor there even on a tab that HOLDS no rows — a fleet with no
+// agent profiles configured has an empty feedback tab — and that is the whole
+// point of doing it unconditionally. Leaving the cursor where it was left it
+// pointing into the tab you came FROM: arriving at the empty feedback tab from
+// the limits tab and pressing e opened the CPU limit's editor, a row on another
+// tab that was not on screen and that nobody had selected.
+func (m model) cyclePanelTab(delta int) model {
+	m.panelTab = wrapIndex(m.panelTabIdx(), delta, len(panelCfgTabs))
+	m.cursor, _ = m.panelTabRange()
+	return m
+}
+
+// panelTabBar draws the page's tabs in the key list's style — the cockpit has one
+// look for a tab bar and this is it.
+func (m model) panelTabBar() []string {
+	parts := make([]string, 0, len(panelCfgTabs))
+	for i, t := range panelCfgTabs {
+		name := m.tr(t.key, t.name)
+		if i == m.panelTabIdx() {
+			parts = append(parts, tabHotStyle.Render(name))
+			continue
+		}
+		parts = append(parts, tabStyle.Render(name))
+	}
+	return []string{" " + strings.Join(parts, mutedStyle.Render("│")), ""}
+}
+
+// panelTabBody builds one tab's rows and the hints that belong under them, and
+// says which body line the cursor landed on.
+//
+// It is asked for EVERY tab on every frame, not just the open one, because the
+// page pads itself to the tallest — so it has to be answerable about a tab
+// nobody is looking at. The caret only ever appears on the open tab, since the
+// cursor is a page-wide row index and no two tabs hold the same row.
+func (m model) panelTabBody(tab int) (body, hints []string, selLine int) {
 	row := func(idx int, label, value string) {
 		caret := "  "
 		labelStyle := mutedStyle
@@ -4870,37 +5124,81 @@ func (m model) panelConfigView() string {
 			labelStyle = inkStyle
 			selLine = len(body)
 		}
-		// Pad the label BEFORE styling it. Rendering wraps the text in escape
-		// sequences, and %-16s counts those, so padding the rendered string is a
-		// no-op that leaves every value butted straight against its label
-		// ("default shellsystem default").
-		body = append(body, caret+labelStyle.Render(fmt.Sprintf("%-16s", label))+valueStyle.Render(value))
+		// The label column is padded by lipgloss, which measures DISPLAY CELLS.
+		// fmt's %-16s counts runes, so a translated label pads by its rune count and
+		// lands two cells short per CJK character — "預設 shell" is 9 runes and 14
+		// columns, and the values downhill of it come out ragged. Padding inside the
+		// style also keeps the old rule that made this comment necessary: the padding
+		// is applied to the PLAIN text, not to a string already wrapped in escape
+		// sequences, where it would count the escapes and do nothing.
+		body = append(body, caret+labelStyle.Width(panelLabelWidth).Render(label)+valueStyle.Render(value))
 	}
 
-	row(panelRowShell, "default shell", shellLabel(m.shellPath))
-	row(panelRowAgent, "default agent", m.defaultAgentLabel())
-	row(panelRowReplayKB, "replay buffer", replayLabel(m.replayKB))
-	body = append(body, m.missingAgentsSection()...)
-	body = append(body, "", sectionStyle.Render(spaced("RESOURCE LIMITS")), "")
-	for i, f := range limitFields {
-		row(firstLimitRow+i, f.label, limitLabel(f.get(m.limits)))
+	switch tab {
+	case 0:
+		row(panelRowShell, m.tr("panel.cfg.shell", "default shell"), m.shellLabel(m.shellPath))
+		row(panelRowAgent, m.tr("panel.cfg.agent", "default agent"), m.defaultAgentLabel())
+		row(panelRowReplayKB, m.tr("panel.cfg.replay", "replay buffer"), m.replayLabel(m.replayKB))
+		body = append(body, m.missingAgentsSection()...)
+		hints = []string{
+			mutedStyle.Render(fmt.Sprintf(m.tr("panel.cfg.hint.agent",
+				"default agent is what %s spawns · detected on the fleet's machine"), seqLabel(m.bindingKey(actNewAgent)))),
+			mutedStyle.Render(m.tr("panel.cfg.hint.replay", "replay buffer seeds scrollback · change applies on server restart")),
+		}
+	case 1:
+		for i, f := range limitFields {
+			// The row label is the CONFIG key (cpus, memory-high, nofile) and stays in
+			// English in every language, for the reason the key names do: it is the word
+			// someone types into their config file, and a translated one is unsearchable.
+			row(firstLimitRow+i, f.label, m.limitLabel(f.get(m.limits)))
+		}
+		hints = []string{mutedStyle.Render(m.tr("panel.cfg.hint.limits",
+			"limits cap a panel's whole process tree") + " · " + m.enforceLabel())}
+	default:
+		body = append(body, m.feedbackSection(row)...)
+		hints = []string{m.feedbackHintLine()}
 	}
-	body = append(body, m.feedbackSection(row)...)
-	hints := legend("↑↓", "move", "e", "edit", "esc", "back")
+	return body, hints, selLine
+}
 
+// panelConfigView renders the open tab of the panel-defaults page: its rows, and
+// the hints that belong to them.
+//
+// Every tab is drawn to the height of the TALLEST, rows and hints alike, so that
+// walking them with ←→ does not breathe the box in and out under the cursor. It
+// is the rule the key list already follows, and the reason is the same: a panel
+// that resizes as you move through it reads as a panel closing and reopening,
+// and there is nothing to be gained by letting the frame shift under a person
+// who is comparing two of its pages.
+func (m model) panelConfigView() string {
+	body, hints, selLine := m.panelTabBody(m.panelTabIdx())
+
+	tallest, most := len(body), len(hints)
+	for tab := range panelCfgTabs {
+		b, h, _ := m.panelTabBody(tab)
+		tallest, most = max(tallest, len(b)), max(most, len(h))
+	}
+	for len(body) < tallest {
+		body = append(body, "")
+	}
+	for len(hints) < most {
+		hints = append(hints, "")
+	}
+
+	legendLine := legend("↑↓", m.tr("legend.move", "move"), "←→", m.tr("legend.tab", "tab"),
+		"e", m.tr("legend.edit", "edit"), "esc", m.tr("legend.back", "back"))
+	footer := append([]string{""}, hints...)
+	footer = append(footer, "", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(legendLine))), legendLine)
+
+	first, end := m.panelTabRange()
 	return m.renderScrollPanel(scrollPanel{
-		title: "PANEL CONFIG",
-		body:  body,
-		footer: []string{"",
-			mutedStyle.Render("default agent is what " + seqLabel(m.bindingKey(actNewAgent)) + " spawns · detected on the fleet's machine"),
-			mutedStyle.Render("replay buffer seeds scrollback · change applies on server restart"),
-			mutedStyle.Render("limits cap a panel's whole process tree · " + m.enforceLabel()),
-			feedbackHintLine(),
-			"", mutedStyle.Render(strings.Repeat("─", lipgloss.Width(hints))), hints},
-		reserved: panelConfigReserved,
+		title:    m.tr("panel.cfg.title", "PANEL CONFIG"),
+		head:     m.panelTabBar(),
+		body:     body,
+		footer:   footer,
 		anchor:   selLine,
 		centered: true,
-		clipHint: mutedStyle.Render(fmt.Sprintf("   %d/%d", m.cursor+1, m.itemCount())),
+		clipHint: mutedStyle.Render(fmt.Sprintf("   %d/%d", max(0, m.cursor-first)+1, max(1, end-first))),
 	})
 }
 
@@ -4921,7 +5219,7 @@ func (m model) missingAgentsSection() []string {
 	if len(miss) == 0 {
 		return nil
 	}
-	out := []string{"", sectionStyle.Render(spaced("KNOWN, NOT INSTALLED")), ""}
+	out := []string{"", sectionStyle.Render(spaced(m.tr("panel.cfg.not-installed", "KNOWN, NOT INSTALLED"))), ""}
 	for _, b := range miss {
 		where := trimScheme(b.Homepage)
 		if where == "" {
@@ -4932,57 +5230,64 @@ func (m model) missingAgentsSection() []string {
 	// The prefix has to be spelled out: reload is a prefixed binding, and seqLabel
 	// on the action alone renders a bare "R" — a key that on its own does nothing.
 	// agentpick.go says it the same way for the same reason.
-	return append(out, "", mutedStyle.Render("install one, then "+keyLabel(m.effPrefix())+" R re-detects"))
+	return append(out, "", mutedStyle.Render(fmt.Sprintf(m.tr("panel.cfg.install-hint", "install one, then %s R re-detects"), keyLabel(m.effPrefix()))))
+}
+
+// inputSpec is what one text-input overlay says: its title, the prompt above the
+// field, and the verb on the enter key. Each is a message key paired with the
+// English source string, which is also the fallback — so this table reads as the
+// overlays it describes while carrying the whole of their translation.
+type inputSpec struct {
+	titleKey, title   string
+	promptKey, prompt string
+	actionKey, action string
+}
+
+// inputSpecs is every text-input overlay, keyed by the input it belongs to. The
+// zero entry (an input with no row here) is the generic INPUT / value / save
+// below, which is what an overlay someone adds without a row renders as.
+var inputSpecs = map[inputPurpose]inputSpec{
+	inputShellPath:   {"input.shell.title", "DEFAULT SHELL", "input.shell.prompt", "shell path  (blank = system default)", "legend.save", "save"},
+	inputReplayKB:    {"input.replay.title", "REPLAY BUFFER", "input.replay.prompt", "KiB of history per panel  (blank = default)", "legend.save", "save"},
+	inputNewPanelCmd: {"input.new-panel.title", "NEW PANEL", "input.new-panel.prompt", "program and arguments  (blank = a shell)", "legend.spawn", "spawn"},
+	inputAgentDir:    {"input.agent-dir.title", "NEW AGENT", "input.agent-dir.prompt", "working directory  (blank = home)", "legend.next", "next"},
+	inputGroupName:   {"input.group.title", "NEW GROUP", "input.group.prompt", "work-item name", "legend.create", "create"},
+	inputRename:      {"input.rename.title", "RENAME", "input.rename.prompt", "new name", "legend.save", "save"},
+	inputDispatch:    {"input.dispatch.title", "DISPATCH TASK", "input.dispatch.prompt", "the task brief for the agent", "legend.send", "send"},
+	inputEnqueue:     {"input.enqueue.title", "ENQUEUE TASK", "input.enqueue.prompt", "the task brief to queue for a free agent", "legend.queue", "queue"},
+	inputSignalName:  {"input.signal.title", "SEND SIGNAL", "input.signal.prompt", "signal name or number  (e.g. WINCH, TSTP, 28)", "legend.send", "send"},
+	inputFilter:      {"input.filter.title", "FIND PANELS", "input.filter.prompt", "filter by title or group  (live)", "legend.apply", "apply"},
+	inputSearch:      {"input.search.title", "SEARCH", "input.search.prompt", "find in the scrollback", "legend.find", "find"},
+	inputFleetSearch: {"input.fleet-search.title", "FLEET SEARCH", "input.fleet-search.prompt", "grep every panel's output  (regexp)", "legend.search", "search"},
+	inputGitBranch:   {"input.git-branch.title", "NEW BRANCH", "input.git-branch.prompt", "branch name  (git checkout -b)", "legend.create", "create"},
+	// The three worktree inputs read the same either way; which command one
+	// commits to is the purpose's business, not the label's.
+	inputGitWorktree:    {"input.worktree.title", "NEW WORKTREE", "input.worktree.prompt", "branch name  (worktree + agent)", "legend.create", "create"},
+	inputWorktreeBranch: {"input.worktree.title", "NEW WORKTREE", "input.worktree.prompt", "branch name  (worktree + agent)", "legend.create", "create"},
+	inputIsolateBranch:  {"input.worktree.title", "NEW WORKTREE", "input.worktree.prompt", "branch name  (worktree + agent)", "legend.create", "create"},
+	inputGitRemove:      {"input.worktree-rm.title", "REMOVE WORKTREE", "input.worktree-rm.prompt", "worktree path  (then confirm)", "legend.next", "next"},
+	inputWorktreeRepo:   {"input.worktree-repo.title", "NEW WORKTREE", "input.worktree-repo.prompt", "the git repository to branch from", "legend.next", "next"},
 }
 
 // inputView renders the active text-input overlay as a centred popup.
 func (m model) inputView() string {
-	title, prompt, action := "INPUT", "value", "save"
-	switch m.input {
-	case inputShellPath:
-		title, prompt = "DEFAULT SHELL", "shell path  (blank = system default)"
-	case inputReplayKB:
-		title, prompt = "REPLAY BUFFER", "KiB of history per panel  (blank = default)"
-	case inputLimit:
+	title, prompt, action := m.tr("input.title", "INPUT"), m.tr("input.prompt", "value"), m.tr("legend.save", "save")
+	if spec, ok := inputSpecs[m.input]; ok {
+		title, prompt, action = m.tr(spec.titleKey, spec.title), m.tr(spec.promptKey, spec.prompt), m.tr(spec.actionKey, spec.action)
+	}
+	// The resource limits carry their own title and prompt on the field they edit,
+	// so the one overlay that is five overlays stays in one table rather than five
+	// rows here that have to be kept in step with it.
+	if m.input == inputLimit {
 		if f, ok := limitFieldFor(m.limitRow); ok {
-			title, prompt = f.title, f.prompt
+			title, prompt = m.tr(f.titleKey, f.title), m.tr(f.promptKey, f.prompt)
 		}
-	case inputNewPanelCmd:
-		title, prompt, action = "NEW PANEL", "program and arguments  (blank = a shell)", "spawn"
-	case inputAgentDir:
-		title, prompt, action = "NEW AGENT", "working directory  (blank = home)", "next"
-	case inputGroupName:
-		title, prompt, action = "NEW GROUP", "work-item name", "create"
-	case inputRename:
-		title, prompt, action = "RENAME", "new name", "save"
-	case inputDispatch:
-		title, prompt, action = "DISPATCH TASK", "the task brief for the agent", "send"
-	case inputEnqueue:
-		title, prompt, action = "ENQUEUE TASK", "the task brief to queue for a free agent", "queue"
-	case inputSignalName:
-		title, prompt, action = "SEND SIGNAL", "signal name or number  (e.g. WINCH, TSTP, 28)", "send"
-	case inputFilter:
-		title, prompt, action = "FIND PANELS", "filter by title or group  (live)", "apply"
-	case inputSearch:
-		title, prompt, action = "SEARCH", "find in the scrollback", "find"
-	case inputFleetSearch:
-		title, prompt, action = "FLEET SEARCH", "grep every panel's output  (regexp)", "search"
-	case inputGitBranch:
-		title, prompt, action = "NEW BRANCH", "branch name  (git checkout -b)", "create"
-	case inputGitWorktree, inputWorktreeBranch, inputIsolateBranch:
-		// The reader sees the same prompt either way; which command it commits
-		// to is the purpose's business, not the label's.
-		title, prompt, action = "NEW WORKTREE", "branch name  (worktree + agent)", "create"
-	case inputGitRemove:
-		title, prompt, action = "REMOVE WORKTREE", "worktree path  (then confirm)", "next"
-	case inputWorktreeRepo:
-		title, prompt, action = "NEW WORKTREE", "the git repository to branch from", "next"
 	}
 
 	field := lipgloss.NewStyle().Width(46).Padding(0, 1).Foreground(colInk).Background(colSurface).Render("› " + m.inputBuf + "▌")
-	hints := legend("enter", action, "esc", "cancel")
+	hints := legend("enter", action, "esc", m.tr("legend.cancel", "cancel"))
 	if inputIsPath(m.input) {
-		hints += mutedStyle.Render("  ·  ") + legend("tab", "complete", "C-b", "del word")
+		hints += mutedStyle.Render("  ·  ") + legend("tab", m.tr("legend.complete", "complete"), "C-b", m.tr("legend.del-word", "del word"))
 	}
 
 	rows := []string{sectionStyle.Render(spaced(title)), "", mutedStyle.Render(prompt), field}
@@ -5022,14 +5327,14 @@ func seg(text string, fg, bg lipgloss.Color) string {
 func (m model) footer() string {
 	// Left cap: the mode. The header already carries the wordmark, so the footer
 	// no longer repeats the brand cap beside it.
-	mode := "DASHBOARD"
+	mode := m.tr("mode.dashboard", "DASHBOARD")
 	switch {
 	case m.input != inputNone:
-		mode = "INPUT"
+		mode = m.tr("mode.input", "INPUT")
 	case m.mode == modeKeyMap:
-		mode = "KEY MAP"
+		mode = m.tr("mode.key-map", "KEY MAP")
 	case m.mode == modePanelConfig:
-		mode = "PANEL CONFIG"
+		mode = m.tr("mode.panel-config", "PANEL CONFIG")
 	}
 	left := seg(mode, colInk, colBlue)
 	// A grab takes over the mode cap and the hint. It is a modal gesture on a view
@@ -5037,7 +5342,7 @@ func (m model) footer() string {
 	// the footer says so and spells out the three keys, rather than leaving a
 	// person to discover that enter now means something different.
 	if m.grabbing() {
-		left = seg("MOVING", colDark, colBrandHi)
+		left = seg(m.tr("mode.moving", "MOVING"), colDark, colBrandHi)
 		return m.statusBar(left, m.grabHint())
 	}
 	return m.statusBar(left, m.helpHint())
@@ -5055,7 +5360,7 @@ func (m model) outageCap() string {
 	if !m.backendDown {
 		return ""
 	}
-	return seg("◼ BACKEND DOWN", colInk, colRed)
+	return seg("◼ "+m.tr("footer.backend-down", "BACKEND DOWN"), colInk, colRed)
 }
 
 // pluginFooterCap renders the plugin's persistent footer segment (baton.footer),

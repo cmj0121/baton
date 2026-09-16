@@ -5,6 +5,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/cmj0121/baton/internal/i18n"
 )
 
 // The connection form (`baton --remote`): a cockpit that shows nothing but two
@@ -36,12 +38,23 @@ type remoteFormModel struct {
 	// model that is neither is still running.
 	done      bool
 	cancelled bool
+
+	// lang is resolved from the environment alone, because this form is drawn
+	// BEFORE there is a fleet to ask: the config file it would read lives on the
+	// machine this cockpit has not attached to yet.
+	lang i18n.Lang
+}
+
+// tr looks a message up in the form's language, with the English at the call site
+// as the fallback — the cockpit's own tr, for a model that is not the cockpit.
+func (m remoteFormModel) tr(key, english string) string {
+	return i18n.T(m.lang, key, english)
 }
 
 // NewRemoteForm builds the connection form, seeded with an address to retry and
 // the failure that sent the person back here (both empty on the first run).
 func NewRemoteForm(address, problem string) tea.Model {
-	m := remoteFormModel{address: address, problem: problem, width: 80, height: 24}
+	m := remoteFormModel{address: address, problem: problem, width: 80, height: 24, lang: i18n.Detect("")}
 	if address != "" {
 		m.focus = 1 // the address already worked as text; the passkey is what is being retyped
 	}
@@ -153,18 +166,18 @@ func (m remoteFormModel) frame() string {
 	width := clampInt(m.width-16, 32, 60)
 
 	rows := []string{
-		bannerStyle.Render(spaced("BATON REMOTE")),
+		bannerStyle.Render(spaced("BATON REMOTE")), // the product's own name
 		"",
-		m.field("ADDRESS", m.address, "host · user@host · host:port", 0, width),
+		m.field(m.tr("rform.address", "ADDRESS"), m.address, m.tr("rform.address.hint", "host · user@host · host:port"), 0, width),
 		"",
-		m.field("PASSKEY", m.passkey, "the 8 characters the fleet's C-t @ shows", 1, width),
+		m.field(m.tr("rform.passkey", "PASSKEY"), m.passkey, m.tr("rform.passkey.hint", "the 8 characters the fleet's C-t @ shows"), 1, width),
 	}
 	if m.problem != "" {
 		rows = append(rows, "", lipgloss.NewStyle().Foreground(colFailed).Render(sanitizeText(m.problem)))
 	}
 	rows = append(rows, "",
-		mutedStyle.Render("the port defaults to 22 · ssh carries the connection"),
-		"", legend("enter", "attach", "tab", "field", "esc", "quit"))
+		mutedStyle.Render(m.tr("rform.hint", "the port defaults to 22 · ssh carries the connection")),
+		"", legend("enter", m.tr("rform.attach", "attach"), "tab", m.tr("rform.field", "field"), "esc", m.tr("legend.quit", "quit")))
 
 	body := lipgloss.JoinVertical(lipgloss.Left, rows...)
 	box := popupBoxAt(body, width)

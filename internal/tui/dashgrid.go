@@ -216,7 +216,7 @@ func (m model) renderCard(it dashItem, selected bool) string {
 	head := clampWidth(marks+rec+led+" "+title, cardInner)
 
 	badge := kindBadge(p.Kind)
-	state := lipgloss.NewStyle().Foreground(info.color).Render(info.label)
+	state := lipgloss.NewStyle().Foreground(info.color).Render(m.stateText(info))
 	kindLine := badge + "  " + state
 	// The directory rides the state line rather than a line of its own: the card is
 	// three lines by design, and the path is what tells fifty panels called
@@ -303,7 +303,7 @@ func (m model) renderFoldCard(it dashItem, selected bool) string {
 	glyph := lipgloss.NewStyle().Foreground(info.color).Bold(true).Render(m.foldGlyph(it.parent))
 	name := lipgloss.NewStyle().Foreground(cardTitleColor(selected)).Bold(true).Render(truncate(it.title(), max(1, cardInner-2)))
 	head := clampWidth(glyph+" "+name, cardInner)
-	kindLine := clampWidth(mutedStyle.Render("idle · exited cleanly"), cardInner)
+	kindLine := clampWidth(mutedStyle.Render(m.tr("fold.quiet-means", "idle · exited cleanly")), cardInner)
 	footer := clampWidth(legend("enter", m.foldVerb(it.parent)), cardInner)
 
 	return cardStyle(selected).Render(lipgloss.JoinVertical(lipgloss.Left, head, kindLine, footer))

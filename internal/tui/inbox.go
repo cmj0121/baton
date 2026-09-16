@@ -256,7 +256,7 @@ func (m model) refreshInbox() (tea.Model, tea.Cmd) {
 			break
 		}
 	}
-	m.status = "inbox: refreshed · " + m.inboxStatus()
+	m.status = m.tr("inbox.status.refreshed", "inbox: refreshed") + " · " + m.inboxStatus()
 	m.wantTail()
 	return m, nil
 }
@@ -274,7 +274,7 @@ func (m model) closeInbox() (tea.Model, tea.Cmd) {
 	m.inboxComposing, m.inboxReply = false, ""
 	m.inboxTails, m.inboxTailOrder, m.inboxTailWant = nil, nil, ""
 	if m.mode == modeDashboard {
-		m.status = "dashboard"
+		m.status = m.tr("mode.dashboard.status", "dashboard")
 	}
 	return m, nil
 }
@@ -295,15 +295,15 @@ func (m model) inboxStatus() string {
 	// the status bar disagreeing with the screen.
 	n := len(m.inboxVisible())
 	if m.inboxFilter != inboxFilterAll {
-		return fmt.Sprintf("inbox: %d %s", n, inboxFilterName(m.inboxFilter))
+		return fmt.Sprintf(m.tr("inbox.status.count", "inbox: %d %s"), n, m.inboxFilterText(m.inboxFilter))
 	}
 	switch n {
 	case 0:
-		return "inbox: clear"
+		return m.tr("inbox.status.clear", "inbox: clear")
 	case 1:
-		return "inbox: 1 item"
+		return m.tr("inbox.status.one", "inbox: 1 item")
 	default:
-		return fmt.Sprintf("inbox: %d items", n)
+		return fmt.Sprintf(m.tr("inbox.status.items", "inbox: %d items"), n)
 	}
 }
 
@@ -548,7 +548,7 @@ func (m model) zoomInboxRow() (tea.Model, tea.Cmd) {
 	}
 	p, live := m.fleetPanel(r.id)
 	if !live {
-		m.status = "inbox: " + truncate(sanitizeText(r.title), 24) + " is gone"
+		m.status = m.tr("status.inbox", "inbox: ") + truncate(sanitizeText(r.title), 24) + " is gone"
 		return m, nil
 	}
 	out, _ := m.closeInbox()
@@ -575,7 +575,7 @@ func (m model) snoozeInboxRow() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m = m.clearRow(m.inboxCursor, m.now.Add(m.effSnooze()), "")
-	m.status = "snoozed " + truncate(sanitizeText(r.title), 20) + " · " + compactAge(m.effSnooze())
+	m.status = m.tr("status.snoozed", "snoozed ") + truncate(sanitizeText(r.title), 20) + " · " + compactAge(m.effSnooze())
 	return m.afterClear()
 }
 
@@ -589,7 +589,7 @@ func (m model) dismissInboxRow() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m = m.clearRow(m.inboxCursor, time.Time{}, "")
-	m.status = "dismissed " + truncate(sanitizeText(r.title), 24)
+	m.status = m.tr("inbox.dismissed", "dismissed") + " " + truncate(sanitizeText(r.title), 24)
 	return m.afterClear()
 }
 
@@ -633,15 +633,15 @@ func (m model) startInboxReply() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if r.state == panel.Exited {
-		m.status = "cannot reply to an exited panel — x dismisses it"
+		m.status = m.tr("inbox.no-reply-exited", "cannot reply to an exited panel — x dismisses it")
 		return m, nil
 	}
 	if r.stale {
-		m.status = "that row is stale — r refreshes the queue"
+		m.status = m.tr("inbox.stale-row", "that row is stale — r refreshes the queue")
 		return m, nil
 	}
 	m.inboxComposing, m.inboxReply = true, ""
-	m.status = "reply to " + truncate(sanitizeText(r.title), 24)
+	m.status = fmt.Sprintf(m.tr("inbox.replying-to", "reply to %s"), truncate(sanitizeText(r.title), 24))
 	return m, nil
 }
 
@@ -693,7 +693,7 @@ func (m model) sendInboxReply() (tea.Model, tea.Cmd) {
 	text := m.inboxReply
 	m.inboxComposing, m.inboxReply = false, ""
 	m = m.clearRow(m.inboxCursor, time.Time{}, text+"\n")
-	m.status = "replied to " + truncate(sanitizeText(r.title), 20) + " · enter zooms to watch it land"
+	m.status = fmt.Sprintf(m.tr("inbox.replied-to", "replied to %s · enter zooms to watch it land"), truncate(sanitizeText(r.title), 20))
 	return m.afterClear()
 }
 
@@ -773,8 +773,8 @@ func (m model) inboxView() string {
 			break
 		}
 	}
-	header := sectionStyle.Render(spaced("INBOX")) + "  " +
-		mutedStyle.Render(fmt.Sprintf("%d of %d", min(at+1, len(vis)), len(vis)))
+	header := sectionStyle.Render(spaced(m.tr("inbox.title", "INBOX"))) + "  " +
+		mutedStyle.Render(fmt.Sprintf(m.tr("inbox.of", "%d of %d"), min(at+1, len(vis)), len(vis)))
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		header, m.inboxTabBar(), "", body, "", m.inboxFooter())
 	return m.popupBox(content)
@@ -795,9 +795,9 @@ func (m model) inboxView() string {
 // other buckets still hold rows, and "nothing needs a human right now" is a
 // sentence the operator would act on.
 func (m model) inboxEmptyBody(width, rows int) string {
-	msg := "nothing needs a human right now"
+	msg := m.tr("inbox.empty", "nothing needs a human right now")
 	if len(m.inboxRows) > 0 {
-		msg = "no " + inboxFilterName(m.inboxFilter) + " panels"
+		msg = fmt.Sprintf(m.tr("inbox.empty.bucket", "no %s panels"), m.inboxFilterText(m.inboxFilter))
 	}
 	lines := make([]string, rows)
 	for i := range lines {
@@ -869,7 +869,7 @@ func (m model) inboxDetailBlock(width, rows int) []string {
 			Width(width).Render(truncate("▸ "+r.reason, width)))
 	}
 	tail, pulled := m.inboxTails[r.id]
-	body := []string{mutedStyle.Render("waiting for the tail…")}
+	body := []string{mutedStyle.Render(m.tr("inbox.waiting", "waiting for the tail…"))}
 	switch {
 	case pulled && len(tail) == 0:
 		body = []string{mutedStyle.Render("(no output retained)")}
@@ -938,17 +938,19 @@ func fitLegend(width int, pairs ...string) string {
 func (m model) inboxFooter() string {
 	if m.inboxComposing {
 		field := lipgloss.NewStyle().Foreground(colInk).Render(m.inboxReply + "▏")
-		head := lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render("reply ▸ ") + field
+		head := lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(m.tr("inbox.reply", "reply")+" ▸ ") + field
 		return lipgloss.JoinVertical(lipgloss.Left, head,
-			fitLegend(m.popupWidth(), "enter", "send", "esc", "cancel", "no echo", "enter zooms"))
+			fitLegend(m.popupWidth(), "enter", m.tr("legend.send", "send"), "esc", m.tr("legend.cancel", "cancel"),
+				m.tr("inbox.no-echo", "no echo"), m.tr("inbox.enter-zooms", "enter zooms")))
 	}
 	// Two groups, not one line: navigation and the way out, then the verbs that
 	// clear a row. Each group is packed to the width on its own, so the grouping
 	// survives a wide terminal and nothing is lost on a narrow one.
 	w := m.popupWidth()
 	return lipgloss.JoinVertical(lipgloss.Left,
-		fitLegend(w, "j/k", "move", "tab", "filter", "enter", "zoom", "r", "re-sort", "esc", "close"),
-		fitLegend(w, "i", "reply", "-", "snooze", "x", "dismiss"),
+		fitLegend(w, "j/k", m.tr("legend.move", "move"), "tab", m.tr("legend.filter", "filter"),
+			"enter", m.tr("legend.zoom", "zoom"), "r", m.tr("legend.re-sort", "re-sort"), "esc", m.tr("legend.close", "close")),
+		fitLegend(w, "i", m.tr("inbox.reply", "reply"), "-", m.tr("inbox.snooze", "snooze"), "x", m.tr("inbox.dismiss", "dismiss")),
 	)
 }
 
@@ -1043,6 +1045,20 @@ func (m model) inboxCounts() map[int]int {
 }
 
 // inboxFilterName is the filter's word, for the status line and the empty state.
+// inboxFilterText is a bucket's name as the tab bar and the status line say it.
+//
+// The buckets are named for the states they hold, so they are translated by the
+// state's own key rather than by four more of their own: "attention" means one
+// thing in this cockpit, and a tab spelling it differently from the chip above it
+// would be describing a different queue.
+func (m model) inboxFilterText(f int) string {
+	name := inboxFilterName(f)
+	if name == "all" {
+		return m.tr("inbox.all", "all")
+	}
+	return m.tr("state."+name, name)
+}
+
 func inboxFilterName(f int) string {
 	if f == inboxFilterAll || f < 0 || f >= len(inboxBucketNames) {
 		return "all"
@@ -1132,7 +1148,7 @@ func (m model) inboxTabBar() string {
 	counts := m.inboxCounts()
 	parts := make([]string, 0, 5)
 	for _, s := range m.inboxStops() {
-		label := fmt.Sprintf("%s %d", inboxFilterName(s), counts[s])
+		label := fmt.Sprintf("%s %d", m.inboxFilterText(s), counts[s])
 		if s == m.inboxFilter {
 			parts = append(parts, tabHotStyle.Render(label))
 			continue

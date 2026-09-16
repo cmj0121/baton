@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 
@@ -26,29 +28,33 @@ const keyGitMenu = "G"
 
 // gitMenu is the menu's rows, in display order — the keycap, the label, and a
 // one-line gloss. The hotkey runs the row directly; ↑↓ + enter pick it.
-var gitMenu = []struct{ key, label, desc string }{
-	{"d", "diff", "staged + unstaged, by file"},
-	{"l", "log", "recent commits, graphed"},
-	{"s", "status", "working-tree status"},
-	{"a", "stage all", "git add -A"},
-	{"c", "commit", "stage all, then $EDITOR"},
-	{"p", "push", "git push  (confirm)"},
-	{"b", "branch", "create and switch to a new branch"},
-	{"w", "worktree", "new worktree on a branch + an agent in it"},
-	{"W", "worktrees", "list the repo's worktrees"},
-	{"x", "rm worktree", "remove a worktree by path  (confirm)"},
+// The label is git's own word for the op — diff, log, commit, push, worktree —
+// and is never translated: it is what the menu is about to RUN, and what a person
+// would type themselves. The gloss beside it is the cockpit talking, so it
+// carries a message key with the English as its source and fallback.
+var gitMenu = []struct{ key, label, descKey, desc string }{
+	{"d", "diff", "git.desc.diff", "staged + unstaged, by file"},
+	{"l", "log", "git.desc.log", "recent commits, graphed"},
+	{"s", "status", "git.desc.status", "working-tree status"},
+	{"a", "stage all", "git.desc.stage-all", "git add -A"},
+	{"c", "commit", "git.desc.commit", "stage all, then $EDITOR"},
+	{"p", "push", "git.desc.push", "git push  (confirm)"},
+	{"b", "branch", "git.desc.branch", "create and switch to a new branch"},
+	{"w", "worktree", "git.desc.worktree", "new worktree on a branch + an agent in it"},
+	{"W", "worktrees", "git.desc.worktrees", "list the repo's worktrees"},
+	{"x", "rm worktree", "git.desc.rm-worktree", "remove a worktree by path  (confirm)"},
 }
 
 // openGitPicker opens the menu for the zoomed agent panel, remembering the zoom to
 // return to. It is agent-only and not available on a transient (diff/git) view.
 func (m model) openGitPicker() (tea.Model, tea.Cmd) {
 	if m.zoomEphemeral {
-		m.status = "git: not available on this view"
+		m.status = m.tr("git.status.no-view", "git: not available on this view")
 		return m, nil
 	}
 	p, ok := m.fleetPanel(m.zoomID)
 	if !ok || !p.IsAgent() {
-		m.status = "git: available on agent panels"
+		m.status = m.tr("git.status.agent-only", "git: available on agent panels")
 		return m, nil
 	}
 	m.gitFrom = m.mode
@@ -56,7 +62,7 @@ func (m model) openGitPicker() (tea.Model, tea.Cmd) {
 	m.gitCursor = 0
 	m.gitConfirmOp, m.gitRemovePath = "", ""
 	m.mode = modeGit
-	m.status = "git · " + p.Title + " · pick an action · esc cancels"
+	m.status = "git · " + p.Title + " · " + m.tr("git.status.pick", "pick an action · esc cancels")
 	return m, nil
 }
 
@@ -71,13 +77,13 @@ func (m model) handleGitKey(key string) (tea.Model, tea.Cmd) {
 			return m.runGitConfirmed(op)
 		}
 		m.mode = m.gitFrom
-		m.status = "git: cancelled"
+		m.status = m.tr("git.status.cancelled", "git: cancelled")
 		return m, nil
 	}
 	switch key {
 	case "esc":
 		m.mode = m.gitFrom
-		m.status = "git: cancelled"
+		m.status = m.tr("git.status.cancelled", "git: cancelled")
 		return m, nil
 	case "up", "k":
 		m.gitCursor = wrapIndex(m.gitCursor, -1, len(gitMenu))
@@ -117,19 +123,19 @@ func (m model) runGitEntry(key string) (tea.Model, tea.Cmd) {
 		return m.sendGitEphemeral("worktree-list", "worktrees", "")
 	case "p":
 		m.gitConfirmOp = "push"
-		m.status = "push " + m.gitTarget.Title + "? · (y/n)"
+		m.status = fmt.Sprintf(m.tr("git.status.push-confirm", "push %s? · (y/n)"), m.gitTarget.Title)
 		return m, nil
 	case "b":
 		m.input, m.inputBuf = inputGitBranch, ""
-		m.status = "new branch · type a name, enter creates"
+		m.status = m.tr("git.status.new-branch", "new branch · type a name, enter creates")
 		return m, nil
 	case "w":
 		m.input, m.inputBuf = inputGitWorktree, ""
-		m.status = "new worktree + agent · type a branch, enter creates"
+		m.status = m.tr("git.status.new-worktree", "new worktree + agent · type a branch, enter creates")
 		return m, nil
 	case "x":
 		m.input, m.inputBuf = inputGitRemove, ""
-		m.status = "remove worktree · type the path, enter then confirm"
+		m.status = m.tr("git.status.rm-worktree", "remove worktree · type the path, enter then confirm")
 		return m, nil
 	}
 	return m, nil
@@ -155,7 +161,7 @@ func (m model) runGitConfirmed(op string) (tea.Model, tea.Cmd) {
 	case "remove":
 		m.sendf(proto.Command{Action: "panel.git", Git: "worktree-remove", ID: m.gitTarget.ID, Dir: m.gitRemovePath})
 		m.mode = m.gitFrom
-		m.status = "removing worktree " + m.gitRemovePath
+		m.status = m.tr("git.status.removing", "removing worktree") + " " + m.gitRemovePath
 		return m, nil
 	}
 	m.mode = m.gitFrom
@@ -188,7 +194,7 @@ func (m model) commitWorktreeRepo(repo string) (tea.Model, tea.Cmd) {
 	}
 	m.wtRepo = expandDir(repo)
 	m.input, m.inputBuf = inputWorktreeBranch, ""
-	m.status = "new worktree in " + dirLabel(m.wtRepo) + " · type a branch, enter creates"
+	m.status = fmt.Sprintf(m.tr("git.status.worktree-in", "new worktree in %s · type a branch, enter creates"), dirLabel(m.wtRepo))
 	return m, nil
 }
 
@@ -199,7 +205,7 @@ func (m model) commitWorktreeRepo(repo string) (tea.Model, tea.Cmd) {
 // what A spawns when nothing is picked — rather than a copy of anything.
 func (m model) commitWorktreeBranch(branch string) (tea.Model, tea.Cmd) {
 	if branch == "" {
-		m.input, m.status = inputWorktreeBranch, "new worktree · a branch name is required"
+		m.input, m.status = inputWorktreeBranch, m.tr("git.status.branch-required", "new worktree · a branch name is required")
 		return m, nil
 	}
 	prof, name, ok := m.resolveAgentNamed(m.effDefaultAgent())
@@ -212,7 +218,7 @@ func (m model) commitWorktreeBranch(branch string) (tea.Model, tea.Cmd) {
 		Dir: m.wtRepo, Name: branch,
 		Path: prof.Command, Args: prof.Args, Profile: name,
 	})
-	m.status = "worktree + " + name + " on " + branch
+	m.status = fmt.Sprintf(m.tr("git.status.worktree-on", "worktree + %s on %s"), name, branch)
 	return m, nil
 }
 
@@ -222,7 +228,7 @@ func (m model) commitWorktreeBranch(branch string) (tea.Model, tea.Cmd) {
 // shared prompt sequence would mix those two resolutions.
 func (m model) commitIsolateBranch(branch string) (tea.Model, tea.Cmd) {
 	if branch == "" {
-		m.input, m.status = inputIsolateBranch, "new worktree · a branch name is required"
+		m.input, m.status = inputIsolateBranch, m.tr("git.status.branch-required", "new worktree · a branch name is required")
 		return m, nil
 	}
 	prof, name, ok := m.resolveAgent()
@@ -237,7 +243,7 @@ func (m model) commitIsolateBranch(branch string) (tea.Model, tea.Cmd) {
 		Dir: dir, Name: branch,
 		Path: prof.Command, Args: prof.Args, Profile: name,
 	})
-	m.status = "worktree + " + name + " on " + branch
+	m.status = fmt.Sprintf(m.tr("git.status.worktree-on", "worktree + %s on %s"), name, branch)
 	return m, nil
 }
 
@@ -246,12 +252,12 @@ func (m model) commitIsolateBranch(branch string) (tea.Model, tea.Cmd) {
 // grouped under the branch.
 func (m model) commitGitWorktree(branch string) (tea.Model, tea.Cmd) {
 	if branch == "" {
-		m.input, m.status = inputGitWorktree, "new worktree · a branch name is required"
+		m.input, m.status = inputGitWorktree, m.tr("git.status.branch-required", "new worktree · a branch name is required")
 		return m, nil
 	}
 	m.sendf(proto.Command{Action: "panel.git", Git: "worktree-add", ID: m.gitTarget.ID, Name: branch})
 	m.mode = m.gitFrom
-	m.status = "worktree + agent on " + branch
+	m.status = fmt.Sprintf(m.tr("git.status.worktree-on", "worktree + %s on %s"), "agent", branch)
 	return m, nil
 }
 
@@ -259,12 +265,12 @@ func (m model) commitGitWorktree(branch string) (tea.Model, tea.Cmd) {
 // destructive step needs an explicit y.
 func (m model) commitGitRemove(path string) (tea.Model, tea.Cmd) {
 	if path == "" {
-		m.input, m.status = inputGitRemove, "remove worktree · a path is required"
+		m.input, m.status = inputGitRemove, m.tr("git.status.path-required", "remove worktree · a path is required")
 		return m, nil
 	}
 	m.mode = modeGit
 	m.gitConfirmOp, m.gitRemovePath = "remove", path
-	m.status = "remove worktree " + path + "? · (y/n)"
+	m.status = fmt.Sprintf(m.tr("git.status.rm-confirm", "remove worktree %s? · (y/n)"), path)
 	return m, nil
 }
 
@@ -288,18 +294,24 @@ func (m model) gitPickerView() string {
 		"",
 	}
 	for i, e := range gitMenu {
-		rows = append(rows, caret(m.gitCursor == i)+keyCol.Render(kc(e.key))+nameStyle.Render(e.label)+mutedStyle.Render(e.desc))
+		rows = append(rows, caret(m.gitCursor == i)+keyCol.Render(kc(e.key))+nameStyle.Render(e.label)+mutedStyle.Render(m.tr(e.descKey, e.desc)))
 	}
 
+	// The confirm line's two rows are drawn whether or not there is one to show, so
+	// the menu keeps its size. A box that grows the moment you press p is a box
+	// that moves the question you are being asked, and moves the row your eye was
+	// on to make space for it.
 	var hints string
+	confirm := ""
 	if m.gitConfirmOp != "" {
-		hints = legend("y", "confirm", "n/esc", "cancel")
-		rows = append(rows, "", lipgloss.NewStyle().Foreground(colBrand).Bold(true).Render(m.statusText()))
+		hints = legend("y", m.tr("legend.confirm", "confirm"), "n/esc", m.tr("legend.cancel", "cancel"))
+		confirm = lipgloss.NewStyle().Foreground(colBrand).Bold(true).Render(m.statusText())
 	} else {
-		hints = legend("↑↓", "move", "enter", "run", "esc", "cancel")
+		hints = legend("↑↓", m.tr("legend.move", "move"), "enter", m.tr("legend.run", "run"), "esc", m.tr("legend.cancel", "cancel"))
 	}
+	rows = append(rows, "", confirm)
 	rows = append(rows, "",
-		mutedStyle.Render("acts on the zoomed agent · "+keyLabel(m.effPrefix())+" R reloads baton"),
+		mutedStyle.Render(fmt.Sprintf(m.tr("git.hint", "acts on the zoomed agent · %s R reloads baton"), keyLabel(m.effPrefix()))),
 		"", hints)
 	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }

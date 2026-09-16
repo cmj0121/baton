@@ -28,7 +28,7 @@ func (m model) openProcTree(from mode) model {
 	m.mode = modeProcTree
 	m.procScroll = 0
 	m.procLines = m.renderProcTree()
-	m.status = "process tree"
+	m.status = m.tr("proc.status.open", "process tree")
 	return m
 }
 
@@ -39,7 +39,7 @@ func (m model) closeProcTree() (tea.Model, tea.Cmd) {
 	m.procLines = nil
 	m.procScroll = 0
 	if m.mode == modeDashboard {
-		m.status = "dashboard"
+		m.status = m.tr("mode.dashboard.status", "dashboard")
 	}
 	return m, nil
 }
@@ -164,7 +164,7 @@ func (m model) handleProcTreeKey(key string) (tea.Model, tea.Cmd) {
 	case "r":
 		m.procLines = m.renderProcTree()
 		m.procScrollBy(0) // re-clamp in case the tree shrank
-		m.status = "process tree · refreshed"
+		m.status = m.tr("proc.status.refreshed", "process tree · refreshed")
 	case "up", "k":
 		m.procScrollBy(-1)
 	case "down", "j":
@@ -204,7 +204,7 @@ func (m model) procWidth() int {
 // tree, and a key legend, in the cockpit's box.
 func (m model) procTreeView() string {
 	if len(m.procLines) == 0 {
-		return m.popupBox(mutedStyle.Render("no processes"))
+		return m.popupBox(mutedStyle.Render(m.tr("proc.empty", "no processes")))
 	}
 	width, rows := m.procWidth(), m.procViewportRows()
 	off := clampInt(m.procScroll, 0, max(0, len(m.procLines)-rows))
@@ -219,7 +219,7 @@ func (m model) procTreeView() string {
 	}
 	body = padBlock(body, rows, width)
 
-	header := sectionStyle.Render(spaced("PROCESS TREE"))
+	header := sectionStyle.Render(spaced(m.tr("proc.title", "PROCESS TREE")))
 	if len(m.procLines) > rows { // a scroll indicator only when there is more than one screen
 		header += mutedStyle.Render(fmt.Sprintf("   %d–%d / %d", off+1, end, len(m.procLines)))
 	}
@@ -231,5 +231,6 @@ func (m model) procTreeView() string {
 
 // procTreeLegend is the overlay's key hint.
 func (m model) procTreeLegend() string {
-	return legend("j/k", "scroll", "g/G", "top · end", "r", "refresh", "esc", "close")
+	return legend("j/k", m.tr("legend.scroll", "scroll"), "g/G", m.tr("legend.top-end", "top · end"),
+		"r", m.tr("legend.refresh", "refresh"), "esc", m.tr("legend.close", "close"))
 }

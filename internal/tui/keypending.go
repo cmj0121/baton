@@ -356,7 +356,7 @@ func escBinding(b binding) bool { return isEscape(b.act) }
 // about what the keys spelled.
 func runCmdBinding(m model, b binding) (tea.Model, tea.Cmd) {
 	if m.refusedOnFoldRow(b.act) {
-		m.status = "expand the quiet group first"
+		m.status = m.tr("status.expand-quiet-group-first", "expand the quiet group first")
 		return m, nil
 	}
 	return m.runAction(b.act)

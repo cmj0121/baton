@@ -35,7 +35,7 @@ func (m model) openRemote(from mode) (tea.Model, tea.Cmd) {
 	m.mode = modeRemote
 	m.remoteSel = 0
 	m.sendf(proto.Command{Action: "remote.status"})
-	m.status = "remote access"
+	m.status = m.tr("remote.status.open", "remote access")
 	return m, nil
 }
 
@@ -44,7 +44,7 @@ func (m model) openRemote(from mode) (tea.Model, tea.Cmd) {
 func (m model) closeRemote() (tea.Model, tea.Cmd) {
 	m.mode = m.remoteFrom
 	if m.mode == modeDashboard {
-		m.status = "dashboard"
+		m.status = m.tr("mode.dashboard.status", "dashboard")
 	}
 	return m, nil
 }
@@ -71,40 +71,40 @@ func (m model) handleRemoteKey(key string) (tea.Model, tea.Cmd) {
 		m.remoteSel = max(0, m.remoteConnCount()-1)
 	case "r":
 		m.sendf(proto.Command{Action: "remote.status"})
-		m.status = "remote access · refreshed"
+		m.status = m.tr("remote.status.refreshed", "remote access · refreshed")
 	case "e":
 		// The local-only rule is checked before "already enabled": both are true
 		// for a remote cockpit looking at a live fleet, and the one worth saying is
 		// the one that explains why the key will never work from here.
 		if info != nil && !info.Local {
-			m.status = "the switch is thrown on the fleet's own machine, not over a remote attach"
+			m.status = m.tr("remote.status.local-only", "the switch is thrown on the fleet's own machine, not over a remote attach")
 			return m, nil
 		}
 		if info != nil && info.Enabled {
-			m.status = "remote access is already enabled"
+			m.status = m.tr("remote.status.already-on", "remote access is already enabled")
 			return m, nil
 		}
 		m.sendf(proto.Command{Action: "remote.enable"})
-		m.status = "enabling remote access…"
+		m.status = m.tr("remote.status.enabling", "enabling remote access…")
 	case "n":
 		if !m.remoteMayControl() {
 			return m, nil
 		}
 		m.sendf(proto.Command{Action: "remote.rotate"})
-		m.status = "rotating the passkey · live connections stay"
+		m.status = m.tr("remote.status.rotating", "rotating the passkey · live connections stay")
 	case "E":
 		if !m.remoteMayControl() {
 			return m, nil
 		}
 		m.sendf(proto.Command{Action: "remote.disable"})
-		m.status = "disabling remote access…"
+		m.status = m.tr("remote.status.disabling", "disabling remote access…")
 	case "x":
 		conn, ok := m.remoteSelected()
 		if !ok {
 			return m, nil
 		}
 		m.sendf(proto.Command{Action: "remote.kick", Conn: conn.ID})
-		m.status = "kicking " + sanitizeText(conn.Source)
+		m.status = m.tr("remote.status.kicking", "kicking") + " " + sanitizeText(conn.Source)
 	}
 	return m, nil
 }
@@ -117,10 +117,10 @@ func (m *model) remoteMayControl() bool {
 	case m.remoteInfo == nil:
 		return false
 	case !m.remoteInfo.Local:
-		m.status = "the passkey is changed on the fleet's own machine, not over a remote attach"
+		m.status = m.tr("remote.status.passkey-local", "the passkey is changed on the fleet's own machine, not over a remote attach")
 		return false
 	case !m.remoteInfo.Enabled:
-		m.status = "remote access is not enabled"
+		m.status = m.tr("remote.status.not-on", "remote access is not enabled")
 		return false
 	}
 	return true
@@ -156,12 +156,12 @@ func (m *model) applyRemote(info *proto.RemoteInfo) {
 // legend for what this side of the pipe may actually do.
 func (m model) remoteView() string {
 	width := m.procWidth()
-	rows := []string{sectionStyle.Render(spaced("REMOTE")) + "   " + m.remoteHead()}
+	rows := []string{sectionStyle.Render(spaced(m.tr("remote.title", "REMOTE"))) + "   " + m.remoteHead()}
 
 	if m.remoteConnCount() == 0 {
-		rows = append(rows, "", mutedStyle.Render("no connections"))
+		rows = append(rows, "", mutedStyle.Render(m.tr("remote.no-conns", "no connections")))
 	} else {
-		rows = append(rows, "", mutedStyle.Render(remoteHeaderRow()))
+		rows = append(rows, "", mutedStyle.Render(m.remoteHeaderRow()))
 		for i, c := range m.remoteInfo.Conns {
 			rows = append(rows, m.remoteRow(c, i == m.remoteSel, width))
 		}
@@ -176,24 +176,25 @@ func (m model) remoteHead() string {
 	info := m.remoteInfo
 	switch {
 	case info == nil:
-		return mutedStyle.Render("asking the fleet…")
+		return mutedStyle.Render(m.tr("remote.asking", "asking the fleet…"))
 	case !info.Enabled:
-		return mutedStyle.Render("disabled")
+		return mutedStyle.Render(m.tr("remote.disabled", "disabled"))
 	case info.Passkey != "":
-		return lipgloss.NewStyle().Foreground(colBrandHi).Render("enabled") +
-			mutedStyle.Render(" · passkey ") +
+		return lipgloss.NewStyle().Foreground(colBrandHi).Render(m.tr("remote.enabled", "enabled")) +
+			mutedStyle.Render(" · "+m.tr("remote.passkey", "passkey")+" ") +
 			lipgloss.NewStyle().Bold(true).Foreground(colInk).Render(info.Passkey)
 	default:
 		// A remote cockpit is told the switch is on and nothing more. The code that
 		// admits the NEXT cockpit is read on the machine the fleet runs on.
-		return lipgloss.NewStyle().Foreground(colBrandHi).Render("enabled") +
-			mutedStyle.Render(" · passkey shown on the fleet's own machine")
+		return lipgloss.NewStyle().Foreground(colBrandHi).Render(m.tr("remote.enabled", "enabled")) +
+			mutedStyle.Render(" · "+m.tr("remote.passkey-local-only", "passkey shown on the fleet's own machine"))
 	}
 }
 
 // remoteHeaderRow is the column header, spaced to match remoteRow.
-func remoteHeaderRow() string {
-	return fmt.Sprintf("  %-22s %-9s %s", "SOURCE", "ROLE", "ATTACHED")
+func (m model) remoteHeaderRow() string {
+	return fmt.Sprintf("  %-22s %-9s %s",
+		m.tr("remote.col.source", "SOURCE"), m.tr("remote.col.role", "ROLE"), m.tr("remote.col.attached", "ATTACHED"))
 }
 
 // remoteRow renders one connection. The source is a label the far end chose for
@@ -243,17 +244,20 @@ func remoteSince(ts string, now time.Time) string {
 // the passkey keys the server would refuse anyway.
 func (m model) remoteLegend() string {
 	info := m.remoteInfo
+	sel, kick := m.tr("legend.select", "select"), m.tr("remote.legend.kick", "kick")
+	refresh, close := m.tr("legend.refresh", "refresh"), m.tr("legend.close", "close")
 	switch {
 	case info == nil:
-		return legend("esc", "close")
+		return legend("esc", close)
 	case !info.Enabled && info.Local:
-		return legend("e", "enable remote", "jk", "select", "x", "kick", "esc", "close")
+		return legend("e", m.tr("remote.legend.enable", "enable remote"), "jk", sel, "x", kick, "esc", close)
 	case !info.Local:
-		return legend("jk", "select", "x", "kick", "r", "refresh", "esc", "close")
+		return legend("jk", sel, "x", kick, "r", refresh, "esc", close)
 	case !info.Enabled:
-		return legend("jk", "select", "x", "kick", "esc", "close")
+		return legend("jk", sel, "x", kick, "esc", close)
 	default:
-		return legend("jk", "select", "x", "kick", "n", "new passkey", "E", "disable", "esc", "close")
+		return legend("jk", sel, "x", kick, "n", m.tr("remote.legend.new-passkey", "new passkey"),
+			"E", m.tr("remote.legend.disable", "disable"), "esc", close)
 	}
 }
 

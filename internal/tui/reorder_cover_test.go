@@ -17,10 +17,10 @@ func TestReorderDashItemLastEdge(t *testing.T) {
 
 // TestReorderEdgeStatus covers both nudge directions directly.
 func TestReorderEdgeStatus(t *testing.T) {
-	if got := reorderEdgeStatus(-1); got != "already first" {
+	if got := (model{}).reorderEdgeStatus(-1); got != "already first" {
 		t.Fatalf("earlier edge = %q, want %q", got, "already first")
 	}
-	if got := reorderEdgeStatus(+1); got != "already last" {
+	if got := (model{}).reorderEdgeStatus(+1); got != "already last" {
 		t.Fatalf("later edge = %q, want %q", got, "already last")
 	}
 }

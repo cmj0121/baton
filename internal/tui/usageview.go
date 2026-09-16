@@ -47,7 +47,7 @@ const usageBurners = 8
 func (m model) openUsage(from mode) model {
 	m.usageFrom = from
 	m.mode = modeUsage
-	m.status = "account usage"
+	m.status = m.tr("status.account-usage", "account usage")
 	return m
 }
 
@@ -55,7 +55,7 @@ func (m model) openUsage(from mode) model {
 func (m model) closeUsage() (tea.Model, tea.Cmd) {
 	m.mode = m.usageFrom
 	if m.mode == modeDashboard {
-		m.status = "dashboard"
+		m.status = m.tr("mode.dashboard.status", "dashboard")
 	}
 	return m, nil
 }
@@ -87,7 +87,7 @@ func (m model) usageView() string {
 		// depend on a quota source at all — which agents the fleet's machine has, and
 		// which of them baton can account for — and it is exactly what somebody who
 		// opened this and found no bars needs to see.
-		body := []string{sectionStyle.Render(spaced("ACCOUNT USAGE")), "",
+		body := []string{sectionStyle.Render(spaced(m.tr("usage.title", "ACCOUNT USAGE"))), "",
 			mutedStyle.Render(i18n.T(m.effLang(), "usage.view.no-reading",
 				"no quota reading yet — a Claude Code panel reports one after its first turn"))}
 		if vendors := m.usageVendorSection(); len(vendors) > 0 {
@@ -189,7 +189,7 @@ func (m model) vendorMarkColor(v proto.VendorUsage) lipgloss.Color {
 // reason when there is not.
 func (m model) vendorStanding(v proto.VendorUsage) string {
 	if v.State != vendorReading {
-		return mutedStyle.Render(vendorReasonText(v))
+		return mutedStyle.Render(m.vendorReasonText(v))
 	}
 	text := usage.FormatTotals(v.Tokens, v.CostUSD)
 	if text == "" {
@@ -208,7 +208,7 @@ func (m model) vendorStanding(v proto.VendorUsage) string {
 // can be perfectly true and half an hour old, and only the age lets someone tell
 // that from a number that is being kept up to date.
 func (m model) usageHeader(lim *proto.LimitsInfo) string {
-	header := sectionStyle.Render(spaced("ACCOUNT USAGE"))
+	header := sectionStyle.Render(spaced(m.tr("usage.title", "ACCOUNT USAGE")))
 	meta := joinDot(lim.Source, m.usageAgeNote())
 	if meta == "" {
 		return header
@@ -420,5 +420,5 @@ func (m model) usageReadingAge() (time.Duration, bool) {
 
 // usageLegend is the overlay's key hint.
 func (m model) usageLegend() string {
-	return legend("u", "cycle footer", "esc", "close")
+	return legend("u", m.tr("usage.legend.cycle", "cycle footer"), "esc", m.tr("legend.close", "close"))
 }

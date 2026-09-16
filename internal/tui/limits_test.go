@@ -18,7 +18,10 @@ func newLimitsModel(t *testing.T) model {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir()) // editing a limit persists to $HOME/.baton/config
 	m := baseModel()
-	m.mode, m.cursor = modePanelConfig, firstLimitRow
+	// The tab as well as the row: the page's cursor belongs to the open tab, and a
+	// fixture that set one without the other would be a state the keys cannot
+	// reach — which is the shape of the bug the tabs first shipped with.
+	m.mode, m.panelTab, m.cursor = modePanelConfig, 1, firstLimitRow
 	return m
 }
 
@@ -33,15 +36,25 @@ func TestPanelConfigWalksToLimitRows(t *testing.T) {
 	if m.mode != modePanelConfig {
 		t.Fatalf("C-t P should open panel config, mode=%v", m.mode)
 	}
-	for i := 0; i < numPanelConfigRows-1; i++ {
+	// ↓ walks the OPEN tab and stops at its end: the page partitions one row index
+	// across its tabs, and the defaults tab ends where the limits tab begins.
+	for i := 0; i < firstLimitRow+2; i++ {
+		m = press(m, "down")
+	}
+	if m.cursor != firstLimitRow-1 {
+		t.Fatalf("down should stop at the last defaults row, cursor=%d", m.cursor)
+	}
+
+	// → opens the limits tab and lands on its first row.
+	m = press(m, "right")
+	if m.cursor != firstLimitRow {
+		t.Fatalf("right should open the limits tab on its first row, cursor=%d", m.cursor)
+	}
+	for i := 0; i < len(limitFields)+2; i++ {
 		m = press(m, "down")
 	}
 	if m.cursor != numPanelConfigRows-1 {
-		t.Fatalf("down should reach the last row, cursor=%d of %d", m.cursor, numPanelConfigRows)
-	}
-	m = press(m, "down") // past the end: the cursor clamps rather than running off
-	if m.cursor != numPanelConfigRows-1 {
-		t.Fatalf("the cursor should clamp at the last row, cursor=%d", m.cursor)
+		t.Fatalf("down should reach the last limit row and clamp there, cursor=%d", m.cursor)
 	}
 
 	for i, f := range limitFields {
@@ -134,8 +147,15 @@ func TestPanelConfigViewRendersLimits(t *testing.T) {
 	if !strings.Contains(out, "no cap") {
 		t.Errorf("an unset limit should read as no cap:\n%s", out)
 	}
-	if !strings.Contains(out, "default shell") || !strings.Contains(out, "replay buffer") {
-		t.Errorf("the spawn defaults should still be shown:\n%s", out)
+	// The spawn defaults are a tab of their own now, and this one does not show
+	// them — which is the point of the split, so it is asserted rather than left
+	// to be noticed.
+	if strings.Contains(out, "default shell") {
+		t.Errorf("the limits tab should hold only limits:\n%s", out)
+	}
+	m.panelTab = 0
+	if out := m.panelConfigView(); !strings.Contains(out, "default shell") || !strings.Contains(out, "replay buffer") {
+		t.Errorf("the defaults tab should show the spawn defaults:\n%s", out)
 	}
 }
 
@@ -156,6 +176,10 @@ func TestPanelConfigViewScrollsToEveryRow(t *testing.T) {
 
 	for row := 0; row < numPanelConfigRows; row++ {
 		m.cursor = row
+		m.panelTab = 0
+		if row >= firstLimitRow {
+			m.panelTab = 1 // the row lives on the limits tab, which is what draws it
+		}
 		out := ansi.Strip(m.panelConfigView())
 		caret := ""
 		for _, l := range strings.Split(out, "\n") {
@@ -176,12 +200,13 @@ func TestPanelConfigViewScrollsToEveryRow(t *testing.T) {
 // TestLimitLabel pins how the two "no cap" spellings read: an absent field and an
 // explicit unlimited mean the same thing to the fleet, so they show the same way.
 func TestLimitLabel(t *testing.T) {
+	m := model{}
 	for _, in := range []string{"", "   ", limits.Unlimited, "UNLIMITED"} {
-		if got := limitLabel(in); got != "no cap" {
+		if got := m.limitLabel(in); got != "no cap" {
 			t.Errorf("limitLabel(%q) = %q, want %q", in, got, "no cap")
 		}
 	}
-	if got := limitLabel("4Gi"); got != "4Gi" {
+	if got := m.limitLabel("4Gi"); got != "4Gi" {
 		t.Errorf(`limitLabel("4Gi") = %q`, got)
 	}
 }
@@ -248,4 +273,85 @@ func TestWelcomeCarriesTheEnforcementMode(t *testing.T) {
 	if m.enforce != string(cgroup.ModeNone) || m.enforceWhy != "cgroup v2 is Linux-only" {
 		t.Fatalf("the welcome should carry the mode and the reason, got %q/%q", m.enforce, m.enforceWhy)
 	}
+}
+
+// TestPanelConfigEditsOnlyWhatIsOnScreen: e acts on a row of the tab being
+// looked at, or it refuses — never on a row of the tab you came from.
+//
+// This is the bug the tabs walked into, and it is worth being precise about how
+// it happened. The page's cursor is a page-wide row index that the tabs
+// partition, and switching tabs moved it to the arriving tab's first row — but
+// only when that tab HAD rows. A fleet with no agent profiles has an empty
+// feedback tab, so arriving there from the limits tab left the cursor on `cpus`,
+// and e opened the CPU limit's editor: a row on another tab, not on screen, that
+// nobody had selected.
+//
+// Two things keep it shut. The cursor parks at the tab's first row whether or
+// not the tab has any, and the clamp respects the tab rather than the page —
+// clamping to the page length walked the cursor straight back onto `nofile`.
+func TestPanelConfigEditsOnlyWhatIsOnScreen(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	t.Run("an empty tab refuses", func(t *testing.T) {
+		// No tab the page ships with is empty any more — the feedback tab leads with
+		// the fleet's own switch — so the case is driven through a tab emptied on
+		// purpose. It is the state the guard exists for, and one a future tab (or a
+		// profile list that can vanish under a reload) can still arrive in.
+		m := baseModel()
+		m = press(m, "ctrl+t", "P")
+		m.panelTab = len(panelCfgTabs) // past the last tab: a range holding nothing
+		m.cursor = firstLimitRow       // ... with the cursor left on another tab's row
+
+		m = press(m, "e")
+		if m.input != inputNone {
+			t.Errorf("e with the cursor off the tab opened editor %v", m.input)
+		}
+		if !strings.Contains(m.status, "nothing to edit") {
+			t.Errorf("e with the cursor off the tab should say so, got %q", m.status)
+		}
+	})
+
+	t.Run("switching tabs takes the cursor with it", func(t *testing.T) {
+		m := baseModel()
+		m = press(m, "ctrl+t", "P")
+		for range panelCfgTabs {
+			m = press(m, "right")
+			first, _ := m.panelTabRange()
+			if m.cursor != first {
+				t.Errorf("tab %d: the cursor should park at %d, got %d", m.panelTab, first, m.cursor)
+			}
+			m.clampCursor() // a snapshot, a resize — anything that re-clamps
+			if m.cursor != first {
+				t.Errorf("tab %d: the clamp pulled the cursor to %d", m.panelTab, m.cursor)
+			}
+		}
+	})
+
+	t.Run("every tab edits its own rows", func(t *testing.T) {
+		m := baseModel()
+		m.agents = map[string]config.AgentProfile{"claude": {Command: "claude"}}
+		m = press(m, "ctrl+t", "P")
+		for tab := range panelCfgTabs {
+			first, end := m.panelTabRange()
+			for row := first; row < end; row++ {
+				m.cursor, m.input, m.status = row, inputNone, ""
+				next := press(m, "e")
+				switch tab {
+				case 1: // the limits tab opens the limit editor for ITS row
+					if next.input != inputLimit || next.limitRow != row {
+						t.Errorf("tab %d row %d: e opened %v for row %d", tab, row, next.input, next.limitRow)
+					}
+				case 2: // the feedback tab cycles the profile on that row
+					if !strings.Contains(next.status, "score feedback") {
+						t.Errorf("tab %d row %d: e said %q", tab, row, next.status)
+					}
+				default: // the defaults tab: a text overlay or the agent picker
+					if next.input == inputNone && next.mode != modeAgentPick {
+						t.Errorf("tab %d row %d: e did nothing (%q)", tab, row, next.status)
+					}
+				}
+			}
+			m = press(m, "right")
+		}
+	})
 }

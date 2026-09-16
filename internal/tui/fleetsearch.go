@@ -28,7 +28,7 @@ import (
 func (m model) openFleetSearch() model {
 	m.input = inputFleetSearch
 	m.inputBuf = m.fsQuery
-	m.status = "fleet search · type a regexp · enter searches every panel · esc cancels"
+	m.status = m.tr("fsearch.status.open", "fleet search · type a regexp · enter searches every panel · esc cancels")
 	return m
 }
 
@@ -37,12 +37,12 @@ func (m model) openFleetSearch() model {
 func (m model) sendFleetSearch(query string) (tea.Model, tea.Cmd) {
 	query = strings.TrimSpace(query)
 	if query == "" {
-		m.status = "fleet search cleared"
+		m.status = m.tr("fsearch.status.cleared", "fleet search cleared")
 		return m, nil
 	}
 	m.fsQuery = query
 	m.sendf(proto.Command{Action: "fleet.search", Query: query})
-	m.status = "fleet search · " + query + " …"
+	m.status = m.tr("fsearch.title.status", "fleet search") + " · " + query + " …"
 	return m, nil
 }
 
@@ -50,7 +50,7 @@ func (m model) sendFleetSearch(query string) (tea.Model, tea.Cmd) {
 // remembering the view to return to. No hits stays out of the popup and says so.
 func (m model) openFleetResults(hits []proto.SearchHit) model {
 	if len(hits) == 0 {
-		m.status = fmt.Sprintf("fleet search · no match for %q", m.fsQuery)
+		m.status = fmt.Sprintf(m.tr("fsearch.status.no-match", "fleet search · no match for %q"), m.fsQuery)
 		return m
 	}
 	m.fsFrom = m.mode
@@ -68,7 +68,7 @@ func (m model) closeFleetResults() (tea.Model, tea.Cmd) {
 	m.fsHits = nil
 	m.fsCursor = 0
 	if m.mode == modeDashboard {
-		m.status = "dashboard"
+		m.status = m.tr("mode.dashboard.status", "dashboard")
 	}
 	return m, nil
 }
@@ -104,20 +104,20 @@ func (m model) jumpToHit() (tea.Model, tea.Cmd) {
 	h := m.fsHits[m.fsCursor]
 	p, ok := m.fleetPanel(h.Panel)
 	if !ok {
-		m.status = "fleet search · that panel is gone"
+		m.status = m.tr("fsearch.status.gone", "fleet search · that panel is gone")
 		return m, nil
 	}
 	m.fsHits = nil
 	m = m.zoomInto(p)
 	m = m.clearSearch()        // drop any prior scrollback search before seeding the new one
 	m.searchSeedPending = true // runSearch fires once the panel's replay lands (see panelOutputMsg)
-	m.status = "zoomed · " + p.Title + " · search " + m.fsQuery
+	m.status = fmt.Sprintf(m.tr("fsearch.status.zoomed", "zoomed · %s · search %s"), p.Title, m.fsQuery)
 	return m, nil
 }
 
 // fleetSearchStatus is the footer line while walking the results.
 func (m model) fleetSearchStatus() string {
-	return fmt.Sprintf("fleet search %q · %d/%d · enter opens · esc closes", m.fsQuery, m.fsCursor+1, len(m.fsHits))
+	return fmt.Sprintf(m.tr("fsearch.status.hits", "fleet search %q · %d/%d · enter opens · esc closes"), m.fsQuery, m.fsCursor+1, len(m.fsHits))
 }
 
 // fleetSearchView renders the results popup: the matching lines grouped under a
@@ -125,15 +125,16 @@ func (m model) fleetSearchStatus() string {
 // highlighted on every line, windowed around the cursor so a long result scrolls.
 func (m model) fleetSearchView() string {
 	if len(m.fsHits) == 0 {
-		return m.popupBox(mutedStyle.Render("no matches"))
+		return m.popupBox(mutedStyle.Render(m.tr("fsearch.no-match", "no matches")))
 	}
 	rows, anchor := m.fleetSearchRows()
 	visible := clampInt(m.height-12, 5, 40)
 	shown, _ := windowAround(rows, anchor, visible)
 
-	header := sectionStyle.Render(spaced("FLEET SEARCH")) + "  " +
-		mutedStyle.Render(fmt.Sprintf("%q  ·  %d hit(s) in %d panel(s)", m.fsQuery, len(m.fsHits), countHitPanels(m.fsHits)))
-	legendLine := legend("j/k", "move", "n/N", "walk", "enter", "open panel", "esc", "close")
+	header := sectionStyle.Render(spaced(m.tr("fsearch.title", "FLEET SEARCH"))) + "  " +
+		mutedStyle.Render(fmt.Sprintf(m.tr("fsearch.hits", "%q  ·  %d hit(s) in %d panel(s)"), m.fsQuery, len(m.fsHits), countHitPanels(m.fsHits)))
+	legendLine := legend("j/k", m.tr("legend.move", "move"), "n/N", m.tr("legend.walk", "walk"),
+		"enter", m.tr("legend.open-panel", "open panel"), "esc", m.tr("legend.close", "close"))
 	body := lipgloss.JoinVertical(lipgloss.Left, shown...)
 	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", legendLine))
 }

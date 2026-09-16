@@ -43,7 +43,7 @@ type diffLine struct {
 // uncommitted changes" before sending in that case, but guard anyway.
 func (m model) openDiffPopup(title string, files []proto.DiffFile) model {
 	if len(files) == 0 {
-		m.status = "diff: no changes"
+		m.status = m.tr("status.diff-no-changes", "diff: no changes")
 		return m
 	}
 	m.diffFrom = m.mode
@@ -65,7 +65,7 @@ func (m model) closeDiffPopup() (tea.Model, tea.Cmd) {
 	m.diffCursor, m.diffScroll = 0, 0
 	m.diffOnDetail = false
 	if m.mode == modeDashboard {
-		m.status = "dashboard"
+		m.status = m.tr("mode.dashboard.status", "dashboard")
 	}
 	return m, nil
 }
@@ -207,7 +207,7 @@ func (m model) diffView() string {
 			lines[i] = lipgloss.NewStyle().Width(fileColW + detailW + 3).Render("")
 		}
 		lines[0] = lipgloss.NewStyle().Width(fileColW + detailW + 3).
-			Render(mutedStyle.Render("no changes to diff"))
+			Render(mutedStyle.Render(m.tr("diff.empty", "no changes to diff")))
 		body = lipgloss.JoinVertical(lipgloss.Left, lines...)
 	} else {
 		left := padBlock(m.diffFileRows(fileColW, rows), rows, fileColW)
@@ -224,9 +224,9 @@ func (m model) diffView() string {
 		)
 	}
 
-	header := sectionStyle.Render(spaced("DIFF")) + "  " +
+	header := sectionStyle.Render(spaced(m.tr("diff.title", "DIFF"))) + "  " +
 		mutedStyle.Render(strings.TrimPrefix(m.diffTitle, "diff · ")) +
-		mutedStyle.Render(fmt.Sprintf("  ·  %d file(s)", len(m.diffFiles)))
+		mutedStyle.Render("  ·  "+fmt.Sprintf(m.tr("diff.files", "%d file(s)"), len(m.diffFiles)))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", m.diffLegend())
 	return m.popupBox(content)
@@ -322,12 +322,12 @@ func renderDiffContentLine(line string, width int) string {
 
 // diffLegend is the popup's key hint, marking the focused pane.
 func (m model) diffLegend() string {
-	focus := "files"
+	focus := m.tr("diff.pane.files", "files")
 	if m.diffOnDetail {
-		focus = "diff"
+		focus = m.tr("diff.pane.diff", "diff")
 	}
 	return mutedStyle.Render("["+focus+"]  ") +
-		legend("tab", "switch", "j/k", "move · scroll", "esc", "close")
+		legend("tab", m.tr("legend.switch", "switch"), "j/k", m.tr("legend.move-scroll", "move · scroll"), "esc", m.tr("legend.close", "close"))
 }
 
 // padBlock pads (or leaves) a column to exactly rows lines, each blank line set to

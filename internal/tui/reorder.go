@@ -72,11 +72,11 @@ func moveTarget(fleet []panel.Panel, units [][]string, sel, dir int) (block []st
 }
 
 // reorderEdgeStatus is the nudge shown when a reorder cannot go further.
-func reorderEdgeStatus(dir int) string {
+func (m model) reorderEdgeStatus(dir int) string {
 	if dir < 0 {
-		return "already first"
+		return m.tr("status.already-first", "already first")
 	}
-	return "already last"
+	return m.tr("status.already-last", "already last")
 }
 
 // reorderSelection asks the server to move the unit at sel one slot in dir among
@@ -87,11 +87,11 @@ func reorderEdgeStatus(dir int) string {
 func (m model) reorderSelection(units [][]string, sel, dir int, title string) model {
 	block, index, ok := moveTarget(m.fleet, units, sel, dir)
 	if !ok {
-		m.status = reorderEdgeStatus(dir)
+		m.status = m.reorderEdgeStatus(dir)
 		return m
 	}
 	m.sendf(proto.Command{Action: "panel.move", IDs: block, Index: index})
-	m.status = "moved " + title
+	m.status = m.tr("status.moved", "moved ") + title
 	return m
 }
 
@@ -107,7 +107,7 @@ func (m model) reorderDashItem(dir int) model {
 	// in the same words: moving a row that stands for twelve panels would have to
 	// move all twelve, which is exactly the bulk action the row does not own.
 	if items[m.cursor].kind == itemFold {
-		m.status = "expand the quiet group first"
+		m.status = m.tr("status.expand-quiet-group-first", "expand the quiet group first")
 		return m
 	}
 	units := make([][]string, len(items))

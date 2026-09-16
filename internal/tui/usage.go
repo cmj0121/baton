@@ -154,7 +154,7 @@ func (m model) usageWindowText() string {
 	if row.State != vendorReading {
 		// No figure for this agent. The reason goes in the segment's place rather than
 		// a number, so nothing here can be read as a spend.
-		return joinDot(row.Vendor, vendorReasonText(*row))
+		return joinDot(row.Vendor, m.vendorReasonText(*row))
 	}
 	return joinDot(row.Vendor+" "+usage.FormatTotals(row.Tokens, row.CostUSD), m.vendorCountdown(*row))
 }
@@ -208,17 +208,17 @@ func (m model) vendorCountdown(v proto.VendorUsage) string {
 // The daemon's own reason is preferred; the fallbacks exist so a row from a newer
 // daemon that carries a state this cockpit does not know still says something
 // true rather than nothing at all.
-func vendorReasonText(v proto.VendorUsage) string {
+func (m model) vendorReasonText(v proto.VendorUsage) string {
 	if v.Reason != "" {
-		return v.Reason
+		return v.Reason // the backend's own sentence about itself
 	}
 	switch v.State {
 	case vendorAbsent:
-		return "not installed"
+		return m.tr("usage.vendor.absent", "not installed")
 	case vendorNoSource:
-		return "no usage source"
+		return m.tr("usage.vendor.no-source", "no usage source")
 	default:
-		return "no reading"
+		return m.tr("usage.vendor.no-reading", "no reading")
 	}
 }
 

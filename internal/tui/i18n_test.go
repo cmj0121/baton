@@ -1,15 +1,22 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/i18n"
+	"github.com/cmj0121/baton/internal/panel"
+	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/signals"
 )
 
 // helpModel is a cockpit sized to render a whole key list, in the given language
@@ -220,4 +227,347 @@ func helpRows(m model) (string, []string) {
 		all = append(all, sec.rows...)
 	}
 	return title, all
+}
+
+// TestPanelConfigIsFullyTranslated is the completeness check for the prefix + P
+// page, and it works the way the key list's does: every line the page draws must
+// read differently in zh-TW than in English. A string someone forgot to key falls
+// back to its English and shows up here as an identical line.
+//
+// It holds for EVERY line because this page has no data on it. The rows are the
+// fleet's own settings, and the two things on it that stay English in both
+// languages — the resource-limit keys (cpus, nofile) and the values beside them —
+// share a line with a label or a value that does not, so no line is English in
+// full. A page state that puts a machine's own words on a line of their own (the
+// KNOWN, NOT INSTALLED roll, which lists backend names and homepages) is left out
+// of the fixture for that reason, not because it is exempt.
+func TestPanelConfigIsFullyTranslated(t *testing.T) {
+	page := func(lang i18n.Lang, tab int) []string {
+		m := baseModel()
+		m.mode, m.lang, m.height = modePanelConfig, lang, 44
+		m.panelTab, m.shellPath = tab, "/bin/zsh"
+		var out []string
+		for _, line := range strings.Split(ansi.Strip(m.panelConfigView()), "\n") {
+			if line = strings.TrimSpace(strings.Trim(line, "│╭╮╰╯─ ")); line != "" {
+				out = append(out, line)
+			}
+		}
+		return out
+	}
+
+	// Every tab, since each draws its own rows and its own hints now — checking
+	// the one that happens to be open would leave two thirds of the page unread.
+	for tab := range panelCfgTabs {
+		en, zh := page(i18n.EN, tab), page(i18n.ZhTW, tab)
+		if len(en) != len(zh) {
+			t.Fatalf("tab %d: translating changed the line count, %d → %d", tab, len(en), len(zh))
+		}
+		for i := range en {
+			if en[i] == zh[i] {
+				t.Errorf("tab %d line %d is untranslated: %q", tab, i, en[i])
+			}
+		}
+	}
+}
+
+// TestInputOverlaysAreFullyTranslated: every text-input popup — its title, its
+// prompt and the verb on enter — reads differently in zh-TW than in English.
+//
+// It walks the table rather than a list written here, so an overlay added to
+// inputSpecs without a catalog entry fails on its first frame instead of
+// appearing in English to the people who cannot read it. The five resource-limit
+// overlays ride on limitFields and are walked with them.
+func TestInputOverlaysAreFullyTranslated(t *testing.T) {
+	// Line by line, not whole overlays: the title, the prompt and the hint line
+	// are three separate strings, and comparing the popup as one blob passes as
+	// soon as ANY of them is keyed — a title left in English hides behind a
+	// translated "cancel" on the line below it.
+	lines := func(lang i18n.Lang, in inputPurpose, limitRow int) []string {
+		m := baseModel()
+		m.lang, m.input, m.limitRow = lang, in, limitRow
+		var out []string
+		for _, line := range strings.Split(ansi.Strip(m.inputView()), "\n") {
+			line = strings.TrimSpace(strings.Trim(line, "│╭╮╰╯─ "))
+			// The field itself is the typed text and is the same in every language.
+			if line == "" || strings.Contains(line, "›") {
+				continue
+			}
+			out = append(out, line)
+		}
+		return out
+	}
+	check := func(what string, in inputPurpose, limitRow int) {
+		en, zh := lines(i18n.EN, in, limitRow), lines(i18n.ZhTW, in, limitRow)
+		if len(en) != len(zh) {
+			t.Fatalf("%s: translating changed the line count, %d → %d", what, len(en), len(zh))
+		}
+		for i := range en {
+			if en[i] == zh[i] {
+				t.Errorf("%s: line %d is untranslated: %q", what, i, en[i])
+			}
+		}
+	}
+
+	for in := range inputSpecs {
+		check(fmt.Sprintf("input %d", in), in, 0)
+	}
+	for i := range limitFields {
+		check("the "+limitFields[i].label+" limit overlay", inputLimit, firstLimitRow+i)
+	}
+	// The generic overlay an input with no table row falls back to.
+	check("the fallback overlay", inputNone, 0)
+}
+
+// TestPickersAreFullyTranslated: the two centred pickers — pick an agent, send a
+// signal — read differently in zh-TW than in English on every line that is not a
+// name the machine owns.
+//
+// Those names are the point of the exemption. A backend is called claude because
+// that is the binary on the PATH, and a signal is called SIGINT because that is
+// the word `kill` takes; a row that renamed either would be naming something that
+// does not exist. So a line carrying one of those may read the same in both
+// languages — and every other line, being prose, may not.
+func TestPickersAreFullyTranslated(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		view func(model) string
+		mut  func(*model)
+	}{
+		{"agent picker", model.agentPickerView, func(m *model) {
+			m.agentList = []proto.AgentBackend{{Name: "claude", Command: "claude"}}
+		}},
+		{"default-agent picker", model.agentPickerView, func(m *model) {
+			m.agentPurpose = agentForDefault
+			m.agentList = []proto.AgentBackend{{Name: "claude", Command: "claude"}}
+		}},
+		{"signal picker", model.signalPickerView, func(m *model) {
+			m.signalScope, m.signalTargets = "shell #1", []string{"1"}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lines := func(lang i18n.Lang) []string {
+				m := baseModel()
+				m.lang = lang
+				tc.mut(&m)
+				var out []string
+				for _, line := range strings.Split(ansi.Strip(tc.view(m)), "\n") {
+					if line = strings.TrimSpace(strings.Trim(line, "│╭╮╰╯─ ")); line != "" {
+						out = append(out, line)
+					}
+				}
+				return out
+			}
+			en, zh := lines(i18n.EN), lines(i18n.ZhTW)
+			if len(en) != len(zh) {
+				t.Fatalf("translating changed the line count, %d → %d", len(en), len(zh))
+			}
+			for i := range en {
+				// Compare what is left of the line once the machine's own words are
+				// taken out of it, not the line. A gloss left in English sits on the
+				// same row as SIGHUP, and a whole-line exemption would let the name
+				// cover for it.
+				a, b := prose(en[i]), prose(zh[i])
+				if a == b && hasLetters(a) {
+					t.Errorf("line %d is untranslated: %q", i, en[i])
+				}
+			}
+		})
+	}
+}
+
+// prose strips the names the machine owns out of a picker line — the signal wire
+// names and the agent backend in the fixture — leaving the text that a
+// translation is answerable for.
+func prose(line string) string {
+	for _, s := range signals.Choices {
+		line = strings.ReplaceAll(line, s.Name, "")
+	}
+	return strings.TrimSpace(strings.ReplaceAll(line, "claude", ""))
+}
+
+// hasLetters reports whether a string still says anything a reader would read —
+// so a row that is nothing but a keycap and a machine name is not demanded of the
+// catalog.
+func hasLetters(s string) bool {
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestDashboardChromeLeavesNoEnglishBehind sweeps the whole dashboard frame in
+// zh-TW and fails on any English word still in it.
+//
+// It is a scanner rather than a line-by-line comparison against the English
+// frame, because that comparison is too coarse to catch what actually goes wrong
+// here. A chip strip reading "◆ 1 需要你 · ● 2 idle" differs from its English
+// line in every way a diff can see, and the one word nobody keyed sits in the
+// middle of it. Whole-line equality goes green on exactly the bug this test is
+// for — it did, on both mutations, before it was written this way.
+//
+// The fleet is named in machine words on purpose. A real panel is called
+// "claude · refactor auth", and those are the fleet's words and never the
+// cockpit's, so a fixture full of them would need an allowlist longer than the
+// thing it is checking. With the fleet's own text reduced to p1..p4, every Latin
+// word left on screen belongs to baton, and the allowlist is the short list of
+// the ones that are meant to be there.
+func TestDashboardChromeLeavesNoEnglishBehind(t *testing.T) {
+	// What English on this screen is load-bearing: the product, the wire protocol,
+	// the two panel KINDS (baton's own words, the ones `ctl spawn` takes), and the
+	// host readout's units.
+	allowed := map[string]bool{
+		"baton": true, "protocol": true, "dev": true,
+		"agent": true, "shell": true, "command": true,
+		"cpu": true, "mem": true,
+	}
+
+	m := baseModel()
+	m.lang, m.height = i18n.ZhTW, 40
+	m.fleet = []panel.Panel{
+		{ID: "1", Title: "p1", Kind: panel.Agent, State: panel.Attention},
+		{ID: "2", Title: "p2", Kind: panel.Shell, State: panel.Running},
+		{ID: "3", Title: "p3", Kind: panel.Agent, State: panel.Idle},
+		{ID: "4", Title: "p4", Kind: panel.Agent, State: panel.Exited},
+	}
+
+	word := regexp.MustCompile(`[A-Za-z]{3,}`)
+	for _, line := range strings.Split(ansi.Strip(m.frame()), "\n") {
+		for _, w := range word.FindAllString(line, -1) {
+			if !allowed[strings.ToLower(w)] {
+				t.Errorf("untranslated English on the dashboard: %q in %q", w, strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
+// TestOverlaysLeaveNoEnglishBehind sweeps every pop-up the cockpit draws and
+// fails on any English word left in the zh-TW render.
+//
+// It is the completeness check for the surfaces that have no fixture worth
+// comparing against their English selves: an overlay's chrome is a title, an
+// empty state and a legend, and the line-by-line comparisons elsewhere in this
+// file cannot see a single unkeyed word inside a line that is otherwise
+// translated. The scanner can, which is the same reason the dashboard has one.
+//
+// The allowlist is per overlay and short on purpose. A word earns its place
+// there by belonging to something other than the cockpit — git's own
+// subcommands, the wire words of a protocol, a plugin language's name — and each
+// entry is a claim that translating it would be wrong, not that nobody got to it
+// yet.
+func TestOverlaysLeaveNoEnglishBehind(t *testing.T) {
+	// Big enough that every overlay draws its whole body: a pop-up squeezed by a
+	// short terminal drops rows, and an empty state that is not on screen is one
+	// this test would pass without reading.
+	m := baseModel()
+	m.lang, m.width, m.height = i18n.ZhTW, 160, 48
+
+	// Everywhere: the KEY NAMES, which are never translated because a translated
+	// key is a key nobody can press; the product; and baton's own words for the
+	// things it spawns.
+	common := []string{
+		"esc", "tab", "enter", "ctrl", "alt", "shift", "space", "backspace",
+		"home", "end", "pgup", "pgdn",
+		"baton", "agent", "shell", "command",
+	}
+
+	for _, tc := range []struct {
+		name    string
+		view    func() string
+		allowed []string
+	}{
+		{"inbox", m.inboxView, nil},
+		{"queue", m.queueView, nil},
+		{"proc tree", m.procTreeView, nil},
+		{"fleet search", m.fleetSearchView, nil},
+		{"remote", m.remoteView, []string{"passkey"}},
+		{"dir picker", m.dirPickView, nil},
+		{"commands", m.commandPickerView, []string{"lua"}},
+		// The git menu runs git's own ops and names each one as git does.
+		{"git menu", m.gitPickerView, []string{
+			"git", "diff", "log", "status", "stage", "all", "commit", "push",
+			"branch", "worktree", "worktrees", "rm", "editor", "add", "repo",
+		}},
+		{"git output", func() string {
+			return m.openGitOutPopup("git status", "on branch main", false).gitOutView()
+		}, []string{"git", "status", "on", "branch", "main"}}, // the op and its output
+		{"diff", m.diffView, nil},
+		{"usage", m.usageView, []string{"claude", "code"}}, // the backend that reports quota
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			allowed := map[string]bool{}
+			for _, w := range append(append([]string(nil), common...), tc.allowed...) {
+				allowed[w] = true
+			}
+			word := regexp.MustCompile(`[A-Za-z]{3,}`)
+			for _, line := range strings.Split(ansi.Strip(tc.view()), "\n") {
+				for _, w := range word.FindAllString(line, -1) {
+					if !allowed[strings.ToLower(w)] {
+						t.Errorf("untranslated English: %q in %q", w, strings.TrimSpace(line))
+					}
+				}
+			}
+		})
+	}
+}
+
+// msgPair matches a message key paired with its English source string, in any of
+// the forms the cockpit writes one: m.tr("k", "en"), the tr shorthand inside a
+// view, i18n.T(lang, "k", "en"), and the tables that carry the pair as two fields
+// (the key map's bindings, the input overlays, the git menu, the limit rows).
+var msgPair = regexp.MustCompile(`"([a-z][a-z0-9-]*(?:\.[a-z0-9-]+)+)",\s*"((?:[^"\\]|\\.)*)"`)
+
+// TestEveryMessageKeyIsTranslated reads this package's own source, collects every
+// message key with the English written beside it, and fails on any whose zh-TW
+// rendering is the same string.
+//
+// This is the completeness check the rendering tests cannot be. They can only
+// reach what a fixture puts on screen — a status line needs the keystroke that
+// sets it, an error needs the failure that raises it — and the cockpit has more
+// than five hundred messages, most of which no fixture will ever draw. Reading
+// the source reaches all of them, including the ones behind a condition nobody
+// has hit yet.
+//
+// Two keys are exempt, and both are exempt for the reason the catalog gives
+// throughout: they are not the cockpit's words. `git add -A` is a command line,
+// and passkey is what the thing is called in baton's own docs and CLI.
+func TestEveryMessageKeyIsTranslated(t *testing.T) {
+	exempt := map[string]bool{
+		"git.desc.stage-all": true, // a git command line, quoted as it is typed
+		"remote.passkey":     true, // baton's own word for it, in the docs and the CLI
+		"rform.passkey":      true, // the same word, as the field asking for one
+		"rform.address.hint": true, // the three address FORMS, which are typed as shown
+	}
+
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	en, zh := model{}, model{lang: i18n.ZhTW}
+	seen := map[string]bool{}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, mm := range msgPair.FindAllStringSubmatch(string(data), -1) {
+			key, eng := mm[1], strings.ReplaceAll(mm[2], `\"`, `"`)
+			if seen[key] || eng == "" || exempt[key] {
+				continue
+			}
+			seen[key] = true
+			if en.tr(key, eng) == zh.tr(key, eng) {
+				t.Errorf("%s: no zh-TW for %q (%s)", f, eng, key)
+			}
+		}
+	}
+	// A guard on the guard: a regex that stopped matching would report nothing and
+	// pass, which is the one way this test could quietly stop being one.
+	if len(seen) < 400 {
+		t.Errorf("only %d message keys found in the source; the scan is not reaching them", len(seen))
+	}
 }

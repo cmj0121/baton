@@ -227,9 +227,9 @@ func (m model) toggleFold() model {
 	}
 	m.foldOpen[parent] = !m.foldOpen[parent]
 	if m.foldOpen[parent] {
-		m.status = "quiet panels shown · esc folds them again"
+		m.status = m.tr("status.quiet-panels-shown-esc", "quiet panels shown · esc folds them again")
 	} else {
-		m.status = "quiet panels folded"
+		m.status = m.tr("status.quiet-panels-folded", "quiet panels folded")
 	}
 	if at := m.foldRowIndexAt(parent); at >= 0 {
 		m.cursor = at
@@ -538,7 +538,7 @@ func markCell(marked bool) string {
 func (m model) markStatus() string {
 	n := len(m.markedIDs())
 	if n == 0 {
-		return "selection cleared"
+		return m.tr("status.selection-cleared", "selection cleared")
 	}
 	return fmt.Sprintf("%d panel(s) selected · %s to group", n, seqLabel(m.bindingKey(actGroup)))
 }
@@ -547,12 +547,12 @@ func (m model) markStatus() string {
 // select some first.
 func (m model) startGroup() model {
 	if len(m.markedIDs()) == 0 {
-		m.status = fmt.Sprintf("press %s to select panels, then %s to group", seqLabel(m.bindingKey(actMark)), seqLabel(m.bindingKey(actGroup)))
+		m.status = fmt.Sprintf(m.tr("status.press-s-select-panels", "press %s to select panels, then %s to group"), seqLabel(m.bindingKey(actMark)), seqLabel(m.bindingKey(actGroup)))
 		return m
 	}
 	m.input = inputGroupName
 	m.inputBuf = ""
-	m.status = fmt.Sprintf("name the work item · %d panel(s), enter to create", len(m.markedIDs()))
+	m.status = fmt.Sprintf(m.tr("status.name-work-item-d", "name the work item · %d panel(s), enter to create"), len(m.markedIDs()))
 	return m
 }
 
@@ -582,19 +582,19 @@ func (m model) nameConflict(name, skipID, skipGroup string) bool {
 // group is rejected here, keeping the selection intact so the user can retype.
 func (m model) commitGroup(name string) model {
 	if name == "" {
-		m.status = "a group needs a name"
+		m.status = m.tr("status.group-needs-name", "a group needs a name")
 		return m
 	}
 	if len(m.markedIDs()) == 0 {
-		m.status = "no panels selected"
+		m.status = m.tr("status.no-panels-selected", "no panels selected")
 		return m
 	}
 	if !panel.GroupValid(name) {
-		m.status = fmt.Sprintf("%q is not a valid group path", name)
+		m.status = fmt.Sprintf(m.tr("status.q-not-valid-group", "%q is not a valid group path"), name)
 		return m
 	}
 	if m.nameConflict(name, "", name) {
-		m.status = fmt.Sprintf("the name %q is already taken — pick another", name)
+		m.status = fmt.Sprintf(m.tr("status.name-q-already-taken", "the name %q is already taken — pick another"), name)
 		return m
 	}
 	groups, panels := m.nestMarkedInto(name)
@@ -608,11 +608,11 @@ func (m model) commitGroup(name string) model {
 func (m model) addMarkedToGroup() model {
 	it, ok := m.selectedItem()
 	if !ok || it.kind != itemGroup {
-		m.status = "select a group to add to"
+		m.status = m.tr("status.select-group-add", "select a group to add to")
 		return m
 	}
 	if len(m.markedIDs()) == 0 {
-		m.status = "mark panels first, then add to a group"
+		m.status = m.tr("status.mark-panels-first-then", "mark panels first, then add to a group")
 		return m
 	}
 	groups, panels := m.nestMarkedInto(it.name)
@@ -698,11 +698,11 @@ func groupStatus(verb string, groups, panels int, target string) string {
 func (m model) ungroupSelected() model {
 	it, ok := m.selectedItem()
 	if !ok || it.kind != itemGroup {
-		m.status = "select a group to ungroup"
+		m.status = m.tr("status.select-group-ungroup", "select a group to ungroup")
 		return m
 	}
 	m.sendf(proto.Command{Action: "panel.ungroup", Group: it.name})
-	m.status = fmt.Sprintf("ungrouped %q", it.name)
+	m.status = fmt.Sprintf(m.tr("status.ungrouped-q", "ungrouped %q"), it.name)
 	return m
 }
 
@@ -715,7 +715,7 @@ func (m model) ungroupSelected() model {
 func (m model) toggleFavourite() model {
 	it, ok := m.selectedItem()
 	if !ok {
-		m.status = "nothing to favourite"
+		m.status = m.tr("status.nothing-favourite", "nothing to favourite")
 		return m
 	}
 	if it.kind == itemGroup {
@@ -734,11 +734,11 @@ func (m model) toggleFavourite() model {
 		if fav {
 			m.favGroups[it.name] = true
 			m.sendf(proto.Command{Action: "group.favourite", Group: it.name})
-			m.status = fmt.Sprintf("favourited %q", it.name)
+			m.status = fmt.Sprintf(m.tr("status.favourited-q", "favourited %q"), it.name)
 		} else {
 			delete(m.favGroups, it.name)
 			m.sendf(proto.Command{Action: "group.unfavourite", Group: it.name})
-			m.status = fmt.Sprintf("unfavourited %q", it.name)
+			m.status = fmt.Sprintf(m.tr("status.unfavourited-q", "unfavourited %q"), it.name)
 		}
 		m.cursorToItem(it)
 		return m
@@ -751,10 +751,10 @@ func (m model) toggleFavourite() model {
 	}
 	if fav {
 		m.sendf(proto.Command{Action: "panel.favourite", ID: it.panel.ID})
-		m.status = "favourited " + it.panel.Title
+		m.status = m.tr("status.favourited", "favourited ") + it.panel.Title
 	} else {
 		m.sendf(proto.Command{Action: "panel.unfavourite", ID: it.panel.ID})
-		m.status = "unfavourited " + it.panel.Title
+		m.status = m.tr("status.unfavourited", "unfavourited ") + it.panel.Title
 	}
 	m.cursorToItem(it)
 	return m
@@ -782,7 +782,7 @@ func (m *model) cursorToItem(target dashItem) {
 func (m model) startRename() model {
 	it, ok := m.selectedItem()
 	if !ok {
-		m.status = "nothing to rename"
+		m.status = m.tr("status.nothing-rename", "nothing to rename")
 		return m
 	}
 	m.input = inputRename
@@ -790,10 +790,10 @@ func (m model) startRename() model {
 	m.renameID, m.renameGroup = "", ""
 	if it.kind == itemGroup {
 		m.renameGroup = it.name
-		m.status = "rename group · enter to save"
+		m.status = m.tr("status.rename-group-enter-save", "rename group · enter to save")
 	} else {
 		m.renameID = it.panel.ID
-		m.status = "rename panel · enter to save"
+		m.status = m.tr("status.rename-panel-enter-save", "rename panel · enter to save")
 	}
 	return m
 }
@@ -804,13 +804,13 @@ func (m model) startRename() model {
 // lost to a round-trip the server would only bounce.
 func (m model) commitRename(name string) model {
 	if name == "" {
-		m.status = "a name cannot be empty"
+		m.status = m.tr("status.name-cannot-be-empty", "a name cannot be empty")
 		return m
 	}
 	if m.nameConflict(name, m.renameID, m.renameGroup) {
 		m.input = inputRename // keep the overlay open with the target remembered
 		m.inputBuf = name
-		m.status = fmt.Sprintf("the name %q is already taken — pick another", name)
+		m.status = fmt.Sprintf(m.tr("status.name-q-already-taken", "the name %q is already taken — pick another"), name)
 		return m
 	}
 	switch {
@@ -821,16 +821,16 @@ func (m model) commitRename(name string) model {
 		if !panel.GroupValid(name) {
 			m.input = inputRename
 			m.inputBuf = name
-			m.status = fmt.Sprintf("%q is not a valid group path", name)
+			m.status = fmt.Sprintf(m.tr("status.q-not-valid-group", "%q is not a valid group path"), name)
 			return m
 		}
 		m.sendf(proto.Command{Action: "panel.rename", Group: m.renameGroup, Name: name})
-		m.status = fmt.Sprintf("renamed group to %q", name)
+		m.status = fmt.Sprintf(m.tr("status.renamed-group-q", "renamed group to %q"), name)
 	case m.renameID != "":
 		m.sendf(proto.Command{Action: "panel.rename", ID: m.renameID, Name: name})
-		m.status = fmt.Sprintf("renamed panel to %q", name)
+		m.status = fmt.Sprintf(m.tr("status.renamed-panel-q", "renamed panel to %q"), name)
 	default:
-		m.status = "nothing to rename"
+		m.status = m.tr("status.nothing-rename", "nothing to rename")
 	}
 	m.renameID, m.renameGroup = "", ""
 	return m
@@ -841,13 +841,13 @@ func (m model) commitRename(name string) model {
 // refused with a hint (the server is authoritative, but the cockpit steers).
 func (m model) startDispatch(p panel.Panel) model {
 	if !p.IsAgent() {
-		m.status = "dispatch: select an agent panel"
+		m.status = m.tr("status.dispatch-select-agent-panel", "dispatch: select an agent panel")
 		return m
 	}
 	m.input = inputDispatch
 	m.inputBuf = p.Task // re-assign edits the existing brief; first dispatch starts empty
 	m.dispatchID, m.dispatchGroup = p.ID, ""
-	m.status = "dispatch task · enter to send"
+	m.status = m.tr("status.dispatch-task-enter-send", "dispatch task · enter to send")
 	return m
 }
 
@@ -857,7 +857,7 @@ func (m model) startDispatchGroup(group string) model {
 	m.input = inputDispatch
 	m.inputBuf = ""
 	m.dispatchID, m.dispatchGroup = "", group
-	m.status = "dispatch to group · enter to send to every member"
+	m.status = m.tr("status.dispatch-group-enter-send", "dispatch to group · enter to send to every member")
 	return m
 }
 
@@ -866,19 +866,19 @@ func (m model) startDispatchGroup(group string) model {
 // closed; dispatch assigns a task, it does not clear one.
 func (m model) commitDispatch(prompt string) model {
 	if prompt == "" {
-		m.status = "a task cannot be empty"
+		m.status = m.tr("status.task-cannot-be-empty", "a task cannot be empty")
 		m.dispatchID, m.dispatchGroup = "", ""
 		return m
 	}
 	switch {
 	case m.dispatchGroup != "":
 		m.sendf(proto.Command{Action: "panel.dispatch-group", Group: m.dispatchGroup, Prompt: prompt})
-		m.status = fmt.Sprintf("dispatched to group %q · %s", m.dispatchGroup, truncate(prompt, 32))
+		m.status = fmt.Sprintf(m.tr("status.dispatched-group-q-s", "dispatched to group %q · %s"), m.dispatchGroup, truncate(prompt, 32))
 	case m.dispatchID != "":
 		m.sendf(proto.Command{Action: "panel.dispatch", ID: m.dispatchID, Prompt: prompt})
-		m.status = "dispatched · " + truncate(prompt, 40)
+		m.status = m.tr("status.dispatched", "dispatched · ") + truncate(prompt, 40)
 	default:
-		m.status = "nothing to dispatch"
+		m.status = m.tr("status.nothing-dispatch", "nothing to dispatch")
 	}
 	m.dispatchID, m.dispatchGroup = "", ""
 	return m
@@ -893,9 +893,9 @@ func (m model) startEnqueue(group string) model {
 	m.inputBuf = ""
 	m.enqueueGroup = group
 	if group != "" {
-		m.status = fmt.Sprintf("enqueue to %q · enter to queue for a free member", group)
+		m.status = fmt.Sprintf(m.tr("status.enqueue-q-enter-queue", "enqueue to %q · enter to queue for a free member"), group)
 	} else {
-		m.status = "enqueue · enter to queue for any free agent"
+		m.status = m.tr("status.enqueue-enter-queue-any", "enqueue · enter to queue for any free agent")
 	}
 	return m
 }
@@ -907,14 +907,14 @@ func (m model) commitEnqueue(prompt string) model {
 	group := m.enqueueGroup
 	m.enqueueGroup = ""
 	if prompt == "" {
-		m.status = "a task cannot be empty"
+		m.status = m.tr("status.task-cannot-be-empty", "a task cannot be empty")
 		return m
 	}
 	m.sendf(proto.Command{Action: "task.enqueue", Prompt: prompt, Group: group})
 	if group != "" {
-		m.status = fmt.Sprintf("enqueued to %q · %s", group, truncate(prompt, 32))
+		m.status = fmt.Sprintf(m.tr("status.enqueued-q-s", "enqueued to %q · %s"), group, truncate(prompt, 32))
 	} else {
-		m.status = "enqueued · " + truncate(prompt, 40)
+		m.status = m.tr("status.enqueued", "enqueued · ") + truncate(prompt, 40)
 	}
 	return m
 }
@@ -940,11 +940,11 @@ func (m model) zoomGroup(it dashItem) model {
 	if only, ok := singlePinned(direct, m.groupPinned); ok {
 		m = m.zoomInto(only)
 		m.zoomGroupOrigin = it.name // back (C-t b) pops back to the split
-		m.status = fmt.Sprintf("group · %s · %s (pinned)", it.name, only.Title)
+		m.status = fmt.Sprintf(m.tr("status.group-s-s-pinned", "group · %s · %s (pinned)"), it.name, only.Title)
 		return m
 	}
 	m.attachGroupMembers()
-	m.status = fmt.Sprintf("group · %s (%d panels)", groupBreadcrumb(it.name), len(direct))
+	m.status = fmt.Sprintf(m.tr("status.group-s-d-panels", "group · %s (%d panels)"), groupBreadcrumb(it.name), len(direct))
 	return m
 }
 
@@ -1050,9 +1050,9 @@ func (m model) foldGlyph(parent string) string {
 // foldVerb is what enter does next on the fold row.
 func (m model) foldVerb(parent string) string {
 	if m.foldOpen[parent] {
-		return "fold"
+		return m.tr("fold.verb.fold", "fold")
 	}
-	return "expand"
+	return m.tr("fold.verb.expand", "expand")
 }
 
 // renderFoldPreview is the tree pane's right side for the quiet row. It says what
@@ -1068,11 +1068,11 @@ func (m model) renderFoldPreview(it dashItem, width int) string {
 		Render(truncate(m.foldGlyph(it.parent)+" "+it.title(), width))
 	rule := mutedStyle.Render(strings.Repeat("─", width))
 	body := []string{
-		mutedStyle.Render(fmt.Sprintf("%d panel(s) folded away: idle, or exited cleanly.", it.quiet)),
+		mutedStyle.Render(fmt.Sprintf(m.tr("fold.count", "%d panel(s) folded away: idle, or exited cleanly."), it.quiet)),
 		"",
-		mutedStyle.Render("Nothing here is asking for anything. Favourites, pins,"),
-		mutedStyle.Render("marked panels and the card under the cursor are never"),
-		mutedStyle.Render("folded, so the fold can never hide what you are on."),
+		mutedStyle.Render(m.tr("fold.note.1", "Nothing here is asking for anything. Favourites, pins,")),
+		mutedStyle.Render(m.tr("fold.note.2", "marked panels and the card under the cursor are never")),
+		mutedStyle.Render(m.tr("fold.note.3", "folded, so the fold can never hide what you are on.")),
 		"",
 		legend("enter", m.foldVerb(it.parent)),
 	}
@@ -1096,7 +1096,7 @@ func (m model) renderGroupPreview(it dashItem, width int) string {
 	rule := mutedStyle.Render(strings.Repeat("─", width))
 
 	roster := make([]string, 0, len(it.members)+1)
-	roster = append(roster, mutedStyle.Render(spaced("PANELS")))
+	roster = append(roster, mutedStyle.Render(spaced(m.tr("preview.panels", "PANELS"))))
 	for _, p := range it.members {
 		info := stateInfoFor(p)
 		led := lipgloss.NewStyle().Foreground(info.color).Render(info.led)

@@ -7,6 +7,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
+
+	"github.com/cmj0121/baton/internal/i18n"
 )
 
 // TestPanelConfigRowsAlign pins the one thing the page's layout promises: the
@@ -50,5 +52,51 @@ func TestPanelConfigRowsAlign(t *testing.T) {
 			t.Fatalf("cursor %d: the value starts at column %d, on top of a label ending at %d — the padding was applied to the styled string",
 				cursor, valueStart, labelEnd)
 		}
+	}
+}
+
+// TestPanelConfigColumnsAlignInEveryLanguage: the label column is padded to a
+// fixed number of DISPLAY CELLS, so the values line up whatever language the page
+// is drawn in.
+//
+// It is the CJK half of the test above, and it catches the opposite mistake. Go's
+// %-16s pads to sixteen RUNES, which is right for "default shell" and two cells
+// short for every Chinese character in "預設 shell" — so a page that lines up
+// perfectly in English comes out ragged in zh-TW, and every assertion written in
+// English keeps passing while it does.
+func TestPanelConfigColumnsAlignInEveryLanguage(t *testing.T) {
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(prev)
+
+	m := baseModel()
+	m.mode = modePanelConfig
+	m.lang = i18n.ZhTW
+	m.shellPath = "/bin/zsh"
+
+	// Two rows whose labels differ in width: "預設 shell" is 14 cells over 9 runes,
+	// "重播緩衝區" is 10 cells over 5. Padded by rune count they land three cells
+	// apart; padded by display width they land on the same column.
+	cols := map[string]int{}
+	for _, line := range strings.Split(ansi.Strip(m.panelConfigView()), "\n") {
+		for label, value := range map[string]string{"預設 shell": "/bin/zsh", "重播緩衝區": "預設"} {
+			at := strings.Index(line, label)
+			if at < 0 {
+				continue
+			}
+			rest := line[at+len(label):]
+			off := strings.Index(rest, value)
+			if off < 0 {
+				continue
+			}
+			// Display cells, not bytes: the label ahead of the value is CJK.
+			cols[label] = lipgloss.Width(line[:at+len(label)+off])
+		}
+	}
+	if len(cols) != 2 {
+		t.Fatalf("expected both rows on the page, found %v", cols)
+	}
+	if cols["預設 shell"] != cols["重播緩衝區"] {
+		t.Errorf("the value column moved with the label's width: %v — the padding counted runes, not cells", cols)
 	}
 }

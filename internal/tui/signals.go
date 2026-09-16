@@ -22,7 +22,7 @@ func signalRows() int { return len(signals.Choices) + 1 }
 // there is nothing live to target.
 func (m model) openSignalPicker(from mode, ids []string, scope string) model {
 	if len(ids) == 0 {
-		m.status = "no live panel to signal"
+		m.status = m.tr("status.no-live-panel-signal", "no live panel to signal")
 		return m
 	}
 	m.signalFrom = from
@@ -30,7 +30,7 @@ func (m model) openSignalPicker(from mode, ids []string, scope string) model {
 	m.signalScope = scope
 	m.signalCursor = 0
 	m.mode = modeSignal
-	m.status = "send signal to " + scope + " · pick one · esc cancels"
+	m.status = m.tr("status.send-signal", "send signal to ") + scope + " · pick one · esc cancels"
 	return m
 }
 
@@ -43,7 +43,7 @@ func (m model) handleSignalKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "esc":
 		m.mode = m.signalFrom
-		m.status = "signal cancelled"
+		m.status = m.tr("status.signal-cancelled", "signal cancelled")
 		return m, nil
 	// Cursor nav is arrows only — j/k are free for nothing here, but a letter like
 	// k is a signal hotkey (SIGKILL), so the hotkeys must own the whole alphabet.
@@ -74,7 +74,7 @@ func (m model) handleSignalKey(key string) (tea.Model, tea.Cmd) {
 func (m model) sendSignal(name string) model {
 	m.sendf(proto.Command{Action: "panel.signal", IDs: m.signalTargets, Signal: name})
 	m.mode = m.signalFrom
-	m.status = fmt.Sprintf("sent %s to %s", name, m.signalScope)
+	m.status = fmt.Sprintf(m.tr("status.sent-s-s", "sent %s to %s"), name, m.signalScope)
 	return m
 }
 
@@ -84,7 +84,7 @@ func (m model) sendSignal(name string) model {
 func (m model) openOtherSignal() model {
 	m.input = inputSignalName
 	m.inputBuf = ""
-	m.status = "signal name or number (e.g. WINCH, TSTP, 28) · enter sends"
+	m.status = m.tr("status.signal-name-or-number", "signal name or number (e.g. WINCH, TSTP, 28) · enter sends")
 	return m
 }
 
@@ -93,7 +93,7 @@ func (m model) openOtherSignal() model {
 func (m model) commitOtherSignal(token string) (tea.Model, tea.Cmd) {
 	if !signals.Valid(token) {
 		m.input = inputSignalName // reopen on the bad entry
-		m.status = fmt.Sprintf("unknown signal %q · try a name or number", token)
+		m.status = fmt.Sprintf(m.tr("signal.unknown", "unknown signal %q · try a name or number"), token)
 		return m, nil
 	}
 	return m.sendSignal(token), nil
@@ -114,19 +114,23 @@ func (m model) signalPickerView() string {
 	}
 
 	rows := []string{
-		sectionStyle.Render(spaced("SEND SIGNAL")),
+		sectionStyle.Render(spaced(m.tr("input.signal.title", "SEND SIGNAL"))),
 		"",
-		mutedStyle.Render("to " + m.signalScope),
+		mutedStyle.Render(m.tr("signal.to", "to") + " " + m.signalScope),
 		"",
 	}
 	for i, s := range signals.Choices {
-		rows = append(rows, caret(m.signalCursor == i)+keyCol.Render(kc(s.Key))+nameStyle.Render(s.Name)+mutedStyle.Render(s.Desc))
+		// The wire name is the signal, and it is the word `kill` takes: it is never
+		// translated. The gloss beside it is prose, keyed by that same wire name so
+		// the catalog and the table cannot drift apart on an order change.
+		desc := m.tr("signal.desc."+s.Name, s.Desc)
+		rows = append(rows, caret(m.signalCursor == i)+keyCol.Render(kc(s.Key))+nameStyle.Render(s.Name)+mutedStyle.Render(desc))
 	}
 	otherSel := m.signalCursor >= len(signals.Choices)
-	rows = append(rows, caret(otherSel)+keyCol.Render(kc(otherSignalKey))+nameStyle.Render("other…")+mutedStyle.Render("any name or number"))
+	rows = append(rows, caret(otherSel)+keyCol.Render(kc(otherSignalKey))+nameStyle.Render(m.tr("signal.other", "other…"))+mutedStyle.Render(m.tr("signal.other.desc", "any name or number")))
 
 	rows = append(rows, "",
-		mutedStyle.Render("delivered to the panel's process group · "+keyLabel(m.effPrefix())+" R reloads baton"),
-		"", legend("↑↓", "move", "enter", "send", "esc", "cancel"))
+		mutedStyle.Render(fmt.Sprintf(m.tr("signal.hint", "delivered to the panel's process group · %s R reloads baton"), keyLabel(m.effPrefix()))),
+		"", legend("↑↓", m.tr("legend.move", "move"), "enter", m.tr("legend.send", "send"), "esc", m.tr("legend.cancel", "cancel")))
 	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
