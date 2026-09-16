@@ -168,11 +168,14 @@ var zhTW = map[string]string{
 	"usage.view.tokens":      "token",
 	"usage.view.of-5h":       "占 5h",
 
-	// The vendor roll: which agent backends this machine has, and which of them
-	// baton can account for.
-	"usage.view.agent":         "代理",
-	"usage.view.accounting":    "baton 能讀到的用量",
-	"usage.view.nothing-spent": "本窗口尚無消耗",
+	// The vendor roll: which agent backends this machine has, what is left of the
+	// windows baton holds a quota for, and what the fleet's panels have spent.
+	"usage.view.agent":        "代理",
+	"usage.view.session-left": "剩餘 5h",
+	"usage.view.week-left":    "剩餘 7d",
+	"usage.view.panels":       "面板用量",
+	"usage.view.panels-one":   "個面板",
+	"usage.view.panels-many":  "個面板",
 
 	// The working-directory features.
 	"panel.here.unknown": "那個面板的目錄不明;改在預設工作目錄開啟",

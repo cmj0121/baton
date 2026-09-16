@@ -128,6 +128,14 @@ func (m model) usageView() string {
 // whole point of the section: "baton cannot see grok's usage" and "grok has used
 // nothing" are opposite claims, and a row that drew an empty bar would make the
 // second one for free.
+//
+// A vendor baton CAN read gets three columns, and they come from two places.
+// What is left of the five-hour window and what is left of the week belong to the
+// account whose books the limits reading describes, and to no other vendor. What
+// the fleet's panels have spent on this agent is baton's own attribution, and
+// every readable vendor has it. So a row carrying the third column and neither of
+// the first two is not a row with holes in it — it is grok, which publishes no
+// ceiling for anybody to count down from.
 func (m model) usageVendorSection() []string {
 	if m.usageInfo == nil || len(m.usageInfo.Vendors) == 0 {
 		// Nil is an older daemon, which never said. Drawing a header over nothing
@@ -136,11 +144,20 @@ func (m model) usageVendorSection() []string {
 	}
 	tr := func(k, def string) string { return i18n.T(m.effLang(), k, def) }
 	def := m.effDefaultAgent()
+	spend := m.panelSpendByAgent()
+
+	var fiveHour, sevenDay *proto.LimitWindow
+	if lim := m.usageLimits(); lim != nil {
+		fiveHour, sevenDay = lim.FiveHour, lim.SevenDay
+	}
 
 	// The two leading spaces stand in for the mark every row below carries, so the
 	// header's columns line up with theirs.
-	rows := []string{mutedStyle.Render(fmt.Sprintf("  %-14s %s",
-		tr("usage.view.agent", "Agent"), tr("usage.view.accounting", "usage baton can account for")))}
+	rows := []string{mutedStyle.Render(fmt.Sprintf("  %-*s %-*s %-*s %s",
+		vendorNameWidth, tr("usage.view.agent", "Agent"),
+		vendorQuotaWidth, tr("usage.view.session-left", "5h left"),
+		vendorQuotaWidth, tr("usage.view.week-left", "7d left"),
+		tr("usage.view.panels", "panels")))}
 	for _, v := range m.usageInfo.Vendors {
 		name := v.Vendor
 		if v.Vendor == def {
@@ -148,11 +165,115 @@ func (m model) usageVendorSection() []string {
 			// which agent the headline number belongs to.
 			name += " *"
 		}
-		rows = append(rows, fmt.Sprintf("%s%-14s %s",
-			lipgloss.NewStyle().Foreground(m.vendorMarkColor(v)).Render(vendorMark(v)),
-			truncate(name, 14), m.vendorStanding(v)))
+		mark := lipgloss.NewStyle().Foreground(m.vendorMarkColor(v)).Render(vendorMark(v))
+		if v.State != vendorReading {
+			// No figure, so no columns: three dashes under three headers would read as
+			// three separate findings when the truth about the row is one sentence.
+			rows = append(rows, mark+pad(name, vendorNameWidth)+" "+mutedStyle.Render(m.vendorReasonText(v)))
+			continue
+		}
+		rows = append(rows, mark+pad(name, vendorNameWidth)+" "+
+			m.vendorQuotaCell(v.Vendor, fiveHour)+" "+
+			m.vendorQuotaCell(v.Vendor, sevenDay)+" "+
+			m.vendorPanelCell(spend[v.Vendor]))
 	}
 	return rows
+}
+
+// The vendor roll's column widths. The name is the widest agent name plus the
+// default's mark; a quota cell holds "100% · 2:14:31" and nothing longer, because
+// FormatCountdown collapses anything past a day to "3d4h".
+const (
+	vendorNameWidth  = 12
+	vendorQuotaWidth = 14
+)
+
+// pad lays out one cell at a fixed width, truncating what will not fit.
+//
+// It exists because fmt counts what lipgloss renders rather than what a terminal
+// shows: a styled cell carries escape sequences, every one of them counts against
+// a %-14s, and the column pads short by exactly the length of the colour. So text
+// is padded here, before anything styles it, and only the last cell in a row —
+// which has no column after it to push out of line — is styled directly.
+func pad(s string, w int) string { return fmt.Sprintf("%-*s", w, truncate(s, w)) }
+
+// vendorQuotaCell is one window's REMAINING share for one vendor, with the
+// countdown to its reset — "62% · 2:14:31" — or a dash where baton holds no quota
+// reading that belongs to this vendor.
+//
+// Remaining rather than spent, and that is not the same choice the bars above
+// made. A bar is a shape you compare against the bar below it; a cell in a row of
+// three is read once, for a decision about whether to start another agent here,
+// and "what is left" is the form that answer comes in.
+//
+// The vendor argument is the whole guard. A quota is the vendor's own statement
+// about its own account, and the only such statement baton holds arrives from the
+// Claude Code status line or the Anthropic OAuth endpoint — both of them that one
+// account's books. Lending the number to grok's row would publish a ceiling grok
+// has never named, which is the failure the rest of this file is built to avoid.
+func (m model) vendorQuotaCell(vendor string, w *proto.LimitWindow) string {
+	if vendor != usage.LimitsVendor || w == nil {
+		return mutedStyle.Render(pad("—", vendorQuotaWidth))
+	}
+	cell := fmt.Sprintf("%.0f%%", (1-limitFraction(w))*100)
+	if left, ok := limitCountdown(w, m.now); ok {
+		cell = joinDot(cell, usage.FormatCountdown(left))
+	}
+	return pad(cell, vendorQuotaWidth)
+}
+
+// vendorPanelCell is the third column: what the panels the fleet is running on
+// this agent have spent this window, and how many of them there are.
+//
+// Nothing attributed is a dash rather than "0 tok". An agent baton has no panels
+// for has not been shown to be idle — somebody may be running it in another
+// terminal, and the vendor's own reader would see that while this column cannot.
+func (m model) vendorPanelCell(s agentSpend) string {
+	if s.panels == 0 {
+		return mutedStyle.Render("—")
+	}
+	unit := m.tr("usage.view.panels-many", "panels")
+	if s.panels == 1 {
+		unit = m.tr("usage.view.panels-one", "panel")
+	}
+	return joinDot(humanTokens(s.tokens), fmt.Sprintf("%d %s", s.panels, unit))
+}
+
+// agentSpend is what the panels on one agent have spent this window: baton's own
+// attribution, which is a different measurement from the vendor's books and not
+// interchangeable with them. The vendor reader scans everything on the machine,
+// including sessions nobody spawned from here; this counts only what the fleet
+// can name.
+type agentSpend struct {
+	tokens int64
+	panels int
+}
+
+// panelSpendByAgent groups the per-panel usage by the agent profile each panel
+// was spawned from.
+//
+// A panel with no profile is attributed to nobody rather than charged to the
+// fleet default. The default is what a profile-less panel WOULD have run had it
+// been spawned today, which is not evidence about what it actually ran — and the
+// cost of guessing is somebody else's tokens sitting under a name, in the one
+// column of this row that baton is the sole author of.
+func (m model) panelSpendByAgent() map[string]agentSpend {
+	info := m.usageInfo
+	if info == nil || len(info.Panels) == 0 {
+		return nil
+	}
+	out := make(map[string]agentSpend, len(info.Vendors))
+	for id, pu := range info.Panels {
+		p, ok := m.fleetPanel(id)
+		if !ok || p.Profile == "" {
+			continue
+		}
+		s := out[p.Profile]
+		s.tokens += pu.Tokens
+		s.panels++
+		out[p.Profile] = s
+	}
+	return out
 }
 
 // vendorMark is the glyph in front of a vendor's row. The three states get three
@@ -183,24 +304,6 @@ func (m model) vendorMarkColor(v proto.VendorUsage) lipgloss.Color {
 	default:
 		return colAmber
 	}
-}
-
-// vendorStanding is the right-hand column: the figure when there is one, the
-// reason when there is not.
-func (m model) vendorStanding(v proto.VendorUsage) string {
-	if v.State != vendorReading {
-		return mutedStyle.Render(m.vendorReasonText(v))
-	}
-	text := usage.FormatTotals(v.Tokens, v.CostUSD)
-	if text == "" {
-		// A reading of nothing. It is a real zero — baton looked — and it has to read
-		// as one rather than as a blank, which is what every other state looks like.
-		return mutedStyle.Render(i18n.T(m.effLang(), "usage.view.nothing-spent", "nothing spent this window"))
-	}
-	if left := m.vendorCountdown(v); left != "" {
-		text = joinDot(text, i18n.T(m.effLang(), "usage.view.resets", "resets")+" "+left)
-	}
-	return text
 }
 
 // usageHeader names the overlay and says where the reading came from and how old
