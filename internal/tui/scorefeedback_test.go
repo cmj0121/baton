@@ -197,3 +197,49 @@ func TestThePageHintSaysWhatTheSwitchDoesNotDo(t *testing.T) {
 		t.Errorf("hint = %q; want it to say the switch stops the telling and not the submitting", hint)
 	}
 }
+
+// TestSaveDoesNotPinTheFleetSwitch: an unrelated save must not stamp
+// score.feedback into the config.
+//
+// It is the language's lesson applied to the switch beside it, and this one was
+// shipped before it was learned again. Written on every save, the first bell
+// toggle or rebind put `feedback: true` in the file — the right value, and a
+// stamp nobody asked for, which would pin that fleet to today's default for good
+// if the default ever moved. saveConfig's own rule is that only what the user
+// changed from the default is written.
+func TestSaveDoesNotPinTheFleetSwitch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	m := baseModel()
+	m.scoreFeedback = true // the default, untouched
+	m.bellEnabled = true   // the user toggles something else entirely
+	if err := m.saveConfig(); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if cfg.Score.Feedback != nil {
+		t.Errorf("an unrelated save wrote score.feedback = %v", *cfg.Score.Feedback)
+	}
+
+	// Thrown on purpose, it is written — including back to the value that happens
+	// to be the default, since by then it is an answer and not an absence.
+	m = m.toggleFleetFeedback()
+	if cfg, err = config.Load(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if cfg.Score.Feedback == nil || *cfg.Score.Feedback {
+		t.Fatalf("throwing the switch should have written feedback: false, got %v", cfg.Score.Feedback)
+	}
+	if m = m.toggleFleetFeedback(); !m.scoreFeedback {
+		t.Fatal("the switch should be back on")
+	}
+	if cfg, err = config.Load(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if cfg.Score.Feedback == nil || !*cfg.Score.Feedback {
+		t.Errorf("throwing it back should have written feedback: true, got %v", cfg.Score.Feedback)
+	}
+}

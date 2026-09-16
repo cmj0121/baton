@@ -509,11 +509,23 @@ func (m model) saveConfig() error {
 	out.Panel.Agents = m.agents // round-trip the user's profiles so a save never drops them
 	out.Panel.ReplayKB = m.replayKB
 	out.Panel.Limits = m.limits
-	// The fleet's score-feedback switch is editable on the panel-config page, so
-	// it is written like any other cockpit-owned setting. The rest of the score
-	// block — the directory, the caps, the ranking weights — stays as it was on
-	// disk, because those are hand-edited and the cockpit does not own them.
-	out.Score.Feedback = &m.scoreFeedback
+	// The fleet's score-feedback switch is written ONLY when the user threw it,
+	// never as a side effect of an unrelated save — the same rule as the language
+	// two blocks up, and for the same reason this function's own comment gives:
+	// only what has been changed from the default is written, so a later change to
+	// that default flows through instead of being masked by a stale value.
+	//
+	// Written unconditionally it stamped `feedback: true` into the file the first
+	// time anyone toggled the bell or rebound a key. The value was right and the
+	// stamp was not: the fleet would have been pinned to today's default for good,
+	// by a line nobody asked for.
+	//
+	// Unset, `out` keeps whatever was on disk — so a user who did throw it keeps
+	// their answer, and the rest of the score block (the directory, the caps, the
+	// ranking weights, all hand-edited) is round-tripped untouched.
+	if m.feedbackChosen {
+		out.Score.Feedback = &m.scoreFeedback
+	}
 	out.Panel.DiffCommand = m.diffCommand
 	out.TUI = config.TUIConfig{} // the cockpit appearance lives in TUI.yaml, never the main config
 	return out.Save()

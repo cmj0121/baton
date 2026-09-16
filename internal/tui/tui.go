@@ -173,6 +173,13 @@ type model struct {
 	// which is the only thing that may write settings.language. See saveConfig.
 	langChosen bool
 
+	// feedbackChosen records that the user threw the fleet's score-feedback
+	// switch on the panel-config page, which is the only thing that may write
+	// score.feedback. It is langChosen's twin and exists for the same reason —
+	// see saveConfig, and the comment above it about writing only what has been
+	// changed from the default.
+	feedbackChosen bool
+
 	// keyTimeout is settings.key-timeout: how long a landing waits, carrying
 	// neverKeyTimeout for a configured 0 so a zero-valued model still reads as
 	// "unset" and takes the default.

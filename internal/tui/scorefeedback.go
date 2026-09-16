@@ -75,6 +75,7 @@ func (m model) feedbackSection(row func(idx int, label, value string)) []string 
 // not overridden it inherits — and persists it.
 func (m model) toggleFleetFeedback() model {
 	m.scoreFeedback = !m.scoreFeedback
+	m.feedbackChosen = true // now it is a choice, and worth persisting
 	if err := m.saveConfig(); err != nil {
 		m.status = m.tr("status.save-failed", "save failed: ") + err.Error()
 		return m
