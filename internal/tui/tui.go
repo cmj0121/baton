@@ -1169,9 +1169,17 @@ func (m *model) ageStatus() {
 
 // restingStatus is the footer's quiet, default line — where the status settles
 // between actions.
+//
+// It is the endpoint and nothing else. The cap this is drawn on is already the
+// connection indicator: the dot is green while the backend answers and red when
+// it does not, and the outage cap says so in words when it matters. "attached"
+// beside it restated in a word what the colour had said in no space at all, on
+// the one row of the cockpit that runs out of room first — and it was the most
+// expensive word in the strip in zh-TW, where it is three characters and a
+// separator before the endpoint gets a look in.
 func (m model) restingStatus() string {
 	if m.endpoint != "" {
-		return m.tr("status.attached", "attached · ") + m.endpoint
+		return m.endpoint
 	}
 	return m.tr("mode.dashboard.status", "dashboard")
 }
@@ -1193,7 +1201,7 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		if sm.Version != proto.ProtocolVersion {
 			m.status = m.tr("status.error-server-speaks", "error: server speaks ") + sm.Version + ", client " + proto.ProtocolVersion
 		} else {
-			m.status = m.tr("status.attached", "attached · ") + m.endpoint
+			m.status = m.restingStatus()
 		}
 	case "goodbye":
 		// The server is dropping this cockpit on purpose and said why — a kick, or

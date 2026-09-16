@@ -644,7 +644,6 @@ var zhTW = map[string]string{
 	"status.purging-d-exited-panel":          "正在清除 %d 個已結束的面板",
 	"status.error-backend-down":              "錯誤:後端已中斷 — ",
 	"status.error-server-speaks":             "錯誤:server 使用的協定是 ",
-	"status.attached":                        "已連上 · ",
 	"status.disconnected":                    "已斷線:",
 	"status.error":                           "錯誤:",
 	"status.rebind-cancelled":                "已取消重新綁定",

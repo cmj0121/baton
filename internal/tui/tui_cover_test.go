@@ -124,8 +124,11 @@ func TestSmallHelpers(t *testing.T) {
 func TestApplyEventBranches(t *testing.T) {
 	m := &model{endpoint: "local"}
 	m.applyEvent(proto.ServerMsg{Type: "welcome", Version: proto.ProtocolVersion})
-	if !strings.Contains(m.status, "attached · local") {
-		t.Fatalf("welcome status = %q", m.status)
+	if m.status != "local" {
+		// The endpoint alone: the cap it is drawn on is already the connection
+		// indicator, so the word "attached" beside it was the strip's most
+		// expensive restatement of a colour.
+		t.Fatalf("welcome status = %q, want the endpoint alone", m.status)
 	}
 	m.applyEvent(proto.ServerMsg{Type: "welcome", Version: "baton/999"})
 	if !strings.HasPrefix(m.status, "error") {
