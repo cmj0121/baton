@@ -75,6 +75,17 @@ panel:
       score-feedback: false # …except this one
 ```
 
+**Every panel may submit, and `score.submit` has never been fenced.** What an agent needs is to be TOLD, and there are
+two ways it is. An agent panel is launched pointing at an MCP config baton writes in its own directory
+(`~/.baton/agent-mcp.json`), carrying `score_submit` and nothing else — so the invitation sits in the agent's tool list
+on every turn, costing it no turn to learn. A dispatched brief carries the sentence as well, which is what reaches an
+agent whose runtime speaks no MCP.
+
+The config is baton's own and never lands in your repository — a worker panel runs in your working tree, where a
+dotfile baton wrote would show up in `git status`. It carries only the memory's write tool: the full table drives the
+fleet (spawn, close, signal) and that is the conductor's job. Turn it off with `panel.agent-mcp: false`, or on the
+panel-config page's DEFAULTS tab; it is read at spawn, so it decides what the NEXT agent panel starts with.
+
 **From the cockpit, without editing the file:** `C-t P` opens panel config; `←→` walks its tabs to **FEEDBACK**. The
 first row is the fleet's own `score.feedback`, which `e` toggles; under it sits one row per configured profile —
 `↑↓` to move, `e` to cycle that profile through `inherit → on → off → inherit`. The

@@ -332,6 +332,7 @@ type prefs struct {
 	defaultAgent      string                         // agent profile the new-agent action spawns
 	agents            map[string]config.AgentProfile // user-configured agent profiles
 	scoreFeedback     bool                           // score.feedback: the fleet's answer, which a profile with no score-feedback of its own inherits
+	agentMCP          bool                           // panel.agent-mcp: agent panels launch pointing at baton's own MCP config
 	replayKB          int                            // per-panel replay buffer in KiB (0 = server default)
 	limits            limits.Limits                  // fleet-wide resource caps for new panels
 	diffCommand       string                         // explicit diff command for the agent diff pop-up ("" = git diff.tool then a built-in diff)
@@ -416,6 +417,7 @@ func prefsFromConfig(cfg config.Config) prefs {
 	// of them an inheriting profile is inheriting. saveConfig starts from the
 	// on-disk config, so score.feedback survives every save untouched.
 	p.scoreFeedback = cfg.Score.FeedbackIsOn()
+	p.agentMCP = cfg.Panel.AgentMCPIsOn()
 	p.replayKB = cfg.Panel.ReplayKB
 	p.limits = cfg.Panel.Limits
 	p.diffCommand = cfg.Panel.DiffCommand
@@ -525,6 +527,10 @@ func (m model) saveConfig() error {
 	// ranking weights, all hand-edited) is round-tripped untouched.
 	if m.feedbackChosen {
 		out.Score.Feedback = &m.scoreFeedback
+	}
+	// Same rule, same reason: written only when the switch was thrown.
+	if m.agentMCPSet {
+		out.Panel.AgentMCP = &m.agentMCP
 	}
 	out.Panel.DiffCommand = m.diffCommand
 	out.TUI = config.TUIConfig{} // the cockpit appearance lives in TUI.yaml, never the main config

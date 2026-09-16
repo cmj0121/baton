@@ -5,13 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/cmj0121/baton/internal/agents"
 	"github.com/cmj0121/baton/internal/panel"
+	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/ptymgr"
 	"github.com/cmj0121/baton/internal/score"
@@ -1844,4 +1847,68 @@ func editorCommand(configured, path string) (string, []string) {
 		ed = "vi"
 	}
 	return "sh", []string{"-c", ed + ` "$0"`, path}
+}
+
+// agentMCPArgs is what an agent panel's command line gains so the agent can see
+// the fleet memory's write tool: the flag that backend takes for an extra MCP
+// config, and the path of the one baton writes.
+//
+// Empty for three reasons, each of which leaves the spawn exactly as it was:
+// panel.agent-mcp is off, the backend is one baton has not been taught to tell
+// (see agents.MCPConfigArgs), or the config could not be written. The last is a
+// deliberate non-error: an agent that starts without its memory tool is a working
+// agent, and refusing to spawn one over a file baton wanted to write in its own
+// directory would be the cure doing more harm than the disease.
+func (s *Server) agentMCPArgs(command string) []string {
+	if !s.agentMCP {
+		return nil
+	}
+	if agents.MCPConfigArgs(command, "probe") == nil {
+		return nil // this backend takes no such flag; do not write a file for nobody
+	}
+	path, err := writeAgentMCPConfig()
+	if err != nil {
+		log.Debug().Err(err).Msg("agent mcp config not written; spawning without it")
+		return nil
+	}
+	return agents.MCPConfigArgs(command, path)
+}
+
+// writeAgentMCPConfig writes the MCP config worker panels load, in baton's own
+// directory, and returns its path.
+//
+// In BATON's directory and never the panel's, which is the whole reason this is
+// a file baton owns rather than the .mcp.json the conductor gets. A conductor
+// runs in a workspace baton made and may litter it; a worker panel runs in the
+// operator's repository, where baton writing a dotfile would show up in their
+// `git status` and, sooner or later, in a commit.
+//
+// It is rewritten on every spawn rather than once at boot, because the path it
+// names is this binary — and after an upgrade the old path may be gone.
+func writeAgentMCPConfig() (string, error) {
+	bin := "baton"
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		bin = exe
+	}
+	cfg := map[string]any{
+		"mcpServers": map[string]any{
+			"baton": map[string]any{
+				"command": bin,
+				"args":    []string{"mcp", "--score-only"},
+			},
+		},
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	dir := paths.Expand("~/.baton")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "agent-mcp.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
 }

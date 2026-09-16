@@ -55,6 +55,37 @@ func New(version string) *Server {
 	return s
 }
 
+// NewScore builds a server carrying the fleet memory's write tool and nothing
+// else. It is what an ORDINARY agent panel loads.
+//
+// The full table drives the fleet — spawn, close, signal, dispatch — and that is
+// the conductor's job, not a worker's. A worker panel is given the one verb the
+// memory needs from it, which is the whole reason it is given a server at all:
+// score.submit is open to every panel already (the daemon has never fenced it),
+// but a panel that is never TOLD does not submit, and a tool in the list is the
+// only way to say so that costs the agent nothing. The alternative is a sentence
+// in a brief, which reaches an agent only when someone dispatches to it.
+//
+// The conductor's three corrections are absent for the same reason the fleet
+// verbs are: the daemon refuses them to any connection that is not the
+// conductor's, so on a worker they would be three tools that exist to say no.
+func NewScore(version string) *Server {
+	s := New(version)
+	s.tools = scoreTools(s.tools)
+	return s
+}
+
+// scoreTools narrows a table to the memory's write tool.
+func scoreTools(all []tool) []tool {
+	out := make([]tool, 0, 1)
+	for _, t := range all {
+		if t.name == "score_submit" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // Serve runs the JSON-RPC loop until in reaches EOF. Requests get a response;
 // notifications (no id) are handled for their side effects and answered with
 // nothing, per JSON-RPC.

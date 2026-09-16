@@ -169,7 +169,7 @@ func TestPanelConfigViewScrollsToEveryRow(t *testing.T) {
 	m := newLimitsModel(t)
 	m.height = 16 // leaves a three-line window, so a wrong anchor clips the selection
 
-	labels := []string{"default shell", "default agent", "replay buffer"}
+	labels := []string{"default shell", "default agent", "replay buffer", "agent mcp"}
 	for _, f := range limitFields {
 		labels = append(labels, f.label)
 	}
@@ -345,9 +345,11 @@ func TestPanelConfigEditsOnlyWhatIsOnScreen(t *testing.T) {
 					if !strings.Contains(next.status, "score feedback") {
 						t.Errorf("tab %d row %d: e said %q", tab, row, next.status)
 					}
-				default: // the defaults tab: a text overlay or the agent picker
-					if next.input == inputNone && next.mode != modeAgentPick {
-						t.Errorf("tab %d row %d: e did nothing (%q)", tab, row, next.status)
+				default:
+					// The defaults tab: a text overlay, the agent picker, or — for the
+					// one toggle among them — a status line saying what it just did.
+					if next.input == inputNone && next.mode != modeAgentPick && next.status == "" {
+						t.Errorf("tab %d row %d: e did nothing", tab, row)
 					}
 				}
 			}

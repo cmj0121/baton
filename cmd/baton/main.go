@@ -29,6 +29,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -82,7 +83,9 @@ func main() {
 		os.Exit(ctlMain(os.Args[2:]))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "mcp" {
-		os.Exit(mcpMain())
+		// --score-only is what an ordinary agent panel's config passes; the
+		// conductor's passes nothing and gets the whole table.
+		os.Exit(mcpMain(slices.Contains(os.Args[2:], "--score-only")))
 	}
 	// `baton usage-sink` is the status line baton hands to the Claude Code panels
 	// it launches, so it runs once per render of every panel in the fleet. It is
@@ -645,6 +648,7 @@ func buildServerOptions(rc reloadable, stateF string) []server.Option {
 		server.WithLimits(rc.settings.Limits, rc.settings.AgentLimits),
 		server.WithLogging(rc.settings.LogDir, rc.settings.AgentLogDir, rc.settings.AgentLog, rc.settings.LogMaxBytes),
 		server.WithScoreFeedback(rc.settings.ScoreFeedback, rc.settings.AgentScoreFeedback),
+		server.WithAgentMCP(rc.settings.AgentMCP),
 		server.WithStateFile(stateF),
 		server.WithQueue(rc.settings.QueueMax, rc.settings.QueueConcurrency),
 	}
@@ -1622,6 +1626,7 @@ func reloadableSettings(cfg config.Config) reloadable {
 	}}
 	rc.settings.LogDir, rc.settings.AgentLogDir, rc.settings.AgentLog = logPolicy(cfg)
 	rc.settings.ScoreFeedback, rc.settings.AgentScoreFeedback = feedbackPolicy(cfg)
+	rc.settings.AgentMCP = cfg.Panel.AgentMCPIsOn()
 	rc.settings.LogMaxBytes = panellog.MaxBytes(cfg.Panel.LogMaxMB)
 	rc.settings.Restart, rc.settings.AgentRestart = restartPolicies(cfg)
 	rc.settings.Attention, rc.settings.AgentAttention = attentionPolicies(cfg)

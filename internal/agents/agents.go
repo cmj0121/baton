@@ -17,6 +17,7 @@ package agents
 
 import (
 	"os/exec"
+	"path/filepath"
 	"sort"
 )
 
@@ -33,6 +34,29 @@ type Backend struct {
 	Args     []string // arguments passed on every spawn; empty for every preset
 	Isolated bool     // the command runs inside a container image, so the host's PATH cannot answer for it
 	Homepage string   // where to get it, for a preset the machine does not have; empty on a user profile
+}
+
+// MCPConfigArgs is how a backend is told to load one extra MCP server, given the
+// path of a config file — or nil when baton does not know how to tell it.
+//
+// It resolves on the COMMAND rather than on the profile name, because a user's
+// own panel.agents entry replaces the preset of the same name entirely: someone
+// who writes `reviewer: {command: claude, args: [--print]}` is still running
+// Claude Code, and would otherwise lose this for having named it something else.
+//
+// Only Claude Code is here, and the rest return nil rather than a guess. A flag
+// invented for a CLI that does not take it is not a missing feature, it is a
+// panel that fails to spawn — so a backend baton has not been taught about
+// simply starts as it always did.
+func MCPConfigArgs(command, path string) []string {
+	if path == "" {
+		return nil
+	}
+	switch filepath.Base(command) {
+	case "claude":
+		return []string{"--mcp-config", path}
+	}
+	return nil
 }
 
 // Scanned is one catalogue entry with this machine's verdict on it: the backend,

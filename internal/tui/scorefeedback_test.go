@@ -243,3 +243,44 @@ func TestSaveDoesNotPinTheFleetSwitch(t *testing.T) {
 		t.Errorf("throwing it back should have written feedback: true, got %v", cfg.Score.Feedback)
 	}
 }
+
+// TestAgentMCPTogglePersistsOnlyWhenThrown: the panel-config switch writes
+// panel.agent-mcp when someone throws it, and an unrelated save leaves it alone.
+//
+// It is the third field in this file to need the rule and the second to be
+// written after learning it the hard way — see TestSaveDoesNotPinTheFleetSwitch.
+func TestAgentMCPTogglePersistsOnlyWhenThrown(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	m := baseModel()
+	m.agentMCP = true // the default, untouched
+	if err := m.saveConfig(); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Panel.AgentMCP != nil {
+		t.Errorf("an unrelated save wrote panel.agent-mcp = %v", *cfg.Panel.AgentMCP)
+	}
+
+	m = m.toggleAgentMCP()
+	if m.agentMCP {
+		t.Error("the switch should be off")
+	}
+	if cfg, err = config.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Panel.AgentMCP == nil || *cfg.Panel.AgentMCP {
+		t.Fatalf("throwing it should have written agent-mcp: false, got %v", cfg.Panel.AgentMCP)
+	}
+	if cfg.Panel.AgentMCPIsOn() {
+		t.Error("an explicit false should read as off")
+	}
+	// It takes effect at spawn, so the status says when — a switch that appears to
+	// do nothing to the panels on screen is worse than one that says why.
+	if !strings.Contains(m.status, "next agent panel") {
+		t.Errorf("the status should say when it applies, got %q", m.status)
+	}
+}
