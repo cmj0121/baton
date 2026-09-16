@@ -293,26 +293,37 @@ func TestPanelConfigEditsOnlyWhatIsOnScreen(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	t.Run("an empty tab refuses", func(t *testing.T) {
-		m := baseModel() // no agent profiles: the feedback tab holds nothing
+		// No tab the page ships with is empty any more — the feedback tab leads with
+		// the fleet's own switch — so the case is driven through a tab emptied on
+		// purpose. It is the state the guard exists for, and one a future tab (or a
+		// profile list that can vanish under a reload) can still arrive in.
+		m := baseModel()
 		m = press(m, "ctrl+t", "P")
-		m = press(m, "right", "right")
-		if m.panelTab != 2 {
-			t.Fatalf("→→ should reach the feedback tab, got %d", m.panelTab)
-		}
-		first, _ := m.panelTabRange()
-		if m.cursor != first {
-			t.Errorf("the cursor should park on the empty tab at %d, got %d", first, m.cursor)
-		}
-		m.clampCursor() // a snapshot, a resize — anything that re-clamps
-		if m.cursor != first {
-			t.Errorf("the clamp pulled the cursor off the tab to %d", m.cursor)
-		}
+		m.panelTab = len(panelCfgTabs) // past the last tab: a range holding nothing
+		m.cursor = firstLimitRow       // ... with the cursor left on another tab's row
+
 		m = press(m, "e")
 		if m.input != inputNone {
-			t.Errorf("e on an empty tab opened editor %v", m.input)
+			t.Errorf("e with the cursor off the tab opened editor %v", m.input)
 		}
 		if !strings.Contains(m.status, "nothing to edit") {
-			t.Errorf("e on an empty tab should say so, got %q", m.status)
+			t.Errorf("e with the cursor off the tab should say so, got %q", m.status)
+		}
+	})
+
+	t.Run("switching tabs takes the cursor with it", func(t *testing.T) {
+		m := baseModel()
+		m = press(m, "ctrl+t", "P")
+		for range panelCfgTabs {
+			m = press(m, "right")
+			first, _ := m.panelTabRange()
+			if m.cursor != first {
+				t.Errorf("tab %d: the cursor should park at %d, got %d", m.panelTab, first, m.cursor)
+			}
+			m.clampCursor() // a snapshot, a resize — anything that re-clamps
+			if m.cursor != first {
+				t.Errorf("tab %d: the clamp pulled the cursor to %d", m.panelTab, m.cursor)
+			}
 		}
 	})
 

@@ -1867,6 +1867,11 @@ const (
 	numPanelConfigRows
 
 	firstLimitRow = panelRowCPUs // where the resource-limits section starts
+
+	// panelRowFleetFeedback is the feedback tab's first row: score.feedback, the
+	// fleet's own answer. The per-profile overrides follow it, one per configured
+	// profile, so that tab is never empty — see feedbackSection.
+	panelRowFleetFeedback = numPanelConfigRows
 )
 
 // panelLabelWidth is the label column of the panel-config page, in display cells.
@@ -1947,8 +1952,10 @@ func (m model) editPanelRow() (tea.Model, tea.Cmd) {
 		return m.openAgentPicker(modePanelConfig, agentForDefault), nil
 	case m.cursor == panelRowReplayKB:
 		return m.editReplayKB(), nil
-	case m.cursor >= numPanelConfigRows:
-		return m.cycleFeedback(m.cursor - numPanelConfigRows), nil
+	case m.cursor == panelRowFleetFeedback:
+		return m.toggleFleetFeedback(), nil
+	case m.cursor > panelRowFleetFeedback:
+		return m.cycleFeedback(m.cursor - panelRowFleetFeedback - 1), nil
 	case m.cursor >= firstLimitRow:
 		return m.editLimit(m.cursor), nil
 	}
@@ -3733,9 +3740,10 @@ func (m model) itemCount() int {
 	case modeKeyMap:
 		return len(m.keymap()) + 1 + numSettings // prefix row + bindings + the settings toggles
 	case modePanelConfig:
-		// The feedback rows are one per CONFIGURED profile, so this page is the one
-		// whose length depends on the user's file rather than on a constant.
-		return numPanelConfigRows + len(m.feedbackProfiles())
+		// The feedback tab carries the fleet's own switch plus one row per CONFIGURED
+		// profile, so this page is the one whose length depends on the user's file
+		// rather than on a constant.
+		return numPanelConfigRows + 1 + len(m.feedbackProfiles())
 	default:
 		return len(m.dashItems())
 	}
@@ -5053,7 +5061,7 @@ type panelCfgTab struct {
 var panelCfgTabs = []panelCfgTab{
 	{"panel.cfg.tab.defaults", "DEFAULTS", panelRowShell, func(model) int { return firstLimitRow }},
 	{"panel.cfg.tab.limits", "LIMITS", firstLimitRow, func(model) int { return len(limitFields) }},
-	{"panel.cfg.tab.feedback", "FEEDBACK", numPanelConfigRows, func(m model) int { return len(m.feedbackProfiles()) }},
+	{"panel.cfg.tab.feedback", "FEEDBACK", panelRowFleetFeedback, func(m model) int { return 1 + len(m.feedbackProfiles()) }},
 }
 
 // panelTabIdx is the open tab, clamped to the tabs that exist.

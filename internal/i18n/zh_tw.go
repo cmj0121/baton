@@ -208,6 +208,7 @@ var zhTW = map[string]string{
 	"panel.cfg.enforce.unknown": "尚未連上,無法得知是否真的生效",
 	"panel.cfg.enforce.none":    "在這台機器上沒有生效",
 	"panel.cfg.enforce.by":      "由以下機制強制執行:",
+	"panel.cfg.fleet-feedback":  "全隊預設",
 	"panel.cfg.nothing-to-edit": "這個分頁沒有可以編輯的項目",
 	"panel.cfg.no-profiles":     "尚未設定任何 agent profile · 設定檔中的 panel.agents 負責命名",
 	"panel.cfg.install-hint":    "先安裝,然後按 %s R 重新偵測",

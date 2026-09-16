@@ -69,8 +69,9 @@ panel:
       score-feedback: false # ……除了這一個
 ```
 
-不改檔案也可以:在 cockpit 按 `C-t P` 打開 panel config,用 `←→` 切到「評分回饋」分頁,裡面列出每一個設定過的
-profile——`↑↓` 移動,`e` 讓那個 profile 在 `inherit → on → off → inherit` 之間循環。改完會寫進你的設定檔,
+不改檔案也可以:在 cockpit 按 `C-t P` 打開 panel config,用 `←→` 切到「評分回饋」分頁。第一列是全隊的
+`score.feedback`,按 `e` 直接切換;底下才是每一個設定過的 profile——`↑↓` 移動,`e` 讓那個 profile 在
+`inherit → on → off → inherit` 之間循環。改完會寫進你的設定檔,
 並且叫 daemon 重新讀一次,所以下一份簡報就生效,不必等重啟。`inherit` 是一個獨立的狀態,不是它當下解析出來
 那個值的另一種寫法:留在 inherit 的 profile,之後你改 `score.feedback` 時會跟著走。
 

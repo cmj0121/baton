@@ -52,15 +52,37 @@ func (m model) feedbackProfiles() []string {
 func (m model) feedbackSection(row func(idx int, label, value string)) []string {
 	names := m.feedbackProfiles()
 	// No heading of its own: these rows are a TAB of the panel-config page now, and
-	// the tab bar above them already says what they are. A section header under it
-	// would be the same word twice, three rows apart.
-	if len(names) == 0 {
-		return []string{mutedStyle.Render("  " + m.tr("panel.cfg.no-profiles", "no agent profiles configured · panel.agents in your config names them"))}
-	}
+	// the tab bar above them already says what they are.
+	//
+	// The FLEET's own switch leads, and it is the reason this tab is never empty.
+	// It used to list overrides and nothing else, so a fleet with no configured
+	// profiles — which is every fresh install — opened the tab on a sentence
+	// explaining that there was nothing here, with the one switch that does apply
+	// to it nowhere on the page at all. The house rule is a setting like any
+	// other; the profiles below it are the exceptions to it.
+	row(panelRowFleetFeedback, m.tr("panel.cfg.fleet-feedback", "fleet default"), m.feedbackOnOff(m.scoreFeedback))
 	for i, name := range names {
-		row(numPanelConfigRows+i, name, m.feedbackLabel(m.agents[name].ScoreFeedback, m.scoreFeedback))
+		row(panelRowFleetFeedback+1+i, name, m.feedbackLabel(m.agents[name].ScoreFeedback, m.scoreFeedback))
+	}
+	if len(names) == 0 {
+		return []string{"", mutedStyle.Render("  " + m.tr("panel.cfg.no-profiles",
+			"no agent profiles configured · panel.agents in your config names them"))}
 	}
 	return nil
+}
+
+// toggleFleetFeedback flips score.feedback — the answer every profile that has
+// not overridden it inherits — and persists it.
+func (m model) toggleFleetFeedback() model {
+	m.scoreFeedback = !m.scoreFeedback
+	if err := m.saveConfig(); err != nil {
+		m.status = m.tr("status.save-failed", "save failed: ") + err.Error()
+		return m
+	}
+	m.sendf(proto.Command{Action: "server.reload"})
+	m.status = m.tr("feedback.score", "score feedback") + " · " +
+		m.tr("panel.cfg.fleet-feedback", "fleet default") + " · " + m.feedbackOnOff(m.scoreFeedback)
+	return m
 }
 
 // feedbackLabel is how one profile's answer reads. Three states, not two: a

@@ -509,6 +509,11 @@ func (m model) saveConfig() error {
 	out.Panel.Agents = m.agents // round-trip the user's profiles so a save never drops them
 	out.Panel.ReplayKB = m.replayKB
 	out.Panel.Limits = m.limits
+	// The fleet's score-feedback switch is editable on the panel-config page, so
+	// it is written like any other cockpit-owned setting. The rest of the score
+	// block — the directory, the caps, the ranking weights — stays as it was on
+	// disk, because those are hand-edited and the cockpit does not own them.
+	out.Score.Feedback = &m.scoreFeedback
 	out.Panel.DiffCommand = m.diffCommand
 	out.TUI = config.TUIConfig{} // the cockpit appearance lives in TUI.yaml, never the main config
 	return out.Save()

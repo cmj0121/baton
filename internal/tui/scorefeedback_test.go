@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/cmj0121/baton/internal/config"
 )
 
@@ -123,14 +125,66 @@ func TestCycleFeedbackIgnoresARowThatIsNotThere(t *testing.T) {
 // TestThePageGrowsWithTheProfiles is what makes the rows reachable at all. Every
 // other row on this page is a fixed field, so itemCount was a constant; a cursor
 // that still stopped at it would draw the section and never let anyone into it.
+//
+// The +1 is the fleet's own switch, which leads the tab and is always there —
+// see TestTheFeedbackTabIsNeverEmpty.
 func TestThePageGrowsWithTheProfiles(t *testing.T) {
 	m := model{mode: modePanelConfig}
-	if got := m.itemCount(); got != numPanelConfigRows {
-		t.Fatalf("itemCount with no profiles = %d; want %d", got, numPanelConfigRows)
+	if got := m.itemCount(); got != numPanelConfigRows+1 {
+		t.Fatalf("itemCount with no profiles = %d; want %d", got, numPanelConfigRows+1)
 	}
 	m.agents = map[string]config.AgentProfile{"claude": {Command: "claude"}, "codex": {Command: "codex"}}
-	if got := m.itemCount(); got != numPanelConfigRows+2 {
-		t.Fatalf("itemCount with two profiles = %d; want %d", got, numPanelConfigRows+2)
+	if got := m.itemCount(); got != numPanelConfigRows+3 {
+		t.Fatalf("itemCount with two profiles = %d; want %d", got, numPanelConfigRows+3)
+	}
+}
+
+// TestTheFeedbackTabIsNeverEmpty: the tab opens on a switch you can throw, on a
+// fleet that has configured nothing.
+//
+// It listed per-profile OVERRIDES and nothing else, so a fresh install — which
+// has no profiles — opened it on a sentence explaining that there was nothing
+// there, while the one switch that did apply to that fleet, score.feedback, was
+// not on the page at all. Someone looking for "how do I turn this on" found a
+// page saying "nothing to configure".
+func TestTheFeedbackTabIsNeverEmpty(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := baseModel()
+	m.mode, m.panelTab, m.scoreFeedback = modePanelConfig, 2, true
+	m.cursor, _ = m.panelTabRange()
+
+	if first, end := m.panelTabRange(); end <= first {
+		t.Fatalf("the feedback tab holds no rows: [%d,%d)", first, end)
+	}
+	if m.cursor != panelRowFleetFeedback {
+		t.Fatalf("the tab should open on the fleet switch, cursor=%d", m.cursor)
+	}
+	// Drawn, not merely counted: a row the arithmetic knows about and the page
+	// does not draw is a cursor resting on nothing.
+	view := ansi.Strip(m.panelConfigView())
+	if !strings.Contains(view, "fleet default") {
+		t.Errorf("the fleet switch is not on the page:\n%s", view)
+	}
+	if !strings.Contains(view, "▸ ") {
+		t.Errorf("the caret is not on any row:\n%s", view)
+	}
+
+	next := press(m, "e")
+	if next.scoreFeedback {
+		t.Error("e on the fleet row should have turned the switch off")
+	}
+	if !strings.Contains(next.status, "score feedback") {
+		t.Errorf("e should say what it did, got %q", next.status)
+	}
+
+	// It is written to the config, not just to the model: the daemon reads the
+	// file, so a toggle that stopped at the model would change nothing at all.
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Score.FeedbackIsOn() {
+		t.Error("the fleet switch was not persisted")
 	}
 }
 
