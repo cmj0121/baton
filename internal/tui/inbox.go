@@ -548,7 +548,7 @@ func (m model) zoomInboxRow() (tea.Model, tea.Cmd) {
 	}
 	p, live := m.fleetPanel(r.id)
 	if !live {
-		m.status = "inbox: " + truncate(sanitizeText(r.title), 24) + " is gone"
+		m.status = m.tr("status.inbox", "inbox: ") + truncate(sanitizeText(r.title), 24) + " is gone"
 		return m, nil
 	}
 	out, _ := m.closeInbox()
@@ -575,7 +575,7 @@ func (m model) snoozeInboxRow() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m = m.clearRow(m.inboxCursor, m.now.Add(m.effSnooze()), "")
-	m.status = "snoozed " + truncate(sanitizeText(r.title), 20) + " · " + compactAge(m.effSnooze())
+	m.status = m.tr("status.snoozed", "snoozed ") + truncate(sanitizeText(r.title), 20) + " · " + compactAge(m.effSnooze())
 	return m.afterClear()
 }
 

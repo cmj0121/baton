@@ -22,7 +22,7 @@ func signalRows() int { return len(signals.Choices) + 1 }
 // there is nothing live to target.
 func (m model) openSignalPicker(from mode, ids []string, scope string) model {
 	if len(ids) == 0 {
-		m.status = "no live panel to signal"
+		m.status = m.tr("status.no-live-panel-signal", "no live panel to signal")
 		return m
 	}
 	m.signalFrom = from
@@ -30,7 +30,7 @@ func (m model) openSignalPicker(from mode, ids []string, scope string) model {
 	m.signalScope = scope
 	m.signalCursor = 0
 	m.mode = modeSignal
-	m.status = "send signal to " + scope + " · pick one · esc cancels"
+	m.status = m.tr("status.send-signal", "send signal to ") + scope + " · pick one · esc cancels"
 	return m
 }
 
@@ -43,7 +43,7 @@ func (m model) handleSignalKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "esc":
 		m.mode = m.signalFrom
-		m.status = "signal cancelled"
+		m.status = m.tr("status.signal-cancelled", "signal cancelled")
 		return m, nil
 	// Cursor nav is arrows only — j/k are free for nothing here, but a letter like
 	// k is a signal hotkey (SIGKILL), so the hotkeys must own the whole alphabet.
@@ -74,7 +74,7 @@ func (m model) handleSignalKey(key string) (tea.Model, tea.Cmd) {
 func (m model) sendSignal(name string) model {
 	m.sendf(proto.Command{Action: "panel.signal", IDs: m.signalTargets, Signal: name})
 	m.mode = m.signalFrom
-	m.status = fmt.Sprintf("sent %s to %s", name, m.signalScope)
+	m.status = fmt.Sprintf(m.tr("status.sent-s-s", "sent %s to %s"), name, m.signalScope)
 	return m
 }
 
@@ -84,7 +84,7 @@ func (m model) sendSignal(name string) model {
 func (m model) openOtherSignal() model {
 	m.input = inputSignalName
 	m.inputBuf = ""
-	m.status = "signal name or number (e.g. WINCH, TSTP, 28) · enter sends"
+	m.status = m.tr("status.signal-name-or-number", "signal name or number (e.g. WINCH, TSTP, 28) · enter sends")
 	return m
 }
 

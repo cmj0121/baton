@@ -295,7 +295,7 @@ func (m model) toggleExpand() model {
 	if it.kind == itemGroup {
 		return m.setCollapsed(it, it.expanded)
 	}
-	m.status = "nothing nested here — " + seqLabel(m.bindingKey(actExpand)) + " opens a work item"
+	m.status = m.tr("status.nothing-nested-here", "nothing nested here — ") + seqLabel(m.bindingKey(actExpand)) + " opens a work item"
 	return m
 }
 
@@ -335,11 +335,11 @@ func (m model) toggleLayout() model {
 	switch {
 	case !m.gridDash() && !m.showTree:
 		// Nothing to give back: this fleet is past the cards on its own.
-		m.status = "the fleet is past the cards — the tree draws it either way"
+		m.status = m.tr("status.fleet-past-cards-tree", "the fleet is past the cards — the tree draws it either way")
 	case m.showTree:
-		m.status = "tree · " + seqLabel(m.bindingKey(actDashLayout)) + " for the cards"
+		m.status = m.tr("status.tree", "tree · ") + seqLabel(m.bindingKey(actDashLayout)) + " for the cards"
 	default:
-		m.status = "cards"
+		m.status = m.tr("status.cards", "cards")
 	}
 	m.rememberLayout() // on change, not on exit: a cockpit is usually killed, not closed
 	return m
@@ -375,10 +375,10 @@ func (m model) setCollapsed(it dashItem, shut bool) model {
 	}
 	if shut {
 		m.collapsed[it.name] = true
-		m.status = "collapsed " + it.name
+		m.status = m.tr("status.collapsed", "collapsed ") + it.name
 	} else {
 		delete(m.collapsed, it.name)
-		m.status = "expanded " + it.name
+		m.status = m.tr("status.expanded", "expanded ") + it.name
 	}
 	m.cursorToItem(it)
 	m.clampCursor()

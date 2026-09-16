@@ -278,7 +278,7 @@ func (m model) cycleLens(delta int) model {
 		}
 	}
 	m.restoreCursor(kind, id, "", had && kind == itemPanel)
-	m.status = "group by: " + m.lens.String()
+	m.status = m.tr("status.group-by", "group by: ") + m.lens.String()
 	m.rememberLens() // on change, not on exit: a cockpit is usually killed, not closed
 	return m
 }

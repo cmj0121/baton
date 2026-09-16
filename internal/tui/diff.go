@@ -43,7 +43,7 @@ type diffLine struct {
 // uncommitted changes" before sending in that case, but guard anyway.
 func (m model) openDiffPopup(title string, files []proto.DiffFile) model {
 	if len(files) == 0 {
-		m.status = "diff: no changes"
+		m.status = m.tr("status.diff-no-changes", "diff: no changes")
 		return m
 	}
 	m.diffFrom = m.mode

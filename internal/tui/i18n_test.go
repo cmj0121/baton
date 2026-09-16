@@ -507,3 +507,61 @@ func TestOverlaysLeaveNoEnglishBehind(t *testing.T) {
 		})
 	}
 }
+
+// msgPair matches a message key paired with its English source string, in any of
+// the forms the cockpit writes one: m.tr("k", "en"), the tr shorthand inside a
+// view, i18n.T(lang, "k", "en"), and the tables that carry the pair as two fields
+// (the key map's bindings, the input overlays, the git menu, the limit rows).
+var msgPair = regexp.MustCompile(`"([a-z][a-z0-9-]*(?:\.[a-z0-9-]+)+)",\s*"((?:[^"\\]|\\.)*)"`)
+
+// TestEveryMessageKeyIsTranslated reads this package's own source, collects every
+// message key with the English written beside it, and fails on any whose zh-TW
+// rendering is the same string.
+//
+// This is the completeness check the rendering tests cannot be. They can only
+// reach what a fixture puts on screen — a status line needs the keystroke that
+// sets it, an error needs the failure that raises it — and the cockpit has more
+// than five hundred messages, most of which no fixture will ever draw. Reading
+// the source reaches all of them, including the ones behind a condition nobody
+// has hit yet.
+//
+// Two keys are exempt, and both are exempt for the reason the catalog gives
+// throughout: they are not the cockpit's words. `git add -A` is a command line,
+// and passkey is what the thing is called in baton's own docs and CLI.
+func TestEveryMessageKeyIsTranslated(t *testing.T) {
+	exempt := map[string]bool{
+		"git.desc.stage-all": true, // a git command line, quoted as it is typed
+		"remote.passkey":     true, // baton's own word for it, in the docs and the CLI
+	}
+
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	en, zh := model{}, model{lang: i18n.ZhTW}
+	seen := map[string]bool{}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, mm := range msgPair.FindAllStringSubmatch(string(data), -1) {
+			key, eng := mm[1], strings.ReplaceAll(mm[2], `\"`, `"`)
+			if seen[key] || eng == "" || exempt[key] {
+				continue
+			}
+			seen[key] = true
+			if en.tr(key, eng) == zh.tr(key, eng) {
+				t.Errorf("%s: no zh-TW for %q (%s)", f, eng, key)
+			}
+		}
+	}
+	// A guard on the guard: a regex that stopped matching would report nothing and
+	// pass, which is the one way this test could quietly stop being one.
+	if len(seen) < 400 {
+		t.Errorf("only %d message keys found in the source; the scan is not reaching them", len(seen))
+	}
+}

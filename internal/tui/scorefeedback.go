@@ -118,7 +118,7 @@ func (m model) cycleFeedback(i int) model {
 	m.agents = next
 
 	if err := m.saveConfig(); err != nil {
-		m.status = "save failed: " + err.Error()
+		m.status = m.tr("status.save-failed", "save failed: ") + err.Error()
 		return m
 	}
 	m.sendf(proto.Command{Action: "server.reload"})

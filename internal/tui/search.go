@@ -30,12 +30,12 @@ func (m model) searchActive() bool {
 // search (e.g. the focus rests on a tree row).
 func (m model) openSearch() model {
 	if emu, _ := m.scrollTarget(); emu == nil {
-		m.status = "nothing to search here"
+		m.status = m.tr("status.nothing-search-here", "nothing to search here")
 		return m
 	}
 	m.input = inputSearch
 	m.inputBuf = m.searchQuery // seed with the last term so repeating a search is one keypress
-	m.status = "search · type a regexp · enter finds · esc cancels"
+	m.status = m.tr("status.search-type-regexp-enter", "search · type a regexp · enter finds · esc cancels")
 	return m
 }
 
@@ -52,12 +52,12 @@ func (m model) openSearch() model {
 func (m model) runSearch(query string) model {
 	emu, _ := m.scrollTarget()
 	if emu == nil {
-		m.status = "nothing to search here"
+		m.status = m.tr("status.nothing-search-here", "nothing to search here")
 		return m
 	}
 	if query == "" {
 		m = m.clearSearch()
-		m.status = "search cleared"
+		m.status = m.tr("status.search-cleared", "search cleared")
 		return m
 	}
 	re, literal := compileSearch(query)
@@ -70,7 +70,7 @@ func (m model) runSearch(query string) model {
 	}
 	if len(hits) == 0 {
 		m = m.clearSearch() // drop any prior hits; a failed search leaves nothing active
-		m.status = fmt.Sprintf("no match for %q", query)
+		m.status = fmt.Sprintf(m.tr("status.no-match-q", "no match for %q"), query)
 		return m
 	}
 	m.searchQuery = query
@@ -81,7 +81,7 @@ func (m model) runSearch(query string) model {
 	m.positionToHit(emu)
 	m.status = m.searchStatus()
 	if literal { // the term was not a valid regexp; say so rather than silently downgrading
-		m.status = "bad regexp · matched literally · " + m.status
+		m.status = m.tr("status.bad-regexp-matched-literally", "bad regexp · matched literally · ") + m.status
 	}
 	return m
 }

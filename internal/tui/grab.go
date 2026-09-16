@@ -64,19 +64,19 @@ func (m model) startGrab() model {
 	}
 	it, ok := m.selectedItem()
 	if !ok {
-		m.status = "nothing to move"
+		m.status = m.tr("status.nothing-move", "nothing to move")
 		return m
 	}
 	switch it.kind {
 	case itemFold:
-		m.status = "expand the quiet rows first — the fold stands for panels, it does not hold them"
+		m.status = m.tr("status.expand-quiet-rows-first", "expand the quiet rows first — the fold stands for panels, it does not hold them")
 		return m
 	case itemGroup:
 		m.grab = &grabState{kind: itemGroup, path: it.name, name: it.label()}
 	default:
 		m.grab = &grabState{kind: itemPanel, id: it.panel.ID, name: it.panel.Title}
 	}
-	m.status = fmt.Sprintf("moving %s · ↑↓ to place it, enter to drop, esc to cancel", m.grab.name)
+	m.status = fmt.Sprintf(m.tr("status.moving-s-place-enter", "moving %s · ↑↓ to place it, enter to drop, esc to cancel"), m.grab.name)
 	return m
 }
 
@@ -86,7 +86,7 @@ func (m model) cancelGrab() model {
 	if !m.grabbing() {
 		return m
 	}
-	m.status = "left " + m.grab.name + " where it was"
+	m.status = m.tr("status.left", "left ") + m.grab.name + " where it was"
 	m.grab = nil
 	return m
 }
@@ -109,11 +109,11 @@ func (m model) dropGrab() model {
 	target, ok := m.selectedItem()
 	m.grab = nil
 	if !ok {
-		m.status = "nowhere to drop " + g.name
+		m.status = m.tr("status.nowhere-drop", "nowhere to drop ") + g.name
 		return m
 	}
 	if target.kind == itemFold {
-		m.status = "a quiet fold is not a place to drop " + g.name
+		m.status = m.tr("status.quiet-fold-not-place", "a quiet fold is not a place to drop ") + g.name
 		return m
 	}
 
@@ -135,19 +135,19 @@ func (m model) reparentGroup(g grabState, parent string) model {
 	if panel.GroupIsUnder(g.path, parent) {
 		// Dropping a work item inside itself would ask the server to rewrite a path
 		// prefix onto its own descendants, which has no meaning and no way back.
-		m.status = "cannot move " + g.name + " inside itself"
+		m.status = m.tr("status.cannot-move", "cannot move ") + g.name + " inside itself"
 		return m
 	}
 	dest := panel.GroupJoin(parent, panel.GroupLeaf(g.path))
 	if m.nameConflict(dest, "", g.path) {
-		m.status = fmt.Sprintf("%q is already taken — rename it first", dest)
+		m.status = fmt.Sprintf(m.tr("status.q-already-taken-rename", "%q is already taken — rename it first"), dest)
 		return m
 	}
 	m.sendf(proto.Command{Action: "panel.rename", Group: g.path, Name: dest})
 	if parent == "" {
-		m.status = "moved " + g.name + " to the top level"
+		m.status = m.tr("status.moved", "moved ") + g.name + " to the top level"
 	} else {
-		m.status = "moved " + g.name + " into " + parent
+		m.status = m.tr("status.moved", "moved ") + g.name + " into " + parent
 	}
 	return m
 }
@@ -171,11 +171,11 @@ func (m model) refilePanel(g grabState, parent string, target dashItem) model {
 	}
 	if parent == "" {
 		m.sendf(proto.Command{Action: "panel.ungroup", IDs: []string{g.id}})
-		m.status = "moved " + g.name + " out to the top level"
+		m.status = m.tr("status.moved", "moved ") + g.name + " out to the top level"
 		return m
 	}
 	m.sendf(proto.Command{Action: "panel.group", IDs: []string{g.id}, Group: parent})
-	m.status = "moved " + g.name + " into " + parent
+	m.status = m.tr("status.moved", "moved ") + g.name + " into " + parent
 	return m
 }
 
@@ -198,11 +198,11 @@ func (m model) moveAfter(g grabState, target dashItem) model {
 		}
 	}
 	if index < 0 {
-		m.status = "nowhere to drop " + g.name
+		m.status = m.tr("status.nowhere-drop", "nowhere to drop ") + g.name
 		return m
 	}
 	m.sendf(proto.Command{Action: "panel.move", IDs: []string{g.id}, Index: index})
-	m.status = "moved " + g.name
+	m.status = m.tr("status.moved", "moved ") + g.name
 	return m
 }
 

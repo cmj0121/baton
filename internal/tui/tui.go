@@ -1029,7 +1029,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.exitScreensaver() // never mask an outage behind the rain
 		}
 		m.backendDown = true
-		m.status = "error: backend down — " + keyLabel(m.effPrefix()) + " S to restart"
+		m.status = m.tr("status.error-backend-down", "error: backend down — ") + keyLabel(m.effPrefix()) + " S to restart"
 		return m, nil
 
 	case tickMsg:
@@ -1180,9 +1180,9 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		m.enforce, m.enforceWhy = sm.Enforce, sm.EnforceWhy
 		m.backendDown = false // a fresh welcome means the backend is live again
 		if sm.Version != proto.ProtocolVersion {
-			m.status = "error: server speaks " + sm.Version + ", client " + proto.ProtocolVersion
+			m.status = m.tr("status.error-server-speaks", "error: server speaks ") + sm.Version + ", client " + proto.ProtocolVersion
 		} else {
-			m.status = "attached · " + m.endpoint
+			m.status = m.tr("status.attached", "attached · ") + m.endpoint
 		}
 	case "goodbye":
 		// The server is dropping this cockpit on purpose and said why — a kick, or
@@ -1190,7 +1190,7 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		// the channels close a moment later and the runner prints it again once the
 		// screen is back.
 		m.backendDown = true
-		m.status = "disconnected: " + sanitizeText(sm.Error)
+		m.status = m.tr("status.disconnected", "disconnected: ") + sanitizeText(sm.Error)
 	case "panels":
 		// Capture what the cursor and the split focus rest on before the fleet
 		// changes under them, so both can be restored to the same item by identity
@@ -1408,7 +1408,7 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		// and fades like any other one-off message.
 		m.status = sm.Notice
 	case "error":
-		m.status = "error: " + sm.Error
+		m.status = m.tr("status.error", "error: ") + sm.Error
 	}
 }
 
@@ -1559,7 +1559,7 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 	if m.editing {
 		if key == "esc" {
 			m.editing, m.editBuf = false, nil
-			m.status = "rebind cancelled"
+			m.status = m.tr("status.rebind-cancelled", "rebind cancelled")
 			return m, nil
 		}
 		// The leader is one key by definition — it is what the sequences hang off
@@ -1568,9 +1568,9 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 			m.editing = false
 			old := m.effPrefix()
 			m.prefixKey = key
-			m.status = fmt.Sprintf("prefix: %s → %s", keyLabel(old), keyLabel(key))
+			m.status = fmt.Sprintf(m.tr("status.prefix-s-s", "prefix: %s → %s"), keyLabel(old), keyLabel(key))
 			if err := m.saveConfig(); err != nil {
-				m.status = "rebound, but save failed: " + err.Error()
+				m.status = m.tr("status.rebound-but-save-failed", "rebound, but save failed: ") + err.Error()
 			}
 			return m, nil
 		}
@@ -1581,13 +1581,13 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 		// anything started with it.
 		if key == "enter" {
 			if len(m.editBuf) == 0 {
-				m.status = "press the keys for this binding first  ·  esc cancels"
+				m.status = m.tr("status.press-keys-binding-first", "press the keys for this binding first  ·  esc cancels")
 				return m, nil
 			}
 			return m.commitRebind()
 		}
 		m.editBuf = append(m.editBuf, key)
-		m.status = "… " + strings.Join(labelTokens(m.editBuf), " ") + "  ·  enter binds  ·  esc cancels"
+		m.status = "… " + strings.Join(labelTokens(m.editBuf), " ") + "  ·  " + m.tr("status.enter-binds", "enter binds  ·  esc cancels")
 		return m, nil
 	}
 
@@ -1598,7 +1598,7 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 		if key == "y" || key == "enter" {
 			m.closeSelected()
 		} else {
-			m.status = "close cancelled"
+			m.status = m.tr("status.close-cancelled", "close cancelled")
 		}
 		return m, nil
 	}
@@ -1615,7 +1615,7 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 		case "w":
 			m.pendingSpawn = false
 			m.input, m.inputBuf = inputIsolateBranch, ""
-			m.status = "new worktree in " + dirLabel(m.spawnDir) + " · type a branch, enter creates"
+			m.status = m.tr("status.new-worktree", "new worktree in ") + dirLabel(m.spawnDir) + " · type a branch, enter creates"
 			return m, nil
 		default:
 			return m.abortSpawnOffer(), nil
@@ -1632,7 +1632,7 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 			m.status = m.tr("exit.restarting", "restarting the server…")
 			return m, tea.Quit
 		}
-		m.status = "restart cancelled"
+		m.status = m.tr("status.restart-cancelled", "restart cancelled")
 		return m, nil
 	}
 
@@ -1663,7 +1663,7 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 		if key == m.bindingKey(actDetach) { // C-t q detaches from every mode
 			return m.runAction(actDetach)
 		}
-		m.status = "no escape for " + keyLabel(key)
+		m.status = m.tr("status.no-escape", "no escape for ") + keyLabel(key)
 		return m, nil
 	}
 
@@ -1677,12 +1677,12 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 			case rowPrefix:
 				m.editing = true
 				m.editIdx = editPrefix
-				m.status = "press the new prefix key  ·  esc cancels"
+				m.status = m.tr("status.press-new-prefix-key", "press the new prefix key  ·  esc cancels")
 			case rowBinding:
 				m.editing = true
 				m.editIdx = idx
 				m.editBuf = nil
-				m.status = "press the keys for " + fmt.Sprintf("%q", m.keymap()[idx].desc) +
+				m.status = m.tr("status.press-keys", "press the keys for ") + fmt.Sprintf("%q", m.keymap()[idx].desc) +
 					"  ·  enter binds  ·  esc cancels"
 			}
 			return m, nil
@@ -1829,7 +1829,7 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 		}
 		if m.mode == modeDashboard && m.filter != "" { // esc on the dashboard clears an applied filter first
 			m.filter, m.cursor = "", 0
-			m.status = "filter cleared"
+			m.status = m.tr("status.filter-cleared", "filter cleared")
 			return m, nil
 		}
 		if m.mode != modeDashboard {
@@ -1979,7 +1979,7 @@ func (m model) commitReplayKB(s string) model {
 		if err != nil || n < 0 {
 			m.input = inputReplayKB // keep the overlay open with the attempt
 			m.inputBuf = s
-			m.status = "replay buffer · enter a whole number of KiB"
+			m.status = m.tr("status.replay-buffer-enter-whole", "replay buffer · enter a whole number of KiB")
 			return m
 		}
 		m.replayKB = n
@@ -1987,7 +1987,7 @@ func (m model) commitReplayKB(s string) model {
 		m.replayKB = 0 // back to the server default
 	}
 	if err := m.saveConfig(); err != nil {
-		m.status = "save failed: " + err.Error()
+		m.status = m.tr("status.save-failed", "save failed: ") + err.Error()
 		return m
 	}
 	m.status = m.tr("panel.cfg.replay", "replay buffer") + " · " + m.replayLabel(m.replayKB) + " · " + m.tr("panel.cfg.status.restart", "restart to apply")
@@ -2050,12 +2050,12 @@ func (m model) commitLimit(s string) model {
 	f.set(&next, s)
 	if err := next.Validate(); err != nil {
 		m.input, m.inputBuf = inputLimit, s // keep the overlay open with the attempt
-		m.status = "limits · " + err.Error()
+		m.status = m.tr("status.limits", "limits · ") + err.Error()
 		return m
 	}
 	m.limits = next
 	if err := m.saveConfig(); err != nil {
-		m.status = "save failed: " + err.Error()
+		m.status = m.tr("status.save-failed", "save failed: ") + err.Error()
 		return m
 	}
 	m.status = f.label + " · " + m.limitLabel(f.get(m.limits)) + " · " + m.tr("panel.cfg.status.new-panels", "applies to new panels")
@@ -2075,7 +2075,7 @@ func (m model) handleInput(k tea.Key) (tea.Model, tea.Cmd) {
 		if isolate {
 			return m.abortSpawnOffer(), nil
 		}
-		m.status = "cancelled"
+		m.status = m.tr("status.cancelled", "cancelled")
 	case k.Code == tea.KeyEnter:
 		return m.commitInput()
 	case k.Code == tea.KeyBackspace:
@@ -2113,7 +2113,7 @@ func (m model) handleInput(k tea.Key) (tea.Model, tea.Cmd) {
 func (m model) openFilter() model {
 	m.input = inputFilter
 	m.inputBuf = m.filter
-	m.status = "filter · type to find panels · enter applies · esc clears"
+	m.status = m.tr("status.filter-type-find-panels", "filter · type to find panels · enter applies · esc clears")
 	return m
 }
 
@@ -2234,7 +2234,7 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 	case inputShellPath:
 		m.shellPath = buf
 		if err := m.saveConfig(); err != nil {
-			m.status = "save failed: " + err.Error()
+			m.status = m.tr("status.save-failed", "save failed: ") + err.Error()
 		} else {
 			m.status = m.tr("panel.cfg.shell", "default shell") + " · " + m.shellLabel(buf)
 		}
@@ -2259,9 +2259,9 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 	case inputFilter:
 		m.filter, m.cursor = buf, 0
 		if buf == "" {
-			m.status = "filter cleared"
+			m.status = m.tr("status.filter-cleared", "filter cleared")
 		} else {
-			m.status = "filter · " + buf
+			m.status = m.tr("status.filter", "filter · ") + buf
 		}
 	case inputSearch:
 		return m.runSearch(buf), nil
@@ -2288,14 +2288,14 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 func (m model) spawnPanel(command string) model {
 	if m.client != nil {
 		if err := m.client.Send(proto.Command{Action: "panel.create", Kind: proto.KindShell, Path: command}); err != nil {
-			m.status = "send failed: " + err.Error()
+			m.status = m.tr("status.send-failed", "send failed: ") + err.Error()
 			return m
 		}
 	}
 	// Armed only past the error return: a send that failed produces no panel, and
 	// a reveal left armed would fire on whatever unrelated snapshot arrived next.
 	m.pendingReveal = true
-	m.status = m.tr("status.spawning", "spawning") + " " + m.shellLabel(command)
+	m.status = m.tr("status.spawning", "spawning ") + m.shellLabel(command)
 	return m
 }
 
@@ -2326,7 +2326,7 @@ func (m model) spawnPanel(command string) model {
 func (m model) spawnFromForm(line string) model {
 	argv, err := splitCommandLine(line)
 	if err != nil {
-		m.status = "not spawned · " + err.Error()
+		m.status = m.tr("status.not-spawned", "not spawned · ") + err.Error()
 		return m
 	}
 	if len(argv) == 0 {
@@ -2334,20 +2334,20 @@ func (m model) spawnFromForm(line string) model {
 	}
 	prog, args := argv[0], argv[1:]
 	if prog == "" || strings.HasPrefix(prog, "-") {
-		m.status = "not spawned · name the program to run before its arguments"
+		m.status = m.tr("status.not-spawned-name-program", "not spawned · name the program to run before its arguments")
 		return m
 	}
 	if m.client != nil {
 		cmd := proto.Command{Action: "panel.create", Kind: proto.KindCommand, Path: prog, Args: args}
 		if err := m.client.Send(cmd); err != nil {
-			m.status = "send failed: " + err.Error()
+			m.status = m.tr("status.send-failed", "send failed: ") + err.Error()
 			return m
 		}
 	}
 	// Armed only past the error return: a send that failed produces no panel, and
 	// a reveal left armed would fire on whatever unrelated snapshot arrived next.
 	m.pendingReveal = true
-	m.status = "spawning " + strings.Join(argv, " ")
+	m.status = m.tr("status.spawning", "spawning ") + strings.Join(argv, " ")
 	return m
 }
 
@@ -2362,7 +2362,7 @@ func (m model) spawnFromForm(line string) model {
 func (m model) spawnPanelHere() model {
 	p, ok := m.cwdSource()
 	if !ok {
-		m.status = "no panel selected"
+		m.status = m.tr("status.no-panel-selected", "no panel selected")
 		return m
 	}
 	if p.Cwd == "" {
@@ -2375,14 +2375,14 @@ func (m model) spawnPanelHere() model {
 	if m.client != nil {
 		cmd := proto.Command{Action: "panel.create", Kind: proto.KindShell, Path: m.shellPath, Dir: p.Cwd}
 		if err := m.client.Send(cmd); err != nil {
-			m.status = "send failed: " + err.Error()
+			m.status = m.tr("status.send-failed", "send failed: ") + err.Error()
 			return m
 		}
 	}
 	// Armed only past the error return: a send that failed produces no panel, and
 	// a reveal left armed would fire on whatever unrelated snapshot arrived next.
 	m.pendingReveal = true
-	m.status = "spawning in " + p.Cwd
+	m.status = m.tr("status.spawning-2", "spawning in ") + p.Cwd
 	return m
 }
 
@@ -2421,7 +2421,7 @@ func (m model) parkSpawnOffer(dir string) model {
 	m.spawnDir = expandDir(dir)
 	m.pendingSpawn = true
 	_, name, _ := m.resolveAgent()
-	m.status = fmt.Sprintf("spawn %s in %s · enter here · w isolate on a branch", name, dirLabel(m.spawnDir))
+	m.status = fmt.Sprintf(m.tr("status.spawn-s-s-enter", "spawn %s in %s · enter here · w isolate on a branch"), name, dirLabel(m.spawnDir))
 	return m
 }
 
@@ -2432,7 +2432,7 @@ func (m model) abortSpawnOffer() model {
 	m.pendingSpawn = false
 	m.spawnDir = ""
 	m.pendingAgent = ""
-	m.status = "spawn cancelled"
+	m.status = m.tr("status.spawn-cancelled", "spawn cancelled")
 	return m
 }
 
@@ -2450,14 +2450,14 @@ func (m model) spawnAgent(dir string) model {
 	if m.client != nil {
 		cmd := proto.Command{Action: "panel.create", Kind: proto.KindAgent, Path: prof.Command, Args: prof.Args, Dir: dir, Profile: name}
 		if err := m.client.Send(cmd); err != nil {
-			m.status = "send failed: " + err.Error()
+			m.status = m.tr("status.send-failed", "send failed: ") + err.Error()
 			return m
 		}
 	}
 	// Armed only past the error return: a send that failed produces no panel, and
 	// a reveal left armed would fire on whatever unrelated snapshot arrived next.
 	m.pendingReveal = true
-	m.status = fmt.Sprintf("spawning %s · %s", name, dirLabel(dir))
+	m.status = fmt.Sprintf(m.tr("status.spawning-s-s", "spawning %s · %s"), name, dirLabel(dir))
 	return m
 }
 
@@ -2534,17 +2534,17 @@ func (m model) globalShellMark() string {
 func (m model) spawnConductor() model {
 	prof, name, ok := m.resolveAgent()
 	if !ok {
-		m.status = fmt.Sprintf("no agent profile %q for the conductor", name)
+		m.status = fmt.Sprintf(m.tr("status.no-agent-profile-q", "no agent profile %q for the conductor"), name)
 		return m
 	}
 	if m.client != nil {
 		cmd := proto.Command{Action: "panel.create", Kind: proto.KindAgent, Path: prof.Command, Args: prof.Args, Profile: name, Conductor: true}
 		if err := m.client.Send(cmd); err != nil {
-			m.status = "send failed: " + err.Error()
+			m.status = m.tr("status.send-failed", "send failed: ") + err.Error()
 			return m
 		}
 	}
-	m.status = fmt.Sprintf("opening the conductor (%s)", name)
+	m.status = fmt.Sprintf(m.tr("status.opening-conductor-s", "opening the conductor (%s)"), name)
 	return m
 }
 
@@ -2556,11 +2556,11 @@ func (m model) spawnGlobalShell() model {
 	if m.client != nil {
 		cmd := proto.Command{Action: "panel.create", Kind: proto.KindShell, GlobalShell: true}
 		if err := m.client.Send(cmd); err != nil {
-			m.status = "send failed: " + err.Error()
+			m.status = m.tr("status.send-failed", "send failed: ") + err.Error()
 			return m
 		}
 	}
-	m.status = "opening the global shell"
+	m.status = m.tr("status.opening-global-shell", "opening the global shell")
 	return m
 }
 
@@ -2629,7 +2629,7 @@ func (m model) openHelp(from mode) model {
 	m.helpFrom = from
 	m.mode = modeHelp
 	m.helpScroll, m.helpTab = 0, 0 // open at the top of the first tab
-	m.status = "keys"
+	m.status = m.tr("status.keys", "keys")
 	return m
 }
 
@@ -2718,7 +2718,7 @@ func (m model) commitRebind() (tea.Model, tea.Cmd) {
 	old, next := b.key, strings.Join(m.editBuf, " ")
 	b.key = next
 	m.editing, m.editBuf = false, nil
-	m.status = fmt.Sprintf("rebound %q: %s → %s", b.desc, seqLabel(old), seqLabel(next))
+	m.status = fmt.Sprintf(m.tr("status.rebound-q-s-s", "rebound %q: %s → %s"), b.desc, seqLabel(old), seqLabel(next))
 
 	half := cmdBinding
 	if isEscape(b.act) {
@@ -2728,13 +2728,13 @@ func (m model) commitRebind() (tea.Model, tea.Cmd) {
 		if pair[0].name != b.name && pair[1].name != b.name {
 			continue
 		}
-		m.status = fmt.Sprintf("%q (%s) starts %q (%s) — %s waits %s before firing",
+		m.status = fmt.Sprintf(m.tr("status.q-s-starts-q", "%q (%s) starts %q (%s) — %s waits %s before firing"),
 			pair[0].name, seqLabel(pair[0].key), pair[1].name, seqLabel(pair[1].key),
 			seqLabel(pair[0].key), m.effKeyTimeout())
 		break
 	}
 	if err := m.saveConfig(); err != nil {
-		m.status = "rebound, but save failed: " + err.Error()
+		m.status = m.tr("status.rebound-but-save-failed", "rebound, but save failed: ") + err.Error()
 	}
 	return m, nil
 }
@@ -2743,7 +2743,7 @@ func (m model) openPanelConfig(from mode) model {
 	m.helpFrom = from
 	m.mode = modePanelConfig
 	m.cursor = 0
-	m.status = "panel config"
+	m.status = m.tr("status.panel-config", "panel config")
 	return m
 }
 
@@ -2751,7 +2751,7 @@ func (m model) openEditMap(from mode) model {
 	m.helpFrom = from
 	m.mode = modeKeyMap
 	m.cursor = 0
-	m.status = "key map"
+	m.status = m.tr("status.key-map", "key map")
 	return m
 }
 
@@ -2771,7 +2771,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		// because statusBar truncates to whatever the caps leave it.
 		m.input = inputNewPanelCmd
 		m.inputBuf = ""
-		m.status = "new panel · a program = a command panel · enter = a shell"
+		m.status = m.tr("status.new-panel-program-command", "new panel · a program = a command panel · enter = a shell")
 	case actNewAgent:
 		// More than one backend on the machine and the choice is real, so make it
 		// before asking where: the picker opens with the cursor on the default, and
@@ -2789,7 +2789,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		}
 		m.input = inputAgentDir
 		m.inputBuf = m.defaultWorkdir()
-		m.status = fmt.Sprintf("new %s agent · type the workdir", name)
+		m.status = fmt.Sprintf(m.tr("status.new-s-agent-type", "new %s agent · type the workdir"), name)
 	case actConductor:
 		// Open the conductor: since it is a mark in the FLEET heading, not a card, C
 		// is how you reach it. Zoom a live one to watch its work; re-run an exited one
@@ -2799,7 +2799,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 			if p.State == panel.Exited {
 				m.sendf(proto.Command{Action: "panel.respawn", ID: p.ID})
 				p.State = panel.Spawning // zoom the re-run as a live panel, not a read-only result
-				m.status = "re-running the conductor"
+				m.status = m.tr("status.re-running-conductor", "re-running the conductor")
 			}
 			return m.zoomInto(p), nil
 		}
@@ -2814,7 +2814,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 			if p.State == panel.Exited {
 				m.sendf(proto.Command{Action: "panel.respawn", ID: p.ID})
 				p.State = panel.Spawning // zoom the re-run as a live panel, not a read-only result
-				m.status = "re-running the global shell"
+				m.status = m.tr("status.re-running-global-shell", "re-running the global shell")
 			}
 			return m.zoomInto(p), nil
 		}
@@ -2831,14 +2831,14 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		}
 		m.input = inputWorktreeRepo
 		m.inputBuf = m.defaultWorkdir()
-		m.status = "new worktree · type the repository, enter, then a branch"
+		m.status = m.tr("status.new-worktree-type-repository", "new worktree · type the repository, enter, then a branch")
 	case actScoreEdit:
 		return m.editScore()
 	case actClose:
 		it, ok := m.selectedItem()
 		switch {
 		case !ok:
-			m.status = "no panel to close"
+			m.status = m.tr("status.no-panel-close", "no panel to close")
 		case m.confirmClose || it.kind == itemGroup:
 			// A group close retires every member at once, so w always confirms it; a
 			// lone panel asks only when confirm-on-close is on (it defaults on).
@@ -2855,18 +2855,18 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 			p, ok := m.focusedMember()
 			switch {
 			case !ok:
-				m.status = "no panel to re-run"
+				m.status = m.tr("status.no-panel-re-run", "no panel to re-run")
 			case p.State != panel.Exited:
 				m.status = p.Title + " is still running"
 			default:
 				m.sendf(proto.Command{Action: "panel.respawn", ID: p.ID})
-				m.status = "re-running " + p.Title
+				m.status = m.tr("status.re-running", "re-running ") + p.Title
 			}
 			return m, nil
 		}
 		it, ok := m.selectedItem()
 		if !ok {
-			m.status = "no panel to re-run"
+			m.status = m.tr("status.no-panel-re-run", "no panel to re-run")
 			return m, nil
 		}
 		members := it.members
@@ -2876,25 +2876,25 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		ids := exitedIDs(members)
 		switch {
 		case len(ids) == 0 && it.kind == itemGroup:
-			m.status = "no exited panel in " + it.name
+			m.status = m.tr("status.no-exited-panel", "no exited panel in ") + it.name
 		case len(ids) == 0:
-			m.status = "panel is still running"
+			m.status = m.tr("status.panel-still-running", "panel is still running")
 		default:
 			for _, id := range ids {
 				m.sendf(proto.Command{Action: "panel.respawn", ID: id})
 			}
 			if it.kind == itemGroup {
-				m.status = fmt.Sprintf("re-running %d panel(s) in %s", len(ids), it.name)
+				m.status = fmt.Sprintf(m.tr("status.re-running-d-panel", "re-running %d panel(s) in %s"), len(ids), it.name)
 			} else {
-				m.status = "re-running " + it.panel.Title
+				m.status = m.tr("status.re-running", "re-running ") + it.panel.Title
 			}
 		}
 	case actPurge:
 		if n := m.countState(panel.Exited); n == 0 {
-			m.status = "no exited panels to purge"
+			m.status = m.tr("status.no-exited-panels-purge", "no exited panels to purge")
 		} else {
 			m.sendf(proto.Command{Action: "panel.purge"})
-			m.status = fmt.Sprintf("purging %d exited panel(s)", n)
+			m.status = fmt.Sprintf(m.tr("status.purging-d-exited-panel", "purging %d exited panel(s)"), n)
 		}
 	case actSignal:
 		// From the dashboard the target is the selection: one panel, or every live
@@ -2902,7 +2902,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		// out, so the picker's count is what will actually be delivered.
 		it, ok := m.selectedItem()
 		if !ok {
-			m.status = "no panel to signal"
+			m.status = m.tr("status.no-panel-signal", "no panel to signal")
 			return m, nil
 		}
 		members := it.members
@@ -2911,7 +2911,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		}
 		ids := liveIDs(members)
 		if len(ids) == 0 {
-			m.status = "no live panel to signal"
+			m.status = m.tr("status.no-live-panel-signal", "no live panel to signal")
 			return m, nil
 		}
 		scope := it.title()
@@ -2943,7 +2943,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		default:
 			it, ok := m.selectedItem()
 			if !ok || it.kind != itemPanel {
-				m.status = "diff: select an agent panel"
+				m.status = m.tr("status.diff-select-agent-panel", "diff: select an agent panel")
 				return m, nil
 			}
 			m.requestDiff(it.panel)
@@ -2964,7 +2964,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		default:
 			it, ok := m.selectedItem()
 			if !ok {
-				m.status = "dispatch: select an agent panel or a work item"
+				m.status = m.tr("status.dispatch-select-agent-panel-2", "dispatch: select an agent panel or a work item")
 				return m, nil
 			}
 			if it.kind == itemGroup {
@@ -3017,21 +3017,21 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 	case actKeycastToggle:
 		m.keycast = !m.keycast
 		m.keycastKey, m.keycastAct = "", "" // never leave the last key stranded on the bar
-		m.status = "keycast: " + onOff(m.keycast)
+		m.status = m.tr("status.keycast", "keycast: ") + onOff(m.keycast)
 		if err := m.saveConfig(); err != nil {
-			m.status = "toggled, but save failed: " + err.Error()
+			m.status = m.tr("status.toggled-but-save-failed", "toggled, but save failed: ") + err.Error()
 		}
 		return m, nil
 	case actPreviewToggle:
 		m.preview = !m.preview
-		m.status = "preview: " + onOff(m.preview)
+		m.status = m.tr("status.preview", "preview: ") + onOff(m.preview)
 		// The pane lives beside the TREE. Saying "preview: on" while the cards are
 		// drawn would be a toggle that reports a change nothing on screen made.
 		if m.preview && m.gridDash() {
 			m.status += " · it shows beside the tree, not the cards"
 		}
 		if err := m.saveConfig(); err != nil {
-			m.status = "toggled, but save failed: " + err.Error()
+			m.status = m.tr("status.toggled-but-save-failed", "toggled, but save failed: ") + err.Error()
 		}
 		return m, nil
 	case actLens:
@@ -3049,7 +3049,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		// A force-restart stops the daemon and starts a fresh one, ending every
 		// panel it owns — so confirm before pulling the rug.
 		m.pendingRestart = true
-		m.status = "force-restart the server? this ends every panel · (y/n)"
+		m.status = m.tr("status.force-restart-server-ends", "force-restart the server? this ends every panel · (y/n)")
 		return m, nil
 	case actReload:
 		// Tell the daemon to re-read its config in place (the fleet keeps running),
@@ -3057,7 +3057,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		// defaults all update live — no detach, no restart.
 		m.sendf(proto.Command{Action: "server.reload"})
 		m = m.applyPrefs(loadPrefs())
-		m.status = "config reloaded · backend + cockpit"
+		m.status = m.tr("status.config-reloaded-backend-cockpit", "config reloaded · backend + cockpit")
 		return m, nil // the reloaded mouse toggle rides out on the next frame's View
 	case actDetach:
 		m.quitting = true
@@ -3116,7 +3116,7 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 			}
 			return m.exitGroupZoom()
 		default:
-			m.status = "already at the dashboard"
+			m.status = m.tr("status.already-at-dashboard", "already at the dashboard")
 			return m, nil
 		}
 	}
@@ -3129,29 +3129,29 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 	if m.mode == modeKeyMap {
 		switch kind, idx := m.keyMapRow(); kind {
 		case rowPrefix:
-			m.status = "press e to change the prefix key"
+			m.status = m.tr("status.press-e-change-prefix", "press e to change the prefix key")
 		case rowBinding:
 			return m.runAction(m.keymap()[idx].act)
 		case rowSetting:
 			switch idx {
 			case settingBell:
 				m.bellEnabled = !m.bellEnabled
-				m.status = "bell: " + onOff(m.bellEnabled)
+				m.status = m.tr("status.bell", "bell: ") + onOff(m.bellEnabled)
 			case settingMouse:
 				// The terminal's mouse reporting is a property of the frame now, so
 				// flipping the toggle IS the flip — the next View carries it.
 				m.mouseEnabled = !m.mouseEnabled
-				m.status = "mouse: " + onOff(m.mouseEnabled)
+				m.status = m.tr("status.mouse", "mouse: ") + onOff(m.mouseEnabled)
 			case settingLanguage:
 				m.lang = i18n.Next(m.effLang()) // a cycle, not a toggle: enter advances it
 				m.langChosen = true             // now it is a choice, and worth persisting
-				m.status = "language: " + string(m.lang)
+				m.status = m.tr("status.language", "language: ") + string(m.lang)
 			default:
 				m.confirmClose = !m.confirmClose
-				m.status = "confirm on close: " + onOff(m.confirmClose)
+				m.status = m.tr("status.confirm-close", "confirm on close: ") + onOff(m.confirmClose)
 			}
 			if err := m.saveConfig(); err != nil {
-				m.status = "toggled, but save failed: " + err.Error()
+				m.status = m.tr("status.toggled-but-save-failed", "toggled, but save failed: ") + err.Error()
 			}
 			return m, nil
 		}
@@ -3229,9 +3229,9 @@ func (m model) zoomInto(p panel.Panel) model {
 	m.sendf(proto.Command{Action: "panel.resize", ID: p.ID, Rows: zr, Cols: zc})
 	m.sendf(proto.Command{Action: "panel.attach", ID: p.ID})
 	if m.zoomExited {
-		m.status = "result · " + p.Title + " (exited)"
+		m.status = m.tr("status.result", "result · ") + p.Title + " (exited)"
 	} else {
-		m.status = "zoomed · " + p.Title
+		m.status = m.tr("status.zoomed", "zoomed · ") + p.Title
 	}
 	if m.scrolling { // restored straight into scroll mode — show the scroll hint, not the zoom status
 		m.status = scrollHintStatus
@@ -3255,12 +3255,12 @@ func (m model) fleetPanel(id string) (panel.Panel, bool) {
 // sets a hint and sends nothing.
 func (m *model) requestDiff(p panel.Panel) {
 	if !p.IsAgent() {
-		m.status = "diff: select an agent panel"
+		m.status = m.tr("status.diff-select-agent-panel", "diff: select an agent panel")
 		return
 	}
 	m.pendingEphemeralTitle = "diff · " + p.Title
 	m.sendf(proto.Command{Action: "panel.diff", ID: p.ID})
-	m.status = "diff · " + p.Title
+	m.status = m.tr("status.diff", "diff · ") + p.Title
 }
 
 // handleZoomKey forwards keystrokes to the zoomed panel, treating the prefix as
@@ -3357,7 +3357,7 @@ func runZoomBinding(m model, b binding) (tea.Model, tea.Cmd) {
 		return m.runAction(b.act)
 	case actSignal:
 		if m.zoomExited {
-			m.status = "panel has exited — nothing to signal"
+			m.status = m.tr("status.panel-has-exited-nothing", "panel has exited — nothing to signal")
 			return m, nil
 		}
 		return m.openSignalPicker(modeZoom, []string{m.zoomID}, m.zoomTitle), nil
@@ -3367,12 +3367,12 @@ func runZoomBinding(m model, b binding) (tea.Model, tea.Cmd) {
 		return m.openFleetSearch(), nil
 	case actDiff:
 		if m.zoomEphemeral { // already a diff zoom — no diff-of-a-diff
-			m.status = "diff: already showing a diff"
+			m.status = m.tr("status.diff-already-showing-diff", "diff: already showing a diff")
 			return m, nil
 		}
 		p, ok := m.fleetPanel(m.zoomID)
 		if !ok || !p.IsAgent() {
-			m.status = "diff: select an agent panel"
+			m.status = m.tr("status.diff-select-agent-panel", "diff: select an agent panel")
 			return m, nil
 		}
 		m.requestDiff(p)
@@ -3380,7 +3380,7 @@ func runZoomBinding(m model, b binding) (tea.Model, tea.Cmd) {
 	case actDispatch:
 		p, ok := m.fleetPanel(m.zoomID)
 		if !ok || !p.IsAgent() {
-			m.status = "dispatch: select an agent panel"
+			m.status = m.tr("status.dispatch-select-agent-panel", "dispatch: select an agent panel")
 			return m, nil
 		}
 		return m.startDispatch(p), nil
@@ -3403,7 +3403,7 @@ func runZoomBinding(m model, b binding) (tea.Model, tea.Cmd) {
 // key reaches the program. A no-op where there is nothing to scroll.
 func (m model) enterScroll() model {
 	if emu, _ := m.scrollTarget(); emu == nil {
-		m.status = "nothing to scroll here"
+		m.status = m.tr("status.nothing-scroll-here", "nothing to scroll here")
 		return m
 	}
 	m.scrolling = true
@@ -3654,7 +3654,7 @@ func (m *model) closeSelected() {
 	// — so the server retires them together and broadcasts a single snapshot.
 	if m.client != nil {
 		if err := m.client.Send(proto.Command{Action: "panel.close", IDs: ids}); err != nil {
-			m.status = "close failed: " + err.Error()
+			m.status = m.tr("status.close-failed", "close failed: ") + err.Error()
 			return
 		}
 	}
@@ -3665,7 +3665,7 @@ func (m *model) closeSelected() {
 	}
 	m.fleet = slices.DeleteFunc(m.fleet, func(p panel.Panel) bool { return gone[p.ID] })
 	m.clampCursor()
-	m.status = "closed · " + it.title()
+	m.status = m.tr("status.closed", "closed · ") + it.title()
 }
 
 // move shifts the cursor by delta within the active list, clamped to its bounds.
@@ -4834,9 +4834,9 @@ func (m model) popupWidth() int {
 // shows is the moment someone is most likely to want to change which view it is.
 func (m model) cycleUsageMode() (tea.Model, tea.Cmd) {
 	m.usageMode = m.usageMode.next()
-	m.status = "usage footer: " + m.usageMode.label(m.effLang())
+	m.status = m.tr("status.usage-footer", "usage footer: ") + m.usageMode.label(m.effLang())
 	if err := m.saveConfig(); err != nil {
-		m.status = "toggled, but save failed: " + err.Error()
+		m.status = m.tr("status.toggled-but-save-failed", "toggled, but save failed: ") + err.Error()
 	}
 	return m, nil
 }

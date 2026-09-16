@@ -77,7 +77,7 @@ func (m model) availableAgents() []proto.AgentBackend {
 func (m model) openAgentPicker(from mode, purpose agentPurpose) model {
 	list := m.availableAgents()
 	if len(list) == 0 {
-		m.status = "no agent backend found on the fleet's machine · install one, then " + keyLabel(m.effPrefix()) + " R"
+		m.status = m.tr("status.no-agent-backend-found", "no agent backend found on the fleet's machine · install one, then ") + keyLabel(m.effPrefix()) + " R"
 		return m
 	}
 	m.agentList = list
@@ -92,9 +92,9 @@ func (m model) openAgentPicker(from mode, purpose agentPurpose) model {
 	}
 	m.mode = modeAgentPick
 	if purpose == agentForDefault {
-		m.status = "default agent · enter sets it · esc cancels"
+		m.status = m.tr("status.default-agent-enter-sets", "default agent · enter sets it · esc cancels")
 	} else {
-		m.status = "pick an agent · enter chooses it · esc cancels"
+		m.status = m.tr("status.pick-agent-enter-chooses", "pick an agent · enter chooses it · esc cancels")
 	}
 	return m
 }
@@ -105,7 +105,7 @@ func (m model) handleAgentKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "esc":
 		m.mode = m.agentFrom
-		m.status = "cancelled"
+		m.status = m.tr("status.cancelled", "cancelled")
 		return m, nil
 	case "up", "k":
 		m.agentCursor = wrapIndex(m.agentCursor, -1, len(m.agentList))
@@ -131,10 +131,10 @@ func (m model) chooseAgent(name string) (tea.Model, tea.Cmd) {
 	case agentForDefault:
 		m.defaultAgent = name
 		if err := m.saveConfig(); err != nil {
-			m.status = "save failed: " + err.Error()
+			m.status = m.tr("status.save-failed", "save failed: ") + err.Error()
 			return m, nil
 		}
-		m.status = "default agent · " + name
+		m.status = m.tr("status.default-agent", "default agent · ") + name
 		return m, nil
 	default:
 		m.pendingAgent = name

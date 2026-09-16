@@ -56,7 +56,7 @@ func (m model) handleCommandKey(key string) (tea.Model, tea.Cmd) {
 func (m model) runPluginCommand(name string) model {
 	m.sendf(proto.Command{Action: "command.run", Name: name})
 	m.mode = m.commandFrom
-	m.status = "ran " + name
+	m.status = m.tr("status.ran", "ran ") + name
 	return m
 }
 

@@ -46,7 +46,7 @@ func (m model) logTarget() (panel.Panel, bool) {
 func (m model) toggleLog() (tea.Model, tea.Cmd) {
 	p, ok := m.logTarget()
 	if !ok {
-		m.status = "logging: select a panel"
+		m.status = m.tr("status.logging-select-panel", "logging: select a panel")
 		return m, nil
 	}
 	m.sendf(proto.Command{Action: "panel.log", ID: p.ID})
@@ -59,11 +59,11 @@ func (m model) toggleLog() (tea.Model, tea.Cmd) {
 func (m model) viewLog() (tea.Model, tea.Cmd) {
 	p, ok := m.logTarget()
 	if !ok {
-		m.status = "log: select a panel"
+		m.status = m.tr("status.log-select-panel", "log: select a panel")
 		return m, nil
 	}
 	if !p.Logging {
-		m.status = "log: this panel is not being logged — " + m.logChord() + " starts it"
+		m.status = m.tr("status.log-panel-not-being", "log: this panel is not being logged — ") + m.logChord() + " starts it"
 		return m, nil
 	}
 	m.pendingEphemeralTitle = "log · " + p.Title

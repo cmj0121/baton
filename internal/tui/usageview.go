@@ -47,7 +47,7 @@ const usageBurners = 8
 func (m model) openUsage(from mode) model {
 	m.usageFrom = from
 	m.mode = modeUsage
-	m.status = "account usage"
+	m.status = m.tr("status.account-usage", "account usage")
 	return m
 }
 

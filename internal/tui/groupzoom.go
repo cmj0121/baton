@@ -302,7 +302,7 @@ func (m model) enterResize() model {
 // so the sizing sticks until the layout is cycled (or the group is left).
 func (m model) exitResize() model {
 	m.groupResize = false
-	m.status = "group · " + m.groupName
+	m.status = m.tr("status.group", "group · ") + m.groupName
 	return m
 }
 
@@ -1110,7 +1110,7 @@ func (m model) enterInteract() model {
 func (m model) exitInteract() model {
 	m.groupInteract = false
 	m.groupArmed = false
-	m.status = "group · " + m.groupName
+	m.status = m.tr("status.group", "group · ") + m.groupName
 	return m
 }
 
@@ -1154,7 +1154,7 @@ func (m model) togglePin() model {
 		}
 		m.groupPinned[p.ID] = true
 		m.sendf(proto.Command{Action: "panel.pin", IDs: []string{p.ID}})
-		m.status = "pinned " + p.Title
+		m.status = m.tr("status.pinned", "pinned ") + p.Title
 	}
 	m.reconcileGroupTiles(p.ID) // attach/detach the affected tile, keep focus on p
 	return m
@@ -1169,7 +1169,7 @@ func (m model) removeFocusedMember() model {
 		return m
 	}
 	m.sendf(proto.Command{Action: "panel.ungroup", IDs: []string{p.ID}})
-	m.status = "removed " + p.Title + " from the group"
+	m.status = m.tr("status.removed", "removed ") + p.Title + " from the group"
 	return m
 }
 
@@ -1219,7 +1219,7 @@ func (m model) enterSummaryScope() model {
 // re-tiles the parent group's own tiles.
 func (m model) exitSummaryScope() model {
 	m = m.retile(func(m *model) { m.summaryScope = false })
-	m.status = "group · " + groupBreadcrumb(m.groupName)
+	m.status = m.tr("status.group", "group · ") + groupBreadcrumb(m.groupName)
 	return m
 }
 
@@ -1233,7 +1233,7 @@ func (m model) rescopeGroup(path string) model {
 		m.groupName = path
 		m.groupPinned = pinsForMembers(m.fleetGroup()) // pins are per-scope, over the new direct panels
 	})
-	m.status = "group · " + groupBreadcrumb(path)
+	m.status = m.tr("status.group", "group · ") + groupBreadcrumb(path)
 	return m
 }
 
@@ -1376,7 +1376,7 @@ func (m model) backToGroup() (tea.Model, tea.Cmd) {
 	m.emuIRM = nil
 	m.zoomID, m.zoomTitle, m.zoomArmed, m.zoomExited, m.zoomGroupOrigin = "", "", false, false, ""
 	m.attachGroupMembers() // re-subscribe every tile's live stream
-	m.status = "group · " + m.groupName
+	m.status = m.tr("status.group", "group · ") + m.groupName
 	return m, nil
 }
 

@@ -22,17 +22,17 @@ import (
 func (m model) copyToggle() model {
 	if m.copySelecting {
 		m.copySelecting = false
-		m.status = "selection cleared"
+		m.status = m.tr("status.selection-cleared", "selection cleared")
 		return m
 	}
 	emu, _ := m.scrollTarget()
 	if emu == nil {
-		m.status = "nothing to select here"
+		m.status = m.tr("status.nothing-select-here", "nothing to select here")
 		return m
 	}
 	m.copySelecting = true
 	m.copyAnchor = m.topVisibleLine(emu)
-	m.status = "selection started · scroll to extend · y copies · v clears"
+	m.status = m.tr("status.selection-started-scroll-extend", "selection started · scroll to extend · y copies · v clears")
 	return m
 }
 
@@ -43,19 +43,19 @@ func (m model) copyToggle() model {
 func (m model) copyBlockToggle() model {
 	if m.copySelecting && m.copyBlock {
 		m.copySelecting, m.copyBlock = false, false
-		m.status = "selection cleared"
+		m.status = m.tr("status.selection-cleared", "selection cleared")
 		return m
 	}
 	emu, _ := m.scrollTarget()
 	if emu == nil {
-		m.status = "nothing to select here"
+		m.status = m.tr("status.nothing-select-here", "nothing to select here")
 		return m
 	}
 	m.copySelecting = true
 	m.copyBlock = true
 	m.copyAnchor = m.topVisibleLine(emu)
 	m.copyCol = max(0, m.scrollCols()-1) // start full width; h narrows it
-	m.status = "block select · scroll rows · h/l columns · y copies · V clears"
+	m.status = m.tr("status.block-select-scroll-rows", "block select · scroll rows · h/l columns · y copies · V clears")
 	return m
 }
 
@@ -66,7 +66,7 @@ func (m model) adjustCopyCol(delta int) model {
 		return m
 	}
 	m.copyCol = max(0, min(m.copyCol+delta, m.scrollCols()-1))
-	m.status = fmt.Sprintf("block · columns 0–%d", m.copyCol)
+	m.status = fmt.Sprintf(m.tr("status.block-columns-0-d", "block · columns 0–%d"), m.copyCol)
 	return m
 }
 
@@ -135,7 +135,7 @@ func (m model) yankSelection() (tea.Model, tea.Cmd) {
 	plain, _ := combinedPlain(emu)
 	lo, hi, ok := m.copyRange(emu, len(plain), rows)
 	if !ok {
-		m.status = "nothing to copy"
+		m.status = m.tr("status.nothing-copy", "nothing to copy")
 		return m, nil
 	}
 	// Block selection clips each row to the chosen columns; a line selection takes
@@ -153,7 +153,7 @@ func (m model) yankSelection() (tea.Model, tea.Cmd) {
 	text := strings.TrimRight(strings.Join(rowsOut, "\n"), " \t\n") + "\n"
 	n := hi - lo + 1
 	m = m.exitScroll() // a yank ends copy mode and returns to the live bottom
-	m.status = fmt.Sprintf("copied %d line(s) to the clipboard", n)
+	m.status = fmt.Sprintf(m.tr("status.copied-d-line-s", "copied %d line(s) to the clipboard"), n)
 	return m, clipboardCmd(text)
 }
 
