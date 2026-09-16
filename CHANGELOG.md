@@ -4,6 +4,36 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v2.2.0](https://github.com/cmj0121/baton/releases/tag/v2.2.0) — the cockpit speaks your language
+
+2026-09-16
+
+- **The whole cockpit is translated, not just its help.** The catalog covered the `?` key list and the key map;
+  everything else answered in English whatever the language — the panel-config page, eighteen text-input pop-ups, both
+  pickers, the dashboard frame, the git surfaces, the inbox, the task queue, the group split and 161 status lines. 135
+  catalog entries became 649. Key names, config keys (`cpus`, `nofile`), other people's words (`SIGINT`, `git add -A`,
+  `claude`) and serialized values stay English on purpose, each for a reason the catalog states.
+- **Completeness is tested rather than asserted.** `TestEveryMessageKeyIsTranslated` reads the package's own source,
+  collects every key paired with the English beside it, and fails on any whose zh-TW is the same string — reaching the
+  five hundred-odd messages no fixture can draw, because most need the keystroke that sets them or the failure that
+  raises them. Two scanners sweep the rendered screens for English words a line-by-line diff cannot see.
+- **No floating widget outgrows its terminal, or changes size while you walk it.** The panel-config page was drawn two
+  rows taller than the screen, so its legend and the footer sat below the bottom edge: its reserved figure said 12
+  beside a comment reading "two hints" long after the page had four. That count is computed now. The wordmark yields
+  when an overlay needs the room, over-tall pop-ups are clipped without ever dropping the legend, and the tabs, the git
+  menu and the directory browser all hold one height.
+- **The panel-config page splits into tabs** — defaults, limits, feedback — each carrying its own rows and hints.
+  On an 80×32 terminal the old page left one resource-limit row visible between its headings and its hints.
+- **An agent panel starts knowing it can write to the fleet memory.** `score.submit` was never fenced, but the only
+  place an agent was told so is a dispatched brief, which a panel you open and talk to yourself never receives. Agent
+  panels now launch pointing at an MCP config baton writes in its own directory, carrying `score_submit` and nothing
+  else — the fleet-control table stays the conductor's. `panel.agent-mcp`, default on, read at spawn.
+- **The dashboard tree draws the stems it hangs its rows from.** Indentation alone left a sub-group's contents floating
+  with nothing beside them, reading as a second root rather than as the contents of the work item above.
+- **Fixes:** a SIGHUP handler that outlived the loop that armed them; `score.feedback` stamped into the config on every
+  unrelated save; `e` on the panel-config page editing a row from the tab you came from; a CJK column that padded by
+  runes instead of display cells; and a test suite that read the developer's locale.
+
 ## [v2.1.2](https://github.com/cmj0121/baton/releases/tag/v2.1.2) — the memory learns to ask
 
 2026-09-15
