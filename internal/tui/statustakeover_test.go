@@ -22,13 +22,13 @@ func barModel(width int, status string) model {
 // connection indicator already — green when the backend answers — so the word
 // beside it bought nothing and cost the strip's scarcest resource.
 func TestTheRestingFooterIsTheEndpointAlone(t *testing.T) {
-	foot := ansi.Strip(barModel(120, "").footer())
+	// A cockpit at rest: the status IS the resting line, which is how the footer
+	// spends most of its life.
 	m := barModel(120, "")
-	if !strings.Contains(ansi.Strip(m.restingStatus()), "local") {
-		t.Fatalf("the resting line lost the endpoint: %q", m.restingStatus())
-	}
-	if strings.Contains(m.restingStatus(), "attached") {
-		t.Errorf("the resting line still names the connection in words: %q", m.restingStatus())
+	m.status = m.restingStatus()
+	foot := ansi.Strip(m.footer())
+	if !strings.Contains(foot, "● local") {
+		t.Fatalf("the footer does not rest on the endpoint:\n%s", foot)
 	}
 	if strings.Contains(foot, "attached") {
 		t.Errorf("the footer still names the connection in words:\n%s", foot)
