@@ -173,6 +173,7 @@ var zhTW = map[string]string{
 	"usage.view.agent":        "代理",
 	"usage.view.session-left": "剩餘 5h",
 	"usage.view.week-left":    "剩餘 7d",
+	"usage.view.spent":        "已用",
 	"usage.view.panels":       "面板用量",
 	"usage.view.panels-one":   "個面板",
 	"usage.view.panels-many":  "個面板",

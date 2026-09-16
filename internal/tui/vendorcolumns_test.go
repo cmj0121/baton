@@ -176,3 +176,54 @@ func TestARowWithNoReadingGrowsNoColumns(t *testing.T) {
 		t.Errorf("row %q acquired a percentage from a reading that is not its own", row)
 	}
 }
+
+// The regression this column exists to stop (#111): grok had been running all
+// day, and the roll showed three dashes. Attribution needs a session id, and
+// withSessionID hands one to Claude Code alone — so for every other agent the
+// panel column can never be filled, and a row with nothing else on it says
+// nothing about an agent baton has read the books of.
+func TestAVendorBatonCannotAttributeStillShowsWhatItSpent(t *testing.T) {
+	m := quotaModel(
+		[]proto.VendorUsage{{Vendor: "grok", State: "reading", Tokens: 58_000_000, CostUSD: 8.08}},
+		&proto.LimitsInfo{FiveHour: &proto.LimitWindow{UsedPercent: 38}},
+		nil, nil) // no panel of grok's can ever reach UsageInfo.Panels
+
+	row := rowFor(t, m.usageVendorSection(), "grok")
+	if !strings.Contains(row, "58.0M tok") {
+		t.Errorf("grok's row carries no figure at all: %q", row)
+	}
+	if strings.Contains(row, "62%") {
+		t.Errorf("grok's row borrowed the account's quota: %q", row)
+	}
+}
+
+// The two token figures are different measurements and the row keeps them apart.
+// The vendor's reader sees every session on the machine; the panel column sees
+// only what the fleet spawned, and on a machine where the same agent is also run
+// from another terminal the gap between them is itself the reading.
+func TestTheVendorsOwnReadingAndTheFleetsAttributionAreSeparateColumns(t *testing.T) {
+	m := quotaModel(
+		[]proto.VendorUsage{{Vendor: "claude", State: "reading", Tokens: 1_200_000}}, nil,
+		[]panel.Panel{{ID: "1", Profile: "claude"}},
+		map[string]proto.PanelUsage{"1": {Tokens: 800_000}})
+
+	row := rowFor(t, m.usageVendorSection(), "claude")
+	for _, want := range []string{"1.2M tok", "800.0K tok", "1 panel"} {
+		if !strings.Contains(row, want) {
+			t.Errorf("row %q is missing %q — the two readings are not both on it", row, want)
+		}
+	}
+}
+
+// A reader that looked and found an empty window is a true zero, but it shares a
+// column with agents whose figure is a real total. "0 tok" there reads as a claim
+// about the agent rather than about the window.
+func TestAVendorWithNothingSpentShowsAMarkNotAZero(t *testing.T) {
+	cell := vendorSpentCell(proto.VendorUsage{Vendor: "claude", State: "reading"})
+	if strings.Contains(cell, "0") {
+		t.Errorf("spent cell = %q, want a mark rather than a count of zero", cell)
+	}
+	if strings.TrimSpace(cell) == "" {
+		t.Error("spent cell rendered blank; it is indistinguishable from a vendor with no reader")
+	}
+}

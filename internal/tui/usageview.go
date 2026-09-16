@@ -129,13 +129,24 @@ func (m model) usageView() string {
 // nothing" are opposite claims, and a row that drew an empty bar would make the
 // second one for free.
 //
-// A vendor baton CAN read gets three columns, and they come from two places.
-// What is left of the five-hour window and what is left of the week belong to the
-// account whose books the limits reading describes, and to no other vendor. What
-// the fleet's panels have spent on this agent is baton's own attribution, and
-// every readable vendor has it. So a row carrying the third column and neither of
-// the first two is not a row with holes in it — it is grok, which publishes no
-// ceiling for anybody to count down from.
+// A vendor baton CAN read gets four columns, and they come from three places.
+//
+// What is left of the five-hour window and of the week belong to the account
+// whose books the limits reading describes, and to no other vendor — so grok, who
+// publishes no ceiling for anybody to count down from, gets a dash in both.
+//
+// `spent` is the vendor's OWN reader: everything it can see on this machine,
+// including the sessions nobody spawned from here. Every readable vendor has it,
+// and for a vendor baton cannot attribute it is the only figure on the row that
+// will ever be filled in — which is why it is back after a version without it
+// left grok showing three dashes on an agent that had been running all day.
+//
+// `panels` is baton's own attribution, and it is claude-only in practice rather
+// than by intent: attribution needs a session id, withSessionID hands one to
+// Claude Code alone, so a grok panel cannot appear there however hard it works.
+// The two are kept apart rather than merged because they measure different
+// things, and on a fleet whose agents also run outside baton the gap between them
+// is itself the reading.
 func (m model) usageVendorSection() []string {
 	if m.usageInfo == nil || len(m.usageInfo.Vendors) == 0 {
 		// Nil is an older daemon, which never said. Drawing a header over nothing
@@ -153,10 +164,11 @@ func (m model) usageVendorSection() []string {
 
 	// The two leading spaces stand in for the mark every row below carries, so the
 	// header's columns line up with theirs.
-	rows := []string{mutedStyle.Render(fmt.Sprintf("  %-*s %-*s %-*s %s",
+	rows := []string{mutedStyle.Render(fmt.Sprintf("  %-*s %-*s %-*s %-*s %s",
 		vendorNameWidth, tr("usage.view.agent", "Agent"),
 		vendorQuotaWidth, tr("usage.view.session-left", "5h left"),
-		vendorQuotaWidth, tr("usage.view.week-left", "7d left"),
+		vendorWeekWidth, tr("usage.view.week-left", "7d left"),
+		vendorSpentWidth, tr("usage.view.spent", "spent"),
 		tr("usage.view.panels", "panels")))}
 	for _, v := range m.usageInfo.Vendors {
 		name := v.Vendor
@@ -173,19 +185,28 @@ func (m model) usageVendorSection() []string {
 			continue
 		}
 		rows = append(rows, mark+pad(name, vendorNameWidth)+" "+
-			m.vendorQuotaCell(v.Vendor, fiveHour)+" "+
-			m.vendorQuotaCell(v.Vendor, sevenDay)+" "+
+			m.vendorQuotaCell(v.Vendor, fiveHour, vendorQuotaWidth, true)+" "+
+			m.vendorQuotaCell(v.Vendor, sevenDay, vendorWeekWidth, false)+" "+
+			vendorSpentCell(v)+" "+
 			m.vendorPanelCell(spend[v.Vendor]))
 	}
 	return rows
 }
 
 // The vendor roll's column widths. The name is the widest agent name plus the
-// default's mark; a quota cell holds "100% · 2:14:31" and nothing longer, because
-// FormatCountdown collapses anything past a day to "3d4h".
+// default's mark, and the five-hour cell holds "100% · 2:14:31" and nothing
+// longer, because FormatCountdown collapses anything past a day to "3d4h".
+//
+// The weekly cell is the narrow one because it is the cheapest reading on the
+// row: a reset three days out is not read to the second, and the Week (all) bar
+// above still counts it down. Giving up those cells is what buys the spent
+// column, which is the only figure a vendor baton cannot attribute will ever
+// have.
 const (
 	vendorNameWidth  = 12
 	vendorQuotaWidth = 14
+	vendorWeekWidth  = 8
+	vendorSpentWidth = 10
 )
 
 // pad lays out one cell at a fixed width, truncating what will not fit.
@@ -211,23 +232,48 @@ func pad(s string, w int) string { return fmt.Sprintf("%-*s", w, truncate(s, w))
 // Claude Code status line or the Anthropic OAuth endpoint — both of them that one
 // account's books. Lending the number to grok's row would publish a ceiling grok
 // has never named, which is the failure the rest of this file is built to avoid.
-func (m model) vendorQuotaCell(vendor string, w *proto.LimitWindow) string {
+func (m model) vendorQuotaCell(vendor string, w *proto.LimitWindow, width int, countdown bool) string {
 	if vendor != usage.LimitsVendor || w == nil {
-		return mutedStyle.Render(pad("—", vendorQuotaWidth))
+		return mutedStyle.Render(pad("—", width))
 	}
 	cell := fmt.Sprintf("%.0f%%", (1-limitFraction(w))*100)
-	if left, ok := limitCountdown(w, m.now); ok {
-		cell = joinDot(cell, usage.FormatCountdown(left))
+	if countdown {
+		if left, ok := limitCountdown(w, m.now); ok {
+			cell = joinDot(cell, usage.FormatCountdown(left))
+		}
 	}
-	return pad(cell, vendorQuotaWidth)
+	return pad(cell, width)
 }
 
-// vendorPanelCell is the third column: what the panels the fleet is running on
+// vendorSpentCell is what the vendor's own reader saw this window: every session
+// on this machine, whether or not baton spawned it.
+//
+// It is the row's load-bearing column for any agent baton cannot attribute, and
+// it is the reason the roll can say anything at all about grok. A reading of
+// nothing is a mark rather than "0 tok": the reader looked and the window is
+// empty, which is a true zero — but it shares a column with agents whose figure
+// is a real total, and a bare 0 there reads as a claim about the agent rather
+// than about the window.
+//
+// The cost the old single-column standing carried ("· ≈$8.08 API") does not fit
+// beside four columns at any terminal width worth laying out for. It is still on
+// the footer segment for the default agent.
+func vendorSpentCell(v proto.VendorUsage) string {
+	if v.Tokens <= 0 {
+		return mutedStyle.Render(pad("—", vendorSpentWidth))
+	}
+	return pad(humanTokens(v.Tokens), vendorSpentWidth)
+}
+
+// vendorPanelCell is the last column: what the panels the fleet is running on
 // this agent have spent this window, and how many of them there are.
 //
-// Nothing attributed is a dash rather than "0 tok". An agent baton has no panels
-// for has not been shown to be idle — somebody may be running it in another
-// terminal, and the vendor's own reader would see that while this column cannot.
+// Nothing attributed is a dash rather than "0 tok", and for a non-claude agent it
+// is always a dash: attribution runs on the session id withSessionID hands to
+// Claude Code and to nothing else, so a grok panel cannot reach this column
+// however hard it works. The dash means "baton cannot attribute this", never
+// "this agent is idle" — the spent column beside it is what says whether the
+// agent has been working.
 func (m model) vendorPanelCell(s agentSpend) string {
 	if s.panels == 0 {
 		return mutedStyle.Render("—")
