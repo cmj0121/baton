@@ -130,7 +130,7 @@ settings:
 按 **`v k`** 會在 `? keys` 旁邊開一段提示,說出你剛按了什麼、那個鍵做了什麼:
 
 ```text
- DASHBOARD │ ? keys │ G group          CPU 22%  MEM 11.5/16G  ⏱ 09:34:49  ● attached · local
+ DASHBOARD │ ? keys │ G group          CPU 22%  MEM 11.5/16G  ⏱ 09:34:49             ● local
 ```
 
 領導鍵是邊按邊顯示的:等待後半段時是 `C-t …`,你補完之後變成 `C-t d dashboard`。每次按鍵停留三秒後自行清除,所以閒置的

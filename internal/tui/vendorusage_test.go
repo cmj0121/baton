@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 )
 
@@ -133,6 +134,12 @@ func TestOverlayListsEveryVendorWithItsStanding(t *testing.T) {
 		{Vendor: "codex", State: "no-source", Reason: "baton has no usage source for this agent"},
 		{Vendor: "gemini", State: "absent", Reason: "not installed on the fleet's machine"},
 	})
+	// A panel on claude, so the readable vendor has a figure to show. The reading
+	// vendors are now priced by what the fleet spent on them rather than by the
+	// vendor's own machine-wide total, and a row with nothing attributed shows a
+	// mark — which is a different assertion, held by its own test.
+	m.fleet = []panel.Panel{{ID: "1", Profile: "claude"}}
+	m.usageInfo.Panels = map[string]proto.PanelUsage{"1": {Tokens: 1_200_000}}
 	rows := m.usageVendorSection()
 	if len(rows) != 4 { // a header and three vendors
 		t.Fatalf("got %d rows, want 4 (header + 3 vendors)", len(rows))
@@ -209,17 +216,18 @@ func TestOverlayMarksTheDefaultAgent(t *testing.T) {
 	}
 }
 
-// A vendor baton read and found empty says so in words. Left blank it would look
-// like the states that carry no figure at all, which is the confusion this whole
-// feature exists to remove.
-func TestAReadingOfNothingSaysNothingSpent(t *testing.T) {
+// A vendor baton can read but has no panels for still renders a cell. Left blank
+// it would look like the states that carry no figure at all, which is the
+// confusion this whole feature exists to remove — and a "0 tok" would be worse
+// still, since nobody has shown the agent to be idle.
+func TestAVendorWithNoPanelsRendersAMarkNotABlank(t *testing.T) {
 	m := vendorModel("claude", []proto.VendorUsage{{Vendor: "claude", State: "reading"}})
-	got := m.vendorStanding(proto.VendorUsage{Vendor: "claude", State: "reading"})
+	got := m.vendorPanelCell(agentSpend{})
 	if strings.TrimSpace(got) == "" {
-		t.Fatal("a reading of zero rendered as blank; it is indistinguishable from having no source")
+		t.Fatal("a vendor with no attributed panels rendered as blank; it is indistinguishable from having no source")
 	}
-	if !strings.Contains(got, "nothing spent") {
-		t.Errorf("standing = %q, want it to say nothing was spent", got)
+	if strings.Contains(got, "0") {
+		t.Errorf("panel cell = %q, want a mark rather than a count of zero", got)
 	}
 }
 

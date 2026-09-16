@@ -1153,15 +1153,20 @@ const statusTTL = 4
 // simply watches for the status to stop changing.
 func (m *model) ageStatus() {
 	resting := m.restingStatus()
-	if m.status == resting || strings.HasPrefix(m.status, "error") {
-		return
-	}
 	if m.status != m.lastStatus {
 		m.lastStatus = m.status
 		m.statusAge = 0
 		return
 	}
-	if m.statusAge++; m.statusAge >= statusTTL {
+	if m.status == resting {
+		return
+	}
+	// The age keeps running for an error even though the error itself never
+	// clears. Two different things are being timed: how long the message stays in
+	// the strip, which for an error is forever, and how long it holds the strip to
+	// itself, which for everything is statusTTL. Freezing the count would leave an
+	// error permanently fresh, and a footer that never showed the clock again.
+	if m.statusAge++; m.statusAge >= statusTTL && !strings.HasPrefix(m.status, "error") {
 		m.status = resting
 		m.statusAge = 0
 	}
@@ -1169,9 +1174,17 @@ func (m *model) ageStatus() {
 
 // restingStatus is the footer's quiet, default line — where the status settles
 // between actions.
+//
+// It is the endpoint and nothing else. The cap this is drawn on is already the
+// connection indicator: the dot is green while the backend answers and red when
+// it does not, and the outage cap says so in words when it matters. "attached"
+// beside it restated in a word what the colour had said in no space at all, on
+// the one row of the cockpit that runs out of room first — and it was the most
+// expensive word in the strip in zh-TW, where it is three characters and a
+// separator before the endpoint gets a look in.
 func (m model) restingStatus() string {
 	if m.endpoint != "" {
-		return m.tr("status.attached", "attached · ") + m.endpoint
+		return m.endpoint
 	}
 	return m.tr("mode.dashboard.status", "dashboard")
 }
@@ -1193,7 +1206,7 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		if sm.Version != proto.ProtocolVersion {
 			m.status = m.tr("status.error-server-speaks", "error: server speaks ") + sm.Version + ", client " + proto.ProtocolVersion
 		} else {
-			m.status = m.tr("status.attached", "attached · ") + m.endpoint
+			m.status = m.restingStatus()
 		}
 	case "goodbye":
 		// The server is dropping this cockpit on purpose and said why — a kick, or
@@ -5456,9 +5469,13 @@ func (m model) statusBar(left, hint string) string {
 	// focused — the dashboard selection, a zoom, the focused tile of a split —
 	// without three copies of the same rule.
 	caps := prefixBadge + m.outageCap() + m.attentionBadge() + m.logCap() + m.pluginFooterCap() + m.usageCap() + stats + clock
+	budget := m.width - lipgloss.Width(left) - lipgloss.Width(caps) - 4 // "● " + cap padding
+	if bar := m.statusTakeover(prefixBadge, budget, statusBg); bar != "" {
+		return bar
+	}
 	right := caps
-	if budget := m.width - lipgloss.Width(left) - lipgloss.Width(caps) - 4; budget > 0 {
-		right += seg("● "+truncate(m.statusText(), budget), colInk, statusBg) // "● " + cap padding
+	if budget > 0 {
+		right += seg("● "+truncate(m.statusText(), budget), colInk, statusBg)
 	}
 
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
@@ -5482,6 +5499,49 @@ func (m model) statusBar(left, hint string) string {
 		hint = ""
 	}
 	return left + m.bar().Width(gap).Render(hint) + right
+}
+
+// statusTakeover is the whole footer given over to a message that will not fit
+// beside the caps, or "" when the strip is to be drawn as usual.
+//
+// The strip composes every cap first — the prefix badge, the outage, the
+// attention count, the log, the plugin's own segment, the usage reading, the host
+// stats, the clock — and hands the message whatever width is left over. With the
+// usage segment up on a narrow terminal that remainder goes to nothing, and the
+// one line in the cockpit that is genuinely new is clipped mid-word or, when the
+// budget lands at zero, dropped without a trace. A daemon error carries git's own
+// stderr folded onto a single line, so the case where the message is longest is
+// exactly the case where it is worth reading whole.
+//
+// The priority was backwards, but only in the case that does not fit. Every cap
+// is ambient state: it will still be there a second from now and can be read at
+// any time, so a message that would be truncated takes the row instead, and the
+// caps come back the moment it goes. A message that fits changes nothing — the
+// footer is not a place to rearrange for the sake of it, and a status that
+// reflowed the whole strip every time it changed would be its own kind of noise.
+//
+// Three things outrank it. A key run in the air and a backend outage are about
+// the keystroke happening now rather than the one that has just finished, and
+// neither is shown anywhere else on the screen. And a message that has had its
+// statusTTL is no longer news: an error never clears, and one holding the row
+// forever would be a cockpit with no clock.
+func (m model) statusTakeover(prefixBadge string, budget int, bg lipgloss.Color) string {
+	text := m.statusText()
+	switch {
+	case prefixBadge != "" || m.backendDown || m.grabbing():
+		return ""
+	case text == "" || m.status == m.restingStatus():
+		return "" // the quiet line is not a message; it has nothing to take the row for
+	case m.statusAge >= statusTTL:
+		return "" // said its piece; it lives in the corner now
+	case budget > 0 && lipgloss.Width(text) <= budget:
+		return "" // it fits where it has always gone
+	}
+	// The cap has to measure exactly m.width: lipgloss wraps what overflows, and a
+	// footer that wraps is a footer that has eaten the row above it. Width() counts
+	// the padding, so the text is truncated to what is left inside it.
+	return lipgloss.NewStyle().Foreground(colInk).Background(bg).Bold(true).
+		Padding(0, 1).Width(m.width).Render(truncate("● "+text, max(m.width-2, 0)))
 }
 
 // helpHint is the footer's standing invitation to the key list: "? keys" in a

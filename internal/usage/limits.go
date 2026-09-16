@@ -155,6 +155,14 @@ const (
 	LimitsOAuth      = "oauth"
 )
 
+// LimitsVendor names the agent backend a limits reading is about. Both sources
+// above read the same account: the status line is Claude Code's own session
+// state, and the OAuth endpoint is Anthropic's. So a per-vendor view may put the
+// reading under `claude` and must put it nowhere else — a quota is a vendor's
+// statement about its own account, and no other vendor here has made one. A
+// window borrowed across the column would publish a ceiling nobody named.
+const LimitsVendor = "claude"
+
 // The quota thresholds, used when the config has not set a usable pair. They are
 // the same figures as the window ones and deliberately so: a user who has tuned
 // when the footer turns amber has said something about their own tolerance, and
