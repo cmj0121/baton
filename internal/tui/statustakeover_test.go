@@ -79,10 +79,14 @@ func TestAMessageThatFitsLeavesTheStripAlone(t *testing.T) {
 // A run in the air keeps the strip. The keys typed so far are shown nowhere else
 // on the screen, and the next keystroke depends on reading them.
 func TestAKeyRunOutranksTheMessage(t *testing.T) {
-	m := barModel(100, longErr)
+	// The same width the takeover test uses, so "the message is not shown whole"
+	// distinguishes the two layouts rather than being true of both. And the badge
+	// is asserted on the key it carries, not on its trailing "…" — truncate ends
+	// a clipped message with one too, which would pass this for the wrong reason.
+	m := barModel(120, longErr)
 	m.pending = []string{"g"}
 	foot := ansi.Strip(m.footer())
-	if !strings.Contains(foot, "…") {
+	if !strings.Contains(foot, "g …") {
 		t.Errorf("the run in the air was covered by the message:\n%s", foot)
 	}
 	if strings.Contains(foot, "unable to access the repository") {
