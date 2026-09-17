@@ -21,16 +21,29 @@ import (
 // carries a usage block, and it is a small minority of updates.jsonl.
 var grokUsageKey = []byte(`"costUsdTicks"`)
 
+// grokHome is grok's config root: $GROK_HOME when set, else ~/.grok. Session
+// logs and auth.json both live under it, and they have to agree — a reader that
+// honoured the override for one and not the other would scan a tree the signed-in
+// CLI did not write.
+func grokHome() string {
+	if v := os.Getenv("GROK_HOME"); v != "" {
+		return v
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".grok")
+	}
+	return ".grok"
+}
+
 // grokSessionsDir locates grok's session root: $GROK_HOME/sessions when set, else
 // ~/.grok/sessions.
 func grokSessionsDir() string {
-	if v := os.Getenv("GROK_HOME"); v != "" {
-		return filepath.Join(v, "sessions")
-	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return filepath.Join(home, ".grok", "sessions")
-	}
-	return filepath.Join(".grok", "sessions")
+	return filepath.Join(grokHome(), "sessions")
+}
+
+// grokAuthFile is where the grok CLI stores its OAuth access token.
+func grokAuthFile() string {
+	return filepath.Join(grokHome(), "auth.json")
 }
 
 // grokFormat is the grok session-log reader.
@@ -51,9 +64,9 @@ func grokFormat() vendorFormat {
 }
 
 // NewGrokProvider builds the grok reader over the user's session logs. window is
-// the same window length the Claude reader takes; grok states no window of its
-// own, so baton measures it the same way for both rather than inventing a second
-// meaning for the same setting.
+// the same window length the Claude reader takes; the logs state no window of
+// their own, so baton measures spend the same way for both. Grok's weekly credit
+// pool is a different reading and lives on GrokLimits.
 func NewGrokProvider(window time.Duration) *LocalProvider {
 	return newFormatProvider(grokFormat(), window)
 }
