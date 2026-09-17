@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -37,6 +38,18 @@ import (
 // gives the number, and what the overlay adds is being able to see four windows
 // against each other at a glance.
 const usageBarWidth = 16
+
+// The roster's and the bar rows' column widths. They were spelled as fmt verbs
+// inline until the columns had to be measured in display cells rather than runes;
+// naming them keeps a header and the rows under it from drifting apart one edit
+// at a time.
+const (
+	barLabelWidth     = 16
+	rosterTitleWidth  = 24
+	rosterShareWidth  = 7
+	rosterTokensWidth = 11
+	rosterQuotaWidth  = 8
+)
 
 // usageBurners is how many panels the roster lists. A fleet can be large and the
 // tail is not a decision — the question this answers is which one to stop, and
@@ -164,12 +177,12 @@ func (m model) usageVendorSection() []string {
 
 	// The two leading spaces stand in for the mark every row below carries, so the
 	// header's columns line up with theirs.
-	rows := []string{mutedStyle.Render(fmt.Sprintf("  %-*s %-*s %-*s %-*s %s",
-		vendorNameWidth, tr("usage.view.agent", "Agent"),
-		vendorQuotaWidth, tr("usage.view.session-left", "5h left"),
-		vendorWeekWidth, tr("usage.view.week-left", "7d left"),
-		vendorSpentWidth, tr("usage.view.spent", "spent"),
-		tr("usage.view.panels", "panels")))}
+	rows := []string{mutedStyle.Render("  " +
+		pad(tr("usage.view.agent", "Agent"), vendorNameWidth) + " " +
+		pad(tr("usage.view.session-left", "5h left"), vendorQuotaWidth) + " " +
+		pad(tr("usage.view.week-left", "7d left"), vendorWeekWidth) + " " +
+		pad(tr("usage.view.spent", "spent"), vendorSpentWidth) + " " +
+		tr("usage.view.panels", "panels"))}
 	for _, v := range m.usageInfo.Vendors {
 		name := v.Vendor
 		if v.Vendor == def {
@@ -209,14 +222,41 @@ const (
 	vendorSpentWidth = 10
 )
 
-// pad lays out one cell at a fixed width, truncating what will not fit.
+// pad lays out one cell in exactly w DISPLAY columns; padLeft does it for a
+// column read from the right, which is where a figure belongs.
 //
-// It exists because fmt counts what lipgloss renders rather than what a terminal
-// shows: a styled cell carries escape sequences, every one of them counts against
-// a %-14s, and the column pads short by exactly the length of the colour. So text
-// is padded here, before anything styles it, and only the last cell in a row —
-// which has no column after it to push out of line — is styled directly.
-func pad(s string, w int) string { return fmt.Sprintf("%-*s", w, truncate(s, w)) }
+// The ruler is lipgloss's, and picking it is the whole job. There are three in
+// play and they disagree:
+//
+//   - fmt pads by counting runes. 代理 is two runes and four columns, so every
+//     translated header in this overlay sat two cells right of the rows below it.
+//   - runewidth, which the package's own truncate measures with, counts an East
+//     Asian ambiguous rune as two cells.
+//   - lipgloss counts it as one — and lipgloss is what lays every row of this
+//     popup out, so it is the ruler the finished screen is measured by.
+//
+// A cell padded against one and laid out against another is a column that drifts,
+// which is why clip (treerow.go) exists and why both of these go through it.
+//
+// Styling happens after padding, never before: a styled cell carries escape
+// sequences, and every one of them would count against the width.
+func pad(s string, w int) string {
+	s = clip(s, w)
+	return s + strings.Repeat(" ", max(0, w-lipgloss.Width(s)))
+}
+
+func padLeft(s string, w int) string {
+	s = clip(s, w)
+	return strings.Repeat(" ", max(0, w-lipgloss.Width(s))) + s
+}
+
+// unknownCell is what a column shows where baton has no reading: an ASCII hyphen,
+// deliberately, where the typographically better em dash used to be. An em dash is
+// East Asian ambiguous, so a terminal set for CJK draws it in two cells while
+// lipgloss lays the row out for one, and the column below it steps sideways on
+// exactly the machines this cockpit is most often read on. A hyphen is one cell
+// everywhere and there is nothing left to disagree about.
+const unknownCell = "-"
 
 // vendorQuotaCell is one window's REMAINING share for one vendor, with the
 // countdown to its reset — "62% · 2:14:31" — or a dash where baton holds no quota
@@ -234,7 +274,7 @@ func pad(s string, w int) string { return fmt.Sprintf("%-*s", w, truncate(s, w))
 // has never named, which is the failure the rest of this file is built to avoid.
 func (m model) vendorQuotaCell(vendor string, w *proto.LimitWindow, width int, countdown bool) string {
 	if vendor != usage.LimitsVendor || w == nil {
-		return mutedStyle.Render(pad("—", width))
+		return mutedStyle.Render(pad(unknownCell, width))
 	}
 	cell := fmt.Sprintf("%.0f%%", (1-limitFraction(w))*100)
 	if countdown {
@@ -260,7 +300,7 @@ func (m model) vendorQuotaCell(vendor string, w *proto.LimitWindow, width int, c
 // the footer segment for the default agent.
 func vendorSpentCell(v proto.VendorUsage) string {
 	if v.Tokens <= 0 {
-		return mutedStyle.Render(pad("—", vendorSpentWidth))
+		return mutedStyle.Render(pad(unknownCell, vendorSpentWidth))
 	}
 	return pad(humanTokens(v.Tokens), vendorSpentWidth)
 }
@@ -276,7 +316,7 @@ func vendorSpentCell(v proto.VendorUsage) string {
 // agent has been working.
 func (m model) vendorPanelCell(s agentSpend) string {
 	if s.panels == 0 {
-		return mutedStyle.Render("—")
+		return mutedStyle.Render(unknownCell)
 	}
 	unit := m.tr("usage.view.panels-many", "panels")
 	if s.panels == 1 {
@@ -427,7 +467,7 @@ func (m model) usageBars(lim *proto.LimitsInfo) []string {
 // which is the whole reason to look at them side by side.
 func (m model) usageBarRow(label string, fraction float64, note string) string {
 	bar := lipgloss.NewStyle().Foreground(m.usageFillColor(fraction)).Render(usage.Bar(fraction, usageBarWidth))
-	row := fmt.Sprintf("%-16s %s", label, bar)
+	row := pad(label, barLabelWidth) + " " + bar
 	if note != "" {
 		row += "   " + mutedStyle.Render(note)
 	}
@@ -486,11 +526,10 @@ func (m model) usageFillColor(fraction float64) lipgloss.Color {
 // usageRosterHeader is the column strip over the roster.
 func (m model) usageRosterHeader() string {
 	tr := func(k, def string) string { return i18n.T(m.effLang(), k, def) }
-	return mutedStyle.Render(fmt.Sprintf("%-26s %7s %11s %8s",
-		tr("usage.view.burning", "Burning this window"),
-		tr("usage.view.share", "share"),
-		tr("usage.view.tokens", "tokens"),
-		tr("usage.view.of-5h", "of 5h")))
+	return mutedStyle.Render(pad(tr("usage.view.burning", "Burning this window"), rosterTitleWidth+2) + " " +
+		padLeft(tr("usage.view.share", "share"), rosterShareWidth) + " " +
+		padLeft(tr("usage.view.tokens", "tokens"), rosterTokensWidth) + " " +
+		padLeft(tr("usage.view.of-5h", "of 5h"), rosterQuotaWidth))
 }
 
 // usageRoster is the panels spending the window, heaviest first.
@@ -543,13 +582,15 @@ func (m model) usageRoster() []string {
 	rows := make([]string, 0, len(entries))
 	for _, e := range entries {
 		share := float64(e.tokens) / float64(info.Tokens)
-		ofQuota := "—" // no five-hour reading to multiply against; the share still stands
+		ofQuota := unknownCell // no five-hour reading to multiply against; the share still stands
 		if fiveHour > 0 {
 			ofQuota = fmt.Sprintf("%.0f%%", share*fiveHour)
 		}
-		rows = append(rows, fmt.Sprintf("%s%-24s %6.0f%% %11s %8s",
-			lipgloss.NewStyle().Foreground(colBrand).Render("▸ "),
-			truncate(e.title, 24), share*100, humanTokens(e.tokens), ofQuota))
+		rows = append(rows, lipgloss.NewStyle().Foreground(colBrand).Render("▸ ")+
+			pad(e.title, rosterTitleWidth)+" "+
+			padLeft(fmt.Sprintf("%.0f%%", share*100), rosterShareWidth)+" "+
+			padLeft(humanTokens(e.tokens), rosterTokensWidth)+" "+
+			padLeft(ofQuota, rosterQuotaWidth))
 	}
 	return rows
 }
