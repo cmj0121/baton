@@ -4,6 +4,36 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v2.2.2](https://github.com/cmj0121/baton/releases/tag/v2.2.2) — the memory the fleet could not write to
+
+2026-09-17
+
+- **An agent panel gains the memory's tool every time it starts.** `panel.agent-mcp` appended `--mcp-config` once, at
+  spawn, and the flag was frozen into the spec the daemon persists — so a panel whose spec predated the setting could
+  never gain it however often it was re-run, and every panel a restart rebuilt came back mute. A whole fleet sat unable
+  to write to its own memory with no log line saying so. The wiring is derived at the one fork point now, beside the
+  session id and the status line, which already worked this way for the same reason.
+- **`score.status` says which panels can actually write.** `entries: 0` had two meanings — a fleet with nothing to
+  remember, and a fleet holding no pen — and every other field read healthy for both. The new `agent_mcp` section names
+  the panels that carry the tool and groups the rest by cause: a backend that takes no such flag, a command line that
+  already names its own config, a config baton could not write.
+- **A dead slot refuses the zoom it cannot fill.** `exited` was two different things. A panel that died under the
+  running daemon still holds its last screen and opens as a result view; one the daemon rebuilt from its snapshot has
+  no terminal behind it, and `enter` opened a black screen you had to press `esc` to leave. The snapshot carries the
+  difference now, and the refusal names `r`.
+- **`n r` re-launches, where `r` restarts.** `r` replays the spec a panel was launched with. `n r` resolves its agent
+  profile against the config in force and starts the slot on that command line — the answer after editing
+  `panel.agents` and reloading. It keeps the panel's id, and everything hanging off it; the directory does not move.
+- **Grok's weekly credit pool reaches the vendor roll.** The `7d left` cell was dashed for every agent but Claude,
+  because the guard against lending Anthropic's ceiling around was the vendor's name. It is the window's label now, so
+  a vendor that publishes its own ceiling gets its own number. Grok's `5h` stays a dash: it publishes no session
+  throttle.
+- **A connection hears nothing before its own welcome.** A client joined the daemon's fan-out set when it was accepted
+  rather than when it greeted, so a frame could arrive ahead of its welcome — and every client reads the handshake by
+  position, so one early frame left it a message behind for the rest of its life.
+- **zh-TW:** the exited zoom's status line says 已結束 rather than `(exited)`, and the group re-run status renders its
+  own numbers instead of `%!s(int=3)`.
+
 ## [v2.2.1](https://github.com/cmj0121/baton/releases/tag/v2.2.1) — the usage overlay answers per agent
 
 2026-09-17
