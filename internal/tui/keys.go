@@ -30,7 +30,7 @@ import (
 // nothing on their own and open a family — which is what keeps the everyday
 // verbs on one key while the long tail stays reachable and discoverable:
 //
-//	n  new     n c form · n . here · n C conductor · n h global shell · n w worktree · n s score
+//	n  new     n c form · n . here · n C conductor · n h global shell · n w worktree · n s score · n r re-launch
 //	v  view    v u usage · v U usage detail · v k keycast · v p preview · v l layout · v g lens
 //	g  group   g g mark · g c create · g a add · g u ungroup
 //	x  purge   x x — the second tap is the confirmation
@@ -59,9 +59,15 @@ const (
 	// the view family is read-only and this one writes score.md — a landing whose
 	// members all leave the fleet alone is worth more than the word "new" being
 	// exactly right about a file that already exists.
-	keyScoreEdit   = "n s"
-	keyClose       = "w"
-	keyRespawn     = "r"   // re-run the exited panel(s) under the focus — a lone dead slot, or every exited member of the focused group
+	keyScoreEdit = "n s"
+	keyClose     = "w"
+	keyRespawn   = "r" // re-run the exited panel(s) under the focus — a lone dead slot, or every exited member of the focused group
+	// Re-LAUNCH rather than restart: the panel's profile is resolved again against
+	// the config in force and the slot comes back on THAT command line, where r
+	// replays the one it was launched with. It sits under the n landing because
+	// re-launching is a new spawn that happens to keep an existing id — and because
+	// no bare key was free, and r could not become a landing without costing bare r.
+	keyRelaunch    = "n r"
 	keyPurge       = "x x" // purge every exited panel — a double tap, because the second one is the confirmation
 	keySignal      = "s"   // open the send-signal picker for the selection / panel / group
 	keySearch      = "f"   // find: filter panels on the dashboard, search the scrollback in a zoom (C-t f)
@@ -149,6 +155,7 @@ const (
 	actScoreEdit
 	actClose
 	actRespawn
+	actRelaunch
 	actPurge
 	actSignal
 	actSearch
@@ -255,6 +262,7 @@ var bindings = []binding{
 	{"score-edit", keyScoreEdit, "open the fleet memory (score.md) in $EDITOR", actScoreEdit, "Panels", "score"},
 	{"close", keyClose, "close the selected panel", actClose, "Panels", "close"},
 	{"respawn", keyRespawn, "re-run exited panel(s) in the selection", actRespawn, "Panels", "re-run"},
+	{"relaunch", keyRelaunch, "re-launch exited panel(s) from the current config", actRelaunch, "Panels", "re-launch"},
 	{"purge-exited", keyPurge, "purge all exited panels", actPurge, "Panels", "purge"},
 	{"signal", keySignal, "send a signal to the panel(s)", actSignal, "Panels", "signal"},
 	{"search", keySearch, "find panels · search the scrollback (zoom)", actSearch, "Panels", "find"},

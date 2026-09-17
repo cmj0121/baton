@@ -7,7 +7,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/cmj0121/baton/internal/i18n"
-	"github.com/cmj0121/baton/internal/panel"
 )
 
 // mustModel unwraps a runAction result.
@@ -33,22 +32,23 @@ func mustModel(t *testing.T, out tea.Model) model {
 // next reordered entry rather than a pin on this one. The catalogue's other three
 // reordered pairs were checked against their call sites when this was found; they
 // agree, which is why only one line moved.
+//
+// Both re-run verbs are driven, because the second one's entry was written from
+// the first one's and would have copied the defect with the phrasing.
 func TestTheGroupStatusFormatsInZhTW(t *testing.T) {
-	c, _ := recordingServer(t)
-	m := model{client: c, width: 80, height: 24, mode: modeDashboard, lang: i18n.ZhTW,
-		fleet: []panel.Panel{
-			{ID: "63", Kind: panel.Agent, Title: "claude · catnip", State: panel.Exited, Group: "catnip"},
-			{ID: "64", Kind: panel.Agent, Title: "grok · catnip", State: panel.Exited, Group: "catnip"},
-		},
-		binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
-	m.cursor = 0
+	for _, act := range []action{actRespawn, actRelaunch} {
+		c, _ := recordingServer(t)
+		m := model{client: c, width: 80, height: 24, mode: modeDashboard, lang: i18n.ZhTW,
+			fleet: deadGroup(), binds: append([]binding(nil), bindings...), prefixKey: "ctrl+t"}
+		m.cursor = 0
 
-	out, _ := m.runAction(actRespawn)
-	got := mustModel(t, out)
-	if strings.Contains(got.status, "%!") {
-		t.Errorf("the zh-TW status mis-renders its placeholders: %q", got.status)
-	}
-	if !strings.Contains(got.status, "catnip") || !strings.Contains(got.status, "2") {
-		t.Errorf("the zh-TW status should carry the group and the count, got %q", got.status)
+		out, _ := m.runAction(act)
+		got := mustModel(t, out)
+		if strings.Contains(got.status, "%!") {
+			t.Errorf("the zh-TW status mis-renders its placeholders: %q", got.status)
+		}
+		if !strings.Contains(got.status, "catnip") || !strings.Contains(got.status, "2") {
+			t.Errorf("the zh-TW status should carry the group and the count, got %q", got.status)
+		}
 	}
 }
