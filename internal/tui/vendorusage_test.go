@@ -145,15 +145,19 @@ func TestOverlayListsEveryVendorWithItsStanding(t *testing.T) {
 		t.Fatalf("got %d rows, want 4 (header + 3 vendors)", len(rows))
 	}
 	joined := strings.Join(rows, "\n")
-	for _, want := range []string{
-		"claude", "codex", "gemini",
-		"1.2M tok",
-		"baton has no usage source for this agent",
-		"not installed on the fleet's machine",
-	} {
+	for _, want := range []string{"claude", "codex", "gemini", "1.2M tok"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("the vendor section does not mention %q:\n%s", want, joined)
 		}
+	}
+	// The two without a figure say so with the mark and "---" rather than with the
+	// daemon's sentence; which state each is in is the mark's job, and the reason
+	// is still on the footer segment for the fleet's default agent.
+	if strings.Contains(joined, "baton has no usage source") {
+		t.Errorf("the roll is back to spelling the reason out:\n%s", joined)
+	}
+	if n := strings.Count(joined, "---"); n != 2 {
+		t.Errorf("got %d rows marked as having no reading, want 2:\n%s", n, joined)
 	}
 	// The vendor with no source must not have acquired a number.
 	for _, row := range rows {

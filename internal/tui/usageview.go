@@ -137,10 +137,12 @@ func (m model) usageView() string {
 // section answers "which of these can baton even account for", once, in place of
 // the operator discovering it by noticing a number never moves.
 //
-// A vendor with no reading gets its reason, not a bar and not a zero. That is the
-// whole point of the section: "baton cannot see grok's usage" and "grok has used
-// nothing" are opposite claims, and a row that drew an empty bar would make the
-// second one for free.
+// A vendor with no reading gets a mark and "---", never a bar and never a zero.
+// That is still the whole point of the section: "baton cannot see grok's usage"
+// and "grok has used nothing" are opposite claims, and a row that drew an empty
+// bar would make the second one for free. The mark's shape and colour are what
+// separate the two states that have no figure; see noReadingCell for why the
+// sentence that used to spell them out is gone.
 //
 // A vendor baton CAN read gets four columns, and they come from three places.
 //
@@ -192,9 +194,7 @@ func (m model) usageVendorSection() []string {
 		}
 		mark := lipgloss.NewStyle().Foreground(m.vendorMarkColor(v)).Render(vendorMark(v))
 		if v.State != vendorReading {
-			// No figure, so no columns: three dashes under three headers would read as
-			// three separate findings when the truth about the row is one sentence.
-			rows = append(rows, mark+pad(name, vendorNameWidth)+" "+mutedStyle.Render(m.vendorReasonText(v)))
+			rows = append(rows, mark+pad(name, vendorNameWidth)+" "+mutedStyle.Render(noReadingCell))
 			continue
 		}
 		rows = append(rows, mark+pad(name, vendorNameWidth)+" "+
@@ -249,6 +249,26 @@ func padLeft(s string, w int) string {
 	s = clip(s, w)
 	return strings.Repeat(" ", max(0, w-lipgloss.Width(s))) + s
 }
+
+// noReadingCell stands for a whole row baton has no reading for, where the
+// vendor's stated reason used to be spelled out.
+//
+// Three cells rather than one, so it reads as "none of this row is known" beside
+// a single hyphen, which marks one column that is not.
+//
+// What it replaced was a forty-character English sentence — and English is what
+// it was in every language, because the reason is the DAEMON's own words
+// (internal/usage/vendor.go:122) and the cockpit prints them verbatim. It made
+// the roll's longest line out of its least useful one, and made it untranslatable
+// besides.
+//
+// The reason itself is not lost, and that is what makes this affordable. Which of
+// the three states a row is in is what the mark and its colour say — a filled
+// mark read, a hollow amber one installed and unreadable, a dash not installed at
+// all — with the table in docs/USAGE.md spelling them out. And for the agent the
+// question is usually asked about, the fleet's default, the footer segment still
+// says why in words (usage.go:157).
+const noReadingCell = "---"
 
 // unknownCell is what a column shows where baton has no reading: an ASCII hyphen,
 // deliberately, where the typographically better em dash used to be. An em dash is

@@ -157,23 +157,44 @@ func TestAProfilelessPanelIsChargedToNobody(t *testing.T) {
 	}
 }
 
-// A vendor with no reading keeps its one sentence. Three dashes under three
-// headers would read as three separate findings about an agent whose whole story
-// is that baton cannot see it.
+// A vendor with no reading is one short mark, not four empty columns and not the
+// daemon's sentence. What it must never grow is a figure: a percentage on this
+// row would be the account's, borrowed by an agent that has never published one.
 func TestARowWithNoReadingGrowsNoColumns(t *testing.T) {
 	m := quotaModel([]proto.VendorUsage{
 		{Vendor: "codex", State: "no-source", Reason: "baton has no usage source for this agent"},
 	}, &proto.LimitsInfo{FiveHour: &proto.LimitWindow{UsedPercent: 38}}, nil, nil)
 
 	row := rowFor(t, m.usageVendorSection(), "codex")
-	if !strings.Contains(row, "baton has no usage source for this agent") {
-		t.Errorf("row %q lost the reason it has no figure", row)
+	if !strings.Contains(row, noReadingCell) {
+		t.Errorf("row %q does not mark itself as having no reading", row)
 	}
-	if strings.Count(row, "—") > 0 {
-		t.Errorf("row %q grew empty columns where one sentence belongs", row)
+	if strings.Contains(row, "baton has no usage source") {
+		t.Errorf("row %q spells out a reason that is the mark's job and the footer's", row)
 	}
 	if strings.Contains(row, "%") {
 		t.Errorf("row %q acquired a percentage from a reading that is not its own", row)
+	}
+	// The mark stands in for a whole row, so it must not be read as one column that
+	// happens to be unknown.
+	if noReadingCell == unknownCell {
+		t.Error("a row with no reading is indistinguishable from a single unknown cell")
+	}
+}
+
+// The state a row is in still has to be readable without colour, because the two
+// states that carry no figure now share the same text. The mark is what separates
+// them, and a pipe or a colour-blind reader has only the mark.
+func TestTheMarkStillSeparatesTheTwoStatesThatShowNothing(t *testing.T) {
+	m := quotaModel([]proto.VendorUsage{
+		{Vendor: "codex", State: "no-source", Reason: "baton has no usage source for this agent"},
+		{Vendor: "gemini", State: "absent", Reason: "not installed on the fleet's machine"},
+	}, nil, nil, nil)
+
+	rows := m.usageVendorSection()
+	codex, gemini := rowFor(t, rows, "codex"), rowFor(t, rows, "gemini")
+	if strings.TrimPrefix(codex, "codex") == strings.TrimPrefix(gemini, "gemini") {
+		t.Errorf("an installed agent baton cannot read and one that is not there render alike:\n%s\n%s", codex, gemini)
 	}
 }
 
