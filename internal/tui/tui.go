@@ -3284,7 +3284,11 @@ func (m model) zoomInto(p panel.Panel) model {
 	m.sendf(proto.Command{Action: "panel.resize", ID: p.ID, Rows: zr, Cols: zc})
 	m.sendf(proto.Command{Action: "panel.attach", ID: p.ID})
 	if m.zoomExited {
-		m.status = m.tr("status.result", "result · ") + p.Title + " (exited)"
+		// One key for the whole line, title and all. It used to be a translated
+		// prefix with " (exited)" concatenated on, which left the one word the
+		// line exists to say in English on a zh-TW cockpit — and that word is
+		// the difference between this status and the live one below.
+		m.status = fmt.Sprintf(m.tr("status.result", "result · %s (exited)"), p.Title)
 	} else {
 		m.status = m.tr("status.zoomed", "zoomed · ") + p.Title
 	}
