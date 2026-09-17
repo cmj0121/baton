@@ -29,10 +29,13 @@ func wireReplay(t *testing.T, s *Server, id string) bool {
 // The same panel is asked on both sides of a real daemon restart, so the two
 // answers cannot be two differently-built fixtures agreeing with themselves.
 //
-// The mutation that kills this: report Replay from anything other than the pty
-// manager — a State check, a non-empty Activity, a non-zero Since — and the
-// restored slot claims a terminal it does not have, which is the black screen the
-// cockpit's guard exists to refuse.
+// What this pins is the JOIN: that the flag reaches the wire, and that the two
+// panels disagree about it. What the flag MEANS is pinned a layer down, in
+// ptymgr.TestHoldsTracksThePaneNotTheProcess — deliberately, because several
+// wrong implementations agree with this test. Reporting `State != Exited ||
+// exitedAt is set` satisfies both cases here and is still wrong, and so does
+// string-matching the Activity line. Only the pane's own lifetime separates
+// them, and that is a question the pty manager answers.
 func TestRestoredPanelReportsNoReplay(t *testing.T) {
 	stateF := filepath.Join(t.TempDir(), "state.json")
 	first, dir := identityServer(t, WithStateFile(stateF))

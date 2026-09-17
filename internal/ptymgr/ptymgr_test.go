@@ -761,3 +761,47 @@ func TestStopKeepsThePanelsLastWords(t *testing.T) {
 		t.Fatalf("Stop dropped the output the panel had already written; sink saw %q", out)
 	}
 }
+
+// TestHoldsTracksThePaneNotTheProcess pins what Holds means, which is the whole
+// reason the fleet snapshot can carry it.
+//
+// It is NOT "the process is alive" and it is NOT "this panel produced output".
+// It is whether the manager still keeps a pane for the id — true from the moment
+// the panel starts, still true after the process dies (the ring is what a dead
+// panel's last screen is read from), and false only once the pane is released.
+//
+// That last transition is the one no proxy for this fact satisfies. A lifecycle
+// state, a stored exit instant, an Activity string: each of them still reads
+// "this panel ended" for an id the manager has already let go of, and each would
+// have the cockpit open an emulator that can never be fed.
+func TestHoldsTracksThePaneNotTheProcess(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	m := New()
+	closed := make(chan string, 1)
+	m.OnClose(func(id string, _ int) { closed <- id })
+
+	if m.Holds("1") {
+		t.Fatal("nothing has been started; the manager holds nothing")
+	}
+	if err := m.Start("1", ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !m.Holds("1") {
+		t.Fatal("a running panel has a pane")
+	}
+
+	m.Write("1", []byte("exit\n"))
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("process did not exit")
+	}
+	if !m.Holds("1") {
+		t.Error("the pane outlives the process — its ring is the panel's last screen")
+	}
+
+	m.Stop("1")
+	if m.Holds("1") {
+		t.Error("Stop releases the pane, and Holds must follow it rather than the lifecycle")
+	}
+}
