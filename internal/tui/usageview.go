@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -37,6 +38,18 @@ import (
 // gives the number, and what the overlay adds is being able to see four windows
 // against each other at a glance.
 const usageBarWidth = 16
+
+// The roster's and the bar rows' column widths. They were spelled as fmt verbs
+// inline until the columns had to be measured in display cells rather than runes;
+// naming them keeps a header and the rows under it from drifting apart one edit
+// at a time.
+const (
+	barLabelWidth     = 16
+	rosterTitleWidth  = 24
+	rosterShareWidth  = 7
+	rosterTokensWidth = 11
+	rosterQuotaWidth  = 8
+)
 
 // usageBurners is how many panels the roster lists. A fleet can be large and the
 // tail is not a decision — the question this answers is which one to stop, and
@@ -124,18 +137,31 @@ func (m model) usageView() string {
 // section answers "which of these can baton even account for", once, in place of
 // the operator discovering it by noticing a number never moves.
 //
-// A vendor with no reading gets its reason, not a bar and not a zero. That is the
-// whole point of the section: "baton cannot see grok's usage" and "grok has used
-// nothing" are opposite claims, and a row that drew an empty bar would make the
-// second one for free.
+// A vendor with no reading gets a mark and "---", never a bar and never a zero.
+// That is still the whole point of the section: "baton cannot see grok's usage"
+// and "grok has used nothing" are opposite claims, and a row that drew an empty
+// bar would make the second one for free. The mark's shape and colour are what
+// separate the two states that have no figure; see noReadingCell for why the
+// sentence that used to spell them out is gone.
 //
-// A vendor baton CAN read gets three columns, and they come from two places.
-// What is left of the five-hour window and what is left of the week belong to the
-// account whose books the limits reading describes, and to no other vendor. What
-// the fleet's panels have spent on this agent is baton's own attribution, and
-// every readable vendor has it. So a row carrying the third column and neither of
-// the first two is not a row with holes in it — it is grok, which publishes no
-// ceiling for anybody to count down from.
+// A vendor baton CAN read gets four columns, and they come from three places.
+//
+// What is left of the five-hour window and of the week belong to the account
+// whose books the limits reading describes, and to no other vendor — so grok, who
+// publishes no ceiling for anybody to count down from, gets a dash in both.
+//
+// `spent` is the vendor's OWN reader: everything it can see on this machine,
+// including the sessions nobody spawned from here. Every readable vendor has it,
+// and for a vendor baton cannot attribute it is the only figure on the row that
+// will ever be filled in — which is why it is back after a version without it
+// left grok showing three dashes on an agent that had been running all day.
+//
+// `panels` is baton's own attribution, and it is claude-only in practice rather
+// than by intent: attribution needs a session id, withSessionID hands one to
+// Claude Code alone, so a grok panel cannot appear there however hard it works.
+// The two are kept apart rather than merged because they measure different
+// things, and on a fleet whose agents also run outside baton the gap between them
+// is itself the reading.
 func (m model) usageVendorSection() []string {
 	if m.usageInfo == nil || len(m.usageInfo.Vendors) == 0 {
 		// Nil is an older daemon, which never said. Drawing a header over nothing
@@ -153,11 +179,13 @@ func (m model) usageVendorSection() []string {
 
 	// The two leading spaces stand in for the mark every row below carries, so the
 	// header's columns line up with theirs.
-	rows := []string{mutedStyle.Render(fmt.Sprintf("  %-*s %-*s %-*s %s",
-		vendorNameWidth, tr("usage.view.agent", "Agent"),
-		vendorQuotaWidth, tr("usage.view.session-left", "5h left"),
-		vendorQuotaWidth, tr("usage.view.week-left", "7d left"),
-		tr("usage.view.panels", "panels")))}
+	rows := []string{mutedStyle.Render("  " +
+		pad(tr("usage.view.agent", "Agent"), vendorNameWidth) + " " +
+		pad(tr("usage.view.session-left", "5h left"), vendorQuotaWidth) + " " +
+		pad(tr("usage.view.week-left", "7d left"), vendorWeekWidth) + " " +
+		pad(tr("usage.view.resets-in", "resets"), vendorResetWidth) + " " +
+		pad(tr("usage.view.spent", "spent"), vendorSpentWidth) + " " +
+		tr("usage.view.panels", "panels"))}
 	for _, v := range m.usageInfo.Vendors {
 		name := v.Vendor
 		if v.Vendor == def {
@@ -167,35 +195,86 @@ func (m model) usageVendorSection() []string {
 		}
 		mark := lipgloss.NewStyle().Foreground(m.vendorMarkColor(v)).Render(vendorMark(v))
 		if v.State != vendorReading {
-			// No figure, so no columns: three dashes under three headers would read as
-			// three separate findings when the truth about the row is one sentence.
-			rows = append(rows, mark+pad(name, vendorNameWidth)+" "+mutedStyle.Render(m.vendorReasonText(v)))
+			rows = append(rows, mark+pad(name, vendorNameWidth)+" "+mutedStyle.Render(noReadingCell))
 			continue
 		}
 		rows = append(rows, mark+pad(name, vendorNameWidth)+" "+
-			m.vendorQuotaCell(v.Vendor, fiveHour)+" "+
-			m.vendorQuotaCell(v.Vendor, sevenDay)+" "+
+			m.vendorQuotaCell(v.Vendor, fiveHour, vendorQuotaWidth)+" "+
+			m.vendorQuotaCell(v.Vendor, sevenDay, vendorWeekWidth)+" "+
+			m.vendorResetCell(v, fiveHour)+" "+
+			vendorSpentCell(v)+" "+
 			m.vendorPanelCell(spend[v.Vendor]))
 	}
 	return rows
 }
 
 // The vendor roll's column widths. The name is the widest agent name plus the
-// default's mark; a quota cell holds "100% · 2:14:31" and nothing longer, because
-// FormatCountdown collapses anything past a day to "3d4h".
+// default's mark; a quota cell holds "100%"; the reset holds "2:14:31" and
+// nothing longer, because FormatCountdown collapses anything past a day to
+// "3d4h".
 const (
 	vendorNameWidth  = 12
-	vendorQuotaWidth = 14
+	vendorQuotaWidth = 8
+	vendorWeekWidth  = 8
+	vendorResetWidth = 9
+	vendorSpentWidth = 10
 )
 
-// pad lays out one cell at a fixed width, truncating what will not fit.
+// pad lays out one cell in exactly w DISPLAY columns; padLeft does it for a
+// column read from the right, which is where a figure belongs.
 //
-// It exists because fmt counts what lipgloss renders rather than what a terminal
-// shows: a styled cell carries escape sequences, every one of them counts against
-// a %-14s, and the column pads short by exactly the length of the colour. So text
-// is padded here, before anything styles it, and only the last cell in a row —
-// which has no column after it to push out of line — is styled directly.
-func pad(s string, w int) string { return fmt.Sprintf("%-*s", w, truncate(s, w)) }
+// The ruler is lipgloss's, and picking it is the whole job. There are three in
+// play and they disagree:
+//
+//   - fmt pads by counting runes. 代理 is two runes and four columns, so every
+//     translated header in this overlay sat two cells right of the rows below it.
+//   - runewidth, which the package's own truncate measures with, counts an East
+//     Asian ambiguous rune as two cells.
+//   - lipgloss counts it as one — and lipgloss is what lays every row of this
+//     popup out, so it is the ruler the finished screen is measured by.
+//
+// A cell padded against one and laid out against another is a column that drifts,
+// which is why clip (treerow.go) exists and why both of these go through it.
+//
+// Styling happens after padding, never before: a styled cell carries escape
+// sequences, and every one of them would count against the width.
+func pad(s string, w int) string {
+	s = clip(s, w)
+	return s + strings.Repeat(" ", max(0, w-lipgloss.Width(s)))
+}
+
+func padLeft(s string, w int) string {
+	s = clip(s, w)
+	return strings.Repeat(" ", max(0, w-lipgloss.Width(s))) + s
+}
+
+// noReadingCell stands for a whole row baton has no reading for, where the
+// vendor's stated reason used to be spelled out.
+//
+// Three cells rather than one, so it reads as "none of this row is known" beside
+// a single hyphen, which marks one column that is not.
+//
+// What it replaced was a forty-character English sentence — and English is what
+// it was in every language, because the reason is the DAEMON's own words
+// (internal/usage/vendor.go:122) and the cockpit prints them verbatim. It made
+// the roll's longest line out of its least useful one, and made it untranslatable
+// besides.
+//
+// The reason itself is not lost, and that is what makes this affordable. Which of
+// the three states a row is in is what the mark and its colour say — a filled
+// mark read, a hollow amber one installed and unreadable, a dash not installed at
+// all — with the table in docs/USAGE.md spelling them out. And for the agent the
+// question is usually asked about, the fleet's default, the footer segment still
+// says why in words (usage.go:157).
+const noReadingCell = "---"
+
+// unknownCell is what a column shows where baton has no reading: an ASCII hyphen,
+// deliberately, where the typographically better em dash used to be. An em dash is
+// East Asian ambiguous, so a terminal set for CJK draws it in two cells while
+// lipgloss lays the row out for one, and the column below it steps sideways on
+// exactly the machines this cockpit is most often read on. A hyphen is one cell
+// everywhere and there is nothing left to disagree about.
+const unknownCell = "-"
 
 // vendorQuotaCell is one window's REMAINING share for one vendor, with the
 // countdown to its reset — "62% · 2:14:31" — or a dash where baton holds no quota
@@ -211,26 +290,71 @@ func pad(s string, w int) string { return fmt.Sprintf("%-*s", w, truncate(s, w))
 // Claude Code status line or the Anthropic OAuth endpoint — both of them that one
 // account's books. Lending the number to grok's row would publish a ceiling grok
 // has never named, which is the failure the rest of this file is built to avoid.
-func (m model) vendorQuotaCell(vendor string, w *proto.LimitWindow) string {
+func (m model) vendorQuotaCell(vendor string, w *proto.LimitWindow, width int) string {
 	if vendor != usage.LimitsVendor || w == nil {
-		return mutedStyle.Render(pad("—", vendorQuotaWidth))
+		return mutedStyle.Render(pad(unknownCell, width))
 	}
-	cell := fmt.Sprintf("%.0f%%", (1-limitFraction(w))*100)
-	if left, ok := limitCountdown(w, m.now); ok {
-		cell = joinDot(cell, usage.FormatCountdown(left))
-	}
-	return pad(cell, vendorQuotaWidth)
+	return pad(fmt.Sprintf("%.0f%%", (1-limitFraction(w))*100), width)
 }
 
-// vendorPanelCell is the third column: what the panels the fleet is running on
+// vendorResetCell is when this agent's window rolls over, and every readable
+// vendor has one — which is the whole reason it is a column of its own rather
+// than a suffix on the quota cell, where only the one account that publishes a
+// quota could ever have carried it.
+//
+// Two different instants can land here and the row says which by what is beside
+// them. For the account the limits reading belongs to it is the QUOTA's reset,
+// the same instant the 5h bar above counts down to, so the cell agrees with the
+// "left" figure two columns along. For every other vendor it is the end of the
+// window baton measured its spend over — which is the reset of the `spent` figure
+// on its own row, and the only reset anybody has stated for that agent.
+//
+// Neither is invented and neither is borrowed: a vendor with no window of its own
+// and no quota gets the mark, exactly as it does everywhere else on this row.
+func (m model) vendorResetCell(v proto.VendorUsage, w *proto.LimitWindow) string {
+	if v.Vendor == usage.LimitsVendor && w != nil {
+		if left, ok := limitCountdown(w, m.now); ok {
+			return pad(usage.FormatCountdown(left), vendorResetWidth)
+		}
+	}
+	if left := m.vendorCountdown(v); left != "" {
+		return pad(left, vendorResetWidth)
+	}
+	return mutedStyle.Render(pad(unknownCell, vendorResetWidth))
+}
+
+// vendorSpentCell is what the vendor's own reader saw this window: every session
+// on this machine, whether or not baton spawned it.
+//
+// It is the row's load-bearing column for any agent baton cannot attribute, and
+// it is the reason the roll can say anything at all about grok. A reading of
+// nothing is a mark rather than "0 tok": the reader looked and the window is
+// empty, which is a true zero — but it shares a column with agents whose figure
+// is a real total, and a bare 0 there reads as a claim about the agent rather
+// than about the window.
+//
+// The cost the old single-column standing carried ("· ≈$8.08 API") does not fit
+// beside four columns at any terminal width worth laying out for. It is still on
+// the footer segment for the default agent.
+func vendorSpentCell(v proto.VendorUsage) string {
+	if v.Tokens <= 0 {
+		return mutedStyle.Render(pad(unknownCell, vendorSpentWidth))
+	}
+	return pad(humanTokens(v.Tokens), vendorSpentWidth)
+}
+
+// vendorPanelCell is the last column: what the panels the fleet is running on
 // this agent have spent this window, and how many of them there are.
 //
-// Nothing attributed is a dash rather than "0 tok". An agent baton has no panels
-// for has not been shown to be idle — somebody may be running it in another
-// terminal, and the vendor's own reader would see that while this column cannot.
+// Nothing attributed is a dash rather than "0 tok", and for a non-claude agent it
+// is always a dash: attribution runs on the session id withSessionID hands to
+// Claude Code and to nothing else, so a grok panel cannot reach this column
+// however hard it works. The dash means "baton cannot attribute this", never
+// "this agent is idle" — the spent column beside it is what says whether the
+// agent has been working.
 func (m model) vendorPanelCell(s agentSpend) string {
 	if s.panels == 0 {
-		return mutedStyle.Render("—")
+		return mutedStyle.Render(unknownCell)
 	}
 	unit := m.tr("usage.view.panels-many", "panels")
 	if s.panels == 1 {
@@ -381,7 +505,7 @@ func (m model) usageBars(lim *proto.LimitsInfo) []string {
 // which is the whole reason to look at them side by side.
 func (m model) usageBarRow(label string, fraction float64, note string) string {
 	bar := lipgloss.NewStyle().Foreground(m.usageFillColor(fraction)).Render(usage.Bar(fraction, usageBarWidth))
-	row := fmt.Sprintf("%-16s %s", label, bar)
+	row := pad(label, barLabelWidth) + " " + bar
 	if note != "" {
 		row += "   " + mutedStyle.Render(note)
 	}
@@ -440,11 +564,10 @@ func (m model) usageFillColor(fraction float64) lipgloss.Color {
 // usageRosterHeader is the column strip over the roster.
 func (m model) usageRosterHeader() string {
 	tr := func(k, def string) string { return i18n.T(m.effLang(), k, def) }
-	return mutedStyle.Render(fmt.Sprintf("%-26s %7s %11s %8s",
-		tr("usage.view.burning", "Burning this window"),
-		tr("usage.view.share", "share"),
-		tr("usage.view.tokens", "tokens"),
-		tr("usage.view.of-5h", "of 5h")))
+	return mutedStyle.Render(pad(tr("usage.view.burning", "Burning this window"), rosterTitleWidth+2) + " " +
+		padLeft(tr("usage.view.share", "share"), rosterShareWidth) + " " +
+		padLeft(tr("usage.view.tokens", "tokens"), rosterTokensWidth) + " " +
+		padLeft(tr("usage.view.of-5h", "of 5h"), rosterQuotaWidth))
 }
 
 // usageRoster is the panels spending the window, heaviest first.
@@ -497,13 +620,15 @@ func (m model) usageRoster() []string {
 	rows := make([]string, 0, len(entries))
 	for _, e := range entries {
 		share := float64(e.tokens) / float64(info.Tokens)
-		ofQuota := "—" // no five-hour reading to multiply against; the share still stands
+		ofQuota := unknownCell // no five-hour reading to multiply against; the share still stands
 		if fiveHour > 0 {
 			ofQuota = fmt.Sprintf("%.0f%%", share*fiveHour)
 		}
-		rows = append(rows, fmt.Sprintf("%s%-24s %6.0f%% %11s %8s",
-			lipgloss.NewStyle().Foreground(colBrand).Render("▸ "),
-			truncate(e.title, 24), share*100, humanTokens(e.tokens), ofQuota))
+		rows = append(rows, lipgloss.NewStyle().Foreground(colBrand).Render("▸ ")+
+			pad(e.title, rosterTitleWidth)+" "+
+			padLeft(fmt.Sprintf("%.0f%%", share*100), rosterShareWidth)+" "+
+			padLeft(humanTokens(e.tokens), rosterTokensWidth)+" "+
+			padLeft(ofQuota, rosterQuotaWidth))
 	}
 	return rows
 }

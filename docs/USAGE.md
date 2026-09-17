@@ -64,13 +64,13 @@ extra-usage balance if you have one, and the panels spending them.
  ▸ zerg / agent-2               67%  800.0K tok      41%
  ▸ baton / conductor            25%  300.0K tok      16%
 
-   Agent        5h left        7d left        panels
- ▸ claude *     62% · 2:14:31  71% · 3d4h     1.2M tok · 4 panels
- ▸ grok         —              —              58.0M tok · 2 panels
- ◦ codex        baton has no usage source for this agent
- · gemini       not installed on the fleet's machine
- · aider        not installed on the fleet's machine
- · opencode     not installed on the fleet's machine
+   Agent        5h left  7d left  resets    spent      panels
+ ▸ claude *     62%      71%      2:14:31   1.2M tok   1.1M tok · 4 panels
+ ▸ grok         -        -        1:02:33   58.0M tok  -
+ ◦ codex        ---
+ · gemini       ---
+ · aider        ---
+ · opencode     ---
 ```
 
 The roster's last column is what the overlay exists for. A panel's **share of the
@@ -110,14 +110,36 @@ are opposite claims, and only one of them is ever backed by evidence — so a
 vendor without a figure carries a **reason** rather than a bar. There are no
 empty bars here, and no zeros standing in for a missing reading.
 
-A vendor baton **can** read gets three columns, and they are three different
-questions from two different places:
+A vendor baton **can** read gets four columns, and they are four different
+questions from three different places:
 
-| Column    | Whose reading | What it says                                                 |
-| --------- | ------------- | ------------------------------------------------------------ |
-| `5h left` | the account's | what is left of the five-hour window, and when it refills    |
-| `7d left` | the account's | what is left of the week                                     |
-| `panels`  | baton's       | what the panels you run on this agent have spent this window |
+| Column    | Whose reading | What it says                                                    |
+| --------- | ------------- | --------------------------------------------------------------- |
+| `5h left` | the account's | what is left of the five-hour window                            |
+| `7d left` | the account's | what is left of the week                                        |
+| `resets`  | either        | when this agent's window rolls over — see below                 |
+| `spent`   | the vendor's  | what its own reader saw this window, everywhere on this machine |
+| `panels`  | baton's       | what the panels **you** run on this agent have spent            |
+
+`resets` is the one column every readable agent has, and two different instants
+land in it. For the account the quota reading belongs to it is the **quota's own
+reset**, the same instant the `Session (5h)` bar counts down to — so it agrees
+with the `5h left` figure beside it. For every other agent it is the end of the
+window baton measured `spent` over, which is the only reset anybody has stated
+for it. An agent that has stated neither gets the mark rather than an invented
+countdown.
+
+`spent` and `panels` are two different measurements and the roll keeps them apart
+on purpose. The vendor's own reader counts every session on the machine, whether
+baton spawned it or not; the `panels` column counts only what your fleet spawned.
+On a machine where you also run the same agent from another terminal, the gap
+between the two columns is itself a reading.
+
+A dash under `panels` on a non-claude agent means **baton cannot attribute this**,
+not that the agent is idle. Attribution runs on a session id, and baton has one to
+hand only to Claude Code — a grok panel cannot reach that column however hard it
+works. The `spent` column beside it is what says whether the agent has been
+working, which is why it is there.
 
 The first two are dashed out for every agent but one, and that is the honest
 answer rather than a hole to fill in later. The only quota reading baton holds
@@ -137,6 +159,12 @@ under one name. A panel spawned without a profile is charged to nobody. An agent
 with no panels shows a mark rather than `0 tok`: nobody has shown it to be idle,
 and somebody may be running it in another terminal, where the vendor's own reader
 would see it and this column cannot.
+
+A row with no figure is `---`, and the **mark** is what says which of the two
+reasons it is. That is the half worth reading down a column, and it survives a
+pipe, a log and a colour-blind reader in a way a sentence repeated down the page
+does not. The agent you are most likely to be asking about — your default — still
+gets the reason in words, on the footer segment.
 
 The `◦` state is the only one drawn in amber, because it is the only one that is a
 gap in baton's reporting. An agent nobody installed is not a gap.
