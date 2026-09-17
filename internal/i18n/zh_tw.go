@@ -163,7 +163,7 @@ var zhTW = map[string]string{
 	"usage.view.credit":      "額外點數",
 	"usage.view.resets":      "重置於",
 	"usage.view.uncapped":    "無上限",
-	"usage.view.burning":     "本窗口的消耗來源",
+	"usage.view.burning":     "誰在消耗",
 	"usage.view.share":       "占比",
 	"usage.view.tokens":      "token",
 	"usage.view.of-5h":       "占 5h",
