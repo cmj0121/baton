@@ -361,21 +361,55 @@ An entry outside the working set carries **one** of three standings, naming the 
 
 `status` answers three questions that are not one question:
 
-| Field                            | Says                                                                     |
-| -------------------------------- | ------------------------------------------------------------------------ |
-| `enabled`                        | what `score.enabled` asked for                                           |
-| `available`                      | whether a store actually opened                                          |
-| `reason`                         | why not, when it did not — or that reads or writes have stopped working  |
-| `entries` / `rendered`           | what the store holds, and what a dispatch would carry                    |
-| `oversized` / `block_full`       | which cap made those two disagree                                        |
-| `bare_admits`                    | how many of your lines became entries on a bare bullet alone             |
-| `promote_at`, `rank`, …          | the tuning **in force**, which is not always what the file says          |
-| `feedback` / `feedback_profiles` | whether briefs carry the submission hint, and which profiles overrode it |
-| `unlocked`                       | the store is running without its single-writer claim                     |
-| `dir`                            | where the files are                                                      |
+| Field                            | Says                                                                        |
+| -------------------------------- | --------------------------------------------------------------------------- |
+| `enabled`                        | what `score.enabled` asked for                                              |
+| `available`                      | whether a store actually opened                                             |
+| `reason`                         | why not, when it did not — or that reads or writes have stopped working     |
+| `entries` / `rendered`           | what the store holds, and what a dispatch would carry                       |
+| `oversized` / `block_full`       | which cap made those two disagree                                           |
+| `bare_admits`                    | how many of your lines became entries on a bare bullet alone                |
+| `promote_at`, `rank`, …          | the tuning **in force**, which is not always what the file says             |
+| `feedback` / `feedback_profiles` | whether briefs carry the submission hint, and which profiles overrode it    |
+| `agent_mcp`                      | which running agent panels can write to the memory, and why the rest cannot |
+| `unlocked`                       | the store is running without its single-writer claim                        |
+| `dir`                            | where the files are                                                         |
 
 Off, unavailable and broken are three states, not one. You must never have to read the daemon log to learn that the
 fleet has no memory.
+
+### Which panels can actually write
+
+`entries: 0` has two meanings and everything else on the reply reads the same for both: a fleet with nothing to
+remember yet, and a fleet holding no pen. `agent_mcp` is the difference.
+
+```sh
+baton ctl score status | jq .agent_mcp
+{
+  "enabled": true,
+  "config": "/home/you/.baton/agent-mcp.json",
+  "wired": ["6", "40"],
+  "unwired": { "backend-has-no-flag": ["32", "69"] }
+}
+```
+
+`wired` is the list that should be everything. `unwired` groups the rest by cause — panels rather than counts, because
+you can act on an id:
+
+| Reason                | Means                                                                     |
+| --------------------- | ------------------------------------------------------------------------- |
+| `backend-has-no-flag` | that CLI takes no MCP config option, so baton has nothing to point it at  |
+| `own-config`          | the command line already names an MCP config — yours, and baton leaves it |
+| `config-unwritable`   | baton could not write its own config file; the panel started without it   |
+| `setting-off`         | `panel.agent-mcp: false`                                                  |
+| `unknown`             | a running agent whose verdict went missing — report it                    |
+
+Only **running agent panels** are reported. A dead slot writes nothing whatever its last launch did, and the conductor
+is out of scope entirely: its workspace already carries the whole fleet-control table.
+
+The verdict is the one the launch actually reached, recorded at the fork rather than worked out again when you ask — a
+second copy of that decision could disagree with the one that started the panel, and that one is both the only one that
+matters and the only one you cannot see.
 
 ## How fast one actor may submit
 

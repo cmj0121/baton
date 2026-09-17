@@ -333,20 +333,53 @@ baton ctl score list   | jq '.entries[] | select(.tier > 1)'                   #
 
 `status` 回答的是三個不同的問題,不是一個:
 
-| 欄位                             | 說的是                                           |
-| -------------------------------- | ------------------------------------------------ |
-| `enabled`                        | `score.enabled` 要求的是什麼                     |
-| `available`                      | 到底有沒有真的開起一個 store                     |
-| `reason`                         | 沒開起來的話是為什麼——或者讀取或寫入已經失效了   |
-| `entries` / `rendered`           | store 握著多少、一次派送會帶多少                 |
-| `oversized` / `block_full`       | 是哪一個上限讓上面兩個數字對不起來               |
-| `bare_admits`                    | 你有幾行光憑一個項目符號就變成了一則             |
-| `promote_at`、`rank`、…          | 實際生效的調校,不見得等於檔案上寫的              |
-| `feedback` / `feedback_profiles` | 簡報有沒有帶著那行提示,以及哪些 profile 覆寫了它 |
-| `unlocked`                       | store 正在沒有單一寫入者宣告的情況下跑           |
-| `dir`                            | 檔案在哪裡                                       |
+| 欄位                             | 說的是                                             |
+| -------------------------------- | -------------------------------------------------- |
+| `enabled`                        | `score.enabled` 要求的是什麼                       |
+| `available`                      | 到底有沒有真的開起一個 store                       |
+| `reason`                         | 沒開起來的話是為什麼——或者讀取或寫入已經失效了     |
+| `entries` / `rendered`           | store 握著多少、一次派送會帶多少                   |
+| `oversized` / `block_full`       | 是哪一個上限讓上面兩個數字對不起來                 |
+| `bare_admits`                    | 你有幾行光憑一個項目符號就變成了一則               |
+| `promote_at`、`rank`、…          | 實際生效的調校,不見得等於檔案上寫的                |
+| `feedback` / `feedback_profiles` | 簡報有沒有帶著那行提示,以及哪些 profile 覆寫了它   |
+| `agent_mcp`                      | 哪些執行中的 agent 面板寫得進記憶,其餘的為什麼不行 |
+| `unlocked`                       | store 正在沒有單一寫入者宣告的情況下跑             |
+| `dir`                            | 檔案在哪裡                                         |
 
 關掉、拿不到、壞掉,是三種狀態而不是一種。你絕不應該為了知道「隊伍沒有記憶」而去讀 daemon 的記錄檔。
+
+### 到底哪些面板寫得進去
+
+`entries: 0` 有兩個意思,而回覆上其他每一個欄位在這兩種情況下讀起來都一模一樣:一支還沒有東西要記的隊伍,
+以及一支根本沒有筆的隊伍。`agent_mcp` 就是那個差別。
+
+```sh
+baton ctl score status | jq .agent_mcp
+{
+  "enabled": true,
+  "config": "/home/you/.baton/agent-mcp.json",
+  "wired": ["6", "40"],
+  "unwired": { "backend-has-no-flag": ["32", "69"] }
+}
+```
+
+`wired` 是那份本來應該包含全部的清單。`unwired` 把其餘的按成因分組——列的是面板而不是數字,因為你能對一個
+id 動手:
+
+| 成因                  | 意思                                                       |
+| --------------------- | ---------------------------------------------------------- |
+| `backend-has-no-flag` | 那個 CLI 不吃 MCP 設定選項,baton 沒有地方可以指給它        |
+| `own-config`          | 命令列上已經指名了一份 MCP 設定——你自己的,baton 不會去動它 |
+| `config-unwritable`   | baton 寫不出自己那份設定檔;面板是在沒有它的情況下起來的    |
+| `setting-off`         | `panel.agent-mcp: false`                                   |
+| `unknown`             | 一個執行中的 agent,它的判定不見了——請回報                  |
+
+只有**執行中的 agent 面板**會被列出來。一個死掉的格子不管上次啟動是什麼結果都寫不了東西,而 conductor 完全
+不在範圍內:它的工作區本來就帶著完整的艦隊控制工具表。
+
+這個判定是啟動當下真正走到的那一個,記在 fork 的時候,而不是等你問的時候再重算一遍——那份決定的第二份副本
+有可能和真正啟動面板的那一份不一致,而那一份既是唯一重要的,也是唯一你看不到的。
 
 ## 一個 actor 能提交多快
 
