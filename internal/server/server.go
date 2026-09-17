@@ -7137,6 +7137,12 @@ func (s *Server) wirePanel(p panel.Panel, pids map[string]int) proto.Panel {
 		out.Since = since.Format(time.RFC3339Nano)
 	}
 	out.Sig = s.mon.sig(p.ID)
+	// Whether there is a terminal behind this slot at all. Joined here rather than
+	// carried on the fleet record because it is the pty manager's fact and nobody
+	// else's, and because it is the only thing that separates a panel that died
+	// under this daemon — whose last screen is the result its dead slot is kept
+	// for — from one Restore rebuilt out of a snapshot, which has nothing to show.
+	out.Replay = s.pty.Holds(p.ID)
 	out.Acked = s.ackedLocked(p.ID)
 	if sink := s.logs[p.ID]; sink != nil {
 		out.Logging, out.LogPath = true, sink.Path()

@@ -289,6 +289,22 @@ type Panel struct {
 	// conclusion.
 	ExitCode int `json:"exit_code,omitempty"`
 
+	// Replay says the daemon still holds this panel's terminal record — the
+	// output an attach would replay onto a fresh emulator.
+	//
+	// It exists because "exited" is two different things and the wire could not
+	// tell them apart. A panel that died under this daemon keeps its ring, so
+	// zooming it shows the last screen it drew; a panel the daemon rebuilt from
+	// its persisted state has no terminal behind it at all, so the same zoom is a
+	// black screen with nothing to read and nothing to do. Both report State
+	// "exited" and neither carries anything else a frontend could key on — the
+	// discriminators available before this were a prose Activity string and a
+	// missing Since, and neither is a contract.
+	//
+	// True for every live panel, so a frontend can read it as "there is something
+	// behind this slot" without special-casing the lifecycle.
+	Replay bool `json:"replay,omitempty"`
+
 	// Reason is why the panel says it needs a human, as the AGENT stated it via
 	// panel.attention. Empty when no declaration stands — a heuristic or a timer
 	// raises the state without a reason, and the inbox shows the tail instead.
