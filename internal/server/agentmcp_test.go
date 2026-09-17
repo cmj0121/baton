@@ -157,19 +157,37 @@ func TestWithAgentMCPLeavesTheLaunchAlone(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	spec := ptymgr.Spec{Command: "claude"}
 
-	if got := withAgentMCP(true, spec); len(got.Args) != 2 || got.Args[0] != "--mcp-config" {
-		t.Fatalf("a worker agent should be pointed at a config, got %v", got.Args)
+	got, why := withAgentMCP(true, spec)
+	if len(got.Args) != 2 || got.Args[0] != "--mcp-config" || why != memoryToolWired {
+		t.Fatalf("a worker agent should be pointed at a config, got %v (%q)", got.Args, why)
 	}
-	if got := withAgentMCP(false, spec); len(got.Args) != 0 {
-		t.Errorf("startPanel said no; the launch should be untouched, got %v", got.Args)
+	// Each refusal reports WHICH refusal it was. That is the whole of this change:
+	// before it, a panel launched without the memory's tool and a panel that never
+	// needed one were the same silence.
+	for _, tc := range []struct {
+		name string
+		wire bool
+		spec ptymgr.Spec
+		want string
+	}{
+		{"startPanel said no", false, spec, ""},
+		{"this backend takes no such flag", true, ptymgr.Spec{Command: "codex"}, memoryToolNoFlag},
+		{"an MCP config is already named", true,
+			ptymgr.Spec{Command: "claude", Args: []string{"--mcp-config", "/mine.json"}}, memoryToolOwnConfig},
+	} {
+		got, why := withAgentMCP(tc.wire, tc.spec)
+		if len(got.Args) != len(tc.spec.Args) {
+			t.Errorf("%s: the launch should be untouched, got %v", tc.name, got.Args)
+		}
+		if why != tc.want {
+			t.Errorf("%s: reason = %q, want %q", tc.name, why, tc.want)
+		}
 	}
-	if got := withAgentMCP(true, ptymgr.Spec{Command: "codex"}); len(got.Args) != 0 {
-		t.Errorf("this backend takes no such flag, got %v", got.Args)
-	}
+
 	// The command is resolved by its basename, so a profile running claude from an
 	// absolute path — or under another profile name — is still claude.
-	if got := withAgentMCP(true, ptymgr.Spec{Command: "/usr/local/bin/claude"}); len(got.Args) != 2 {
-		t.Errorf("an absolute path should resolve the same, got %v", got.Args)
+	if abs, _ := withAgentMCP(true, ptymgr.Spec{Command: "/usr/local/bin/claude"}); len(abs.Args) != 2 {
+		t.Errorf("an absolute path should resolve the same, got %v", abs.Args)
 	}
 }
 
@@ -177,25 +195,31 @@ func TestWithAgentMCPLeavesTheLaunchAlone(t *testing.T) {
 // decision, where it actually lives: which panels startPanel says yes for.
 func TestWiresMemoryLeavesOutEveryPanelItIsNotFor(t *testing.T) {
 	agent := []panel.Panel{{ID: "1", Kind: panel.Agent}}
-	if on := (&Server{agentMCP: true, panels: agent}); !on.wiresMemoryLocked("1") {
-		t.Fatal("a worker agent is exactly who this is for")
+	if on, why := (&Server{agentMCP: true, panels: agent}).wiresMemoryLocked("1"); !on || why != memoryToolWired {
+		t.Fatalf("a worker agent is exactly who this is for, got (%v, %q)", on, why)
 	}
 	for _, tc := range []struct {
 		name string
 		srv  *Server
 		id   string
+		want string
 	}{
-		{"the setting is off", &Server{agentMCP: false, panels: agent}, "1"},
+		{"the setting is off", &Server{agentMCP: false, panels: agent}, "1", memoryToolOff},
 		{"the conductor already has the whole table",
-			&Server{agentMCP: true, panels: []panel.Panel{{ID: "1", Kind: panel.Agent, Conductor: true}}}, "1"},
+			&Server{agentMCP: true, panels: []panel.Panel{{ID: "1", Kind: panel.Agent, Conductor: true}}},
+			"1", memoryToolConductor},
 		{"a shell is not an agent",
-			&Server{agentMCP: true, panels: []panel.Panel{{ID: "1", Kind: panel.Shell}}}, "1"},
+			&Server{agentMCP: true, panels: []panel.Panel{{ID: "1", Kind: panel.Shell}}}, "1", memoryToolNotAgent},
 		{"a command panel is not an agent",
-			&Server{agentMCP: true, panels: []panel.Panel{{ID: "1", Kind: panel.Command}}}, "1"},
-		{"a transient panel is in no fleet at all", &Server{agentMCP: true}, "score:1"},
+			&Server{agentMCP: true, panels: []panel.Panel{{ID: "1", Kind: panel.Command}}}, "1", memoryToolNotAgent},
+		{"a transient panel is in no fleet at all", &Server{agentMCP: true}, "score:1", memoryToolNotAgent},
 	} {
-		if tc.srv.wiresMemoryLocked(tc.id) {
+		on, why := tc.srv.wiresMemoryLocked(tc.id)
+		if on {
 			t.Errorf("%s: the launch should be untouched", tc.name)
+		}
+		if why != tc.want {
+			t.Errorf("%s: reason = %q, want %q", tc.name, why, tc.want)
 		}
 	}
 }
@@ -240,5 +264,49 @@ func TestAgentMCPConfigIsBatonsOwn(t *testing.T) {
 	}
 	if strings.Join(srv.Args, " ") != "mcp --score-only" {
 		t.Errorf("a worker must get the score-only server, got %v", srv.Args)
+	}
+}
+
+// namedShim writes an executable with the given basename that parks, so a panel
+// can be launched under a backend name baton either does or does not know.
+func namedShim(t *testing.T, name string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexec sleep 30\n"), 0o700); err != nil { //nolint:gosec // a test shim must be executable
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestTheVerdictIsRecordedByTheLaunchItself closes the loop the report depends
+// on. Every other test in this file either drives the decision directly or sets
+// the recorded map by hand; this one spawns two real panels and asks the report,
+// so nothing between the fork and score.status is assumed.
+//
+// The two backends differ only in the name of the binary — same script, same
+// spawn, same everything else — which is exactly the fleet the report was
+// written for: claude panels and grok panels side by side, half of them unable
+// to write to the memory and nothing anywhere saying which half.
+func TestTheVerdictIsRecordedByTheLaunchItself(t *testing.T) {
+	s, dir := identityServer(t, WithAgentMCP(true))
+
+	wired, err := s.createPanel(originOperator, proto.KindAgent, namedShim(t, "claude"), nil, dir, "", false, false)
+	if err != nil {
+		t.Fatalf("create claude: %v", err)
+	}
+	mute, err := s.createPanel(originOperator, proto.KindAgent, namedShim(t, "grok"), nil, dir, "", false, false)
+	if err != nil {
+		t.Fatalf("create grok: %v", err)
+	}
+
+	got := s.memoryToolInForce()
+	if !slices.Contains(got.Wired, wired) {
+		t.Errorf("the claude panel should be wired, got %+v", got)
+	}
+	if !slices.Contains(got.Unwired[memoryToolNoFlag], mute) {
+		t.Errorf("the grok panel takes no such flag and the report should say so, got %+v", got)
+	}
+	if slices.Contains(got.Wired, mute) {
+		t.Errorf("a panel that never got the tool was reported as wired: %+v", got)
 	}
 }

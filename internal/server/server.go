@@ -390,6 +390,14 @@ type Server struct {
 	// baton's own MCP config, which carries score_submit and nothing else.
 	agentMCP bool
 
+	// memoryTool is how the LAST LAUNCH of each panel went for that config, keyed
+	// by panel id: the empty string when the tool was wired, one of the
+	// memoryTool* reasons when it was not. score.status reads it, so an operator
+	// can see which panels can write to the fleet memory instead of inferring it
+	// from an empty store. Written at the one fork point, dropped with the
+	// panel's spec. Guarded by mu.
+	memoryTool map[string]string
+
 	// The quiet ladder. attention is the fleet-wide policy and agentAttention the
 	// per-profile ones layered over it (see Settings), resolved per tick from the
 	// profile each panel records rather than frozen at spawn — which is what lets
@@ -1104,7 +1112,7 @@ func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 	s.mu.Lock()
 	caps := s.effectiveLimitsLocked(profile)
 	iso := s.agentIsolate[profile]
-	wireMemory := s.wiresMemoryLocked(id)
+	wireMemory, refusal := s.wiresMemoryLocked(id)
 	s.mu.Unlock()
 
 	// Hand an agent panel a session of its own, on the launched copy only — the
@@ -1127,7 +1135,10 @@ func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 	// re-run and a panel Restore rebuilt from a snapshot are wired exactly like a
 	// fresh spawn. Baking it into the stored spec is what left a whole upgraded
 	// fleet unable to write to its own memory.
-	spec = withAgentMCP(wireMemory, spec)
+	spec, why := withAgentMCP(wireMemory, spec)
+	if wireMemory {
+		refusal = why // this panel was in scope; the verdict is the wiring's own
+	}
 
 	if iso.Enabled() {
 		// No cgroup here, and that is deliberate: it would confine the runtime
@@ -1161,6 +1172,12 @@ func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 	// same "was this run healthy" question.
 	s.mu.Lock()
 	s.noteSpawnLocked(id, time.Now())
+	// The memory-tool verdict is recorded in this acquisition rather than in one
+	// of its own, for the reason the wiring decision is read in the caps' — the
+	// spawn path must not gain lock acquisitions. Doing so is what surfaced the
+	// broadcast-before-welcome race in #121, and a second attempt at it here cost
+	// the git ephemeral suite the same way.
+	s.noteMemoryToolLocked(id, refusal)
 	s.mu.Unlock()
 	return nil
 }
@@ -1395,6 +1412,7 @@ func (s *Server) withdrawPanel(id string) {
 		s.panels = append(s.panels[:i], s.panels[i+1:]...)
 	}
 	delete(s.specs, id)
+	delete(s.memoryTool, id)
 	s.mon.forget(id)
 }
 
@@ -5116,6 +5134,7 @@ func (s *Server) pruneExitedLocked() (stop []string) {
 			stop = append(stop, p.ID)
 			s.mon.forget(p.ID)
 			delete(s.specs, p.ID)
+			delete(s.memoryTool, p.ID)
 			delete(s.sessions, p.ID)
 			s.forgetRestartLocked(p.ID)
 			s.forgetCwdLocked(p.ID)
@@ -6074,6 +6093,7 @@ func (s *Server) closePanel(id string) error {
 	s.panels = slices.Delete(s.panels, idx, idx+1)
 	s.mon.forget(id)
 	delete(s.specs, id)           // the panel is gone for good; drop its retained spawn spec
+	delete(s.memoryTool, id)      // …and how its last launch went for the memory's tool
 	delete(s.sessions, id)        // …and the session ids its usage was attributed through
 	s.forgetRestartLocked(id)     // …and any restart armed for it: it must not come back
 	s.forgetCwdLocked(id)         // …and the output tail kept to read its directory reports
@@ -6553,7 +6573,8 @@ func (s *Server) purgeExited() int {
 		if p.State == panel.Exited {
 			gone = append(gone, p.ID)
 			s.mon.forget(p.ID)
-			delete(s.specs, p.ID)    // purged for good; drop its retained spawn spec
+			delete(s.specs, p.ID) // purged for good; drop its retained spawn spec
+			delete(s.memoryTool, p.ID)
 			delete(s.sessions, p.ID) // …and the session ids its usage was attributed through
 			s.forgetRestartLocked(p.ID)
 			s.forgetCwdLocked(p.ID)
