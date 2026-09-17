@@ -185,4 +185,40 @@ func TestNoWindowMeansNoWindowRow(t *testing.T) {
 	if !rows[0].ResetsAt.Equal(open.Until) {
 		t.Errorf("window resets at %v, want %v", rows[0].ResetsAt, open.Until)
 	}
+	if rows[0].Label != WindowSpend {
+		t.Errorf("spend window label = %q, want %q", rows[0].Label, WindowSpend)
+	}
+}
+
+// A vendor's own weekly ceiling lands in front of the spend window, labelled as
+// a quota, so a countdown walking the list hits the reset that belongs next to
+// "7d left" rather than the window baton measured spent over.
+func TestAttachWeekQuotaPrependsALabeledCeiling(t *testing.T) {
+	now := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	r := VendorReport{
+		Vendor:  "grok",
+		State:   VendorReading,
+		Windows: []VendorWindow{{Label: WindowSpend, Fraction: 0.4, ResetsAt: now.Add(time.Hour)}},
+	}
+	week := &Window{UsedPercent: 36, ResetsAt: now.Add(72 * time.Hour)}
+	got := AttachWeekQuota(r, week)
+	if len(got.Windows) != 2 {
+		t.Fatalf("windows = %d, want spend plus quota", len(got.Windows))
+	}
+	if got.Windows[0].Label != WindowWeek {
+		t.Errorf("first window label = %q, want %q so the quota is what a walk hits first",
+			got.Windows[0].Label, WindowWeek)
+	}
+	if got.Windows[0].Fraction != week.Fraction() {
+		t.Errorf("week fraction = %v, want %v", got.Windows[0].Fraction, week.Fraction())
+	}
+	if !got.Windows[0].ResetsAt.Equal(week.ResetsAt) {
+		t.Errorf("week reset = %v, want %v", got.Windows[0].ResetsAt, week.ResetsAt)
+	}
+	if got.Windows[1].Label != WindowSpend {
+		t.Errorf("the spend window was lost: %+v", got.Windows)
+	}
+	if AttachWeekQuota(r, nil).Windows[0].Label != WindowSpend {
+		t.Error("a nil week still rewrote the report")
+	}
 }

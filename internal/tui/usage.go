@@ -189,17 +189,34 @@ func (m model) defaultVendorRow() *proto.VendorUsage {
 // different times, and borrowing one for the other would count down to an instant
 // that has nothing to do with the number beside it.
 func (m model) vendorCountdown(v proto.VendorUsage) string {
+	// A published ceiling's reset belongs next to the "left" figure, so those
+	// labels are tried before the spend window baton measured.
+	for _, label := range []string{usage.WindowFiveHour, usage.WindowWeek} {
+		if s := m.windowCountdown(labeledVendorWindow(v, label)); s != "" {
+			return s
+		}
+	}
 	for _, w := range v.Windows {
-		if w.ResetsAt == "" {
+		if w.Label == usage.WindowFiveHour || w.Label == usage.WindowWeek {
 			continue
 		}
-		at, err := time.Parse(time.RFC3339, w.ResetsAt)
-		if err != nil {
-			continue
+		if s := m.windowCountdown(&proto.LimitWindow{ResetsAt: w.ResetsAt}); s != "" {
+			return s
 		}
-		if left := at.Sub(m.now); left > 0 {
-			return usage.FormatCountdown(left)
-		}
+	}
+	return ""
+}
+
+func (m model) windowCountdown(w *proto.LimitWindow) string {
+	if w == nil || w.ResetsAt == "" {
+		return ""
+	}
+	at, err := time.Parse(time.RFC3339, w.ResetsAt)
+	if err != nil {
+		return ""
+	}
+	if left := at.Sub(m.now); left > 0 {
+		return usage.FormatCountdown(left)
 	}
 	return ""
 }

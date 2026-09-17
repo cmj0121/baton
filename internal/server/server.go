@@ -316,6 +316,13 @@ type Server struct {
 	limitsInfo     *proto.LimitsInfo
 	limitsSelf     string
 
+	// grokWeek is grok's own weekly credit pool, asked of the same endpoint the
+	// CLI's /usage modal uses. Nil leaves grok's 7d column dashed — the honest
+	// answer when baton has not been wired to ask. Guarded by nothing of its
+	// own: the poller locks internally, and this field is set once before the
+	// loops start.
+	grokWeek func(context.Context) (*usage.Window, bool)
+
 	// Remote access (remote.go). remoteOn and remoteKey are the live switch and
 	// the in-memory 8-character passkey — never persisted, so a restart always
 	// means a new one. remoteCfg is the last value the CONFIG asked for, kept so
@@ -908,6 +915,13 @@ func WithUsage(p usage.Provider, interval time.Duration, display UsageDisplay) O
 // non-positive window leaves the list off entirely.
 func WithVendorUsage(window time.Duration) Option {
 	return func(s *Server) { s.usageWindow = window }
+}
+
+// WithGrokLimits wires grok's weekly credit reading onto the vendor roll. The
+// 5h column stays a dash: grok publishes no session throttle. A nil week is how
+// a test, or a build that has not asked, leaves the column empty.
+func WithGrokLimits(week func(context.Context) (*usage.Window, bool)) Option {
+	return func(s *Server) { s.grokWeek = week }
 }
 
 // WithUsageLimits wires the account's rate-limit bars: p reads the current standing,
@@ -1667,6 +1681,11 @@ func (s *Server) vendorUsage(ctx context.Context) []proto.VendorUsage {
 	out := make([]proto.VendorUsage, 0, len(backends))
 	for _, b := range backends {
 		r := usage.Report(ctx, usage.VendorCandidate{Name: b.Name, Missing: b.Missing}, s.usageWindow, now)
+		if r.Vendor == "grok" && r.State == usage.VendorReading && s.grokWeek != nil {
+			if w, ok := s.grokWeek(ctx); ok {
+				r = usage.AttachWeekQuota(r, w)
+			}
+		}
 		v := proto.VendorUsage{
 			Vendor:  r.Vendor,
 			State:   string(r.State),

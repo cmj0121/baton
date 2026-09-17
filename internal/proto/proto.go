@@ -479,10 +479,10 @@ type VendorUsage struct {
 // VendorWindow is one usage window in terms every vendor shares: what to call it,
 // how much of it is gone, and when it resets.
 //
-// It is not LimitWindow. LimitWindow's percentage is a share of a ceiling the
-// vendor published; this fraction is how far through a window baton is measuring.
-// Giving them one type would let a bar drawn from the second be read as the
-// first, which is a limit nobody stated.
+// The label says which question the percentage answers. "window" is how far
+// through a window baton is measuring, not a published ceiling. "5h" and "7d"
+// are shares of a ceiling the vendor named. The cockpit draws those in the
+// quota columns and never treats a "window" row as one.
 type VendorWindow struct {
 	Label       string  `json:"label"`
 	UsedPercent float64 `json:"used_percentage"`

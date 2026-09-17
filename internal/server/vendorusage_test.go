@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/usage"
 )
 
 // With the feature off, the payload is byte-for-byte what it always was. This is
@@ -107,5 +108,49 @@ func TestAttachVendorsDoesNotMutateTheHeldPayload(t *testing.T) {
 	// A nil list is not a statement, so it leaves the payload exactly as it was.
 	if got := attachVendors(held, nil); got != held {
 		t.Error("a nil vendor list still rebuilt the payload")
+	}
+}
+
+// Grok's weekly credit pool is grok's own statement, and it lands only on a
+// grok row that already has a reading. Lending it to another vendor, or to a
+// grok that is not installed, would print a ceiling next to a name that never
+// published one.
+func TestGrokWeekQuotaLandsOnlyOnAGrokReading(t *testing.T) {
+	t.Setenv("GROK_HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	weekEnd := time.Date(2026, 9, 21, 0, 44, 30, 0, time.UTC)
+	s := &Server{usageWindow: time.Hour}
+	s.grokWeek = func(context.Context) (*usage.Window, bool) {
+		return &usage.Window{UsedPercent: 36, ResetsAt: weekEnd}, true
+	}
+	s.agents = []proto.AgentBackend{
+		{Name: "grok", Command: "grok"},
+		{Name: "claude", Command: "claude"},
+		{Name: "codex", Command: "codex"},
+		{Name: "gemini", Command: "gemini", Missing: true},
+	}
+	by := map[string]proto.VendorUsage{}
+	for _, r := range s.vendorUsage(context.Background()) {
+		by[r.Vendor] = r
+	}
+	grok := by["grok"]
+	if grok.State != "reading" {
+		t.Fatalf("grok state = %q, want reading so the quota has a row to land on", grok.State)
+	}
+	if len(grok.Windows) == 0 || grok.Windows[0].Label != usage.WindowWeek {
+		t.Fatalf("grok windows = %+v, want a 7d quota first", grok.Windows)
+	}
+	if grok.Windows[0].UsedPercent != 36 {
+		t.Errorf("grok week used = %v, want 36", grok.Windows[0].UsedPercent)
+	}
+	if grok.Windows[0].ResetsAt != weekEnd.Format(time.RFC3339) {
+		t.Errorf("grok week reset = %q, want %s", grok.Windows[0].ResetsAt, weekEnd.Format(time.RFC3339))
+	}
+	for _, name := range []string{"claude", "codex", "gemini"} {
+		for _, w := range by[name].Windows {
+			if w.Label == usage.WindowWeek {
+				t.Errorf("%s carried grok's week window: %+v", name, w)
+			}
+		}
 	}
 }

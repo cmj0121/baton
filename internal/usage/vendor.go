@@ -39,14 +39,24 @@ const (
 	VendorAbsent VendorState = "absent"
 )
 
+// The window labels that travel on VendorWindow. "window" is how far through a
+// window baton is measuring; "5h" and "7d" are shares of a ceiling the vendor
+// published. Mixing the two in one type is fine because the label says which
+// question the fraction answers, and the cockpit draws them in different columns.
+const (
+	WindowSpend    = "window"
+	WindowFiveHour = "5h"
+	WindowWeek     = "7d"
+)
+
 // VendorWindow is one usage window in vendor-neutral terms: what to call it, how
 // much of it is gone, and when it resets.
 //
 // It is deliberately not LimitsInfo's shape. Those fields are Anthropic's plan —
-// a seven-day Opus ceiling is not a thing grok has — and a per-vendor list built
-// on them could only ever describe one vendor. A label, a fraction and an instant
-// are what every vendor's windows have in common, and a vendor that reports none
-// contributes none rather than four empty ones.
+// a seven-day Opus ceiling is not a thing every vendor has — and a per-vendor
+// list built on them could only ever describe one vendor. A label, a fraction and
+// an instant are what every vendor's windows have in common, and a vendor that
+// reports none contributes none rather than four empty ones.
 type VendorWindow struct {
 	Label    string
 	Fraction float64   // 0–1 of the window spent
@@ -176,5 +186,20 @@ func snapshotWindows(s Snapshot, now time.Time) []VendorWindow {
 	if !ok {
 		return nil
 	}
-	return []VendorWindow{{Label: "window", Fraction: spent, ResetsAt: s.Until}}
+	return []VendorWindow{{Label: WindowSpend, Fraction: spent, ResetsAt: s.Until}}
+}
+
+// AttachWeekQuota prepends a vendor's own weekly ceiling onto a report that
+// already has a reading. It is prepended so a countdown that walks the list hits
+// the quota reset before the spend window baton measured.
+//
+// A nil window is a no-op: the caller looked and there was nothing to add, which
+// is the same state as never having asked.
+func AttachWeekQuota(r VendorReport, w *Window) VendorReport {
+	if w == nil {
+		return r
+	}
+	qw := VendorWindow{Label: WindowWeek, Fraction: w.Fraction(), ResetsAt: w.ResetsAt}
+	r.Windows = append([]VendorWindow{qw}, r.Windows...)
+	return r
 }
