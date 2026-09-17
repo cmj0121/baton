@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 )
 
@@ -93,6 +94,12 @@ func grokBillingURL() string {
 // most once every GrokLimitsMinInterval, serves the held reading in between,
 // and never lets two callers fetch at once.
 func (p *GrokLimits) Week(ctx context.Context) (*Window, bool) {
+	// A test binary that booted a real daemon would otherwise send the operator's
+	// token at production the first time grok appears in the agent list. The
+	// httptest sources point p.url at loopback and still fetch.
+	if testing.Testing() && strings.Contains(p.url, "cli-chat-proxy.grok.com") {
+		return nil, false
+	}
 	now := p.now()
 
 	p.mu.Lock()

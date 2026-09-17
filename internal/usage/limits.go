@@ -155,12 +155,12 @@ const (
 	LimitsOAuth      = "oauth"
 )
 
-// LimitsVendor names the agent backend a limits reading is about. Both sources
-// above read the same account: the status line is Claude Code's own session
-// state, and the OAuth endpoint is Anthropic's. So a per-vendor view may put the
-// reading under `claude` and must put it nowhere else — a quota is a vendor's
-// statement about its own account, and no other vendor here has made one. A
-// window borrowed across the column would publish a ceiling nobody named.
+// LimitsVendor names the agent backend the account Limits payload is about.
+// Both sources above read the same Anthropic account: the status line is Claude
+// Code's own session state, and the OAuth endpoint is Anthropic's. Grok's weekly
+// credit pool is a different statement and travels on the vendor row, not here.
+// A window borrowed from this payload onto another vendor's 5h/7d cells would
+// still print a ceiling that vendor never named.
 const LimitsVendor = "claude"
 
 // The quota thresholds, used when the config has not set a usable pair. They are
