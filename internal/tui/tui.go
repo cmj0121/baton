@@ -2902,48 +2902,19 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		default:
 			m.closeSelected()
 		}
+	case actRelaunch:
+		// The same scope as actRespawn, on the other verb: bring the dead slots back
+		// from the config in force rather than from the spec that launched them. The
+		// daemon decides what that resolves to and refuses a panel with no profile —
+		// a second copy of that rule here would be one that could disagree.
+		return m.reRun("panel.relaunch", m.tr("status.re-launching", "re-launching "),
+			m.tr("status.re-launching-d-panel", "re-launching %d panel(s) in %s"))
 	case actRespawn:
 		// Re-run every exited panel under the focus: in the group split, the focused
 		// member; on the dashboard, the selected lone panel, or each exited member of
 		// the selected group. Live panels are left running.
-		if m.mode == modeGroupZoom {
-			p, ok := m.focusedMember()
-			switch {
-			case !ok:
-				m.status = m.tr("status.no-panel-re-run", "no panel to re-run")
-			case p.State != panel.Exited:
-				m.status = p.Title + " is still running"
-			default:
-				m.sendf(proto.Command{Action: "panel.respawn", ID: p.ID})
-				m.status = m.tr("status.re-running", "re-running ") + p.Title
-			}
-			return m, nil
-		}
-		it, ok := m.selectedItem()
-		if !ok {
-			m.status = m.tr("status.no-panel-re-run", "no panel to re-run")
-			return m, nil
-		}
-		members := it.members
-		if it.kind == itemPanel {
-			members = []panel.Panel{it.panel}
-		}
-		ids := exitedIDs(members)
-		switch {
-		case len(ids) == 0 && it.kind == itemGroup:
-			m.status = m.tr("status.no-exited-panel", "no exited panel in ") + it.name
-		case len(ids) == 0:
-			m.status = m.tr("status.panel-still-running", "panel is still running")
-		default:
-			for _, id := range ids {
-				m.sendf(proto.Command{Action: "panel.respawn", ID: id})
-			}
-			if it.kind == itemGroup {
-				m.status = fmt.Sprintf(m.tr("status.re-running-d-panel", "re-running %d panel(s) in %s"), len(ids), it.name)
-			} else {
-				m.status = m.tr("status.re-running", "re-running ") + it.panel.Title
-			}
-		}
+		return m.reRun("panel.respawn", m.tr("status.re-running", "re-running "),
+			m.tr("status.re-running-d-panel", "re-running %d panel(s) in %s"))
 	case actPurge:
 		if n := m.countState(panel.Exited); n == 0 {
 			m.status = m.tr("status.no-exited-panels-purge", "no exited panels to purge")
@@ -3173,6 +3144,64 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		default:
 			m.status = m.tr("status.already-at-dashboard", "already at the dashboard")
 			return m, nil
+		}
+	}
+	return m, nil
+}
+
+// reRun is the body both re-run verbs share: the same scope, the same refusals,
+// a different action on the wire and a different word in the status line.
+//
+// In the group split the target is the focused member; on the dashboard it is
+// the selected lone panel, or every exited member of the selected group. Live
+// panels are left alone in both.
+//
+// The two verbs differ only in what the DAEMON does with the slot — replay the
+// spec it was launched with, or resolve its profile against the config in force
+// — so the cockpit holds one copy of the selection rules rather than two that
+// could drift. It also holds no copy of the daemon's refusals: a panel with no
+// profile is re-launchable or not by the daemon's answer, and a second ruling
+// here is one that could disagree with it.
+//
+// one is the status prefix for a single panel ("re-running "); many is its
+// format string for a group ("re-running %d panel(s) in %s").
+func (m model) reRun(action, one, many string) (tea.Model, tea.Cmd) {
+	if m.mode == modeGroupZoom {
+		p, ok := m.focusedMember()
+		switch {
+		case !ok:
+			m.status = m.tr("status.no-panel-re-run", "no panel to re-run")
+		case p.State != panel.Exited:
+			m.status = p.Title + " is still running"
+		default:
+			m.sendf(proto.Command{Action: action, ID: p.ID})
+			m.status = one + p.Title
+		}
+		return m, nil
+	}
+	it, ok := m.selectedItem()
+	if !ok {
+		m.status = m.tr("status.no-panel-re-run", "no panel to re-run")
+		return m, nil
+	}
+	members := it.members
+	if it.kind == itemPanel {
+		members = []panel.Panel{it.panel}
+	}
+	ids := exitedIDs(members)
+	switch {
+	case len(ids) == 0 && it.kind == itemGroup:
+		m.status = m.tr("status.no-exited-panel", "no exited panel in ") + it.name
+	case len(ids) == 0:
+		m.status = m.tr("status.panel-still-running", "panel is still running")
+	default:
+		for _, id := range ids {
+			m.sendf(proto.Command{Action: action, ID: id})
+		}
+		if it.kind == itemGroup {
+			m.status = fmt.Sprintf(many, len(ids), it.name)
+		} else {
+			m.status = one + it.panel.Title
 		}
 	}
 	return m, nil
