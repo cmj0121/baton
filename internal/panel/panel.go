@@ -235,6 +235,18 @@ type Panel struct {
 	Logging bool
 	LogFile string
 
+	// Replay says the daemon still holds this panel's terminal record, so an
+	// attach has something to put on the screen. The server owns it and reports
+	// it; nothing on a frontend can work it out, because a frontend holds no
+	// output for a panel it never attached to.
+	//
+	// It is what separates the two things Exited means. A panel that died here
+	// keeps its ring and is worth zooming — its last screen is the result the
+	// dead slot is kept for. A panel restored from the persisted fleet has no
+	// terminal behind it, and zooming one is a black screen the operator has to
+	// press esc to leave. See the cockpit's deadSlotRefusal.
+	Replay bool
+
 	// Reason is why the panel says it needs a human, in the AGENT's own words —
 	// set only by an explicit declaration (panel.attention), never by the tail
 	// heuristic or a timer, which raise a state without being able to say why.
@@ -282,6 +294,7 @@ func FromProto(p proto.Panel) Panel {
 		ExitCode:    p.ExitCode,
 		Logging:     p.Logging,
 		LogFile:     p.LogPath,
+		Replay:      p.Replay,
 		Reason:      p.Reason,
 	}
 }
@@ -313,5 +326,6 @@ func (p Panel) ToProto() proto.Panel {
 		Logging:     p.Logging,
 		LogPath:     p.LogFile,
 		Reason:      p.Reason,
+		Replay:      p.Replay,
 	}
 }

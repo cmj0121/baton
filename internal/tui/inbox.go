@@ -551,6 +551,13 @@ func (m model) zoomInboxRow() (tea.Model, tea.Cmd) {
 		m.status = m.tr("status.inbox", "inbox: ") + truncate(sanitizeText(r.title), 24) + " is gone"
 		return m, nil
 	}
+	// Same reason the gone-panel branch above is here rather than left to the
+	// zoom: the overlay closes on the next line, and a refusal after that would
+	// take the queue off the screen to tell the operator that nothing happened.
+	if why := m.deadSlotRefusal(p); why != "" {
+		m.status = why
+		return m, nil
+	}
 	out, _ := m.closeInbox()
 	mm, _ := out.(model)
 	var cmd tea.Cmd

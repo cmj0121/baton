@@ -154,7 +154,12 @@ The Monitor moves a panel through a small set of states, from the moment you spa
   dispatched finished or because it has been quiet for `panel.done-after` (default 60s).
 - **stuck** — an agent has been quiet far past what its work should take (`panel.stuck-after`, default 10m). It says
   nothing about why; only that silence has outlasted the budget configured for that agent.
-- **exited** — the process ended on its own; its **exit code** is kept until you dismiss it.
+- **exited** — the process ended on its own; its **exit code** is kept until you dismiss it. Two panels report this
+  state and they are not the same thing: one that died under the running daemon still holds the last screen it drew, so
+  `enter` opens it as a **result view**; one the daemon rebuilt from its persisted fleet has no terminal behind it at
+  all, and `enter` is refused with `nothing to replay — press r to re-run it` rather than opening a black screen. The
+  snapshot carries the difference as `replay`, because a frontend holds no output for a panel it never attached to and
+  cannot work it out for itself.
 - **closed** — the panel is retired and leaves the dashboard.
 
 Everything above `idle` is measured on one clock: the **quiet clock**, the time since the panel's last byte of output.
@@ -380,6 +385,16 @@ dead slot, no process auto-respawned (shells or agents alike), and the id counte
 a new panel can never collide. The `panel.respawn` action (the dashboard `r` key) re-runs an exited slot on demand from
 its retained spec — one command per dead slot, so `r` on a focused group restarts every exited member at once and `r` in
 the group split re-runs the focused tile; closing or purging a panel drops its spec for good.
+
+**Restart and re-launch are two verbs.** `r` (`panel.respawn`) replays the spec the panel was launched with, which is
+the right answer for a panel that died. `n r` (`panel.relaunch`) resolves the panel's **agent profile** against the
+config in force and starts the slot on that command line instead — the answer after editing `panel.agents` and
+reloading, when the config changed and the dead slots never heard about it. It re-resolves the **spec, not the
+identity**: the id, the work item, the pin, the favourite, the task and the log binding all stay, because
+purge-and-respawn is the thing it exists so nobody has to do. The panel's **directory is its own** and is not
+re-resolved — a profile's `dir` is a default for a new panel, and moving a slot on a re-launch is the one part of this
+that could lose work. A panel with no profile (a shell, a command panel, an agent spawned by path) is refused, and the
+refusal names `r`.
 
 **Interact mode.** Pressing `i` hands the keyboard to the focused tile so you can drive its program _in place_, without
 the full-screen zoom — the tile glows green and wears a keyboard badge, and every keystroke is forwarded to that panel.

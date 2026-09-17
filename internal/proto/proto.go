@@ -117,7 +117,7 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | panel.tail | panel.diff | panel.git | panel.log | panel.logview | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run | remote.status | remote.enable | remote.disable | remote.rotate | remote.kick | score.submit | score.list | score.status | score.merge | score.reword | score.lower | worktree.list | worktree.sweep
+	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.relaunch | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | panel.tail | panel.diff | panel.git | panel.log | panel.logview | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run | remote.status | remote.enable | remote.disable | remote.rotate | remote.kick | score.submit | score.list | score.status | score.merge | score.reword | score.lower | worktree.list | worktree.sweep
 	Kind      string   `json:"kind,omitempty"`      // panel kind for "panel.create": "shell" (the default), "agent", or "command"
 	ID        string   `json:"id,omitempty"`        // target panel for close/attach/input/resize/diff, the panel to rename, the panel "score.list" ranks its entries for (empty = rank against no context), the score entry a refine verb corrects, or — empty on "panel.git" worktree-add — the spawn that has no source panel at all
 	Path      string   `json:"path,omitempty"`      // init command (binary path) for "panel.create"; empty = default shell. Also the agent command for a targetless "panel.git" worktree-add, which spawns one
@@ -288,6 +288,22 @@ type Panel struct {
 	// docs/SPEC.md), so the daemon reports the fact and the frontend draws the
 	// conclusion.
 	ExitCode int `json:"exit_code,omitempty"`
+
+	// Replay says the daemon still holds this panel's terminal record — the
+	// output an attach would replay onto a fresh emulator.
+	//
+	// It exists because "exited" is two different things and the wire could not
+	// tell them apart. A panel that died under this daemon keeps its ring, so
+	// zooming it shows the last screen it drew; a panel the daemon rebuilt from
+	// its persisted state has no terminal behind it at all, so the same zoom is a
+	// black screen with nothing to read and nothing to do. Both report State
+	// "exited" and neither carries anything else a frontend could key on — the
+	// discriminators available before this were a prose Activity string and a
+	// missing Since, and neither is a contract.
+	//
+	// True for every live panel, so a frontend can read it as "there is something
+	// behind this slot" without special-casing the lifecycle.
+	Replay bool `json:"replay,omitempty"`
 
 	// Reason is why the panel says it needs a human, as the AGENT stated it via
 	// panel.attention. Empty when no declaration stands — a heuristic or a timer
