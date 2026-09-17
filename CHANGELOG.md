@@ -4,6 +4,34 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v2.2.1](https://github.com/cmj0121/baton/releases/tag/v2.2.1) — the usage overlay answers per agent
+
+2026-09-17
+
+- **`v U` prices every agent, not just the one.** Each readable backend gets five columns — `5h left`, `7d left`,
+  `resets`, `spent`, `panels` — in place of the single line of free text it used to get. The quota pair belongs to the
+  one account baton holds books for and is dashed out for everybody else: no other vendor publishes a ceiling, and
+  lending it Anthropic's would print a limit nobody stated. `spent` is the vendor's own reader, everything on the
+  machine; `panels` is baton's attribution, grouped by the profile each panel was spawned from.
+- **Every readable agent counts down to its own reset.** The countdown used to ride inside the quota figure, so only the
+  account that publishes a quota ever had one. Two instants land in the new column and the docs say which is which: the
+  quota's own reset for the account it belongs to, the end of the measured window for everybody else, and a mark for an
+  agent that has stated neither.
+- **The overlay lines up in the language it is read in.** Three rulers were in play: `fmt` pads by counting runes (代理
+  is two runes and four columns), `runewidth` calls an East Asian ambiguous rune two cells, and lipgloss — which lays
+  every row out — calls it one. The roster's header, the bar labels and the agent roll all measure the way the finished
+  screen is measured now. The em dash went with them, for being two cells on a CJK terminal and one to the layout.
+- **A row baton has no reading for is `---`.** It was forty characters of "baton has no usage source for this agent",
+  repeated down every agent the machine has not got — and it was English in every language, because the reason is the
+  daemon's words printed verbatim. Which state a row is in was already the mark's job.
+- **A message the footer cannot hold takes the whole row.** The strip composed every cap first and handed the status
+  whatever was left, so a daemon error carrying git's own stderr arrived clipped mid-word or vanished. A key run in the
+  air, a backend outage and a message past its TTL still outrank it.
+- **The footer's resting line is the endpoint alone** — `local`, not `attached · local`. The cap it sits on is already
+  the connection indicator.
+- **zh-TW:** the roster header is 誰在消耗. 本窗口的消耗來源 read as "the source of the consumption figures", and on
+  that screen 來源 is already taken by 用量來源.
+
 ## [v2.2.0](https://github.com/cmj0121/baton/releases/tag/v2.2.0) — the cockpit speaks your language
 
 2026-09-16
