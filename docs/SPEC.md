@@ -154,7 +154,12 @@ The Monitor moves a panel through a small set of states, from the moment you spa
   dispatched finished or because it has been quiet for `panel.done-after` (default 60s).
 - **stuck** — an agent has been quiet far past what its work should take (`panel.stuck-after`, default 10m). It says
   nothing about why; only that silence has outlasted the budget configured for that agent.
-- **exited** — the process ended on its own; its **exit code** is kept until you dismiss it.
+- **exited** — the process ended on its own; its **exit code** is kept until you dismiss it. Two panels report this
+  state and they are not the same thing: one that died under the running daemon still holds the last screen it drew, so
+  `enter` opens it as a **result view**; one the daemon rebuilt from its persisted fleet has no terminal behind it at
+  all, and `enter` is refused with `nothing to replay — press r to re-run it` rather than opening a black screen. The
+  snapshot carries the difference as `replay`, because a frontend holds no output for a panel it never attached to and
+  cannot work it out for itself.
 - **closed** — the panel is retired and leaves the dashboard.
 
 Everything above `idle` is measured on one clock: the **quiet clock**, the time since the panel's last byte of output.
