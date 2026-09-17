@@ -147,8 +147,11 @@ func (m model) usageView() string {
 // A vendor baton CAN read gets four columns, and they come from three places.
 //
 // What is left of the five-hour window and of the week belong to the account
-// whose books the limits reading describes, and to no other vendor — so grok, who
-// publishes no ceiling for anybody to count down from, gets a dash in both.
+// whose books that column describes. Claude's pair comes from the Anthropic
+// limits reading. Grok publishes a weekly credit pool of its own and no
+// five-hour throttle, so its 7d cell fills from that pool and its 5h cell stays
+// a dash. Lending Anthropic's numbers across the column would still print a
+// ceiling grok never named.
 //
 // `spent` is the vendor's OWN reader: everything it can see on this machine,
 // including the sessions nobody spawned from here. Every readable vendor has it,
@@ -199,8 +202,8 @@ func (m model) usageVendorSection() []string {
 			continue
 		}
 		rows = append(rows, mark+pad(name, vendorNameWidth)+" "+
-			m.vendorQuotaCell(v.Vendor, fiveHour, vendorQuotaWidth)+" "+
-			m.vendorQuotaCell(v.Vendor, sevenDay, vendorWeekWidth)+" "+
+			m.vendorQuotaCell(v, fiveHour, usage.WindowFiveHour, vendorQuotaWidth)+" "+
+			m.vendorQuotaCell(v, sevenDay, usage.WindowWeek, vendorWeekWidth)+" "+
 			m.vendorResetCell(v, fiveHour)+" "+
 			vendorSpentCell(v)+" "+
 			m.vendorPanelCell(spend[v.Vendor]))
@@ -276,25 +279,46 @@ const noReadingCell = "---"
 // everywhere and there is nothing left to disagree about.
 const unknownCell = "-"
 
-// vendorQuotaCell is one window's REMAINING share for one vendor, with the
-// countdown to its reset — "62% · 2:14:31" — or a dash where baton holds no quota
-// reading that belongs to this vendor.
+// vendorQuotaCell is one window's REMAINING share for one vendor — "62%" — or a
+// dash where baton holds no quota reading that belongs to this vendor.
 //
 // Remaining rather than spent, and that is not the same choice the bars above
 // made. A bar is a shape you compare against the bar below it; a cell in a row of
 // three is read once, for a decision about whether to start another agent here,
 // and "what is left" is the form that answer comes in.
 //
-// The vendor argument is the whole guard. A quota is the vendor's own statement
-// about its own account, and the only such statement baton holds arrives from the
-// Claude Code status line or the Anthropic OAuth endpoint — both of them that one
-// account's books. Lending the number to grok's row would publish a ceiling grok
-// has never named, which is the failure the rest of this file is built to avoid.
-func (m model) vendorQuotaCell(vendor string, w *proto.LimitWindow, width int) string {
-	if vendor != usage.LimitsVendor || w == nil {
+// A quota is the vendor's own statement about its own account. Claude's pair
+// comes from the Anthropic limits payload. Any other vendor fills only from a
+// window it labelled as this column — grok's weekly pool is "7d", and nothing
+// here is "5h" — so Anthropic's numbers cannot leak onto a name that never
+// published them.
+func (m model) vendorQuotaCell(v proto.VendorUsage, account *proto.LimitWindow, label string, width int) string {
+	w := vendorQuotaWindow(v, account, label)
+	if w == nil {
 		return mutedStyle.Render(pad(unknownCell, width))
 	}
 	return pad(fmt.Sprintf("%.0f%%", (1-limitFraction(w))*100), width)
+}
+
+// vendorQuotaWindow is the ceiling share that belongs in one column of one row.
+// Claude reads the account payload; everyone else reads a window they labelled
+// as this column, or nothing.
+func vendorQuotaWindow(v proto.VendorUsage, account *proto.LimitWindow, label string) *proto.LimitWindow {
+	if v.Vendor == usage.LimitsVendor && account != nil {
+		return account
+	}
+	return labeledVendorWindow(v, label)
+}
+
+func labeledVendorWindow(v proto.VendorUsage, label string) *proto.LimitWindow {
+	for i := range v.Windows {
+		if v.Windows[i].Label != label {
+			continue
+		}
+		w := v.Windows[i]
+		return &proto.LimitWindow{UsedPercent: w.UsedPercent, ResetsAt: w.ResetsAt}
+	}
+	return nil
 }
 
 // vendorResetCell is when this agent's window rolls over, and every readable
@@ -305,9 +329,9 @@ func (m model) vendorQuotaCell(vendor string, w *proto.LimitWindow, width int) s
 // Two different instants can land here and the row says which by what is beside
 // them. For the account the limits reading belongs to it is the QUOTA's reset,
 // the same instant the 5h bar above counts down to, so the cell agrees with the
-// "left" figure two columns along. For every other vendor it is the end of the
-// window baton measured its spend over — which is the reset of the `spent` figure
-// on its own row, and the only reset anybody has stated for that agent.
+// "left" figure two columns along. For every other vendor it is that vendor's
+// own ceiling reset when they published one (grok's week), otherwise the end of
+// the window baton measured its spend over.
 //
 // Neither is invented and neither is borrowed: a vendor with no window of its own
 // and no quota gets the mark, exactly as it does everywhere else on this row.

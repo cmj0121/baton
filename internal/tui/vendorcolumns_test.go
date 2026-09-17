@@ -126,6 +126,51 @@ func TestEveryReadableAgentCountsDownToItsOwnReset(t *testing.T) {
 	}
 }
 
+// Grok publishes a weekly credit pool and no five-hour throttle. Its 7d cell
+// fills from that pool; its 5h cell stays a dash; Anthropic's numbers stay on
+// claude's row.
+func TestGrokWeekQuotaFillsTheWeekColumnNotTheSessionOne(t *testing.T) {
+	quotaReset := time.Date(2026, 9, 6, 14, 14, 31, 0, time.UTC).Format(time.RFC3339)
+	weekReset := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	m := quotaModel([]proto.VendorUsage{
+		{Vendor: "claude", State: "reading", Tokens: 1_200_000},
+		{Vendor: "grok", State: "reading", Tokens: 58_000_000, Windows: []proto.VendorWindow{
+			{Label: "7d", UsedPercent: 36, ResetsAt: weekReset},
+			{Label: "window", UsedPercent: 40, ResetsAt: time.Date(2026, 9, 6, 13, 2, 33, 0, time.UTC).Format(time.RFC3339)},
+		}},
+	}, &proto.LimitsInfo{
+		FiveHour: &proto.LimitWindow{UsedPercent: 38, ResetsAt: quotaReset},
+		SevenDay: &proto.LimitWindow{UsedPercent: 29, ResetsAt: quotaReset},
+	}, nil, nil)
+
+	rows := m.usageVendorSection()
+	grok := rowFor(t, rows, "grok")
+	if !strings.Contains(grok, "64%") {
+		t.Errorf("grok's week cell is not what is left of its own pool: %q", grok)
+	}
+	for _, borrowed := range []string{"62%", "71%", "38%", "29%", "36%", "40%"} {
+		if strings.Contains(grok, borrowed) {
+			t.Errorf("grok's row carries %s, which is not its remaining week share: %q", borrowed, grok)
+		}
+	}
+	if strings.Contains(grok, "2:14:31") {
+		t.Errorf("grok's row borrowed claude's reset: %q", grok)
+	}
+	if !strings.Contains(grok, "3d") {
+		t.Errorf("grok's row does not count down to its own week reset: %q", grok)
+	}
+	if !strings.Contains(grok, "58.0M tok") {
+		t.Errorf("grok's spent column was lost: %q", grok)
+	}
+	claude := rowFor(t, rows, "claude")
+	if !strings.Contains(claude, "62%") || !strings.Contains(claude, "71%") {
+		t.Errorf("claude's quota columns moved: %q", claude)
+	}
+	if strings.Contains(claude, "64%") {
+		t.Errorf("grok's week landed on claude: %q", claude)
+	}
+}
+
 // A readable vendor that has stated no window gets the mark. A countdown baton
 // invented would be worse than none — it is a promise about when a number will
 // change, made on behalf of a vendor that never made it.
