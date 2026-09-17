@@ -2028,10 +2028,10 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 
 	var out []proto.Panel
 	if changed && len(s.clients) > 0 {
-		pids := s.pty.Pids()
+		pids, held := s.pty.Pids(), s.pty.Held()
 		out = make([]proto.Panel, len(s.panels))
 		for i, p := range s.panels {
-			out[i] = s.wirePanel(p, pids)
+			out[i] = s.wirePanel(p, pids, held)
 		}
 	}
 	s.mu.Unlock()
@@ -7121,7 +7121,7 @@ func (s *Server) setGroupFavourite(group string, fav bool) error {
 // dead panel it falls back to when the process ended, because the Monitor forgets
 // a panel on exit and a queue listing failures still has to order them.
 // Caller holds s.mu.
-func (s *Server) wirePanel(p panel.Panel, pids map[string]int) proto.Panel {
+func (s *Server) wirePanel(p panel.Panel, pids map[string]int, held map[string]bool) proto.Panel {
 	out := p.ToProto()
 	out.Pid = pids[p.ID]
 	// The profile joins the snapshot here rather than living on the panel record,
@@ -7142,7 +7142,9 @@ func (s *Server) wirePanel(p panel.Panel, pids map[string]int) proto.Panel {
 	// else's, and because it is the only thing that separates a panel that died
 	// under this daemon — whose last screen is the result its dead slot is kept
 	// for — from one Restore rebuilt out of a snapshot, which has nothing to show.
-	out.Replay = s.pty.Holds(p.ID)
+	// Handed in as a set for the reason the pids are: one ptymgr acquisition per
+	// frame, not one per panel inside s.mu.
+	out.Replay = held[p.ID]
 	out.Acked = s.ackedLocked(p.ID)
 	if sink := s.logs[p.ID]; sink != nil {
 		out.Logging, out.LogPath = true, sink.Path()
@@ -7157,9 +7159,11 @@ func (s *Server) panelsMsg() proto.ServerMsg {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]proto.Panel, len(s.panels))
-	pids := s.pty.Pids() // one lock acquisition, then a map lookup per panel — the ptymgr lock is contended by the output pump
+	// One acquisition each, then a map lookup per panel — the ptymgr lock is
+	// contended by the output pump, and this loop runs inside s.mu.
+	pids, held := s.pty.Pids(), s.pty.Held()
 	for i, p := range s.panels {
-		out[i] = s.wirePanel(p, pids)
+		out[i] = s.wirePanel(p, pids, held)
 	}
 	// Per-group view settings ride the snapshot, sorted by name for determinism.
 	// A group appears when it carries a non-default visible count, a non-default

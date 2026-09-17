@@ -805,3 +805,30 @@ func TestHoldsTracksThePaneNotTheProcess(t *testing.T) {
 		t.Error("Stop releases the pane, and Holds must follow it rather than the lifecycle")
 	}
 }
+
+// TestHeldAgreesWithHolds: the batched answer is the per-id one, for every id at
+// once. Two readings of the same fact that could disagree would be worse than
+// the contention Held exists to avoid.
+func TestHeldAgreesWithHolds(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	m := New()
+	if got := m.Held(); len(got) != 0 {
+		t.Fatalf("nothing started; Held = %v", got)
+	}
+	for _, id := range []string{"1", "2", "3"} {
+		if err := m.Start(id, ""); err != nil {
+			t.Fatalf("Start %s: %v", id, err)
+		}
+	}
+	m.Stop("2")
+
+	held := m.Held()
+	for _, id := range []string{"1", "2", "3", "nope"} {
+		if held[id] != m.Holds(id) {
+			t.Errorf("Held[%q] = %v but Holds(%q) = %v", id, held[id], id, m.Holds(id))
+		}
+	}
+	if held["2"] || !held["1"] || !held["3"] {
+		t.Errorf("Held = %v, want the two panes that are still there", held)
+	}
+}
