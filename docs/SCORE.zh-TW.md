@@ -76,8 +76,12 @@ panel:
 
 那份設定是 baton 自己的,不會掉進你的 repo——worker 面板跑在你的工作目錄裡,baton 在那裡寫 dotfile 會出現在
 `git status` 上。它也只帶記憶的寫入工具:完整的工具表是用來駕駛艦隊的(開面板、關面板、送 signal),那是
-conductor 的工作。要關掉就寫 `panel.agent-mcp: false`,或在面板設定的「開啟預設」分頁切換;它是在開面板當下
-讀的,所以決定的是**下一個** agent 面板。
+conductor 的工作。要關掉就寫 `panel.agent-mcp: false`,或在面板設定的「開啟預設」分頁切換。
+
+它是在**每一次啟動**當下才解析出來的,不會存在面板身上——所以重跑(`r`)以及 daemon 從快照重建回來的面板,
+接線方式和全新開的面板一模一樣。這件事比聽起來重要:這個旗標以前是凍進 spawn spec 裡的,於是一個 spec 比這
+個設定還早存在的面板,不管重跑幾次都拿不到那個工具;而 spec 裡帶著旗標的面板,則可能指向一份為早已搬走的
+baton 執行檔寫出來的設定。
 
 不改檔案也可以:在 cockpit 按 `C-t P` 打開 panel config,用 `←→` 切到「評分回饋」分頁。第一列是全隊的
 `score.feedback`,按 `e` 直接切換;底下才是每一個設定過的 profile——`↑↓` 移動,`e` 讓那個 profile 在

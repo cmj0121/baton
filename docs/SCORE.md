@@ -84,7 +84,12 @@ agent whose runtime speaks no MCP.
 The config is baton's own and never lands in your repository — a worker panel runs in your working tree, where a
 dotfile baton wrote would show up in `git status`. It carries only the memory's write tool: the full table drives the
 fleet (spawn, close, signal) and that is the conductor's job. Turn it off with `panel.agent-mcp: false`, or on the
-panel-config page's DEFAULTS tab; it is read at spawn, so it decides what the NEXT agent panel starts with.
+panel-config page's DEFAULTS tab.
+
+It is resolved at **every launch**, not stored on the panel — so a re-run (`r`) and a panel the daemon rebuilt from its
+snapshot are wired exactly like a fresh spawn. That matters more than it sounds: the flag used to be frozen into the
+spawn spec, which meant a panel whose spec predated the setting could never gain the tool however often it was re-run,
+and a panel whose spec carried it could end up pointed at a config written for a baton binary that had since moved.
 
 **From the cockpit, without editing the file:** `C-t P` opens panel config; `←→` walks its tabs to **FEEDBACK**. The
 first row is the fleet's own `score.feedback`, which `e` toggles; under it sits one row per configured profile —
