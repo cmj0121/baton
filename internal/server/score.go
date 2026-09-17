@@ -1849,29 +1849,64 @@ func editorCommand(configured, path string) (string, []string) {
 	return "sh", []string{"-c", ed + ` "$0"`, path}
 }
 
-// agentMCPArgs is what an agent panel's command line gains so the agent can see
-// the fleet memory's write tool: the flag that backend takes for an extra MCP
-// config, and the path of the one baton writes.
+// withAgentMCP returns a copy of spec whose command line carries the fleet
+// memory's write tool: the flag that backend takes for an extra MCP config, and
+// the path of the one baton writes.
 //
-// Empty for three reasons, each of which leaves the spawn exactly as it was:
-// panel.agent-mcp is off, the backend is one baton has not been taught to tell
-// (see agents.MCPConfigArgs), or the config could not be written. The last is a
-// deliberate non-error: an agent that starts without its memory tool is a working
-// agent, and refusing to spawn one over a file baton wanted to write in its own
-// directory would be the cure doing more harm than the disease.
-func (s *Server) agentMCPArgs(command string) []string {
-	if !s.agentMCP {
-		return nil
+// ON THE LAUNCHED COPY ONLY, never on the spec the server retains for respawn —
+// the same rule withSessionID and withStatusLine already follow, and for a
+// sharper reason than either. This used to be appended in spawnPanel and frozen
+// into the stored spec, which meant two things. A panel whose spec predates the
+// setting (every panel on a fleet upgraded into it, and every panel Restore
+// rebuilds from a snapshot) could never gain the tool at all, because
+// respawnPanel replays that spec verbatim. And a panel whose spec DID carry the
+// flag was on borrowed time: writeAgentMCPConfig names this binary and is
+// rewritten on every spawn for that reason, and a replayed flag never calls it,
+// so after an upgrade the config it points at can name a path that is gone.
+// Deriving it here, at the daemon's one fork point, answers both.
+//
+// The spec is returned untouched for five reasons, each of which leaves the
+// launch exactly as it was:
+//
+//   - panel.agent-mcp is off.
+//   - The panel is not an agent — a shell, a command panel, or one of the
+//     transient diff/git/log/editor panels that also come through startPanel.
+//   - It is the conductor, whose workspace already holds a .mcp.json with the
+//     whole fleet-control table; a second server offering one of those tools
+//     again would be a tool listed twice under two names.
+//   - The backend takes no such flag (see agents.MCPConfigArgs), or the args
+//     already name an MCP config — a user who passed their own, or a spec
+//     persisted while the flag was still being baked in. Appending a second one
+//     is the failure mode this move would otherwise introduce.
+//   - The config could not be written. A deliberate non-error: an agent that
+//     starts without its memory tool is a working agent, and refusing to spawn
+//     one over a file baton wanted to write in its own directory would be the
+//     cure doing more harm than the disease.
+func (s *Server) withAgentMCP(id string, spec ptymgr.Spec) ptymgr.Spec {
+	s.mu.Lock()
+	on := s.agentMCP
+	i := s.indexLocked(id)
+	worker := i >= 0 && s.panels[i].Kind == panel.Agent && !s.panels[i].Conductor
+	s.mu.Unlock()
+	if !on || !worker {
+		return spec
 	}
-	if agents.MCPConfigArgs(command, "probe") == nil {
-		return nil // this backend takes no such flag; do not write a file for nobody
+	probe := agents.MCPConfigArgs(spec.Command, "probe")
+	if probe == nil {
+		return spec // this backend takes no such flag; do not write a file for nobody
+	}
+	for _, a := range spec.Args {
+		if flag, _, _ := strings.Cut(a, "="); flag == probe[0] {
+			return spec // an MCP config is already named; do not argue with it
+		}
 	}
 	path, err := writeAgentMCPConfig()
 	if err != nil {
 		log.Debug().Err(err).Msg("agent mcp config not written; spawning without it")
-		return nil
+		return spec
 	}
-	return agents.MCPConfigArgs(command, path)
+	spec.Args = append(append([]string(nil), spec.Args...), agents.MCPConfigArgs(spec.Command, path)...)
+	return spec
 }
 
 // writeAgentMCPConfig writes the MCP config worker panels load, in baton's own

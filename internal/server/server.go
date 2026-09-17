@@ -1121,6 +1121,13 @@ func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 	// respawn, so a re-run re-resolves whatever status line the user has by then.
 	spec, _ = withStatusLine(spec, s.limitsSelf)
 
+	// …and the fleet memory's write tool, under the same rule again: a worker
+	// panel is pointed at baton's own MCP config every time it starts, so a
+	// re-run and a panel Restore rebuilt from a snapshot are wired exactly like a
+	// fresh spawn. Baking it into the stored spec is what left a whole upgraded
+	// fleet unable to write to its own memory.
+	spec = s.withAgentMCP(id, spec)
+
 	if iso.Enabled() {
 		// No cgroup here, and that is deliberate: it would confine the runtime
 		// CLIENT, leaving the container — the daemon's child, not ours — entirely
@@ -3826,14 +3833,10 @@ func (s *Server) createPanel(origin panelOrigin, kind, path string, args []strin
 			s.clearConductorPending()
 			return "", fmt.Errorf("an agent panel needs a command")
 		}
-		// A worker panel is pointed at baton's own MCP config, which carries the
-		// memory's score_submit and nothing else. The conductor is skipped: its
-		// workspace already holds a .mcp.json with the whole fleet-control table,
-		// and a second server offering one of those tools again would be a tool
-		// listed twice under two names.
-		if !conductor {
-			args = append(append([]string(nil), args...), s.agentMCPArgs(path)...)
-		}
+		// The memory's MCP config is NOT added here. It is derived on the launched
+		// copy in startPanel, beside the session id and the status line, so that a
+		// re-run and a restored panel gain it too — see withAgentMCP. What this
+		// spec holds is what the user asked for, and nothing baton bolted on.
 		spec = ptymgr.Spec{Command: path, Args: args, Dir: dir, Env: env}
 	case proto.KindCommand:
 		if path == "" {
