@@ -66,7 +66,7 @@ extra-usage balance if you have one, and the panels spending them.
 
    Agent        5h left        7d left  spent      panels
  ▸ claude *     62% · 2:14:31  71%      1.2M tok   1.1M tok · 4 panels
- ▸ grok         —              —        58.0M tok  —
+ ▸ grok         -              -        58.0M tok  -
  ◦ codex        baton has no usage source for this agent
  · gemini       not installed on the fleet's machine
  · aider        not installed on the fleet's machine
