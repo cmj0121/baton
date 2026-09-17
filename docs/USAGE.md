@@ -67,10 +67,10 @@ extra-usage balance if you have one, and the panels spending them.
    Agent        5h left        7d left  spent      panels
  ▸ claude *     62% · 2:14:31  71%      1.2M tok   1.1M tok · 4 panels
  ▸ grok         -              -        58.0M tok  -
- ◦ codex        baton has no usage source for this agent
- · gemini       not installed on the fleet's machine
- · aider        not installed on the fleet's machine
- · opencode     not installed on the fleet's machine
+ ◦ codex        ---
+ · gemini       ---
+ · aider        ---
+ · opencode     ---
 ```
 
 The roster's last column is what the overlay exists for. A panel's **share of the
@@ -150,6 +150,12 @@ under one name. A panel spawned without a profile is charged to nobody. An agent
 with no panels shows a mark rather than `0 tok`: nobody has shown it to be idle,
 and somebody may be running it in another terminal, where the vendor's own reader
 would see it and this column cannot.
+
+A row with no figure is `---`, and the **mark** is what says which of the two
+reasons it is. That is the half worth reading down a column, and it survives a
+pipe, a log and a colour-blind reader in a way a sentence repeated down the page
+does not. The agent you are most likely to be asking about — your default — still
+gets the reason in words, on the footer segment.
 
 The `◦` state is the only one drawn in amber, because it is the only one that is a
 gap in baton's reporting. An agent nobody installed is not a gap.

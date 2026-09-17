@@ -60,10 +60,10 @@ Baton 顯示帳號的兩件不同的事,而這個區別正是重點:
    Agent        5h left        7d left  spent      panels
  ▸ claude *     62% · 2:14:31  71%      1.2M tok   1.1M tok · 4 panels
  ▸ grok         -              -        58.0M tok  -
- ◦ codex        baton has no usage source for this agent
- · gemini       not installed on the fleet's machine
- · aider        not installed on the fleet's machine
- · opencode     not installed on the fleet's machine
+ ◦ codex        ---
+ · gemini       ---
+ · aider        ---
+ · opencode     ---
 ```
 
 消耗清單的最後一欄才是這個畫面存在的理由。面板**佔本窗口 token 的比例**是 Baton 自己的讀數,
@@ -128,6 +128,10 @@ Baton **讀得到**的 agent 會有四欄,而它們是來自三個地方的四�
 預設值,那會把每個 agent 的消耗都堆到同一個名字底下。生成時沒有 profile 的面板不會
 算到任何人頭上。沒有面板的 agent 顯示一個記號而不是 `0 tok`:沒有人證明過它是閒著的,
 而且可能有人正在另一個終端機裡跑它——那是廠商自己的讀取器看得到、而這一欄看不到的。
+
+沒有數字的那一列是 `---`,而**標記**才是說明它屬於哪一種原因的東西。那一半才值得沿著
+欄位往下讀,而且它經得起管線、日誌和色盲讀者,一整頁重複的句子做不到。你最可能在問的
+那個 agent——你的預設值——在頁尾段落仍然會用文字說明原因。
 
 只有 `◦` 會畫成琥珀色,因為只有它才是 Baton 回報能力上的缺口。
 沒人安裝的 agent 不是缺口。
