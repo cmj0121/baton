@@ -263,6 +263,21 @@ func TestGrokLimitsBodyUnderTheCapIsRead(t *testing.T) {
 	}
 }
 
+func TestGrokLimitsDoesNotHitProductionFromATestBinary(t *testing.T) {
+	var called bool
+	p := NewGrokLimits()
+	p.token = func() (string, error) {
+		called = true
+		return "must-not-send", nil
+	}
+	if _, ok := p.Week(context.Background()); ok {
+		t.Fatal("a test binary fetched from the production host")
+	}
+	if called {
+		t.Fatal("the token was read; a request was about to go out")
+	}
+}
+
 func TestGrokBillingURLHonoursTheCLIOverride(t *testing.T) {
 	t.Setenv(grokChatProxyEnv, "https://proxy.example/v1/")
 	if got, want := grokBillingURL(), "https://proxy.example/v1/billing?format=credits"; got != want {
