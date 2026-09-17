@@ -93,17 +93,50 @@ func TestOnlyTheVendorTheLimitsBelongToGetsQuotaColumns(t *testing.T) {
 	}
 }
 
-// The cell counts down to the reset, because "62% left" and "62% left, and it
-// refills in four minutes" are different decisions.
-func TestQuotaCellCarriesTheCountdownToTheReset(t *testing.T) {
-	m := quotaModel([]proto.VendorUsage{{Vendor: "claude", State: "reading"}}, &proto.LimitsInfo{
-		FiveHour: &proto.LimitWindow{
+// Every readable agent counts down to its own reset, because "62% left" and "62%
+// left, and it refills in four minutes" are different decisions — and because an
+// agent with no quota at all still has a window its figure rolls over on.
+//
+// The two instants come from different places and must not be swapped: claude's
+// is the quota's own reset, grok's is the end of the window baton measured its
+// spend over. Each row carries its own.
+func TestEveryReadableAgentCountsDownToItsOwnReset(t *testing.T) {
+	quotaReset := time.Date(2026, 9, 6, 14, 14, 31, 0, time.UTC).Format(time.RFC3339)
+	grokWindow := time.Date(2026, 9, 6, 13, 2, 33, 0, time.UTC).Format(time.RFC3339)
+	m := quotaModel([]proto.VendorUsage{
+		{Vendor: "claude", State: "reading", Tokens: 1_200_000},
+		{Vendor: "grok", State: "reading", Tokens: 58_000_000, Windows: []proto.VendorWindow{
+			{Label: "window", UsedPercent: 40, ResetsAt: grokWindow},
+		}},
+	}, &proto.LimitsInfo{FiveHour: &proto.LimitWindow{UsedPercent: 38, ResetsAt: quotaReset}}, nil, nil)
+
+	rows := m.usageVendorSection()
+	claude, grok := rowFor(t, rows, "claude"), rowFor(t, rows, "grok")
+	if !strings.Contains(claude, "2:14:31") {
+		t.Errorf("claude's row does not count down to its quota's reset: %q", claude)
+	}
+	if !strings.Contains(grok, "1:02:33") {
+		t.Errorf("grok has a window of its own and its row does not count down to it: %q", grok)
+	}
+	if strings.Contains(grok, "2:14:31") {
+		t.Errorf("grok's row borrowed the account's reset: %q", grok)
+	}
+	if strings.Contains(claude, "1:02:33") {
+		t.Errorf("claude's row shows grok's window: %q", claude)
+	}
+}
+
+// A readable vendor that has stated no window gets the mark. A countdown baton
+// invented would be worse than none — it is a promise about when a number will
+// change, made on behalf of a vendor that never made it.
+func TestAVendorThatStatesNoWindowGetsNoCountdown(t *testing.T) {
+	m := quotaModel([]proto.VendorUsage{{Vendor: "grok", State: "reading", Tokens: 5}},
+		&proto.LimitsInfo{FiveHour: &proto.LimitWindow{
 			UsedPercent: 38,
 			ResetsAt:    time.Date(2026, 9, 6, 14, 14, 31, 0, time.UTC).Format(time.RFC3339),
-		},
-	}, nil, nil)
-	if row := rowFor(t, m.usageVendorSection(), "claude"); !strings.Contains(row, "2:14:31") {
-		t.Errorf("row %q does not count down to the window's reset", row)
+		}}, nil, nil)
+	if row := rowFor(t, m.usageVendorSection(), "grok"); strings.Contains(row, ":") {
+		t.Errorf("row %q carries a countdown nobody stated", row)
 	}
 }
 

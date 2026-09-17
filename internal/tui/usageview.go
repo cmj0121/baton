@@ -183,6 +183,7 @@ func (m model) usageVendorSection() []string {
 		pad(tr("usage.view.agent", "Agent"), vendorNameWidth) + " " +
 		pad(tr("usage.view.session-left", "5h left"), vendorQuotaWidth) + " " +
 		pad(tr("usage.view.week-left", "7d left"), vendorWeekWidth) + " " +
+		pad(tr("usage.view.resets-in", "resets"), vendorResetWidth) + " " +
 		pad(tr("usage.view.spent", "spent"), vendorSpentWidth) + " " +
 		tr("usage.view.panels", "panels"))}
 	for _, v := range m.usageInfo.Vendors {
@@ -198,8 +199,9 @@ func (m model) usageVendorSection() []string {
 			continue
 		}
 		rows = append(rows, mark+pad(name, vendorNameWidth)+" "+
-			m.vendorQuotaCell(v.Vendor, fiveHour, vendorQuotaWidth, true)+" "+
-			m.vendorQuotaCell(v.Vendor, sevenDay, vendorWeekWidth, false)+" "+
+			m.vendorQuotaCell(v.Vendor, fiveHour, vendorQuotaWidth)+" "+
+			m.vendorQuotaCell(v.Vendor, sevenDay, vendorWeekWidth)+" "+
+			m.vendorResetCell(v, fiveHour)+" "+
 			vendorSpentCell(v)+" "+
 			m.vendorPanelCell(spend[v.Vendor]))
 	}
@@ -207,18 +209,14 @@ func (m model) usageVendorSection() []string {
 }
 
 // The vendor roll's column widths. The name is the widest agent name plus the
-// default's mark, and the five-hour cell holds "100% · 2:14:31" and nothing
-// longer, because FormatCountdown collapses anything past a day to "3d4h".
-//
-// The weekly cell is the narrow one because it is the cheapest reading on the
-// row: a reset three days out is not read to the second, and the Week (all) bar
-// above still counts it down. Giving up those cells is what buys the spent
-// column, which is the only figure a vendor baton cannot attribute will ever
-// have.
+// default's mark; a quota cell holds "100%"; the reset holds "2:14:31" and
+// nothing longer, because FormatCountdown collapses anything past a day to
+// "3d4h".
 const (
 	vendorNameWidth  = 12
-	vendorQuotaWidth = 14
+	vendorQuotaWidth = 8
 	vendorWeekWidth  = 8
+	vendorResetWidth = 9
 	vendorSpentWidth = 10
 )
 
@@ -292,17 +290,37 @@ const unknownCell = "-"
 // Claude Code status line or the Anthropic OAuth endpoint — both of them that one
 // account's books. Lending the number to grok's row would publish a ceiling grok
 // has never named, which is the failure the rest of this file is built to avoid.
-func (m model) vendorQuotaCell(vendor string, w *proto.LimitWindow, width int, countdown bool) string {
+func (m model) vendorQuotaCell(vendor string, w *proto.LimitWindow, width int) string {
 	if vendor != usage.LimitsVendor || w == nil {
 		return mutedStyle.Render(pad(unknownCell, width))
 	}
-	cell := fmt.Sprintf("%.0f%%", (1-limitFraction(w))*100)
-	if countdown {
+	return pad(fmt.Sprintf("%.0f%%", (1-limitFraction(w))*100), width)
+}
+
+// vendorResetCell is when this agent's window rolls over, and every readable
+// vendor has one — which is the whole reason it is a column of its own rather
+// than a suffix on the quota cell, where only the one account that publishes a
+// quota could ever have carried it.
+//
+// Two different instants can land here and the row says which by what is beside
+// them. For the account the limits reading belongs to it is the QUOTA's reset,
+// the same instant the 5h bar above counts down to, so the cell agrees with the
+// "left" figure two columns along. For every other vendor it is the end of the
+// window baton measured its spend over — which is the reset of the `spent` figure
+// on its own row, and the only reset anybody has stated for that agent.
+//
+// Neither is invented and neither is borrowed: a vendor with no window of its own
+// and no quota gets the mark, exactly as it does everywhere else on this row.
+func (m model) vendorResetCell(v proto.VendorUsage, w *proto.LimitWindow) string {
+	if v.Vendor == usage.LimitsVendor && w != nil {
 		if left, ok := limitCountdown(w, m.now); ok {
-			cell = joinDot(cell, usage.FormatCountdown(left))
+			return pad(usage.FormatCountdown(left), vendorResetWidth)
 		}
 	}
-	return pad(cell, width)
+	if left := m.vendorCountdown(v); left != "" {
+		return pad(left, vendorResetWidth)
+	}
+	return mutedStyle.Render(pad(unknownCell, vendorResetWidth))
 }
 
 // vendorSpentCell is what the vendor's own reader saw this window: every session
