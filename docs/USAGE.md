@@ -64,9 +64,9 @@ extra-usage balance if you have one, and the panels spending them.
  ▸ zerg / agent-2               67%  800.0K tok      41%
  ▸ baton / conductor            25%  300.0K tok      16%
 
-   Agent        5h left        7d left  spent      panels
- ▸ claude *     62% · 2:14:31  71%      1.2M tok   1.1M tok · 4 panels
- ▸ grok         -              -        58.0M tok  -
+   Agent        5h left  7d left  resets    spent      panels
+ ▸ claude *     62%      71%      2:14:31   1.2M tok   1.1M tok · 4 panels
+ ▸ grok         -        -        1:02:33   58.0M tok  -
  ◦ codex        ---
  · gemini       ---
  · aider        ---
@@ -115,10 +115,19 @@ questions from three different places:
 
 | Column    | Whose reading | What it says                                                    |
 | --------- | ------------- | --------------------------------------------------------------- |
-| `5h left` | the account's | what is left of the five-hour window, and when it refills       |
+| `5h left` | the account's | what is left of the five-hour window                            |
 | `7d left` | the account's | what is left of the week                                        |
+| `resets`  | either        | when this agent's window rolls over — see below                 |
 | `spent`   | the vendor's  | what its own reader saw this window, everywhere on this machine |
 | `panels`  | baton's       | what the panels **you** run on this agent have spent            |
+
+`resets` is the one column every readable agent has, and two different instants
+land in it. For the account the quota reading belongs to it is the **quota's own
+reset**, the same instant the `Session (5h)` bar counts down to — so it agrees
+with the `5h left` figure beside it. For every other agent it is the end of the
+window baton measured `spent` over, which is the only reset anybody has stated
+for it. An agent that has stated neither gets the mark rather than an invented
+countdown.
 
 `spent` and `panels` are two different measurements and the roll keeps them apart
 on purpose. The vendor's own reader counts every session on the machine, whether

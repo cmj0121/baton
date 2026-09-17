@@ -57,9 +57,9 @@ Baton 顯示帳號的兩件不同的事,而這個區別正是重點:
  ▸ zerg / agent-2               67%  800.0K tok      41%
  ▸ baton / conductor            25%  300.0K tok      16%
 
-   Agent        5h left        7d left  spent      panels
- ▸ claude *     62% · 2:14:31  71%      1.2M tok   1.1M tok · 4 panels
- ▸ grok         -              -        58.0M tok  -
+   Agent        5h left  7d left  resets    spent      panels
+ ▸ claude *     62%      71%      2:14:31   1.2M tok   1.1M tok · 4 panels
+ ▸ grok         -        -        1:02:33   58.0M tok  -
  ◦ codex        ---
  · gemini       ---
  · aider        ---
@@ -101,10 +101,17 @@ Baton **讀得到**的 agent 會有四欄,而它們是來自三個地方的四�
 
 | 欄位      | 誰的讀數 | 說的是什麼                                |
 | --------- | -------- | ----------------------------------------- |
-| `5h left` | 帳號的   | 五小時窗口還剩多少,以及何時重新灌滿       |
+| `5h left` | 帳號的   | 五小時窗口還剩多少                        |
 | `7d left` | 帳號的   | 本週還剩多少                              |
+| `resets`  | 兩者皆有 | 這個 agent 的窗口何時翻新——見下部說明     |
 | `spent`   | 廠商的   | 它自己的讀取器在本窗口看到的,整台機器都算 |
 | `panels`  | Baton 的 | **你的**面板跑在這個 agent 上花掉了多少   |
+
+`resets` 是每一個讀得到的 agent 都有的那一欄,而且會有兩種不同的時刻落在這裡。對額度
+讀數所屬的那個帳號,它是**額度自己的重置時刻**,跟 `工作階段（5h）` 進度條倒數到的是
+同一刻——所以它跟旁邊的 `5h left` 一致。對其他每一個 agent,它是 Baton 用來量 `spent`
+的那個窗口的結束時刻,也是唯一有人說過的、屬於那個 agent 的重置。兩者都沒有的 agent
+顯示記號,而不是一個憑空生出來的倒數。
 
 `spent` 跟 `panels` 是兩種不同的量測,這份清單刻意把它們分開。廠商自己的讀取器會數
 這台機器上的每一個 session,不管是不是 Baton 開的;`panels` 只數你的艦隊開出來的。
