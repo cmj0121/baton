@@ -66,7 +66,7 @@ extra-usage balance if you have one, and the panels spending them.
 
    Agent        5h left  7d left  resets    spent      panels
  ▸ claude *     62%      71%      2:14:31   1.2M tok   1.1M tok · 4 panels
- ▸ grok         -        -        1:02:33   58.0M tok  -
+ ▸ grok         -        64%      3d12h     58.0M tok  -
  ◦ codex        ---
  · gemini       ---
  · aider        ---
@@ -113,21 +113,22 @@ empty bars here, and no zeros standing in for a missing reading.
 A vendor baton **can** read gets four columns, and they are four different
 questions from three different places:
 
-| Column    | Whose reading | What it says                                                    |
-| --------- | ------------- | --------------------------------------------------------------- |
-| `5h left` | the account's | what is left of the five-hour window                            |
-| `7d left` | the account's | what is left of the week                                        |
-| `resets`  | either        | when this agent's window rolls over — see below                 |
-| `spent`   | the vendor's  | what its own reader saw this window, everywhere on this machine |
-| `panels`  | baton's       | what the panels **you** run on this agent have spent            |
+| Column    | Whose reading | What it says                                                                         |
+| --------- | ------------- | ------------------------------------------------------------------------------------ |
+| `5h left` | the account's | what is left of the five-hour window (Claude only)                                   |
+| `7d left` | that vendor's | what is left of the week — Claude's Anthropic week, or grok's own weekly credit pool |
+| `resets`  | either        | when this agent's window rolls over — see below                                      |
+| `spent`   | the vendor's  | what its own reader saw this window, everywhere on this machine                      |
+| `panels`  | baton's       | what the panels **you** run on this agent have spent                                 |
 
 `resets` is the one column every readable agent has, and two different instants
-land in it. For the account the quota reading belongs to it is the **quota's own
-reset**, the same instant the `Session (5h)` bar counts down to — so it agrees
-with the `5h left` figure beside it. For every other agent it is the end of the
-window baton measured `spent` over, which is the only reset anybody has stated
-for it. An agent that has stated neither gets the mark rather than an invented
-countdown.
+land in it. For Claude it is the **quota's own reset**, the same instant the
+`Session (5h)` bar counts down to — so it agrees with the `5h left` figure beside
+it. For grok it is the end of Grok Build's weekly credit pool, the same instant
+the `7d left` figure beside it counts down to. For every other agent it is the
+end of the window baton measured `spent` over, which is the only reset anybody
+has stated for it. An agent that has stated neither gets the mark rather than an
+invented countdown.
 
 `spent` and `panels` are two different measurements and the roll keeps them apart
 on purpose. The vendor's own reader counts every session on the machine, whether
@@ -141,13 +142,11 @@ hand only to Claude Code — a grok panel cannot reach that column however hard 
 works. The `spent` column beside it is what says whether the agent has been
 working, which is why it is there.
 
-The first two are dashed out for every agent but one, and that is the honest
-answer rather than a hole to fill in later. The only quota reading baton holds
-arrives from the Claude Code status line or the Anthropic OAuth endpoint, and
-both of those are one account's own books. No other vendor here publishes a
-ceiling to count down from, so lending it Anthropic's would print a limit nobody
-ever stated — in the most convincing place on the screen, a column of figures
-that all look alike.
+`5h left` is dashed out for every agent but Claude: that window is Anthropic's,
+and lending it across the column would print a limit nobody else stated. `7d left`
+is Claude's Anthropic week, and grok's own weekly credit pool when the grok CLI
+is signed in — not the same week, and not a hole to fill with Claude's number.
+Grok publishes no five-hour throttle, so its `5h left` stays a dash.
 
 They show what is **left** where the bars above show what is **gone**. A bar is a
 shape you compare against the bar below it; a cell in a row of three is read once,
@@ -328,14 +327,14 @@ thing to ask "who is burning it" about as a single panel.
 
 ## Which agents baton can account for
 
-| Agent      | Usage source                                | Cost                             |
-| ---------- | ------------------------------------------- | -------------------------------- |
-| `claude`   | `~/.claude/projects/**/*.jsonl` transcripts | Priced by Baton, per model       |
-| `grok`     | `~/.grok/sessions/**/updates.jsonl`         | **Grok's own figure**, converted |
-| `codex`    | —                                           | —                                |
-| `gemini`   | —                                           | —                                |
-| `aider`    | —                                           | —                                |
-| `opencode` | —                                           | —                                |
+| Agent      | Usage source                                                                          | Cost                             |
+| ---------- | ------------------------------------------------------------------------------------- | -------------------------------- |
+| `claude`   | `~/.claude/projects/**/*.jsonl` transcripts                                           | Priced by Baton, per model       |
+| `grok`     | `~/.grok/sessions/**/updates.jsonl`, plus the CLI's weekly credit pool when signed in | **Grok's own figure**, converted |
+| `codex`    | —                                                                                     | —                                |
+| `gemini`   | —                                                                                     | —                                |
+| `aider`    | —                                                                                     | —                                |
+| `opencode` | —                                                                                     | —                                |
 
 `CLAUDE_CONFIG_DIR` and `GROK_HOME` relocate the two roots the way each vendor's
 own CLI does.
@@ -345,6 +344,13 @@ tokens and a model but no price, so Baton prices them from a per-model table.
 Grok states the cost of every turn, so Baton reads that number rather than
 reconstructing it — there is no Grok price table in Baton to go stale when xAI
 reprices.
+
+Grok's `7d left` is a third reading. When the grok CLI is signed in, Baton asks
+the same billing endpoint the `/usage` modal uses (`GET
+https://cli-chat-proxy.grok.com/v1/billing?format=credits`), with the access
+token in `~/.grok/auth.json`. The token is sent only there, never logged, and
+never written back — Grok itself refreshes it. That pool is weekly; Grok
+publishes no five-hour throttle, so `5h left` stays a dash.
 
 A dash means Baton has **no usage source**, not that the agent is free. Grok's
 accounting in particular is easy to miss: `chat_history.jsonl`, `events.jsonl`,
