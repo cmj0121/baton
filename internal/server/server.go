@@ -1104,6 +1104,7 @@ func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 	s.mu.Lock()
 	caps := s.effectiveLimitsLocked(profile)
 	iso := s.agentIsolate[profile]
+	wireMemory := s.wiresMemoryLocked(id)
 	s.mu.Unlock()
 
 	// Hand an agent panel a session of its own, on the launched copy only — the
@@ -1126,7 +1127,7 @@ func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 	// re-run and a panel Restore rebuilt from a snapshot are wired exactly like a
 	// fresh spawn. Baking it into the stored spec is what left a whole upgraded
 	// fleet unable to write to its own memory.
-	spec = s.withAgentMCP(id, spec)
+	spec = withAgentMCP(wireMemory, spec)
 
 	if iso.Enabled() {
 		// No cgroup here, and that is deliberate: it would confine the runtime

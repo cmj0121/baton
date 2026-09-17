@@ -146,8 +146,8 @@ func TestAgentMCPIsNotAddedTwice(t *testing.T) {
 	}
 }
 
-// TestWithAgentMCPLeavesTheLaunchAlone: the five cases that must not be wired,
-// each of which would be a panel launched differently than the operator asked.
+// TestWithAgentMCPLeavesTheLaunchAlone: the cases that must not be wired, each
+// of which would be a panel launched differently than the operator asked.
 //
 // The "nobody else" cases are the ones worth the test. A flag invented for a CLI
 // that does not take it is not a missing feature — it is a panel that fails to
@@ -157,41 +157,46 @@ func TestWithAgentMCPLeavesTheLaunchAlone(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	spec := ptymgr.Spec{Command: "claude"}
 
-	on := &Server{agentMCP: true, panels: []panel.Panel{{ID: "1", Kind: panel.Agent}}}
-	if got := on.withAgentMCP("1", spec); len(got.Args) != 2 || got.Args[0] != "--mcp-config" {
+	if got := withAgentMCP(true, spec); len(got.Args) != 2 || got.Args[0] != "--mcp-config" {
 		t.Fatalf("a worker agent should be pointed at a config, got %v", got.Args)
 	}
+	if got := withAgentMCP(false, spec); len(got.Args) != 0 {
+		t.Errorf("startPanel said no; the launch should be untouched, got %v", got.Args)
+	}
+	if got := withAgentMCP(true, ptymgr.Spec{Command: "codex"}); len(got.Args) != 0 {
+		t.Errorf("this backend takes no such flag, got %v", got.Args)
+	}
+	// The command is resolved by its basename, so a profile running claude from an
+	// absolute path — or under another profile name — is still claude.
+	if got := withAgentMCP(true, ptymgr.Spec{Command: "/usr/local/bin/claude"}); len(got.Args) != 2 {
+		t.Errorf("an absolute path should resolve the same, got %v", got.Args)
+	}
+}
 
+// TestWiresMemoryLeavesOutEveryPanelItIsNotFor is the other half of that
+// decision, where it actually lives: which panels startPanel says yes for.
+func TestWiresMemoryLeavesOutEveryPanelItIsNotFor(t *testing.T) {
+	agent := []panel.Panel{{ID: "1", Kind: panel.Agent}}
+	if on := (&Server{agentMCP: true, panels: agent}); !on.wiresMemoryLocked("1") {
+		t.Fatal("a worker agent is exactly who this is for")
+	}
 	for _, tc := range []struct {
 		name string
 		srv  *Server
-		spec ptymgr.Spec
 		id   string
 	}{
-		{"the setting is off",
-			&Server{agentMCP: false, panels: []panel.Panel{{ID: "1", Kind: panel.Agent}}}, spec, "1"},
+		{"the setting is off", &Server{agentMCP: false, panels: agent}, "1"},
 		{"the conductor already has the whole table",
-			&Server{agentMCP: true, panels: []panel.Panel{{ID: "1", Kind: panel.Agent, Conductor: true}}}, spec, "1"},
+			&Server{agentMCP: true, panels: []panel.Panel{{ID: "1", Kind: panel.Agent, Conductor: true}}}, "1"},
 		{"a shell is not an agent",
-			&Server{agentMCP: true, panels: []panel.Panel{{ID: "1", Kind: panel.Shell}}}, spec, "1"},
+			&Server{agentMCP: true, panels: []panel.Panel{{ID: "1", Kind: panel.Shell}}}, "1"},
 		{"a command panel is not an agent",
-			&Server{agentMCP: true, panels: []panel.Panel{{ID: "1", Kind: panel.Command}}}, spec, "1"},
-		{"a transient panel is in no fleet at all",
-			&Server{agentMCP: true}, spec, "score:1"},
-		{"this backend takes no such flag",
-			&Server{agentMCP: true, panels: []panel.Panel{{ID: "1", Kind: panel.Agent}}},
-			ptymgr.Spec{Command: "codex"}, "1"},
+			&Server{agentMCP: true, panels: []panel.Panel{{ID: "1", Kind: panel.Command}}}, "1"},
+		{"a transient panel is in no fleet at all", &Server{agentMCP: true}, "score:1"},
 	} {
-		if got := tc.srv.withAgentMCP(tc.id, tc.spec); len(got.Args) != 0 {
-			t.Errorf("%s: the launch should be untouched, got %v", tc.name, got.Args)
+		if tc.srv.wiresMemoryLocked(tc.id) {
+			t.Errorf("%s: the launch should be untouched", tc.name)
 		}
-	}
-
-	// The command is resolved by its basename, so a profile running claude from an
-	// absolute path — or under another profile name — is still claude.
-	abs := on.withAgentMCP("1", ptymgr.Spec{Command: "/usr/local/bin/claude"})
-	if len(abs.Args) != 2 || abs.Args[0] != "--mcp-config" {
-		t.Errorf("an absolute path should resolve the same, got %v", abs.Args)
 	}
 }
 

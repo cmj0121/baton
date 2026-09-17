@@ -1868,12 +1868,15 @@ func editorCommand(configured, path string) (string, []string) {
 // The spec is returned untouched for five reasons, each of which leaves the
 // launch exactly as it was:
 //
-//   - panel.agent-mcp is off.
-//   - The panel is not an agent — a shell, a command panel, or one of the
-//     transient diff/git/log/editor panels that also come through startPanel.
-//   - It is the conductor, whose workspace already holds a .mcp.json with the
-//     whole fleet-control table; a second server offering one of those tools
-//     again would be a tool listed twice under two names.
+//   - wire is false, which is startPanel's answer to the first three: the
+//     setting is off, the panel is not an agent (a shell, a command panel, or
+//     one of the transient diff/git/log/editor panels that also come through
+//     startPanel), or it is the conductor — whose workspace already holds a
+//     .mcp.json with the whole fleet-control table, so a second server offering
+//     one of those tools again would be a tool listed twice under two names.
+//     It is decided there, inside the critical section the caps are read in,
+//     because this function must not be a second lock acquisition on the spawn
+//     path (see wiresMemoryLocked).
 //   - The backend takes no such flag (see agents.MCPConfigArgs), or the args
 //     already name an MCP config — a user who passed their own, or a spec
 //     persisted while the flag was still being baked in. Appending a second one
@@ -1882,13 +1885,28 @@ func editorCommand(configured, path string) (string, []string) {
 //     starts without its memory tool is a working agent, and refusing to spawn
 //     one over a file baton wanted to write in its own directory would be the
 //     cure doing more harm than the disease.
-func (s *Server) withAgentMCP(id string, spec ptymgr.Spec) ptymgr.Spec {
-	s.mu.Lock()
-	on := s.agentMCP
+//
+// wiresMemoryLocked is whether this panel is one the fleet memory's tool belongs
+// on: an agent panel that is not the conductor, with panel.agent-mcp on.
+//
+// Read inside the critical section startPanel already holds for the caps, and
+// deliberately so. An extra lock acquisition on the spawn path is not free here:
+// a connection is registered as a client before its hello is handled, and
+// broadcast does not wait for the welcome, so contention between the two lets
+// fleet frames reach a cockpit ahead of its own greeting. Adding a second
+// acquisition here was enough to turn that latent race into a reproducible
+// failure of the hostile-input suite, at one in eight runs on two cores.
+// Caller holds s.mu.
+func (s *Server) wiresMemoryLocked(id string) bool {
+	if !s.agentMCP {
+		return false
+	}
 	i := s.indexLocked(id)
-	worker := i >= 0 && s.panels[i].Kind == panel.Agent && !s.panels[i].Conductor
-	s.mu.Unlock()
-	if !on || !worker {
+	return i >= 0 && s.panels[i].Kind == panel.Agent && !s.panels[i].Conductor
+}
+
+func withAgentMCP(wire bool, spec ptymgr.Spec) ptymgr.Spec {
+	if !wire {
 		return spec
 	}
 	probe := agents.MCPConfigArgs(spec.Command, "probe")
