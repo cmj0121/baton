@@ -642,7 +642,7 @@ var zhTW = map[string]string{
 	"status.rebound-q-s-s":                   "已重新綁定 %q:%s → %s",
 	"status.q-s-starts-q":                    "%q（%s）是 %q（%s）的開頭 — %s 會先等 %s 才觸發",
 	"status.new-s-agent-type":                "新的 %s agent · 輸入工作目錄",
-	"status.re-running-d-panel":              "正在重跑 %s 裡的 %d 個面板",
+	"status.re-running-d-panel":              "正在重跑 %[2]s 裡的 %[1]d 個面板",
 	"status.purging-d-exited-panel":          "正在清除 %d 個已結束的面板",
 	"status.error-backend-down":              "錯誤:後端已中斷 — ",
 	"status.error-server-speaks":             "錯誤:server 使用的協定是 ",
