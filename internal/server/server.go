@@ -1298,6 +1298,9 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 		// operator leaves when they have read it. An EDITOR has no output to
 		// read, so the cockpit needs to know the thing it is zoomed on is over.
 		for cc := range s.clients {
+			if !cc.greeted {
+				continue // still mid-handshake; see broadcast
+			}
 			send(cc, proto.ServerMsg{Type: "ephemeral-exit", ID: id, Failed: exitCode != 0})
 		}
 	}
@@ -7348,11 +7351,32 @@ func (s *Server) removeClient(cc *clientConn) {
 	s.pushRemote() // the connection list lost a row; refresh any open overlay
 }
 
-// broadcast fans a message out to every attached client.
+// broadcast fans a message out to every attached client that has finished its
+// handshake.
+//
+// The greeted check is the whole of #121, and it is a correctness fix rather
+// than tidiness. A connection joins s.clients when it is ACCEPTED, before its
+// hello is handled, so without this a broadcast from any other goroutine could
+// be queued onto it ahead of its own welcome. Every client drains the handshake
+// POSITIONALLY — welcome, then the panels snapshot — so one early frame pushes
+// that by one and the connection reads a message behind for the rest of its
+// life. It surfaced as the hostile-input suite meeting a welcome where a panels
+// reply was due, which reads like "the daemon stopped answering" and is really
+// "the daemon answered in an order nobody expected".
+//
+// Nothing is lost by waiting. A client that has not said hello has not asked for
+// anything, and its hello answers with a full snapshot a moment later — so the
+// state it would have learned from the dropped frame is in the frame it does
+// get. remoteInfoForLocked has skipped ungreeted connections since it landed,
+// for the neighbouring reason: mid-handshake there is nothing true to say about
+// them yet.
 func (s *Server) broadcast(msg proto.ServerMsg) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for cc := range s.clients {
+		if !cc.greeted {
+			continue
+		}
 		send(cc, msg)
 	}
 }

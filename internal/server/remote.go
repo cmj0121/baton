@@ -211,13 +211,25 @@ func connRole(cc *clientConn) string {
 	return cc.role
 }
 
-// pushRemote sends every attached client the status as IT should see it. It is
+// pushRemote sends every GREETED client the status as IT should see it. It is
 // called after any change — enable, rotate, disable, kick, attach, detach — so
 // an open overlay on either side of the pipe is never stale.
+//
+// The greeted check is broadcast's, and this loop needed it most: addClient
+// calls pushRemote, so a connection being accepted pushed a frame to every
+// client INCLUDING ITSELF, arriving before its own welcome. Nothing is lost —
+// a client with no overlay open yet has nothing to keep current, and its hello
+// is answered with a fresh push a moment later.
+//
+// remoteInfoForLocked has skipped ungreeted connections when BUILDING the list
+// since it landed; this is the same rule applied to who is sent it.
 func (s *Server) pushRemote() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for cc := range s.clients {
+		if !cc.greeted {
+			continue
+		}
 		send(cc, proto.ServerMsg{Type: "remote", Remote: s.remoteInfoForLocked(cc)})
 	}
 }
