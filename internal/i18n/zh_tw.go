@@ -697,7 +697,7 @@ var zhTW = map[string]string{
 	"status.mouse":                           "滑鼠:",
 	"status.language":                        "語言:",
 	"status.confirm-close":                   "關閉前先確認:",
-	"status.result":                          "結果 · ",
+	"status.result":                          "結果 · %s（已結束）",
 	"status.zoomed":                          "已放大 · ",
 	"status.diff":                            "差異 · ",
 	"status.panel-has-exited-nothing":        "這個面板已經結束 — 沒有對象可以送 signal",
