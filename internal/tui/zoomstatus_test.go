@@ -28,7 +28,10 @@ func zoomStatusFor(t *testing.T, lang i18n.Lang, p panel.Panel) string {
 // re-introduction would look like: put the suffix back outside m.tr and this
 // fails, reword 已結束 and it does not.
 func TestExitedZoomStatusIsFullyTranslated(t *testing.T) {
-	dead := panel.Panel{ID: "7", Title: "sh #7", State: panel.Exited}
+	// Replay: the panel died under this daemon and its last screen is still
+	// there, which is the exited zoom that opens at all — a dead slot with
+	// nothing behind it is refused before it can set a status (see deadSlot).
+	dead := panel.Panel{ID: "7", Title: "sh #7", State: panel.Exited, Replay: true}
 
 	zh := zoomStatusFor(t, i18n.ZhTW, dead)
 	if strings.Contains(strings.ToLower(zh), "exited") {

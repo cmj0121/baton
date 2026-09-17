@@ -697,6 +697,7 @@ var zhTW = map[string]string{
 	"status.mouse":                           "滑鼠:",
 	"status.language":                        "語言:",
 	"status.confirm-close":                   "關閉前先確認:",
+	"status.no-replay":                       "沒有畫面可以重播 — 按 r 重跑它",
 	"status.result":                          "結果 · %s（已結束）",
 	"status.zoomed":                          "已放大 · ",
 	"status.diff":                            "差異 · ",

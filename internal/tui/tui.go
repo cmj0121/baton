@@ -3250,10 +3250,48 @@ func (m *model) rememberScroll() {
 	m.scrollMem[m.zoomID] = scrollState{off: m.scrollOff, on: m.scrolling}
 }
 
+// deadSlot reports a panel there is nothing behind: exited, and with no terminal
+// record left on the daemon for an attach to replay.
+//
+// The two halves are both needed and neither is enough. A panel that died under
+// this daemon keeps its ring, and its last screen is the RESULT the dead slot is
+// kept for — refusing that zoom would throw away the feature. A panel the daemon
+// rebuilt from its persisted fleet has a slot, a title, a group and no terminal
+// whatsoever, so the same keystroke opens an emulator that will never receive a
+// byte. The cockpit cannot work the difference out for itself; Replay is the
+// daemon saying which it is.
+func deadSlot(p panel.Panel) bool {
+	return p.State == panel.Exited && !p.Replay
+}
+
+// deadSlotRefusal is what the cockpit says instead of opening a zoom onto
+// nothing, or "" when there is something to open.
+//
+// It names r because that is the whole of what a dead slot offers — the daemon's
+// own Activity line for one reads "restored · press r to re-run" — and a status
+// line saying it is a better version of a view whose entire body would be that
+// sentence.
+func (m model) deadSlotRefusal(p panel.Panel) string {
+	if !deadSlot(p) {
+		return ""
+	}
+	return m.tr("status.no-replay", "nothing to replay — press r to re-run it")
+}
+
 // zoomInto opens a terminal emulator for panel p and attaches to its PTY: output
 // streams into the emulator and keystrokes are forwarded back. baton owns the
 // screen, so the footer (rendered in View) is always safe.
+//
+// A dead slot is refused here, at the one point every zoom passes through, rather
+// than at each of the dozen keystrokes that can reach one. Two callers check
+// first anyway — the group split and the inbox both tear their own view down
+// before they get here, and a refusal after that would leave the operator
+// somewhere they did not ask to be.
 func (m model) zoomInto(p panel.Panel) model {
+	if why := m.deadSlotRefusal(p); why != "" {
+		m.status = why
+		return m
+	}
 	m.mode = modeZoom
 	m.zoomID = p.ID
 	m.zoomTitle = p.Title
