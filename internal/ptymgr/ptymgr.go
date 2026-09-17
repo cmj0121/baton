@@ -374,6 +374,45 @@ func (m *Manager) ringView(p *pane) []byte {
 	return p.ring
 }
 
+// Holds reports whether the manager still keeps a terminal record for this
+// panel — the thing Snapshot would replay.
+//
+// It is not "has this panel produced output yet". A pane's entry is created when
+// the panel starts and removed only when the panel is closed or purged, so this
+// is true for a panel that is running, and stays true after its process dies:
+// the ring is what an operator reads a dead panel's last screen from, and that is
+// the whole reason an exited panel keeps a slot in the fleet at all.
+//
+// It is false for the one case that looks identical from the fleet snapshot and
+// is not: a panel the daemon rebuilt from its persisted state, which has a slot,
+// a title, a group and no terminal behind it whatsoever. A frontend cannot tell
+// those two apart on its own — both are simply "exited" — so the daemon says.
+func (m *Manager) Holds(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.ptys[id]
+	return ok
+}
+
+// Held is the same answer for every panel at once: the set of ids the manager
+// keeps a pane for.
+//
+// It exists for the reason Pids does, stated there and just as true here. A
+// fleet snapshot asks this per panel while the server holds its OWN lock, and
+// this one is contended by every output pump — so asking N times inside that
+// critical section is N chances to stall the daemon's command loop behind a
+// pump, on the exact path a cockpit's handshake is waiting on. One acquisition,
+// then a map lookup per panel.
+func (m *Manager) Held() map[string]bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	held := make(map[string]bool, len(m.ptys))
+	for id := range m.ptys {
+		held[id] = true
+	}
+	return held
+}
+
 // Snapshot returns a copy of a panel's recent output, for replay when a client
 // attaches. Nil for an unknown id.
 func (m *Manager) Snapshot(id string) []byte {

@@ -1313,6 +1313,14 @@ func (m model) zoomFocusedMember() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	// Asked BEFORE the split is torn down. zoomInto refuses a dead slot on its
+	// own, but by then this function has already dropped every tile's stream and
+	// closed its emulators — the operator would be refused into a split that has
+	// to be rebuilt, for a keystroke that did nothing.
+	if why := m.deadSlotRefusal(p); why != "" {
+		m.status = why
+		return m, nil
+	}
 	origin := m.groupName
 	// Drop the split's streams before the single zoom takes over input + output.
 	m.sendf(proto.Command{Action: "panel.detach"}) // detach all

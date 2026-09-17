@@ -84,7 +84,12 @@ agent whose runtime speaks no MCP.
 The config is baton's own and never lands in your repository — a worker panel runs in your working tree, where a
 dotfile baton wrote would show up in `git status`. It carries only the memory's write tool: the full table drives the
 fleet (spawn, close, signal) and that is the conductor's job. Turn it off with `panel.agent-mcp: false`, or on the
-panel-config page's DEFAULTS tab; it is read at spawn, so it decides what the NEXT agent panel starts with.
+panel-config page's DEFAULTS tab.
+
+It is resolved at **every launch**, not stored on the panel — so a re-run (`r`) and a panel the daemon rebuilt from its
+snapshot are wired exactly like a fresh spawn. That matters more than it sounds: the flag used to be frozen into the
+spawn spec, which meant a panel whose spec predated the setting could never gain the tool however often it was re-run,
+and a panel whose spec carried it could end up pointed at a config written for a baton binary that had since moved.
 
 **From the cockpit, without editing the file:** `C-t P` opens panel config; `←→` walks its tabs to **FEEDBACK**. The
 first row is the fleet's own `score.feedback`, which `e` toggles; under it sits one row per configured profile —
@@ -356,21 +361,55 @@ An entry outside the working set carries **one** of three standings, naming the 
 
 `status` answers three questions that are not one question:
 
-| Field                            | Says                                                                     |
-| -------------------------------- | ------------------------------------------------------------------------ |
-| `enabled`                        | what `score.enabled` asked for                                           |
-| `available`                      | whether a store actually opened                                          |
-| `reason`                         | why not, when it did not — or that reads or writes have stopped working  |
-| `entries` / `rendered`           | what the store holds, and what a dispatch would carry                    |
-| `oversized` / `block_full`       | which cap made those two disagree                                        |
-| `bare_admits`                    | how many of your lines became entries on a bare bullet alone             |
-| `promote_at`, `rank`, …          | the tuning **in force**, which is not always what the file says          |
-| `feedback` / `feedback_profiles` | whether briefs carry the submission hint, and which profiles overrode it |
-| `unlocked`                       | the store is running without its single-writer claim                     |
-| `dir`                            | where the files are                                                      |
+| Field                            | Says                                                                        |
+| -------------------------------- | --------------------------------------------------------------------------- |
+| `enabled`                        | what `score.enabled` asked for                                              |
+| `available`                      | whether a store actually opened                                             |
+| `reason`                         | why not, when it did not — or that reads or writes have stopped working     |
+| `entries` / `rendered`           | what the store holds, and what a dispatch would carry                       |
+| `oversized` / `block_full`       | which cap made those two disagree                                           |
+| `bare_admits`                    | how many of your lines became entries on a bare bullet alone                |
+| `promote_at`, `rank`, …          | the tuning **in force**, which is not always what the file says             |
+| `feedback` / `feedback_profiles` | whether briefs carry the submission hint, and which profiles overrode it    |
+| `agent_mcp`                      | which running agent panels can write to the memory, and why the rest cannot |
+| `unlocked`                       | the store is running without its single-writer claim                        |
+| `dir`                            | where the files are                                                         |
 
 Off, unavailable and broken are three states, not one. You must never have to read the daemon log to learn that the
 fleet has no memory.
+
+### Which panels can actually write
+
+`entries: 0` has two meanings and everything else on the reply reads the same for both: a fleet with nothing to
+remember yet, and a fleet holding no pen. `agent_mcp` is the difference.
+
+```sh
+baton ctl score status | jq .agent_mcp
+{
+  "enabled": true,
+  "config": "/home/you/.baton/agent-mcp.json",
+  "wired": ["6", "40"],
+  "unwired": { "backend-has-no-flag": ["32", "69"] }
+}
+```
+
+`wired` is the list that should be everything. `unwired` groups the rest by cause — panels rather than counts, because
+you can act on an id:
+
+| Reason                | Means                                                                     |
+| --------------------- | ------------------------------------------------------------------------- |
+| `backend-has-no-flag` | that CLI takes no MCP config option, so baton has nothing to point it at  |
+| `own-config`          | the command line already names an MCP config — yours, and baton leaves it |
+| `config-unwritable`   | baton could not write its own config file; the panel started without it   |
+| `setting-off`         | `panel.agent-mcp: false`                                                  |
+| `unknown`             | a running agent whose verdict went missing — report it                    |
+
+Only **running agent panels** are reported. A dead slot writes nothing whatever its last launch did, and the conductor
+is out of scope entirely: its workspace already carries the whole fleet-control table.
+
+The verdict is the one the launch actually reached, recorded at the fork rather than worked out again when you ask — a
+second copy of that decision could disagree with the one that started the panel, and that one is both the only one that
+matters and the only one you cannot see.
 
 ## How fast one actor may submit
 

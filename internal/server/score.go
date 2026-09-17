@@ -1611,6 +1611,7 @@ func (s *Server) scoreStatus() json.RawMessage {
 		rank = &r
 	}
 	feedback, overrides := s.feedbackInForce()
+	tools := s.memoryToolInForce()
 	return scoreJSON(struct {
 		Enabled       bool        `json:"enabled"`
 		Available     bool        `json:"available"`
@@ -1631,7 +1632,11 @@ func (s *Server) scoreStatus() json.RawMessage {
 		// hiding the answer the operator went looking for.
 		Feedback         bool            `json:"feedback"`
 		FeedbackProfiles map[string]bool `json:"feedback_profiles,omitempty"`
-		Dir              string          `json:"dir,omitempty"`
+		// No omitempty, for the reason feedback has none: a fleet where nothing
+		// can write is exactly when this is worth reading, and that is the case
+		// where every count inside it is zero.
+		AgentMCP memoryToolReport `json:"agent_mcp"`
+		Dir      string           `json:"dir,omitempty"`
 	}{
 		Enabled:       s.scoreState.Enabled,
 		Available:     s.scoreState.available(),
@@ -1653,6 +1658,7 @@ func (s *Server) scoreStatus() json.RawMessage {
 		Rank:             rank,
 		Feedback:         feedback,
 		FeedbackProfiles: overrides,
+		AgentMCP:         tools,
 		Dir:              s.scoreState.Store.Dir(),
 	})
 }
@@ -1849,29 +1855,180 @@ func editorCommand(configured, path string) (string, []string) {
 	return "sh", []string{"-c", ed + ` "$0"`, path}
 }
 
-// agentMCPArgs is what an agent panel's command line gains so the agent can see
-// the fleet memory's write tool: the flag that backend takes for an extra MCP
-// config, and the path of the one baton writes.
+// The reasons a panel is launched WITHOUT the fleet memory's write tool, as the
+// verdict recorded against its id and reported by score.status.
 //
-// Empty for three reasons, each of which leaves the spawn exactly as it was:
-// panel.agent-mcp is off, the backend is one baton has not been taught to tell
-// (see agents.MCPConfigArgs), or the config could not be written. The last is a
-// deliberate non-error: an agent that starts without its memory tool is a working
-// agent, and refusing to spawn one over a file baton wanted to write in its own
-// directory would be the cure doing more harm than the disease.
-func (s *Server) agentMCPArgs(command string) []string {
+// They are tokens rather than sentences because an operator greps them and a
+// status payload groups by them; the prose that explains each one lives on the
+// function that decides it. memoryToolWired is the empty string so a recorded
+// verdict reads as "nothing wrong with this one".
+const (
+	memoryToolWired      = ""
+	memoryToolOff        = "setting-off"         // panel.agent-mcp is off
+	memoryToolNotAgent   = "not-an-agent"        // a shell, a command panel, or a transient one
+	memoryToolConductor  = "conductor"           // it already holds the whole fleet-control table
+	memoryToolNoFlag     = "backend-has-no-flag" // this backend takes no MCP config option
+	memoryToolOwnConfig  = "own-config"          // an MCP config is already named on the command line
+	memoryToolUnwritable = "config-unwritable"   // baton could not write its own config file
+)
+
+// wiresMemoryLocked is whether this panel is one the fleet memory's tool belongs
+// on — an agent panel that is not the conductor, with panel.agent-mcp on — and
+// the reason when it is not.
+//
+// Read inside the critical section startPanel already holds for the caps, and
+// deliberately so. An extra lock acquisition on the spawn path is not free here:
+// a connection is registered as a client before its hello is handled, and
+// broadcast does not wait for the welcome, so contention between the two lets
+// fleet frames reach a cockpit ahead of its own greeting. Adding a second
+// acquisition here was enough to turn that latent race into a reproducible
+// failure of the hostile-input suite, at one in eight runs on two cores (#121).
+// Caller holds s.mu.
+func (s *Server) wiresMemoryLocked(id string) (bool, string) {
 	if !s.agentMCP {
-		return nil
+		return false, memoryToolOff
 	}
-	if agents.MCPConfigArgs(command, "probe") == nil {
-		return nil // this backend takes no such flag; do not write a file for nobody
+	i := s.indexLocked(id)
+	if i < 0 || s.panels[i].Kind != panel.Agent {
+		return false, memoryToolNotAgent
+	}
+	if s.panels[i].Conductor {
+		// Its workspace already holds a .mcp.json with the whole fleet-control
+		// table, and a second server offering one of those tools again would be a
+		// tool listed twice under two names.
+		return false, memoryToolConductor
+	}
+	return true, memoryToolWired
+}
+
+// withAgentMCP returns a copy of spec whose command line carries the fleet
+// memory's write tool — the flag that backend takes for an extra MCP config, and
+// the path of the one baton writes — and the reason it does not, when it does
+// not.
+//
+// ON THE LAUNCHED COPY ONLY, never on the spec the server retains for respawn —
+// the same rule withSessionID and withStatusLine already follow, and for a
+// sharper reason than either. This used to be appended in spawnPanel and frozen
+// into the stored spec, which meant two things. A panel whose spec predates the
+// setting (every panel on a fleet upgraded into it, and every panel Restore
+// rebuilds from a snapshot) could never gain the tool at all, because
+// respawnPanel replays that spec verbatim. And a panel whose spec DID carry the
+// flag was on borrowed time: writeAgentMCPConfig names this binary and is
+// rewritten on every spawn for that reason, and a replayed flag never calls it,
+// so after an upgrade the config it points at can name a path that is gone.
+// Deriving it here, at the daemon's one fork point, answers both.
+//
+// wire is startPanel's answer, decided by wiresMemoryLocked; the three reasons
+// below are this function's own. Every one of them leaves the launch exactly as
+// it was, and every one of them is now REPORTED — a panel launched without the
+// memory's tool used to be a Debug log line and nothing else, which is precisely
+// the shape invariant I8 exists to refuse.
+//
+//   - The backend takes no such flag (see agents.MCPConfigArgs). Silently
+//     skipping it is right about the file and was wrong about the silence: on a
+//     fleet of claude and grok panels, half of it can never write to the memory
+//     and nothing anywhere said which half.
+//   - The args already name an MCP config — a user who passed their own, or a
+//     spec persisted while the flag was still being baked in. Appending a second
+//     one is the failure mode moving this to launch time would introduce.
+//   - The config could not be written. A deliberate non-error: an agent that
+//     starts without its memory tool is a working agent, and refusing to spawn
+//     one over a file baton wanted to write in its own directory would be the
+//     cure doing more harm than the disease. It is a Warn rather than a Debug,
+//     because it is the one of the three that is a fault rather than a shape.
+func withAgentMCP(wire bool, spec ptymgr.Spec) (ptymgr.Spec, string) {
+	if !wire {
+		return spec, ""
+	}
+	probe := agents.MCPConfigArgs(spec.Command, "probe")
+	if probe == nil {
+		return spec, memoryToolNoFlag
+	}
+	for _, a := range spec.Args {
+		if flag, _, _ := strings.Cut(a, "="); flag == probe[0] {
+			return spec, memoryToolOwnConfig
+		}
 	}
 	path, err := writeAgentMCPConfig()
 	if err != nil {
-		log.Debug().Err(err).Msg("agent mcp config not written; spawning without it")
-		return nil
+		log.Warn().Err(err).Msg("agent mcp config not written; the panel starts without the memory's tool")
+		return spec, memoryToolUnwritable
 	}
-	return agents.MCPConfigArgs(command, path)
+	spec.Args = append(append([]string(nil), spec.Args...), agents.MCPConfigArgs(spec.Command, path)...)
+	return spec, memoryToolWired
+}
+
+// memoryToolReport is the write half of score.status: whether the fleet's agent
+// panels can reach the memory at all, and which cannot.
+//
+// It exists because every other field on that reply can read healthy while the
+// loop is wide open. enabled, available and feedback all answered true on a
+// fleet of thirteen agent panels where not one of them had ever been handed
+// score_submit, and the only trace of that anywhere was a Debug log line. An
+// operator meeting `entries: 0` had no way to tell a fleet with nothing to
+// remember from a fleet with no pen.
+//
+// Panels rather than counts, because an operator can act on an id and cannot act
+// on a number. Wired is the list that should be everything; Unwired groups the
+// rest by reason, which is the question "why not" asked once per cause instead
+// of once per panel.
+//
+// It reports on the agent panels that are RUNNING. A dead slot writes nothing
+// whatever its last launch did, and listing one here would be an answer to a
+// question nobody asked.
+type memoryToolReport struct {
+	Enabled bool                `json:"enabled"`
+	Config  string              `json:"config,omitempty"`
+	Wired   []string            `json:"wired"`
+	Unwired map[string][]string `json:"unwired,omitempty"`
+}
+
+// memoryToolInForce builds that report from the verdicts recorded at launch.
+func (s *Server) memoryToolInForce() memoryToolReport {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := memoryToolReport{Enabled: s.agentMCP, Wired: []string{}}
+	if s.agentMCP {
+		out.Config = filepath.Join(paths.Expand("~/.baton"), "agent-mcp.json")
+	}
+	for _, p := range s.panels {
+		if p.Kind != panel.Agent || p.State == panel.Exited {
+			continue
+		}
+		reason, ok := s.memoryTool[p.ID]
+		switch {
+		case !ok:
+			// A live agent panel this daemon never launched. Restore cannot produce
+			// one — everything it rebuilds is exited — so this is a panel whose
+			// verdict went missing rather than one that was never asked, and saying
+			// so is better than counting it as wired.
+			reason = "unknown"
+		case reason == memoryToolWired:
+			out.Wired = append(out.Wired, p.ID)
+			continue
+		}
+		if out.Unwired == nil {
+			out.Unwired = map[string][]string{}
+		}
+		out.Unwired[reason] = append(out.Unwired[reason], p.ID)
+	}
+	return out
+}
+
+// noteMemoryToolLocked records how the last launch of this panel went for the fleet
+// memory's write tool, so score.status can answer "which panels can write to the
+// memory, and why can the rest not".
+//
+// Recorded rather than re-derived. Working the verdict out again at status time
+// would be a second copy of the decision, and a second copy can disagree with
+// the one that actually launched the panel — which is the only one that matters
+// and the only one nobody can observe.
+// Caller holds s.mu.
+func (s *Server) noteMemoryToolLocked(id, reason string) {
+	if s.memoryTool == nil {
+		s.memoryTool = map[string]string{}
+	}
+	s.memoryTool[id] = reason
 }
 
 // writeAgentMCPConfig writes the MCP config worker panels load, in baton's own

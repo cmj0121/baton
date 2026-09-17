@@ -397,6 +397,14 @@ type Server struct {
 	// baton's own MCP config, which carries score_submit and nothing else.
 	agentMCP bool
 
+	// memoryTool is how the LAST LAUNCH of each panel went for that config, keyed
+	// by panel id: the empty string when the tool was wired, one of the
+	// memoryTool* reasons when it was not. score.status reads it, so an operator
+	// can see which panels can write to the fleet memory instead of inferring it
+	// from an empty store. Written at the one fork point, dropped with the
+	// panel's spec. Guarded by mu.
+	memoryTool map[string]string
+
 	// The quiet ladder. attention is the fleet-wide policy and agentAttention the
 	// per-profile ones layered over it (see Settings), resolved per tick from the
 	// profile each panel records rather than frozen at spawn — which is what lets
@@ -1118,6 +1126,7 @@ func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 	s.mu.Lock()
 	caps := s.effectiveLimitsLocked(profile)
 	iso := s.agentIsolate[profile]
+	wireMemory, refusal := s.wiresMemoryLocked(id)
 	s.mu.Unlock()
 
 	// Hand an agent panel a session of its own, on the launched copy only — the
@@ -1134,6 +1143,16 @@ func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 	// Same rule as the session id: the launched copy only, never the spec kept for
 	// respawn, so a re-run re-resolves whatever status line the user has by then.
 	spec, _ = withStatusLine(spec, s.limitsSelf)
+
+	// …and the fleet memory's write tool, under the same rule again: a worker
+	// panel is pointed at baton's own MCP config every time it starts, so a
+	// re-run and a panel Restore rebuilt from a snapshot are wired exactly like a
+	// fresh spawn. Baking it into the stored spec is what left a whole upgraded
+	// fleet unable to write to its own memory.
+	spec, why := withAgentMCP(wireMemory, spec)
+	if wireMemory {
+		refusal = why // this panel was in scope; the verdict is the wiring's own
+	}
 
 	if iso.Enabled() {
 		// No cgroup here, and that is deliberate: it would confine the runtime
@@ -1167,6 +1186,12 @@ func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 	// same "was this run healthy" question.
 	s.mu.Lock()
 	s.noteSpawnLocked(id, time.Now())
+	// The memory-tool verdict is recorded in this acquisition rather than in one
+	// of its own, for the reason the wiring decision is read in the caps' — the
+	// spawn path must not gain lock acquisitions. Doing so is what surfaced the
+	// broadcast-before-welcome race in #121, and a second attempt at it here cost
+	// the git ephemeral suite the same way.
+	s.noteMemoryToolLocked(id, refusal)
 	s.mu.Unlock()
 	return nil
 }
@@ -1401,6 +1426,7 @@ func (s *Server) withdrawPanel(id string) {
 		s.panels = append(s.panels[:i], s.panels[i+1:]...)
 	}
 	delete(s.specs, id)
+	delete(s.memoryTool, id)
 	s.mon.forget(id)
 }
 
@@ -2039,10 +2065,10 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 
 	var out []proto.Panel
 	if changed && len(s.clients) > 0 {
-		pids := s.pty.Pids()
+		pids, held := s.pty.Pids(), s.pty.Held()
 		out = make([]proto.Panel, len(s.panels))
 		for i, p := range s.panels {
-			out[i] = s.wirePanel(p, pids)
+			out[i] = s.wirePanel(p, pids, held)
 		}
 	}
 	s.mu.Unlock()
@@ -3278,6 +3304,15 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			return
 		}
 		s.broadcastFleet()
+	case "panel.relaunch":
+		// The second re-run verb (#117): re-resolve the panel's profile against the
+		// config in force and start it on THAT command line, rather than replaying
+		// the one it was launched with. Same slot, same id.
+		if err := s.relaunchPanel(cmd.ID); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		s.broadcastFleet()
 	case "panel.respawn":
 		if err := s.respawnPanel(cmd.ID); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
@@ -3845,14 +3880,10 @@ func (s *Server) createPanel(origin panelOrigin, kind, path string, args []strin
 			s.clearConductorPending()
 			return "", fmt.Errorf("an agent panel needs a command")
 		}
-		// A worker panel is pointed at baton's own MCP config, which carries the
-		// memory's score_submit and nothing else. The conductor is skipped: its
-		// workspace already holds a .mcp.json with the whole fleet-control table,
-		// and a second server offering one of those tools again would be a tool
-		// listed twice under two names.
-		if !conductor {
-			args = append(append([]string(nil), args...), s.agentMCPArgs(path)...)
-		}
+		// The memory's MCP config is NOT added here. It is derived on the launched
+		// copy in startPanel, beside the session id and the status line, so that a
+		// re-run and a restored panel gain it too — see withAgentMCP. What this
+		// spec holds is what the user asked for, and nothing baton bolted on.
 		spec = ptymgr.Spec{Command: path, Args: args, Dir: dir, Env: env}
 	case proto.KindCommand:
 		if path == "" {
@@ -5131,6 +5162,7 @@ func (s *Server) pruneExitedLocked() (stop []string) {
 			stop = append(stop, p.ID)
 			s.mon.forget(p.ID)
 			delete(s.specs, p.ID)
+			delete(s.memoryTool, p.ID)
 			delete(s.sessions, p.ID)
 			s.forgetRestartLocked(p.ID)
 			s.forgetCwdLocked(p.ID)
@@ -5924,6 +5956,80 @@ func (s *Server) dispatchGroupBound(group, prompt, submit string) (fanout, error
 	return f, nil
 }
 
+// relaunchPanel re-runs an exited panel from the config in force rather than from
+// the spec it was launched with: the panel's profile is resolved again against
+// the agent backends the daemon is currently holding, and the resulting command
+// line replaces the slot's stored one.
+//
+// It is the second of two re-run verbs, and the pair is the point (#117).
+// respawnPanel means "bring it back exactly as it was" and is the right answer
+// for a panel that died; this means "bring it back the way I would spawn it
+// now", which is the question an operator has after editing panel.agents and
+// reloading — the config reloaded, and the dead slots never heard about it.
+// Neither answer is always right, which is why there are two keys rather than a
+// cleverer single one.
+//
+// IT KEEPS THE PANEL'S ID, and everything hanging off it: the work item and its
+// pin and favourite, the task brief, the log binding, and every reference an
+// operator, a ctl call or an MCP tool holds. A re-launch re-resolves the SPEC,
+// not the panel's identity. Purge-and-respawn is the thing this exists so nobody
+// has to do.
+//
+// THE DIRECTORY IS THE PANEL'S OWN and is not re-resolved. A profile's dir is a
+// default for a new panel; where a panel was put is a decision the operator made
+// afterwards, and settings.restore-cwd exists because even a panel's own
+// wandering is not always where it should come back. Moving a slot on a re-launch
+// would be the one part of this that could lose work.
+//
+// Refused for a panel with no profile — a shell, a command panel, an agent
+// spawned by path — because there is nothing to re-resolve and quietly doing what
+// r does would make two keys mean one thing on those panels and two on others.
+// The error says so and names r.
+func (s *Server) relaunchPanel(id string) error {
+	s.mu.Lock()
+	idx := s.indexLocked(id)
+	if idx < 0 {
+		s.mu.Unlock()
+		return fmt.Errorf("no panel with id %q", id)
+	}
+	if s.panels[idx].State != panel.Exited {
+		s.mu.Unlock()
+		return fmt.Errorf("panel is still running")
+	}
+	spec, ok := s.specs[id]
+	if !ok {
+		s.mu.Unlock()
+		return fmt.Errorf("nothing to re-run")
+	}
+	profile := spec.Profile
+	if profile == "" {
+		s.mu.Unlock()
+		return fmt.Errorf("panel %s was not spawned from an agent profile, so there is nothing to re-resolve — r re-runs it as it was", id)
+	}
+	var found *proto.AgentBackend
+	for i := range s.agents {
+		if s.agents[i].Name == profile {
+			found = &s.agents[i]
+			break
+		}
+	}
+	if found == nil {
+		s.mu.Unlock()
+		return fmt.Errorf("no agent profile named %q in the config in force — r re-runs panel %s as it was", profile, id)
+	}
+	// The command line is replaced; the directory is not (see above). Stored back
+	// so the slot's spec IS what launched it — a re-launch that left the old one
+	// behind would make the next plain r undo it.
+	spec.Command = found.Command
+	spec.Args = append([]string(nil), found.Args...)
+	s.specs[id] = spec
+	s.mu.Unlock()
+
+	log.Info().Str("panel", id).Str("profile", profile).Str("command", found.Command).
+		Msg("re-launching a panel from the config in force")
+	return s.respawnPanel(id)
+}
+
 // respawnPanel re-runs the backing process of an exited panel from its frozen spawn
 // spec. It is the manual counterpart to the no-auto-respawn restore: only an Exited
 // panel with a recorded spec can be re-run. The lock is dropped around StartCmd (which
@@ -6089,6 +6195,7 @@ func (s *Server) closePanel(id string) error {
 	s.panels = slices.Delete(s.panels, idx, idx+1)
 	s.mon.forget(id)
 	delete(s.specs, id)           // the panel is gone for good; drop its retained spawn spec
+	delete(s.memoryTool, id)      // …and how its last launch went for the memory's tool
 	delete(s.sessions, id)        // …and the session ids its usage was attributed through
 	s.forgetRestartLocked(id)     // …and any restart armed for it: it must not come back
 	s.forgetCwdLocked(id)         // …and the output tail kept to read its directory reports
@@ -6568,7 +6675,8 @@ func (s *Server) purgeExited() int {
 		if p.State == panel.Exited {
 			gone = append(gone, p.ID)
 			s.mon.forget(p.ID)
-			delete(s.specs, p.ID)    // purged for good; drop its retained spawn spec
+			delete(s.specs, p.ID) // purged for good; drop its retained spawn spec
+			delete(s.memoryTool, p.ID)
 			delete(s.sessions, p.ID) // …and the session ids its usage was attributed through
 			s.forgetRestartLocked(p.ID)
 			s.forgetCwdLocked(p.ID)
@@ -7136,7 +7244,7 @@ func (s *Server) setGroupFavourite(group string, fav bool) error {
 // dead panel it falls back to when the process ended, because the Monitor forgets
 // a panel on exit and a queue listing failures still has to order them.
 // Caller holds s.mu.
-func (s *Server) wirePanel(p panel.Panel, pids map[string]int) proto.Panel {
+func (s *Server) wirePanel(p panel.Panel, pids map[string]int, held map[string]bool) proto.Panel {
 	out := p.ToProto()
 	out.Pid = pids[p.ID]
 	// The profile joins the snapshot here rather than living on the panel record,
@@ -7152,6 +7260,14 @@ func (s *Server) wirePanel(p panel.Panel, pids map[string]int) proto.Panel {
 		out.Since = since.Format(time.RFC3339Nano)
 	}
 	out.Sig = s.mon.sig(p.ID)
+	// Whether there is a terminal behind this slot at all. Joined here rather than
+	// carried on the fleet record because it is the pty manager's fact and nobody
+	// else's, and because it is the only thing that separates a panel that died
+	// under this daemon — whose last screen is the result its dead slot is kept
+	// for — from one Restore rebuilt out of a snapshot, which has nothing to show.
+	// Handed in as a set for the reason the pids are: one ptymgr acquisition per
+	// frame, not one per panel inside s.mu.
+	out.Replay = held[p.ID]
 	out.Acked = s.ackedLocked(p.ID)
 	if sink := s.logs[p.ID]; sink != nil {
 		out.Logging, out.LogPath = true, sink.Path()
@@ -7166,9 +7282,11 @@ func (s *Server) panelsMsg() proto.ServerMsg {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]proto.Panel, len(s.panels))
-	pids := s.pty.Pids() // one lock acquisition, then a map lookup per panel — the ptymgr lock is contended by the output pump
+	// One acquisition each, then a map lookup per panel — the ptymgr lock is
+	// contended by the output pump, and this loop runs inside s.mu.
+	pids, held := s.pty.Pids(), s.pty.Held()
 	for i, p := range s.panels {
-		out[i] = s.wirePanel(p, pids)
+		out[i] = s.wirePanel(p, pids, held)
 	}
 	// Per-group view settings ride the snapshot, sorted by name for determinism.
 	// A group appears when it carries a non-default visible count, a non-default

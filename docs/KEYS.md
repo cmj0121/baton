@@ -99,7 +99,8 @@ dashboard row — the work-item verbs — is refused in a zoom with the way forw
 |                 | (C-t)  | `n`     | `w`                 | a worktree on a new branch + an agent in it            |
 |                 | (C-t)  | `n`     | `s`                 | the fleet memory, in your $EDITOR                      |
 |                 | (C-t)  | ·       | `w`                 | close the selection                                    |
-|                 | (C-t)  | ·       | `r`                 | re-run the exited panels under the focus               |
+|                 | (C-t)  | ·       | `r`                 | **restart** the exited panels under the focus          |
+|                 | (C-t)  | `n`     | `r`                 | **re-launch** them from the config in force            |
 |                 | (C-t)  | `x`     | `x`                 | purge every exited panel                               |
 |                 | (C-t)  | ·       | `s`                 | send a signal                                          |
 |                 | (C-t)  | ·       | `f`                 | find panels · search the scrollback in a zoom          |
