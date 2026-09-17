@@ -386,6 +386,16 @@ a new panel can never collide. The `panel.respawn` action (the dashboard `r` key
 its retained spec — one command per dead slot, so `r` on a focused group restarts every exited member at once and `r` in
 the group split re-runs the focused tile; closing or purging a panel drops its spec for good.
 
+**Restart and re-launch are two verbs.** `r` (`panel.respawn`) replays the spec the panel was launched with, which is
+the right answer for a panel that died. `n r` (`panel.relaunch`) resolves the panel's **agent profile** against the
+config in force and starts the slot on that command line instead — the answer after editing `panel.agents` and
+reloading, when the config changed and the dead slots never heard about it. It re-resolves the **spec, not the
+identity**: the id, the work item, the pin, the favourite, the task and the log binding all stay, because
+purge-and-respawn is the thing it exists so nobody has to do. The panel's **directory is its own** and is not
+re-resolved — a profile's `dir` is a default for a new panel, and moving a slot on a re-launch is the one part of this
+that could lose work. A panel with no profile (a shell, a command panel, an agent spawned by path) is refused, and the
+refusal names `r`.
+
 **Interact mode.** Pressing `i` hands the keyboard to the focused tile so you can drive its program _in place_, without
 the full-screen zoom — the tile glows green and wears a keyboard badge, and every keystroke is forwarded to that panel.
 Like a zoom, the prefix is the only way out: `C-t i` returns to navigation, `C-t d` leaves for the

@@ -3285,6 +3285,15 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			return
 		}
 		s.broadcastFleet()
+	case "panel.relaunch":
+		// The second re-run verb (#117): re-resolve the panel's profile against the
+		// config in force and start it on THAT command line, rather than replaying
+		// the one it was launched with. Same slot, same id.
+		if err := s.relaunchPanel(cmd.ID); err != nil {
+			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		s.broadcastFleet()
 	case "panel.respawn":
 		if err := s.respawnPanel(cmd.ID); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
@@ -5926,6 +5935,80 @@ func (s *Server) dispatchGroupBound(group, prompt, submit string) (fanout, error
 			group, vetoed, len(skipped), s.fanoutBudget)
 	}
 	return f, nil
+}
+
+// relaunchPanel re-runs an exited panel from the config in force rather than from
+// the spec it was launched with: the panel's profile is resolved again against
+// the agent backends the daemon is currently holding, and the resulting command
+// line replaces the slot's stored one.
+//
+// It is the second of two re-run verbs, and the pair is the point (#117).
+// respawnPanel means "bring it back exactly as it was" and is the right answer
+// for a panel that died; this means "bring it back the way I would spawn it
+// now", which is the question an operator has after editing panel.agents and
+// reloading — the config reloaded, and the dead slots never heard about it.
+// Neither answer is always right, which is why there are two keys rather than a
+// cleverer single one.
+//
+// IT KEEPS THE PANEL'S ID, and everything hanging off it: the work item and its
+// pin and favourite, the task brief, the log binding, and every reference an
+// operator, a ctl call or an MCP tool holds. A re-launch re-resolves the SPEC,
+// not the panel's identity. Purge-and-respawn is the thing this exists so nobody
+// has to do.
+//
+// THE DIRECTORY IS THE PANEL'S OWN and is not re-resolved. A profile's dir is a
+// default for a new panel; where a panel was put is a decision the operator made
+// afterwards, and settings.restore-cwd exists because even a panel's own
+// wandering is not always where it should come back. Moving a slot on a re-launch
+// would be the one part of this that could lose work.
+//
+// Refused for a panel with no profile — a shell, a command panel, an agent
+// spawned by path — because there is nothing to re-resolve and quietly doing what
+// r does would make two keys mean one thing on those panels and two on others.
+// The error says so and names r.
+func (s *Server) relaunchPanel(id string) error {
+	s.mu.Lock()
+	idx := s.indexLocked(id)
+	if idx < 0 {
+		s.mu.Unlock()
+		return fmt.Errorf("no panel with id %q", id)
+	}
+	if s.panels[idx].State != panel.Exited {
+		s.mu.Unlock()
+		return fmt.Errorf("panel is still running")
+	}
+	spec, ok := s.specs[id]
+	if !ok {
+		s.mu.Unlock()
+		return fmt.Errorf("nothing to re-run")
+	}
+	profile := spec.Profile
+	if profile == "" {
+		s.mu.Unlock()
+		return fmt.Errorf("panel %s was not spawned from an agent profile, so there is nothing to re-resolve — r re-runs it as it was", id)
+	}
+	var found *proto.AgentBackend
+	for i := range s.agents {
+		if s.agents[i].Name == profile {
+			found = &s.agents[i]
+			break
+		}
+	}
+	if found == nil {
+		s.mu.Unlock()
+		return fmt.Errorf("no agent profile named %q in the config in force — r re-runs panel %s as it was", profile, id)
+	}
+	// The command line is replaced; the directory is not (see above). Stored back
+	// so the slot's spec IS what launched it — a re-launch that left the old one
+	// behind would make the next plain r undo it.
+	spec.Command = found.Command
+	spec.Args = append([]string(nil), found.Args...)
+	s.specs[id] = spec
+	s.mu.Unlock()
+
+	log.Info().Str("panel", id).Str("profile", profile).Str("command", found.Command).
+		Msg("re-launching a panel from the config in force")
+	return s.respawnPanel(id)
 }
 
 // respawnPanel re-runs the backing process of an exited panel from its frozen spawn
