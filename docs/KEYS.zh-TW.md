@@ -172,6 +172,7 @@ settings:
 | **Issues**   | ·      | ·      | `h`／`l`／`←`／`→` | 選 status 欄（空欄會跳過）                        |
 |              | ·      | ·      | `j`／`k`／`↑`／`↓` | 選卡（欄內可捲）                                  |
 |              | ·      | ·      | `m` 再 `tab`       | 選 milestone；`S-tab` 上一個；即時更新三欄        |
+|              | ·      | ·      | `/`                | 用名稱找 milestone                                |
 |              | ·      | ·      | `space`／`enter`   | 打開這張卡的詳情                                  |
 |              | ·      | ·      | `p`                | 放大 handling panel                               |
 |              | ·      | ·      | `r`                | 立刻重抓 GitHub                                   |

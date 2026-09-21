@@ -654,6 +654,7 @@ const (
 	inputWorktreeBranch              // the branch for that repository — the git menu's field, committing to the targetless form
 	inputIsolateBranch               // A's isolate path after the here/isolate offer — not n w's field, so the two cannot share a prompt sequence
 	inputIssueBlock                  // blocked-by issue number from the issues overlay
+	inputIssueMile                   // milestone name filter from the issues overlay (/)
 )
 
 // RestartRequested reports whether the cockpit exited because the user asked to
@@ -2373,6 +2374,8 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		return m.commitEnqueue(buf), nil
 	case inputIssueBlock:
 		return m.commitIssuesBlock(buf)
+	case inputIssueMile:
+		return m.commitIssuesMile(buf), nil
 	case inputSignalName:
 		return m.commitOtherSignal(buf)
 	case inputFilter:
@@ -5442,6 +5445,7 @@ var inputSpecs = map[inputPurpose]inputSpec{
 	inputDispatch:    {"input.dispatch.title", "DISPATCH TASK", "input.dispatch.prompt", "the task brief for the agent", "legend.send", "send"},
 	inputEnqueue:     {"input.enqueue.title", "ENQUEUE TASK", "input.enqueue.prompt", "the task brief to queue for a free agent", "legend.queue", "queue"},
 	inputIssueBlock:  {"input.issue-block.title", "BLOCKED BY", "input.issue-block.prompt", "the issue number this card is blocked by", "legend.add", "add"},
+	inputIssueMile:   {"input.issue-mile.title", "FIND MILESTONE", "input.issue-mile.prompt", "milestone name  (substring, enter selects)", "legend.find", "find"},
 	inputSignalName:  {"input.signal.title", "SEND SIGNAL", "input.signal.prompt", "signal name or number  (e.g. WINCH, TSTP, 28)", "legend.send", "send"},
 	inputFilter:      {"input.filter.title", "FIND PANELS", "input.filter.prompt", "filter by title or group  (live)", "legend.apply", "apply"},
 	inputSearch:      {"input.search.title", "SEARCH", "input.search.prompt", "find in the scrollback", "legend.find", "find"},

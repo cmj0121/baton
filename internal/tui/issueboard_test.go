@@ -494,6 +494,83 @@ func TestIssuesMilestonePickFromDetail(t *testing.T) {
 	}
 }
 
+func TestMatchIssuesMile(t *testing.T) {
+	names := []string{"2.3.0", "0.2.0", "0.2.1"}
+	none := "(none)"
+	cases := []struct {
+		q       string
+		want    int
+		wantOK  bool
+		comment string
+	}{
+		{"", 0, true, "blank is all"},
+		{"none", 0, true, "none aliases (none)"},
+		{"2.3.0", 1, true, "exact"},
+		{"2.3", 1, true, "prefix"},
+		{"0.2", 0, false, "0.2.0 and 0.2.1 share a prefix"},
+		{"0.2.1", 3, true, "exact beats the sibling prefix"},
+		{"nope", 0, false, "unknown"},
+	}
+	for _, c := range cases {
+		got, ok := matchIssuesMile(c.q, none, names)
+		if ok != c.wantOK || (ok && got != c.want) {
+			t.Errorf("%s: matchIssuesMile(%q) = %d,%v want %d,%v", c.comment, c.q, got, ok, c.want, c.wantOK)
+		}
+	}
+}
+
+func TestIssuesSlashFindsMilestone(t *testing.T) {
+	m := issuesModel()
+	m.issuesBoard.Milestones = []string{"2.3.0", "v2.2.2"}
+	m.issuesBoard.Issues[1].Milestone = "2.3.0"
+	m.issuesBind = map[string]int{}
+	m.issuesCwdFrom = ""
+	nm, _ := m.handleIssuesKey("/")
+	m = nm.(model)
+	if m.mode != modeIssues || m.input != inputIssueMile {
+		t.Fatalf(" / should open the milestone prompt, mode=%v input=%v", m.mode, m.input)
+	}
+	m.inputBuf = "2.3"
+	nm, _ = m.commitInput()
+	m = nm.(model)
+	if m.input != inputNone {
+		t.Fatalf("enter should close the prompt, input=%v", m.input)
+	}
+	if m.issuesMile != 1 {
+		t.Fatalf("2.3 should select 2.3.0, mile=%d", m.issuesMile)
+	}
+	var nums []int
+	for c := 0; c < 3; c++ {
+		for _, iss := range m.issuesColumn(issues.Col(c)) {
+			nums = append(nums, iss.Number)
+		}
+	}
+	if len(nums) != 1 || nums[0] != 128 {
+		t.Fatalf("filter should show only 2.3.0 cards, got %v", nums)
+	}
+
+	nm, _ = m.handleIssuesKey("/")
+	m = nm.(model)
+	m.inputBuf = "v2"
+	nm, _ = m.commitInput()
+	m = nm.(model)
+	if m.issuesMile != 2 {
+		t.Fatalf("v2 should select v2.2.2, mile=%d", m.issuesMile)
+	}
+
+	nm, _ = m.handleIssuesKey("/")
+	m = nm.(model)
+	m.inputBuf = "zzz"
+	nm, _ = m.commitInput()
+	m = nm.(model)
+	if m.input != inputIssueMile {
+		t.Fatal("a miss should keep the prompt open")
+	}
+	if m.issuesMile != 2 {
+		t.Fatalf("a miss must not change the filter, mile=%d", m.issuesMile)
+	}
+}
+
 func TestIssuesDetailShowsRelations(t *testing.T) {
 	m := issuesModel()
 	m.issuesBoard.Issues[1].Parent = 127

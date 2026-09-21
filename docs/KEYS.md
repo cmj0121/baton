@@ -178,6 +178,7 @@ dashboard row — the work-item verbs — is refused in a zoom with the way forw
 | **Issues**      | ·      | ·       | `h` / `l` / `←` / `→` | select the status column (empty columns are skipped)   |
 |                 | ·      | ·       | `j` / `k` / `↑` / `↓` | select the card (the column scrolls)                   |
 |                 | ·      | ·       | `m` then `tab`        | pick a milestone; `S-tab` back; live column counts     |
+|                 | ·      | ·       | `/`                   | find a milestone by name                               |
 |                 | ·      | ·       | `space` / `enter`     | open this card's detail                                |
 |                 | ·      | ·       | `p`                   | zoom the handling panel                                |
 |                 | ·      | ·       | `r`                   | re-fetch GitHub                                        |
