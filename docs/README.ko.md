@@ -64,6 +64,9 @@ Baton은 백그라운드 서버를 띄우고 당신을 **대시보드** — 당�
 
 길을 잃었나요? **`?`** 는 지금 있는 화면의 키를 언제나 보여줍니다.
 
+함대는 **`n C`** 와 `$HOME/.baton/CONDUCTOR.md` 의 상설 지시입니다. conductor가 worker를 띄우고 일을 배정합니다.
+한 agent는 여전히 **`A`**. **[docs/CONTROL.md](CONTROL.md)** 참고.
+
 ## 그냥 tmux를 쓰면 안 되나요?
 
 tmux는 pane 안에 무엇이 있는지 모르기 때문입니다. tmux는 창을 줄 뿐, 어느 것이 무엇인지는 당신이 기억해야 하고,
@@ -186,9 +189,9 @@ Baton은 세 가지 화면으로 조종하며, 키 하나로 그 사이를 오�
   `stuck` — 그리고 agent는 스스로 손을 들어 이 사다리 전체를 앞지를 수 있습니다. `C-t a`는 어느 화면에서든 받은함을
   열고, 대기열은 거기서 정리됩니다. `settings.notify`는 아무도 보고 있지 않을 때 OSC 9 데스크톱 알림을 보내되
   묶어서 보내며, `done`으로는 결코 울리지 않습니다. **[docs/ATTENTION.md](ATTENTION.md)** 참고.
-- **conductor** — `n C`는 함대를 대신 몰아 주는 agent를 엽니다. socket을 통해 — `baton ctl`이나 `baton mcp`
-  도구로 — 패널을 띄우고, 묶고, 시그널을 보내고, 다른 패널에 프롬프트를 넘깁니다. 자기 호스트를 망가뜨리지 못하도록
-  울타리가 쳐져 있습니다. 목표는 `$HOME/.baton/CONDUCTOR.md`에. **[docs/CONTROL.md](CONTROL.md)** 참고.
+- **conductor** — 함대의 길. `n C`는 함대를 대신 몰아 주는 agent를 엽니다. socket을 통해 — `baton ctl`이나
+  `baton mcp` 도구로 — worker를 띄우고, 묶고, dispatch하고, enqueue합니다. 자기 호스트를 망가뜨리지 못하도록
+  울타리가 쳐져 있습니다. 상설 지시는 `$HOME/.baton/CONDUCTOR.md`에. **[docs/CONTROL.md](CONTROL.md)** 참고.
 - **task와 대기열** — `T`는 브리프를 한 agent에게, 또는 작업 항목 전체에 뿌립니다. 카드에 기록되고 agent가 준비되면
   전달됩니다. `Q`는 지속되는 백로그를 관리하고, 서버가 가진 스케줄러가 이를 비어 있는 agent에게 흘려보냅니다.
   Lua `task.pre` 훅은 브리프를 고치거나 거부할 수 있고, `task.change`는 그것을 지켜봅니다.

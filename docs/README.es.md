@@ -63,6 +63,9 @@ Baton arranca su servidor en segundo plano y te deja en el **tablero**, tu base 
 
 ¿Perdido? **`?`** siempre muestra las teclas del sitio donde estés.
 
+Una flota es **`n C`** más las órdenes en `$HOME/.baton/CONDUCTOR.md`: el conductor crea los trabajadores y reparte el
+trabajo. Un agente sigue siendo **`A`**. Ver **[docs/CONTROL.md](CONTROL.md)**.
+
 ## ¿Por qué no simplemente tmux?
 
 Porque tmux no sabe qué hay dentro del panel. Te da ventanas; cuál es cuál lo recuerdas tú, y que un agente lleva un rato
@@ -190,9 +193,9 @@ Cinco cosas que un multiplexor de terminal no hace:
   encima de toda la escalera. `C-t a` abre la bandeja desde cualquier vista y la cola se vacía ahí; `settings.notify`
   manda una notificación de escritorio OSC 9 cuando no hay nadie mirando, agrupada, y nunca por un `done`. Ver
   **[docs/ATTENTION.md](ATTENTION.md)**.
-- **Un conductor** — `n C` abre un agente que maneja la flota por ti: abre paneles, los agrupa, les manda señales y les
-  pasa prompts a través del socket, mediante `baton ctl` o las herramientas `baton mcp`, vallado para que no pueda
-  destrozar su propio anfitrión. Su objetivo se fija en `$HOME/.baton/CONDUCTOR.md`. Ver
+- **Un conductor** — el camino de la flota. `n C` abre un agente que maneja la flota por ti: crea, agrupa, despacha y
+  encola los otros paneles a través del socket, mediante `baton ctl` o las herramientas `baton mcp`, vallado para que no
+  pueda destrozar su propio anfitrión. Las órdenes permanentes están en `$HOME/.baton/CONDUCTOR.md`. Ver
   **[docs/CONTROL.md](CONTROL.md)**.
 - **Tareas y una cola** — `T` reparte un encargo a un agente, o a todo un work item; queda anotado en la tarjeta y se
   entrega cuando el agente está listo. `Q` gestiona una cola persistente que un planificador del servidor va vaciando

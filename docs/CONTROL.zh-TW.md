@@ -1,5 +1,7 @@
 # Baton — Control
 
+<!-- markdownlint-disable MD049 -- this page already uses underscore emphasis; prettier agrees. -->
+
 [English](CONTROL.md) · **繁體中文**
 
 > 讓一個 agent 來指揮整支隊伍。Baton 的 socket 是一整套控制平面(control plane):座艙送出的那些指令,
@@ -37,6 +39,16 @@
 Baton 塑造的是讓控制成為那條好走的路的環境;它並不把行程關進牢裡。[資源上限](LIMITS.zh-TW.md)確實會對它能耗用
 的量設下真正的天花板——CPU、記憶體、行程數——但那是資源邊界,不是檔案系統或網路的邊界。
 
+**艦隊路徑**是你 → conductor → 艦隊。把一批目標交給它;它開工人、分組、派工或排進佇列。你留在收件匣。單一個
+agent 仍是 **`A`**。一整隊是 **`n C`** 加上 `$HOME/.baton/CONDUCTOR.md` 裡的常設命令。
+
+| 問題               | 選定                                                                                                                                                    |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 控制是什麼         | **只派工。** conductor 開、分組、派工、排隊、送訊號、關掉*別人的*面板。卡住時舉*自己的*手。收件匣仍是操作者的。不是旁觀再操盤。不是坐在艦隊裡的規劃者。 |
+| 它怎麼在場         | **手動 `n C`**(或在它已結束的格子上按 `r`)。常駐程式啟動時不會自動開。磁碟上有 `CONDUCTOR.md` 不是開關。                                                |
+| `A` 鍵             | **不變。** 單一個 agent 仍是 `A`。艦隊路徑就在旁邊:`n C` + `$HOME/.baton/CONDUCTOR.md`。                                                                |
+| 工人的 `baton ctl` | **不變。** 空的 `BATON_ROLE` 仍是完整座艙。真正拿掉 `BATON_SOCK` 的旋鈕仍是隔離(`isolate: docker`)。                                                    |
+
 ### 操作者簡報 — `$HOME/.baton/CONDUCTOR.md`
 
 內建的入門說明告訴 conductor _如何_ 驅動 baton;而 _該做什麼_ 由你來說。在 `$HOME/.baton/CONDUCTOR.md`
@@ -44,14 +56,44 @@ Baton 塑造的是讓控制成為那條好走的路的環境;它並不把行程�
 標題底下。它同時也可以**熱重載**:按 `C-t R`(或對常駐程式送一個 `SIGHUP`)會把簡報重新寫進正在運行的 conductor
 工作區,並在它的面板印一行提示——不需要關掉再重開。熱重載做不到的是當場改變 agent 的想法:agent 是在 session
 起始時讀它的專案指示,所以更新後的簡報是它下次去讀時會看到的內容,而那行提示的用途就是告訴你「有新東西可以看了」。
-這個檔案是選用的,而且永遠不會取代入門說明:agent 始終保有控制機制與那些被禁止的動作。例如:
+這個檔案是選用的,而且永遠不會取代入門說明:agent 始終保有控制機制與那些被禁止的動作。把
+[`examples/CONDUCTOR.md`](../examples/CONDUCTOR.md) 複製到 `$HOME/.baton/CONDUCTOR.md` 再改任務:
 
 ```md
 # Mission
 
 Keep a reviewer agent running on each open PR worktree. When one finishes, summarise its findings into a shell panel
 named "report" and pause for me.
+
+# How to create
+
+`baton ctl list` first. Spawn workers with `baton ctl spawn --worktree` so each has its own checkout, or enqueue with
+`--command` so the scheduler provisions one when none is free. Then `baton ctl group` them under a work item.
+
+# How to give work
+
+`baton ctl dispatch` a brief to a live worker, `baton ctl dispatch-group` to the work item, or `baton ctl queue add` for
+the scheduler. Never `send` an objective — that types keystrokes into a running prompt.
+
+# When to raise a hand
+
+`baton ctl attention --why "..."` on _this_ panel when you are stuck and need the operator. The inbox is theirs. Do not
+read other panels' output or drain their attention.
+
+# When a worker is done
+
+Summarise, then `baton ctl close` that worker. Do not act on your own panel, do not drain the queue, do not sweep
+worktrees, do not reset this workspace.
 ```
+
+### 黃金迴圈
+
+動詞照這個順序,不要 `send`:
+
+1. `baton ctl list` —— 看誰還活著。
+2. `baton ctl spawn --worktree`(自己的 checkout)或 `baton ctl queue add --command`(沒人空閒時再開)。
+3. `baton ctl group` —— 把工人歸進一個工作項目。
+4. `baton ctl dispatch` / `dispatch-group` / `queue add` —— 給工作。
 
 ## `baton ctl` — CLI
 

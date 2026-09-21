@@ -62,6 +62,9 @@ Baton はバックグラウンドサーバを起動し、あなたを**ダッシ
 
 迷いましたか?**`?`** はいつでも、今いる場所のキーを見せてくれます。
 
+fleet は **`n C`** と `$HOME/.baton/CONDUCTOR.md` の常設命令です。conductor が worker を起こし、仕事を配ります。
+一人の agent はこれまでどおり **`A`**。**[docs/CONTROL.md](CONTROL.md)** を参照。
+
 ## tmux ではだめなのか
 
 tmux は pane の中身を知らないからです。渡されるのは窓だけで、どれがどれかを覚えておくのはあなたの仕事。agent が
@@ -183,9 +186,9 @@ Baton は 3 つの画面で操作し、キー 1 つで行き来します:
   `stuck`——そして agent は自分で手を挙げ、この段全体を追い越せます。`C-t a` はどの view からでも受信箱を開き、
   待ち行列はそこで片付きます。`settings.notify` は誰も見ていないときに OSC 9 のデスクトップ通知を出し、まとめて
   送られ、`done` では決して鳴りません。**[docs/ATTENTION.md](ATTENTION.md)** を参照。
-- **conductor** — `n C` は fleet をあなたの代わりに動かす agent を開きます。socket 越しに——`baton ctl` あるいは
-  `baton mcp` の tool を通じて——panel を起こし、まとめ、signal を送り、他の panel に prompt を渡します。自分の
-  ホストを壊せないよう柵が張られています。目標は `$HOME/.baton/CONDUCTOR.md` に。
+- **conductor** — fleet の道。`n C` は fleet をあなたの代わりに動かす agent を開きます。socket 越しに——`baton
+ctl` あるいは `baton mcp` の tool を通じて——worker を起こし、まとめ、dispatch し、enqueue します。自分のホストを
+  壊せないよう柵が張られています。常設命令は `$HOME/.baton/CONDUCTOR.md` に。
   **[docs/CONTROL.md](CONTROL.md)** を参照。
 - **task とキュー** — `T` は brief を一つの agent に、あるいは work item 全体に配ります。カードに記録され、agent
   の準備ができた時点で届きます。`Q` は永続的なバックログを扱い、サーバ側のスケジューラが空いた agent へ流し込みます。

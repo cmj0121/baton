@@ -63,6 +63,9 @@ minute :
 
 Perdu ? **`?`** affiche toujours les touches de l'endroit où vous vous trouvez.
 
+Une flotte, c'est **`n C`** plus les ordres dans `$HOME/.baton/CONDUCTOR.md` — le conductor crée les workers et
+distribue le travail. Un agent, c'est toujours **`A`**. Voir **[docs/CONTROL.md](CONTROL.md)**.
+
 ## Pourquoi pas simplement tmux ?
 
 Parce que tmux ignore ce qu'il y a dans le panneau. Il vous donne des fenêtres ; c'est à vous de retenir laquelle est
@@ -190,9 +193,9 @@ Cinq choses qu'un multiplexeur de terminal ne fait pas :
   main lui-même, au-dessus de toute l'échelle. `C-t a` ouvre la boîte de réception depuis n'importe quelle vue, et la
   file se vide là ; `settings.notify` envoie une notification de bureau OSC 9 quand personne ne regarde, groupée, et
   jamais pour `done`. Voir **[docs/ATTENTION.md](ATTENTION.md)**.
-- **Un conductor** — `n C` ouvre un agent qui pilote la flotte pour vous : il ouvre, regroupe, signale et sollicite les
-  autres panneaux via la socket, à travers `baton ctl` ou les outils `baton mcp`, clôturé pour qu'il ne puisse pas
-  casser son propre hôte. Son objectif se règle dans `$HOME/.baton/CONDUCTOR.md`. Voir
+- **Un conductor** — le chemin de la flotte. `n C` ouvre un agent qui pilote la flotte pour vous : il crée, regroupe,
+  dispatch et enqueue les autres panneaux via la socket, à travers `baton ctl` ou les outils `baton mcp`, clôturé pour
+  qu'il ne puisse pas casser son propre hôte. Les ordres permanents sont dans `$HOME/.baton/CONDUCTOR.md`. Voir
   **[docs/CONTROL.md](CONTROL.md)**.
 - **Des tâches et une file** — `T` envoie une consigne à un agent, ou la diffuse à tout un élément de travail ; elle est
   inscrite sur la carte et remise quand l'agent est prêt. `Q` gère une file persistante qu'un ordonnanceur côté serveur

@@ -41,6 +41,17 @@ workspace with an absolute path. Baton shapes the environment so control is the 
 [Resource limits](LIMITS.md) do put a real ceiling on what it can consume — CPU, memory, processes — but that is a
 resource boundary, not a filesystem or network one.
 
+The **fleet path** is you → conductor → fleet. Hand it a batch of objectives; it creates the workers, groups them, and
+dispatches or enqueues the work. You stay on the inbox. One agent is still **`A`**. A fleet is **`n C`** plus standing
+orders in `$HOME/.baton/CONDUCTOR.md`.
+
+| Question           | Chosen                                                                                                                                                                                                                                     |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| What control means | **Dispatch-only.** The conductor spawns, groups, dispatches, enqueues, signals, and closes _other_ panels. It raises _its own_ hand when stuck. The inbox stays the operator's. Not observe-and-steer. Not a planner sitting in the fleet. |
+| How it is present  | **Manual `n C`** (or `r` on its dead slot). The daemon does not spawn it at start. A `CONDUCTOR.md` on disk is not a spawn switch.                                                                                                         |
+| The `A` key        | **Unchanged.** One agent is still `A`. The fleet path sits beside it: `n C` + `$HOME/.baton/CONDUCTOR.md`.                                                                                                                                 |
+| Worker `baton ctl` | **Unchanged.** An empty `BATON_ROLE` is still the full cockpit. Isolation (`isolate: docker`) remains the knob that actually drops `BATON_SOCK`.                                                                                           |
+
 ### The operator's brief — `$HOME/.baton/CONDUCTOR.md`
 
 The built-in primer tells the conductor _how_ to drive baton; you tell it _what to do_. Write a goal and guide in
@@ -50,14 +61,44 @@ brief into the running conductor's workspace and prints a line in its panel sayi
 What a reload cannot do is change an agent's mind mid-session: an agent reads its project instructions when its session
 starts, so the refreshed brief is what it will see the next time it looks, and the notice is there to tell you there is
 something new to look at. The file is optional and never replaces the primer: the agent always keeps the control
-mechanics and the forbidden actions. For example:
+mechanics and the forbidden actions. Copy [`examples/CONDUCTOR.md`](../examples/CONDUCTOR.md) to `$HOME/.baton/CONDUCTOR.md`
+and edit the mission:
 
 ```md
 # Mission
 
 Keep a reviewer agent running on each open PR worktree. When one finishes, summarise its findings into a shell panel
 named "report" and pause for me.
+
+# How to create
+
+`baton ctl list` first. Spawn workers with `baton ctl spawn --worktree` so each has its own checkout, or enqueue with
+`--command` so the scheduler provisions one when none is free. Then `baton ctl group` them under a work item.
+
+# How to give work
+
+`baton ctl dispatch` a brief to a live worker, `baton ctl dispatch-group` to the work item, or `baton ctl queue add` for
+the scheduler. Never `send` an objective — that types keystrokes into a running prompt.
+
+# When to raise a hand
+
+`baton ctl attention --why "..."` on _this_ panel when you are stuck and need the operator. The inbox is theirs. Do not
+read other panels' output or drain their attention.
+
+# When a worker is done
+
+Summarise, then `baton ctl close` that worker. Do not act on your own panel, do not drain the queue, do not sweep
+worktrees, do not reset this workspace.
 ```
+
+### The golden loop
+
+The verbs, in order, not `send`:
+
+1. `baton ctl list` — see who is live.
+2. `baton ctl spawn --worktree` (own checkout) or `baton ctl queue add --command` (spawn when none is free).
+3. `baton ctl group` — file the workers under a work item.
+4. `baton ctl dispatch` / `dispatch-group` / `queue add` — give work.
 
 ## `baton ctl` — the CLI
 

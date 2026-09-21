@@ -61,6 +61,9 @@ Baton starts its background server and drops you on the **dashboard** — your h
 
 Lost? **`?`** always shows the keys for wherever you are.
 
+A fleet is **`n C`** plus standing orders in `$HOME/.baton/CONDUCTOR.md` — the conductor spawns the workers and
+dispatches the work. One agent is still **`A`**. See **[docs/CONTROL.md](docs/CONTROL.md)**.
+
 ## Why not just tmux?
 
 Because tmux has no idea what is in the pane. It hands you windows; you supply the memory of which one is which, and you
@@ -183,9 +186,9 @@ Five things Baton does that a terminal multiplexer does not:
   turn, `stuck` when it has gone on too long — and an agent can raise its own hand above the lot. `C-t a` opens the
   inbox from any view and the queue is cleared from there; `settings.notify` sends an OSC 9 desktop notification when
   nobody is looking, coalesced, and never for `done`. See **[docs/ATTENTION.md](docs/ATTENTION.md)**.
-- **A conductor** — `n C` opens an agent that drives the fleet for you: it spawns, groups, signals and prompts the other
-  panels over the socket, through `baton ctl` or the `baton mcp` tools, fenced so it cannot wreck its own host. Set its
-  goal in `$HOME/.baton/CONDUCTOR.md`. See **[docs/CONTROL.md](docs/CONTROL.md)**.
+- **A conductor** — the fleet path. `n C` opens an agent that drives the fleet for you: it spawns, groups, dispatches and
+  enqueues the other panels over the socket, through `baton ctl` or the `baton mcp` tools, fenced so it cannot wreck its
+  own host. Standing orders live in `$HOME/.baton/CONDUCTOR.md`. See **[docs/CONTROL.md](docs/CONTROL.md)**.
 - **Tasks and a backlog** — `T` dispatches a brief to an agent, or fans it across a whole work item; it is recorded on
   the card and delivered when the agent is ready. `Q` manages a persistent backlog that a server-owned scheduler drains
   onto free agents. A `task.pre` Lua hook can rewrite or veto a brief; `task.change` watches it.
