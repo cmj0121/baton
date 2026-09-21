@@ -102,7 +102,7 @@ func TestManagerLockIsNotHeldAcrossTheCallbacks(t *testing.T) {
 	m := New()
 
 	reentered := make(chan struct{}, 1)
-	m.OnOutput(func(id string, _ []byte) {
+	m.OnOutput(func(id string, _ []byte, _ int64) {
 		m.Snapshot(id) // takes m.mu, as the server's own path does through s.mu
 		select {
 		case reentered <- struct{}{}:

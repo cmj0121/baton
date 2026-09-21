@@ -117,7 +117,26 @@ type clientConn struct {
 	// Written and read under Server.mu, unlike role/self, which the command loop
 	// also reads on its own goroutine.
 	greeted bool
+
+	// replayed is, per attached panel, the running output offset its attach replay
+	// ended at (ptymgr.Replay.End). A pump appends a chunk to the ring before it
+	// reaches fanOutput, so a chunk can be in the replay AND arrive as live output
+	// a moment later; fanOutput drops any chunk that ends at or before this. Guarded
+	// by Server.mu, and forgotten on detach.
+	replayed map[string]int64
+
+	// dropped counts the output messages lost to a full queue, and dropSaid is
+	// when the last warning about them was logged. A dropped chunk leaves the
+	// client's screen out of step with the program, so it is said out loud —
+	// but paced, because a stalled client drops on every chunk. Guarded by
+	// Server.mu, which every output send runs under.
+	dropped  int
+	dropSaid time.Time
 }
+
+// dropSayEvery paces the dropped-output warning per connection: one line
+// carrying the running count, rather than a line per lost chunk.
+const dropSayEvery = 10 * time.Second
 
 // spawnSpec is what a panel was launched from: the exact process spec ptymgr
 // ran, plus the agent profile it came from. The profile is kept as a name rather
@@ -1283,6 +1302,7 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 		if cc.attached[id] {
 			send(cc, protoOutput(id, line))
 			delete(cc.attached, id)
+			delete(cc.replayed, id)
 		}
 	}
 
@@ -1355,8 +1375,8 @@ func protoOutput(id, text string) proto.ServerMsg {
 // The two halves are split because only the first needs the server lock. Waking a
 // quiet panel and demuxing to clients is bookkeeping; writing the log is disk I/O,
 // and the whole fleet's fan-out must never queue behind one panel's disk.
-func (s *Server) routeOutput(id string, data []byte) {
-	s.fanOutput(id, data)
+func (s *Server) routeOutput(id string, data []byte, end int64) {
+	s.fanOutput(id, data, end)
 	// The log is written with s.mu RELEASED. It is a file write on the hot output
 	// path, and the whole fleet's fan-out must never queue behind one panel's disk;
 	// per-panel ordering is preserved because this runs on that panel's own pump.
@@ -1368,7 +1388,11 @@ func (s *Server) routeOutput(id string, data []byte) {
 // panel back to running; the wake is in-memory only — the next monitor tick
 // carries it to clients — so the hot output path never triggers a broadcast of
 // its own.
-func (s *Server) fanOutput(id string, data []byte) {
+//
+// end is the chunk's running output offset (see ptymgr.Manager.OnOutput). A
+// client whose attach replay already reached it has painted these bytes once;
+// they are skipped for that client rather than painted twice.
+func (s *Server) fanOutput(id string, data []byte, end int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mon.observed(id, len(data))
@@ -1410,9 +1434,13 @@ func (s *Server) fanOutput(id string, data []byte) {
 		}
 	}
 	for cc := range s.clients {
-		if cc.attached[id] {
-			send(cc, proto.ServerMsg{Type: "output", ID: id, Data: data})
+		if !cc.attached[id] {
+			continue
 		}
+		if to, ok := cc.replayed[id]; ok && end <= to {
+			continue // already in this client's replay
+		}
+		sendOutput(cc, proto.ServerMsg{Type: "output", ID: id, Data: data})
 	}
 }
 
@@ -1463,7 +1491,11 @@ func (s *Server) attach(cc *clientConn, id string) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if snap := s.pty.Snapshot(id); len(snap) > 0 {
+	// The lock order is s.mu → ptymgr's, the same as every other read of the ring;
+	// the pump releases its lock before calling fanOutput, so a chunk appended
+	// while this holds s.mu is either inside the snapshot (and skipped by its
+	// offset) or after it (and delivered live) — never lost, never doubled.
+	if r := s.pty.SnapshotAt(id); len(r.Data) > 0 {
 		// Condition the raw replay ring before a fresh emulator reconstructs from it:
 		// trim to the last full screen reset so a ring that evicted a program's
 		// alt-screen enter (a long vim/pager) cannot leave its drawing on the primary
@@ -1471,7 +1503,21 @@ func (s *Server) attach(cc *clientConn, id string) {
 		// own emulator. Then strip query sequences so the emulator does not re-answer
 		// the program's old terminal queries (their late replies echo as garbage at a
 		// prompt). Live output is untouched by both.
-		send(cc, proto.ServerMsg{Type: "output", ID: id, Data: stripReplayQueries(trimToLastScreenReset(snap))})
+		//
+		// The size tag is the window the ring's tail was painted at. A cockpit
+		// attaches before it resizes the panel to its own view, so a fresh emulator
+		// can replay at that size — relative cursor moves and wraps land where they
+		// did on a real terminal — and then resize, as the real terminal did.
+		sendOutput(cc, proto.ServerMsg{
+			Type: "output", ID: id, Data: stripReplayQueries(trimToLastScreenReset(r.Data)),
+			Rows: r.Rows, Cols: r.Cols,
+		})
+		if cc.replayed == nil {
+			cc.replayed = make(map[string]int64)
+		}
+		cc.replayed[id] = r.End
+	} else {
+		delete(cc.replayed, id) // nothing replayed, so nothing live can double it
 	}
 	cc.attached[id] = true
 }
@@ -1483,9 +1529,11 @@ func (s *Server) detach(cc *clientConn, id string) {
 	defer s.mu.Unlock()
 	if id == "" {
 		cc.attached = make(map[string]bool)
+		cc.replayed = nil
 		return
 	}
 	delete(cc.attached, id)
+	delete(cc.replayed, id)
 }
 
 // Serve accepts connections until the listener closes.
@@ -7427,10 +7475,28 @@ func (s *Server) broadcast(msg proto.ServerMsg) {
 }
 
 // send queues a message to one client. It never blocks; if the client's buffer
-// is full the message is dropped.
-func send(cc *clientConn, msg proto.ServerMsg) {
+// is full the message is dropped, and it reports whether it was queued.
+func send(cc *clientConn, msg proto.ServerMsg) bool {
 	select {
 	case cc.out <- msg:
+		return true
 	default:
+		return false
+	}
+}
+
+// sendOutput is send for a panel's output, which is the one message a drop
+// corrupts rather than merely delays: the client's emulator is left out of step
+// with the program until something repaints the lost cells. So a drop is
+// counted and logged, paced by dropSayEvery. The caller holds s.mu.
+func sendOutput(cc *clientConn, msg proto.ServerMsg) {
+	if send(cc, msg) {
+		return
+	}
+	cc.dropped++
+	if now := time.Now(); now.Sub(cc.dropSaid) >= dropSayEvery {
+		cc.dropSaid = now
+		log.Warn().Str("conn", cc.id).Str("panel", msg.ID).Int("dropped", cc.dropped).
+			Msg("output dropped: the client's queue is full, its screen may be stale")
 	}
 }

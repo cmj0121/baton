@@ -35,7 +35,7 @@ sys.stdout.write("REPLY:" + data.hex() + ":END\r\n"); sys.stdout.flush()
 	var mu sync.Mutex
 	var out strings.Builder
 	m := New()
-	m.OnOutput(func(_ string, d []byte) { mu.Lock(); out.Write(d); mu.Unlock() })
+	m.OnOutput(func(_ string, d []byte, _ int64) { mu.Lock(); out.Write(d); mu.Unlock() })
 	if err := m.StartCmd("p", Spec{Command: "python3", Args: []string{"-c", prog}}); err != nil {
 		t.Skipf("python3 start: %v", err)
 	}

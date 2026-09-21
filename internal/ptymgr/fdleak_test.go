@@ -41,7 +41,7 @@ func TestPanelInheritsNoExtraDescriptors(t *testing.T) {
 	var mu sync.Mutex
 	var out strings.Builder
 	m := New()
-	m.OnOutput(func(_ string, data []byte) {
+	m.OnOutput(func(_ string, data []byte, _ int64) {
 		mu.Lock()
 		out.Write(data)
 		mu.Unlock()

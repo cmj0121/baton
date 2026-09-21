@@ -55,6 +55,12 @@ const minRingCap = 4 * 1024
 // which says what happened.
 const maxRingCap = 1 << 30
 
+// maxCleanStart bounds how far SnapshotAt advances a wrapped replay looking for a
+// clean place to begin. A program that writes one long line with no escape and no
+// break would otherwise cost the whole window; this caps the loss at a few
+// hundred bytes of history.
+const maxCleanStart = 256
+
 // clampRingCap fits a requested ring size between the floor and the ceiling.
 func clampRingCap(bytes int) int { return min(max(bytes, minRingCap), maxRingCap) }
 
@@ -66,7 +72,14 @@ type pane struct {
 	pid        int // child process id; with pty.Start it leads its own process group
 	ring       []byte
 	dead       bool // process exited: f is closed, ring retained for replay
-	rows, cols int  // last window size set on the PTY, for ForceRepaint's nudge
+	rows, cols int  // last window size set on the PTY, for ForceRepaint's nudge and the replay's size
+
+	// end is the running output offset at which the ring ends (see
+	// Manager.offset), and written is how many bytes this pane has produced. They
+	// differ once a panel has been respawned: end keeps rising across every pane
+	// an id has had, while written — which says whether the ring has wrapped —
+	// starts from zero with each one.
+	end, written int64
 }
 
 // Manager tracks the live PTYs keyed by panel id and fans their output out
@@ -77,8 +90,16 @@ type Manager struct {
 	ptys     map[string]*pane
 	ringCap  int
 	closed   bool // a KillAll shutdown sweep has run; new spawns must not outlive it
-	onOutput func(id string, data []byte)
+	onOutput func(id string, data []byte, end int64)
 	onClose  func(id string, exitCode int)
+
+	// offset is the running output offset, shared by every pane: the count of all
+	// bytes any panel has produced. A chunk's end offset is taken from it, so it
+	// places the chunk before or after any snapshot for good — across the ring's
+	// trim and across a respawn that reuses the id, where a per-pane count
+	// restarting at zero would make the new process's output look already
+	// replayed to a client that attached to the dead one.
+	offset int64
 
 	// pumps counts the pump goroutines that have not returned, and drained is the
 	// channel Wait blocks on — created by the first waiter, closed and dropped the
@@ -130,8 +151,10 @@ func New(opts ...Option) *Manager {
 }
 
 // OnOutput registers the sink that receives every panel's output. Set it once,
-// before any panels are started.
-func (m *Manager) OnOutput(fn func(id string, data []byte)) { m.onOutput = fn }
+// before any panels are started. end is the manager's running output offset just
+// past the chunk — the same count SnapshotAt reports — so a sink that has already
+// replayed a snapshot can tell whether a chunk is inside it.
+func (m *Manager) OnOutput(fn func(id string, data []byte, end int64)) { m.onOutput = fn }
 
 // OnClose registers a callback fired when a panel's process exits on its own. It
 // carries the process exit code: 0 on a clean exit, the status code on a non-zero
@@ -222,6 +245,7 @@ func (m *Manager) StartCmd(id string, spec Spec) error {
 
 	p := &pane{f: f, pid: cmd.Process.Pid}
 	m.mu.Lock()
+	p.end = m.offset // a snapshot before any output still ends past every earlier pane's
 	m.ptys[id] = p
 	m.pumps++                // registered before the goroutine runs, so Wait can never miss it
 	shuttingDown := m.closed // a KillAll may have swept just before this fork landed in the map
@@ -246,7 +270,7 @@ func (m *Manager) pump(id string, p *pane, cmd *exec.Cmd) {
 		n, err := p.f.Read(buf)
 		if n > 0 {
 			chunk := append([]byte(nil), buf[:n]...)
-			m.appendRing(p, chunk)
+			end := m.appendRing(p, chunk)
 			// Answer device-attributes queries on the PTY the way a real terminal does.
 			// baton keeps no server-side emulator, so without this the only responder is
 			// the client's emulator, whose reply round-trips back as late input; the client
@@ -256,7 +280,7 @@ func (m *Manager) pump(id string, p *pane, cmd *exec.Cmd) {
 				_, _ = p.f.Write(reply)
 			}
 			if m.onOutput != nil {
-				m.onOutput(id, chunk)
+				m.onOutput(id, chunk, end)
 			}
 		}
 		if err != nil {
@@ -352,15 +376,23 @@ func (m *Manager) markDead(id string, p *pane) {
 // before it is trimmed back to ringCap, so the trim — an O(ringCap) copy — runs
 // at most once per ringCap bytes written rather than on every chunk. Readers only
 // ever expose the last ringCap bytes (see ringView), so the slack is invisible.
-func (m *Manager) appendRing(p *pane, chunk []byte) {
+//
+// It returns the running offset just past chunk. The offset is assigned
+// under the same lock a snapshot is taken under, so every chunk is either inside
+// a given snapshot or after it — never both, never neither.
+func (m *Manager) appendRing(p *pane, chunk []byte) int64 {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	p.ring = append(p.ring, chunk...)
 	if len(p.ring) > 2*m.ringCap {
 		trimmed := make([]byte, m.ringCap)
 		copy(trimmed, p.ring[len(p.ring)-m.ringCap:])
 		p.ring = trimmed
 	}
-	m.mu.Unlock()
+	m.offset += int64(len(chunk))
+	p.end = m.offset
+	p.written += int64(len(chunk))
+	return p.end
 }
 
 // ringView returns the last-ringCap-bytes window of a pane's ring without
@@ -422,6 +454,64 @@ func (m *Manager) Snapshot(id string) []byte {
 		return append([]byte(nil), m.ringView(p)...)
 	}
 	return nil
+}
+
+// Replay is a panel's recent output as an attach replays it: the bytes, the
+// running offset they end at, and the window size they were painted at.
+type Replay struct {
+	Data       []byte
+	End        int64 // the running output offset at the end of Data (see OnOutput)
+	Rows, Cols int   // the PTY's size when the snapshot was taken
+}
+
+// SnapshotAt is Snapshot for an attach: the replay plus where it ends and the
+// size it was painted at. The zero Replay for an unknown id.
+//
+// The size is the one the PTY was last set to, or the birth size for a panel no
+// cockpit has sized yet — the width the ring's tail was drawn for, which a
+// frontend needs to reconstruct it before resizing to its own.
+//
+// Once the ring has evicted its oldest bytes, its window can open inside a UTF-8
+// rune or halfway through a line; a fresh emulator would draw that fragment as
+// garbage at the top of the screen. So a wrapped replay drops any leading
+// continuation bytes and then begins at the first escape sequence or just after
+// the first line break, advancing at most maxCleanStart bytes. A ring that never
+// wrapped begins at the panel's real first byte and is replayed whole.
+func (m *Manager) SnapshotAt(id string) Replay {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.ptys[id]
+	if !ok {
+		return Replay{}
+	}
+	view := m.ringView(p)
+	if p.written > int64(len(view)) {
+		view = cleanStart(view)
+	}
+	r := Replay{Data: append([]byte(nil), view...), End: p.end, Rows: p.rows, Cols: p.cols}
+	if r.Rows <= 0 || r.Cols <= 0 {
+		r.Rows, r.Cols = birthRows, birthCols
+	}
+	return r
+}
+
+// cleanStart trims a wrapped replay window to a place a fresh emulator can begin
+// drawing from: past any torn UTF-8 rune, then at the first ESC or just after the
+// first '\n' within maxCleanStart bytes. With neither in reach only the torn
+// rune goes.
+func cleanStart(b []byte) []byte {
+	for len(b) > 0 && b[0]&0xc0 == 0x80 {
+		b = b[1:]
+	}
+	for i := 0; i < len(b) && i < maxCleanStart; i++ {
+		switch b[i] {
+		case 0x1b:
+			return b[i:]
+		case '\n':
+			return b[i+1:]
+		}
+	}
+	return b
 }
 
 // Tail returns up to the last n bytes of a panel's retained output, the cheap

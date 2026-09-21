@@ -343,7 +343,7 @@ func TestRouteOutputWakes(t *testing.T) {
 	}
 	mo.spawned("p1")
 
-	s.routeOutput("p1", []byte("fresh output"))
+	s.routeOutput("p1", []byte("fresh output"), 0)
 	if s.panels[0].State != panel.Running {
 		t.Fatalf("output should wake an idle panel to running, got %v", s.panels[0].State)
 	}
@@ -354,7 +354,7 @@ func TestRouteOutputWakes(t *testing.T) {
 	// Every resting state wakes, including the two new rungs of the ladder.
 	for _, from := range []panel.State{panel.Spawning, panel.Attention, panel.Done, panel.Stuck} {
 		s.panels[0].State = from
-		s.routeOutput("p1", []byte("more"))
+		s.routeOutput("p1", []byte("more"), 0)
 		if s.panels[0].State != panel.Running {
 			t.Fatalf("output should wake %v to running, got %v", from, s.panels[0].State)
 		}
@@ -364,7 +364,7 @@ func TestRouteOutputWakes(t *testing.T) {
 	// spinner while waiting on you must not lose its own raised hand.
 	s.panels[0].State = panel.Attention
 	s.declared = map[string]*declaration{"p1": {Reason: "which migration?"}}
-	s.routeOutput("p1", []byte("⠋ waiting"))
+	s.routeOutput("p1", []byte("⠋ waiting"), 0)
 	if s.panels[0].State != panel.Attention {
 		t.Fatalf("a declared attention should survive output, got %v", s.panels[0].State)
 	}
@@ -413,7 +413,7 @@ func TestMonitorTickClimbsTheLadder(t *testing.T) {
 	}
 
 	// One byte of output takes the whole ladder back to the bottom.
-	s.routeOutput("agent", []byte("back to work"))
+	s.routeOutput("agent", []byte("back to work"), 0)
 	if stateOf("agent") != panel.Running {
 		t.Fatalf("output should wake a stuck panel, got %v", stateOf("agent"))
 	}
@@ -428,7 +428,7 @@ func TestMonitorTickDoneOnTaskEvent(t *testing.T) {
 	if err := s.dispatchPanel("p1", "work it", ""); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	s.routeOutput("p1", []byte("thinking…"))
+	s.routeOutput("p1", []byte("thinking…"), 0)
 
 	clk.add(idleAfter) // the agent goes quiet: the task settles, the panel settles to idle
 	s.monitorTick()
@@ -442,7 +442,7 @@ func TestMonitorTickDoneOnTaskEvent(t *testing.T) {
 	}
 
 	// The event was consumed: output wakes the panel and it stays awake.
-	s.routeOutput("p1", []byte("more work"))
+	s.routeOutput("p1", []byte("more work"), 0)
 	s.monitorTick()
 	if s.panels[0].State != panel.Running {
 		t.Fatalf("a spent task event must not drag a woken panel back to done, got %v", s.panels[0].State)
@@ -458,7 +458,7 @@ func TestOutputInvalidatesTheDoneEvent(t *testing.T) {
 	s, _, _ := gateServer(panel.Panel{ID: "p1", Kind: panel.Agent, State: panel.Idle})
 	s.taskSettled["p1"] = true
 
-	s.routeOutput("p1", []byte("actually, one more thing"))
+	s.routeOutput("p1", []byte("actually, one more thing"), 0)
 	s.monitorTick()
 	if s.panels[0].State != panel.Running {
 		t.Fatalf("output should invalidate the pending done event, got %v", s.panels[0].State)

@@ -44,6 +44,36 @@ func writeEmu(emu *vt.SafeEmulator, irm *vtirm.Filter, data []byte) {
 	_, _ = emu.Write(irm.Rewrite(vtquery.Strip(data)))
 }
 
+// feedEmu writes one panel output message into emu.
+//
+// A message tagged with a size is an attach's replay, painted at that size. A
+// program that repaints relatively — cursor-up and erase over the rows it thinks
+// its last frame took — only lands where it meant to at the width it wrapped at,
+// so the replay is written at that size and the emulator is then resized back to
+// its own, exactly what a real terminal went through (#133). Untagged output —
+// all live output, and a replay from a daemon that predates the tag — is written
+// as-is.
+func feedEmu(emu *vt.SafeEmulator, irm *vtirm.Filter, msg proto.ServerMsg) {
+	if msg.Rows <= 0 || msg.Cols <= 0 {
+		writeEmu(emu, irm, msg.Data)
+		return
+	}
+	w, h := emu.Width(), emu.Height()
+	emu.Resize(msg.Cols, msg.Rows)
+	writeEmu(emu, irm, msg.Data)
+	// Shrinking, a real terminal keeps the cursor's row on screen by pushing the
+	// top rows into scrollback; the emulator keeps the TOP rows and drops the rest,
+	// which would cut the prompt off a small split tile. So scroll the content up
+	// first — line feeds from the bottom row, the way the program itself scrolls —
+	// until the cursor's row is the last one the smaller grid keeps, and put the
+	// cursor back on its (now moved) cell.
+	if pos := emu.CursorPosition(); pos.Y >= h {
+		n := pos.Y - h + 1
+		_, _ = fmt.Fprintf(emu, "\x1b[%d;1H%s\x1b[%d;%dH", msg.Rows, strings.Repeat("\n", n), pos.Y-n+1, pos.X+1)
+	}
+	emu.Resize(w, h)
+}
+
 // cellCond gives wcwidth-style cell widths — 2 for wide (CJK) glyphs, 1 for the
 // rest — independent of the user's locale, matching the emulator's own cell math.
 var cellCond = &runewidth.Condition{}
