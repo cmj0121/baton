@@ -165,7 +165,7 @@ Quatre touches sont des _landings_ : elles n'agissent pas seules et ouvrent une 
 |                 | `g a` / `g u`     | ajouter à l'élément de travail sélectionné / dégrouper                  |
 |                 | `s` / `f` / `D`   | envoyer un signal / rechercher / diff sur la sélection                  |
 |                 | `/`               | chercher dans la sortie de chaque panneau (grep de la flotte)           |
-|                 | `T` / `Q`         | assigner une tâche / gérer la file de tâches                            |
+|                 | `T` / `Q` / `I`   | assigner une tâche / gérer la file / GitHub issues                      |
 |                 | `v u`             | faire défiler le pied de page d'usage : off / fenêtre / panneau / quota |
 |                 | `v U`             | usage du compte — barres de quota, et qui les consomme                  |
 |                 | `v k`             | afficher/masquer le rappel des touches dans le pied de page             |

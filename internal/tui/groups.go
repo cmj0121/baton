@@ -308,6 +308,7 @@ var foldRowVerbs = map[action]bool{
 	actClose: true, actRespawn: true, actSignal: true, actDiff: true,
 	actDispatch: true, actEnqueue: true, actMark: true, actAdd: true,
 	actUngroup: true, actRename: true, actFavourite: true, actNewHere: true,
+	actIssues: true,
 }
 
 // refusedOnFoldRow reports whether an action must be refused because the cursor is
@@ -907,10 +908,13 @@ func (m model) commitEnqueue(prompt string) model {
 	group := m.enqueueGroup
 	m.enqueueGroup = ""
 	if prompt == "" {
+		m.enqueueIssue = 0
 		m.status = m.tr("status.task-cannot-be-empty", "a task cannot be empty")
 		return m
 	}
-	m.sendf(proto.Command{Action: "task.enqueue", Prompt: prompt, Group: group})
+	issue := m.enqueueIssue
+	m.enqueueIssue = 0
+	m.sendf(proto.Command{Action: "task.enqueue", Prompt: prompt, Group: group, Issue: issue})
 	if group != "" {
 		m.status = fmt.Sprintf(m.tr("status.enqueued-q-s", "enqueued to %q · %s"), group, truncate(prompt, 32))
 	} else {

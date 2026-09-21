@@ -159,7 +159,7 @@ each can take next.
 |             | `g a` / `g u`     | add to the selected work item / ungroup                      |
 |             | `s` / `f` / `D`   | signal / find / diff the selection                           |
 |             | `/`               | search every panel's output (grep the fleet)                 |
-|             | `T` / `Q`         | dispatch a task / manage the task queue                      |
+|             | `T` / `Q` / `I`   | dispatch a task / manage the queue / GitHub issues           |
 |             | `v u`             | cycle the usage footer: off / window / focused panel / quota |
 |             | `v U`             | account usage — quota bars, and who is spending them         |
 |             | `v k`             | toggle the key-press readout in the footer                   |

@@ -77,6 +77,7 @@ func TestViewRendersEveryMode(t *testing.T) {
 		{"input-agent-dir", func(m *model) { m.input = inputAgentDir; m.inputBuf = "~/work" }},
 		{"input-isolate-branch", func(m *model) { m.input = inputIsolateBranch; m.inputBuf = "feat/x" }},
 		{"zoom", func(m *model) { m.mode = modeZoom; m.zoomTitle = "shell #1" }},
+		{"issues", func(m *model) { m.mode = modeIssues }},
 		{"prefix-armed", func(m *model) { m.fleet = sampleFleet()[:3]; m.prefix = true }},
 		{"error", func(m *model) { m.fleet = sampleFleet()[:3]; m.status = "error: boom" }},
 		{"narrow", func(m *model) { m.fleet = sampleFleet(); m.width = 40 }},

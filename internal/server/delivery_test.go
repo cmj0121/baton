@@ -53,6 +53,24 @@ func TestEnqueueDefersTheFilterToDelivery(t *testing.T) {
 	}
 }
 
+func TestEnqueueStampsGitHubIssueNumber(t *testing.T) {
+	s, _ := deliveryServer()
+	cc := conn("")
+	s.onCommand(cc, proto.Command{Action: "task.enqueue", Group: "auth", Prompt: "later", Issue: 128})
+	noError(t, cc)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var got int
+	for _, tsk := range s.tasks {
+		if tsk.Issue != 0 {
+			got = tsk.Issue
+		}
+	}
+	if got != 128 {
+		t.Fatalf("task.Issue = %d, want 128", got)
+	}
+}
+
 // TestTheDeliveryFilterRunsOffTheLock is the constraint the whole shape of #44
 // was chosen for. task.pre goes through the Lua worker behind a 2s fail-open
 // timeout, so a hook that hangs while s.mu is held stalls every connection on

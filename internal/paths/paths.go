@@ -141,6 +141,13 @@ func UsageLimitsFile() string {
 	return filepath.Join(home(), ".baton", "usage-limits.json")
 }
 
+// IssueBindFile is where the issues overlay remembers which issue a working tree
+// was bound to ($HOME/.baton/issue-bind.json). Like TUIStateFile it belongs to
+// the operator, not to one fleet, so it is not scoped to a socket.
+func IssueBindFile() string {
+	return filepath.Join(home(), ".baton", "issue-bind.json")
+}
+
 // PluginFile is the user's Lua plugin ($HOME/.baton/plug-in.lua). BATON_PLUGIN
 // overrides it (and is how the daemon child inherits an explicit --plugin choice
 // across the re-exec, since it re-sessions itself).

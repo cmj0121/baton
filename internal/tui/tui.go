@@ -24,6 +24,7 @@ import (
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/i18n"
+	"github.com/cmj0121/baton/internal/issues"
 	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/paths"
@@ -138,6 +139,7 @@ const (
 	modeDiff        // the master-detail diff popup (the diff action)
 	modeGitOut      // the scrollable text popup for a captured git op (log/status/…)
 	modeQueue       // the task-queue manager popup (Q): list / cancel / drain the backlog
+	modeIssues      // the GitHub issues overlay (I / C-t I)
 	modeFleetSearch // the fleet-wide search results popup (/): matching lines grouped by panel
 	modeProcTree    // the process-tree overlay (C-t o): the daemon, its panels, and their OS descendants
 	modeUsage       // the account-usage overlay (v U): the quota bars in full, and who is spending them
@@ -268,6 +270,7 @@ type model struct {
 	dispatchID    string // agent panel id being dispatched a task via inputDispatch
 	dispatchGroup string // group name being dispatched a task to every member (mutually exclusive with dispatchID)
 	enqueueGroup  string // work item an inputEnqueue task is restricted to ("" = any free agent)
+	enqueueIssue  int    // optional GitHub issue number stamped on the next enqueue (0 = none)
 
 	filter string // dashboard panel filter (substring on titles / group names); "" shows the whole fleet
 
@@ -332,6 +335,27 @@ type model struct {
 	tasks       []proto.Task
 	queueFrom   mode
 	queueCursor int
+
+	// The GitHub issues overlay (modeIssues, I / C-t I).
+	issuesFrom     mode
+	issuesCwd      string
+	issuesCwdFrom  string // panel whose cwd/branch auto-chain uses
+	issuesGroup    string
+	issuesFanout   bool
+	issuesMile     int  // 0 = all milestones; 1.. = Board.Milestones[i-1]
+	issuesMilePick bool // m: tab rotates the milestone chips
+	issuesDetail   bool
+	issuesCol      int
+	issuesIdx      [3]int
+	issuesOff      [3]int
+	issuesBoard    issues.Board
+	issuesErr      string
+	issuesFetched  time.Time
+	issuesBind     map[string]int
+	issuesPersist  map[string]int
+	issuesLoading  bool
+	issuesBlockFor int
+	issuesInterval time.Duration
 
 	// The git menu (C-t g in a zoom, zoom-only). gitTarget is the agent it acts on,
 	// captured at open; gitFrom is the zoom it returns to; gitCursor is the
@@ -629,6 +653,7 @@ const (
 	inputWorktreeRepo                // the repository the dashboard's n w opens a worktree on, asked before the branch
 	inputWorktreeBranch              // the branch for that repository — the git menu's field, committing to the targetless form
 	inputIsolateBranch               // A's isolate path after the here/isolate offer — not n w's field, so the two cannot share a prompt sequence
+	inputIssueBlock                  // blocked-by issue number from the issues overlay
 )
 
 // RestartRequested reports whether the cockpit exited because the user asked to
@@ -699,6 +724,7 @@ func (m model) applyPrefs(p prefs) model {
 	m.keyTimeout = p.keyTimeout
 	m.notifyEnabled = p.notify
 	m.notifyCoalesce = p.notifyCoalesce
+	m.issuesInterval = p.issuesInterval
 	if !m.notifyEnabled {
 		// A reload that switches notifications off must take an already-open window
 		// with it, or off would still mean one last toast up to a coalesce later.
@@ -1054,7 +1080,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := m.maybeAutoSaver(); cmd != nil { // auto-start the saver after saverIdle
 			return m, tea.Batch(note, cmd, tick())
 		}
-		return m, tea.Batch(note, tick())
+		m, issueCmd := m.maybeRefreshIssues()
+		return m, tea.Batch(note, issueCmd, tick())
 
 	case seqTimeoutMsg:
 		// A landing has waited long enough. Either it ends on a binding, which
@@ -1189,8 +1216,14 @@ func (m model) restingStatus() string {
 	return m.tr("mode.dashboard.status", "dashboard")
 }
 
+// sendHook is an optional test spy for sendf. Production leaves it nil.
+var sendHook func(proto.Command)
+
 // sendf sends a command if there is a live client (a no-op in tests).
 func (m model) sendf(cmd proto.Command) {
+	if sendHook != nil {
+		sendHook(cmd)
+	}
 	if m.client != nil {
 		_ = m.client.Send(cmd)
 	}
@@ -1342,6 +1375,24 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		// channel rather than the output stream because it is a request/response
 		// reply, not a subscription: the inbox never attaches.
 		m.applyTail(sm.ID, sm.Data)
+	case "issues":
+		errMsg := sm.Error
+		if sm.Failed && errMsg == "" {
+			errMsg = "issues failed"
+		}
+		var loaded issuesLoadedMsg
+		loaded.cwd = m.issuesCwd
+		if errMsg != "" {
+			loaded.err = fmt.Errorf("%s", errMsg)
+		} else if len(sm.Issues) > 0 {
+			var b issues.Board
+			if err := json.Unmarshal(sm.Issues, &b); err != nil {
+				loaded.err = err
+			} else {
+				loaded.board = b
+			}
+		}
+		*m = m.applyIssuesLoaded(loaded)
 	case "search":
 		// The server scanned every panel for the term and returned the matching lines.
 		// Open the results popup grouped by panel; it owns nothing server-side, so esc
@@ -1405,6 +1456,9 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		if m.queueCursor >= len(m.tasks) {
 			m.queueCursor = max(0, len(m.tasks)-1)
 		}
+		if m.mode == modeIssues {
+			m.clampIssuesCursor()
+		}
 	case "ephemeral-exit":
 		// The transient panel's process ended. Only a zoom that asked to be left
 		// acts on it, and only on a CLEAN exit: a non-zero one means the program
@@ -1432,6 +1486,12 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		// and fades like any other one-off message.
 		m.status = sm.Notice
 	case "error":
+		// An old daemon answers issues.board with unknown action. Put that in
+		// the overlay rather than only on the status line, or the board stays
+		// "— · GitHub · —" and looks like it never fetched.
+		if m.mode == modeIssues && m.issuesLoading {
+			*m = m.applyIssuesLoaded(issuesLoadedMsg{cwd: m.issuesCwd, err: fmt.Errorf("%s", sm.Error)})
+		}
 		m.status = m.tr("status.error", "error: ") + sm.Error
 	}
 }
@@ -1458,6 +1518,9 @@ func (m *model) applyTelemetry(sm proto.ServerMsg) {
 	}
 	m.observeWire(sm.Panels) // the inbox reads Since/Acked, which the fleet model does not carry
 	m.refreshAttention()
+	if m.mode == modeIssues {
+		m.clampIssuesCursor()
+	}
 }
 
 // handlePaste delivers pasted text to whatever is taking text right now, and
@@ -1535,6 +1598,11 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 	// cancels/drains the backlog.
 	if m.mode == modeQueue {
 		return m.handleQueueKey(key)
+	}
+
+	// The issues overlay owns the keyboard until esc.
+	if m.mode == modeIssues {
+		return m.handleIssuesKey(key)
 	}
 
 	// The workdir picker owns the keyboard until a directory is picked or esc; it
@@ -2303,6 +2371,8 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		return m.commitDispatch(buf), nil
 	case inputEnqueue:
 		return m.commitEnqueue(buf), nil
+	case inputIssueBlock:
+		return m.commitIssuesBlock(buf)
 	case inputSignalName:
 		return m.commitOtherSignal(buf)
 	case inputFilter:
@@ -3018,6 +3088,8 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		}
 	case actQueue:
 		return m.openQueue(m.mode), nil
+	case actIssues:
+		return m.openIssues(m.mode)
 	case actProcTree:
 		return m.openProcTree(m.mode), nil
 	case actRemote:
@@ -3518,6 +3590,8 @@ func runZoomBinding(m model, b binding) (tea.Model, tea.Cmd) {
 		return m.startEnqueue(p.Group), nil
 	case actQueue:
 		return m.openQueue(modeZoom), nil
+	case actIssues:
+		return m.openIssues(modeZoom)
 	}
 	m.status = m.bindDesc(b) + ": not available in a zoom — " +
 		seqLabel(m.bindingKey(actDashboard)) + " for the dashboard"
@@ -4058,6 +4132,8 @@ func (m model) render() string {
 		body = m.gitOutView()
 	case m.mode == modeQueue:
 		body = m.queueView()
+	case m.mode == modeIssues:
+		body = m.issuesView()
 	case m.mode == modeDirPick:
 		body = m.dirPickView()
 	case m.mode == modeFleetSearch:
@@ -4552,6 +4628,7 @@ func (m model) helpSections() (title string, secs []helpSection) {
 			{"Work items", keycaps("", keyPin, false), tr("help.group.pin", "pin / unpin the focused panel to a live tile")},
 			{"Work items", keycaps("", keySignal, false) + " " + keycaps("", keySignalAll, false), tr("help.group.signal", "signal the focused panel · the whole group")},
 			{"Work items", keycaps("", keyRemove, false), tr("help.group.remove", "remove the focused panel from the group")},
+			{"Panels", keycaps("", m.bindingKey(actIssues), false), tr("help.group.issues", "GitHub issues for the focused panel's repo")},
 			{"Panels", keycaps(pfx, m.bindingKey(actLogToggle), false) + " " + keycaps("", m.bindingKey(actLogView), false), tr("help.common.log", "log this panel's output to a file · read it back")},
 			{"View", keycaps("", m.bindingKey(actHelp), false), tr("help.common.keys", "this key list")},
 			{"View", keycaps("", m.bindingKey(actBack), false) + " " + kc("esc"), tr("help.group.back", "back one level")},
@@ -4573,6 +4650,7 @@ func (m model) helpSections() (title string, secs []helpSection) {
 			{"Navigation", kc(pfx) + " " + kc("…"), tr("help.zoom.commands", "any dashboard key, with the leader in front of it")},
 			{"Panels", keycaps(pfx, m.bindingKey(actSignal), false), tr("help.zoom.signal", "send a signal to this panel")},
 			{"Panels", keycaps(pfx, keyGitMenu, false), tr("help.zoom.git", "git menu · diff, log, commit, push, worktree (agent panel)")},
+			{"Panels", keycaps(pfx, m.bindingKey(actIssues), false), tr("help.zoom.issues", "GitHub issues for this panel's repo")},
 			{"Panels", keycaps(pfx, m.bindingKey(actLogToggle), false) + " " + keycaps("", m.bindingKey(actLogView), false), tr("help.common.log", "log this panel's output to a file · read it back")},
 			{"View", keycaps(pfx, m.bindingKey(actBack), false), tr("help.zoom.back", "back one level (to the split / dashboard)")},
 			{"View", kc(pfx) + " " + keycaps("", m.bindingKey(actDashboard), false), tr("help.zoom.dashboard", "straight to the dashboard")},
@@ -4922,7 +5000,12 @@ const minPopupRows = 3 + 2 + 2 + popupChrome // body, title+blank, a one-line fo
 // then drawn without it wastes the rows it just gave away, and a body sized
 // without the banner and drawn with it runs off the bottom of the screen — which
 // is the failure this whole file's row arithmetic exists to avoid.
+//
+// The issues overlay never gets it: it fills the screen less its own margin.
 func (m model) bannerFits() bool {
+	if m.mode == modeIssues {
+		return false
+	}
 	if m.height <= 0 {
 		return true // unsized: the first frame, and unit tests
 	}
@@ -5358,6 +5441,7 @@ var inputSpecs = map[inputPurpose]inputSpec{
 	inputRename:      {"input.rename.title", "RENAME", "input.rename.prompt", "new name", "legend.save", "save"},
 	inputDispatch:    {"input.dispatch.title", "DISPATCH TASK", "input.dispatch.prompt", "the task brief for the agent", "legend.send", "send"},
 	inputEnqueue:     {"input.enqueue.title", "ENQUEUE TASK", "input.enqueue.prompt", "the task brief to queue for a free agent", "legend.queue", "queue"},
+	inputIssueBlock:  {"input.issue-block.title", "BLOCKED BY", "input.issue-block.prompt", "the issue number this card is blocked by", "legend.add", "add"},
 	inputSignalName:  {"input.signal.title", "SEND SIGNAL", "input.signal.prompt", "signal name or number  (e.g. WINCH, TSTP, 28)", "legend.send", "send"},
 	inputFilter:      {"input.filter.title", "FIND PANELS", "input.filter.prompt", "filter by title or group  (live)", "legend.apply", "apply"},
 	inputSearch:      {"input.search.title", "SEARCH", "input.search.prompt", "find in the scrollback", "legend.find", "find"},

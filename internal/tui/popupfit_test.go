@@ -43,6 +43,7 @@ func TestNoOverlayOutgrowsItsTerminal(t *testing.T) {
 		{"help", func(m *model) { m.mode, m.helpFrom = modeHelp, modeDashboard }},
 		{"inbox", func(m *model) { m.mode = modeInbox }},
 		{"queue", func(m *model) { m.mode = modeQueue }},
+		{"issues", func(m *model) { m.mode = modeIssues }},
 		{"proc tree", func(m *model) { m.mode = modeProcTree }},
 		{"remote", func(m *model) { m.mode = modeRemote }},
 		{"commands", func(m *model) { m.mode = modeCommand }},

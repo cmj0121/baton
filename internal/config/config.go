@@ -51,6 +51,15 @@ type Config struct {
 
 	// Score configures the fleet-scope memory (issue #37).
 	Score ScoreConfig `yaml:"score,omitempty"`
+
+	// Issues configures the GitHub issues overlay (I / C-t I).
+	Issues IssuesConfig `yaml:"issues,omitempty"`
+}
+
+// IssuesConfig is the GitHub overlay's refresh cadence. Interval is seconds:
+// unset uses 60s, 0 is manual (r only), 1–29 clamp to 30.
+type IssuesConfig struct {
+	Interval *int `yaml:"interval,omitempty"`
 }
 
 // TUIConfig is the cockpit appearance: the colour theme and the named group-split
