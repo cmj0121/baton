@@ -46,6 +46,7 @@ var hostileActions = []string{
 	"group.unfavourite", "task.enqueue", "task.list", "task.cancel", "task.promote",
 	"task.demote", "task.drain", "config.get", "score.submit", "score.list", "score.status",
 	"score.merge", "score.reword", "score.lower", "score.edit", "worktree.list",
+	"issues.board", "issues.block",
 	"panel.signal", "panel.respawn", "panel.close", "panel.purge",
 }
 
