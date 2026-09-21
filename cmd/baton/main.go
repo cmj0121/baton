@@ -58,7 +58,7 @@ import (
 	"github.com/cmj0121/baton/internal/usage"
 )
 
-const version = "2.2.2"
+const version = "2.3.0"
 
 // daemonEnv marks the re-executed child that should run the server loop instead
 // of attaching a cockpit.
