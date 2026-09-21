@@ -44,6 +44,26 @@ func writeEmu(emu *vt.SafeEmulator, irm *vtirm.Filter, data []byte) {
 	_, _ = emu.Write(irm.Rewrite(vtquery.Strip(data)))
 }
 
+// feedEmu writes one panel output message into emu.
+//
+// A message tagged with a size is an attach's replay, painted at that size. A
+// program that repaints relatively — cursor-up and erase over the rows it thinks
+// its last frame took — only lands where it meant to at the width it wrapped at,
+// so the replay is written at that size and the emulator is then resized back to
+// its own, exactly what a real terminal went through (#133). Untagged output —
+// all live output, and a replay from a daemon that predates the tag — is written
+// as-is.
+func feedEmu(emu *vt.SafeEmulator, irm *vtirm.Filter, msg proto.ServerMsg) {
+	if msg.Rows <= 0 || msg.Cols <= 0 {
+		writeEmu(emu, irm, msg.Data)
+		return
+	}
+	w, h := emu.Width(), emu.Height()
+	emu.Resize(msg.Cols, msg.Rows)
+	writeEmu(emu, irm, msg.Data)
+	emu.Resize(w, h)
+}
+
 // cellCond gives wcwidth-style cell widths — 2 for wide (CJK) glyphs, 1 for the
 // rest — independent of the user's locale, matching the emulator's own cell math.
 var cellCond = &runewidth.Condition{}

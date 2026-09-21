@@ -127,8 +127,10 @@ func (m *model) attachTile(p panel.Panel, emuCols, emuRows int) {
 func (m model) attachEmu(id string, emuCols, emuRows int) *vt.SafeEmulator {
 	emu := vt.NewSafeEmulator(emuCols, emuRows)
 	go zoomReader(emu, m.client, id)
-	m.sendf(proto.Command{Action: "panel.resize", ID: id, Rows: emuRows, Cols: emuCols})
+	// Attach before resize, for the reason zoomInto gives: the replay's size tag
+	// must be the size its bytes were painted at.
 	m.sendf(proto.Command{Action: "panel.attach", ID: id})
+	m.sendf(proto.Command{Action: "panel.resize", ID: id, Rows: emuRows, Cols: emuCols})
 	return emu
 }
 

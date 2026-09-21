@@ -1019,7 +1019,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case panelOutputMsg:
 		sm := proto.ServerMsg(msg)
 		if m.mode == modeZoom && m.emu != nil && sm.ID == m.zoomID {
-			writeEmu(m.emu, m.emuIRM, sm.Data)
+			feedEmu(m.emu, m.emuIRM, sm)
 			if m.searchSeedPending {
 				// Jumped here from a fleet-search hit: the panel's replay has now landed
 				// in the emulator, so run the same term as a scrollback search — the view
@@ -1030,7 +1030,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.mode == modeGroupZoom {
 			if emu := m.groupEmus[sm.ID]; emu != nil {
-				writeEmu(emu, m.groupIRMs[sm.ID], sm.Data) // demux by id into the member's tile
+				feedEmu(emu, m.groupIRMs[sm.ID], sm) // demux by id into the member's tile
 			}
 		}
 		return m, waitOutput(m.client.Output)
@@ -3422,9 +3422,13 @@ func (m model) zoomInto(p panel.Panel) model {
 		// PTY. The goroutine ends when zoomDetach closes the emulator.
 		go zoomReader(m.emu, m.client, p.ID)
 	}
+	// Attach BEFORE resize: the daemon tags the replay with the PTY's size when it
+	// snapshots, and that must be the size the ring's tail was painted at, not the
+	// one this zoom is about to impose. The resize that follows then SIGWINCHes the
+	// program into a real repaint at the view's size (#133).
 	zr, zc := m.viewGeometry()
-	m.sendf(proto.Command{Action: "panel.resize", ID: p.ID, Rows: zr, Cols: zc})
 	m.sendf(proto.Command{Action: "panel.attach", ID: p.ID})
+	m.sendf(proto.Command{Action: "panel.resize", ID: p.ID, Rows: zr, Cols: zc})
 	if m.zoomExited {
 		// One key for the whole line, title and all. It used to be a translated
 		// prefix with " (exited)" concatenated on, which left the one word the
