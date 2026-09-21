@@ -62,6 +62,9 @@ Baton startet seinen Hintergrund-Server und setzt dich auf dem **Dashboard** ab 
 
 Verirrt? **`?`** zeigt dir immer die Tasten für die Stelle, an der du gerade bist.
 
+Eine Flotte ist **`n C`** plus stehende Befehle in `$HOME/.baton/CONDUCTOR.md` — der Conductor startet die Worker und
+verteilt die Arbeit. Ein einzelner Agent bleibt **`A`**. Siehe **[docs/CONTROL.md](CONTROL.md)**.
+
 ## Warum nicht einfach tmux?
 
 Weil tmux nicht weiß, was im Pane steckt. Es gibt dir Fenster; welches welches ist, musst du dir selbst merken, und dass
@@ -188,9 +191,9 @@ Fünf Dinge, die ein Terminal-Multiplexer nicht tut:
   melden, über die ganze Leiter hinweg. `C-t a` öffnet aus jeder Ansicht den Posteingang, und dort wird die Schlange
   abgearbeitet; `settings.notify` schickt eine OSC-9-Desktopbenachrichtigung, wenn niemand hinsieht, gebündelt und
   niemals für `done`. Siehe **[docs/ATTENTION.md](ATTENTION.md)**.
-- **Ein Conductor** — `n C` öffnet einen Agent, der die Flotte für dich steuert: Er startet, gruppiert, signalisiert und
-  promptet die anderen Panels über den Socket, per `baton ctl` oder den `baton mcp`-Tools, eingezäunt, damit er seinen
-  eigenen Host nicht ruinieren kann. Sein Ziel steht in `$HOME/.baton/CONDUCTOR.md`. Siehe
+- **Ein Conductor** — der Flottenweg. `n C` öffnet einen Agent, der die Flotte für dich steuert: Er startet, gruppiert,
+  dispatcht und enqueued die anderen Panels über den Socket, per `baton ctl` oder den `baton mcp`-Tools, eingezäunt,
+  damit er seinen eigenen Host nicht ruinieren kann. Stehende Befehle stehen in `$HOME/.baton/CONDUCTOR.md`. Siehe
   **[docs/CONTROL.md](CONTROL.md)**.
 - **Aufgaben und ein Rückstau** — `T` gibt einen Auftrag an einen Agent oder verteilt ihn über ein ganzes Work Item; er
   steht auf der Karte und wird zugestellt, sobald der Agent bereit ist. `Q` verwaltet einen dauerhaften Rückstau, den ein
