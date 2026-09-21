@@ -163,7 +163,7 @@ Vier Tasten sind _Landings_: Sie tun allein nichts und öffnen eine Familie — 
 |             | `g a` / `g u`     | zum gewählten Work Item hinzufügen / Gruppierung aufheben            |
 |             | `s` / `f` / `D`   | der Auswahl ein Signal senden / sie finden / diffen                  |
 |             | `/`               | die Ausgabe jedes Panels durchsuchen (die Flotte greppen)            |
-|             | `T` / `Q`         | eine Task vergeben / die Task-Warteschlange verwalten                |
+|             | `T` / `Q` / `I`   | eine Task vergeben / die Warteschlange / GitHub-Issues               |
 |             | `v u`             | Nutzungs-Fußzeile durchschalten: aus / Fenster / Panel / Kontingent  |
 |             | `v U`             | Kontonutzung — Kontingentbalken und wer sie verbraucht               |
 |             | `v k`             | die Tastenanzeige in der Fußzeile umschalten                         |

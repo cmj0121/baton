@@ -335,6 +335,9 @@ usage:
   warn-at: 0.75 # fraction of the window spent before the segment turns amber
   alarm-at: 0.9 # …and red
 
+issues:
+  interval: 60 # I 覆蓋層開著時重抓 GitHub 的秒數；0 = 只靠 r；下限 30s
+
 settings:
   usage-mode: window # off | window | panel | limits  (`v u` 可即時循環)
 ```

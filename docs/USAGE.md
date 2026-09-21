@@ -393,6 +393,9 @@ usage:
   warn-at: 0.75 # fraction of the window spent before the segment turns amber
   alarm-at: 0.9 # …and red
 
+issues:
+  interval: 60 # GitHub refresh while the I overlay is open; 0 = r only; floor 30s
+
 settings:
   usage-mode: window # off | window | panel | limits  (also cycled live with `v u`)
 ```

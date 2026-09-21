@@ -164,7 +164,7 @@ Cuatro teclas son _landings_: no hacen nada por sí solas y abren una familia �
 |             | `g a` / `g u`     | añadir al work item seleccionado / desagrupar                         |
 |             | `s` / `f` / `D`   | enviar señal / buscar / diff de la selección                          |
 |             | `/`               | buscar en la salida de todos los paneles (grep a la flota)            |
-|             | `T` / `Q`         | despachar una tarea / gestionar la cola de tareas                     |
+|             | `T` / `Q` / `I`   | despachar una tarea / gestionar la cola / GitHub issues               |
 |             | `v u`             | alternar el pie de uso: apagado / ventana / panel enfocado / cuota    |
 |             | `v U`             | uso de la cuenta — barras de cuota y quién las consume                |
 |             | `v k`             | alternar el indicador de teclas en el pie                             |
