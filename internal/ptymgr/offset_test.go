@@ -2,6 +2,7 @@ package ptymgr
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -33,31 +34,51 @@ func TestAppendRingReturnsTheRunningOffset(t *testing.T) {
 }
 
 // TestOutputCallbackCarriesTheChunkEnd checks the pump hands the sink the same
-// running offset: the end offset of the last chunk seen equals every byte seen.
+// running offset: every chunk arrives stamped with the count of all bytes seen
+// through it. The output is paced so it spans several reads — with one chunk,
+// its length and its end offset are the same number and a sink handed the
+// wrong one could not tell.
 func TestOutputCallbackCarriesTheChunkEnd(t *testing.T) {
 	m := New()
 
 	var mu sync.Mutex
-	var seen, last int64
+	var seen int64
+	var chunks int
+	var bad []string
 	m.OnOutput(func(_ string, data []byte, end int64) {
 		mu.Lock()
 		defer mu.Unlock()
 		seen += int64(len(data))
-		last = end
+		chunks++
+		if end != seen {
+			bad = append(bad, fmt.Sprintf("chunk %d ended at %d after %d bytes", chunks, end, seen))
+		}
 	})
-	if err := m.StartCmd("p", Spec{Command: "/bin/sh", Args: []string{"-c", "echo one; echo two; echo three"}}); err != nil {
+	script := "printf a; sleep 0.1; printf bb; sleep 0.1; printf ccc; sleep 0.1; printf dddd; sleep 5"
+	if err := m.StartCmd("p", Spec{Command: "/bin/sh", Args: []string{"-c", script}}); err != nil {
 		t.Fatalf("StartCmd: %v", err)
 	}
 	t.Cleanup(func() { m.Stop("p") })
 
+	const total = 10 // a + bb + ccc + dddd
 	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) && !strings.Contains(string(m.Snapshot("p")), "three") {
+	for {
+		mu.Lock()
+		got, n, wrong := seen, chunks, bad
+		mu.Unlock()
+		if got >= total {
+			if n < 2 {
+				t.Fatalf("the output arrived in %d read(s); the test needs several to mean anything", n)
+			}
+			if len(wrong) > 0 {
+				t.Fatalf("the sink was handed the wrong end offsets: %v", wrong)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the sink saw %d of %d bytes", got, total)
+		}
 		time.Sleep(10 * time.Millisecond)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if seen == 0 || last != seen {
-		t.Fatalf("last chunk ended at offset %d, but %d bytes were delivered", last, seen)
 	}
 }
 
