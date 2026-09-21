@@ -175,6 +175,8 @@ func (m model) handleIssuesKey(key string) (tea.Model, tea.Cmd) {
 	case "m":
 		m.enterIssuesMilePick()
 		return m, nil
+	case "/":
+		return m.startIssuesMile(), nil
 	case "left", "h", "shift+tab":
 		m.moveIssuesCol(-1)
 		return m, nil
@@ -214,6 +216,8 @@ func (m model) handleIssuesDetailKey(key string) (tea.Model, tea.Cmd) {
 	case "m":
 		m.enterIssuesMilePick()
 		return m, nil
+	case "/":
+		return m.startIssuesMile(), nil
 	case "p":
 		return m.jumpIssuesPanel()
 	case "r":
@@ -587,6 +591,77 @@ func (m model) enqueueIssuesCard() (tea.Model, tea.Cmd) {
 	return m.commitEnqueue(body), nil
 }
 
+func (m model) startIssuesMile() model {
+	m.issuesMilePick = false
+	m.input = inputIssueMile
+	m.inputBuf = ""
+	m.status = m.tr("issues.status.mile-search", "milestone · type a name · enter selects")
+	return m
+}
+
+func (m model) commitIssuesMile(buf string) model {
+	none := m.tr("issues.milestone.none", "(none)")
+	idx, ok := matchIssuesMile(buf, none, m.issuesBoard.Milestones)
+	if !ok {
+		m.input, m.inputBuf = inputIssueMile, buf
+		m.status = m.tr("issues.status.mile-none", "issues: no unique milestone match")
+		return m
+	}
+	m.applyIssuesMile(idx)
+	return m
+}
+
+// matchIssuesMile picks a chip index (0 = all / (none)) from a typed query.
+// Exact wins over prefix over substring; two hits at the best rank refuse.
+func matchIssuesMile(query, none string, names []string) (int, bool) {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return 0, true
+	}
+	type hit struct{ idx, rank int }
+	var hits []hit
+	consider := func(idx int, label string) {
+		s := strings.ToLower(strings.TrimSpace(label))
+		if s == "" {
+			return
+		}
+		switch {
+		case s == q:
+			hits = append(hits, hit{idx, 0})
+		case strings.HasPrefix(s, q):
+			hits = append(hits, hit{idx, 1})
+		case strings.Contains(s, q):
+			hits = append(hits, hit{idx, 2})
+		}
+	}
+	consider(0, none)
+	consider(0, "none")
+	for i, name := range names {
+		consider(i+1, name)
+	}
+	if len(hits) == 0 {
+		return 0, false
+	}
+	best := hits[0].rank
+	for _, h := range hits {
+		if h.rank < best {
+			best = h.rank
+		}
+	}
+	picked, seen := []int{}, map[int]bool{}
+	for _, h := range hits {
+		if h.rank != best || seen[h.idx] {
+			continue
+		}
+		seen[h.idx] = true
+		picked = append(picked, h.idx)
+	}
+	if len(picked) != 1 {
+		return 0, false
+	}
+	return picked[0], true
+}
+
 func (m model) startIssuesBlock() (tea.Model, tea.Cmd) {
 	c, ok := m.issuesSelected()
 	if !ok {
@@ -669,7 +744,7 @@ func (m model) issuesChrome() (head, legend string) {
 	} else if m.issuesDetail {
 		legend = mutedStyle.Render(m.tr("issues.legend.detail", "T dispatch  ·  t enqueue  ·  b bind  ·  B block  ·  p panel  ·  r refresh  ·  enter  ·  esc"))
 	} else {
-		legend = mutedStyle.Render(m.tr("issues.legend.board", "tab/←→ column  ·  ↑/↓ card  ·  m milestone  ·  space/enter detail  ·  p panel  ·  r refresh  ·  esc"))
+		legend = mutedStyle.Render(m.tr("issues.legend.board", "tab/←→ column  ·  ↑/↓ card  ·  m / milestone  ·  space/enter detail  ·  p panel  ·  r refresh  ·  esc"))
 	}
 	if m.issuesDetail && !m.issuesMilePick {
 		return mutedStyle.Render(m.tr("issues.detail.back", "← esc board")), legend
