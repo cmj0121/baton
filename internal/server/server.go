@@ -1302,6 +1302,7 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 		if cc.attached[id] {
 			send(cc, protoOutput(id, line))
 			delete(cc.attached, id)
+			delete(cc.replayed, id)
 		}
 	}
 

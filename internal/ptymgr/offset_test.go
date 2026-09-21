@@ -93,20 +93,20 @@ func TestSnapshotAtStartsCleanOnlyAfterEviction(t *testing.T) {
 	m.ringCap = minRingCap // white-box: the window is the last minRingCap bytes
 
 	// Whole ring: nothing evicted, so even a mid-line start is the real start.
-	m.ptys["whole"] = &pane{ring: []byte("tail of text\x1b[Hscreen"), total: 21}
+	m.ptys["whole"] = &pane{ring: []byte("tail of text\x1b[Hscreen"), written: 21}
 	if got := string(m.SnapshotAt("whole").Data); got != "tail of text\x1b[Hscreen" {
 		t.Errorf("an unwrapped ring must replay whole, got %q", got)
 	}
 
 	// Wrapped, opening on the continuation bytes of "é" and a torn line.
 	wrapped := append([]byte{0xa9, 0xa9}, []byte("torn line\x1b[Hscreen")...)
-	m.ptys["wrapped"] = &pane{ring: wrapped, total: 1 << 20}
+	m.ptys["wrapped"] = &pane{ring: wrapped, written: 1 << 20}
 	if got := string(m.SnapshotAt("wrapped").Data); got != "\x1b[Hscreen" {
 		t.Errorf("a wrapped ring should replay from the first escape, got %q", got)
 	}
 
 	// Wrapped, with a line break before any escape: start on the next line.
-	m.ptys["newline"] = &pane{ring: []byte("torn\nnext line"), total: 1 << 20}
+	m.ptys["newline"] = &pane{ring: []byte("torn\nnext line"), written: 1 << 20}
 	if got := string(m.SnapshotAt("newline").Data); got != "next line" {
 		t.Errorf("a wrapped ring should replay from after the first line break, got %q", got)
 	}
@@ -114,8 +114,53 @@ func TestSnapshotAtStartsCleanOnlyAfterEviction(t *testing.T) {
 	// Wrapped, with no break inside the bound: only the torn rune is dropped.
 	long := append([]byte{0x80}, bytes.Repeat([]byte{'y'}, 300)...)
 	long = append(long, "\x1b[H"...)
-	m.ptys["long"] = &pane{ring: long, total: 1 << 20}
+	m.ptys["long"] = &pane{ring: long, written: 1 << 20}
 	if got := m.SnapshotAt("long").Data; !bytes.Equal(got, long[1:]) {
 		t.Errorf("the advance must stop at the bound, got %d bytes want %d", len(got), len(long)-1)
+	}
+}
+
+// waitRing polls a panel's replay until it holds mark.
+func waitRing(t *testing.T, m *Manager, id, mark string) Replay {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if r := m.SnapshotAt(id); strings.Contains(string(r.Data), mark) {
+			return r
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("%q never reached panel %s's ring", mark, id)
+	return Replay{}
+}
+
+// TestOffsetsKeepRisingAcrossARespawn pins that the offset is never reused for
+// an id. A respawned panel gets a fresh pane under the same id, and a client
+// that replayed the dead one holds that pane's end offset; were the new pane to
+// count from zero again, every chunk it produced below that mark would look
+// already replayed and be skipped — a live panel with a frozen screen.
+//
+// The new pane's own ring is still whole, not wrapped: that check counts what
+// THIS pane wrote, so its first line is not trimmed away as a torn fragment.
+func TestOffsetsKeepRisingAcrossARespawn(t *testing.T) {
+	m := New()
+	m.OnOutput(func(string, []byte, int64) {})
+	t.Cleanup(func() { m.Stop("p") })
+
+	if err := m.StartCmd("p", Spec{Command: "/bin/sh", Args: []string{"-c", "printf OLDOLDOLDOLD; sleep 5"}}); err != nil {
+		t.Fatalf("StartCmd: %v", err)
+	}
+	old := waitRing(t, m, "p", "OLDOLDOLDOLD")
+	m.Stop("p")
+
+	if err := m.StartCmd("p", Spec{Command: "/bin/sh", Args: []string{"-c", "printf 'ab\\ncd'; sleep 5"}}); err != nil {
+		t.Fatalf("StartCmd: %v", err)
+	}
+	fresh := waitRing(t, m, "p", "cd")
+	if fresh.End <= old.End {
+		t.Errorf("the respawned pane ends at offset %d, not past the dead one's %d", fresh.End, old.End)
+	}
+	if !strings.HasPrefix(string(fresh.Data), "ab") {
+		t.Errorf("the respawned pane's unwrapped ring lost its start: %q", fresh.Data)
 	}
 }

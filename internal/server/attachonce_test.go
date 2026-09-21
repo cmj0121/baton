@@ -21,10 +21,13 @@ import (
 // and its late delivery is made after the attach.
 
 // sinkless is a server whose PTY output lands in the ring and nowhere else: the
-// pump never reaches fanOutput, so each test delivers "live" chunks by hand.
+// pump never reaches fanOutput, so each test delivers "live" chunks by hand. An
+// exit does not reach the server either, so stopping a pane cannot detach a
+// client behind a test's back.
 func sinkless() *Server {
 	s := New(nil)
 	s.pty.OnOutput(func(string, []byte, int64) {})
+	s.pty.OnClose(func(string, int) {})
 	return s
 }
 
@@ -146,5 +149,42 @@ func TestADroppedOutputIsCountedAndSaid(t *testing.T) {
 	}
 	if line := logged(); strings.Count(line, "output dropped") != 1 {
 		t.Errorf("want exactly one paced line for a burst of drops, got:\n%s", line)
+	}
+}
+
+// TestARespawnedPanelStillStreams is the respawn under the same id. An operator
+// zooms a panel that has exited while its restart backs off, so the client
+// records the dead ring's end offset; the restart then starts a new process
+// under the same id, and its output must reach that client rather than be
+// mistaken for bytes the replay already held.
+func TestARespawnedPanelStillStreams(t *testing.T) {
+	s := sinkless()
+	holdOutput(t, s, "p", "OLDOLDOLDOLDOLD")
+
+	cc := &clientConn{out: make(chan proto.ServerMsg, 8), attached: map[string]bool{}}
+	s.clients[cc] = struct{}{}
+	s.attach(cc, "p")
+	s.pty.Stop("p")
+	end := holdOutput(t, s, "p", "NEW")
+	s.fanOutput("p", []byte("NEW"), end)
+
+	var all strings.Builder
+	for _, msg := range queued(cc) {
+		all.Write(msg.Data)
+	}
+	if !strings.Contains(all.String(), "NEW") {
+		t.Errorf("the respawned process's output never reached the attached client: %q", all.String())
+	}
+}
+
+// TestAnExitForgetsTheReplayOffset keeps the exit handler's detach whole: it
+// drops the client from the panel's stream, and the replay offset with it.
+func TestAnExitForgetsTheReplayOffset(t *testing.T) {
+	s := New(nil)
+	cc := &clientConn{out: make(chan proto.ServerMsg, 8), attached: map[string]bool{"p": true}, replayed: map[string]int64{"p": 42}}
+	s.clients[cc] = struct{}{}
+	s.onPanelExit("p", 0)
+	if _, ok := cc.replayed["p"]; ok {
+		t.Error("the exit detached the client but left its replay offset behind")
 	}
 }

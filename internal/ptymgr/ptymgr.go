@@ -74,10 +74,12 @@ type pane struct {
 	dead       bool // process exited: f is closed, ring retained for replay
 	rows, cols int  // last window size set on the PTY, for ForceRepaint's nudge and the replay's size
 
-	// total is the pane's running output offset: every byte it has ever produced,
-	// which is also the offset at which the ring ends. It survives the ring's trim,
-	// so a chunk's end offset places it before or after any snapshot for good.
-	total int64
+	// end is the running output offset at which the ring ends (see
+	// Manager.offset), and written is how many bytes this pane has produced. They
+	// differ once a panel has been respawned: end keeps rising across every pane
+	// an id has had, while written — which says whether the ring has wrapped —
+	// starts from zero with each one.
+	end, written int64
 }
 
 // Manager tracks the live PTYs keyed by panel id and fans their output out
@@ -90,6 +92,14 @@ type Manager struct {
 	closed   bool // a KillAll shutdown sweep has run; new spawns must not outlive it
 	onOutput func(id string, data []byte, end int64)
 	onClose  func(id string, exitCode int)
+
+	// offset is the running output offset, shared by every pane: the count of all
+	// bytes any panel has produced. A chunk's end offset is taken from it, so it
+	// places the chunk before or after any snapshot for good — across the ring's
+	// trim and across a respawn that reuses the id, where a per-pane count
+	// restarting at zero would make the new process's output look already
+	// replayed to a client that attached to the dead one.
+	offset int64
 
 	// pumps counts the pump goroutines that have not returned, and drained is the
 	// channel Wait blocks on — created by the first waiter, closed and dropped the
@@ -141,7 +151,7 @@ func New(opts ...Option) *Manager {
 }
 
 // OnOutput registers the sink that receives every panel's output. Set it once,
-// before any panels are started. end is the panel's running output offset just
+// before any panels are started. end is the manager's running output offset just
 // past the chunk — the same count SnapshotAt reports — so a sink that has already
 // replayed a snapshot can tell whether a chunk is inside it.
 func (m *Manager) OnOutput(fn func(id string, data []byte, end int64)) { m.onOutput = fn }
@@ -235,6 +245,7 @@ func (m *Manager) StartCmd(id string, spec Spec) error {
 
 	p := &pane{f: f, pid: cmd.Process.Pid}
 	m.mu.Lock()
+	p.end = m.offset // a snapshot before any output still ends past every earlier pane's
 	m.ptys[id] = p
 	m.pumps++                // registered before the goroutine runs, so Wait can never miss it
 	shuttingDown := m.closed // a KillAll may have swept just before this fork landed in the map
@@ -366,7 +377,7 @@ func (m *Manager) markDead(id string, p *pane) {
 // at most once per ringCap bytes written rather than on every chunk. Readers only
 // ever expose the last ringCap bytes (see ringView), so the slack is invisible.
 //
-// It returns the pane's running offset just past chunk. The offset is assigned
+// It returns the running offset just past chunk. The offset is assigned
 // under the same lock a snapshot is taken under, so every chunk is either inside
 // a given snapshot or after it — never both, never neither.
 func (m *Manager) appendRing(p *pane, chunk []byte) int64 {
@@ -378,8 +389,10 @@ func (m *Manager) appendRing(p *pane, chunk []byte) int64 {
 		copy(trimmed, p.ring[len(p.ring)-m.ringCap:])
 		p.ring = trimmed
 	}
-	p.total += int64(len(chunk))
-	return p.total
+	m.offset += int64(len(chunk))
+	p.end = m.offset
+	p.written += int64(len(chunk))
+	return p.end
 }
 
 // ringView returns the last-ringCap-bytes window of a pane's ring without
@@ -447,7 +460,7 @@ func (m *Manager) Snapshot(id string) []byte {
 // running offset they end at, and the window size they were painted at.
 type Replay struct {
 	Data       []byte
-	End        int64 // the pane's running offset at the end of Data (see OnOutput)
+	End        int64 // the running output offset at the end of Data (see OnOutput)
 	Rows, Cols int   // the PTY's size when the snapshot was taken
 }
 
@@ -472,10 +485,10 @@ func (m *Manager) SnapshotAt(id string) Replay {
 		return Replay{}
 	}
 	view := m.ringView(p)
-	if p.total > int64(len(view)) {
+	if p.written > int64(len(view)) {
 		view = cleanStart(view)
 	}
-	r := Replay{Data: append([]byte(nil), view...), End: p.total, Rows: p.rows, Cols: p.cols}
+	r := Replay{Data: append([]byte(nil), view...), End: p.end, Rows: p.rows, Cols: p.cols}
 	if r.Rows <= 0 || r.Cols <= 0 {
 		r.Rows, r.Cols = birthRows, birthCols
 	}
