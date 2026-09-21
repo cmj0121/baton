@@ -197,6 +197,7 @@ type Task struct {
 	Spawn      *SpawnSpec `json:"spawn,omitempty"`    // provision a fresh agent for this task when none is free (nil = existing agents only)
 	Author     Author     `json:"author,omitempty"`   // WHO queued it, durable and never mutated; absent means AuthorUnknown, see below
 	UserSignal bool       `json:"user,omitempty"`     // ONE-SHOT permission to count the operator's reinforcement, spent at assignment; see below
+	Issue      int        `json:"issue,omitempty"`    // GitHub issue number stamped at enqueue; 0 means none
 	Created    time.Time  `json:"created"`
 	Updated    time.Time  `json:"updated"`
 }

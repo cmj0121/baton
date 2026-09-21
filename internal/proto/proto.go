@@ -117,28 +117,33 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.relaunch | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | panel.tail | panel.diff | panel.git | panel.log | panel.logview | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run | remote.status | remote.enable | remote.disable | remote.rotate | remote.kick | score.submit | score.list | score.status | score.merge | score.reword | score.lower | worktree.list | worktree.sweep
+	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.relaunch | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | panel.tail | panel.diff | panel.git | panel.log | panel.logview | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run | remote.status | remote.enable | remote.disable | remote.rotate | remote.kick | score.submit | score.list | score.status | score.merge | score.reword | score.lower | worktree.list | worktree.sweep | issues.board | issues.block
 	Kind      string   `json:"kind,omitempty"`      // panel kind for "panel.create": "shell" (the default), "agent", or "command"
 	ID        string   `json:"id,omitempty"`        // target panel for close/attach/input/resize/diff, the panel to rename, the panel "score.list" ranks its entries for (empty = rank against no context), the score entry a refine verb corrects, or — empty on "panel.git" worktree-add — the spawn that has no source panel at all
 	Path      string   `json:"path,omitempty"`      // init command (binary path) for "panel.create"; empty = default shell. Also the agent command for a targetless "panel.git" worktree-add, which spawns one
 	Args      []string `json:"args,omitempty"`      // command arguments for "panel.create" (an agent profile's args), and for a targetless "panel.git" worktree-add
 	Profile   string   `json:"profile,omitempty"`   // the agent profile the spawn came from; the server resolves THAT profile's resource limits from its own config, so a client never carries a policy it could widen. Same for a targetless "panel.git" worktree-add
-	Dir       string   `json:"dir,omitempty"`       // working directory the new panel's process runs in ("panel.create"); the worktree path for "panel.git" worktree-remove, and the repo a targetless worktree-add branches from
+	Dir       string   `json:"dir,omitempty"`       // working directory the new panel's process runs in ("panel.create"); the worktree path for "panel.git" worktree-remove, and the repo a targetless worktree-add branches from; the git cwd for "issues.board" / "issues.block"
 	Data      []byte   `json:"data,omitempty"`      // input bytes for "panel.input"
 	Prompt    string   `json:"prompt,omitempty"`    // the task brief for "panel.dispatch"/"panel.dispatch-group": recorded on the panel(s) and delivered to the process as a unit; the note text for "score.submit"; the new wording for "score.reword"
 	Submit    string   `json:"submit,omitempty"`    // optional submit sequence appended to a dispatched prompt (default newline)
 	Ephemeral bool     `json:"ephemeral,omitempty"` // for "task.enqueue" with a spawn spec (Path/Args/Dir): close the provisioned agent once the task finishes
-	Rows      int      `json:"rows,omitempty"`      // window size for "panel.resize"
-	Cols      int      `json:"cols,omitempty"`
-	IDs       []string `json:"ids,omitempty"`    // panels to group ("panel.group"), remove ("panel.ungroup"), close ("panel.close"), or move as a block ("panel.move")
-	Group     string   `json:"group,omitempty"`  // group name to assign ("panel.group"), or the group to rename ("panel.rename")
-	Name      string   `json:"name,omitempty"`   // new name for "panel.rename" (a panel title or a group name)
-	Index     int      `json:"index,omitempty"`  // destination index among the remaining panels for "panel.move"
-	Signal    string   `json:"signal,omitempty"` // signal name to deliver for "panel.signal", e.g. "SIGINT"
-	Count     int      `json:"count,omitempty"`  // absolute visible count for "group.show"; also how many trailing bytes "panel.tail" returns (0 = the Monitor's own attention-sniff window)
-	Git       string   `json:"git,omitempty"`    // git op for "panel.git", e.g. "log", "commit", "worktree-add"; Name carries a branch, Dir a worktree path — or, for a targetless "worktree-add" (empty ID), the repo to branch from, with Path/Args/Profile carrying the agent spec
-	Layout    string   `json:"layout,omitempty"` // layout name for "group.layout": the named split arrangement the group opens with
-	Query     string   `json:"query,omitempty"`  // the search term for "fleet.search": a case-insensitive regexp matched against every panel's retained output
+	// Issue is an optional GitHub issue number stamped on "task.enqueue" so the
+	// issues overlay can match a queued brief to a card without scraping the prompt.
+	// For "issues.block" it is the issue being blocked, and Blocker the one it waits on.
+	Issue   int      `json:"issue,omitempty"`
+	Blocker int      `json:"blocker,omitempty"`
+	Rows    int      `json:"rows,omitempty"` // window size for "panel.resize"
+	Cols    int      `json:"cols,omitempty"`
+	IDs     []string `json:"ids,omitempty"`    // panels to group ("panel.group"), remove ("panel.ungroup"), close ("panel.close"), or move as a block ("panel.move")
+	Group   string   `json:"group,omitempty"`  // group name to assign ("panel.group"), or the group to rename ("panel.rename")
+	Name    string   `json:"name,omitempty"`   // new name for "panel.rename" (a panel title or a group name)
+	Index   int      `json:"index,omitempty"`  // destination index among the remaining panels for "panel.move"
+	Signal  string   `json:"signal,omitempty"` // signal name to deliver for "panel.signal", e.g. "SIGINT"
+	Count   int      `json:"count,omitempty"`  // absolute visible count for "group.show"; also how many trailing bytes "panel.tail" returns (0 = the Monitor's own attention-sniff window)
+	Git     string   `json:"git,omitempty"`    // git op for "panel.git", e.g. "log", "commit", "worktree-add"; Name carries a branch, Dir a worktree path — or, for a targetless "worktree-add" (empty ID), the repo to branch from, with Path/Args/Profile carrying the agent spec
+	Layout  string   `json:"layout,omitempty"` // layout name for "group.layout": the named split arrangement the group opens with
+	Query   string   `json:"query,omitempty"`  // the search term for "fleet.search": a case-insensitive regexp matched against every panel's retained output
 
 	// Reason is why an agent says it needs a human, carried by "panel.attention".
 	// It is required there rather than optional: a declaration outranks both the
@@ -364,6 +369,7 @@ type Task struct {
 	Attempts int    `json:"attempts,omitempty"` // how many times its prompt has been delivered
 	Spawn    bool   `json:"spawn,omitempty"`    // the task provisions its own agent when none is free
 	Author   string `json:"author,omitempty"`   // agent | user | plugin, or empty when the daemon never said
+	Issue    int    `json:"issue,omitempty"`    // GitHub issue number, if the enqueue named one
 }
 
 // DiffFile is one changed path in the structured "diff" reply: its staged and
@@ -594,7 +600,7 @@ type RemoteInfo struct {
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type       string      `json:"type"`                  // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "ephemeral-exit" (a transient panel's process ended; ID names it, Failed says it exited non-zero — additive and ignorable, like "ping") | "diff" | "gitout" | "search" | "notice" | "config" | "footer" | "usage" | "tasks" | "tail" (the pulled trailing output of one panel: ID names it, Data carries the bytes) | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline) | "remote" (the remote-access status and connection list) | "goodbye" (the server is dropping this connection on purpose; Error says why) | "score" (a score.* verb's reply; Score carries the payload) | "worktree" (a worktree.* verb's reply; Worktree carries the payload)
+	Type       string      `json:"type"`                  // "welcome" | "panels" | "telemetry" | "output" | "stats" | "error" | "ephemeral" | "ephemeral-exit" (a transient panel's process ended; ID names it, Failed says it exited non-zero — additive and ignorable, like "ping") | "diff" | "gitout" | "search" | "notice" | "config" | "footer" | "usage" | "tasks" | "tail" (the pulled trailing output of one panel: ID names it, Data carries the bytes) | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline) | "remote" (the remote-access status and connection list) | "goodbye" (the server is dropping this connection on purpose; Error says why) | "score" (a score.* verb's reply; Score carries the payload) | "worktree" (a worktree.* verb's reply; Worktree carries the payload) | "issues" (issues.board / issues.block reply; Issues carries the board JSON)
 	Version    string      `json:"version,omitempty"`     // protocol version, set on "welcome"
 	ServerVer  string      `json:"server_ver,omitempty"`  // the server's build version, set on "welcome"
 	Enforce    string      `json:"enforce,omitempty"`     // the resource-limit backend in force on the host the panels run on ("cgroup", "none"), set on "welcome" and "config" so a frontend offering to edit limits can say whether they bite
@@ -633,6 +639,11 @@ type ServerMsg struct {
 	// score.list again is an ordinary breaking change under the rule above. Read
 	// it as a record of one decision, not as a standing licence.
 	Score json.RawMessage `json:"score,omitempty"`
+
+	// Issues is the GitHub board snapshot on type "issues" (reply to issues.board
+	// and a refresh after issues.block). Raw JSON of internal/issues.Board so the
+	// shape can grow without a protocol bump; old cockpits ignore the field.
+	Issues json.RawMessage `json:"issues,omitempty"`
 
 	// The merged effective client config, set on "config": defaults <- YAML <-
 	// plugin. The cockpit applies it over its local config on attach and reload, so

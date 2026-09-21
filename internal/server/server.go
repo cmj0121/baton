@@ -2968,6 +2968,8 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 		if cc.self != "" && cmd.ID != "" && cmd.ID != cc.self {
 			return "conductor role: may only raise its own hand"
 		}
+	case "issues.board", "issues.block":
+		return "conductor role: GitHub issues is an operator surface"
 	case "panel.log", "panel.logview":
 		// Logging is an operator surface for the same reason the inbox is, and with an
 		// edge the inbox does not have: panel.log asks the DAEMON to write files, on
@@ -3545,9 +3547,13 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		if cmd.Path != "" {
 			spawn = &task.SpawnSpec{Command: cmd.Path, Profile: cmd.Profile, Args: cmd.Args, Dir: cmd.Dir, CloseOnDone: cmd.Ephemeral}
 		}
-		if _, err := s.enqueueTask(cc, cmd.Prompt, cmd.Group, spawn); err != nil {
+		id, err := s.enqueueTask(cc, cmd.Prompt, cmd.Group, spawn)
+		if err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
+		}
+		if cmd.Issue > 0 {
+			s.setTaskIssue(id, cmd.Issue)
 		}
 		s.broadcastFleet()
 	case "task.list":
@@ -3618,6 +3624,10 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		send(cc, proto.ServerMsg{Type: "worktree", Worktree: worktreeJSON(s.worktreeEntries())})
 	case "worktree.sweep":
 		send(cc, proto.ServerMsg{Type: "worktree", Worktree: worktreeJSON(s.sweepWorktrees())})
+	case "issues.board":
+		s.issuesBoard(cc, cmd.Dir)
+	case "issues.block":
+		s.issuesBlock(cc, cmd.Dir, cmd.Issue, cmd.Blocker)
 	default:
 		send(cc, proto.ServerMsg{Type: "error", Error: fmt.Sprintf("unknown action %q", cmd.Action)})
 	}
@@ -5253,6 +5263,22 @@ func (s *Server) enqueueTask(cc *clientConn, prompt, group string, spawn *task.S
 	return s.enqueueTaskFrom(prompt, group, spawn, s.connAuthor(cc))
 }
 
+// setTaskIssue stamps a GitHub issue number on an already-queued task so the
+// issues overlay can match the card without parsing the prompt.
+func (s *Server) setTaskIssue(id string, n int) {
+	if n <= 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.tasks[id]
+	if t == nil {
+		return
+	}
+	t.Issue = n
+	s.markTaskDirtyLocked(id)
+}
+
 // connAuthor is the task.Author a live connection amounts to: task.AuthorUser
 // when connProvenance reads it as the operator's, task.AuthorAgent otherwise.
 // task.AuthorPlugin never comes from here — a plugin has no connection at all.
@@ -5677,7 +5703,7 @@ func (s *Server) tasksMsg() proto.ServerMsg {
 		wire[i] = proto.Task{
 			ID: t.ID, Prompt: t.Prompt, Status: string(t.Status), Panel: t.Panel,
 			Group: t.Group, Result: t.Result, Priority: t.Priority, Attempts: t.Attempts,
-			Spawn: t.Spawn != nil, Author: string(t.Author),
+			Spawn: t.Spawn != nil, Author: string(t.Author), Issue: t.Issue,
 		}
 	}
 	return proto.ServerMsg{Type: "tasks", Tasks: wire}
