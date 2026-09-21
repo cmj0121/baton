@@ -304,7 +304,7 @@ func foldedModel(t *testing.T) model {
 func TestFoldRowRefusesEveryPanelVerb(t *testing.T) {
 	m := foldedModel(t)
 	for _, act := range []action{actClose, actRespawn, actSignal, actMark, actFavourite,
-		actRename, actUngroup, actAdd, actDispatch, actEnqueue, actDiff, actNewHere} {
+		actRename, actUngroup, actAdd, actDispatch, actEnqueue, actDiff, actNewHere, actIssues} {
 		if !m.refusedOnFoldRow(act) {
 			t.Errorf("action %v should be refused on the fold row", act)
 		}

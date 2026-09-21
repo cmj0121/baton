@@ -494,6 +494,20 @@ func TestOverlaysLeaveNoEnglishBehind(t *testing.T) {
 		}, []string{"git", "status", "on", "branch", "main"}}, // the op and its output
 		{"diff", m.diffView, nil},
 		{"usage", m.usageView, []string{"claude", "code"}}, // the backend that reports quota
+		{"issues", func() string {
+			im := issuesModel()
+			im.lang = i18n.ZhTW
+			im.width, im.height = 160, 48
+			return im.issuesView()
+		}, []string{"github", "backlog", "process", "milestone", "hale", "baton", "feat", "docs", "overlay", "passkey", "cmj"}},
+		{"issues detail", func() string {
+			im := issuesModel()
+			im.lang = i18n.ZhTW
+			im.width, im.height = 160, 48
+			im.issuesCol = 1
+			im.issuesDetail = true
+			return im.issuesView()
+		}, []string{"github", "process", "hale", "baton", "feat", "docs", "overlay", "do", "the"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			allowed := map[string]bool{}
@@ -529,15 +543,17 @@ var msgPair = regexp.MustCompile(`"([a-z][a-z0-9-]*(?:\.[a-z0-9-]+)+)",\s*"((?:[
 // the source reaches all of them, including the ones behind a condition nobody
 // has hit yet.
 //
-// Two keys are exempt, and both are exempt for the reason the catalog gives
-// throughout: they are not the cockpit's words. `git add -A` is a command line,
-// and passkey is what the thing is called in baton's own docs and CLI.
+// A handful of keys are exempt, and they are exempt for the reason the catalog
+// gives throughout: they are not the cockpit's words. `git add -A` is a command
+// line, passkey is what the thing is called in baton's own docs and CLI, and
+// GitHub is the forge's name on the issues overlay header.
 func TestEveryMessageKeyIsTranslated(t *testing.T) {
 	exempt := map[string]bool{
 		"git.desc.stage-all": true, // a git command line, quoted as it is typed
 		"remote.passkey":     true, // baton's own word for it, in the docs and the CLI
 		"rform.passkey":      true, // the same word, as the field asking for one
 		"rform.address.hint": true, // the three address FORMS, which are typed as shown
+		"issues.header.repo": true, // repo · GitHub · branch; GitHub is the forge's name
 	}
 
 	files, err := filepath.Glob("*.go")
