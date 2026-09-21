@@ -70,7 +70,7 @@ func TestDismissSurvivesAStateChangeButNotOutput(t *testing.T) {
 
 	// One byte of output, though, is the panel speaking — a new claim on a human's
 	// attention, and the acknowledgement stops standing.
-	s.routeOutput("a1", []byte("resuming\n"))
+	s.routeOutput("a1", []byte("resuming\n"), 0)
 	if ackedOnWire(s, "a1") {
 		t.Fatal("output should end the acknowledgement")
 	}
@@ -89,7 +89,7 @@ func TestAckSurvivesOutputUnderADeclaration(t *testing.T) {
 		t.Fatal("the ack should stand to begin with")
 	}
 
-	s.routeOutput("a1", []byte("still waiting…\n"))
+	s.routeOutput("a1", []byte("still waiting…\n"), 0)
 
 	if got := stateOf(s, "a1"); got != panel.Attention {
 		t.Fatalf("a declaration survives output, got %v", got)

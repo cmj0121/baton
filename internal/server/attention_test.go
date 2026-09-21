@@ -82,7 +82,7 @@ func TestDeclarationOutranksEveryGuess(t *testing.T) {
 
 	// Nor may resumed output. An agent that prints a spinner while it waits on you
 	// would otherwise lose its raised hand on the very next byte.
-	s.routeOutput("a1", []byte("thinking...\n"))
+	s.routeOutput("a1", []byte("thinking...\n"), 0)
 	if got := stateOf(s, "a1"); got != panel.Attention {
 		t.Fatalf("output must not withdraw a declaration, got %v", got)
 	}
@@ -338,7 +338,7 @@ func TestResolveSuppressesTheTailUntilNewOutput(t *testing.T) {
 	// One byte of output, and the panel is speaking again: whatever its tail says
 	// now deserves to be read on its own terms.
 	clk.add(time.Second)
-	s.routeOutput("a1", []byte("x"))
+	s.routeOutput("a1", []byte("x"), 0)
 	if got := stateOf(s, "a1"); got != panel.Running {
 		t.Fatalf("output should wake an undeclared panel, got %v", got)
 	}

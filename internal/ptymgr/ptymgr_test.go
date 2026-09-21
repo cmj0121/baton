@@ -108,7 +108,7 @@ func TestStreamsOutputAndForwardsInput(t *testing.T) {
 
 	var mu sync.Mutex
 	var got []byte
-	m.OnOutput(func(_ string, data []byte) {
+	m.OnOutput(func(_ string, data []byte, _ int64) {
 		mu.Lock()
 		got = append(got, data...)
 		mu.Unlock()
@@ -212,7 +212,7 @@ func TestStartCmdRunsArgsInDir(t *testing.T) {
 
 	var mu sync.Mutex
 	var got []byte
-	m.OnOutput(func(_ string, data []byte) {
+	m.OnOutput(func(_ string, data []byte, _ int64) {
 		mu.Lock()
 		got = append(got, data...)
 		mu.Unlock()
@@ -263,7 +263,7 @@ func TestStartCmdHandsThePanelTheWholeDaemonEnvironment(t *testing.T) {
 
 	var mu sync.Mutex
 	var got []byte
-	m.OnOutput(func(_ string, data []byte) {
+	m.OnOutput(func(_ string, data []byte, _ int64) {
 		mu.Lock()
 		got = append(got, data...)
 		mu.Unlock()
@@ -730,7 +730,7 @@ func TestStopKeepsThePanelsLastWords(t *testing.T) {
 	var got strings.Builder
 	release, first := make(chan struct{}), make(chan struct{})
 	var once sync.Once
-	m.OnOutput(func(_ string, data []byte) {
+	m.OnOutput(func(_ string, data []byte, _ int64) {
 		mu.Lock()
 		got.Write(data)
 		mu.Unlock()

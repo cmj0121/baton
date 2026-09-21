@@ -65,7 +65,7 @@ func TestToggleLogWritesOutput(t *testing.T) {
 		t.Fatalf("the panel should be logging after the first press")
 	}
 
-	s.routeOutput("p1", []byte("\x1b[32mbuild ok\x1b[0m\r\n"))
+	s.routeOutput("p1", []byte("\x1b[32mbuild ok\x1b[0m\r\n"), 0)
 	if body := logBody(t, s, "p1"); !strings.Contains(body, "build ok\n") {
 		t.Errorf("live output did not reach the log:\n%s", body)
 	} else if strings.Contains(body, "\x1b") {
@@ -79,7 +79,7 @@ func TestToggleLogWritesOutput(t *testing.T) {
 		t.Fatalf("the second press should stop logging")
 	}
 	// Output after the stop goes nowhere, and the file says why it ended.
-	s.routeOutput("p1", []byte("after the stop\n"))
+	s.routeOutput("p1", []byte("after the stop\n"), 0)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
@@ -204,12 +204,12 @@ func TestRespawnAppendsUnderANewSession(t *testing.T) {
 		t.Fatalf("startLogging: %v", err)
 	}
 	path := s.LogPath("p1")
-	s.routeOutput("p1", []byte("first run\n"))
+	s.routeOutput("p1", []byte("first run\n"), 0)
 
 	s.suspendLog("p1", 1)
-	s.routeOutput("p1", []byte("while dead\n")) // the process is gone; nothing to record
+	s.routeOutput("p1", []byte("while dead\n"), 0) // the process is gone; nothing to record
 	s.resumeLog("p1")
-	s.routeOutput("p1", []byte("second run\n"))
+	s.routeOutput("p1", []byte("second run\n"), 0)
 
 	body := logBody(t, s, "p1")
 	if s.LogPath("p1") != path {

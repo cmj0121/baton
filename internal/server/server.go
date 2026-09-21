@@ -1355,7 +1355,7 @@ func protoOutput(id, text string) proto.ServerMsg {
 // The two halves are split because only the first needs the server lock. Waking a
 // quiet panel and demuxing to clients is bookkeeping; writing the log is disk I/O,
 // and the whole fleet's fan-out must never queue behind one panel's disk.
-func (s *Server) routeOutput(id string, data []byte) {
+func (s *Server) routeOutput(id string, data []byte, _ int64) {
 	s.fanOutput(id, data)
 	// The log is written with s.mu RELEASED. It is a file write on the hot output
 	// path, and the whole fleet's fan-out must never queue behind one panel's disk;

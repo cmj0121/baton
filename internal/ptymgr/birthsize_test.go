@@ -26,7 +26,7 @@ func TestPanelIsBornWithAUsableSize(t *testing.T) {
 
 	var mu sync.Mutex
 	var got strings.Builder
-	m.OnOutput(func(_ string, b []byte) {
+	m.OnOutput(func(_ string, b []byte, _ int64) {
 		mu.Lock()
 		defer mu.Unlock()
 		got.Write(b)

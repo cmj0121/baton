@@ -38,7 +38,7 @@ func TestTaskLifecycle(t *testing.T) {
 		t.Fatalf("delivery should move the task to dispatched, got %q", tk.Status)
 	}
 
-	s.routeOutput("p1", []byte("thinking…")) // the agent produces output
+	s.routeOutput("p1", []byte("thinking…"), 0) // the agent produces output
 	if tk := taskFor(s, "p1"); tk.Status != task.Running {
 		t.Fatalf("output should move the task to running, got %q", tk.Status)
 	}
