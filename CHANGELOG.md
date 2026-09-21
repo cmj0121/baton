@@ -4,6 +4,28 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v2.3.0](https://github.com/cmj0121/baton/releases/tag/v2.3.0) — the GitHub board the cockpit could not see
+
+2026-09-21
+
+- **`I` / `C-t I` opens the GitHub board for the selected panel's repo.** Cards sit in BACKLOG, IN PROCESS and PR. Tab
+  and the arrows move between columns that have cards; empty columns are skipped. Space or enter opens detail. The
+  overlay owns the keyboard until esc; its legend stays the last inner row of the box, and the cockpit footer stays the
+  last row of the terminal.
+- **The card under the cursor is the one you dispatch.** `T` dispatches, `t` enqueues with the issue number stamped on
+  the task, `b` binds the worktree, `B` records a blocked-by, `p` jumps to the handling panel. An in-flight task
+  (`dispatched` / `running` plus Issue N) is a live handler and sits in IN PROCESS; a queued brief stays BACKLOG. `T`
+  does not auto-bind.
+- **`git` and `gh` run on the daemon host, as the operator.** A remote attach still sees the repo the fleet sits in. The
+  GitHub remote is a github.com URL, or a remote named GITHUB — origin is never chosen just because it is origin. Both
+  `issues.board` and `issues.block` are an operator surface: a conductor connection is refused.
+- **Milestones filter the board without leaving it.** `m` then Tab / Shift-Tab rotates chips with live column counts;
+  `/` opens a name prompt and Enter selects a unique exact, prefix, or substring match (blank is all). A miss keeps the
+  prompt. `[` `]` still cycle.
+- **`issues.interval` polls while the overlay is open** — default 60s, floor 30s, `0` is `r` only.
+- **The conductor is the documented fleet path.** `n C` plus `$HOME/.baton/CONDUCTOR.md`. `A` still spawns one agent.
+  Dispatch-only: spawn, group, dispatch, enqueue, signal, close — not inbox, not `panel.tail`, not auto-start.
+
 ## [v2.2.2](https://github.com/cmj0121/baton/releases/tag/v2.2.2) — the memory the fleet could not write to
 
 2026-09-17
