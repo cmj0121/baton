@@ -61,6 +61,16 @@ func feedEmu(emu *vt.SafeEmulator, irm *vtirm.Filter, msg proto.ServerMsg) {
 	w, h := emu.Width(), emu.Height()
 	emu.Resize(msg.Cols, msg.Rows)
 	writeEmu(emu, irm, msg.Data)
+	// Shrinking, a real terminal keeps the cursor's row on screen by pushing the
+	// top rows into scrollback; the emulator keeps the TOP rows and drops the rest,
+	// which would cut the prompt off a small split tile. So scroll the content up
+	// first — line feeds from the bottom row, the way the program itself scrolls —
+	// until the cursor's row is the last one the smaller grid keeps, and put the
+	// cursor back on its (now moved) cell.
+	if pos := emu.CursorPosition(); pos.Y >= h {
+		n := pos.Y - h + 1
+		_, _ = fmt.Fprintf(emu, "\x1b[%d;1H%s\x1b[%d;%dH", msg.Rows, strings.Repeat("\n", n), pos.Y-n+1, pos.X+1)
+	}
 	emu.Resize(w, h)
 }
 

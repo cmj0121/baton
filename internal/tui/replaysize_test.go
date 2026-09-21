@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -136,5 +137,43 @@ func TestAttachIsSentBeforeResize(t *testing.T) {
 	want := []string{"panel.attach", "panel.resize", "panel.attach", "panel.resize"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("zoomInto then attachEmu sent %v, want %v", got, want)
+	}
+}
+
+// TestAReplayShrunkToASmallTileKeepsItsBottom covers resizing back DOWN. A
+// split tile is far smaller than the terminal the panel was last painted in,
+// and a real terminal that shrinks keeps the cursor's row on screen by pushing
+// the top rows into scrollback — so the prompt stays in view. Truncating the
+// grid instead keeps the top rows and drops the prompt, leaving a tile that
+// shows the start of an old scroll and nothing the operator is waiting on.
+//
+// The expected screen is written out by hand rather than produced by an
+// emulator, so it cannot share a mistake with the code under test.
+func TestAReplayShrunkToASmallTileKeepsItsBottom(t *testing.T) {
+	c, _ := recordingServer(t)
+	m := baseModel()
+	m.client = c
+	m.mode = modeGroupZoom
+	emu := vt.NewSafeEmulator(40, 10)
+	go zoomReader(emu, nil, "a1")
+	t.Cleanup(func() { closeZoom(emu) })
+	m.groupEmus = map[string]*vt.SafeEmulator{"a1": emu}
+	m.groupIRMs = map[string]*vtirm.Filter{"a1": {}}
+
+	var replay, want []string
+	for i := 1; i <= 59; i++ {
+		replay = append(replay, fmt.Sprintf("row%02d", i))
+	}
+	replay = append(replay, "$ prompt")
+	want = replay[len(replay)-10:] // the bottom ten rows: row51…row59 and the prompt
+
+	nm, _ := m.Update(panelOutputMsg{Type: "output", ID: "a1", Data: []byte(strings.Join(replay, "\r\n")), Rows: 60, Cols: 200})
+	_ = nm.(model)
+
+	if got := emu.String(); got != strings.Join(want, "\n") {
+		t.Errorf("the tile lost the bottom of the replay:\n got %q\nwant %q", got, strings.Join(want, "\n"))
+	}
+	if pos := emu.CursorPosition(); pos.Y != 9 || pos.X != len("$ prompt") {
+		t.Errorf("the cursor sits at %d,%d, want after the prompt at 8,9", pos.X, pos.Y)
 	}
 }
