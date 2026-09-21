@@ -929,11 +929,15 @@ func (m model) handleGroupZoomKey(k tea.Key) (tea.Model, tea.Cmd) {
 		if key == m.bindingKey(actDetach) { // C-t q detaches from the split too
 			return m.runAction(actDetach)
 		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actReload { // C-t R → reload config
-			return m.runAction(actReload)
-		}
-		if b, ok := m.lookupCmd(key); ok && b.act == actSearch { // C-t f → search the focused tile's scrollback
-			return m.openSearch(), nil
+		if b, ok := m.lookupCmd(key); ok {
+			switch b.act {
+			case actReload: // C-t R → reload config
+				return m.runAction(actReload)
+			case actSearch: // C-t f → search the focused tile's scrollback
+				return m.openSearch(), nil
+			case actIssues: // C-t I → the issues overlay for the focused tile
+				return m.openIssues(modeGroupZoom)
+			}
 		}
 		return m, nil
 	}
@@ -1019,6 +1023,8 @@ func (m model) handleGroupZoomKey(k tea.Key) (tea.Model, tea.Cmd) {
 	case keyDiff:
 		// Bare D pops up the work-tree diff of the focused member, like s signals it.
 		return m.runAction(actDiff)
+	case keyIssues:
+		return m.openIssues(modeGroupZoom)
 	case keyRespawn:
 		// Bare r re-runs the focused member if it has exited — the split's per-tile
 		// counterpart to r on a dashboard panel.
@@ -1074,6 +1080,9 @@ func (m model) handleGroupInteractKey(k tea.Key) (tea.Model, tea.Cmd) {
 		}
 		if key == m.bindingKey(actDetach) { // C-t q detaches from interact too
 			return m.runAction(actDetach)
+		}
+		if b, ok := m.lookupCmd(key); ok && b.act == actIssues {
+			return m.openIssues(modeGroupZoom)
 		}
 		return m, nil
 	}

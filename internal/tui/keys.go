@@ -9,6 +9,7 @@ import (
 
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/i18n"
+	"github.com/cmj0121/baton/internal/issues"
 	"github.com/cmj0121/baton/internal/limits"
 )
 
@@ -76,6 +77,7 @@ const (
 	keyDispatch    = "T"   // dispatch a task to the focused agent panel (shift+t; C-t T in a zoom)
 	keyEnqueue     = "t"   // enqueue a task for the scheduler to drain onto a free agent (bare t, the everyday sibling of T; C-t t in a zoom)
 	keyQueue       = "Q"   // open the task-queue manager popup (shift+q; C-t Q in a zoom)
+	keyIssues      = "I"   // GitHub issues overlay for the selected panel's repo (shift+i; C-t I in a zoom)
 	keyUsage       = "v u" // cycle the account usage/cost footer segment
 	keyUsageView   = "v U" // open the account-usage overlay: the quota bars in full, and who is spending them
 	keyKeycast     = "v k" // toggle the key-press readout in the footer
@@ -164,6 +166,7 @@ const (
 	actDispatch
 	actEnqueue
 	actQueue
+	actIssues
 	actHelp
 	actUsageToggle
 	actKeycastToggle
@@ -271,6 +274,7 @@ var bindings = []binding{
 	{"dispatch", keyDispatch, "dispatch a task to the agent panel", actDispatch, "Panels", "dispatch"},
 	{"enqueue", keyEnqueue, "enqueue a task for any free agent (a work item, if selected)", actEnqueue, "Panels", "enqueue"},
 	{"queue", keyQueue, "manage the task queue (list · reorder · cancel · drain)", actQueue, "Panels", "queue"},
+	{"issues", keyIssues, "GitHub issues for this panel's repo (board · dispatch · enqueue)", actIssues, "Panels", "issues"},
 	{"log", keyLogToggle, "start / stop logging the panel's output to a file (prefix)", actLogToggle, "Panels", "log"},
 	{"log-view", keyLogView, "open that log in a temporary panel, following it (prefix)", actLogView, "Panels", "read log"},
 
@@ -353,6 +357,7 @@ type prefs struct {
 	keyTimeout        time.Duration                  // settings.key-timeout: how long a landing key waits for the key after it; 0 = never
 	notify            bool                           // send OSC 9 desktop notifications when panels need a human; default OFF
 	notifyCoalesce    time.Duration                  // how long edges are gathered into one notification; default defaultNotifyCoalesce
+	issuesInterval    time.Duration                  // GitHub poll while the issues overlay is open; 0 = r only
 }
 
 // loadPrefs reads the config file, returning defaults for anything missing or on
@@ -448,6 +453,7 @@ func prefsFromConfig(cfg config.Config) prefs {
 		p.notify = *cfg.Settings.Notify
 	}
 	p.notifyCoalesce = parseCoalesce(cfg.Settings.NotifyCoalesce)
+	p.issuesInterval = issues.RefreshDuration(cfg.Issues.Interval)
 	return p
 }
 
