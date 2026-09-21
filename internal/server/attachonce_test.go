@@ -188,3 +188,16 @@ func TestAnExitForgetsTheReplayOffset(t *testing.T) {
 		t.Error("the exit detached the client but left its replay offset behind")
 	}
 }
+
+// TestAnEmptyAttachForgetsAnOlderOffset covers an attach that replays nothing:
+// the panel has no ring, so there is nothing its live output could double. An
+// offset left over from an earlier attach would still gate that output, so it
+// goes.
+func TestAnEmptyAttachForgetsAnOlderOffset(t *testing.T) {
+	s := sinkless()
+	cc := &clientConn{out: make(chan proto.ServerMsg, 8), attached: map[string]bool{}, replayed: map[string]int64{"p": 1 << 40}}
+	s.attach(cc, "p")
+	if _, ok := cc.replayed["p"]; ok {
+		t.Error("an attach with nothing to replay kept an older replay offset")
+	}
+}

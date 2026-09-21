@@ -1516,6 +1516,8 @@ func (s *Server) attach(cc *clientConn, id string) {
 			cc.replayed = make(map[string]int64)
 		}
 		cc.replayed[id] = r.End
+	} else {
+		delete(cc.replayed, id) // nothing replayed, so nothing live can double it
 	}
 	cc.attached[id] = true
 }
