@@ -65,6 +65,21 @@ type Snapshot struct {
 	// Code session id that spent them. Nil when the source cannot attribute spend.
 	// The values sum to the snapshot's own totals.
 	Sessions map[string]SessionUsage
+
+	// Projects is the same totals by project directory — the raw first path
+	// segment under the reader's root, not a label. A project is a session's,
+	// never a line's: every message a session spent lands under the one directory
+	// its log sits in, however far its cwd wandered. Spend whose log sits outside
+	// the layout is keyed UnattributedProject, so the values sum to the totals.
+	// Nil when the source cannot attribute spend.
+	//
+	// The keys stay raw so that a label is never a property of one scan: the
+	// caller names every scan's directories together with LabelProjects.
+	Projects map[string]SessionUsage
+
+	// ProjectHints is what the scan learned of each directory's path, keyed like
+	// Projects (UnattributedProject has none). It is LabelProjects' input.
+	ProjectHints map[string]ProjectHint
 }
 
 // TotalTokens is every token the snapshot counted, across the four buckets.

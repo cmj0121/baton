@@ -351,19 +351,20 @@ func TestLocalFetchForkedSessionNotDoubleCounted(t *testing.T) {
 	}
 }
 
-// TestSessionOf: a session's own transcript and its subagents' transcripts both
-// resolve to the session id, and a path outside the layout resolves to "".
-func TestSessionOf(t *testing.T) {
+// TestOriginOf: a session's own transcript and its subagents' transcripts both
+// resolve to the session id and to the project directory above it, and a path
+// outside the layout resolves to "" for both.
+func TestOriginOf(t *testing.T) {
 	root := filepath.Join("home", "projects")
-	cases := map[string]string{
-		filepath.Join(root, "proj", "sess.jsonl"):                           "sess",
-		filepath.Join(root, "proj", "sess", "subagents", "agent-x.jsonl"):   "sess",
-		filepath.Join(root, "proj", "sess", "tool-results", "t", "x.jsonl"): "sess",
-		filepath.Join(root, "loose.jsonl"):                                  "",
+	cases := map[string][2]string{
+		filepath.Join(root, "proj", "sess.jsonl"):                           {"proj", "sess"},
+		filepath.Join(root, "proj", "sess", "subagents", "agent-x.jsonl"):   {"proj", "sess"},
+		filepath.Join(root, "proj", "sess", "tool-results", "t", "x.jsonl"): {"proj", "sess"},
+		filepath.Join(root, "loose.jsonl"):                                  {"", ""},
 	}
 	for path, want := range cases {
-		if got := sessionOf(root, path); got != want {
-			t.Errorf("sessionOf(%q) = %q, want %q", path, got, want)
+		if p, s := originOf(root, path); p != want[0] || s != want[1] {
+			t.Errorf("originOf(%q) = %q, %q, want %q, %q", path, p, s, want[0], want[1])
 		}
 	}
 }

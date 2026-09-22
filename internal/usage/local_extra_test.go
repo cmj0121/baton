@@ -40,7 +40,7 @@ func TestLocalFetchContextCancelled(t *testing.T) {
 // untouched (the file is skipped, not fatal).
 func TestScanTranscriptOpenError(t *testing.T) {
 	sc := newScan(fixedNow, fixedNow)
-	sc.transcript(filepath.Join(t.TempDir(), "does-not-exist.jsonl"), "sess1")
+	sc.transcript(filepath.Join(t.TempDir(), "does-not-exist.jsonl"), "proj", "sess1")
 	if !sc.snapshot(sc.cutoff).Empty() {
 		t.Fatalf("open error should leave snapshot empty: %+v", sc.snapshot(sc.cutoff))
 	}
@@ -50,7 +50,7 @@ func TestScanTranscriptOpenError(t *testing.T) {
 // valid JSON is ignored without panicking or mutating the snapshot.
 func TestFoldEntryBadJSON(t *testing.T) {
 	sc := newScan(fixedNow, fixedNow)
-	sc.fold([]byte(`{ this is not "usage" json `), "sess1")
+	sc.fold([]byte(`{ this is not "usage" json `), "proj", "sess1")
 	if !sc.snapshot(sc.cutoff).Empty() {
 		t.Fatalf("bad JSON should be ignored: %+v", sc.snapshot(sc.cutoff))
 	}
@@ -61,7 +61,7 @@ func TestFoldEntryBadJSON(t *testing.T) {
 func TestFoldEntryNilUsage(t *testing.T) {
 	sc := newScan(fixedNow, fixedNow)
 	line := `{"type":"assistant","timestamp":"2026-07-08T09:00:00Z","message":{"id":"m","usage":null}}`
-	sc.fold([]byte(line), "sess1")
+	sc.fold([]byte(line), "proj", "sess1")
 	if !sc.snapshot(sc.cutoff).Empty() {
 		t.Fatalf("nil usage should be ignored: %+v", sc.snapshot(sc.cutoff))
 	}
@@ -72,7 +72,7 @@ func TestFoldEntryNilUsage(t *testing.T) {
 func TestFoldEntryBadTimestamp(t *testing.T) {
 	sc := newScan(fixedNow, fixedNow)
 	line := `{"type":"assistant","timestamp":"not-a-time","message":{"id":"m","model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":50}}}`
-	sc.fold([]byte(line), "sess1")
+	sc.fold([]byte(line), "proj", "sess1")
 	if !sc.snapshot(sc.cutoff).Empty() {
 		t.Fatalf("bad timestamp should be ignored: %+v", sc.snapshot(sc.cutoff))
 	}
@@ -85,7 +85,7 @@ func TestFoldEntryNoCacheCreationTier(t *testing.T) {
 	sc := newScan(startOfDay(fixedNow), fixedNow)
 	ts := fixedNow.Add(-time.Hour).Format(time.RFC3339)
 	line := `{"type":"assistant","requestId":"r","timestamp":"` + ts + `","message":{"id":"m","model":"claude-opus-4-8","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":400}}}`
-	sc.fold([]byte(line), "sess1")
+	sc.fold([]byte(line), "proj", "sess1")
 
 	if sc.snapshot(sc.cutoff).CacheWrite != 400 {
 		t.Fatalf("CacheWrite = %d, want 400", sc.snapshot(sc.cutoff).CacheWrite)
@@ -103,8 +103,8 @@ func TestFoldEntryNoDedupKeys(t *testing.T) {
 	sc := newScan(startOfDay(fixedNow), fixedNow)
 	ts := fixedNow.Add(-time.Hour).Format(time.RFC3339)
 	line := `{"type":"assistant","timestamp":"` + ts + `","message":{"model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":5}}}`
-	sc.fold([]byte(line), "sess1")
-	sc.fold([]byte(line), "sess1")
+	sc.fold([]byte(line), "proj", "sess1")
+	sc.fold([]byte(line), "proj", "sess1")
 
 	if sc.snapshot(sc.cutoff).Input != 20 || sc.snapshot(sc.cutoff).Output != 10 {
 		t.Fatalf("keyless lines should each count: in=%d out=%d, want 20/10", sc.snapshot(sc.cutoff).Input, sc.snapshot(sc.cutoff).Output)
@@ -170,8 +170,8 @@ func TestKeepRefusesAMessageBelowTheScanFloor(t *testing.T) {
 			`","message":{"id":"` + id + `","model":"claude-sonnet-4","usage":{"input_tokens":` +
 			strconv.FormatInt(in, 10) + `,"output_tokens":0}}}`
 	}
-	sc.fold([]byte(line(stale, "old", 500)), "sess1")
-	sc.fold([]byte(line(fresh, "new", 7)), "sess1")
+	sc.fold([]byte(line(stale, "old", 500)), "proj", "sess1")
+	sc.fold([]byte(line(fresh, "new", 7)), "proj", "sess1")
 
 	if len(sc.entries) != 1 {
 		t.Fatalf("kept %d entries, want 1; a message below the scan floor was buffered", len(sc.entries))
