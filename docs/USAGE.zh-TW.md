@@ -396,6 +396,37 @@ Baton 以座艙自己的時鐘倒數它——每秒一次,不是每次輪詢一�
 選取一個**群組**時會把成員全部加總——「是誰在燒」這個問題,對一個工作項目問和對單一
 面板問一樣自然。
 
+## 開場成本 —— `SYS`
+
+當 cockpit 指著單一個 Claude Code 面板時,頁尾會在主機的 `CPU` 與 `MEM` 後面接上該面板的
+開場成本:
+
+```text
+ CPU 18%  MEM 9.2/16G  SYS 44.0K
+```
+
+它是這個面板的 session 在對話開始之前就付掉的 token:system prompt、tool 定義,以及
+Claude Code 塞進第一個 turn 的所有東西——`CLAUDE.md`、auto-memory 的 `MEMORY.md` 索引、
+skill 與 agent 清單、hook 注入的內容。session 的每一個 turn 都會再帶一次,所以這就是你
+可以靠修改那些檔案來削減的那部分 context。
+
+它是讀出來的,不是估出來的。Baton 取 session 的第一個 assistant turn——未快取、寫入快取、
+讀取快取三種 input 加總,也就是 API 實際收到的量——再扣掉在那之前打進去的 prompt,因為
+派發的 brief 是以打字輸入的方式送達,不算開銷。Claude Code 把載入的 context 記成各自獨立
+的行,所以唯一的估計是打進去的 prompt(約四個 ASCII 字元或一個 CJK 字元算一個 token),
+誤差不會超過它本身的大小。
+
+- 每個 session 只讀一次。system prompt 在 session 開始時就組好了;session 進行中修改
+  `MEMORY.md`,改變的是下一個 session 的數字,不是這一個——畫面上的就是面板現在正在付的。
+- 第一個 turn 之前是空白。新開的面板在第一次回覆之前不顯示 `SYS`,數字會在下一次用量
+  輪詢時出現(最多 30 秒)。
+- 重新執行就重新算。`r` 與 `n r` 會開新的 session,所以舊數字在下一次用量輪詢時撤下,
+  新的等它第一個 turn 落地再讀。
+- 不追 `/clear` 與 `/resume`。它們在 Claude Code 內部切換 session,Baton 看不到;
+  數字會停留在 Baton 啟動的那個 session。
+- 只看單一面板。shell、其他 agent CLI、選取中的群組都不顯示:群組裡每個成員各付各的
+  開場成本,加總起來不對應任何一份可以削減的 prompt。
+
 ## Baton 讀得到哪些 agent 的用量
 
 | Agent      | 用量來源                                                                | 成本                       |

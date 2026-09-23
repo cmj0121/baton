@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -375,6 +376,13 @@ type Server struct {
 	// slot with no live process, so carrying its old ids across a daemon restart
 	// would attribute a window's spend to something that is not running.
 	sessions map[string][]string
+
+	// opening holds each session's opening cost once it has been read, keyed by
+	// session id — the figure never changes for a session, so it is read once and
+	// kept while the session is some panel's current one (see refreshOpening).
+	// openingRead reads one; nil reads Claude Code's own transcripts. Guarded by mu.
+	opening     map[string]int64
+	openingRead func(session string) (int64, bool)
 
 	// Restart supervision. restart is the fleet-wide policy and agentRestart the
 	// per-profile ones layered over it (see Settings); restarts holds the live
@@ -1664,6 +1672,7 @@ func (s *Server) refreshUsage() {
 	// holding mu across it would stall every panel event for the length of a walk.
 	// The week scan, when one is due, is the same and larger.
 	vendors, reports := s.vendorUsage(ctx)
+	s.refreshOpening()
 	var plans map[string]weekPlan
 	var due bool
 	if reports != nil {
@@ -1709,7 +1718,7 @@ func (s *Server) publishUsage(text string, snap usage.Snapshot, hold bool,
 	if hold {
 		text, info = s.usageText, attachLimits(s.usageInfo, s.limitsInfo)
 	}
-	info = attachProjects(attachVendors(info, vendors), projects)
+	info = attachOpening(attachProjects(attachVendors(info, vendors), projects), s.openingLocked())
 	changed := s.usageText != text || !sameUsageInfo(s.usageInfo, info)
 	s.usageText, s.usageInfo = text, info
 	s.mu.Unlock()
@@ -1936,7 +1945,7 @@ func sameUsageInfo(a, b *proto.UsageInfo) bool {
 			return false
 		}
 	}
-	if !sameVendors(a.Vendors, b.Vendors) || !slices.Equal(a.Projects, b.Projects) {
+	if !sameVendors(a.Vendors, b.Vendors) || !slices.Equal(a.Projects, b.Projects) || !maps.Equal(a.Opening, b.Opening) {
 		return false
 	}
 	return sameLimits(a.Limits, b.Limits)

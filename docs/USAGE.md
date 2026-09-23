@@ -464,6 +464,41 @@ footer:
 Selecting a **group** rolls up every member, since a work item is as natural a
 thing to ask "who is burning it" about as a single panel.
 
+## Opening cost — `SYS`
+
+When the cockpit is pointed at one Claude Code panel, the footer follows the host's
+`CPU` and `MEM` with that panel's **opening cost**:
+
+```text
+ CPU 18%  MEM 9.2/16G  SYS 44.0K
+```
+
+It is what the panel's session pays before the conversation says anything: the
+system prompt, the tool definitions, and everything Claude Code loads into the
+first turn — `CLAUDE.md`, the auto-memory `MEMORY.md` index, the skill and agent
+listings, hook context. Every turn of the session carries it again, so it is the
+part of the context you trim by editing those files.
+
+It is **read, not estimated**. Baton takes the session's first assistant turn —
+uncached, cache-written and cache-read input together, exactly what the API was
+sent — and subtracts the prompt that was typed before it, since a dispatched brief
+arrives as typed input and is not overhead. Claude Code records the loaded context
+as lines of their own, so the typed prompt is the one estimate (about four ASCII
+characters or one CJK character a token), and its error is bounded by its size.
+
+- **Read once per session.** The system prompt is assembled when the session
+  starts. Editing `MEMORY.md` mid-session changes the _next_ session's figure, not
+  this one's — the one shown is what the panel is paying now.
+- **Blank until the first turn.** A fresh panel shows no `SYS` until its first
+  reply, and the figure arrives on the next usage poll (up to 30s).
+- **A re-run starts over.** `r` and `n r` launch a new session, so the old figure
+  is dropped on the next usage poll and the new one read when its first turn lands.
+- **`/clear` and `/resume` are not followed.** They switch sessions inside Claude
+  Code, behind baton's back; the figure stays with the session baton launched.
+- **One panel only.** A shell, another agent CLI, and a selected group show
+  nothing: each member of a group pays its own opening, and their sum is no prompt
+  anyone can trim.
+
 ## Which agents baton can account for
 
 | Agent      | Usage source                                                                          | Cost                             |
