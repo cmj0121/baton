@@ -175,6 +175,8 @@ dashboard row — the work-item verbs — is refused in a zoom with the way forw
 | **Inbox**       | ·      | ·       | `i`                   | step into the panel that wants you                     |
 |                 | ·      | ·       | `-`                   | snooze the row                                         |
 | **Queue**       | ·      | ·       | `shift+↑` / `↓`       | promote / demote the task                              |
+| **Usage**       | ·      | ·       | `tab` / `S-tab`       | next / previous tab: Account, Session, Week            |
+|                 | ·      | ·       | `u`                   | cycle the footer segment                               |
 | **Issues**      | ·      | ·       | `h` / `l` / `←` / `→` | select the status column (empty columns are skipped)   |
 |                 | ·      | ·       | `j` / `k` / `↑` / `↓` | select the card (the column scrolls)                   |
 |                 | ·      | ·       | `m` then `tab`        | pick a milestone; `S-tab` back; live column counts     |

@@ -49,11 +49,15 @@ the tokens, not a bill. See [What it is — and is not](#what-it-is--and-is-not)
 
 ## The quota overlay
 
-`v U` opens the account's standing in full: every window the source reported, the
-extra-usage balance if you have one, and the panels spending them.
+`v U` opens the account's standing in full. It has three tabs — **Account**,
+**Session** and **Week**. Account, the first, is every window the source
+reported, the extra-usage balance if you have one, and the panels spending them.
+The other two are the same spend by project; see
+[The project tabs](#the-project-tabs).
 
 ```text
  A C C O U N T   U S A G E   statusline · 12s ago
+ Account · Session · Week
 
  Session (5h)     ▓▓▓▓▓▓▓▓▓▓░░░░░░   resets 2:14:31
  Week (all)       ▓▓▓▓▓░░░░░░░░░░░   resets 3d4h
@@ -71,6 +75,8 @@ extra-usage balance if you have one, and the panels spending them.
  · gemini       ---
  · aider        ---
  · opencode     ---
+
+ tab switch  ·  u cycle footer  ·  esc close
 ```
 
 The roster's last column is what the overlay exists for. A panel's **share of the
@@ -170,6 +176,139 @@ gap in baton's reporting. An agent nobody installed is not a gap.
 
 An older daemon sends no vendor list at all, and the section is then omitted
 rather than drawn empty.
+
+### The project tabs
+
+The account page answers "which panel do I stop". The other two tabs answer a
+different question — **what has this work cost** — as spend by project, one scope
+each:
+
+| Tab       | Covers                                                                                   |
+| --------- | ---------------------------------------------------------------------------------------- |
+| `Session` | the current usage window — the same window the roll's `spent` column covers              |
+| `Week`    | the vendor's own 7-day quota week when baton knows where it starts, else the last 7 days |
+
+Press **`tab`** for the next tab and **`shift+tab`** for the previous one; both
+wrap around. The overlay reopens on the tab you left it on for as long as the
+cockpit runs. The project tabs work even before there is a quota reading, because
+these figures are baton's own.
+
+```text
+ A C C O U N T   U S A G E   statusline · 12s ago
+ Account · Session · Week
+
+   week: since 09-21 14:00
+   Project                                           share  tokens       cost
+ ▸ ~/src/baton                     ▓▓▓▓▓▓▓▓▓▓▓▓░░░░    74%   48.2M     $96.10
+     claude                                            62%   40.4M     $81.00
+     grok                                              12%    7.8M     $15.10
+ ▸ ~/src/zerg                      ▓▓▓░░░░░░░░░░░░░    20%   12.9M     $25.60
+     claude                                            19%   12.5M     $24.80
+     grok                                               1%  400.0K      $0.80
+ ▸ ~/src/notes                     ▓░░░░░░░░░░░░░░░     2%    1.6M      $3.20
+     claude                                             2%    1.6M      $3.20
+   (temporary)                     ▓░░░░░░░░░░░░░░░     3%    2.1M      $4.20
+     claude                                             3%    2.1M      $4.20
+
+ tab switch  ·  u cycle footer  ·  esc close
+```
+
+**A project is the directory a session was launched in.** Each agent CLI files a
+session's log under a directory named after where it started, and baton charges
+the **whole session** to that directory. It does not follow the session's working
+directory line by line: one session routinely wanders into worktrees and
+subdirectories, and charging each line where it ran would split one piece of
+work across a dozen rows.
+
+Each project row is the total across agents, with a bar for its **share of the
+tab's tokens**, the share as a percentage, the tokens, and the cost. The agents
+that spent it are indented beneath, with their share of the same total but no bar
+of their own. Rows are sorted by the open tab's tokens, so a project that ate the
+week can sit low on the Session tab while it is idle this window. A project or
+agent that spent nothing in the tab's scope is left out rather than drawn as a
+zero row. A cost baton could not price is a `-`, never `$0.00`, and a share too
+small to round to one percent reads `<1%`.
+
+The line above the header says what the tab measures:
+
+- **Session** — `this window · resets 2:14:31`, the countdown to the window's
+  reset.
+- **Week** — `week: since 09-21 14:00` for a quota week (in the cockpit's time
+  zone), `week: last 7 days` for a rolling one. When the agents in the table
+  disagree it says it per agent — `week: claude since 09-21 14:00 · grok last 7
+days` — rather than pretending to one week.
+
+A quota week starts at the vendor's stated weekly reset minus seven days:
+Claude's comes from the account's seven-day limit (see
+[Quota bars](#quota-bars--usagelimits)), grok's from its weekly credit pool when
+the grok CLI is signed in. The daemon remembers the last reset it saw and steps
+it forward a week at a time, so a failed limits read does not quietly turn the
+week into a rolling one; only an agent that has never stated a reset since the
+daemon started gets the last seven days.
+
+When the popup is narrow, the name column shrinks first, then the bar narrows and
+goes, then the cost column goes. A figure is never cut mid-number: one that still
+does not fit is dropped whole, with an ellipsis where it was. A long path keeps
+its tail, where worktrees differ, and paths under your home directory are shown
+as `~/…`. Rows past what the popup holds are counted in a `+N more` line.
+
+#### How projects are folded
+
+Most of the directories an agent CLI keeps logs under are not a main checkout.
+They are worktrees and scratch clones, and listed as they are the table would be
+mostly noise about where a session happened to run. So baton folds each
+directory onto the checkout it belongs to, by string rules alone — no git, so a
+worktree deleted long ago still folds:
+
+| Directory                                              | Folds into                                                     |
+| ------------------------------------------------------ | -------------------------------------------------------------- |
+| `<repo>/.claude/worktrees/<x>[/…]`                     | `<repo>` (Claude Code's worktrees)                             |
+| `<repo>-worktrees/<leaf>[/…]`                          | `<repo>` (baton's default git-menu worktree layout)            |
+| `~/.grok/worktrees/<name>` or `$GROK_HOME/worktrees/…` | the project whose last two segments joined by `-` are `<name>` |
+| anything under a temp root (`/tmp`, `/var/folders`, …) | one `(temporary)` row                                          |
+
+A grok worktree that matches no project, or matches two, stays on its own as
+`grok worktree <name>`. The grok rule resolves against every agent's projects,
+so a grok worktree of a repo only Claude has worked in still joins it.
+
+A label in parentheses is a bucket, not a project. It is drawn muted, without a
+mark, and listed after every real project whatever it weighs:
+
+| Bucket               | What it holds                                                                                  |
+| -------------------- | ---------------------------------------------------------------------------------------------- |
+| `(temporary)`        | every session launched under a temp root, in one row                                           |
+| `(unresolved) <dir>` | a Claude project directory no log stated a path for; its raw directory name follows the marker |
+| `(unattributed)`     | spend whose log sits outside the reader's `<root>/<project>/<session>` layout                  |
+| `(other)`            | per agent, everything past the top 20 projects                                                 |
+
+`(unresolved)` exists because Claude's directory names have lost every `/` and
+`.` of the path they encode; baton names the directory rather than guess a path
+you might not have. `(unattributed)` is kept rather than dropped so the projects
+still add up to the totals. The daemon sends the **top 20 projects by week
+tokens**, every agent of each kept project included, and sums the rest into one
+`(other)` row per agent.
+
+**Not folded**, in this version:
+
+- a worktree directory you configured yourself (`panel.worktree-dir`) — only the
+  default `<repo>-worktrees/` layout folds;
+- other tools' worktree layouts (for example `…/worktrees/<tool>/pr-123`), where
+  no repository path can be recovered from the directory name.
+
+Those show as their own rows, under their own paths.
+
+**Cadence.** The Session figures are rescanned on every usage tick
+(`usage.interval`, 30 seconds by default), alongside the footer. A week of logs is
+several times a window's, so the Week figures are rescanned **every 5 minutes**
+instead — and also on the first poll, when a remembered reset passes, and when an
+agent states its first reset. The quota bars are sent before a due week scan
+starts, so a slow scan never holds them back. A week scan that fails keeps the
+figures it had.
+
+**After upgrading, restart the daemon** (`C-t S`, which ends the running fleet); a
+config reload (`C-t R`) is not enough. The projects are computed by the daemon,
+and an older one sends none: the project tabs then read `no per-project figures — an older daemon, or nothing spent yet`
+instead of drawing an empty table.
 
 ## Data sources
 
