@@ -4,6 +4,18 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v2.4.1](https://github.com/cmj0121/baton/releases/tag/v2.4.1) — what an agent pays before it says a word
+
+2026-09-23
+
+- **`SYS` in the footer.** When the cockpit points at one Claude Code panel, the footer shows that panel's opening
+  cost after `CPU` and `MEM` (`SYS 44.0K`): the system prompt, tools, `CLAUDE.md`, the `MEMORY.md` index and the
+  listings its session pays for on every turn. Shells, other agents and a selected group show nothing.
+- **Measured, not estimated.** It is the first assistant turn's input less the typed prompt before it, so a dispatched
+  brief does not inflate it; the typed prompt is the only estimate.
+- **Read once per session.** A memory edit shows up in the next session's figure; a re-run (`r`, `n r`) reads anew.
+  A `/clear` or `/resume` inside the panel is not followed yet.
+
 ## [v2.4.0](https://github.com/cmj0121/baton/releases/tag/v2.4.0) — where the week's tokens went
 
 2026-09-23
