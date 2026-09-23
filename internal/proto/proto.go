@@ -480,6 +480,14 @@ type UsageInfo struct {
 	// list off. A current daemon with the list on and nothing attributed sends nil
 	// too rather than an empty list, so a client need not tell the two apart.
 	Projects []ProjectUsage `json:"projects,omitempty"`
+
+	// Opening is each agent panel's opening cost, keyed by panel id: the tokens its
+	// current session paid before the conversation said anything — the system
+	// prompt, the tools, and the CLAUDE.md, memory index and listings Claude Code
+	// loads into the first turn. It is read once per session, off that session's
+	// first assistant turn, so a panel is absent until that turn lands and again
+	// from the moment it is relaunched onto a new session.
+	Opening map[string]int64 `json:"opening,omitempty"`
 }
 
 // ProjectOther is the Project of the row that sums, per vendor, every project
