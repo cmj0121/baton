@@ -506,6 +506,8 @@ func joinDot(a, b string) string {
 // daemon renders the account total in.
 func humanTokens(n int64) string {
 	switch {
+	case n >= 1_000_000_000:
+		return fmt.Sprintf("%.1fB tok", float64(n)/1e9)
 	case n >= 1_000_000:
 		return fmt.Sprintf("%.1fM tok", float64(n)/1e6)
 	case n >= 1_000:
