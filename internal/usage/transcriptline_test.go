@@ -36,7 +36,7 @@ func TestOversizedTranscriptLineIsDropped(t *testing.T) {
 	)
 
 	sc := newScan(startOfDay(fixedNow), fixedNow)
-	sc.transcript(filepath.Join(root, "projects", "proj", "sess.jsonl"), "sess")
+	sc.transcript(filepath.Join(root, "projects", "proj", "sess.jsonl"), "proj", "sess")
 
 	snap := sc.snapshot(sc.cutoff)
 	if snap.Input != 200 {
@@ -58,7 +58,7 @@ func TestLargeTranscriptLineIsRead(t *testing.T) {
 	)
 
 	sc := newScan(startOfDay(fixedNow), fixedNow)
-	sc.transcript(filepath.Join(root, "projects", "proj", "sess.jsonl"), "sess")
+	sc.transcript(filepath.Join(root, "projects", "proj", "sess.jsonl"), "proj", "sess")
 
 	if snap := sc.snapshot(sc.cutoff); snap.Input != 7 {
 		t.Fatalf("input = %d, want 7 — an 8 MiB line is a pasted image, not an attack", snap.Input)
@@ -81,7 +81,7 @@ func TestOversizedTranscriptLineAtEOF(t *testing.T) {
 	)
 
 	sc := newScan(startOfDay(fixedNow), fixedNow)
-	sc.transcript(filepath.Join(root, "projects", "proj", "sess.jsonl"), "sess")
+	sc.transcript(filepath.Join(root, "projects", "proj", "sess.jsonl"), "proj", "sess")
 
 	if snap := sc.snapshot(sc.cutoff); snap.Input != 100 {
 		t.Fatalf("input = %d, want 100", snap.Input)

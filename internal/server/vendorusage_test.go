@@ -14,7 +14,7 @@ import (
 func TestVendorUsageIsOffWithoutAWindow(t *testing.T) {
 	s := &Server{}
 	s.agents = []proto.AgentBackend{{Name: "claude", Command: "claude"}}
-	if got := s.vendorUsage(context.Background()); got != nil {
+	if got, _ := s.vendorUsage(context.Background()); got != nil {
 		t.Errorf("a server with no usage window produced %d vendor rows, want none", len(got))
 	}
 }
@@ -24,7 +24,7 @@ func TestVendorUsageIsOffWithoutAWindow(t *testing.T) {
 // list as a scan that found nothing, and only one of those is true here.
 func TestVendorUsageSaysNothingBeforeDetection(t *testing.T) {
 	s := &Server{usageWindow: time.Hour}
-	if got := s.vendorUsage(context.Background()); got != nil {
+	if got, _ := s.vendorUsage(context.Background()); got != nil {
 		t.Errorf("a server that has not detected produced %d vendor rows, want nil", len(got))
 	}
 }
@@ -37,7 +37,7 @@ func TestEveryDetectedBackendGetsAnHonestRow(t *testing.T) {
 		{Name: "codex", Command: "codex"},                  // installed, no reader
 		{Name: "gemini", Command: "gemini", Missing: true}, // not installed
 	}
-	rows := s.vendorUsage(context.Background())
+	rows, _ := s.vendorUsage(context.Background())
 	if len(rows) != 2 {
 		t.Fatalf("got %d rows for 2 backends", len(rows))
 	}
@@ -130,7 +130,8 @@ func TestGrokWeekQuotaLandsOnlyOnAGrokReading(t *testing.T) {
 		{Name: "gemini", Command: "gemini", Missing: true},
 	}
 	by := map[string]proto.VendorUsage{}
-	for _, r := range s.vendorUsage(context.Background()) {
+	rows, _ := s.vendorUsage(context.Background())
+	for _, r := range rows {
 		by[r.Vendor] = r
 	}
 	grok := by["grok"]

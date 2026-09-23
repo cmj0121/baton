@@ -342,6 +342,10 @@ type Server struct {
 	// loops start.
 	grokWeek func(context.Context) (*usage.Window, bool)
 
+	// week is the per-project week scan's state (projectusage.go). It is owned by
+	// the usage loop's goroutine and is deliberately not under mu.
+	week weekUsage
+
 	// Remote access (remote.go). remoteOn and remoteKey are the live switch and
 	// the in-memory 8-character passkey — never persisted, so a restart always
 	// means a new one. remoteCfg is the last value the CONFIG asked for, kept so
@@ -1658,14 +1662,54 @@ func (s *Server) refreshUsage() {
 	// The per-vendor sweep runs OUTSIDE the lock: it scans other vendors' session
 	// directories, which is disk work of the same order as the main provider's, and
 	// holding mu across it would stall every panel event for the length of a walk.
-	vendors := s.vendorUsage(ctx)
+	// The week scan, when one is due, is the same and larger.
+	vendors, reports := s.vendorUsage(ctx)
+	var plans map[string]weekPlan
+	var due bool
+	if reports != nil {
+		s.mu.Lock()
+		lim := s.limitsInfo
+		s.mu.Unlock()
+		plans, due = s.planWeek(reports, lim)
+	}
+
+	// The tick's fresh readings go out FIRST, beside the week figures already
+	// held, and only then is a due week scanned. The scan can take two ticks per
+	// vendor; run ahead of the broadcast, it held a new quota reading — the one
+	// figure that says whether the next turn is refused — back by that long. A
+	// held week figure stays paired with its own WeekSince, so the first send is
+	// consistent, only older; the second goes out only if the scan moved it.
+	s.publishUsage(text, snap, hold, vendors, reports, s.heldWeek(plans))
+	if due {
+		s.scanWeek(plans)
+		s.publishUsage(text, snap, hold, vendors, reports, s.heldWeek(plans))
+	}
+}
+
+// publishUsage builds the usage payload from this tick's readings and the given
+// week figures, holds it, and broadcasts it when it moved. The vendor rows are
+// copied before the week fields are set on them: a payload already broadcast
+// shares its slices with the caller's, and must not change in a client's hands.
+func (s *Server) publishUsage(text string, snap usage.Snapshot, hold bool,
+	vendors []proto.VendorUsage, reports []usage.VendorReport, weeks map[string]weekFigure) {
+	var projects []proto.ProjectUsage
+	if reports != nil {
+		vendors = slices.Clone(vendors)
+		for i := range vendors {
+			if f, ok := weeks[vendors[i].Vendor]; ok {
+				vendors[i].WeekSince = f.since.UTC().Format(time.RFC3339)
+				vendors[i].WeekQuota = f.quota
+			}
+		}
+		projects = projectRows(projectScopes(reports, weeks), maxProjectRows)
+	}
 
 	s.mu.Lock()
 	info := s.usageInfoLocked(snap)
 	if hold {
 		text, info = s.usageText, attachLimits(s.usageInfo, s.limitsInfo)
 	}
-	info = attachVendors(info, vendors)
+	info = attachProjects(attachVendors(info, vendors), projects)
 	changed := s.usageText != text || !sameUsageInfo(s.usageInfo, info)
 	s.usageText, s.usageInfo = text, info
 	s.mu.Unlock()
@@ -1740,22 +1784,24 @@ func limitWindow(w *usage.Window) *proto.LimitWindow {
 // detected: a reading where baton has a reader, and a stated reason where it does
 // not. It returns nil when the feature is off or nothing has been detected yet,
 // which is the wire's "the daemon never said" — distinct from an empty list.
+// The reports the rows were made from ride along, for the per-project figures.
 //
 // Callers must NOT hold mu: this walks vendor session directories.
-func (s *Server) vendorUsage(ctx context.Context) []proto.VendorUsage {
+func (s *Server) vendorUsage(ctx context.Context) ([]proto.VendorUsage, []usage.VendorReport) {
 	if s.usageWindow <= 0 {
-		return nil
+		return nil, nil
 	}
 	s.mu.Lock()
 	backends := make([]proto.AgentBackend, len(s.agents))
 	copy(backends, s.agents)
 	s.mu.Unlock()
 	if len(backends) == 0 {
-		return nil // no detection has happened yet; saying "no vendors" would be a claim
+		return nil, nil // no detection has happened yet; saying "no vendors" would be a claim
 	}
 
 	now := time.Now()
 	out := make([]proto.VendorUsage, 0, len(backends))
+	reports := make([]usage.VendorReport, 0, len(backends))
 	for _, b := range backends {
 		r := usage.Report(ctx, usage.VendorCandidate{Name: b.Name, Missing: b.Missing}, s.usageWindow, now)
 		if r.Vendor == "grok" && r.State == usage.VendorReading && s.grokWeek != nil {
@@ -1779,8 +1825,9 @@ func (s *Server) vendorUsage(ctx context.Context) []proto.VendorUsage {
 			v.Windows = append(v.Windows, vw)
 		}
 		out = append(out, v)
+		reports = append(reports, r)
 	}
-	return out
+	return out, reports
 }
 
 // attachVendors returns info carrying the per-vendor list, without mutating what
@@ -1889,7 +1936,7 @@ func sameUsageInfo(a, b *proto.UsageInfo) bool {
 			return false
 		}
 	}
-	if !sameVendors(a.Vendors, b.Vendors) {
+	if !sameVendors(a.Vendors, b.Vendors) || !slices.Equal(a.Projects, b.Projects) {
 		return false
 	}
 	return sameLimits(a.Limits, b.Limits)
@@ -1910,7 +1957,7 @@ func sameVendors(a, b []proto.VendorUsage) bool {
 		x, y := a[i], b[i]
 		if x.Vendor != y.Vendor || x.State != y.State || x.Reason != y.Reason ||
 			x.Source != y.Source || x.Tokens != y.Tokens || x.CostUSD != y.CostUSD ||
-			len(x.Windows) != len(y.Windows) {
+			x.WeekSince != y.WeekSince || x.WeekQuota != y.WeekQuota || len(x.Windows) != len(y.Windows) {
 			return false
 		}
 		for j := range x.Windows {

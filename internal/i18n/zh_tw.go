@@ -184,6 +184,24 @@ var zhTW = map[string]string{
 	"usage.view.panels-one":   "個面板",
 	"usage.view.panels-many":  "個面板",
 
+	// The usage overlay's tabs (tab / shift+tab inside v U), and the project
+	// tabs' table: spend by project over one scope, across every agent baton can
+	// read. The tab names reuse the overlay's own words: 帳號 as in 帳號用量,
+	// 工作階段 as in 工作階段（5h）, 本週 as in 本週（全部）.
+	"usage.tab.account":        "帳號",
+	"usage.tab.session":        "工作階段",
+	"usage.tab.week":           "本週",
+	"usage.view.no-projects":   "沒有各專案的數字 — daemon 版本較舊，或還沒有任何用量",
+	"usage.view.session-idle":  "本窗口還沒有任何用量",
+	"usage.view.week-idle":     "本週還沒有任何用量",
+	"usage.view.project":       "專案",
+	"usage.view.cost":          "費用",
+	"usage.view.this-window":   "本窗口",
+	"usage.view.more-projects": "還有 %d 個",
+	"usage.view.week-is":       "本週：",
+	"usage.view.last-7d":       "最近 7 天",
+	"usage.view.since":         "自 %s 起",
+
 	// The working-directory features.
 	"panel.here.unknown": "那個面板的目錄不明;改在預設工作目錄開啟",
 

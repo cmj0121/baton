@@ -467,6 +467,40 @@ type UsageInfo struct {
 	// scanned and knows of no backends at all", which a current daemon does not
 	// produce — it always at least reports the presets it could not find.
 	Vendors []VendorUsage `json:"vendors,omitempty"`
+
+	// Projects is spend by project, one flat row per (project, vendor) — the
+	// cockpit groups them. Each row carries two scopes: the current window
+	// (Session*) and the current week (Week*), whose start is the vendor's
+	// VendorUsage.WeekSince. The rows arrive in a fixed order — projects by week
+	// tokens across vendors, most first, ties by name; vendors by name within one
+	// — and are capped at the top projects, the rest of each vendor's spend
+	// summed into one ProjectOther row.
+	//
+	// Nil is "the daemon never said": an older daemon, or one with the per-vendor
+	// list off. A current daemon with the list on and nothing attributed sends nil
+	// too rather than an empty list, so a client need not tell the two apart.
+	Projects []ProjectUsage `json:"projects,omitempty"`
+}
+
+// ProjectOther is the Project of the row that sums, per vendor, every project
+// past the cap on UsageInfo.Projects.
+const ProjectOther = "(other)"
+
+// ProjectUsage is one vendor's spend on one project, in the window and in the
+// week.
+//
+// Project is a label, not necessarily a path: a main checkout's path with every
+// worktree of it folded in, or one of "(temporary)", "(unresolved) <dir>",
+// "(unattributed)", "grok worktree <name>" or ProjectOther. A path is the full
+// one; shortening it under $HOME is the frontend's to do, since whose home it is
+// is a question about the machine the panels run on.
+type ProjectUsage struct {
+	Project        string  `json:"project"`
+	Vendor         string  `json:"vendor"`
+	SessionTokens  int64   `json:"session_tokens,omitempty"`
+	SessionCostUSD float64 `json:"session_cost_usd,omitempty"`
+	WeekTokens     int64   `json:"week_tokens,omitempty"`
+	WeekCostUSD    float64 `json:"week_cost_usd,omitempty"`
 }
 
 // VendorUsage is one agent backend's usage standing on the wire.
@@ -496,6 +530,16 @@ type VendorUsage struct {
 	Tokens  int64          `json:"tokens,omitempty"`
 	CostUSD float64        `json:"cost_usd,omitempty"`
 	Windows []VendorWindow `json:"windows,omitempty"`
+
+	// WeekSince is where this vendor's week figures on UsageInfo.Projects start,
+	// as an RFC 3339 instant; empty when the daemon has no week figure for it.
+	// WeekQuota says what that instant is: true, the start of the vendor's own
+	// seven-day quota window (its reset less seven days); false, merely seven days
+	// before the scan, because the vendor has never stated a reset baton could see.
+	// A cockpit labels the two differently — only the first answers "how much of
+	// this week's quota went where".
+	WeekSince string `json:"week_since,omitempty"`
+	WeekQuota bool   `json:"week_quota,omitempty"`
 }
 
 // VendorWindow is one usage window in terms every vendor shares: what to call it,

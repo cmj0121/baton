@@ -422,6 +422,13 @@ type model struct {
 	// a way the footer has not.
 	usageFrom mode
 
+	// usageTab is the overlay's open tab — the account, or the projects by the
+	// window's or the week's spend (tab / shift+tab inside the overlay). It is view
+	// state, kept for the cockpit's run so reopening the overlay lands where it was
+	// left, and not saved: the footer's segment is a preference the config file
+	// owns, this is which page of one screen was last looked at.
+	usageTab usageTab
+
 	zoomID                string // panel being zoomed (modeZoom)
 	zoomTitle             string // its title, for the zoom footer
 	zoomEphemeral         bool   // the current zoom is a transient diff panel — dismissing it closes the panel server-side

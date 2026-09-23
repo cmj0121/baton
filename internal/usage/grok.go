@@ -2,6 +2,7 @@ package usage
 
 import (
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -55,12 +56,26 @@ func grokAuthFile() string {
 // are narrative.
 func grokFormat() vendorFormat {
 	return vendorFormat{
-		source: "grok",
-		root:   grokSessionsDir(),
-		only:   "updates.jsonl",
-		gate:   grokUsageKey,
-		decode: decodeGrok,
+		source:  "grok",
+		root:    grokSessionsDir(),
+		only:    "updates.jsonl",
+		gate:    grokUsageKey,
+		decode:  decodeGrok,
+		project: grokProject,
 	}
+}
+
+// grokProject reads a grok session directory's name back into the project path.
+// grok names it by URL-escaping the session's cwd, which — unlike Claude Code's
+// dash encoding — loses nothing, so the name is the whole answer and the logs
+// need not state a cwd of their own. A name that does not unescape is "", which the
+// engine labels unresolved rather than guessing.
+func grokProject(dir string) string {
+	p, err := url.PathUnescape(dir)
+	if err != nil {
+		return ""
+	}
+	return p
 }
 
 // NewGrokProvider builds the grok reader over the user's session logs. window is

@@ -73,24 +73,90 @@ func (m model) closeUsage() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// usageTab is one page of the overlay. Account is the vendor's reading of the
+// account and the panels spending it; Session and Week are the same spend seen
+// by project, over the window and over the week.
+//
+// They are tabs rather than one screen because they answer different questions
+// and there is not room for all three answers at once: the account page is read
+// for "is there anything left, and who is eating it", the project pages for
+// "what has this work cost". Stacking a projects table under the bars squeezed
+// both into a handful of rows; a tab gives each the whole popup.
+type usageTab int
+
+const (
+	usageTabAccount usageTab = iota
+	usageTabSession
+	usageTabWeek
+	usageTabCount // not a tab: how many there are, for the wrap-around
+)
+
 // handleUsageKey owns the keyboard while the overlay is up. There is nothing to
-// scroll — the reading is four rows and a bounded roster — so the only verbs are
-// leaving and cycling the footer segment, which is the setting a user is most
-// likely to want to change while looking straight at what it shows.
+// scroll — each page is bounded to what the popup holds — so the verbs are
+// leaving, turning the page, and cycling the footer segment, which is the setting
+// a user is most likely to want to change while looking straight at what it
+// shows.
 func (m model) handleUsageKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "esc", "q":
 		return m.closeUsage()
 	case "u":
 		return m.cycleUsageMode()
+	case "tab":
+		m.usageTab = (m.usageTab + 1) % usageTabCount
+	case "shift+tab":
+		m.usageTab = (m.usageTab + usageTabCount - 1) % usageTabCount
 	}
 	return m, nil
 }
 
-// usageView renders the overlay: the quota bars, the roster of what is spending
-// them, and a key legend.
+// usageView renders the overlay: the title, the tab bar, the open tab's page,
+// and a key legend.
 func (m model) usageView() string {
 	lim := m.usageLimits()
+	title := sectionStyle.Render(spaced(m.tr("usage.title", "ACCOUNT USAGE")))
+	if lim != nil {
+		title = m.usageHeader(lim)
+	}
+	var page []string
+	switch m.usageTab {
+	case usageTabSession, usageTabWeek:
+		page = m.usageScopeSection(m.usageTab)
+	default:
+		page = m.usageAccountPage(lim)
+	}
+	lines := append([]string{title, m.usageTabBar(), ""}, page...)
+	lines = append(lines, "", m.usageLegend())
+	return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, lines...))
+}
+
+// usageTabBar is the row under the title naming the pages, the open one lit —
+// the same strip the inbox's filter draws, so the two read as one idiom.
+func (m model) usageTabBar() string {
+	names := []string{
+		m.tr("usage.tab.account", "Account"),
+		m.tr("usage.tab.session", "Session"),
+		m.tr("usage.tab.week", "Week"),
+	}
+	parts := make([]string, 0, len(names))
+	for i, name := range names {
+		style := tabStyle
+		if usageTab(i) == m.usageTab {
+			style = tabHotStyle
+		}
+		if i == 0 {
+			// The first label starts where the title and every row under it do; the
+			// style's own left padding would set it one cell in from that edge.
+			style = style.PaddingLeft(0)
+		}
+		parts = append(parts, style.Render(name))
+	}
+	return strings.Join(parts, mutedStyle.Render(" · "))
+}
+
+// usageAccountPage is the Account tab: the quota bars, the roster of what is
+// spending them, and the vendor roll.
+func (m model) usageAccountPage(lim *proto.LimitsInfo) []string {
 	if lim == nil {
 		// No source configured, or none that has reported yet. Saying which would be
 		// guessing at the daemon's config from the cockpit; saying nothing at all
@@ -100,32 +166,25 @@ func (m model) usageView() string {
 		// depend on a quota source at all — which agents the fleet's machine has, and
 		// which of them baton can account for — and it is exactly what somebody who
 		// opened this and found no bars needs to see.
-		body := []string{sectionStyle.Render(spaced(m.tr("usage.title", "ACCOUNT USAGE"))), "",
-			mutedStyle.Render(i18n.T(m.effLang(), "usage.view.no-reading",
-				"no quota reading yet — a Claude Code panel reports one after its first turn"))}
+		page := []string{mutedStyle.Render(i18n.T(m.effLang(), "usage.view.no-reading",
+			"no quota reading yet — a Claude Code panel reports one after its first turn"))}
 		if vendors := m.usageVendorSection(); len(vendors) > 0 {
-			body = append(body, "")
-			body = append(body, vendors...)
+			page = append(page, "")
+			page = append(page, vendors...)
 		}
-		body = append(body, "", m.usageLegend())
-		return m.popupBox(lipgloss.JoinVertical(lipgloss.Left, body...))
+		return page
 	}
 
-	rows := m.usageBars(lim)
+	page := m.usageBars(lim)
 	if roster := m.usageRoster(); len(roster) > 0 {
-		rows = append(rows, "", m.usageRosterHeader())
-		rows = append(rows, roster...)
+		page = append(page, "", m.usageRosterHeader())
+		page = append(page, roster...)
 	}
 	if vendors := m.usageVendorSection(); len(vendors) > 0 {
-		rows = append(rows, "")
-		rows = append(rows, vendors...)
+		page = append(page, "")
+		page = append(page, vendors...)
 	}
-
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		m.usageHeader(lim), "",
-		lipgloss.JoinVertical(lipgloss.Left, rows...), "",
-		m.usageLegend())
-	return m.popupBox(content)
+	return page
 }
 
 // usageVendorSection is the vendor roll: every agent backend the fleet's machine
@@ -670,7 +729,11 @@ func (m model) usageReadingAge() (time.Duration, bool) {
 	return usage.Limits{At: at}.Age(m.now), true
 }
 
-// usageLegend is the overlay's key hint.
+// usageLegend is the overlay's key hint. It is the same on every tab: the tab
+// bar above already says where tab goes, so the legend only has to say that it
+// goes somewhere.
 func (m model) usageLegend() string {
-	return legend("u", m.tr("usage.legend.cycle", "cycle footer"), "esc", m.tr("legend.close", "close"))
+	return legend("tab", m.tr("legend.switch", "switch"),
+		"u", m.tr("usage.legend.cycle", "cycle footer"),
+		"esc", m.tr("legend.close", "close"))
 }

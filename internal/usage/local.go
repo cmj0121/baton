@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -111,9 +112,10 @@ var usageKey = []byte(`"usage"`)
 
 // vendorFormat is everything about one vendor's session logs that the engine
 // cannot share: where they live, which files inside carry usage, the substring
-// that makes a line worth parsing, and how one line decodes.
+// that makes a line worth parsing, how one line decodes, and what a project
+// directory's name says about the project.
 //
-// Keeping it to four fields is the point. Everything a usage reader gets wrong
+// Keeping it this small is the point. Everything a usage reader gets wrong
 // under load — unbounded lines, FIFOs on a path baton does not own, the same
 // message counted from two files, a window anchored on the clock instead of on a
 // message — is in the engine and is written once. A vendor supplies only what is
@@ -128,6 +130,17 @@ type vendorFormat struct {
 	// It does no filtering: the cutoff, the ceiling and the dedup are the engine's,
 	// so every vendor gets them and none can forget one.
 	decode func(line []byte) (record, bool)
+
+	// project reads a project directory's name — the first path segment under the
+	// root — as the project's path, or "" when the name cannot be read back into
+	// one. Nil means the name never can: Claude Code's encoding turns every "/" and
+	// "." into "-", so only a cwd the logs state is trusted for it.
+	project func(dir string) string
+
+	// dirName is the project directory name the vendor gives a cwd, for checking a
+	// stated cwd against the directory it was found in. Nil when the format states
+	// no cwd to check.
+	dirName func(cwd string) string
 }
 
 // record is one decoded usage line, in the terms every vendor shares.
@@ -139,6 +152,7 @@ type vendorFormat struct {
 type record struct {
 	ts  time.Time
 	key string // dedup key across files; "" means the line can never be a duplicate
+	cwd string // the working directory the line states; "" when the format has none
 
 	input, output, cacheRead, cacheWrite int64
 	cost                                 float64
@@ -148,11 +162,38 @@ type record struct {
 // under the projects root, one line per message, usage on the assistant turns.
 func claudeFormat() vendorFormat {
 	return vendorFormat{
-		source: "local",
-		root:   claudeProjectsDir(),
-		gate:   usageKey,
-		decode: decodeClaude,
+		source:  "local",
+		root:    claudeProjectsDir(),
+		gate:    usageKey,
+		decode:  decodeClaude,
+		dirName: claudeDirName,
 	}
+}
+
+// claudeDirName is the project directory Claude Code keeps a cwd's transcripts
+// under: every character that is not an ASCII letter or digit becomes "-", so
+// /Users/me/my.repo is -Users-me-my-repo. The CLI does that with a JavaScript
+// regex over a JavaScript string, which works per UTF-16 code unit: a CJK
+// character is one "-", not the three its UTF-8 bytes would make, and a
+// character past U+FFFF — an emoji — is a surrogate pair and so two.
+//
+// It only runs forward — the directory name cannot be read back, since "-"
+// stood for many things. Newer Claude Code also truncates a long name and appends
+// a hash; no cwd encodes to that, so such a directory falls back to the first cwd
+// seen, which is what every directory did before this check existed.
+func claudeDirName(cwd string) string {
+	var b strings.Builder
+	for _, r := range cwd {
+		switch {
+		case 'a' <= r && r <= 'z', 'A' <= r && r <= 'Z', '0' <= r && r <= '9':
+			b.WriteRune(r)
+		case r > 0xFFFF:
+			b.WriteString("--")
+		default:
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
 }
 
 // Fetch scans the transcripts for the assistant messages inside the current
@@ -180,38 +221,9 @@ func (p *LocalProvider) Fetch(ctx context.Context) (Snapshot, error) {
 		// it whenever there is no anchor to continue from.
 		cutoff = cutoff.Add(-p.window)
 	}
-	sc := newFormatScan(cutoff, now, p.format)
-
-	err := filepath.WalkDir(p.dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil // an unreadable dir/file is skipped, not fatal to the whole scan
-		}
-		if d.IsDir() || !sc.format.carries(path) {
-			return nil
-		}
-		if info, ierr := d.Info(); ierr != nil || info.ModTime().Before(cutoff) {
-			return nil // no message inside the window can live in a file last written before it
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		sc.transcript(path, sessionOf(p.dir, path))
-		return nil
-	})
-	// A missing projects dir (Claude Code never run here) is not an error — it just
-	// means zero usage. WalkDir surfaces it via the root callback, which we ignore.
-	if err != nil && !os.IsNotExist(err) {
-		// A halted walk read some files and not others, so its total spans neither a
-		// window nor a day — it is a fraction of one, with no way to say which. Report
-		// nothing and let the caller hold whatever it had; a number that looks like a
-		// reading but under-counts by an unknown amount is the one thing worse.
+	sc, err := p.walk(ctx, cutoff, now)
+	if err != nil {
 		return Snapshot{Source: p.format.source}, err
-	}
-	// A dropped line is spend this reading does not carry, so the reading is a
-	// little low and nothing on screen says why. Once per poll, with a count.
-	if sc.oversized > 0 {
-		log.Warn().Int("lines", sc.oversized).Int("limit", maxTranscriptLine).
-			Msg("usage under-counts: transcript lines past the size limit were skipped")
 	}
 	if p.window <= 0 {
 		return sc.snapshot(cutoff), nil // the calendar-day fallback: totals, no reset
@@ -231,22 +243,99 @@ func (p *LocalProvider) Fetch(ctx context.Context) (Snapshot, error) {
 	return snap, nil
 }
 
-// sessionOf is the session id a transcript belongs to, taken from its path under
-// the projects root: <root>/<project>/<session>.jsonl for a session's own
-// transcript, and <root>/<project>/<session>/subagents/agent-*.jsonl for the
-// subagents it spawned. Both fold into the same id on purpose — a panel's
-// subagents are that panel's spend, not somebody else's. A path that does not fit
-// the layout yields "", which buckets as unattributed rather than guessing.
-func sessionOf(root, path string) string {
+// Since sums every message from since up to now, with the same walk, dedup,
+// ceiling and line cap as Fetch and none of its window chain: the caller names
+// the period, so there is no window to infer and no anchor to carry. It is how a
+// week's spend is read — a period the caller takes from the vendor's own quota
+// reset, which the logs cannot know.
+//
+// The snapshot has no Until and no reset. A week figure is a total over a stated
+// range, and a countdown on it would claim a window baton did not measure.
+func (p *LocalProvider) Since(ctx context.Context, since time.Time) (Snapshot, error) {
+	sc, err := p.walk(ctx, since, p.now())
+	if err != nil {
+		return Snapshot{Source: p.format.source}, err
+	}
+	return sc.snapshot(since), nil
+}
+
+// walk reads every log this format carries that could hold a message in
+// [cutoff, now], and returns the scan holding them. It is the one walk both
+// Fetch and Since go through, so the FIFO guard, the line cap, the mtime skip and
+// the dedup cannot drift apart between the window figure and the week figure.
+//
+// Files not touched since cutoff are skipped whole: an append-only log last
+// written before it cannot hold a message after it.
+//
+// A non-nil error means the walk halted partway. It read some files and not
+// others, so its total spans no period anyone can name — it is a fraction of one,
+// with no way to say which. The caller reports nothing and holds whatever it had;
+// a number that looks like a reading but under-counts by an unknown amount is the
+// one thing worse.
+func (p *LocalProvider) walk(ctx context.Context, cutoff, now time.Time) (*scan, error) {
+	sc := newFormatScan(cutoff, now, p.format)
+	err := filepath.WalkDir(p.dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			// An unreadable dir/file is skipped, not fatal to the whole scan — but it
+			// is counted, since what it held is missing from the total.
+			sc.skip(err)
+			return nil
+		}
+		if d.IsDir() || !sc.format.carries(path) {
+			return nil
+		}
+		info, ierr := d.Info()
+		if ierr != nil {
+			sc.skip(ierr)
+			return nil
+		}
+		if info.ModTime().Before(cutoff) {
+			return nil // no message inside the range can live in a file last written before it
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		project, session := originOf(p.dir, path)
+		sc.transcript(path, project, session)
+		return nil
+	})
+	// A missing projects dir (the CLI never run here) is not an error — it just
+	// means zero usage. WalkDir surfaces it via the root callback, which we ignore.
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	// A dropped line is spend this reading does not carry, so the reading is a
+	// little low and nothing on screen says why. Once per scan, with a count.
+	if sc.oversized > 0 {
+		log.Warn().Int("lines", sc.oversized).Int("limit", maxTranscriptLine).
+			Msg("usage under-counts: transcript lines past the size limit were skipped")
+	}
+	// The same for a log the walk could not read: said once, with a count, because
+	// a permissions problem that hides one session's log tends to hide a directory.
+	if sc.unreadable > 0 {
+		log.Warn().Int("entries", sc.unreadable).Str("dir", p.dir).
+			Msg("usage under-counts: unreadable log entries were skipped")
+	}
+	return sc, nil
+}
+
+// originOf is the project directory and the session id a log belongs to, taken
+// from its path under the root: <root>/<project>/<session>.jsonl for a session's
+// own transcript, and <root>/<project>/<session>/subagents/agent-*.jsonl for the
+// subagents it spawned. Both fold into the same session on purpose — a panel's
+// subagents are that panel's spend, not somebody else's — and so into the same
+// project. A path that does not fit the layout yields "" for both, which buckets
+// as unattributed rather than guessing.
+func originOf(root, path string) (project, session string) {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	parts := strings.Split(filepath.ToSlash(rel), "/")
 	if len(parts) < 2 {
-		return ""
+		return "", ""
 	}
-	return strings.TrimSuffix(parts[1], ".jsonl")
+	return parts[0], strings.TrimSuffix(parts[1], ".jsonl")
 }
 
 // counted is one deduplicated in-scope message: when it happened, which session
@@ -256,6 +345,7 @@ func sessionOf(root, path string) string {
 // once every file has been read.
 type counted struct {
 	ts         time.Time
+	project    string // the project directory, the key a label is looked up by
 	session    string
 	input      int64
 	output     int64
@@ -280,11 +370,35 @@ type scan struct {
 	seen    map[string]struct{}
 	entries []counted
 
+	// cwds is the working directory a project directory's hint names, keyed by
+	// that directory: the first cwd whose encoding is the directory's name (named
+	// then records that it matched), else the first cwd seen. It is learned from
+	// every line the gate lets through, in range or not, because the label is a
+	// fact about the directory and not about the window: a project whose only
+	// in-range line happens to lack a cwd is still the project its older lines named.
+	cwds  map[string]string
+	named map[string]bool
+
 	// oversized counts the lines dropped for running past maxTranscriptLine. It
-	// is kept so the drop can be said once per poll instead of once per line: the
+	// is kept so the drop can be said once per scan instead of once per line: the
 	// thing that produces an oversized line tends to produce a lot of them, and a
 	// log line each would be the disk-filling this cap exists to stop.
 	oversized int
+
+	// unreadable counts the directories and logs the walk had to skip because
+	// they could not be read (a permission denied, a log that is not a regular
+	// file). Kept, like oversized, so the gap is said once per scan with a count.
+	// An entry that vanished mid-walk is not counted: a log that no longer exists
+	// holds no spend the total is missing, and the root not existing at all is
+	// simply a vendor never run here.
+	unreadable int
+}
+
+// skip records one entry the walk could not read; see unreadable.
+func (sc *scan) skip(err error) {
+	if !errors.Is(err, fs.ErrNotExist) {
+		sc.unreadable++
+	}
 }
 
 func newScan(cutoff, now time.Time) *scan {
@@ -293,7 +407,8 @@ func newScan(cutoff, now time.Time) *scan {
 
 // newFormatScan is newScan for a named vendor's log format.
 func newFormatScan(cutoff, now time.Time, f vendorFormat) *scan {
-	return &scan{cutoff: cutoff, now: now, format: f, seen: make(map[string]struct{})}
+	return &scan{cutoff: cutoff, now: now, format: f, seen: make(map[string]struct{}),
+		cwds: make(map[string]string), named: make(map[string]bool)}
 }
 
 // carries reports whether a walked path is a file this format keeps usage in.
@@ -343,10 +458,16 @@ func (sc *scan) window(now time.Time, length time.Duration, anchor time.Time) (s
 	return start, !now.Before(start) && now.Before(start.Add(length))
 }
 
-// snapshot sums every message from since onward, totals and per-session alike. A
-// message before it belongs to a window that has already closed, and folding one
-// in would carry a finished window's spend into the current one — which is the
-// number the whole footer is read off.
+// snapshot sums every message from since onward: totals, per session and per
+// project directory. A message before it belongs to a window that has already
+// closed, and folding one in would carry a finished window's spend into the
+// current one — which is the number the whole footer is read off.
+//
+// Every message lands in exactly one project directory, UnattributedProject
+// included, so the project values sum to the totals the same way the whole
+// snapshot does. The directories stay raw here, each with what the scan learned
+// of its path: naming them is LabelProjects' job, done once over every scan's
+// directories, so one directory cannot be named two ways by two scans.
 func (sc *scan) snapshot(since time.Time) Snapshot {
 	snap := Snapshot{Since: since, Source: sc.format.source}
 	for _, e := range sc.entries {
@@ -358,6 +479,25 @@ func (sc *scan) snapshot(since time.Time) Snapshot {
 		snap.CacheRead += e.cacheRead
 		snap.CacheWrite += e.cacheWrite
 		snap.CostUSD += e.cost
+		tokens := e.input + e.output + e.cacheRead + e.cacheWrite
+
+		if snap.Projects == nil {
+			snap.Projects = make(map[string]SessionUsage)
+		}
+		dir := e.project
+		if dir == "" {
+			dir = UnattributedProject
+		} else if _, ok := snap.ProjectHints[dir]; !ok {
+			if snap.ProjectHints == nil {
+				snap.ProjectHints = make(map[string]ProjectHint)
+			}
+			snap.ProjectHints[dir] = sc.hint(dir)
+		}
+		pb := snap.Projects[dir]
+		pb.Tokens += tokens
+		pb.CostUSD += e.cost
+		snap.Projects[dir] = pb
+
 		if e.session == "" {
 			continue // a path we cannot attribute; it still counts toward the totals
 		}
@@ -365,11 +505,24 @@ func (sc *scan) snapshot(since time.Time) Snapshot {
 			snap.Sessions = make(map[string]SessionUsage)
 		}
 		b := snap.Sessions[e.session]
-		b.Tokens += e.input + e.output + e.cacheRead + e.cacheWrite
+		b.Tokens += tokens
 		b.CostUSD += e.cost
 		snap.Sessions[e.session] = b
 	}
 	return snap
+}
+
+// hint is what the scan knows of a project directory's path: the format's own
+// reading of the name when it has a lossless one, else the cwd fold settled on.
+// A hint with no path is still returned — LabelProjects names that directory
+// unresolved rather than leaving it out.
+func (sc *scan) hint(dir string) ProjectHint {
+	if sc.format.project != nil {
+		if p := sc.format.project(dir); p != "" {
+			return ProjectHint{Path: p, Exact: true}
+		}
+	}
+	return ProjectHint{Path: sc.cwds[dir], Exact: sc.named[dir]}
 }
 
 // maxTranscriptLine caps how many bytes ONE transcript line may cost the daemon.
@@ -388,8 +541,8 @@ func (sc *scan) snapshot(since time.Time) Snapshot {
 const maxTranscriptLine = 16 << 20
 
 // transcript folds one transcript file's in-window usage in, crediting it to
-// session. It reads line by line, bounded at maxTranscriptLine, and only parses
-// lines that mention usage.
+// project and session. It reads line by line, bounded at maxTranscriptLine, and
+// only parses lines that mention usage.
 // paths.OpenRegular rather than os.Open, for the half maxTranscriptLine does not
 // cover: the line length was bounded, the file's KIND was not. The walk lists
 // whatever is in the projects tree and takes anything ending .jsonl, and open(2)
@@ -397,9 +550,10 @@ const maxTranscriptLine = 16 << 20
 // parks the usage poller's goroutine for the daemon's life, taking the footer
 // and the quota bars with it. A file that is not a plain file is skipped, which
 // is what the walk already does with every other unreadable entry.
-func (sc *scan) transcript(path, session string) {
+func (sc *scan) transcript(path, project, session string) {
 	f, err := paths.OpenRegular(path)
 	if err != nil {
+		sc.skip(err)
 		return
 	}
 	defer func() { _ = f.Close() }()
@@ -411,7 +565,7 @@ func (sc *scan) transcript(path, session string) {
 			sc.oversized++
 		}
 		if len(line) > 0 && bytes.Contains(line, sc.format.gate) {
-			sc.fold(line, session)
+			sc.fold(line, project, session)
 		}
 		if err != nil {
 			return // io.EOF or a read error: either way, done with this file
@@ -450,6 +604,7 @@ func cappedLine(r *bufio.Reader) (line []byte, over bool, err error) {
 type transcriptEntry struct {
 	Timestamp string `json:"timestamp"`
 	RequestID string `json:"requestId"`
+	Cwd       string `json:"cwd"`
 	Message   struct {
 		ID    string `json:"id"`
 		Model string `json:"model"`
@@ -474,18 +629,34 @@ type transcriptEntry struct {
 // verbatim into the new transcript, keeping their original ids and timestamps. So
 // the same spend genuinely appears in two files, and without the dedup it would
 // be counted — and attributed — twice.
-func (sc *scan) fold(line []byte, session string) {
+//
+// A line's cwd teaches its project directory a label before any filtering. A
+// session's cwd wanders into worktrees and subdirectories as it works, so not
+// every cwd is the project: the one the vendor named the directory after is, and
+// it wins wherever in the walk it turns up. A subagent's transcript is walked
+// before its parent's (<session>/ sorts before <session>.jsonl), and its cwd is
+// wherever the parent had wandered to when it spawned — measured, that named 5
+// of 231 directories wrongly. Only when no cwd matches does the first one seen
+// stand, which beats a label nobody can read.
+func (sc *scan) fold(line []byte, project, session string) {
 	r, ok := sc.format.decode(line)
 	if !ok {
 		return
 	}
-	sc.keep(r, session)
+	if r.cwd != "" && project != "" && !sc.named[project] {
+		if sc.format.dirName != nil && sc.format.dirName(r.cwd) == project {
+			sc.cwds[project], sc.named[project] = r.cwd, true
+		} else if sc.cwds[project] == "" {
+			sc.cwds[project] = r.cwd
+		}
+	}
+	sc.keep(r, project, session)
 }
 
 // keep places one decoded record in the scan, or drops it. Every test a record
 // has to pass lives here rather than in a decoder, so a new vendor cannot ship
 // without the cutoff, the ceiling or the dedup.
-func (sc *scan) keep(r record, session string) {
+func (sc *scan) keep(r record, project, session string) {
 	if r.ts.Before(sc.cutoff) {
 		return
 	}
@@ -504,6 +675,7 @@ func (sc *scan) keep(r record, session string) {
 	}
 	sc.entries = append(sc.entries, counted{
 		ts:         r.ts,
+		project:    project,
 		session:    session,
 		input:      r.input,
 		output:     r.output,
@@ -541,6 +713,7 @@ func decodeClaude(line []byte) (record, bool) {
 	return record{
 		ts:         ts,
 		key:        key,
+		cwd:        e.Cwd,
 		input:      u.InputTokens,
 		output:     u.OutputTokens,
 		cacheRead:  u.CacheReadInputTokens,

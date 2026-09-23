@@ -116,6 +116,11 @@ func TestFormat(t *testing.T) {
 		{Snapshot{Input: 512}, "512 tok"},
 		{Snapshot{Input: 1_200_000, CostUSD: 12.345}, "1.2M tok · ≈$12.35 API"},
 		{Snapshot{Input: 9340, CostUSD: 0}, "9.3K tok"},
+		{Snapshot{Input: 999_949_999}, "999.9M tok"},
+		{Snapshot{Input: 999_960_000}, "1.0B tok"},
+		{Snapshot{Input: 999_960}, "1.0M tok"},
+		{Snapshot{Input: 1_000_000_000}, "1.0B tok"},
+		{Snapshot{Input: 3_210_000_000, CostUSD: 1}, "3.2B tok · ≈$1.00 API"},
 	}
 	for _, c := range cases {
 		if got := Format(c.snap); got != c.want {

@@ -79,6 +79,13 @@ type VendorReport struct {
 	Tokens  int64
 	CostUSD float64
 	Windows []VendorWindow
+
+	// Projects and ProjectHints are the same figure by project directory
+	// (Snapshot.Projects, Snapshot.ProjectHints): the spend of the window Report
+	// read, not the week's — a week is a separate, slower read the caller makes
+	// with VendorSince. The keys are raw directories; LabelProjects names them.
+	Projects     map[string]SessionUsage
+	ProjectHints map[string]ProjectHint
 }
 
 // vendorReaders is the registry: a catalogue name to the reader that can see its
@@ -102,6 +109,29 @@ func VendorReader(vendor string, window time.Duration) (Provider, bool) {
 		return nil, false
 	}
 	return build(window), true
+}
+
+// sinceReader is a reader that can sum an arbitrary period. Every registered
+// reader is one; the interface is asked for rather than assumed so a stand-in
+// Provider in the registry reads as "no week figure" instead of a panic.
+type sinceReader interface {
+	Since(ctx context.Context, since time.Time) (Snapshot, error)
+}
+
+// VendorSince sums one vendor's spend from since until now, and reports whether
+// baton has a reader that can. It is VendorReader's counterpart for the week: the
+// same registry, so a vendor gains a week figure the moment it gains a reader.
+func VendorSince(ctx context.Context, vendor string, since time.Time) (Snapshot, bool, error) {
+	p, ok := VendorReader(vendor, 0) // the window plays no part in a named period
+	if !ok {
+		return Snapshot{}, false, nil
+	}
+	sr, ok := p.(sinceReader)
+	if !ok {
+		return Snapshot{}, false, nil
+	}
+	snap, err := sr.Since(ctx, since)
+	return snap, true, err
 }
 
 // HasVendorReader reports whether baton can read a vendor's usage, without
@@ -171,6 +201,9 @@ func Report(ctx context.Context, c VendorCandidate, window time.Duration, now ti
 		Tokens:  snap.TotalTokens(),
 		CostUSD: snap.CostUSD,
 		Windows: snapshotWindows(snap, now),
+
+		Projects:     snap.Projects,
+		ProjectHints: snap.ProjectHints,
 	}
 }
 

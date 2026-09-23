@@ -65,6 +65,21 @@ type Snapshot struct {
 	// Code session id that spent them. Nil when the source cannot attribute spend.
 	// The values sum to the snapshot's own totals.
 	Sessions map[string]SessionUsage
+
+	// Projects is the same totals by project directory — the raw first path
+	// segment under the reader's root, not a label. A project is a session's,
+	// never a line's: every message a session spent lands under the one directory
+	// its log sits in, however far its cwd wandered. Spend whose log sits outside
+	// the layout is keyed UnattributedProject, so the values sum to the totals.
+	// Nil when the source cannot attribute spend.
+	//
+	// The keys stay raw so that a label is never a property of one scan: the
+	// caller names every scan's directories together with LabelProjects.
+	Projects map[string]SessionUsage
+
+	// ProjectHints is what the scan learned of each directory's path, keyed like
+	// Projects (UnattributedProject has none). It is LabelProjects' input.
+	ProjectHints map[string]ProjectHint
 }
 
 // TotalTokens is every token the snapshot counted, across the four buckets.
@@ -213,8 +228,12 @@ func FormatCountdown(d time.Duration) string {
 
 // humanTokens abbreviates a token count: 1234567 → "1.2M", 9340 → "9.3K", 512 → "512".
 func humanTokens(n int64) string {
+	// The tiers switch where the figure ROUNDS up to the next unit, so 999,960
+	// reads "1.0M" rather than "1000.0K".
 	switch {
-	case n >= 1_000_000:
+	case n >= 999_950_000:
+		return fmt.Sprintf("%.1fB", float64(n)/1e9)
+	case n >= 999_950:
 		return fmt.Sprintf("%.1fM", float64(n)/1e6)
 	case n >= 1_000:
 		return fmt.Sprintf("%.1fK", float64(n)/1e3)
