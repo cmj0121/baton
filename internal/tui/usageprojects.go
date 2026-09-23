@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -11,25 +12,32 @@ import (
 	"github.com/cmj0121/baton/internal/usage"
 )
 
-// The usage overlay's projects table (p inside v U): where the spend went, by
-// project, in the window and in the week, across every agent baton can read.
+// The usage overlay's project tabs (Session and Week inside v U): where the
+// spend went, by project, over one scope, across every agent baton can read.
 //
-// The roster answers "which panel do I stop"; this answers "what has this week
-// gone on", which is a question about work rather than about processes — and a
+// The account tab answers "which panel do I stop"; these answer "what has this
+// work cost", which is a question about work rather than about processes — and a
 // project outlives every panel that ever worked on it. The daemon has already
 // done the hard parts: named each project once across both scopes and every
-// vendor, folded its worktrees in, ranked the rows and capped them. The cockpit
-// only groups and draws, and it does not re-sort: the order is the daemon's, so
-// every client shows the same list.
+// vendor, folded its worktrees in, and capped the rows. The cockpit groups them,
+// orders them by the open tab's scope, and draws.
+//
+// One scope a tab, rather than the window and the week side by side: two scopes
+// on a row left no room for a bar, and a bar is what makes "which project took
+// most of it" a glance instead of a comparison of six-digit numbers.
 
-// The projects table's column widths. The name is wide because it is a path, and
-// it is the column that gives way first: a figure cell holds "999.9M tok ·
-// $9999.99" with its cost, "999.9M tok" without, and neither is ever cut.
+// The project table's column widths. The name is wide because it is a path, and
+// it gives way first; the bar gives way next, then the cost. The figure columns
+// are sized for the longest figure they hold — "100%", "999.9M", "$99999.99" — so
+// they are never cut, only dropped whole.
 const (
-	projectNameWidth    = 30 // the widest the name gets
-	projectNameMinWidth = 12 // the narrowest before the cells give up their cost
-	projectCellWidth    = 21 // a cell with its cost
-	projectTokenWidth   = 10 // a cell without
+	projectNameWidth    = 40 // the widest the name gets
+	projectNameMinWidth = 12 // the narrowest before the bar gives way
+	projectBarWidth     = 16 // the bar at full width, the account bars' width
+	projectBarMinWidth  = 6  // the narrowest bar still worth drawing
+	projectShareWidth   = 5  // "100%", or "share"
+	projectTokenWidth   = 6  // "999.9M", or "tokens"
+	projectCostWidth    = 9  // "$99999.99"
 	projectGap          = 2  // the space in front of every cell
 )
 
@@ -37,28 +45,36 @@ const (
 var gap = strings.Repeat(" ", projectGap)
 
 // projectLayout is the table's shape at one popup width: how wide the name and
-// the figure cells are. Whether a cell carries its cost follows from its width
-// (see projectCell), so the narrow layout needs no flag to drop it.
+// the bar are (a zero bar is no bar column at all), and whether the cost column
+// is drawn.
 //
 // The popup is not a scroller, and its edge cuts a row wherever it ends — which
-// turned "$1234.56" into "$123" on an 80-column terminal, a wrong figure with
-// nothing to say it was one. So the widths come from the space there is: the
-// name shrinks first, to a floor that still names something; past that the
-// cells drop their cost and keep the tokens; and a row that still does not fit
+// once turned "$1234.56" into "$123" on an 80-column terminal, a wrong figure
+// with nothing to say it was one. So the widths come from the space there is:
+// the name shrinks first, to a floor that still names something; then the bar
+// narrows and goes; then the cost column goes; and a row that still does not fit
 // loses whole cells (fitRow), never part of one.
 type projectLayout struct {
-	name, cell int
+	name, bar int
+	cost      bool
 }
 
 func (m model) projectLayout() projectLayout {
 	avail := m.popupWidth()
-	// A row is the two-cell mark, the name, and two cells each behind a two-space
-	// gap — one space let two right-aligned figures run together into one.
-	if name := avail - 2 - 2*(projectGap+projectCellWidth); name >= projectNameMinWidth {
-		return projectLayout{name: min(name, projectNameWidth), cell: projectCellWidth}
+	// A row is the two-cell mark, the name, and each cell behind a two-space gap —
+	// one space let two right-aligned figures run together into one.
+	figures := 2 + projectGap + projectShareWidth + projectGap + projectTokenWidth
+	withCost := figures + projectGap + projectCostWidth
+	if name := avail - withCost - projectGap - projectBarWidth; name >= projectNameMinWidth {
+		return projectLayout{name: min(name, projectNameWidth), bar: projectBarWidth, cost: true}
 	}
-	name := avail - 2 - 2*(projectGap+projectTokenWidth)
-	return projectLayout{name: clampInt(name, projectNameMinWidth, projectNameWidth), cell: projectTokenWidth}
+	if bar := avail - withCost - projectGap - projectNameMinWidth; bar >= projectBarMinWidth {
+		return projectLayout{name: projectNameMinWidth, bar: bar, cost: true}
+	}
+	if name := avail - withCost; name >= projectNameMinWidth {
+		return projectLayout{name: min(name, projectNameWidth), cost: true}
+	}
+	return projectLayout{name: clampInt(avail-figures, projectNameMinWidth, projectNameWidth)}
 }
 
 // fitRow joins a row's cells while they fit the popup, and ends it with an
@@ -123,16 +139,103 @@ func clipLabel(label string, n int) string {
 	return marker + clipLeft(rest, room)
 }
 
-// usageProjectLines is how many table lines the section draws below its header.
-// A project takes one line plus one per agent, so this is a handful of projects,
-// which is what fits the popup beside the bars and the roll — the same bound the
-// roster keeps with usageBurners, for the same reason: the tail is not what the
-// table is read for.
-const usageProjectLines = 10
+// usageProjectMinLines is the fewest table lines a project tab draws below its
+// header, whatever the terminal says. A project takes one line plus one per
+// agent, so this is a handful of projects.
+const usageProjectMinLines = 10
 
-// usageProjectSection is the projects table with its header, or one muted line
-// saying why there is none.
-func (m model) usageProjectSection() []string {
+// usageScopeChrome is the lines a project tab spends on things other than
+// project rows: the title, the tab bar and the blank under it, the scope note,
+// the column header, the "+N more" line, and the blank and legend at the foot.
+const usageScopeChrome = 8
+
+// usageProjectLines is how many table lines a project tab may draw: whatever the
+// terminal leaves once the popup's box and the tab's own chrome are paid for. The
+// tab has the whole popup to itself, so the bound is the screen, not a guess at
+// what fits beside something else; the tail past it is a count, not a scroller.
+func (m model) usageProjectLines() int {
+	if m.height <= 0 {
+		return usageProjectMinLines
+	}
+	return max(usageProjectMinLines, m.height-1-popupChrome-usageScopeChrome)
+}
+
+// scopeFigures is one wire row's spend in the tab's scope.
+func scopeFigures(r proto.ProjectUsage, tab usageTab) (int64, float64) {
+	if tab == usageTabWeek {
+		return r.WeekTokens, r.WeekCostUSD
+	}
+	return r.SessionTokens, r.SessionCostUSD
+}
+
+// scopeSpend is a project or one of its agents, in one scope.
+type scopeSpend struct {
+	label  string
+	tokens int64
+	cost   float64
+}
+
+// scopeProject is a project's total in one scope, and the agents under it.
+type scopeProject struct {
+	scopeSpend
+	agents []scopeSpend
+}
+
+// isBucket says a label is not a project but a bucket — (other), (temporary),
+// (unresolved) …, (unattributed).
+func isBucket(label string) bool { return strings.HasPrefix(label, "(") }
+
+// scopeProjects groups the wire rows into projects for one scope, heaviest
+// first, and the scope's total they are shares of.
+//
+// The daemon ranks by the week, which is the wrong order for the session tab —
+// a project that ate the week can be idle this window — so the cockpit re-sorts
+// by the open scope. A bucket goes after every real project whatever it weighs:
+// "(other)" can outweigh any single project and still not be the answer to
+// "where did it go". A project, or an agent under one, that spent nothing in
+// the scope is left out rather than drawn as a zero row.
+func scopeProjects(rows []proto.ProjectUsage, tab usageTab) ([]scopeProject, int64) {
+	index := make(map[string]int)
+	var out []scopeProject
+	var total int64
+	for _, r := range rows {
+		tokens, cost := scopeFigures(r, tab)
+		if tokens <= 0 && cost <= 0 {
+			continue
+		}
+		total += tokens
+		i, ok := index[r.Project]
+		if !ok {
+			i = len(out)
+			index[r.Project] = i
+			out = append(out, scopeProject{scopeSpend: scopeSpend{label: r.Project}})
+		}
+		p := &out[i]
+		p.tokens += tokens
+		p.cost += cost
+		p.agents = append(p.agents, scopeSpend{label: r.Vendor, tokens: tokens, cost: cost})
+	}
+	heavier := func(a, b scopeSpend) bool {
+		if a.tokens != b.tokens {
+			return a.tokens > b.tokens
+		}
+		return a.label < b.label
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if bi, bj := isBucket(out[i].label), isBucket(out[j].label); bi != bj {
+			return bj
+		}
+		return heavier(out[i].scopeSpend, out[j].scopeSpend)
+	})
+	for _, p := range out {
+		sort.SliceStable(p.agents, func(i, j int) bool { return heavier(p.agents[i], p.agents[j]) })
+	}
+	return out, total
+}
+
+// usageScopeSection is a project tab's page: what its scope measures, the
+// column header, and the projects — or one muted line saying why there are none.
+func (m model) usageScopeSection(tab usageTab) []string {
 	var rows []proto.ProjectUsage
 	if m.usageInfo != nil {
 		rows = m.usageInfo.Projects
@@ -143,91 +246,135 @@ func (m model) usageProjectSection() []string {
 		return []string{mutedStyle.Render(clip(m.tr("usage.view.no-projects",
 			"no per-project figures — an older daemon, or nothing spent yet"), m.popupWidth()))}
 	}
+	projects, total := scopeProjects(rows, tab)
+	if len(projects) == 0 {
+		// Figures exist, just none in this scope: a quiet window after a busy week.
+		reason := m.tr("usage.view.session-idle", "nothing spent this window yet")
+		if tab == usageTabWeek {
+			reason = m.tr("usage.view.week-idle", "nothing spent this week yet")
+		}
+		return []string{mutedStyle.Render(clip(reason, m.popupWidth()))}
+	}
 
 	l := m.projectLayout()
-	out := []string{mutedStyle.Render(m.fitRow("  "+pad(m.tr("usage.view.project", "Project"), l.name),
-		gap+padLeft(m.tr("usage.view.project-session", "session"), l.cell),
-		gap+padLeft(m.tr("usage.view.project-week", "week"), l.cell)))}
-	if note := m.usageWeekNote(rows); note != "" {
+	var out []string
+	if note := m.usageScopeNote(tab, rows); note != "" {
 		out = append(out, mutedStyle.Render(clip("  "+note, m.popupWidth())))
 	}
+	out = append(out, mutedStyle.Render(m.projectRow(l, "  "+pad(m.tr("usage.view.project", "Project"), l.name),
+		strings.Repeat(" ", l.bar), m.tr("usage.view.share", "share"),
+		m.tr("usage.view.tokens", "tokens"), m.tr("usage.view.cost", "cost"))))
 
-	groups := groupProjects(rows)
-	lines := 0
-	for i, g := range groups {
-		if lines+1+len(g) > usageProjectLines {
+	budget, lines := m.usageProjectLines(), 0
+	for i, p := range projects {
+		if lines+1+len(p.agents) > budget {
 			out = append(out, mutedStyle.Render("  "+fmt.Sprintf(
-				m.tr("usage.view.more-projects", "+%d more"), len(groups)-i)))
+				m.tr("usage.view.more-projects", "+%d more"), len(projects)-i)))
 			break
 		}
-		out = append(out, m.projectGroupRows(g, l)...)
-		lines += 1 + len(g)
+		out = append(out, m.projectRows(p, total, l)...)
+		lines += 1 + len(p.agents)
 	}
 	return out
 }
 
-// groupProjects splits the wire rows into one run per project. The daemon sends
-// a project's vendor rows next to each other, so a run is consecutive rows with
-// one label; grouping by adjacency rather than by map keeps the daemon's order.
-func groupProjects(rows []proto.ProjectUsage) [][]proto.ProjectUsage {
-	var out [][]proto.ProjectUsage
-	for i, r := range rows {
-		if i == 0 || r.Project != rows[i-1].Project {
-			out = append(out, nil)
-		}
-		out[len(out)-1] = append(out[len(out)-1], r)
+// usageScopeNote says what the open tab's scope measures: the window and when it
+// rolls over, or which week (usageWeekNote).
+func (m model) usageScopeNote(tab usageTab, rows []proto.ProjectUsage) string {
+	if tab == usageTabWeek {
+		return m.usageWeekNote(rows)
 	}
-	return out
+	note := m.tr("usage.view.this-window", "this window")
+	if left := m.usageWindowLeft(); left != "" {
+		note = joinDot(note, m.tr("usage.view.resets", "resets")+" "+left)
+	}
+	return note
 }
 
-// projectGroupRows is one project: its total across agents, then a row per
-// agent, indented beneath it.
+// projectRow lays out one line of the table from its cells, already styled or
+// not: the lead (mark and name, 2+name cells), the bar, and the three figures.
+// Every line of the table — the header included — goes through here, so a
+// column's right edge is the same display cell on every one of them.
+func (m model) projectRow(l projectLayout, lead, bar, share, tokens, cost string) string {
+	cells := []string{lead}
+	if l.bar > 0 {
+		cells = append(cells, gap+bar)
+	}
+	cells = append(cells, gap+alignRight(share, projectShareWidth), gap+alignRight(tokens, projectTokenWidth))
+	if l.cost {
+		cells = append(cells, gap+alignRight(cost, projectCostWidth))
+	}
+	return m.fitRow(cells...)
+}
+
+// alignRight is padLeft for a cell that may already carry its style: the padding
+// is measured on the display width and kept outside the escapes.
+func alignRight(s string, w int) string {
+	return strings.Repeat(" ", max(0, w-lipgloss.Width(s))) + s
+}
+
+// projectRows is one project: its total across agents, then a row per agent,
+// indented beneath it.
 //
-// A label in parentheses is not a project but a bucket — (other), (temporary),
-// (unresolved) …, (unattributed) — and is drawn muted, so the eye goes to the
-// rows that name real work.
-func (m model) projectGroupRows(g []proto.ProjectUsage, l projectLayout) []string {
-	var total proto.ProjectUsage
-	for _, r := range g {
-		total.SessionTokens += r.SessionTokens
-		total.SessionCostUSD += r.SessionCostUSD
-		total.WeekTokens += r.WeekTokens
-		total.WeekCostUSD += r.WeekCostUSD
-	}
-	bucket := strings.HasPrefix(g[0].Project, "(")
-	name := pad(clipLabel(usage.ShortenHome(g[0].Project), l.name), l.name)
+// A label in parentheses is not a project but a bucket, and is drawn muted — its
+// bar too — so the eye goes to the rows that name real work. An agent row has no
+// bar of its own: its share is the figure beside it, and a second bar under every
+// project doubled the ink without saying more than the percentage does.
+func (m model) projectRows(p scopeProject, total int64, l projectLayout) []string {
+	bucket := isBucket(p.label)
+	name := pad(clipLabel(usage.ShortenHome(p.label), l.name), l.name)
 	mark := lipgloss.NewStyle().Foreground(colBrand).Render("▸ ")
+	barStyle := lipgloss.NewStyle().Foreground(colBrand)
 	if bucket {
-		name, mark = mutedStyle.Render(name), "  "
+		name, mark, barStyle = mutedStyle.Render(name), "  ", mutedStyle
 	}
-	out := []string{m.fitRow(mark+name,
-		gap+projectCell(total.SessionTokens, total.SessionCostUSD, l),
-		gap+projectCell(total.WeekTokens, total.WeekCostUSD, l))}
-	for _, r := range g {
-		out = append(out, m.fitRow("    "+mutedStyle.Render(pad(r.Vendor, l.name-2)),
-			gap+projectCell(r.SessionTokens, r.SessionCostUSD, l),
-			gap+projectCell(r.WeekTokens, r.WeekCostUSD, l)))
+	fraction := shareOf(p.tokens, total)
+	out := []string{m.projectRow(l, mark+name, barStyle.Render(usage.Bar(fraction, l.bar)),
+		shareCell(fraction), bareTokens(p.tokens), costCell(p.cost))}
+	for _, a := range p.agents {
+		out = append(out, m.projectRow(l, "    "+mutedStyle.Render(pad(a.label, l.name-2)),
+			strings.Repeat(" ", l.bar), shareCell(shareOf(a.tokens, total)), bareTokens(a.tokens), costCell(a.cost)))
 	}
 	return out
 }
 
-// projectCell is one scope's figure, "1.2M tok · $3.40", or a dash when the
-// scope saw nothing — a project idle this window is not "0 tok", it is a row
-// whose window column has nothing in it.
-//
-// The cost is there only when the whole figure fits the cell: never in the
-// narrow layout, and not for one too long for the wide one ($10000 and up). The
-// tokens then stand alone rather than the cell being clipped through the middle
-// of a number.
-func projectCell(tokens int64, cost float64, l projectLayout) string {
-	if tokens <= 0 && cost <= 0 {
-		return mutedStyle.Render(padLeft(unknownCell, l.cell))
+// shareOf is tokens as a fraction of the scope's total.
+func shareOf(tokens, total int64) float64 {
+	if total <= 0 {
+		return 0
 	}
-	cell := humanTokens(tokens)
-	if withCost := joinDot(cell, fmt.Sprintf("$%.2f", cost)); cost > 0 && lipgloss.Width(withCost) <= l.cell {
-		cell = withCost
+	return float64(tokens) / float64(total)
+}
+
+// shareCell is a share as a percentage. A share too small to round to one
+// percent says so rather than claiming 0% of a scope it did spend in.
+func shareCell(fraction float64) string {
+	// Rounding decides the edges, not the raw fraction: %.0f rounds a half to
+	// even, so 0.5% would print "0%" for a project that did spend, and 99.6%
+	// would print "100%" beside a bar that is visibly not full.
+	pct := fraction * 100
+	switch printed := fmt.Sprintf("%.0f", pct); {
+	case pct > 0 && printed == "0":
+		return "<1%"
+	case pct < 100 && printed == "100":
+		return "99%"
+	default:
+		return printed + "%"
 	}
-	return padLeft(cell, l.cell)
+}
+
+// costCell is a cost, or a muted dash when the reader priced nothing — an agent
+// whose tokens baton cannot price is not free, and "$0.00" would say it was. A
+// cost too long for its column drops its cents before it would be cut.
+func costCell(cost float64) string {
+	if cost <= 0 {
+		return mutedStyle.Render(unknownCell)
+	}
+	s := fmt.Sprintf("$%.2f", cost)
+	if lipgloss.Width(s) > projectCostWidth {
+		s = fmt.Sprintf("$%.0f", cost)
+	}
+	return s
 }
 
 // usageWeekNote says what the week column measures. It is not the same thing for

@@ -288,6 +288,9 @@ func TestHumanTokens(t *testing.T) {
 	cases := map[int64]string{
 		3_210_000_000: "3.2B tok",
 		1_000_000_000: "1.0B tok",
+		999_960_000:   "1.0B tok",
+		999_960:       "1.0M tok",
+		999_949:       "999.9K tok",
 		1_234_567:     "1.2M tok",
 		9_340:         "9.3K tok",
 		512:           "512 tok",

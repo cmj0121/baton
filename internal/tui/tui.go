@@ -422,12 +422,12 @@ type model struct {
 	// a way the footer has not.
 	usageFrom mode
 
-	// usageProjects is whether the overlay's lower section shows the projects
-	// table instead of the panel roster (p inside the overlay). It is view state,
-	// kept for the cockpit's run so reopening the overlay lands where it was left,
-	// and not saved: the footer's segment is a preference the config file owns,
-	// this is which half of one screen was last looked at.
-	usageProjects bool
+	// usageTab is the overlay's open tab — the account, or the projects by the
+	// window's or the week's spend (tab / shift+tab inside the overlay). It is view
+	// state, kept for the cockpit's run so reopening the overlay lands where it was
+	// left, and not saved: the footer's segment is a preference the config file
+	// owns, this is which page of one screen was last looked at.
+	usageTab usageTab
 
 	zoomID                string // panel being zoomed (modeZoom)
 	zoomTitle             string // its title, for the zoom footer

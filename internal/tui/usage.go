@@ -347,6 +347,15 @@ func limitCountdown(w *proto.LimitWindow, now time.Time) (time.Duration, bool) {
 // countdown then, instead of resting on the 0:00:00 a subtraction would floor at
 // — a number that would sit there for as long as nothing newer arrived.
 func (m model) usageCountdown() string {
+	if left := m.usageWindowLeft(); left != "" {
+		return "⏳ " + left
+	}
+	return ""
+}
+
+// usageWindowLeft is the countdown usageCountdown draws, without its glyph, for
+// the places that put it in a sentence of their own; empty under the same rules.
+func (m model) usageWindowLeft() string {
 	info := m.usageInfo
 	if info == nil || !info.Resets || info.Until == "" {
 		return ""
@@ -359,7 +368,7 @@ func (m model) usageCountdown() string {
 	if !ok {
 		return ""
 	}
-	return "⏳ " + usage.FormatCountdown(left)
+	return usage.FormatCountdown(left)
 }
 
 // usagePanelText is the focused work's line: what it has spent inside this window
@@ -505,14 +514,34 @@ func joinDot(a, b string) string {
 // humanTokens abbreviates a token count for the panel view, matching the form the
 // daemon renders the account total in.
 func humanTokens(n int64) string {
+	// The tiers switch at the value that ROUNDS up to the next unit, not at the unit
+	// itself: 999,960 would otherwise read "1000.0K", one cell wider than any other
+	// figure in its column.
 	switch {
-	case n >= 1_000_000_000:
+	case n >= 999_950_000:
 		return fmt.Sprintf("%.1fB tok", float64(n)/1e9)
-	case n >= 1_000_000:
+	case n >= 999_950:
 		return fmt.Sprintf("%.1fM tok", float64(n)/1e6)
 	case n >= 1_000:
 		return fmt.Sprintf("%.1fK tok", float64(n)/1e3)
 	default:
 		return fmt.Sprintf("%d tok", n)
+	}
+}
+
+// bareTokens is humanTokens without its unit, for a column of figures whose
+// header already names the unit. Repeating " tok" on every row of a table is
+// noise the eye has to step over to compare the numbers, and it is what used to
+// push a token figure off the column edge of the figure below it.
+func bareTokens(n int64) string {
+	switch { // the same rounding-aware tiers as humanTokens
+	case n >= 999_950_000:
+		return fmt.Sprintf("%.1fB", float64(n)/1e9)
+	case n >= 999_950:
+		return fmt.Sprintf("%.1fM", float64(n)/1e6)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fK", float64(n)/1e3)
+	default:
+		return fmt.Sprintf("%d", n)
 	}
 }
