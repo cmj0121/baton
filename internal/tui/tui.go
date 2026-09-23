@@ -5726,15 +5726,43 @@ func (m model) helpHint() string {
 
 // statsStrip renders the system CPU and memory readout as a surface-coloured
 // telemetry segment (e.g. "CPU 18%  MEM 9.2/16G"). It is blank until the first
-// sample lands, so the footer never shows a bogus 0/0.
+// sample lands, so the footer never shows a bogus 0/0. When the cockpit is
+// pointed at one agent panel whose opening cost is known, "SYS 44.0K" follows.
 func (m model) statsStrip() string {
-	if m.memTotal == 0 {
+	bar, barBold := m.bar(), m.barStrong()
+	var body string
+	if m.memTotal != 0 {
+		body = bar.Render(" CPU ") + barBold.Render(fmt.Sprintf("%.0f%%", m.cpuPct)) +
+			bar.Render("  MEM ") + barBold.Render(memLabel(m.memUsed, m.memTotal))
+	}
+	if n, ok := m.focusedOpening(); ok {
+		if body != "" {
+			body += bar.Render(" ")
+		}
+		body += bar.Render(" SYS ") + barBold.Render(bareTokens(n))
+	}
+	if body == "" {
 		return ""
 	}
-	bar, barBold := m.bar(), m.barStrong()
-	body := bar.Render(" CPU ") + barBold.Render(fmt.Sprintf("%.0f%%", m.cpuPct)) +
-		bar.Render("  MEM ") + barBold.Render(memLabel(m.memUsed, m.memTotal)) + bar.Render(" ")
-	return bar.Render(body)
+	return bar.Render(body + bar.Render(" "))
+}
+
+// focusedOpening is the opening cost of the one panel the cockpit is pointed at:
+// the tokens its session paid for the system prompt, tools, CLAUDE.md, memory and
+// listings before the conversation said anything. A group rolls up several
+// sessions, each paying its own, so a sum would describe no prompt anyone can
+// trim — it reads as nothing, like a shell or a panel whose first turn has not
+// landed.
+func (m model) focusedOpening() (int64, bool) {
+	if m.usageInfo == nil || len(m.usageInfo.Opening) == 0 {
+		return 0, false
+	}
+	_, ids, ok := m.usageFocus()
+	if !ok || len(ids) != 1 {
+		return 0, false
+	}
+	n, ok := m.usageInfo.Opening[ids[0]]
+	return n, ok
 }
 
 // memLabel formats a used/total byte pair in the total's unit, e.g. "9.2/16G".
