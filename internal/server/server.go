@@ -1664,12 +1664,37 @@ func (s *Server) refreshUsage() {
 	// holding mu across it would stall every panel event for the length of a walk.
 	// The week scan, when one is due, is the same and larger.
 	vendors, reports := s.vendorUsage(ctx)
-	var projects []proto.ProjectUsage
+	var plans map[string]weekPlan
+	var due bool
 	if reports != nil {
 		s.mu.Lock()
 		lim := s.limitsInfo
 		s.mu.Unlock()
-		weeks := s.refreshWeek(reports, lim)
+		plans, due = s.planWeek(reports, lim)
+	}
+
+	// The tick's fresh readings go out FIRST, beside the week figures already
+	// held, and only then is a due week scanned. The scan can take two ticks per
+	// vendor; run ahead of the broadcast, it held a new quota reading — the one
+	// figure that says whether the next turn is refused — back by that long. A
+	// held week figure stays paired with its own WeekSince, so the first send is
+	// consistent, only older; the second goes out only if the scan moved it.
+	s.publishUsage(text, snap, hold, vendors, reports, s.heldWeek(plans))
+	if due {
+		s.scanWeek(plans)
+		s.publishUsage(text, snap, hold, vendors, reports, s.heldWeek(plans))
+	}
+}
+
+// publishUsage builds the usage payload from this tick's readings and the given
+// week figures, holds it, and broadcasts it when it moved. The vendor rows are
+// copied before the week fields are set on them: a payload already broadcast
+// shares its slices with the caller's, and must not change in a client's hands.
+func (s *Server) publishUsage(text string, snap usage.Snapshot, hold bool,
+	vendors []proto.VendorUsage, reports []usage.VendorReport, weeks map[string]weekFigure) {
+	var projects []proto.ProjectUsage
+	if reports != nil {
+		vendors = slices.Clone(vendors)
 		for i := range vendors {
 			if f, ok := weeks[vendors[i].Vendor]; ok {
 				vendors[i].WeekSince = f.since.UTC().Format(time.RFC3339)

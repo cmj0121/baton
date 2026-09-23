@@ -51,6 +51,14 @@ type weekUsage struct {
 
 	held  map[string]weekFigure // the last successful week scan per vendor
 	ranAt time.Time             // when the week was last scanned; zero before the first
+
+	// promoted is the quota week start a vendor's first stated reset has already
+	// forced a scan for. The forced scan happens once per start: if it fails, the
+	// held figure is still a rolling week, and without this every tick would force
+	// another scan that fails the same way, each one costing its whole budget.
+	promoted map[string]time.Time
+
+	scan weekScanFunc // injectable reader; nil means usage.VendorSince
 }
 
 // weekFigure is one vendor's week scan and what its start was.
@@ -134,72 +142,135 @@ func weekEligible(r usage.VendorReport) bool {
 	return r.State != usage.VendorAbsent && usage.HasVendorReader(r.Vendor)
 }
 
-// refreshWeek rescans the week when one is due and returns the held figures for
-// every eligible vendor. It runs outside mu: it walks a week of session logs.
+// weekPlan is where one vendor's week starts this tick, and whether that start
+// is its quota week's.
+type weekPlan struct {
+	since time.Time
+	quota bool
+}
+
+// weekScanFunc reads one vendor's spend from since: usage.VendorSince, unless a
+// test put something slower or failing in its place.
+type weekScanFunc func(ctx context.Context, vendor string, since time.Time) (usage.Snapshot, bool, error)
+
+// refreshWeek plans the week, rescans it when one is due, and returns the held
+// figures for every eligible vendor. It runs outside mu: it walks a week of
+// session logs. refreshUsage does the same in two halves (planWeek, then
+// scanWeek after a broadcast) so the scan cannot delay the quota bars; this is
+// the one-call form for a caller with nothing to send in between.
+func (s *Server) refreshWeek(reports []usage.VendorReport, lim *proto.LimitsInfo) map[string]weekFigure {
+	plans, due := s.planWeek(reports, lim)
+	if due {
+		s.scanWeek(plans)
+	}
+	return s.heldWeek(plans)
+}
+
+// planWeek works out where every eligible vendor's week starts now, and whether
+// a scan is due. It reads no logs, so it is cheap enough to run before the tick
+// broadcasts.
 //
 // A scan is due on the first poll, once the cadence has elapsed, when a
 // remembered reset has passed, and when a vendor states a reset for the first
 // time (its held figure is a rolling week and now has a real start). Between
 // scans the held figure stands, start included — the WeekSince on the wire
 // always describes the figures beside it.
-//
-// A vendor whose scan fails keeps what it had: a week read short by an unknown
-// amount is worse than one read five minutes ago. It is not retried before the
-// cadence comes round, either — a scan that failed by running out of time would
-// fail the same way on every thirty-second tick.
-func (s *Server) refreshWeek(reports []usage.VendorReport, lim *proto.LimitsInfo) map[string]weekFigure {
+func (s *Server) planWeek(reports []usage.VendorReport, lim *proto.LimitsInfo) (map[string]weekPlan, bool) {
 	w := &s.week
 	now := w.clock()
 	due := w.ranAt.IsZero() || now.Sub(w.ranAt) >= w.interval()
-	type plan struct {
-		since time.Time
-		quota bool
-	}
-	plans := make(map[string]plan)
+	plans := make(map[string]weekPlan)
 	for _, r := range reports {
 		if !weekEligible(r) {
 			continue
 		}
 		since, quota, passed := w.start(r.Vendor, weekResetSeen(r, lim), now)
-		plans[r.Vendor] = plan{since, quota}
-		if held, ok := w.held[r.Vendor]; passed || (ok && quota && !held.quota) {
+		plans[r.Vendor] = weekPlan{since, quota}
+		if passed {
+			due = true
+		}
+		if held, ok := w.held[r.Vendor]; ok && quota && !held.quota && !w.promoted[r.Vendor].Equal(since) {
+			if w.promoted == nil {
+				w.promoted = make(map[string]time.Time)
+			}
+			w.promoted[r.Vendor] = since
 			due = true
 		}
 	}
-	if due {
-		ctx, cancel := context.WithTimeout(context.Background(), s.weekScanTimeout())
-		defer cancel()
-		for vendor, p := range plans {
-			snap, ok, err := usage.VendorSince(ctx, vendor, p.since)
-			if err != nil {
-				log.Warn().Err(err).Str("vendor", vendor).Msg("week usage scan failed; keeping the last figures")
-				continue
-			}
-			if !ok {
-				continue
-			}
-			if w.held == nil {
-				w.held = make(map[string]weekFigure)
-			}
-			w.held[vendor] = weekFigure{since: p.since, quota: p.quota, snap: snap}
-		}
-		w.ranAt = now
+	return plans, due
+}
+
+// scanWeek reads every planned vendor's week and holds what succeeded.
+//
+// Vendors go in sorted order, each with a budget of its own (weekScanTimeout),
+// so which vendor a slow disk costs is the same from one scan to the next, and
+// one vendor's slow walk cannot spend another's time — under one shared budget
+// in map order, a big Claude week would starve grok's on some ticks and not on
+// others.
+//
+// A vendor whose scan fails keeps what it had: a week read short by an unknown
+// amount is worse than one read five minutes ago. It is not retried before the
+// cadence comes round, either — a scan that failed by running out of time would
+// fail the same way on every thirty-second tick.
+func (s *Server) scanWeek(plans map[string]weekPlan) {
+	w := &s.week
+	started := w.clock()
+	scan := w.scan
+	if scan == nil {
+		scan = usage.VendorSince
 	}
+	vendors := make([]string, 0, len(plans))
+	for v := range plans {
+		vendors = append(vendors, v)
+	}
+	sort.Strings(vendors)
+	for _, vendor := range vendors {
+		p := plans[vendor]
+		began := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), s.weekScanTimeout())
+		snap, ok, err := scan(ctx, vendor, p.since)
+		cancel()
+		elapsed := time.Since(began)
+		if err != nil {
+			log.Warn().Err(err).Str("vendor", vendor).Dur("elapsed", elapsed).
+				Msg("week usage scan failed; keeping the last figures")
+			continue
+		}
+		if !ok {
+			continue
+		}
+		log.Debug().Str("vendor", vendor).Dur("elapsed", elapsed).
+			Int("projects", len(snap.Projects)).Int64("tokens", snap.TotalTokens()).
+			Msg("week usage scanned")
+		if w.held == nil {
+			w.held = make(map[string]weekFigure)
+		}
+		w.held[vendor] = weekFigure{since: p.since, quota: p.quota, snap: snap}
+	}
+	w.ranAt = started
+}
+
+// heldWeek is the held figure of every planned vendor that has one.
+func (s *Server) heldWeek(plans map[string]weekPlan) map[string]weekFigure {
 	out := make(map[string]weekFigure, len(plans))
 	for vendor := range plans {
-		if f, ok := w.held[vendor]; ok {
+		if f, ok := s.week.held[vendor]; ok {
 			out[vendor] = f
 		}
 	}
 	return out
 }
 
-// weekScanTimeout bounds one week scan: the cadence, but never more than two
-// usage ticks. The scan runs on the usage loop's goroutine — the one that also
-// refreshes the rate-limit bars and the window figures — so a week scan allowed
-// the whole five-minute cadence could freeze the quota bars for five minutes on a
-// slow disk. Two ticks lets a big week finish while costing the bars at most one
-// missed refresh; a scan that needs longer fails, keeps its last figures, and is
+// weekScanTimeout bounds one vendor's week scan: the cadence, but never more
+// than two usage ticks. The scan runs on the usage loop's goroutine — the one
+// that also refreshes the rate-limit bars and the window figures. The tick has
+// already broadcast its fresh bars before the scan starts (see refreshUsage), so
+// a slow scan delays the NEXT refresh, not this one: the ticker drops the ticks
+// it misses, and a scan allowed the whole five-minute cadence could hold the
+// bars still for five minutes on a slow disk. The budget is per vendor, so the
+// worst case for a whole scan is two ticks times the vendors with a reader —
+// about two minutes for claude and grok on the default tick. Two ticks per vendor
+// lets a big week finish; a scan that needs longer fails, keeps its last figures, and is
 // tried again at the next cadence. A server with no tick (a test) keeps the
 // cadence as its bound.
 func (s *Server) weekScanTimeout() time.Duration {

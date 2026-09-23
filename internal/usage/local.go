@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -275,12 +276,20 @@ func (p *LocalProvider) walk(ctx context.Context, cutoff, now time.Time) (*scan,
 	sc := newFormatScan(cutoff, now, p.format)
 	err := filepath.WalkDir(p.dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // an unreadable dir/file is skipped, not fatal to the whole scan
+			// An unreadable dir/file is skipped, not fatal to the whole scan — but it
+			// is counted, since what it held is missing from the total.
+			sc.skip(err)
+			return nil
 		}
 		if d.IsDir() || !sc.format.carries(path) {
 			return nil
 		}
-		if info, ierr := d.Info(); ierr != nil || info.ModTime().Before(cutoff) {
+		info, ierr := d.Info()
+		if ierr != nil {
+			sc.skip(ierr)
+			return nil
+		}
+		if info.ModTime().Before(cutoff) {
 			return nil // no message inside the range can live in a file last written before it
 		}
 		if ctx.Err() != nil {
@@ -300,6 +309,12 @@ func (p *LocalProvider) walk(ctx context.Context, cutoff, now time.Time) (*scan,
 	if sc.oversized > 0 {
 		log.Warn().Int("lines", sc.oversized).Int("limit", maxTranscriptLine).
 			Msg("usage under-counts: transcript lines past the size limit were skipped")
+	}
+	// The same for a log the walk could not read: said once, with a count, because
+	// a permissions problem that hides one session's log tends to hide a directory.
+	if sc.unreadable > 0 {
+		log.Warn().Int("entries", sc.unreadable).Str("dir", p.dir).
+			Msg("usage under-counts: unreadable log entries were skipped")
 	}
 	return sc, nil
 }
@@ -369,6 +384,21 @@ type scan struct {
 	// thing that produces an oversized line tends to produce a lot of them, and a
 	// log line each would be the disk-filling this cap exists to stop.
 	oversized int
+
+	// unreadable counts the directories and logs the walk had to skip because
+	// they could not be read (a permission denied, a log that is not a regular
+	// file). Kept, like oversized, so the gap is said once per scan with a count.
+	// An entry that vanished mid-walk is not counted: a log that no longer exists
+	// holds no spend the total is missing, and the root not existing at all is
+	// simply a vendor never run here.
+	unreadable int
+}
+
+// skip records one entry the walk could not read; see unreadable.
+func (sc *scan) skip(err error) {
+	if !errors.Is(err, fs.ErrNotExist) {
+		sc.unreadable++
+	}
 }
 
 func newScan(cutoff, now time.Time) *scan {
@@ -523,6 +553,7 @@ const maxTranscriptLine = 16 << 20
 func (sc *scan) transcript(path, project, session string) {
 	f, err := paths.OpenRegular(path)
 	if err != nil {
+		sc.skip(err)
 		return
 	}
 	defer func() { _ = f.Close() }()

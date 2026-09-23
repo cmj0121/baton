@@ -1,10 +1,13 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -151,6 +154,36 @@ func TestAFirstStatedResetForcesARescan(t *testing.T) {
 	lim := &proto.LimitsInfo{SevenDay: &proto.LimitWindow{ResetsAt: reset.UTC().Format(time.RFC3339)}}
 	if f := s.refreshWeek(reports, lim)["claude"]; !f.quota || !f.since.Equal(reset.Add(-week)) {
 		t.Errorf("first reset: since %v quota %v, want the quota week from %v", f.since, f.quota, reset.Add(-week))
+	}
+}
+
+// A first stated reset forces one scan, not one per tick: when that scan fails
+// the held figure is still a rolling week, and forcing again on every tick would
+// spend a whole scan budget each time on a scan that fails the same way.
+func TestAFailedPromotionIsNotRetriedEveryTick(t *testing.T) {
+	base := time.Now().Truncate(time.Second)
+	cur := base
+	s := weekServer(&cur)
+	calls := 0
+	fail := false
+	s.week.scan = func(_ context.Context, _ string, since time.Time) (usage.Snapshot, bool, error) {
+		calls++
+		if fail {
+			return usage.Snapshot{}, true, errors.New("slow disk")
+		}
+		return usage.Snapshot{Since: since}, true, nil
+	}
+	reports := []usage.VendorReport{{Vendor: "claude", State: usage.VendorReading}}
+	s.refreshWeek(reports, nil) // the rolling week, held
+	fail = true
+	reset := base.Add(24 * time.Hour)
+	lim := &proto.LimitsInfo{SevenDay: &proto.LimitWindow{ResetsAt: reset.UTC().Format(time.RFC3339)}}
+	for i := 1; i <= 3; i++ {
+		cur = base.Add(time.Duration(i) * time.Minute)
+		s.refreshWeek(reports, lim)
+	}
+	if calls != 2 {
+		t.Errorf("%d scans, want 2: the first poll and ONE forced by the first stated reset", calls)
 	}
 }
 
@@ -459,6 +492,224 @@ func TestTheWeekScanTimeoutIsCappedByTheTick(t *testing.T) {
 		s.week.every = c.every
 		if got := s.weekScanTimeout(); got != c.want {
 			t.Errorf("every %v, tick %v: timeout %v, want %v", c.every, c.tick, got, c.want)
+		}
+	}
+}
+
+// fiveHourLimits is a limits source whose five-hour window reads used, set by
+// the test between ticks, and whose seven-day window resets at reset (none when
+// zero).
+type fiveHourLimits struct {
+	used  float64
+	reset time.Time
+}
+
+func (l *fiveHourLimits) Limits(context.Context) (usage.Limits, bool) {
+	out := usage.Limits{FiveHour: &usage.Window{UsedPercent: l.used}, Source: "stub"}
+	if !l.reset.IsZero() {
+		out.SevenDay = &usage.Window{ResetsAt: l.reset}
+	}
+	return out, true
+}
+func (l *fiveHourLimits) Source() string { return "stub" }
+
+// weekTokens is a week scan's snapshot: n tokens in one project directory.
+func weekTokens(n int64) usage.Snapshot {
+	return usage.Snapshot{Projects: map[string]usage.SessionUsage{"-p-a": {Tokens: n}}}
+}
+
+// A due week scan does not hold back the tick's fresh quota reading: the new
+// limits go out first, beside the week figures already held, and the rescanned
+// week follows in a second update once the scan returns. Scanned first, a slow
+// week held the one figure that says whether the next turn is refused back by
+// up to two ticks.
+func TestADueWeekScanDoesNotDelayTheLimits(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", root)
+	base := time.Now().Truncate(time.Second)
+	appendClaudeLine(t, root, "-p-a", "s1", "/p/a", "m1", base.Add(-time.Minute), 1)
+
+	cur := base
+	s := weekServer(&cur)
+	lim := &fiveHourLimits{used: 10}
+	s.usageWindow, s.usageInterval, s.limitsProvider = 5*time.Hour, time.Minute, lim
+	s.agents = []proto.AgentBackend{{Name: "claude", Command: "claude"}}
+	cc := &clientConn{out: make(chan proto.ServerMsg, 8), greeted: true}
+	s.clients = map[*clientConn]struct{}{cc: {}}
+
+	started, release := make(chan struct{}), make(chan struct{})
+	scans := 0
+	s.week.scan = func(context.Context, string, time.Time) (usage.Snapshot, bool, error) {
+		scans++
+		if scans == 1 {
+			return weekTokens(10), true, nil
+		}
+		close(started)
+		<-release
+		return weekTokens(25), true, nil
+	}
+	s.refreshUsage() // the first poll: held week of 10
+	for len(cc.out) > 0 {
+		<-cc.out
+	}
+
+	lim.used = 55
+	cur = base.Add(2 * time.Hour) // past the hour cadence: a scan is due
+	done := make(chan struct{})
+	go func() { defer close(done); s.refreshUsage() }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("the due week scan never started")
+	}
+
+	weekOf := func(m proto.ServerMsg) int64 {
+		if m.UsageInfo == nil || len(m.UsageInfo.Projects) == 0 {
+			return -1
+		}
+		return m.UsageInfo.Projects[0].WeekTokens
+	}
+	usedOf := func(m proto.ServerMsg) float64 {
+		if m.UsageInfo == nil || m.UsageInfo.Limits == nil || m.UsageInfo.Limits.FiveHour == nil {
+			return -1
+		}
+		return m.UsageInfo.Limits.FiveHour.UsedPercent
+	}
+	var first proto.ServerMsg
+	var firstSince string
+	select {
+	case first = <-cc.out:
+		if usedOf(first) != 55 || weekOf(first) != 10 {
+			t.Errorf("sent during the scan: five-hour %v%%, week %d tokens; want the new 55%% beside the held 10", usedOf(first), weekOf(first))
+		}
+		if len(first.UsageInfo.Vendors) == 1 {
+			firstSince = first.UsageInfo.Vendors[0].WeekSince
+		}
+	default:
+		t.Error("nothing was sent while the week scanned: the new limits waited on it")
+	}
+	close(release)
+	<-done
+	// The rescan moved the rolling week's start; the update already in the
+	// client's hands must still say the start of the figures it carried.
+	if first.UsageInfo != nil && len(first.UsageInfo.Vendors) == 1 && first.UsageInfo.Vendors[0].WeekSince != firstSince {
+		t.Errorf("the first update's WeekSince changed from %q to %q after it was sent", firstSince, first.UsageInfo.Vendors[0].WeekSince)
+	}
+
+	select {
+	case m := <-cc.out:
+		if usedOf(m) != 55 || weekOf(m) != 25 {
+			t.Errorf("sent after the scan: five-hour %v%%, week %d tokens; want 55%% and the rescanned 25", usedOf(m), weekOf(m))
+		}
+	default:
+		t.Error("the rescanned week was never sent")
+	}
+	if n := len(cc.out); n != 0 {
+		t.Errorf("%d more updates after the rescanned week, want none", n)
+	}
+}
+
+// A due week that the scan leaves as it was sends nothing more: the second
+// update exists for the week moving, not for the scan having run.
+func TestAWeekScanThatChangesNothingSendsOnce(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	cur := time.Now().Truncate(time.Second)
+	s := weekServer(&cur)
+	// A quota week, so the start holds still across the two ticks: a rolling one
+	// moves with the clock, and its moved WeekSince would rightly be news.
+	lim := &fiveHourLimits{used: 10, reset: cur.Add(3 * 24 * time.Hour)}
+	s.usageWindow, s.usageInterval, s.limitsProvider = 5*time.Hour, time.Minute, lim
+	s.agents = []proto.AgentBackend{{Name: "claude", Command: "claude"}}
+	cc := &clientConn{out: make(chan proto.ServerMsg, 8), greeted: true}
+	s.clients = map[*clientConn]struct{}{cc: {}}
+	s.week.scan = func(context.Context, string, time.Time) (usage.Snapshot, bool, error) {
+		return weekTokens(10), true, nil
+	}
+	s.refreshUsage()
+	for len(cc.out) > 0 {
+		<-cc.out
+	}
+	lim.used = 20
+	cur = cur.Add(2 * time.Hour)
+	s.refreshUsage()
+	if n := len(cc.out); n != 1 {
+		t.Errorf("%d updates for a new limits reading and an unchanged week, want 1", n)
+	}
+}
+
+// Vendors are week-scanned in sorted order, each on its own budget: one that
+// spends its whole timeout neither changes who goes first nor leaves the next
+// an expired context. Under one shared budget in map order, a slow Claude week
+// starved grok's on some ticks and not others.
+func TestEachVendorWeekScanHasItsOwnBudget(t *testing.T) {
+	reports := []usage.VendorReport{
+		{Vendor: "grok", State: usage.VendorReading},
+		{Vendor: "claude", State: usage.VendorReading},
+	}
+	for range 8 { // map order is random; one pass could pass by luck
+		cur := time.Now()
+		s := weekServer(&cur)
+		s.usageInterval = 20 * time.Millisecond // a 40ms budget per vendor
+		var order []string
+		s.week.scan = func(ctx context.Context, vendor string, _ time.Time) (usage.Snapshot, bool, error) {
+			order = append(order, vendor)
+			if vendor == "claude" {
+				<-ctx.Done() // the slow disk: the whole budget, and then some
+				return usage.Snapshot{}, true, ctx.Err()
+			}
+			if err := ctx.Err(); err != nil {
+				return usage.Snapshot{}, true, err
+			}
+			return weekTokens(7), true, nil
+		}
+		got := s.refreshWeek(reports, nil)
+		if !slices.Equal(order, []string{"claude", "grok"}) {
+			t.Fatalf("scan order = %v, want [claude grok]", order)
+		}
+		if _, ok := got["claude"]; ok {
+			t.Error("claude's timed-out week was held")
+		}
+		if f, ok := got["grok"]; !ok || f.snap.Projects["-p-a"].Tokens != 7 {
+			t.Fatalf("grok's week = %+v (held %v), want its 7 tokens — claude's slow scan spent grok's budget", f, ok)
+		}
+	}
+}
+
+// Each vendor's week scan leaves a line: Debug with how long it took and what it
+// read when it worked, Warn with how long it took when it did not.
+func TestWeekScansAreLogged(t *testing.T) {
+	logs := captureLog(t)
+	cur := time.Now()
+	s := weekServer(&cur)
+	s.week.scan = func(_ context.Context, vendor string, _ time.Time) (usage.Snapshot, bool, error) {
+		if vendor == "claude" {
+			return usage.Snapshot{}, true, fmt.Errorf("disk on fire")
+		}
+		return usage.Snapshot{Input: 7, Projects: map[string]usage.SessionUsage{"-p-a": {Tokens: 7}}}, true, nil // Input is what TotalTokens sums
+	}
+	s.refreshWeek([]usage.VendorReport{
+		{Vendor: "claude", State: usage.VendorReading},
+		{Vendor: "grok", State: usage.VendorReading},
+	}, nil)
+
+	var failed, scanned string
+	for _, l := range strings.Split(logs(), "\n") {
+		switch {
+		case strings.Contains(l, "week usage scan failed"):
+			failed = l
+		case strings.Contains(l, "week usage scanned"):
+			scanned = l
+		}
+	}
+	for _, want := range []string{`"level":"warn"`, `"vendor":"claude"`, `"elapsed":`, "disk on fire"} {
+		if !strings.Contains(failed, want) {
+			t.Errorf("the failed scan's line %q lacks %s", failed, want)
+		}
+	}
+	for _, want := range []string{`"level":"debug"`, `"vendor":"grok"`, `"elapsed":`, `"projects":1`, `"tokens":7`} {
+		if !strings.Contains(scanned, want) {
+			t.Errorf("the scan's line %q lacks %s", scanned, want)
 		}
 	}
 }
