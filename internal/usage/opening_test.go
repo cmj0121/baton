@@ -172,3 +172,26 @@ func TestEstimateTokens(t *testing.T) {
 		}
 	}
 }
+
+// TestOpeningRootIsNotAPattern: a root whose path holds glob metacharacters is
+// still a plain directory.
+func TestOpeningRootIsNotAPattern(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "home[1]")
+	dir := filepath.Join(root, "proj")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "stray.jsonl"), nil, 0o600); err != nil {
+		t.Fatal(err) // a file beside the project directories is passed over
+	}
+	const id = "0b1c2d3e-0000-4000-8000-000000000003"
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(openFirstTurn+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := Opening(root, id); !ok || got != 44002 {
+		t.Fatalf("Opening = (%d, %v), want (44002, true)", got, ok)
+	}
+	if _, ok := Opening(filepath.Join(root, "missing"), id); ok {
+		t.Fatal("Opening read from a root that does not exist")
+	}
+}

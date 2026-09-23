@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"os"
 	"path/filepath"
 	"unicode/utf8"
 
@@ -58,22 +59,29 @@ func Opening(root, session string) (tokens int64, ok bool) {
 	}
 	// The project directory is found rather than computed: Claude Code shortens a
 	// long cwd's directory name with a hash no cwd encodes to, while a session id is
-	// a UUID no two directories share.
-	matches, err := filepath.Glob(filepath.Join(root, "*", session+".jsonl"))
-	if err != nil || len(matches) == 0 {
-		return 0, false
-	}
-	f, err := paths.OpenRegular(matches[0])
+	// a UUID no two directories share. Listed rather than globbed, so a root whose
+	// path happens to hold a "[" is not read as a pattern.
+	dirs, err := os.ReadDir(root)
 	if err != nil {
 		return 0, false
 	}
-	defer func() { _ = f.Close() }()
-	return openingOf(io.LimitReader(f, maxOpeningRead))
+	for _, d := range dirs {
+		if !d.IsDir() {
+			continue
+		}
+		f, err := paths.OpenRegular(filepath.Join(root, d.Name(), session+".jsonl"))
+		if err != nil {
+			continue
+		}
+		defer func() { _ = f.Close() }()
+		return openingOf(io.LimitReader(f, maxOpeningRead))
+	}
+	return 0, false
 }
 
 // sessionIDShape reports whether s can be a session id: letters, digits and
-// dashes only. The id is spliced into a glob, so anything else — a separator, a
-// "*" — would reach some other session's transcript, or several.
+// dashes only. The id is spliced into a path, so anything else — a separator, a
+// ".." — would reach some other file.
 func sessionIDShape(s string) bool {
 	if s == "" {
 		return false
