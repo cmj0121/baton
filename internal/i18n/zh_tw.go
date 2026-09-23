@@ -184,6 +184,19 @@ var zhTW = map[string]string{
 	"usage.view.panels-one":   "個面板",
 	"usage.view.panels-many":  "個面板",
 
+	// The projects table (p inside the usage overlay): spend by project, in the
+	// window and in the week, across every agent baton can read.
+	"usage.view.no-projects":     "沒有各專案的數字 — daemon 版本較舊，或還沒有任何用量",
+	"usage.view.project":         "專案",
+	"usage.view.project-session": "工作階段",
+	"usage.view.project-week":    "本週",
+	"usage.view.more-projects":   "還有 %d 個",
+	"usage.view.week-is":         "本週：",
+	"usage.view.last-7d":         "最近 7 天",
+	"usage.view.since":           "自 %s 起",
+	"usage.legend.projects":      "專案",
+	"usage.legend.panels":        "面板",
+
 	// The working-directory features.
 	"panel.here.unknown": "那個面板的目錄不明;改在預設工作目錄開啟",
 

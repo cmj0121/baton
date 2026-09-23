@@ -75,14 +75,18 @@ func (m model) closeUsage() (tea.Model, tea.Cmd) {
 
 // handleUsageKey owns the keyboard while the overlay is up. There is nothing to
 // scroll — the reading is four rows and a bounded roster — so the only verbs are
-// leaving and cycling the footer segment, which is the setting a user is most
-// likely to want to change while looking straight at what it shows.
+// leaving, cycling the footer segment, which is the setting a user is most
+// likely to want to change while looking straight at what it shows, and turning
+// the lower section between the panels and the projects.
 func (m model) handleUsageKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "esc", "q":
 		return m.closeUsage()
 	case "u":
 		return m.cycleUsageMode()
+	case "p":
+		m.usageProjects = !m.usageProjects
+		return m, nil
 	}
 	return m, nil
 }
@@ -103,6 +107,12 @@ func (m model) usageView() string {
 		body := []string{sectionStyle.Render(spaced(m.tr("usage.title", "ACCOUNT USAGE"))), "",
 			mutedStyle.Render(i18n.T(m.effLang(), "usage.view.no-reading",
 				"no quota reading yet — a Claude Code panel reports one after its first turn"))}
+		if m.usageProjects {
+			// The projects are baton's own reading, as the roll is: no quota source
+			// is needed for them, so the toggle works here too.
+			body = append(body, "")
+			body = append(body, m.usageProjectSection()...)
+		}
 		if vendors := m.usageVendorSection(); len(vendors) > 0 {
 			body = append(body, "")
 			body = append(body, vendors...)
@@ -112,7 +122,10 @@ func (m model) usageView() string {
 	}
 
 	rows := m.usageBars(lim)
-	if roster := m.usageRoster(); len(roster) > 0 {
+	if m.usageProjects {
+		rows = append(rows, "")
+		rows = append(rows, m.usageProjectSection()...)
+	} else if roster := m.usageRoster(); len(roster) > 0 {
 		rows = append(rows, "", m.usageRosterHeader())
 		rows = append(rows, roster...)
 	}
@@ -670,7 +683,12 @@ func (m model) usageReadingAge() (time.Duration, bool) {
 	return usage.Limits{At: at}.Age(m.now), true
 }
 
-// usageLegend is the overlay's key hint.
+// usageLegend is the overlay's key hint. The p entry names where the key goes,
+// not where the view is: a legend is read to decide what to press.
 func (m model) usageLegend() string {
-	return legend("u", m.tr("usage.legend.cycle", "cycle footer"), "esc", m.tr("legend.close", "close"))
+	target := m.tr("usage.legend.projects", "projects")
+	if m.usageProjects {
+		target = m.tr("usage.legend.panels", "panels")
+	}
+	return legend("u", m.tr("usage.legend.cycle", "cycle footer"), "p", target, "esc", m.tr("legend.close", "close"))
 }
