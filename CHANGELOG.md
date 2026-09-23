@@ -4,6 +4,17 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v2.4.2](https://github.com/cmj0121/baton/releases/tag/v2.4.2) — SYS follows the session you are in
+
+2026-09-23
+
+- **`/clear` and `/resume` are followed.** A Claude Code panel's status line now reports the session the panel is on,
+  and the next usage poll moves the panel onto it, so `SYS` stops going blank after a `/clear`.
+- **The panel's usage share follows too.** Spend after a `/clear` is counted for the panel, and a `/resume` back to an
+  earlier session counts that transcript once.
+- **Scoped to what baton launched.** Only panels with baton's status line are followed; one started with its own
+  `--settings` is not, and neither is a server that keeps no state on disk.
+
 ## [v2.4.1](https://github.com/cmj0121/baton/releases/tag/v2.4.1) — what an agent pays before it says a word
 
 2026-09-23
