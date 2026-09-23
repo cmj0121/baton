@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/cmj0121/baton/internal/proto"
 )
 
 // TestFooterShowsOpening: the panel the cockpit is pointed at shows its opening
@@ -83,5 +85,21 @@ func TestFooterWithOpeningFillsWidth(t *testing.T) {
 		if got := lipgloss.Width(foot); got != w {
 			t.Fatalf("w=%d: footer width = %d", w, got)
 		}
+	}
+}
+
+// TestOpeningOnlyPayloadLeavesPanelViewBlank: a payload carrying only opening
+// costs has no window in it, and the panel view reads it as no payload — not as
+// "not attributed".
+func TestOpeningOnlyPayloadLeavesPanelViewBlank(t *testing.T) {
+	m := usageModel(usagePanel)
+	m.usageText = ""
+	m.usageInfo = &proto.UsageInfo{Opening: map[string]int64{"p1": 44_002}}
+	m.cursor = 0
+	if got := m.usagePanelText(); got != "" {
+		t.Errorf("usagePanelText = %q, want blank", got)
+	}
+	if !strings.Contains(m.statsStrip(), "SYS") {
+		t.Error("the footer lost SYS with no window in the payload")
 	}
 }

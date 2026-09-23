@@ -378,7 +378,9 @@ func (m model) usageWindowLeft() string {
 func (m model) usagePanelText() string {
 	info := m.usageInfo
 	title, ids, ok := m.usageFocus()
-	if info == nil || !ok {
+	// A payload carrying only the footer's opening costs has no window in it at
+	// all, and must read as blank like no payload, not as "not attributed".
+	if info == nil || !ok || info.Source == "" && info.Tokens == 0 && len(info.Panels) == 0 {
 		return ""
 	}
 	var tokens int64
