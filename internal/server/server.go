@@ -384,6 +384,16 @@ type Server struct {
 	opening     map[string]int64
 	openingRead func(session string) (int64, bool)
 
+	// launched is the session id each panel's current run was started with, keyed
+	// by panel id: the name its status line records the panel's live session under
+	// in liveDir, which /clear and /resume move off the launched one (see
+	// followLiveSessions). liveDir is empty when the server keeps no state on disk,
+	// and then panels are not followed at all. liveRead reads one launch's record;
+	// nil reads the file. Guarded by mu.
+	launched map[string]string
+	liveDir  string
+	liveRead func(launch string) (string, bool)
+
 	// Restart supervision. restart is the fleet-wide policy and agentRestart the
 	// per-profile ones layered over it (see Settings); restarts holds the live
 	// bookkeeping per panel — failure count, run clock, armed timer. shuttingDown
@@ -1037,6 +1047,7 @@ func New(ln net.Listener, opts ...Option) *Server {
 		base := strings.TrimSuffix(s.stateF, ".state.json")
 		s.qstore = queue.New(base+".queue", time.Now)
 		s.wtrees = worktree.New(base + ".worktrees.json")
+		s.liveDir = base + ".live"
 	}
 
 	var pmOpts []ptymgr.Option
@@ -1164,16 +1175,24 @@ func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 	// spec the caller retains for respawn must stay free of the id, because
 	// re-using one fails the next launch outright (see session.go).
 	spec, session := withSessionID(spec)
+	var live string
 	if session != "" {
 		s.mu.Lock()
 		s.sessions[id] = append(s.sessions[id], session)
+		if s.launched == nil {
+			s.launched = make(map[string]string)
+		}
+		s.launched[id] = session
+		if s.liveDir != "" {
+			live = filepath.Join(s.liveDir, session)
+		}
 		s.mu.Unlock()
 	}
 
 	// …and a status line that harvests the account's rate limits on the way past.
 	// Same rule as the session id: the launched copy only, never the spec kept for
 	// respawn, so a re-run re-resolves whatever status line the user has by then.
-	spec, _ = withStatusLine(spec, s.limitsSelf)
+	spec, _ = withStatusLine(spec, s.limitsSelf, live)
 
 	// …and the fleet memory's write tool, under the same rule again: a worker
 	// panel is pointed at baton's own MCP config every time it starts, so a
@@ -1672,6 +1691,7 @@ func (s *Server) refreshUsage() {
 	// holding mu across it would stall every panel event for the length of a walk.
 	// The week scan, when one is due, is the same and larger.
 	vendors, reports := s.vendorUsage(ctx)
+	s.followLiveSessions()
 	s.refreshOpening()
 	var plans map[string]weekPlan
 	var due bool
@@ -5281,6 +5301,7 @@ func (s *Server) pruneExitedLocked() (stop []string) {
 			delete(s.specs, p.ID)
 			delete(s.memoryTool, p.ID)
 			delete(s.sessions, p.ID)
+			delete(s.launched, p.ID)
 			s.forgetRestartLocked(p.ID)
 			s.forgetCwdLocked(p.ID)
 			delete(s.declared, p.ID)
@@ -6330,6 +6351,7 @@ func (s *Server) closePanel(id string) error {
 	delete(s.specs, id)           // the panel is gone for good; drop its retained spawn spec
 	delete(s.memoryTool, id)      // …and how its last launch went for the memory's tool
 	delete(s.sessions, id)        // …and the session ids its usage was attributed through
+	delete(s.launched, id)        // …and the launch its live session was followed from
 	s.forgetRestartLocked(id)     // …and any restart armed for it: it must not come back
 	s.forgetCwdLocked(id)         // …and the output tail kept to read its directory reports
 	delete(s.declared, id)        // …and whatever it had said about needing a human
@@ -6811,6 +6833,7 @@ func (s *Server) purgeExited() int {
 			delete(s.specs, p.ID) // purged for good; drop its retained spawn spec
 			delete(s.memoryTool, p.ID)
 			delete(s.sessions, p.ID) // …and the session ids its usage was attributed through
+			delete(s.launched, p.ID)
 			s.forgetRestartLocked(p.ID)
 			s.forgetCwdLocked(p.ID)
 			continue

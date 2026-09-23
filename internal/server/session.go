@@ -107,8 +107,9 @@ const settingsFlag = "--settings"
 //     something else in its place would trade the user's setup for a number.
 //
 // self is the path to baton's own binary; with none, there is nothing to point
-// the status line at.
-func withStatusLine(spec ptymgr.Spec, self string) (ptymgr.Spec, bool) {
+// the status line at. live, when set, is the file the sink records the panel's
+// current session in (see usage.WriteLiveSession).
+func withStatusLine(spec ptymgr.Spec, self, live string) (ptymgr.Spec, bool) {
 	if strings.TrimSpace(self) == "" || !isClaudeCommand(spec.Command) {
 		return spec, false
 	}
@@ -129,6 +130,9 @@ func withStatusLine(spec ptymgr.Spec, self string) (ptymgr.Spec, bool) {
 	command := shellQuote(self) + " usage-sink"
 	if wrapped != "" {
 		command += " --wrap " + shellQuote(wrapped)
+	}
+	if live != "" {
+		command += " --live " + shellQuote(live)
 	}
 	settings, err := json.Marshal(map[string]any{
 		"statusLine": map[string]string{"type": "command", "command": command},
