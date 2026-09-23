@@ -420,8 +420,8 @@ skill 與 agent 清單、hook 注入的內容。session 的每一個 turn 都會
   `MEMORY.md`,改變的是下一個 session 的數字,不是這一個——畫面上的就是面板現在正在付的。
 - 第一個 turn 之前是空白。新開的面板在第一次回覆之前不顯示 `SYS`,數字會在下一次用量
   輪詢時出現(最多 30 秒)。
-- 重新執行就重新算。`r` 與 `n r` 會開新的 session,所以舊數字立刻撤下,新的等它第一個
-  turn 落地再讀。
+- 重新執行就重新算。`r` 與 `n r` 會開新的 session,所以舊數字在下一次用量輪詢時撤下,
+  新的等它第一個 turn 落地再讀。
 - 不追 `/clear` 與 `/resume`。它們在 Claude Code 內部切換 session,Baton 看不到;
   數字會停留在 Baton 啟動的那個 session。
 - 只看單一面板。shell、其他 agent CLI、選取中的群組都不顯示:群組裡每個成員各付各的

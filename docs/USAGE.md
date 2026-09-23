@@ -492,7 +492,7 @@ characters or one CJK character a token), and its error is bounded by its size.
 - **Blank until the first turn.** A fresh panel shows no `SYS` until its first
   reply, and the figure arrives on the next usage poll (up to 30s).
 - **A re-run starts over.** `r` and `n r` launch a new session, so the old figure
-  is dropped at once and the new one read when its first turn lands.
+  is dropped on the next usage poll and the new one read when its first turn lands.
 - **`/clear` and `/resume` are not followed.** They switch sessions inside Claude
   Code, behind baton's back; the figure stays with the session baton launched.
 - **One panel only.** A shell, another agent CLI, and a selected group show
