@@ -33,17 +33,22 @@ import (
 //     that will be along again in a second; a status line that exits non-zero
 //     after eating the wrapped command's output has cost the user their status
 //     line. Errors are dropped on purpose.
-//   - It keeps only the four numbers it came for. The payload also carries the
-//     transcript path, the working directory and the session cost; a sink that
-//     forwards only what it needs is a sink that cannot leak the rest.
+//   - It keeps only what it came for: the four quota numbers and, when asked,
+//     the session id. The payload also carries the transcript path, the working
+//     directory and the session cost; a sink that forwards only what it needs is
+//     a sink that cannot leak the rest.
 //
 // Usage:
 //
-//	baton usage-sink [--wrap <shell command>]
+//	baton usage-sink [--wrap <shell command>] [--live <file>]
 //
 // --wrap is the status line to defer to, as the user configured it. With none,
 // the sink prints baton's own quota line instead of nothing, so injecting it into
 // a panel that had no status line adds a row worth having rather than a blank one.
+//
+// --live is where to record the session the panel is on now. /clear and /resume
+// move a panel onto a new session behind baton's back, and this is how the daemon
+// hears of it (see usage.WriteLiveSession).
 
 // sinkBarWidth is the bar width in the sink's own fallback line. It is narrower
 // than the cockpit's because it shares a row with whatever else Claude Code puts
@@ -54,7 +59,7 @@ const sinkBarWidth = 10
 // the wrapped status line's own or 0; a failure of the sink's own work never
 // shows up here.
 func usageSinkMain(args []string) int {
-	wrapped := parseWrap(args)
+	wrapped, live := parseWrap(args), parseLive(args)
 
 	// Read the payload whole before anything else. The wrapped command needs the
 	// same bytes, and stdin can only be drained once.
@@ -64,6 +69,7 @@ func usageSinkMain(args []string) int {
 	}
 
 	harvest(payload)
+	recordLive(payload, live)
 
 	if wrapped == "" {
 		printOwnLine()
@@ -77,13 +83,21 @@ func usageSinkMain(args []string) int {
 // this command's stdout is a status line: a usage block would be rendered into
 // the user's panel on every frame. An argument it does not understand is ignored
 // for the same reason.
-func parseWrap(args []string) string {
+func parseWrap(args []string) string { return parseFlag(args, "--wrap") }
+
+// parseLive pulls the --live value out of the argument list, by the same rules
+// as parseWrap.
+func parseLive(args []string) string { return parseFlag(args, "--live") }
+
+// parseFlag returns the value of one --name flag, spelled either as two words or
+// as --name=value, or "" when it is absent.
+func parseFlag(args []string, name string) string {
 	for i := 0; i < len(args); i++ {
 		switch {
-		case args[i] == "--wrap" && i+1 < len(args):
+		case args[i] == name && i+1 < len(args):
 			return args[i+1]
-		case strings.HasPrefix(args[i], "--wrap="):
-			return strings.TrimPrefix(args[i], "--wrap=")
+		case strings.HasPrefix(args[i], name+"="):
+			return strings.TrimPrefix(args[i], name+"=")
 		}
 	}
 	return ""
@@ -103,6 +117,18 @@ func harvest(payload []byte) {
 		return
 	}
 	_, _ = usage.WriteLimitsIfChanged(paths.UsageLimitsFile(), l)
+}
+
+// recordLive drops the payload's session id at path for the daemon, which reads
+// it to follow the panel across /clear and /resume. Silent like harvest: a lost
+// write is repeated on the next render.
+func recordLive(payload []byte, path string) {
+	if path == "" {
+		return
+	}
+	if sid, ok := usage.ParseSessionID(payload); ok {
+		_ = usage.WriteLiveSession(path, sid)
+	}
 }
 
 // printOwnLine renders baton's own quota line, for a panel whose user had no

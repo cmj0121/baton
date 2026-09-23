@@ -422,8 +422,10 @@ skill 與 agent 清單、hook 注入的內容。session 的每一個 turn 都會
   輪詢時出現(最多 30 秒)。
 - 重新執行就重新算。`r` 與 `n r` 會開新的 session,所以舊數字在下一次用量輪詢時撤下,
   新的等它第一個 turn 落地再讀。
-- 不追 `/clear` 與 `/resume`。它們在 Claude Code 內部切換 session,Baton 看不到;
-  數字會停留在 Baton 啟動的那個 session。
+- 會追 `/clear` 與 `/resume`。它們在 Claude Code 內部切換 session;面板的 status line
+  會回報新的 session,下一次用量輪詢時數字——連同面板在時段裡的用量——就跟著過去。
+  還沒回覆就 `/clear` 的話,要等新 session 的第一個 turn 才會顯示。自帶 `--settings`
+  啟動的面板沒有 Baton 的 status line,不會被追。
 - 只看單一面板。shell、其他 agent CLI、選取中的群組都不顯示:群組裡每個成員各付各的
   開場成本,加總起來不對應任何一份可以削減的 prompt。
 

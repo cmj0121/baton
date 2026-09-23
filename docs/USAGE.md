@@ -493,8 +493,12 @@ characters or one CJK character a token), and its error is bounded by its size.
   reply, and the figure arrives on the next usage poll (up to 30s).
 - **A re-run starts over.** `r` and `n r` launch a new session, so the old figure
   is dropped on the next usage poll and the new one read when its first turn lands.
-- **`/clear` and `/resume` are not followed.** They switch sessions inside Claude
-  Code, behind baton's back; the figure stays with the session baton launched.
+- **`/clear` and `/resume` are followed.** They switch sessions inside Claude
+  Code; the panel's status line reports the new one, and on the next usage poll
+  the figure — and the panel's share of the window — moves with it. A `/clear`
+  before any reply shows nothing until the new session's first turn. A panel
+  launched with `--settings` of its own has no baton status line, and is not
+  followed.
 - **One panel only.** A shell, another agent CLI, and a selected group show
   nothing: each member of a group pays its own opening, and their sum is no prompt
   anyone can trim.

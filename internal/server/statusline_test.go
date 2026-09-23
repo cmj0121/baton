@@ -62,7 +62,7 @@ func injectedStatusLine(t *testing.T, args []string) string {
 // prints baton's own quota line.
 func TestWithStatusLineNoUserStatusLine(t *testing.T) {
 	claudeSettingsDir(t, "")
-	spec, ok := withStatusLine(ptymgr.Spec{Command: "claude", Dir: t.TempDir()}, "/usr/local/bin/baton")
+	spec, ok := withStatusLine(ptymgr.Spec{Command: "claude", Dir: t.TempDir()}, "/usr/local/bin/baton", "")
 	if !ok {
 		t.Fatal("withStatusLine did not inject for a Claude Code panel")
 	}
@@ -76,7 +76,7 @@ func TestWithStatusLineNoUserStatusLine(t *testing.T) {
 // exactly what it would have without baton in the way.
 func TestWithStatusLineWrapsTheUsers(t *testing.T) {
 	claudeSettingsDir(t, "bash ~/.claude/statusline.sh")
-	spec, ok := withStatusLine(ptymgr.Spec{Command: "/opt/homebrew/bin/claude", Dir: t.TempDir()}, "/usr/local/bin/baton")
+	spec, ok := withStatusLine(ptymgr.Spec{Command: "/opt/homebrew/bin/claude", Dir: t.TempDir()}, "/usr/local/bin/baton", "")
 	if !ok {
 		t.Fatal("withStatusLine did not inject over a configured status line")
 	}
@@ -91,7 +91,7 @@ func TestWithStatusLineWrapsTheUsers(t *testing.T) {
 // directory with a space in it, and the wrapped command is arbitrary shell.
 func TestWithStatusLineQuoting(t *testing.T) {
 	claudeSettingsDir(t, `sh -c 'echo it'\''s fine'`)
-	spec, ok := withStatusLine(ptymgr.Spec{Command: "claude", Dir: t.TempDir()}, "/Users/a b/bin/baton")
+	spec, ok := withStatusLine(ptymgr.Spec{Command: "claude", Dir: t.TempDir()}, "/Users/a b/bin/baton", "")
 	if !ok {
 		t.Fatal("withStatusLine did not inject")
 	}
@@ -134,24 +134,24 @@ func TestWithStatusLineDeclines(t *testing.T) {
 
 	t.Run("not claude code", func(t *testing.T) {
 		claudeSettingsDir(t, "")
-		if _, ok := withStatusLine(ptymgr.Spec{Command: "codex", Dir: dir}, "/bin/baton"); ok {
+		if _, ok := withStatusLine(ptymgr.Spec{Command: "codex", Dir: dir}, "/bin/baton", ""); ok {
 			t.Error("injected into a panel that is not Claude Code")
 		}
 	})
 	t.Run("no binary path", func(t *testing.T) {
 		claudeSettingsDir(t, "")
-		if _, ok := withStatusLine(ptymgr.Spec{Command: "claude", Dir: dir}, "  "); ok {
+		if _, ok := withStatusLine(ptymgr.Spec{Command: "claude", Dir: dir}, "  ", ""); ok {
 			t.Error("injected with nothing to point the status line at")
 		}
 	})
 	t.Run("user set --settings", func(t *testing.T) {
 		claudeSettingsDir(t, "")
 		spec := ptymgr.Spec{Command: "claude", Dir: dir, Args: []string{"--settings", "/tmp/mine.json"}}
-		if _, ok := withStatusLine(spec, "/bin/baton"); ok {
+		if _, ok := withStatusLine(spec, "/bin/baton", ""); ok {
 			t.Error("injected a second settings source over the user's own")
 		}
 		spec.Args = []string{"--settings=/tmp/mine.json"}
-		if _, ok := withStatusLine(spec, "/bin/baton"); ok {
+		if _, ok := withStatusLine(spec, "/bin/baton", ""); ok {
 			t.Error("the --settings=VALUE form was not recognised")
 		}
 	})
@@ -162,10 +162,25 @@ func TestWithStatusLineDeclines(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(cfg, "settings.json"), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := withStatusLine(ptymgr.Spec{Command: "claude", Dir: dir}, "/bin/baton"); ok {
+		if _, ok := withStatusLine(ptymgr.Spec{Command: "claude", Dir: dir}, "/bin/baton", ""); ok {
 			t.Error("replaced a status line baton cannot reproduce")
 		}
 	})
+}
+
+// The live-session file rides the command quoted, after the wrapped status line,
+// and is left off when there is none.
+func TestWithStatusLineLive(t *testing.T) {
+	claudeSettingsDir(t, "bash ~/.claude/statusline.sh")
+	spec, ok := withStatusLine(ptymgr.Spec{Command: "claude", Dir: t.TempDir()}, "/bin/baton", "/a b/s.live/abc")
+	if !ok {
+		t.Fatal("withStatusLine did not inject")
+	}
+	got := injectedStatusLine(t, spec.Args)
+	want := `'/bin/baton' usage-sink --wrap 'bash ~/.claude/statusline.sh' --live '/a b/s.live/abc'`
+	if got != want {
+		t.Errorf("statusLine command = %q, want %q", got, want)
+	}
 }
 
 // The caller keeps the original spec to replay on respawn, so the injection must
@@ -173,7 +188,7 @@ func TestWithStatusLineDeclines(t *testing.T) {
 func TestWithStatusLineDoesNotMutateTheOriginal(t *testing.T) {
 	claudeSettingsDir(t, "")
 	original := ptymgr.Spec{Command: "claude", Dir: t.TempDir(), Args: []string{"--model", "opus"}}
-	got, ok := withStatusLine(original, "/bin/baton")
+	got, ok := withStatusLine(original, "/bin/baton", "")
 	if !ok {
 		t.Fatal("withStatusLine did not inject")
 	}

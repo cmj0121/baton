@@ -240,3 +240,43 @@ func TestLimitsOption(t *testing.T) {
 		t.Error("the status-line source could not read the file the sink writes")
 	}
 }
+
+// With --live, the sink records the session the payload says the panel is on, so
+// the daemon can follow it across /clear. It is the payload's id, not the launched
+// one the file is named after — that is the whole point.
+func TestUsageSinkRecordsLiveSession(t *testing.T) {
+	sinkHome(t)
+	live := filepath.Join(t.TempDir(), "live", "f9e698d2-c9ba-403d-a662-c840792e6b46")
+	const cleared = "5203df8f-33a0-4684-ab31-86d209ec751e"
+	out, code := runSink(t, `{"session_id":"`+cleared+`"}`, "--wrap", "echo INTACT", "--live", live)
+	if code != 0 || strings.TrimSpace(out) != "INTACT" {
+		t.Errorf("out=%q code=%d, want the wrapped line and 0", out, code)
+	}
+	if got, ok := usage.ReadLiveSession(live); !ok || got != cleared {
+		t.Errorf("recorded %q, %v; want %q", got, ok, cleared)
+	}
+
+	// Without --live nothing is recorded anywhere, and a payload with no id of the
+	// right shape records nothing either.
+	other := filepath.Join(t.TempDir(), "launch")
+	runSink(t, `{"session_id":"../x"}`, "--live", other)
+	if _, err := os.Stat(other); !os.IsNotExist(err) {
+		t.Errorf("a malformed session id was recorded at %s", other)
+	}
+}
+
+func TestParseLive(t *testing.T) {
+	for name, tc := range map[string]struct {
+		args []string
+		want string
+	}{
+		"none":        {[]string{"--wrap", "x"}, ""},
+		"separate":    {[]string{"--wrap", "x", "--live", "/a b/c"}, "/a b/c"},
+		"equals":      {[]string{"--live=/a/c"}, "/a/c"},
+		"not wrapped": {[]string{"--wrap", "--live"}, ""},
+	} {
+		if got := parseLive(tc.args); got != tc.want {
+			t.Errorf("%s: parseLive(%q) = %q, want %q", name, tc.args, got, tc.want)
+		}
+	}
+}
