@@ -4,6 +4,24 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v2.4.0](https://github.com/cmj0121/baton/releases/tag/v2.4.0) — where the week's tokens went
+
+2026-09-23
+
+- **The usage overlay is three tabs.** `v U` opens on Account — the quota bars, panel roster and vendor roll, as before.
+  `tab` / `shift+tab` switch to Session and Week, and the tab is remembered while the cockpit runs.
+- **Session and Week show spend by project, across agents.** Each project that spent in the scope gets a share bar, its
+  share, tokens and cost, with the agents that spent it indented beneath; claude and grok land under one project. The
+  week is the vendor's own 7-day quota week when it has ever stated a reset, else the last 7 days, and the note line
+  says which.
+- **A project is the directory a session was launched in.** Worktrees under `.claude/worktrees/`, baton's own
+  `<repo>-worktrees/`, and grok's worktrees fold onto their main checkout; temporary paths fold into `(temporary)`. The
+  daemon sends the top 20 projects plus one `(other)` row per agent.
+- **The week costs the quota bars nothing.** It is rescanned every 5 minutes and on a passed reset, each agent within
+  its own budget, after the tick's fresh bars have gone out.
+- **A zoomed panel replays at the size it was painted, exactly once.** Stale Claude Code text in the input area and
+  spurious wraps in grok's input box no longer wait for a re-zoom (#133).
+
 ## [v2.3.0](https://github.com/cmj0121/baton/releases/tag/v2.3.0) — the GitHub board the cockpit could not see
 
 2026-09-21
