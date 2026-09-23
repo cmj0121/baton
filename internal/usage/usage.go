@@ -228,10 +228,12 @@ func FormatCountdown(d time.Duration) string {
 
 // humanTokens abbreviates a token count: 1234567 → "1.2M", 9340 → "9.3K", 512 → "512".
 func humanTokens(n int64) string {
+	// The tiers switch where the figure ROUNDS up to the next unit, so 999,960
+	// reads "1.0M" rather than "1000.0K".
 	switch {
-	case n >= 1_000_000_000:
+	case n >= 999_950_000:
 		return fmt.Sprintf("%.1fB", float64(n)/1e9)
-	case n >= 1_000_000:
+	case n >= 999_950:
 		return fmt.Sprintf("%.1fM", float64(n)/1e6)
 	case n >= 1_000:
 		return fmt.Sprintf("%.1fK", float64(n)/1e3)
