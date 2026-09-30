@@ -4,6 +4,21 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## Unreleased
+
+- **A zoom no longer tears when a program sets a scroll region taller than the screen.** A program that still
+  believes an older, taller PTY size — every zoom passes through that window between its attach and its resize —
+  asked the emulator for margins past its last row, and the next delete-line panicked inside the emulator. The cockpit
+  recovered by dropping the rest of that chunk, so the panel showed a torn screen until the program repainted; the
+  daemon log carried the trace as `recovered an emulator write panic`. The margins are now clamped on the way in,
+  as a real terminal does (#139).
+- **The terminal's cursor follows the zoomed program.** The zoom painted a reverse-video cell where the program's
+  cursor was and left the real cursor at the end of the footer, which is where an input method draws the text it is
+  composing: CJK marked text there wrapped the line and scrolled the screen out from under the renderer. The zoom now
+  hands the terminal the program's cursor, so composition happens at the prompt, as in a plain terminal (#140).
+- **Wide glyphs in scrollback are clipped by cell.** A scrollback line with CJK text captured at a wider size was
+  clipped by rune count and could still overflow its tile by up to twice its width.
+
 ## [v2.4.2](https://github.com/cmj0121/baton/releases/tag/v2.4.2) — SYS follows the session you are in
 
 2026-09-23
