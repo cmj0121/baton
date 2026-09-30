@@ -214,18 +214,21 @@ func TestZoomTracksCursorVisibility(t *testing.T) {
 	}
 }
 
-// TestZoomViewHidesCursor proves the zoom view draws the cursor only while the
-// program keeps it visible.
+// TestZoomViewHidesCursor proves the zoom hands the terminal the program's cursor
+// only while the program keeps it visible — and never paints one of its own.
 func TestZoomViewHidesCursor(t *testing.T) {
-	emu := vt.NewSafeEmulator(20, 5)
+	emu := vt.NewSafeEmulator(80, 23)
 	hidden := false
-	m := model{emu: emu, mode: modeZoom, width: 20, height: 6, cursorHidden: &hidden}
-	if !strings.Contains(m.zoomView(), "\x1b[7m") {
-		t.Fatal("a visible cursor should be drawn")
+	m := model{emu: emu, mode: modeZoom, width: 80, height: 24, cursorHidden: &hidden}
+	if m.View().Cursor == nil {
+		t.Fatal("a visible cursor should be handed to the terminal")
+	}
+	if strings.Contains(m.zoomView(), "\x1b[7m") {
+		t.Fatal("the zoom should not paint a reverse-video cursor of its own")
 	}
 	hidden = true
-	if strings.Contains(m.zoomView(), "\x1b[7m") {
-		t.Fatal("a hidden cursor should not be drawn")
+	if m.View().Cursor != nil {
+		t.Fatal("a hidden cursor should not be handed to the terminal")
 	}
 }
 

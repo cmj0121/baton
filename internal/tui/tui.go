@@ -4076,6 +4076,9 @@ func (m model) cols() int {
 func (m model) View() tea.View {
 	v := tea.NewView(m.frame())
 	v.AltScreen = true
+	if x, y, ok := m.zoomCursor(); ok {
+		v.Cursor = tea.NewCursor(x, y)
+	}
 	if m.mouseEnabled {
 		// Cell motion reports clicks and the wheel without the noise of every
 		// pointer move, which is all the cockpit's wheel handling needs.
@@ -4229,18 +4232,36 @@ func (m model) zoomView() string {
 	lines := make([]string, rows)
 	if m.emu != nil {
 		lines = m.selectWindow(m.emu, m.width, rows, m.scrollOff)
-		// Draw the cursor only on the live bottom (a scrolled-back view is history),
-		// and only when the program has not hidden it — so a full-screen reader that
-		// turns the cursor off does not show a phantom block.
-		if m.scrollOff == 0 && !m.cursorHiddenNow() {
-			cur := m.emu.CursorPosition()
-			if cur.Y >= 0 && cur.Y < len(lines) {
-				lines[cur.Y] = overlayCursor(lines[cur.Y], cur.X)
-			}
-		}
 	}
 	footer := m.zoomFooter()
 	return strings.Join(lines, "\n") + "\n" + footer
+}
+
+// zoomCursor is where the terminal's own cursor belongs while a zoom is on screen:
+// on the cell the zoomed program's cursor is on, so the terminal composes there.
+// The zoom used to paint a reverse-video cell instead and leave the real cursor
+// wherever the renderer last wrote. That is where an input method draws the text
+// it is composing — the end of the footer — and CJK marked text there wraps the
+// line and scrolls the alternate screen out from under the diff renderer (#140).
+// A real terminal composes at the program's cursor; now so does the cockpit.
+//
+// No cursor — ok false, and the terminal keeps it hidden — outside a zoom, on a
+// cockpit too small to draw one, while scrolled back into history, while a copy
+// selection is being marked, while a text-input overlay (the search prompt) holds
+// the keyboard, or while the program has hidden it (DECTCEM), so a full-screen
+// reader that turns the cursor off does not show a phantom block.
+func (m model) zoomCursor() (x, y int, ok bool) {
+	if m.mode != modeZoom || m.emu == nil || m.width < minWidth || m.height < minHeight {
+		return 0, 0, false
+	}
+	if m.scrollOff != 0 || m.copySelecting || m.input != inputNone || m.cursorHiddenNow() {
+		return 0, 0, false
+	}
+	cur := m.emu.CursorPosition()
+	if cur.Y < 0 || cur.Y >= m.zoomRows() || cur.X < 0 || cur.X >= m.width {
+		return 0, 0, false
+	}
+	return cur.X, cur.Y, true
 }
 
 // dashboardView renders the status summary strip above the fleet. A small fleet
