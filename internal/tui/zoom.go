@@ -35,12 +35,21 @@ import (
 // bursts into the ICH the emulator implements, so a character typed into the middle of a
 // line pushes its neighbours right instead of landing on top of one. It carries state
 // across chunks, so each emulator needs its own; a nil filter leaves the stream alone.
+//
+// The filter is also told the emulator's height on every write, so a scroll region a
+// program sets for a taller screen than this one — the window between a zoom's attach and
+// its resize — is clamped before the emulator stores it. Left as asked, the next delete-line
+// indexes past the buffer; the recover below then drops the rest of the chunk and the panel
+// shows a torn screen until the program repaints (#139).
 func writeEmu(emu *vt.SafeEmulator, irm *vtirm.Filter, data []byte) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().Interface("panic", r).Bytes("stack", debug.Stack()).Msg("recovered an emulator write panic")
 		}
 	}()
+	if irm != nil {
+		irm.Rows = emu.Height()
+	}
 	_, _ = emu.Write(irm.Rewrite(vtquery.Strip(data)))
 }
 

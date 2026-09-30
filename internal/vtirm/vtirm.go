@@ -22,6 +22,15 @@
 // Mode 4 itself is taken out of the stream, so the emulator never sees it. That keeps the
 // rewrite honest in one direction that matters: should a future x/vt learn IRM natively,
 // it cannot double up on the ICH this package already emits.
+//
+// The same pass clamps DECSTBM (CSI t ; b r) to the emulator's height. The emulator stores
+// whatever margins a program asks for, and its line operations index the buffer through
+// them: a bottom margin past the last row makes the next DL / IL / RI / SU / SD index past
+// the buffer and panic, which the cockpit recovers from by dropping the rest of that chunk
+// — the screen then diverges until the program's next full repaint. A program asks for such
+// a margin whenever it still believes an older, taller PTY size, which every zoom passes
+// through between its attach and its resize (github.com/cmj0121/baton#139). A real terminal
+// clamps the request; the Filter does it on the way in.
 package vtirm
 
 import (
@@ -54,6 +63,10 @@ const (
 // a caller that feeds an emulator it does not own — a test, a one-shot render — needs no
 // filter at all.
 type Filter struct {
+	// Rows is the emulator's height, the ceiling a DECSTBM bottom margin is clamped to.
+	// Zero (a caller that never set it) leaves margins untouched.
+	Rows int
+
 	insert bool   // IRM is set: printed cells push the rest of the line right
 	state  byte   // ansi decoder state, carried because a chunk may split a sequence
 	held   []byte // a CSI sequence split across chunks, held until it completes
@@ -145,10 +158,71 @@ func (f *Filter) Rewrite(b []byte) []byte {
 			out = append(out, residual...)
 			continue
 		}
+		if clamped, ok := clampMargins(seq, f.Rows); ok {
+			out = append(out, clamped...)
+			continue
+		}
 		out = append(out, seq...)
 	}
 	flush()
 	return out
+}
+
+// clampMargins rewrites a DECSTBM whose margins reach past the emulator's rows to the
+// margins a real terminal would keep: a bottom past the last row becomes the last row,
+// and a request whose top is not above its (clamped) bottom is dropped whole, which is
+// how xterm treats it. A margin already inside the screen, a sequence that is not a
+// plain numeric DECSTBM, or a Filter with no Rows are passed through untouched, ok false.
+func clampMargins(seq []byte, rows int) (clamped []byte, ok bool) {
+	if rows <= 0 || len(seq) < 3 || seq[0] != ansi.ESC || seq[1] != '[' || seq[len(seq)-1] != 'r' {
+		return nil, false
+	}
+	params := seq[2 : len(seq)-1]
+	for _, c := range params {
+		if (c < '0' || c > '9') && c != ';' {
+			return nil, false
+		}
+	}
+	fields := bytes.Split(params, []byte{';'})
+	if len(fields) > 2 {
+		return nil, false
+	}
+	top, bottom := 1, rows
+	if len(fields) >= 1 && len(fields[0]) > 0 {
+		top = margin(fields[0], 1)
+	}
+	if len(fields) == 2 && len(fields[1]) > 0 {
+		bottom = margin(fields[1], rows)
+	}
+	if bottom <= rows && top < bottom {
+		return nil, false // already what the emulator can hold
+	}
+	bottom = min(bottom, rows)
+	if top >= bottom {
+		return nil, true // xterm ignores a region that is not at least two rows
+	}
+	clamped = append(clamped, ansi.ESC, '[')
+	clamped = strconv.AppendInt(clamped, int64(top), 10)
+	clamped = append(clamped, ';')
+	clamped = strconv.AppendInt(clamped, int64(bottom), 10)
+	return append(clamped, 'r'), true
+}
+
+// margin reads one DECSTBM parameter. A zero means "default" in DECSTBM, and a run of
+// digits long enough to overflow is not a row anyone meant, so both fall back to the
+// default the caller supplied.
+func margin(b []byte, def int) int {
+	if len(b) > 6 {
+		return def
+	}
+	n := 0
+	for _, c := range b {
+		n = n*10 + int(c-'0')
+	}
+	if n == 0 {
+		return def
+	}
+	return n
 }
 
 // holdable reports whether the half-read bytes are still worth waiting for: they can only
