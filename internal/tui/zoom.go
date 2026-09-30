@@ -204,6 +204,10 @@ func emuWindow(emu *vt.SafeEmulator, cols, rows, off int) []string {
 // copying escape sequences verbatim since they cost no columns. A scrollback line
 // captured at a wider size is thus trimmed to fit, and a trailing reset is added
 // when the clip lands mid-styling so a colour cannot bleed past the cut.
+//
+// Columns are display cells, not runes: a wide (CJK) glyph takes two, and one that
+// would straddle the cut is dropped rather than let the line run a cell over and
+// wrap in its tile (#140).
 func clipVisible(s string, width int) string {
 	if width < 1 {
 		return ""
@@ -217,13 +221,14 @@ func clipVisible(s string, width int) string {
 			i += n
 			continue
 		}
-		if vis >= width {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		w := cellWidth(r)
+		if vis+w > width {
 			clipped = true
 			break
 		}
-		_, size := utf8.DecodeRuneInString(s[i:])
+		vis += w
 		out.WriteString(s[i : i+size])
-		vis++
 		i += size
 	}
 	if clipped {
