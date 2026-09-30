@@ -1,7 +1,7 @@
 $ make test
 ok      baton/internal/tui      0.42s
 [32mPASS[m
-$ [7m [27m
+$
 
 
 

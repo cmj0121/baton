@@ -35,12 +35,21 @@ import (
 // bursts into the ICH the emulator implements, so a character typed into the middle of a
 // line pushes its neighbours right instead of landing on top of one. It carries state
 // across chunks, so each emulator needs its own; a nil filter leaves the stream alone.
+//
+// The filter is also told the emulator's height on every write, so a scroll region a
+// program sets for a taller screen than this one — the window between a zoom's attach and
+// its resize — is clamped before the emulator stores it. Left as asked, the next delete-line
+// indexes past the buffer; the recover below then drops the rest of the chunk and the panel
+// shows a torn screen until the program repaints (#139).
 func writeEmu(emu *vt.SafeEmulator, irm *vtirm.Filter, data []byte) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().Interface("panic", r).Bytes("stack", debug.Stack()).Msg("recovered an emulator write panic")
 		}
 	}()
+	if irm != nil {
+		irm.Rows = emu.Height()
+	}
 	_, _ = emu.Write(irm.Rewrite(vtquery.Strip(data)))
 }
 
@@ -195,6 +204,10 @@ func emuWindow(emu *vt.SafeEmulator, cols, rows, off int) []string {
 // copying escape sequences verbatim since they cost no columns. A scrollback line
 // captured at a wider size is thus trimmed to fit, and a trailing reset is added
 // when the clip lands mid-styling so a colour cannot bleed past the cut.
+//
+// Columns are display cells, not runes: a wide (CJK) glyph takes two, and one that
+// would straddle the cut is dropped rather than let the line run a cell over and
+// wrap in its tile (#140).
 func clipVisible(s string, width int) string {
 	if width < 1 {
 		return ""
@@ -208,13 +221,14 @@ func clipVisible(s string, width int) string {
 			i += n
 			continue
 		}
-		if vis >= width {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		w := cellWidth(r)
+		if vis+w > width {
 			clipped = true
 			break
 		}
-		_, size := utf8.DecodeRuneInString(s[i:])
+		vis += w
 		out.WriteString(s[i : i+size])
-		vis++
 		i += size
 	}
 	if clipped {
