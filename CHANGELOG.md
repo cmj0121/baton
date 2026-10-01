@@ -4,7 +4,9 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
-## Unreleased
+## [v2.4.3](https://github.com/cmj0121/baton/releases/tag/v2.4.3) — a zoom that does not tear
+
+2026-10-01
 
 - **A zoom no longer tears when a program sets a scroll region taller than the screen.** A program that still
   believes an older, taller PTY size — every zoom passes through that window between its attach and its resize —
