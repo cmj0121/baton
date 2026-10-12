@@ -72,8 +72,8 @@ func TestReply(t *testing.T) {
 		{"DA3 tertiary has no canned reply", "\x1b[=c", ""},
 		{"two queries answered in order", "\x1b[c\x1b[>c", da1Reply + da2Reply},
 		{"no query", "plain \x1b[31mred\x1b[0m text", ""},
-		{"cursor-position DSR is left to the client emulator", "\x1b[6n", ""},
-		{"device-status DSR is not a DA", "\x1b[5n", ""},
+		{"cursor-position DSR gets no server reply", "\x1b[6n", ""},
+		{"device-status DSR answers ready", "\x1b[5n", "\x1b[0n"},
 		{"DECRQM mode query is not a DA", "\x1b[?2026$p", ""},
 		{"modifyOtherKeys reset is not a DA query", "\x1b[>4;0m", ""}, // ends in m, seen in nvim output
 		{"in-band-resize enable is not a DA", "\x1b[?2048h", ""},

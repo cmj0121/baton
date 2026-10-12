@@ -1,9 +1,10 @@
 // Package vtquery strips terminal query / report-triggering escape sequences from a
-// byte stream before it is fed to a client-side emulator.
+// byte stream before it is fed to a client-side emulator, and answers the queries
+// that do not need screen state.
 //
-// baton has no server-side emulator, so the CLIENT's emulator is what answers a
-// program's terminal queries (device attributes, cursor position, background colour) —
-// its replies go back to the program as panel.input so the program gets its answer.
+// baton has no server-side emulator. Left alone, the CLIENT's emulator answers a
+// program's terminal queries (device attributes, cursor position, background colour)
+// and those replies go back to the program as panel.input.
 //
 // That answering is the problem in two places baton feeds an emulator:
 //
@@ -59,44 +60,62 @@ func Strip(b []byte) []byte {
 	return queries.ReplaceAll(b, nil)
 }
 
-// deviceAttrs matches a device-attributes query and captures its private-marker so the
-// primary (DA1), secondary (DA2) and tertiary (DA3) forms can be told apart:
+// answered matches the queries the server can answer without an emulator, in the
+// order they appear in the chunk:
 //
-//	CSI    Ps  c   → DA1 (marker "")
-//	CSI  > Ps  c   → DA2 (marker ">")
-//	CSI  = Ps  c   → DA3 (marker "=")
+//	CSI 0* 5 n      device-status DSR. Ps is exactly 5; leading zeros are the same
+//	                parameter. No private marker, no second parameter.
+//	CSI [>=]? … c   DA1 (marker ""), DA2 (marker ">"), DA3 (marker "=").
 //
-// The marker set is exactly [>=] so it never matches a CSI ending in c that carries a
-// different private marker or an intermediate byte (e.g. CSI > 4 ; 0 m is not a c).
-var deviceAttrs = regexp.MustCompile(`\x1b\[([>=]?)[0-9;]*c`)
+// The DSR alternative is tried first so CSI 5 n is not read as a DA. The marker set
+// is exactly [>=], so a CSI ending in c with another private marker or an
+// intermediate byte (CSI > 4 ; 0 m) is not a DA. CSI 6 n, CSI ? 5 n, CSI ? 6 n,
+// CSI 15 n and CSI 5 ; 6 n do not match.
+var answered = regexp.MustCompile(`\x1b\[(?:0*5n|([>=]?)[0-9;]*c)`)
 
-// Canned answers, byte-identical to what the client-side x/vt emulator returns, so the
-// server responder is a drop-in for the emulator that answered these live before the
-// live-strip landed. A DA reply is state-independent, which is exactly why the server —
-// which keeps no emulator — can answer it.
+// Canned answers. The DA bytes match the client-side x/vt emulator, so the server
+// responder is a drop-in for the emulator that answered these live before the
+// live-strip landed. Both replies are state-independent, which is why a server
+// that keeps no emulator can write them.
 const (
 	da1Reply = "\x1b[?62;1;6;22c" // VT220 + 132-col + selective-erase + ANSI colour
 	da2Reply = "\x1b[>1;10;0c"    // VT220, firmware 10, no cartridge
+	// Operating status: ready, no malfunction (ECMA-48 / VT510 DSR). This is CSI 0 n.
+	// x/vt emits CSI ? 0 n here because it passes a DEC status type; that is not the
+	// reply a terminal gives, and a binding on CSI 0 n would never see it.
+	dsrReady = "\x1b[0n"
 )
 
-// Reply returns the terminal's canned answers to the device-attributes queries present
-// in b, in the order they appear, so a server with no emulator can answer them on the
-// PTY the way a real terminal does — immediately, before a round-tripped emulator reply
-// could arrive late at the program's prompt as garbage. A full-screen program (vim,
-// nvim) blocks on this reply during its terminal handshake, including around suspend, so
-// a missing answer wedges it. State-dependent queries (cursor position DSR 6 n, mode
-// DECRQM, colours) are deliberately NOT answered here — only the client emulator, which
-// tracks screen state, can answer those; they stay live-answered as before.
+// Reply returns canned answers for the queries in b that do not need screen state,
+// in the order they appear, so pump can write them on the PTY the way a real
+// terminal does. The write happens on the read that carried the query, before a
+// round-tripped emulator reply could arrive late at the prompt as garbage.
+//
+// Answered:
+//   - DA1 and DA2. A full-screen program blocks on DA during its handshake,
+//     including around suspend, so a missing answer wedges it (nvim Ctrl-Z).
+//     DA3 gets nothing, matching the emulator.
+//   - Device-status DSR, CSI 5 n. The ready reply is always CSI 0 n. A readline
+//     macro bound to that sequence never runs while the PTY stays silent.
+//
+// Not answered, because the bytes depend on state this server does not keep:
+// cursor-position DSR (CSI 6 n, CSI ? 6 n), DECRQM, colour queries, XTVERSION,
+// and the in-band-resize report. Strip removes those before the client emulator,
+// so nothing answers them. A canned row, mode bit, or colour would be a lie.
 //
 // Returns nil when b holds no answerable query, so the common no-query chunk is
-// allocation-free.
+// allocation-free. A chunk whose only query is DA3 also returns nil.
 func Reply(b []byte) []byte {
-	ms := deviceAttrs.FindAllSubmatch(b, -1)
+	ms := answered.FindAllSubmatch(b, -1)
 	if ms == nil {
 		return nil
 	}
 	var out []byte
 	for _, m := range ms {
+		if m[0][len(m[0])-1] == 'n' { // device-status DSR; group 1 did not participate
+			out = append(out, dsrReady...)
+			continue
+		}
 		switch string(m[1]) {
 		case "": // DA1
 			out = append(out, da1Reply...)
