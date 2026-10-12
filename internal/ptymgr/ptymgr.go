@@ -271,11 +271,11 @@ func (m *Manager) pump(id string, p *pane, cmd *exec.Cmd) {
 		if n > 0 {
 			chunk := append([]byte(nil), buf[:n]...)
 			end := m.appendRing(p, chunk)
-			// Answer device-attributes queries on the PTY the way a real terminal does.
-			// baton keeps no server-side emulator, so without this the only responder is
-			// the client's emulator, whose reply round-trips back as late input; the client
-			// therefore strips these queries, leaving a full-screen program (nvim) blocked
-			// on a handshake reply that never comes — notably wedging Ctrl-Z suspend.
+			// Answer state-independent terminal queries on the PTY the way a real terminal
+			// does. baton keeps no server-side emulator, and the client strips these
+			// queries, so without this write a program blocked on the reply never resumes.
+			// nvim's Ctrl-Z waits on device attributes; a readline macro bound to CSI 0 n
+			// waits on device-status DSR (CSI 5 n).
 			if reply := vtquery.Reply(chunk); len(reply) > 0 {
 				_, _ = p.f.Write(reply)
 			}
