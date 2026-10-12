@@ -1433,6 +1433,7 @@ func (m model) groupZoomView() string {
 	}
 	header := sectionStyle.Render(spaced(caption)) + "  " +
 		lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render(groupBreadcrumb(m.groupName)) +
+		m.splitPeersChip() +
 		mutedStyle.Render("   "+fmt.Sprintf(m.tr("fleet.panels", "%d panel(s)"), len(tiles))+"  ") + kindBreakdown(tiles)
 	if ng > 0 {
 		header += lipgloss.NewStyle().Foreground(colBrand).Render("   ▣ " + fmt.Sprintf(m.tr("group.sub-groups", "%d sub-group(s)"), ng))
@@ -1446,6 +1447,15 @@ func (m model) groupZoomView() string {
 	body := lipgloss.JoinVertical(lipgloss.Left, header, "", grid)
 	placed := lipgloss.Place(m.width, m.height-1, lipgloss.Left, lipgloss.Top, body)
 	return placed + "\n" + m.groupZoomFooter()
+}
+
+// splitPeersChip is the peers chip for the split's title, with the gap that
+// sets it off from the breadcrumb, or "" when the group on screen has peers off.
+func (m model) splitPeersChip() string {
+	if !m.groupPeersOn(m.groupName) {
+		return ""
+	}
+	return "  " + m.peersChip()
 }
 
 // renderSplitGrid lays the live tiles (plus the summary tile when members are
@@ -1730,6 +1740,15 @@ func (m model) renderTile(p panel.Panel, focused bool, emuCols, emuRows, marginR
 	case m.groupPinned[p.ID]:
 		pin := lipgloss.NewStyle().Foreground(colBrandHi).Render("⊙")
 		prefix = pin + " " + led + " "
+	}
+	// Asked of the panel's own group and not of the split's: a tile can belong to
+	// a group other than the one in the title, and a peer reaches exactly the
+	// panels of its own. It leads the head, so it survives the interact badge —
+	// the moment a human is typing here is the moment to know an agent can too.
+	// A tile too narrow to hold it and one cell of title goes without: a head
+	// that wrapped would cost the tile a row of the panel's own screen.
+	if marked := peersMark() + " " + prefix; m.peersOn(p.Group) && lipgloss.Width(marked) < emuCols {
+		prefix = marked
 	}
 	title := lipgloss.NewStyle().Foreground(titleColor).Bold(true).
 		Render(truncate(p.Title, max(1, emuCols-lipgloss.Width(prefix))))

@@ -213,7 +213,8 @@ func treeRails(it dashItem) string {
 }
 
 // rowMarks is what a row says about itself before its glyph: the selection mark
-// while marking, the favourite ⊙, and the ⇅ of a row being carried.
+// while marking, the favourite ⊙, the ⋈ of a group whose panels may reach each
+// other, and the ⇅ of a row being carried.
 //
 // The tree row and the card grid both draw it from here, and that is the point.
 // The ⇅ was added while the dashboard had no cards at all, so a card assembled
@@ -231,6 +232,9 @@ func (m model) rowMarks(it dashItem) string {
 	}
 	if m.itemFavourite(it) {
 		b.WriteString(lipgloss.NewStyle().Foreground(colBrandHi).Render("⊙"))
+	}
+	if it.kind == itemGroup && m.groupPeersOn(it.name) {
+		b.WriteString(peersMark())
 	}
 	if m.grabbedRow(it) {
 		b.WriteString(lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render("⇅"))

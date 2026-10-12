@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/lipgloss"
 	vt "github.com/charmbracelet/x/vt"
 	"github.com/mattn/go-runewidth"
 	"github.com/rs/zerolog/log"
@@ -115,8 +116,42 @@ func (m model) zoomFooter() string {
 	case m.zoomExited:
 		state = seg("◼ EXITED", colDark, colMuted)
 	}
-	left := state + scrollSeg(m.scrollOff) + m.barStrong().Render(" "+m.zoomTitle+" ")
-	return m.statusBar(left, m.helpHint())
+	lead := state + scrollSeg(m.scrollOff)
+	title := m.zoomTitle
+	left := func(peers string) string { return lead + m.barStrong().Render(" "+title+" ") + peers }
+
+	// The peers segment says its word while the strip can spare the cells, and
+	// falls back to the bare glyph the moment the word would be paid for out of
+	// the status text beside it. It never goes away: of everything on this line
+	// it is the one fact the operator cannot get by looking at the panel.
+	peers := m.zoomPeersSeg(true)
+	if peers != "" && m.statusRoom(left(peers)) < runewidth.StringWidth(m.statusText()) {
+		peers = m.zoomPeersSeg(false)
+	}
+	// What is still too wide is the title's to give up — the strip is one line of
+	// m.width cells, and a title that ran past it would wrap the whole footer. It
+	// is cut with clip, on the ruler the overrun was measured with: truncate counts
+	// a "·" as two cells where the layout counts one, and a title cut against the
+	// wrong ruler is still too long.
+	if over := -m.statusRoom(left(peers)) - statusPad; over > 0 {
+		title = clip(title, max(1, lipgloss.Width(title)-over))
+	}
+	return m.statusBar(left(peers), m.helpHint())
+}
+
+// zoomPeersSeg is the strip's peers segment: lit while the zoomed panel sits in
+// a peers-on group, so a human typing into a full-screen panel can still see
+// that its group-mates may type into it too. Empty otherwise. word chooses the
+// glyph with its label over the glyph alone.
+func (m model) zoomPeersSeg(word bool) string {
+	p, ok := m.fleetPanel(m.zoomID)
+	if !ok || !m.peersOn(p.Group) {
+		return ""
+	}
+	if !word {
+		return seg(peersGlyph, colDark, colCyan)
+	}
+	return seg(peersGlyph+" "+m.tr("peers.label", "peers"), colDark, colCyan)
 }
 
 // scrollSeg is the footer marker shown while a view is scrolled back through the

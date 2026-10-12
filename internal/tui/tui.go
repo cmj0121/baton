@@ -201,12 +201,18 @@ type model struct {
 	attnSeen    map[string]bool // panel ids currently flagged for attention, to fire the notification only on the rising edge
 	bellPending bool            // a panel just entered attention — ring the terminal bell on the next render
 
-	confirmClose       bool // ask y/n before closing a panel (toggled in the key map)
-	allowNameConflict  bool // let two work items share a name (server enforces; kept to round-trip config)
-	bellEnabled        bool // ring the terminal bell when a panel needs you (toggled in the key map)
-	mouseEnabled       bool // mouse reporting on — the wheel scrolls and moves the selection (toggled in the key map)
-	pendingClose       bool // a close is awaiting y/n confirmation
-	pendingRestart     bool // a force-restart is awaiting y/n confirmation
+	confirmClose      bool // ask y/n before closing a panel (toggled in the key map)
+	allowNameConflict bool // let two work items share a name (server enforces; kept to round-trip config)
+	bellEnabled       bool // ring the terminal bell when a panel needs you (toggled in the key map)
+	mouseEnabled      bool // mouse reporting on — the wheel scrolls and moves the selection (toggled in the key map)
+	pendingClose      bool // a close is awaiting y/n confirmation
+	pendingRestart    bool // a force-restart is awaiting y/n confirmation
+	// pendingPeers is the group whose peers switch is awaiting a y, "" when none
+	// is. It holds the NAME rather than re-reading the cursor on the answer: a
+	// snapshot can land between the question and the y, and the group that gets
+	// opened has to be the one the prompt named. It lives exactly as long as the
+	// prompt is on screen; see peersPromptLive.
+	pendingPeers       string
 	pendingSpawn       bool // A's workdir is awaiting here/isolate; handled beside pendingClose so w/n cannot leak
 	pendingConductor   bool // a conductor spawn is in flight; zoom it when it lands in a snapshot
 	pendingGlobalShell bool // a global-shell spawn is in flight; zoom it when it lands in a snapshot
@@ -460,6 +466,8 @@ type model struct {
 	groupShown      map[string]int              // per-group visible-tile count N, server-owned via the snapshot's Groups
 	groupLayout     map[string]string           // per-group split layout name, server-owned via the snapshot's Groups
 	favGroups       map[string]bool             // groups marked a dashboard favourite, server-owned via the snapshot's Groups
+	peerGroups      map[string]bool             // groups whose panels may read and type into each other, server-owned via the snapshot's Groups
+	peersUnsettled  bool                        // a peers flip was drawn before the server answered; the next snapshot settles it
 	groupRatios     map[string]splitRatios      // per-group manual tile weights (view-local, reset when the layout changes)
 	summaryScope    bool                        // the split is scoped to a group's collapsed (summarised) members
 	groupPinned     map[string]bool             // member ids pinned to a live tile, derived from the fleet's server-owned Pinned flags
@@ -1081,6 +1089,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		m.now = time.Time(msg)
 		m.ageStatus()
+		m.dropStalePeersPrompt() // the prompt may just have faded; the question goes with it
 		m = m.ageKeycast()
 		// The clock has just moved, which is the only thing that can make an open
 		// notification window expire — so this is the one place the coalescer is
@@ -1283,6 +1292,9 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 		m.groupShown = shownForGroups(sm.Groups)
 		m.groupLayout = layoutForGroups(sm.Groups)
 		m.favGroups = favForGroups(sm.Groups)
+		m.peerGroups = peersForGroups(sm.Groups)
+		m.peersUnsettled = false
+		m.dropStalePeersPrompt() // the group being asked about may be gone
 		if onDash {
 			m.restoreCursor(selKind, selID, selGroup, hadSel)
 		} else {
@@ -1502,6 +1514,13 @@ func (m *model) applyEvent(sm proto.ServerMsg) {
 			*m = m.applyIssuesLoaded(issuesLoadedMsg{cwd: m.issuesCwd, err: fmt.Errorf("%s", sm.Error)})
 		}
 		m.status = m.tr("status.error", "error: ") + sm.Error
+		// A refused command is answered to this client alone and broadcasts nothing,
+		// so a peers mark drawn ahead of the server would stay lit on a group whose
+		// panels cannot reach each other. Ask for the fleet: the snapshot it brings
+		// is what takes the mark back.
+		if m.peersUnsettled {
+			m.sendf(proto.Command{Action: "panel.list"})
+		}
 	}
 }
 
@@ -1572,6 +1591,13 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 	// bubbletea version; tok settles on the one the key map is written in, so a
 	// binding on space cannot half-work and no handler has to check for both.
 	key := k.String()
+
+	// A peers question whose prompt is no longer what the operator is looking at
+	// is withdrawn before this key is read, whichever way the prompt went: it
+	// faded, another status replaced it, the view changed, the group left the
+	// fleet. Checked here, ahead of every mode, so no route out of the dashboard
+	// can leave a y armed behind it.
+	m.dropStalePeersPrompt()
 
 	// The send-signal picker owns the keyboard until a signal is chosen or esc.
 	if m.mode == modeSignal {
@@ -1701,6 +1727,20 @@ func (m model) handleKey(k tea.Key) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = m.tr("status.close-cancelled", "close cancelled")
 		}
+		return m, nil
+	}
+
+	// Switching peers on is waiting on an answer. It lets agents type into each
+	// other's terminals, so only y goes through. Enter does NOT: it is the
+	// dashboard's "open this row" key, the one a hand lands on without meaning
+	// anything by it, and it cancels like every other key.
+	if m.pendingPeers != "" {
+		group := m.pendingPeers
+		m.pendingPeers = ""
+		if key == "y" {
+			return m.setPeers(group, true), nil
+		}
+		m.status = m.tr("status.peers-cancelled", "peers left off")
 		return m, nil
 	}
 
@@ -3208,6 +3248,8 @@ func (m model) runAction(a action) (tea.Model, tea.Cmd) {
 		return m.toggleLayout(), nil
 	case actFavourite:
 		return m.toggleFavourite(), nil
+	case actPeers:
+		return m.togglePeers(), nil
 	case actCommands:
 		return m.openCommandPicker(m.mode), nil
 	case actBack:
@@ -5647,13 +5689,32 @@ func (m model) versionLine() string {
 // filter could change: a leading "error:" is unaffected by it.
 func (m model) statusText() string { return scrub.Text(m.status) }
 
+// statusPad is what the status segment costs before its first letter: the "● "
+// that leads it and the segment's own padding.
+const statusPad = 4
+
+// statusCaps is the run of caps the bar's right-hand side always carries, and
+// the pending-run badge that leads it (statusBar needs that one on its own too).
+func (m model) statusCaps() (prefixBadge, caps string) {
+	prefixBadge = m.pendingCap()
+	clock := seg("⏱ "+m.now.Format("15:04:05"), colDark, colCyan)
+	return prefixBadge, prefixBadge + m.outageCap() + m.attentionBadge() + m.logCap() + m.pluginFooterCap() + m.usageCap() + m.statsStrip() + clock
+}
+
+// statusRoom is how many cells the status text would get on a bar with this
+// left-hand side — statusBar's own budget, for a view that has to decide what
+// its left side can afford before it builds the bar. Negative when the left
+// side and the caps alone already overrun the screen.
+func (m model) statusRoom(left string) int {
+	_, caps := m.statusCaps()
+	return m.width - lipgloss.Width(left) - lipgloss.Width(caps) - statusPad
+}
+
 func (m model) statusBar(left, hint string) string {
 	// The run so far — "C-t …", "g …", "C-t v …" — in place of the older PREFIX
 	// chip, which said only that the leader was down and said it on the
 	// dashboard alone. The keys it can still take ride in the hint region below.
-	prefixBadge := m.pendingCap()
-	clock := seg("⏱ "+m.now.Format("15:04:05"), colDark, colCyan)
-	stats := m.statsStrip()
+	prefixBadge, caps := m.statusCaps()
 
 	statusBg := colGreen
 	if strings.HasPrefix(m.status, "error") {
@@ -5663,8 +5724,7 @@ func (m model) statusBar(left, hint string) string {
 	// "this panel is being written to disk" is stated wherever the panel is
 	// focused — the dashboard selection, a zoom, the focused tile of a split —
 	// without three copies of the same rule.
-	caps := prefixBadge + m.outageCap() + m.attentionBadge() + m.logCap() + m.pluginFooterCap() + m.usageCap() + stats + clock
-	budget := m.width - lipgloss.Width(left) - lipgloss.Width(caps) - 4 // "● " + cap padding
+	budget := m.width - lipgloss.Width(left) - lipgloss.Width(caps) - statusPad
 	if bar := m.statusTakeover(prefixBadge, budget, statusBg); bar != "" {
 		return bar
 	}

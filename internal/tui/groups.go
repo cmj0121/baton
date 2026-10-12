@@ -761,6 +761,135 @@ func (m model) toggleFavourite() model {
 	return m
 }
 
+// togglePeers flips the selected group's peers flag: whether its panels may read
+// and type into each other. Switching it OFF is sent at once. Switching it ON
+// parks one y/n first, because it is the operator deciding which agents may reach
+// which terminals — and a key that opened that by a slip of the finger would have
+// opened it without anyone deciding anything.
+func (m model) togglePeers() model {
+	// The switch belongs to the dashboard, where the group it acts on is the row
+	// under the cursor. In a zoom that cursor is out of sight, and the prefix
+	// would flip a group the operator is not looking at.
+	if m.mode != modeDashboard {
+		return m
+	}
+	it, ok := m.selectedItem()
+	if !ok || it.kind != itemGroup {
+		m.status = m.tr("status.select-group-peers", "select a group to switch peers on")
+		return m
+	}
+	// A lens bucket is not a group the server has; see toggleFavourite.
+	if why := m.lensRefusal(); why != "" {
+		m.status = why
+		return m
+	}
+	if m.peerGroups[it.name] {
+		return m.setPeers(it.name, false)
+	}
+	// The server opens a group only when a panel sits directly in it, and a group
+	// made of nothing but sub-groups has none. Asking a question whose yes is
+	// always refused would be asking for nothing, so it is said here instead.
+	if !m.hasDirectMember(it.name) {
+		m.status = fmt.Sprintf(m.tr("status.peers-no-direct", "no panel sits directly in %q, so there are no peers to switch on"), it.name)
+		return m
+	}
+	m.pendingPeers = it.name
+	m.status = m.peersPrompt(it.name)
+	return m
+}
+
+// hasDirectMember reports whether any panel's group is exactly this path — the
+// panels a peers flag on it would reach. Panels of its sub-groups do not count.
+func (m model) hasDirectMember(group string) bool {
+	for _, p := range m.fleet {
+		if p.Group == group {
+			return true
+		}
+	}
+	return false
+}
+
+// peersPrompt is the question togglePeers parks, naming the group it is about.
+func (m model) peersPrompt(group string) string {
+	return fmt.Sprintf(m.tr("status.peers-confirm", "let the panels in %q read and type into each other? (y/n)"), group)
+}
+
+// peersPromptLive reports whether the parked peers question is still the one on
+// screen: the dashboard is showing, the status line still reads the prompt, and
+// the group it names still has a panel directly in it — the same test togglePeers
+// asked before it parked the question. A y is an answer only to a question the
+// operator can see; the moment any of the three stops holding, there is no
+// question left to answer.
+func (m model) peersPromptLive() bool {
+	return m.pendingPeers != "" && m.mode == modeDashboard &&
+		m.status == m.peersPrompt(m.pendingPeers) && m.hasDirectMember(m.pendingPeers)
+}
+
+// dropStalePeersPrompt withdraws a peers question that is no longer live. If the
+// prompt is still what the status line reads — the group left, or the view
+// changed, under a prompt that had not faded yet — the line is taken down with
+// it: a "(y/n)" with nothing behind it invites an n that would then be an
+// ordinary dashboard key.
+func (m *model) dropStalePeersPrompt() {
+	if m.pendingPeers == "" || m.peersPromptLive() {
+		return
+	}
+	if m.status == m.peersPrompt(m.pendingPeers) {
+		m.status = m.tr("status.peers-cancelled", "peers left off")
+	}
+	m.pendingPeers = ""
+}
+
+// setPeers sends the wanted peers state for a group and draws it at once. The
+// server owns the flag and may refuse — a group with no panel directly in it
+// cannot be opened — so what is drawn here is a guess the next snapshot settles
+// either way (see peersUnsettled).
+func (m model) setPeers(group string, on bool) model {
+	if m.peerGroups == nil {
+		m.peerGroups = map[string]bool{}
+	}
+	if on {
+		m.peerGroups[group] = true
+		m.status = fmt.Sprintf(m.tr("status.peers-on-q", "peers on for %q"), group)
+	} else {
+		delete(m.peerGroups, group)
+		m.status = fmt.Sprintf(m.tr("status.peers-off-q", "peers off for %q"), group)
+	}
+	m.peersUnsettled = true
+	m.sendf(proto.Command{Action: "group.peers", Group: group, Enable: on})
+	return m
+}
+
+// peersOn reports whether the panels of exactly this group may read and type
+// into each other. The path is matched whole: the flag on `a` says nothing about
+// `a/b`, and a panel in no group has no peers.
+func (m model) peersOn(group string) bool {
+	return group != "" && m.peerGroups[group]
+}
+
+// groupPeersOn is peersOn for a row, card or title that NAMES a group. Under a
+// lens those names are buckets, and a bucket that happens to be called what a
+// peers-on group is called is still not that group.
+func (m model) groupPeersOn(name string) bool {
+	return m.lens.real() && m.peersOn(name)
+}
+
+// peersGlyph is the mark every peers surface leads with, so the tree row, the
+// card, the split and the zoom say the same thing with the same shape.
+const peersGlyph = "⋈"
+
+// peersMark is the bare glyph, for the places that have a column and no room for
+// a word: the tree row, the card head and a member tile's head.
+func peersMark() string {
+	return lipgloss.NewStyle().Foreground(colCyan).Bold(true).Render(peersGlyph)
+}
+
+// peersChip is the glyph with its word, for the one place with a line to put it
+// on: the split's title.
+func (m model) peersChip() string {
+	return lipgloss.NewStyle().Foreground(colCyan).Bold(true).Render(peersGlyph + " " + m.tr("peers.label", "peers"))
+}
+
 // cursorToItem re-points the dashboard cursor at the given item after a reflow —
 // matching a lone panel by id and a group by name against the freshly sorted
 // dashItems, so the highlight stays on the same card. A no-match leaves the cursor
@@ -1024,6 +1153,23 @@ func favForGroups(groups []proto.GroupView) map[string]bool {
 	}
 	if len(out) == 0 {
 		return nil
+	}
+	return out
+}
+
+// peersForGroups builds the set of peers-on groups from a snapshot's GroupView
+// entries, keyed by the group's full path. A group absent from the map has peers
+// off, which is where every group starts.
+func peersForGroups(groups []proto.GroupView) map[string]bool {
+	var out map[string]bool
+	for _, g := range groups {
+		if !g.Peers {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]bool)
+		}
+		out[g.Group] = true
 	}
 	return out
 }
