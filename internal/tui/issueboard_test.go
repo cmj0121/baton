@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/cmj0121/baton/internal/i18n"
 	"github.com/cmj0121/baton/internal/issues"
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
@@ -304,9 +305,15 @@ func TestIssuesLegendIsTheOverlayFooter(t *testing.T) {
 	m.issuesCol = 0
 	m.issuesIdx[0] = 0
 	foot = lastOverlayInnerLine(m.issuesView())
-	if !strings.Contains(foot, "esc") || !strings.Contains(foot, "dispatch") {
+	if !strings.Contains(foot, "esc") || !strings.Contains(foot, "dispatch") || !strings.Contains(foot, "tree") {
 		t.Fatalf("detail legend should be the foot of the box, got %q", foot)
 	}
+	m.lang = i18n.ZhTW
+	zh := lastOverlayInnerLine(m.issuesView())
+	if !strings.Contains(zh, "工作樹") || strings.Contains(zh, "worktree") || !strings.Contains(zh, "esc") {
+		t.Fatalf("zh-TW detail legend = %q", zh)
+	}
+	m.lang = ""
 
 	frame := m.frame()
 	lines := strings.Split(ansi.Strip(frame), "\n")
@@ -664,6 +671,64 @@ func TestIssuesMissedChainSetsStatus(t *testing.T) {
 	m = m.applyIssuesLoaded(issuesLoadedMsg{cwd: "/tmp/repo", board: m.issuesBoard})
 	if !strings.Contains(m.status, "no issue or PR") {
 		t.Fatalf("status = %q", m.status)
+	}
+}
+
+func TestIssuesDetailWorktreeStaysOnTheCard(t *testing.T) {
+	var got proto.Command
+	sendHook = func(c proto.Command) { got = c }
+	t.Cleanup(func() { sendHook = nil })
+
+	board := issuesModel()
+	board.issuesDetail = false
+	nm, _ := board.handleIssuesKey("w")
+	board = nm.(model)
+	if board.input != inputNone || board.mode != modeIssues {
+		t.Fatalf("board w must not open a prompt, mode=%v input=%v", board.mode, board.input)
+	}
+
+	m := issuesModel()
+	m.issuesDetail = true
+	m.issuesCol = 0 // backlog card 118
+	nm, _ = m.handleIssuesKey("w")
+	m = nm.(model)
+	if m.mode != modeIssues || !m.issuesDetail || m.input != inputIssuesWorktree || m.inputBuf != "feat/118" {
+		t.Fatalf("detail w should prefill and stay on the card, mode=%v detail=%v input=%v buf=%q",
+			m.mode, m.issuesDetail, m.input, m.inputBuf)
+	}
+
+	m.inputBuf = "docs/notes"
+	nm, _ = m.commitInput()
+	m = nm.(model)
+	prof, name, ok := m.resolveAgentNamed(m.effDefaultAgent())
+	if !ok {
+		t.Fatal("the fleet default should resolve")
+	}
+	if m.mode != modeIssues || !m.issuesDetail || m.input != inputNone {
+		t.Fatalf("committing should stay on the detail card, mode=%v detail=%v input=%v", m.mode, m.issuesDetail, m.input)
+	}
+	if got.Action != "panel.git" || got.Git != "worktree-add" || got.ID != "" ||
+		got.Dir != "/tmp/repo" || got.Name != "docs/notes" || got.Issue != 118 ||
+		got.Path != prof.Command || got.Profile != name {
+		t.Fatalf("sent %+v, want targetless worktree-add for #118 as %s", got, name)
+	}
+
+	nm, _ = m.handleIssuesKey("w")
+	m = nm.(model)
+	m.inputBuf = "   "
+	nm, _ = m.commitInput()
+	m = nm.(model)
+	if m.input != inputIssuesWorktree || m.mode != modeIssues {
+		t.Fatalf("an empty name should reopen the field, input=%v mode=%v", m.input, m.mode)
+	}
+
+	bare := issuesModel()
+	bare.issuesDetail = true
+	bare.issuesCwd = ""
+	nm, _ = bare.handleIssuesKey("w")
+	bare = nm.(model)
+	if bare.input != inputNone || !strings.Contains(bare.status, "working directory") {
+		t.Fatalf("no cwd must not open the field, input=%v status=%q", bare.input, bare.status)
 	}
 }
 
