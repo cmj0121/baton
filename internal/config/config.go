@@ -126,7 +126,9 @@ type QueueDefaults struct {
 // UsageConfig configures the account usage/cost footer segment: which data source
 // feeds it and how often it refreshes. The Admin-API source additionally needs an
 // admin key in $BATON_ANTHROPIC_ADMIN_KEY — deliberately an env var, never this
-// hand-editable file. Applied at daemon start; changing it needs a restart.
+// hand-editable file. Source, interval, window and limits are applied at daemon
+// start; changing them needs a restart. pause-below is the exception: it rides
+// the hot-reload path with the queue caps.
 type UsageConfig struct {
 	// Source selects the data source: "local" reads Claude Code's own transcripts,
 	// "api" queries the Anthropic Admin usage/cost API, and "auto" (the default,
@@ -164,6 +166,13 @@ type UsageConfig struct {
 	// values outside 0–1, or an alarm below the warning, fall back to them too.
 	WarnAt  float64 `yaml:"warn-at,omitempty"`
 	AlarmAt float64 `yaml:"alarm-at,omitempty"`
+
+	// PauseBelow is the remaining fraction of a vendor's own quota under which
+	// the scheduler stops handing that vendor new work. 0, and anything outside
+	// (0, 1], mean off — the default, so an existing fleet does not change.
+	// Remaining is what is left (1 - used), not the spent fraction warn-at uses.
+	// It reloads with the queue caps; it does not need a daemon restart.
+	PauseBelow float64 `yaml:"pause-below,omitempty"`
 }
 
 // The usage-window defaults, applied when the config leaves a field unset.
@@ -206,6 +215,15 @@ func (u UsageConfig) Thresholds() (warn, alarm float64) {
 		return DefaultUsageWarnAt, DefaultUsageAlarmAt
 	}
 	return warn, alarm
+}
+
+// QueuePauseLine is the remaining-quota fraction at which the scheduler pauses
+// a vendor. Zero and anything outside (0, 1] are off.
+func (u UsageConfig) QueuePauseLine() float64 {
+	if u.PauseBelow <= 0 || u.PauseBelow > 1 {
+		return 0
+	}
+	return u.PauseBelow
 }
 
 // Settings are the persisted cockpit toggles. Pointers distinguish "unset"

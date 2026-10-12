@@ -239,6 +239,12 @@ type Settings struct {
 	// SIGHUP changes what the NEXT agent panel starts with and leaves the running
 	// ones alone — an agent's tool list is fixed when its process starts.
 	AgentMCP bool
+
+	// PauseBelow is the remaining-quota fraction at which the scheduler stops
+	// handing a vendor new work. 0, and anything outside (0, 1], means off.
+	// It is the vendor's own remaining share (1 - used), not the spent fraction
+	// the footer colours with. A SIGHUP takes it on the next scheduler pass.
+	PauseBelow float64
 }
 
 // Server owns all state and every PTY. It is safe for concurrent use.
@@ -342,6 +348,12 @@ type Server struct {
 	// own: the poller locks internally, and this field is set once before the
 	// loops start.
 	grokWeek func(context.Context) (*usage.Window, bool)
+
+	// pauseBelow is usage.pause-below: remaining quota under this fraction pauses
+	// the queue for that vendor. 0 is off. quotaHold remembers the last logged
+	// state per vendor so a tick does not repeat the line. Guarded by mu.
+	pauseBelow float64
+	quotaHold  map[string]bool
 
 	// week is the per-project week scan's state (projectusage.go). It is owned by
 	// the usage loop's goroutine and is deliberately not under mu.
@@ -1119,6 +1131,14 @@ func (s *Server) Reload(set Settings) {
 	if set.QueueConcurrency >= 0 {
 		s.queueConcurrency = set.QueueConcurrency
 	}
+	// A value outside (0, 1] is off, same as an unset key. The scheduler reads
+	// this on its next pass; nothing already in flight is pulled back.
+	if set.PauseBelow <= 0 || set.PauseBelow > 1 {
+		s.pauseBelow = 0
+	} else {
+		s.pauseBelow = set.PauseBelow
+	}
+	pauseBelow := s.pauseBelow
 	s.mu.Unlock()
 	s.applyRemoteSetting(set.Remote) // acts only on a change to `settings.remote` in the file
 	s.refreshConductorWiring()       // an edited operator brief lands without reopening the conductor
@@ -1146,6 +1166,7 @@ func (s *Server) Reload(set Settings) {
 		Int("replay_bytes", set.ReplayBytes).Str("diff_command", set.DiffCommand).Str("editor", set.Editor).
 		Str("worktree_dir", set.WorktreeDir).Interface("limits", set.Limits.Fields()).Int("agent_limits", len(set.AgentLimits)).
 		Dur("done_after", set.Attention.Done()).Dur("stuck_after", set.Attention.Stuck()).Int("agent_attention", len(set.AgentAttention)).
+		Float64("pause_below", pauseBelow).
 		Int("panels_recapped", updated).Strs("respawn_to_apply", deferred).
 		Msg("settings reloaded")
 }
@@ -5545,21 +5566,27 @@ func (s *Server) queuedBacklogLenLocked() int {
 // named, with no live task of its own. Caller holds s.mu.
 func (s *Server) freeIdleAgentLocked(group string) (string, bool) {
 	for i := range s.panels {
-		p := &s.panels[i]
-		if p.Kind != panel.Agent || p.Conductor || !freeForWork(p.State) {
-			continue
+		if s.agentFreeLocked(&s.panels[i], group) {
+			return s.panels[i].ID, true
 		}
-		if group != "" && p.Group != group {
-			continue
-		}
-		if tid, ok := s.panelTask[p.ID]; ok {
-			if t := s.tasks[tid]; t != nil && !t.Status.Terminal() {
-				continue // already running a task
-			}
-		}
-		return p.ID, true
 	}
 	return "", false
+}
+
+// agentFreeLocked reports whether p can take queued work in group. Caller holds s.mu.
+func (s *Server) agentFreeLocked(p *panel.Panel, group string) bool {
+	if p.Kind != panel.Agent || p.Conductor || !freeForWork(p.State) {
+		return false
+	}
+	if group != "" && p.Group != group {
+		return false
+	}
+	if tid, ok := s.panelTask[p.ID]; ok {
+		if t := s.tasks[tid]; t != nil && !t.Status.Terminal() {
+			return false // already running a task
+		}
+	}
+	return true
 }
 
 // spawnRequest is a queued spawn-on-demand task with no free agent: the panel to
@@ -5638,13 +5665,30 @@ func (s *Server) scheduleLocked() ([]delivery, []spawnRequest) {
 		if s.queueConcurrency > 0 && groupRunning[t.Group] >= s.queueConcurrency {
 			continue
 		}
-		pid, ok := s.freeIdleAgentLocked(t.Group)
-		if !ok {
+		pid, held := s.scheduleAgentLocked(t.Group)
+		if held {
+			// A standing agent is free and its vendor is under the line. Leave the
+			// task queued. Do not spawn a replacement: the agent is paused, not
+			// absent, and a fresh panel of the same vendor would spend the quota
+			// the pause exists to keep. Another vendor's free agent is chosen
+			// ahead of this one, so the rest of the fleet still drains.
+			continue
+		}
+		if pid == "" {
 			// No standing agent is free. If the task provisions its own, ask for one
 			// panel per task (spawning marks it in flight so a later tick does not
 			// double-spawn), within the fleet's spawn budget — the ceiling, and the
 			// gap that is the reason this pass hands back at most one.
+			//
+			// A spawn whose own command is under the line does not start. The task
+			// stays queued. Human panel.create and a conductor's baton_spawn do not
+			// come through here, and a turn already in flight is not a queued task.
+			if t.Spawn != nil && s.quotaHoldsLocked(commandVendor(t.Spawn.Command)) {
+				s.noteQuotaHoldLocked(commandVendor(t.Spawn.Command), true)
+				continue
+			}
 			if t.Spawn != nil && !s.spawning[t.ID] && s.spawnBudgetLocked(now) == "" {
+				s.noteQuotaHoldLocked(commandVendor(t.Spawn.Command), false)
 				s.spawning[t.ID] = true
 				groupRunning[t.Group]++ // the pending worker counts against the cap for later tasks
 				spawns = append(spawns, spawnRequest{taskID: t.ID, spec: *t.Spawn})
