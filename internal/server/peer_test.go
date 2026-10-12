@@ -246,6 +246,12 @@ func TestPeerSendPrefixesAnAgentAndNotAShell(t *testing.T) {
 	s.panels[0].Title = "al\x1b[2Jice\nthe first" // a title is whatever a rename set
 
 	msg := peerDo(t, s, "a1", proto.Command{Action: "peer.send", ID: "a2", Data: []byte("are you done?")})
+	// The notice carries the target's id: a notice is also what the daemon
+	// broadcasts for a plugin and for the fleet memory, and the id is how a client
+	// knows this one is the answer to its send.
+	if msg.ID != "a2" {
+		t.Fatalf("the peer.send notice should carry the target's id, got %+v", msg)
+	}
 	if msg.Type != "notice" || !strings.Contains(msg.Notice, "bob (a2)") || !strings.Contains(msg.Notice, "13 bytes") {
 		t.Fatalf("the reply should be a notice naming the target and the size, got %+v", msg)
 	}
