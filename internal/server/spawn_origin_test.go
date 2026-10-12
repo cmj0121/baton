@@ -223,7 +223,7 @@ func TestTheWorktreeRoadIsChargedAtTheFenceAndNotOnTheRoad(t *testing.T) {
 	repo := wtRepo(t)
 	s, _ := wtServer(t)
 
-	if err := s.worktreeSpawn(originConductor, repo, "feature/origin", idleAgent()); err != nil {
+	if err := s.worktreeSpawn(originConductor, repo, "feature/origin", idleAgent(), 0); err != nil {
 		t.Fatalf("worktreeSpawn: %v", err)
 	}
 	if doorSlotSpent(s) {

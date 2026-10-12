@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/json"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/cmj0121/baton/internal/issues"
 	"github.com/cmj0121/baton/internal/proto"
 )
@@ -62,4 +64,29 @@ func (s *Server) blockIssue(cc *clientConn, dir string, issue, blocker int) {
 
 func failIssues(cc *clientConn, msg string) {
 	send(cc, proto.ServerMsg{Type: "issues", Failed: true, Error: msg})
+}
+
+// issuesRunner is the git surface for an issue bind. A nil field is the real
+// git binary. It never needs gh: ResolveRepo reads remotes and stops.
+func (s *Server) issuesRunner() issues.Runner {
+	if s.issuesRun != nil {
+		return s.issuesRun
+	}
+	return issues.ExecRunner{}
+}
+
+// bindSpawnedIssue records that worktreePath is issue. The key is the new
+// tree, not the repo root, because that path is the cwd a later board reads.
+// No GitHub remote is logged and skipped. The add has already succeeded.
+func (s *Server) bindSpawnedIssue(repoDir, worktreePath string, issue int) {
+	if issue <= 0 {
+		return
+	}
+	_, repo, err := issues.ResolveRepo(s.issuesRunner(), repoDir)
+	if err != nil {
+		log.Info().Str("dir", repoDir).Int("issue", issue).Err(err).
+			Msg("worktree created; issue bind skipped")
+		return
+	}
+	issues.SaveBind(repo, worktreePath, issue)
 }

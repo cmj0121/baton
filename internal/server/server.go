@@ -32,6 +32,7 @@ import (
 	"github.com/cmj0121/baton/internal/gitdiff"
 	"github.com/cmj0121/baton/internal/gitops"
 	"github.com/cmj0121/baton/internal/isolate"
+	"github.com/cmj0121/baton/internal/issues"
 	"github.com/cmj0121/baton/internal/limits"
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/panellog"
@@ -696,6 +697,11 @@ type Server struct {
 	saveMu   sync.Mutex
 	bootTime time.Time
 	wtrees   *worktree.Store
+
+	// issuesRun resolves a GitHub repo when worktree-add names an issue. Nil
+	// means issues.ExecRunner, which runs git and never gh. Tests inject a fake
+	// so the bind can be checked without a remote.
+	issuesRun issues.Runner
 
 	// heartbeat is the server→client ping cadence for each connection's keepalive
 	// ticker. It defaults to proto.HeartbeatInterval; tests set it to milliseconds
@@ -6654,7 +6660,7 @@ func (s *Server) agentTargetSpec(targetID, label string) (spawnSpec, error) {
 // is the whole of what the spawn budget wants to know. It is passed on to
 // createPanel unchanged — the charge for a conductor's worktree-add is already
 // spent at the fence, before git built the tree.
-func (s *Server) worktreeSpawn(origin panelOrigin, repo, branch string, spec spawnSpec) error {
+func (s *Server) worktreeSpawn(origin panelOrigin, repo, branch string, spec spawnSpec, issue int) error {
 	s.mu.Lock()
 	base := s.worktreeDir
 	// The ceiling is read HERE as well as at the door, because this road has a side
@@ -6711,6 +6717,9 @@ func (s *Server) worktreeSpawn(origin panelOrigin, repo, branch string, spec spa
 	if err != nil {
 		return fmt.Errorf("worktree created at %q, but the agent did not start: %w", path, err)
 	}
+	// The tree exists and an agent is in it. Recording the issue is bookkeeping:
+	// a repo with no GitHub remote still keeps the tree, and the bind is skipped.
+	s.bindSpawnedIssue(repo, path, issue)
 	if err := s.groupPanels([]string{id}, branch); err != nil {
 		log.Warn().Str("panel", id).Str("group", branch).Err(err).Msg("worktree agent spawned but not grouped")
 	}
@@ -6771,7 +6780,7 @@ func (s *Server) gitWorktreeAdd(origin panelOrigin, cmd proto.Command) error {
 			return fmt.Errorf("worktree: a repository directory is required")
 		}
 		spec := spawnSpec{Spec: ptymgr.Spec{Command: cmd.Path, Args: cmd.Args}, Profile: cmd.Profile}
-		return s.worktreeSpawn(origin, cmd.Dir, cmd.Name, spec)
+		return s.worktreeSpawn(origin, cmd.Dir, cmd.Name, spec, cmd.Issue)
 	}
 	// Named rather than used inline: TestEveryGitTargetFollowsTheAgent counts the
 	// git targets that resolve through targetDir by reading this file's source, so
@@ -6781,7 +6790,7 @@ func (s *Server) gitWorktreeAdd(origin panelOrigin, cmd proto.Command) error {
 	if err != nil {
 		return err
 	}
-	return s.worktreeSpawn(origin, s.targetDir(targetID, spec.Spec), cmd.Name, spec)
+	return s.worktreeSpawn(origin, s.targetDir(targetID, spec.Spec), cmd.Name, spec, cmd.Issue)
 }
 
 // gitWorktreeRemove removes the worktree at path from the target agent's repo. It
