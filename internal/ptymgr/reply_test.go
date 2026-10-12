@@ -59,3 +59,50 @@ sys.stdout.write("REPLY:" + data.hex() + ":END\r\n"); sys.stdout.flush()
 		t.Fatalf("program did not receive the DA reply on stdin.\ngot: %q\nwant REPLY to contain %q", got, wantHex)
 	}
 }
+
+// TestPumpAnswersDeviceStatus is the same round trip for device-status DSR.
+// A program writes CSI 5 n and must read CSI 0 n back on its stdin. The client
+// strips the query, so pump is the only writer. Cursor-position DSR is not this
+// reply: the bytes are 1b 5b 30 6e, with no private marker.
+func TestPumpAnswersDeviceStatus(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	const prog = `
+import sys, os, tty, termios, select
+fd = 0
+old = termios.tcgetattr(fd)
+tty.setraw(fd)
+sys.stdout.write("\x1b[5n"); sys.stdout.flush()     # device-status DSR
+r, _, _ = select.select([fd], [], [], 2.0)
+data = os.read(fd, 64) if r else b""
+termios.tcsetattr(fd, termios.TCSADRAIN, old)
+sys.stdout.write("REPLY:" + data.hex() + ":END\r\n"); sys.stdout.flush()
+`
+	var mu sync.Mutex
+	var out strings.Builder
+	m := New()
+	m.OnOutput(func(_ string, d []byte, _ int64) { mu.Lock(); out.Write(d); mu.Unlock() })
+	if err := m.StartCmd("p", Spec{Command: "python3", Args: []string{"-c", prog}}); err != nil {
+		t.Skipf("python3 start: %v", err)
+	}
+	defer m.Stop("p")
+
+	deadline := time.Now().Add(4 * time.Second)
+	var got string
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		got = out.String()
+		mu.Unlock()
+		if strings.Contains(got, ":END") {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// ESC [ 0 n
+	const wantHex = "1b5b306e"
+	if !strings.Contains(got, "REPLY:"+wantHex+":END") {
+		t.Fatalf("program did not receive the status reply on stdin.\ngot: %q\nwant REPLY to contain %q", got, wantHex)
+	}
+}
