@@ -227,15 +227,17 @@ func leadingDigits(s string) string {
 
 // AutoChain picks the current issue number: explicit bind, then the open
 // PR's Closes, then digits in the branch name.
+//
+// A pull request's own number is not an issue. PR #130 that closes nothing
+// must not steal issue 130 out from under a branch that names a different
+// one; column membership still comes from Classify, which looks at whether
+// an open PR exists rather than at this number.
 func AutoChain(bind int, branch string, pr *Pull) int {
 	if bind > 0 {
 		return bind
 	}
 	if pr != nil && len(pr.Closes) > 0 {
 		return pr.Closes[0]
-	}
-	if pr != nil && pr.Number > 0 {
-		return pr.Number
 	}
 	return BranchNumber(branch)
 }

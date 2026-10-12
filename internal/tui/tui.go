@@ -662,6 +662,7 @@ const (
 	inputIsolateBranch               // A's isolate path after the here/isolate offer — not n w's field, so the two cannot share a prompt sequence
 	inputIssueBlock                  // blocked-by issue number from the issues overlay
 	inputIssueMile                   // milestone name filter from the issues overlay (/)
+	inputIssuesWorktree              // issue-detail w: a worktree for this card. Not n w's field, so committing stays on the board
 )
 
 // RestartRequested reports whether the cockpit exited because the user asked to
@@ -2408,6 +2409,8 @@ func (m model) commitInput() (tea.Model, tea.Cmd) {
 		return m.commitWorktreeBranch(buf)
 	case inputIsolateBranch:
 		return m.commitIsolateBranch(buf)
+	case inputIssuesWorktree:
+		return m.commitIssuesWorktree(buf)
 	}
 	return m, nil
 }
@@ -5487,6 +5490,7 @@ var inputSpecs = map[inputPurpose]inputSpec{
 	// commits to is the purpose's business, not the label's.
 	inputGitWorktree:    {"input.worktree.title", "NEW WORKTREE", "input.worktree.prompt", "branch name  (worktree + agent)", "legend.create", "create"},
 	inputWorktreeBranch: {"input.worktree.title", "NEW WORKTREE", "input.worktree.prompt", "branch name  (worktree + agent)", "legend.create", "create"},
+	inputIssuesWorktree: {"input.worktree.title", "NEW WORKTREE", "input.worktree.prompt", "branch name  (worktree + agent)", "legend.create", "create"},
 	inputIsolateBranch:  {"input.worktree.title", "NEW WORKTREE", "input.worktree.prompt", "branch name  (worktree + agent)", "legend.create", "create"},
 	inputGitRemove:      {"input.worktree-rm.title", "REMOVE WORKTREE", "input.worktree-rm.prompt", "worktree path  (then confirm)", "legend.next", "next"},
 	inputWorktreeRepo:   {"input.worktree-repo.title", "NEW WORKTREE", "input.worktree-repo.prompt", "the git repository to branch from", "legend.next", "next"},

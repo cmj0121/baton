@@ -173,6 +173,7 @@ dashboard row — the work-item verbs — is refused in a zoom with the way forw
 |                 | ·      | ·       | `X`                   | clear every row, after a `y`/`n`                       |
 |                 | ·      | ·       | `q` / `esc`           | close                                                  |
 | **Inbox**       | ·      | ·       | `i`                   | step into the panel that wants you                     |
+|                 | ·      | ·       | `1` / `2` / `3`       | answer a permission overlay, when the tail is one      |
 |                 | ·      | ·       | `-`                   | snooze the row                                         |
 | **Queue**       | ·      | ·       | `shift+↑` / `↓`       | promote / demote the task                              |
 | **Usage**       | ·      | ·       | `tab` / `S-tab`       | next / previous tab: Account, Session, Week            |
@@ -185,6 +186,7 @@ dashboard row — the work-item verbs — is refused in a zoom with the way forw
 |                 | ·      | ·       | `p`                   | zoom the handling panel                                |
 |                 | ·      | ·       | `r`                   | re-fetch GitHub                                        |
 |                 | ·      | ·       | `T` / `t` / `b` / `B` | detail: dispatch / enqueue / bind / blocked-by         |
+|                 | ·      | ·       | `w`                   | detail: worktree for this issue, fleet default agent   |
 |                 | ·      | ·       | `enter`               | detail: open the issue on GitHub                       |
 |                 | ·      | ·       | `esc`                 | back to the board, or close                            |
 | **Remote**      | ·      | ·       | `e` / `E`             | enable / disable remote access                         |
@@ -200,6 +202,9 @@ dashboard row — the work-item verbs — is refused in a zoom with the way forw
 | **Git menu**    | ·      | ·       | `d` `l` `s`           | diff · log · status                                    |
 |                 | ·      | ·       | `a` `c` `p`           | stage all · commit · push                              |
 |                 | ·      | ·       | `b` `w` `W` `x`       | branch · worktree · worktrees · remove worktree        |
+
+Issue detail `w` asks for a branch, prefilled `feat/<number>`, spawns the fleet default agent, and binds the new tree
+to that issue. The board's `w` does not. A repository with no GitHub remote still gets the tree; the bind is skipped.
 
 Three verbs isolate an agent in a worktree, and they differ in what they resolve from. `n w` works on the
 **dashboard**, asks for a repository and then a branch, and spawns the **fleet default** agent — it has no source panel,

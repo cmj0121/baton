@@ -26,7 +26,7 @@ func TestAFullFleetRefusesAWorktreeBeforeGitMakesIt(t *testing.T) {
 	s, _, _ := gateServer(fullFleet()...)
 
 	spec := spawnSpec{Spec: ptymgr.Spec{Command: "/bin/sh", Args: []string{"-c", "exit 0"}}}
-	err := s.worktreeSpawn(originOperator, repo, "feature/ceiling", spec)
+	err := s.worktreeSpawn(originOperator, repo, "feature/ceiling", spec, 0)
 	if err == nil || !strings.Contains(err.Error(), "capacity") {
 		t.Fatalf("a full fleet answered %v, want the capacity refusal", err)
 	}
@@ -42,7 +42,7 @@ func TestAFullFleetRefusesAWorktreeBeforeGitMakesIt(t *testing.T) {
 	s.mu.Lock()
 	s.panels = s.panels[:1]
 	s.mu.Unlock()
-	if err := s.worktreeSpawn(originOperator, repo, "feature/ceiling", spec); err != nil {
+	if err := s.worktreeSpawn(originOperator, repo, "feature/ceiling", spec, 0); err != nil {
 		t.Fatalf("with room the same call answered %v, want it admitted", err)
 	}
 	if _, statErr := os.Stat(tree); statErr != nil {

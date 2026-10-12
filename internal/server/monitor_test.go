@@ -1,6 +1,7 @@
 package server
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +48,9 @@ func TestNextState(t *testing.T) {
 		{"stuck holds", stateSignals{cur: panel.Stuck, agent: true, quiet: true, stuckDue: true}, panel.Stuck, false},
 		{"never stuck from attention — the human is, not the panel", stateSignals{cur: panel.Attention, agent: true, quiet: true, stuckDue: true}, panel.Attention, false},
 		{"the certain timer outranks the guessing tail", stateSignals{cur: panel.Running, agent: true, quiet: true, stuckDue: true, looksAtt: true}, panel.Stuck, true},
+		{"a permission overlay on the promotion tick stays attention", stateSignals{cur: panel.Idle, agent: true, quiet: true, stuckDue: true, overlayAtt: true}, panel.Attention, true},
+		{"a permission overlay outranks a question mark on that tick", stateSignals{cur: panel.Done, agent: true, quiet: true, stuckDue: true, looksAtt: true, overlayAtt: true}, panel.Attention, true},
+		{"an overlay does not reopen a panel already stuck", stateSignals{cur: panel.Stuck, agent: true, quiet: true, stuckDue: true, overlayAtt: true}, panel.Stuck, false},
 
 		// Rung 2b — the task event, which is the primary done signal.
 		{"a finished task promotes an agent at once", stateSignals{cur: panel.Idle, agent: true, quiet: true, taskDone: true}, panel.Done, true},
@@ -257,6 +261,65 @@ func TestLooksLikeAttention(t *testing.T) {
 		if got := looksLikeAttention([]byte(tc.tail)); got != tc.want {
 			t.Errorf("%s: looksLikeAttention() = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// scriptPty starts a panel that prints text and exits, and waits until needle is
+// in the ring. The process being gone is the same shape the monitor reads: the
+// ring outlives the child. needle is a substring the PTY will not rewrite (a
+// question mark, a phrase) rather than the whole script, because a terminal
+// turns newlines into CRLF.
+func scriptPty(t *testing.T, id, text, needle string) *ptymgr.Manager {
+	t.Helper()
+	pm := ptymgr.New()
+	t.Cleanup(func() { pm.Stop(id) })
+	spec := ptymgr.Spec{Command: "/bin/sh", Args: []string{"-c", "printf '%s' '" + text + "'"}}
+	if err := pm.StartCmd(id, spec); err != nil {
+		t.Fatalf("start the scripted panel: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(string(pm.Tail(id, attnTailBytes)), needle) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the scripted panel never produced %q, tail=%q", needle, pm.Tail(id, attnTailBytes))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return pm
+}
+
+// TestStuckEdgeReadsTheOverlayNotTheGuess is the live hole: once stuckDue is
+// set, wantsTail is false, so the guessing sniff never runs. The promotion tick
+// still reads the overlay phrases. A "?" does not come back as attention, and a
+// resolve keeps the same screen from raising the hand again.
+func TestStuckEdgeReadsTheOverlayNotTheGuess(t *testing.T) {
+	s, clk, _ := gateServer(panel.Panel{ID: "p1", Kind: panel.Agent, State: panel.Idle})
+	s.pty = scriptPty(t, "p1", "Apply this refactor?", "refactor?")
+	clk.add(attn.DefaultStuckAfter)
+
+	sig := s.signalsLocked(s.panels[0], false)
+	if sig.overlayAtt || sig.looksAtt || !sig.stuckDue {
+		t.Fatalf("a ? on the promotion tick must not be an overlay, got %+v", sig)
+	}
+	if ns, _ := nextState(sig); ns != panel.Stuck {
+		t.Fatalf("the guessing tail should still lose, got %v", ns)
+	}
+
+	s.pty = scriptPty(t, "p1", "Allow this\ndo not ask again\n", "do not ask again")
+	sig = s.signalsLocked(s.panels[0], false)
+	if !sig.overlayAtt || sig.looksAtt {
+		t.Fatalf("the overlay sniff is the only tail read on this edge, got %+v", sig)
+	}
+	if ns, moved := nextState(sig); ns != panel.Attention || !moved {
+		t.Fatalf("overlay on the promotion tick = %v moved %v, want attention, true", ns, moved)
+	}
+
+	s.declared["p1"] = &declaration{Cleared: s.mon.now()}
+	sig = s.signalsLocked(s.panels[0], false)
+	if sig.overlayAtt {
+		t.Fatalf("a resolve must suppress the overlay re-read, got %+v", sig)
+	}
+	if ns, _ := nextState(sig); ns != panel.Stuck {
+		t.Fatalf("a suppressed overlay should still promote to stuck, got %v", ns)
 	}
 }
 

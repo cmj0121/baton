@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/cmj0121/baton/internal/config"
+	"github.com/cmj0121/baton/internal/i18n"
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 )
@@ -926,5 +927,107 @@ func TestInboxClearingTheLastRowMovesTheCursorUp(t *testing.T) {
 
 	if m.inboxCursor != 0 || len(m.inboxRows) != 1 {
 		t.Fatalf("cursor = %d over %v, want 0 over one row", m.inboxCursor, rowIDs(m))
+	}
+}
+
+// overlayTail is a permission chooser the shared matcher accepts. A bare "?" is
+// the guessing tail, and it must not.
+const overlayTail = "Allow this tool?\n"
+
+// TestInboxDigitAnswersAPermissionOverlay. 1/2/3 is the short reply for a
+// chooser whose answers are those digits: the digit and a newline reach the
+// panel, the row is acknowledged, and the cursor stays for the next item.
+func TestInboxDigitAnswersAPermissionOverlay(t *testing.T) {
+	m, cmds := clientInbox(t,
+		wire("1", "attention", 2*time.Minute),
+		wire("2", "attention", time.Minute),
+	)
+	m.applyTail("1", []byte(overlayTail))
+
+	m = press(m, "2")
+
+	in := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "panel.input" })
+	if in.ID != "1" || string(in.Data) != "2\n" {
+		t.Errorf("digit = %+v, want id 1 data %q", in, "2\n")
+	}
+	ack := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "panel.ack" && c.ID == "1" })
+	if ack.Until != "" {
+		t.Errorf("answering an overlay should ack with no until, got %q", ack.Until)
+	}
+	if got := rowIDs(m); !eqIDs(got, "2") || m.inboxCursor != 0 {
+		t.Errorf("the row should leave and the cursor stay, got %v at %d", got, m.inboxCursor)
+	}
+}
+
+// TestInboxDigitRefusesAnythingButTheOverlay. The key is not a general reply.
+// Stuck, a declared reason, a question mark, an empty tail, and a tail that
+// has not been pulled yet all leave the row where it is.
+func TestInboxDigitRefusesAnythingButTheOverlay(t *testing.T) {
+	stuck, _ := clientInbox(t, wire("1", "stuck", time.Minute))
+	stuck.applyTail("1", []byte(overlayTail))
+	stuck = press(stuck, "1")
+	if len(stuck.inboxRows) != 1 || !strings.Contains(stuck.status, "permission overlay") {
+		t.Fatalf("stuck must not take a digit, status %q rows %v", stuck.status, rowIDs(stuck))
+	}
+
+	declared := wire("1", "attention", time.Minute)
+	declared.Reason = "need a decision"
+	dec, _ := clientInbox(t, declared)
+	dec.applyTail("1", []byte(overlayTail))
+	dec = press(dec, "3")
+	if len(dec.inboxRows) != 1 || !strings.Contains(dec.status, "permission overlay") {
+		t.Fatalf("a declared reason must not take a digit, status %q", dec.status)
+	}
+
+	guess, _ := clientInbox(t, wire("1", "attention", time.Minute))
+	guess.applyTail("1", []byte("?\n"))
+	guess = press(guess, "1")
+	if len(guess.inboxRows) != 1 || !strings.Contains(guess.status, "permission overlay") {
+		t.Fatalf("a question mark must not take a digit, status %q", guess.status)
+	}
+
+	empty, _ := clientInbox(t, wire("1", "attention", time.Minute))
+	empty.applyTail("1", nil) // loaded, and empty
+	empty = press(empty, "1")
+	if len(empty.inboxRows) != 1 || !strings.Contains(empty.status, "permission overlay") {
+		t.Fatalf("an empty tail must not take a digit, status %q", empty.status)
+	}
+
+	pending, _ := clientInbox(t, wire("1", "attention", time.Minute))
+	if _, loaded := pending.inboxTails["1"]; loaded {
+		t.Fatal("setup: the tail must be absent, not empty")
+	}
+	pending = press(pending, "1")
+	if len(pending.inboxRows) != 1 || !strings.Contains(pending.status, "has not arrived") {
+		t.Fatalf("an unpulled tail must wait, status %q", pending.status)
+	}
+}
+
+// TestInboxDigitIsTextWhileComposing. The composer owns the keyboard, so a
+// reply that starts with 1 is a reply, not an overlay answer.
+func TestInboxDigitIsTextWhileComposing(t *testing.T) {
+	m, _ := clientInbox(t, wire("1", "attention", time.Minute))
+	m.applyTail("1", []byte(overlayTail))
+
+	m = press(m, "i", "1")
+	if m.inboxReply != "1" || len(m.inboxRows) != 1 || !m.inboxComposing {
+		t.Fatalf("a digit in the composer stays text, reply %q rows %v composing %v",
+			m.inboxReply, rowIDs(m), m.inboxComposing)
+	}
+}
+
+// TestInboxLegendNamesTheOverlayAnswer. 1/2/3 sits on the verb line. esc stays
+// on the line above it, and a narrow pop-up wraps rather than clipping the exit.
+func TestInboxLegendNamesTheOverlayAnswer(t *testing.T) {
+	m := openedInbox(t, wire("1", "attention", time.Minute))
+	m.width = 120
+	foot := m.inboxFooter()
+	if !strings.Contains(foot, "1/2/3") || !strings.Contains(foot, "answer") || !strings.Contains(foot, "close") {
+		t.Fatalf("legend = %q, want 1/2/3, answer, and close", foot)
+	}
+	m.lang = i18n.ZhTW
+	zh := m.inboxFooter()
+	if !strings.Contains(zh, "1/2/3") || !strings.Contains(zh, "回答") || strings.Contains(zh, "answer") {
+		t.Fatalf("zh-TW legend = %q, want 1/2/3 and 回答", zh)
 	}
 }

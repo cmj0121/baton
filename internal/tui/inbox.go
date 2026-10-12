@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/cmj0121/baton/internal/attn"
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
 )
@@ -26,8 +27,9 @@ import (
 // It borrows the diff popup's master-detail shape: the queue on the left, on the
 // right the tail that raised the flag (pulled per row with panel.tail, never
 // carried on a snapshot). Every verb it offers acts WITHOUT leaving the overlay —
-// i answers, - defers, x dismisses — and the one verb that does leave, enter,
-// leaves deliberately because sometimes you really do have to look.
+// i answers, 1/2/3 answers a permission overlay, - defers, x dismisses — and the
+// one verb that does leave, enter, leaves deliberately because sometimes you
+// really do have to look.
 //
 // Two rules shape everything below, and both are about trust rather than
 // convenience:
@@ -422,8 +424,8 @@ func (m *model) applyTail(id string, data []byte) {
 
 // --- clearing a row -----------------------------------------------------------
 
-// clearRow is the one path all three clearing verbs take: i (with text), - (with
-// an until), and x (with neither). It sends, removes the row, and leaves the
+// clearRow is the one path every clearing verb takes: i and 1/2/3 (with text),
+// - (with an until), and x (with neither). It sends, removes the row, and leaves the
 // cursor at the same INDEX — because the slice shrank underneath it, that index
 // now holds the next item, which is the whole ergonomic claim of this feature.
 //
@@ -533,8 +535,47 @@ func (m model) handleInboxKey(key string, k tea.Key) (tea.Model, tea.Cmd) {
 		return m.snoozeInboxRow()
 	case "x":
 		return m.dismissInboxRow()
+	case "1", "2", "3":
+		return m.answerInboxOverlay(key)
 	}
 	return m, nil
+}
+
+// answerInboxOverlay types the digit and a newline into a live permission
+// overlay, then clears the row the way a typed reply does. It is the short
+// path for a chooser whose answers are 1, 2 and 3.
+//
+// It fires only for an attention row that the agent did not declare (an empty
+// reason) and whose cached tail is the same overlay the monitor sniffs. A
+// stuck, done or failed row, a declared reason, and a bare "?" are not that
+// screen. A tail that has not been pulled yet is not a guess: the key waits
+// and says so, rather than answering a pane the cockpit has not seen.
+func (m model) answerInboxOverlay(digit string) (tea.Model, tea.Cmd) {
+	r, ok := m.inboxSelected()
+	if !ok {
+		return m, nil
+	}
+	if r.stale {
+		m.status = m.tr("inbox.stale-row", "that row is stale — r refreshes the queue")
+		return m, nil
+	}
+	refuse := m.tr("inbox.overlay-only", "1/2/3 answers a permission overlay")
+	if r.state != panel.Attention || r.reason != "" {
+		m.status = refuse
+		return m, nil
+	}
+	tail, loaded := m.inboxTails[r.id]
+	if !loaded {
+		m.status = m.tr("inbox.tail-pending", "the tail has not arrived yet")
+		return m, nil
+	}
+	if !attn.PermissionOverlay(tail) {
+		m.status = refuse
+		return m, nil
+	}
+	m = m.clearRow(m.inboxCursor, time.Time{}, digit+"\n")
+	m.status = fmt.Sprintf(m.tr("inbox.replied-to", "replied to %s · enter zooms to watch it land"), truncate(sanitizeText(r.title), 20))
+	return m.afterClear()
 }
 
 // zoomInboxRow is the one verb that leaves the overlay, and it deliberately does
@@ -957,7 +998,8 @@ func (m model) inboxFooter() string {
 	return lipgloss.JoinVertical(lipgloss.Left,
 		fitLegend(w, "j/k", m.tr("legend.move", "move"), "tab", m.tr("legend.filter", "filter"),
 			"enter", m.tr("legend.zoom", "zoom"), "r", m.tr("legend.re-sort", "re-sort"), "esc", m.tr("legend.close", "close")),
-		fitLegend(w, "i", m.tr("inbox.reply", "reply"), "-", m.tr("inbox.snooze", "snooze"), "x", m.tr("inbox.dismiss", "dismiss")),
+		fitLegend(w, "i", m.tr("inbox.reply", "reply"), "-", m.tr("inbox.snooze", "snooze"), "x", m.tr("inbox.dismiss", "dismiss"),
+			"1/2/3", m.tr("inbox.answer", "answer")),
 	)
 }
 

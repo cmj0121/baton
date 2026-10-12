@@ -488,6 +488,7 @@ usage:
   window: 5h # window length once use opens one; 0 = no countdown, calendar day
   warn-at: 0.75 # fraction of the window spent before the segment turns amber
   alarm-at: 0.9 # …and red
+  pause-below: 0 # 剩餘比例,範圍 (0, 1];0 = 關。可重新載入,見下文
 
 issues:
   interval: 60 # I 覆蓋層開著時重抓 GitHub 的秒數；0 = 只靠 r；下限 30s
@@ -503,14 +504,24 @@ settings:
 `warn-at` 與 `alarm-at` 是成對生效的。一組無法描述「壓力遞增」的設定——超出 0–1,或
 alarm 小於等於 warn——會整組退回預設值,這樣顏色才會永遠是它看起來的意思。
 
+`pause-below` 是某個廠商**自己的**額度還剩多少(`1` 減掉已用百分比),不是 `warn-at`
+用來上色的已用比例。`0`,以及 `(0, 1]` 以外的任何值,都是關閉——這是預設,所以既有的
+艦隊不會因為升級而改變。剩餘嚴格低於這條線時,排程器不再把排隊的工作交給那個廠商,
+也不再為排隊的任務生成新面板。讀數剛好落在線上仍然會排下去。Claude 取它自己的 5h 與
+7d 之中較小的那個,不用各模型的上限,也不用花費視窗。Grok 只用它自己讀數上的 7d 視窗;
+標成 5h 的、以及其他廠商的數字,都不會讓它暫停。廠商是指令(`claude`、`grok`),不是
+profile 的名字。沒有讀數就不會暫停。人按的 `A` 或 `panel.create`、conductor 的生成,
+以及已經在跑的那一輪,都會繼續。進入暫停與恢復各記一次 log。
+
 使用 `api` 來源時,Admin 金鑰放在環境變數裡:
 
 ```sh
 export BATON_ANTHROPIC_ADMIN_KEY=sk-ant-admin01-…
 ```
 
-`usage:` 底下的所有設定都在常駐程式啟動時讀取;更動後需重啟伺服器(`C-t S`)才會
-生效。`v u` 這個循環則是即時的。
+`source`、`interval`、`window`、`limits`、`warn-at` 與 `alarm-at` 在常駐程式啟動時
+讀取;更動後需重啟伺服器(`C-t S`)才會生效。`pause-below` 跟佇列上限一起重新載入
+(`C-t R`,或 SIGHUP)。`v u` 這個循環則是即時的。
 
 > 舊設定檔裡的 `settings.usage-footer: false` 仍然會隱藏這段頁尾。`usage-mode` 取代了
 > 它,兩者同時存在時以 `usage-mode` 為準。

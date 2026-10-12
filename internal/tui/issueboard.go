@@ -17,7 +17,7 @@ import (
 
 // The GitHub issues overlay (modeIssues, I / C-t I). It is the cockpit's window
 // onto the selected panel's repo: compact cards in BACKLOG / IN PROCESS / PR,
-// a detail frame in the same box, and T/t/b/B on that detail. The overlay
+// a detail frame in the same box, and T/t/b/B/w on that detail. The overlay
 // owns the keyboard until esc. GitHub is fetched on the daemon (the operator's
 // gh); handler titles follow the fleet snapshot without waiting for the next fetch.
 
@@ -237,6 +237,8 @@ func (m model) handleIssuesDetailKey(key string) (tea.Model, tea.Cmd) {
 		return m.bindIssuesCard()
 	case "B":
 		return m.startIssuesBlock()
+	case "w":
+		return m.startIssuesWorktree()
 	}
 	return m, nil
 }
@@ -662,6 +664,57 @@ func matchIssuesMile(query, none string, names []string) (int, bool) {
 	return picked[0], true
 }
 
+// startIssuesWorktree opens the branch field for a worktree rooted at this
+// card. The board's w does not: only the detail card has an issue to name.
+// The field is prefilled feat/<number> and the operator can edit it. An empty
+// commit reopens it. n w's prompt is a different purpose and returns to the
+// dashboard; this one stays on the board.
+func (m model) startIssuesWorktree() (tea.Model, tea.Cmd) {
+	c, ok := m.issuesSelected()
+	if !ok {
+		m.status = m.tr("issues.status.empty-column", "issues: no card in this column")
+		return m, nil
+	}
+	if m.issuesCwd == "" {
+		m.status = m.tr("issues.status.need-cwd", "issues: no working directory")
+		return m, nil
+	}
+	m.input = inputIssuesWorktree
+	m.inputBuf = "feat/" + strconv.Itoa(c.Number)
+	m.status = m.tr("git.status.branch-required", "new worktree · a branch name is required")
+	return m, nil
+}
+
+// commitIssuesWorktree sends the targetless worktree-add: the issues cwd, the
+// typed branch, the fleet default agent, and this card's number. The server
+// binds the new tree to that issue after the agent starts. An empty name
+// reopens the field. The overlay stays where it is.
+func (m model) commitIssuesWorktree(branch string) (tea.Model, tea.Cmd) {
+	if branch == "" {
+		m.input = inputIssuesWorktree
+		m.inputBuf = ""
+		m.status = m.tr("git.status.branch-required", "new worktree · a branch name is required")
+		return m, nil
+	}
+	c, ok := m.issuesSelected()
+	if !ok || m.issuesCwd == "" {
+		m.status = m.tr("issues.status.need-cwd", "issues: no working directory")
+		return m, nil
+	}
+	prof, name, ok := m.resolveAgentNamed(m.effDefaultAgent())
+	if !ok {
+		m.status = m.agentUnavailable(name)
+		return m, nil
+	}
+	m.sendf(proto.Command{
+		Action: "panel.git", Git: "worktree-add",
+		Dir: m.issuesCwd, Name: branch, Issue: c.Number,
+		Path: prof.Command, Args: prof.Args, Profile: name,
+	})
+	m.status = fmt.Sprintf(m.tr("git.status.worktree-on", "worktree + %s on %s"), name, branch)
+	return m, nil
+}
+
 func (m model) startIssuesBlock() (tea.Model, tea.Cmd) {
 	c, ok := m.issuesSelected()
 	if !ok {
@@ -742,7 +795,7 @@ func (m model) issuesChrome() (head, legend string) {
 	if m.issuesMilePick {
 		legend = mutedStyle.Render(m.tr("issues.legend.mile-pick", "tab rotate  ·  S-tab back  ·  m/esc done"))
 	} else if m.issuesDetail {
-		legend = mutedStyle.Render(m.tr("issues.legend.detail", "T dispatch  ·  t enqueue  ·  b bind  ·  B block  ·  p panel  ·  r refresh  ·  enter  ·  esc"))
+		legend = mutedStyle.Render(m.tr("issues.legend.detail", "T dispatch  ·  t enqueue  ·  b bind  ·  B block  ·  w tree  ·  p panel  ·  r refresh  ·  enter  ·  esc"))
 	} else {
 		legend = mutedStyle.Render(m.tr("issues.legend.board", "tab/←→ column  ·  ↑/↓ card  ·  m / milestone  ·  space/enter detail  ·  p panel  ·  r refresh  ·  esc"))
 	}

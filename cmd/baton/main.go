@@ -1649,6 +1649,7 @@ func reloadableSettings(cfg config.Config) reloadable {
 		rc.settings.QueueMax = cfg.Queue.Max
 	}
 	rc.settings.QueueConcurrency = cfg.Queue.Concurrency
+	rc.settings.PauseBelow = cfg.Usage.QueuePauseLine()
 	return rc
 }
 

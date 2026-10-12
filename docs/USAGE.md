@@ -570,6 +570,7 @@ usage:
   window: 5h # window length once use opens one; 0 = no countdown, calendar day
   warn-at: 0.75 # fraction of the window spent before the segment turns amber
   alarm-at: 0.9 # …and red
+  pause-below: 0 # remaining fraction in (0, 1]; 0 = off. Reloads; see below
 
 issues:
   interval: 60 # GitHub refresh while the I overlay is open; 0 = r only; floor 30s
@@ -587,14 +588,28 @@ than a wrong one.
 rising pressure — outside 0–1, or an alarm at or below the warning — falls back to
 the defaults wholesale, so the colours always mean what they look like.
 
+`pause-below` is how much of a vendor's **own** quota is still left (`1` minus the
+used percentage), not the spent fraction `warn-at` colours with. `0`, and anything
+outside `(0, 1]`, means off — the default, so an existing fleet does not change.
+The scheduler stops handing that vendor new queued work, and stops spawning a panel
+for a queued task, when remaining is strictly under the line. A reading that lands
+on the line still drains. Claude uses the smaller of its own 5h and 7d windows, not
+the per-model ceilings and not a spend window. Grok uses only the 7d window on its
+own reading; a 5h label, and another vendor's numbers, do not pause it. The vendor
+is the command (`claude`, `grok`), not the profile name. No reading does not pause.
+A human `A` or `panel.create`, a conductor spawn, and a turn already in flight keep
+going. The hold is logged once when it starts and once when it ends.
+
 The Admin key, when using the `api` source, goes in the environment:
 
 ```sh
 export BATON_ANTHROPIC_ADMIN_KEY=sk-ant-admin01-…
 ```
 
-Everything under `usage:` is read when the daemon starts; change it and restart
-the server (`C-t S`) to pick it up. The `v u` cycle is live.
+`source`, `interval`, `window`, `limits`, `warn-at` and `alarm-at` are read when
+the daemon starts; change them and restart the server (`C-t S`) to pick them up.
+`pause-below` reloads with the queue caps (`C-t R`, or SIGHUP). The `v u` cycle
+is live.
 
 > An older config that set `settings.usage-footer: false` still hides the segment.
 > `usage-mode` supersedes it and wins whenever both are present.

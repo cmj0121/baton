@@ -46,7 +46,7 @@ func TestWorktreeErrorQuotesAHostileRepo(t *testing.T) {
 	}
 	s, _ := wtServer(t)
 
-	err := s.worktreeSpawn(originOperator, plain, "feature/nope", idleAgent())
+	err := s.worktreeSpawn(originOperator, plain, "feature/nope", idleAgent(), 0)
 	if err == nil {
 		t.Fatal("a non-repo should be refused")
 	}
