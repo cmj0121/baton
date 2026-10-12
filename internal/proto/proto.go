@@ -670,7 +670,7 @@ type ServerMsg struct {
 	Panels     []Panel     `json:"panels,omitempty"`      // full snapshot on "panels"; live state/spark refresh on "telemetry"
 	Groups     []GroupView `json:"groups,omitempty"`      // per-group view settings on the "panels" snapshot, alongside Panels
 	Tasks      []Task      `json:"tasks,omitempty"`       // the backlog snapshot on "tasks" (reply to task.list)
-	ID         string      `json:"id,omitempty"`          // panel id on "output" and on "tail"; the new transient panel id on "ephemeral" (a git op); the diffed agent panel id on "diff"
+	ID         string      `json:"id,omitempty"`          // panel id on "output" and on "tail"; the new transient panel id on "ephemeral" (a git op); the diffed agent panel id on "diff"; the target panel id on the "notice" that answers peer.send
 	Data       []byte      `json:"data,omitempty"`        // pty output bytes on "output"; the pulled trailing output on "tail"
 	Rows       int         `json:"rows,omitempty"`        // on "output", set only on an attach's replay: the window height its bytes were painted at; zero on live output
 	Cols       int         `json:"cols,omitempty"`        // on "output", set only on an attach's replay: the window width its bytes were painted at; zero on live output

@@ -234,30 +234,22 @@ func contentText(t *testing.T, result map[string]any) string {
 	return text
 }
 
-// TestScoreOnlyServerCarriesOneTool: what an ordinary agent panel loads is the
-// memory's write tool and nothing else.
+// TestWorkerServerCarriesNoFleetVerb: what an ordinary agent panel loads drives
+// nothing in the fleet.
 //
-// The number is the assertion. The full table drives the fleet — spawn, close,
-// signal, dispatch — and a worker panel handed it could close the panel beside
-// it. It is given a server at all only so that the memory's invitation is in its
-// tool list on every turn, which is the one thing a brief can say only when
-// somebody dispatches.
-func TestScoreOnlyServerCarriesOneTool(t *testing.T) {
+// The full table spawns, closes, signals and dispatches, and a worker panel
+// handed it could close the panel beside it. The exact contents of the worker's
+// table are pinned in peer_test.go; this holds the half that is about absence.
+func TestWorkerServerCarriesNoFleetVerb(t *testing.T) {
 	full := New("test").tools
 	if len(full) < 10 {
 		t.Fatalf("the full table should carry the fleet verbs, got %d", len(full))
 	}
-	score := NewScore("test").tools
-	if len(score) != 1 {
-		t.Fatalf("the score server should carry one tool, got %d: %v", len(score), toolNames(score))
-	}
-	if score[0].name != "score_submit" {
-		t.Errorf("the one tool should be score_submit, got %q", score[0].name)
-	}
-	// The conductor's corrections are absent rather than present-and-refusing:
-	// on a worker they would be three tools that exist to say no.
-	for _, t2 := range score {
-		if strings.HasPrefix(t2.name, "baton_") || t2.name == "score_merge" {
+	peer := map[string]bool{"baton_peers": true, "baton_peek": true, "baton_tell": true}
+	for _, t2 := range NewWorker("test").tools {
+		// The conductor's corrections are absent rather than present-and-refusing:
+		// on a worker they would be three tools that exist to say no.
+		if t2.name != "score_submit" && !peer[t2.name] {
 			t.Errorf("a worker must not carry %q", t2.name)
 		}
 	}

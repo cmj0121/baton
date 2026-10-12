@@ -283,8 +283,10 @@ func peerPayload(me, to panel.Panel, text string) []byte {
 // else of a dispatch — no task is recorded on the target, no brief reaches its
 // card and no task hook runs, because a peer's message is not an assignment.
 //
-// The reply is a notice to the sender alone. There is no fleet broadcast:
-// nothing a snapshot carries changed.
+// The reply is a notice to the sender alone, carrying the target's id. The id
+// is what lets a client tell this reply from the notices the daemon broadcasts
+// to every connection for its own reasons. There is no fleet broadcast: nothing
+// a snapshot carries changed.
 func (s *Server) peerSend(cc *clientConn, cmd proto.Command) {
 	s.mu.Lock()
 	me, to, text, reason := s.peerSendLocked(cc.self, cmd.ID, cmd.Data, cmd.Submit, s.mon.now())
@@ -301,5 +303,5 @@ func (s *Server) peerSend(cc *clientConn, cmd proto.Command) {
 	// text, and not the prefix the server added.
 	log.Info().Str("from", me.ID).Str("to", to.ID).Str("group", me.Group).Int("bytes", len(cmd.Data)).Msg("peer send")
 	s.emit("peer.send", map[string]any{"from": me.ID, "to": to.ID, "group": me.Group, "bytes": len(cmd.Data)})
-	send(cc, proto.ServerMsg{Type: "notice", Notice: fmt.Sprintf("sent %d bytes to %s (%s)", len(cmd.Data), scrub.Capped(to.Title, maxPeerTitleRunes), to.ID)})
+	send(cc, proto.ServerMsg{Type: "notice", ID: to.ID, Notice: fmt.Sprintf("sent %d bytes to %s (%s)", len(cmd.Data), scrub.Capped(to.Title, maxPeerTitleRunes), to.ID)})
 }

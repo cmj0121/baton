@@ -17,9 +17,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
+	"strings"
+
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/cmj0121/baton/internal/control"
 	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/scrub"
 )
 
 // protocolVersion is the MCP revision baton implements; it is echoed back to a
@@ -55,35 +61,35 @@ func New(version string) *Server {
 	return s
 }
 
-// NewScore builds a server carrying the fleet memory's write tool and nothing
-// else. It is what an ORDINARY agent panel loads.
+// NewWorker builds the server an ORDINARY agent panel loads: the fleet memory's
+// write tool and the three peer tools, and nothing else.
 //
 // The full table drives the fleet — spawn, close, signal, dispatch — and that is
-// the conductor's job, not a worker's. A worker panel is given the one verb the
-// memory needs from it, which is the whole reason it is given a server at all:
-// score.submit is open to every panel already (the daemon has never fenced it),
-// but a panel that is never TOLD does not submit, and a tool in the list is the
-// only way to say so that costs the agent nothing. The alternative is a sentence
-// in a brief, which reaches an agent only when someone dispatches to it.
+// the conductor's job, not a worker's. A worker is given a server at all for two
+// things it can only be told through a tool list. One is score.submit: it is
+// open to every panel already (the daemon has never fenced it), but a panel that
+// is never TOLD does not submit, and a sentence in a brief reaches an agent only
+// when someone dispatches to it. The other is its group-mates, see peerTools.
 //
 // The conductor's three corrections are absent for the same reason the fleet
 // verbs are: the daemon refuses them to any connection that is not the
 // conductor's, so on a worker they would be three tools that exist to say no.
-func NewScore(version string) *Server {
+func NewWorker(version string) *Server {
 	s := New(version)
-	s.tools = scoreTools(s.tools)
+	s.tools = workerTools(s.tools)
 	return s
 }
 
-// scoreTools narrows a table to the memory's write tool.
-func scoreTools(all []tool) []tool {
-	out := make([]tool, 0, 1)
+// workerTools is the worker's table: the memory's write tool out of the full
+// one, then the peer tools, which are in no other table.
+func workerTools(all []tool) []tool {
+	out := make([]tool, 0, 4)
 	for _, t := range all {
 		if t.name == "score_submit" {
 			out = append(out, t)
 		}
 	}
-	return out
+	return append(out, peerTools()...)
 }
 
 // Serve runs the JSON-RPC loop until in reaches EOF. Requests get a response;
@@ -683,4 +689,185 @@ func defaultTools() []tool {
 			},
 		},
 	}
+}
+
+// peerWhen is the sentence every peer tool's description ends on. It is one
+// string so the three cannot disagree about when they work.
+const peerWhen = " Works only while the operator has switched peer interaction on for your group; when it has not, or the panel is not one you may reach, the call is refused and the reason says why."
+
+// The sizes the peer tools quote to a model. peekMaxBytes and tellMaxBytes are
+// the DAEMON's caps (maxTailBytes, maxPeerSendBytes), repeated here because this
+// package cannot import the server; TestWorkerToolsQuoteTheServersCaps in
+// internal/server fails when either side moves without the other.
+// peekDefaultBytes is this package's own: what baton_peek reads when the caller
+// names no size, enough for the last screen or so of a terminal.
+const (
+	peekDefaultBytes = 4096
+	peekMaxBytes     = 8192
+	tellMaxBytes     = 4096
+)
+
+// WorkerToolDocs is everything a model is told about each worker tool: its
+// description followed by the description of each argument, keyed by tool name.
+//
+// Like ToolNames it is exported for a test in internal/server, which is the one
+// package that can read these words beside the limits they quote.
+func WorkerToolDocs() map[string]string {
+	out := map[string]string{}
+	for _, t := range workerTools(defaultTools()) {
+		doc := t.desc
+		props, _ := t.schema["properties"].(map[string]any)
+		for _, name := range slices.Sorted(maps.Keys(props)) {
+			if p, ok := props[name].(map[string]any); ok {
+				doc += fmt.Sprintf("\n%s: %v", name, p["description"])
+			}
+		}
+		out[t.name] = doc
+	}
+	return out
+}
+
+// peerTools is the worker's half of peer interaction: list the panels of your
+// own group, read one's recent output, type one line into one.
+//
+// They are ALWAYS in a worker's list, whether or not its group has peers on. The
+// operator flips that flag while panels run, this server holds no subscription
+// that would tell it, and tools/list_changed is honoured differently by every
+// agent CLI — so a list that tracked the flag would be stale exactly when it
+// mattered. The daemon decides each call from the fleet as it stands and a
+// refusal carries its reason, which a model can read and a missing tool cannot
+// say.
+//
+// They are not in the conductor's table (defaultTools, and so ToolNames): the
+// daemon refuses the peer verbs to the conductor role, which reaches every panel
+// through its own tools already.
+func peerTools() []tool {
+	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
+	obj := func(props map[string]any, required ...string) map[string]any {
+		m := map[string]any{"type": "object", "properties": props}
+		if len(required) > 0 {
+			m["required"] = required
+		}
+		return m
+	}
+
+	return []tool{
+		{
+			name:   "baton_peers",
+			desc:   "List the other panels in your group that you may read and type into: each one's id, title, kind (agent, shell or command) and state. Use an id from this list with baton_peek and baton_tell." + peerWhen,
+			schema: obj(map[string]any{}),
+			run: func(c *control.Client, _ args) (string, error) {
+				panels, err := c.PeerList()
+				if err != nil {
+					return "", err
+				}
+				return peersJSON(panels)
+			},
+		},
+		{
+			name: "baton_peek",
+			desc: "Read the recent terminal output of another panel in your group, as plain text with the terminal's control sequences removed. It is the tail of what that panel printed, cut by size, so it can start mid-line and a full-screen program reads as fragments." + peerWhen,
+			schema: obj(map[string]any{
+				"id":    str("panel id to read, from baton_peers"),
+				"bytes": map[string]any{"type": "integer", "description": fmt.Sprintf("how many trailing bytes of output to read (default %d, at most %d)", peekDefaultBytes, peekMaxBytes)},
+			}, "id"),
+			run: func(c *control.Client, a args) (string, error) {
+				id := a.str("id")
+				if id == "" {
+					return "", fmt.Errorf("id is required")
+				}
+				n := a.intDefault("bytes", peekDefaultBytes)
+				if n <= 0 {
+					n = peekDefaultBytes
+				}
+				raw, err := c.PeerTail(id, n)
+				if err != nil {
+					return "", err
+				}
+				text := plainTail(raw)
+				if text == "" {
+					return "(panel " + id + " has no output to show)", nil
+				}
+				return text, nil
+			},
+		},
+		{
+			name: "baton_tell",
+			desc: fmt.Sprintf("Type one line into another panel in your group's terminal and press Enter. An agent panel receives it as a prompt, prefixed with your panel's title and id so it can tell you from its human; a shell panel receives it exactly as written and runs it as a command. Sends are limited in size (%d bytes) and in rate, and a panel that is waiting for a human takes none.", tellMaxBytes) + peerWhen,
+			schema: obj(map[string]any{
+				"id":   str("panel id to type into, from baton_peers"),
+				"text": str("the line to type; line breaks sent to an agent are folded into spaces"),
+			}, "id", "text"),
+			run: func(c *control.Client, a args) (string, error) {
+				id, text := a.str("id"), a.str("text")
+				if id == "" || text == "" {
+					return "", fmt.Errorf("id and text are both required")
+				}
+				return c.PeerSend(id, text)
+			},
+		},
+	}
+}
+
+// peersJSON renders a peer list for a model: the four fields it acts on. The
+// wire panel carries a great deal more — pids, directories, sparklines — that a
+// group-mate has no use for and would pay for in every call.
+func peersJSON(panels []proto.Panel) (string, error) {
+	type peer struct {
+		ID    string `json:"id"`
+		Title string `json:"title"`
+		Kind  string `json:"kind"`
+		State string `json:"state,omitempty"`
+	}
+	out := make([]peer, 0, len(panels))
+	for _, p := range panels {
+		out = append(out, peer{ID: p.ID, Title: p.Title, Kind: p.Kind, State: p.State})
+	}
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// plainTail turns the raw tail of a panel's terminal into text a model can be
+// handed: every escape sequence is removed whole, then every rune a terminal
+// would act on or be lied to by (scrub.Drop — controls, bidi and zero-width
+// format characters, and the U+FFFD an undecodable byte becomes).
+//
+// It is the inbox detail pane's treatment of the same bytes — split into lines,
+// drop the carriage returns, strip the escapes — made in this package because
+// that one lives in the cockpit. Lines are kept, unlike scrub.Text, which folds
+// to one: a tail is a screen, and its line breaks are most of its meaning. Tabs
+// are kept for the same reason.
+//
+// Before either, every byte that is not part of a valid UTF-8 rune is dropped.
+// The tail is cut by size, so it can open on the second or third byte of a
+// character, and the escape parser reads a bare 0x90, 0x98 or 0x9D–0x9F as an
+// 8-bit string introducer (DCS, SOS, OSC, PM, APC) and swallows everything up to
+// a terminator that never comes: one cut CJK character at the head and the
+// whole tail read as empty. The same byte loose in the MIDDLE of the buffer does
+// the same from there on, so the rule is the whole buffer's and not the head's.
+// What it gives up is a raw 8-bit C1 introducer acting as one: its parameters
+// stay behind as text, exactly as they do for the two-byte encoding of the same
+// control and for scrub everywhere else. A panel's terminal is UTF-8, where a
+// raw C1 byte is not a control to begin with.
+//
+// The sequences go FIRST and as a whole, which scrub alone would not do: it
+// drops the ESC and leaves "[1;31m" behind as text, on purpose, so a person can
+// see that something tried. A model reading forty lines of colour parameters
+// sees nothing else.
+func plainTail(raw []byte) string {
+	lines := strings.Split(ansi.Strip(strings.ToValidUTF8(string(raw), "")), "\n")
+	for i, line := range lines {
+		var b strings.Builder
+		b.Grow(len(line))
+		for _, r := range line {
+			if r == '\t' || !scrub.Drop(r) {
+				b.WriteRune(r)
+			}
+		}
+		lines[i] = strings.TrimRight(b.String(), " \t")
+	}
+	return strings.Trim(strings.Join(lines, "\n"), "\n")
 }

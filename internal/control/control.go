@@ -497,6 +497,103 @@ func (c *Client) Tasks() ([]proto.Task, error) {
 	}
 }
 
+// GroupPeers switches peer interaction for a group on or off (group.peers): the
+// flag that lets the group's panels list, read and type into each other. The
+// daemon refuses it to a conductor connection and to an agent panel — it is the
+// operator's setting — and refuses to enable a group nobody is in.
+func (c *Client) GroupPeers(group string, on bool) error {
+	return c.Do(proto.Command{Action: "group.peers", Group: group, Enable: on})
+}
+
+// PeerList returns the group-mates this connection's own panel may reach
+// (peer.list). The daemon answers from the panel declared on hello, so there is
+// no argument: outside a panel, or in a group the operator has not switched
+// peers on for, the call is refused with the reason.
+//
+// The reply is its own message type, and it is the ONLY place this reads from:
+// the "panels" broadcast every connection also receives is the whole fleet, and
+// handing that back here would show a panel the others it may not reach.
+func (c *Client) PeerList() ([]proto.Panel, error) {
+	msg, err := c.peerExchange(proto.Command{Action: "peer.list"}, "peers", "")
+	if err != nil {
+		return nil, err
+	}
+	return msg.Panels, nil
+}
+
+// PeerTail returns the trailing output of group-mate id (peer.tail), at most
+// count bytes; zero leaves the size to the daemon, which also caps it.
+//
+// These are the RAW bytes of the panel's terminal — escape sequences included,
+// and cut by size, so the first of them may be half a sequence. A caller that
+// shows them to anything but a terminal emulator turns them into text first.
+func (c *Client) PeerTail(id string, count int) ([]byte, error) {
+	msg, err := c.peerExchange(proto.Command{Action: "peer.tail", ID: id, Count: count}, "tail", id)
+	if err != nil {
+		return nil, err
+	}
+	return msg.Data, nil
+}
+
+// PeerSend types text into group-mate id as one line and presses Enter
+// (peer.send), and returns the daemon's own account of what it sent. There is no
+// submit flag: the daemon refuses one, so every admitted send is submitted.
+//
+// The reply is the notice that names id. A notice is also what the daemon
+// broadcasts to every connection for a plugin or the fleet memory, and one of
+// those arriving in the same window is not this call's answer.
+func (c *Client) PeerSend(id, text string) (string, error) {
+	msg, err := c.peerExchange(proto.Command{Action: "peer.send", ID: id, Data: []byte(text)}, "notice", id)
+	if err != nil {
+		return "", err
+	}
+	return msg.Notice, nil
+}
+
+// peerExchange issues one peer.* command and returns its reply: the message of
+// type replyType — naming panel id, when id is given — read before the config.get
+// barrier, as Tasks reads its "tasks". Everything else on the connection is
+// skipped, the fleet's "panels" broadcasts above all.
+//
+// A barrier reached with neither a reply nor an error is reported rather than
+// returned as an empty answer: "no peers" and "no answer" are different facts,
+// and the second is what a daemon older than these verbs gives.
+func (c *Client) peerExchange(cmd proto.Command, replyType, id string) (proto.ServerMsg, error) {
+	if err := c.send(cmd); err != nil {
+		return proto.ServerMsg{}, err
+	}
+	if err := c.send(proto.Command{Action: "config.get"}); err != nil {
+		return proto.ServerMsg{}, err
+	}
+	deadline := time.Now().Add(ioTimeout)
+	var reply proto.ServerMsg
+	var got bool
+	var firstErr error
+	for {
+		_ = c.conn.SetReadDeadline(deadline)
+		var msg proto.ServerMsg
+		if err := c.dec.Decode(&msg); err != nil {
+			return proto.ServerMsg{}, fmt.Errorf("read from baton: %w", err)
+		}
+		switch {
+		case msg.Type == "error":
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s", msg.Error)
+			}
+		case msg.Type == replyType && (id == "" || msg.ID == id):
+			reply, got = msg, true
+		case msg.Type == "config":
+			switch {
+			case firstErr != nil:
+				return proto.ServerMsg{}, firstErr
+			case !got:
+				return proto.ServerMsg{}, fmt.Errorf("baton did not answer %s", cmd.Action)
+			}
+			return reply, nil
+		}
+	}
+}
+
 // TasksJSON returns the backlog as indented JSON, the shared presentation for
 // `baton ctl queue list` and the MCP queue tool.
 func (c *Client) TasksJSON() (string, error) {
