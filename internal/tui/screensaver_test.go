@@ -223,6 +223,7 @@ func TestCanAutoSaverGuards(t *testing.T) {
 		{"backend-down", func(m *model) { m.backendDown = true }, false},
 		{"pending-close", func(m *model) { m.pendingClose = true }, false},
 		{"pending-spawn", func(m *model) { m.pendingSpawn = true }, false},
+		{"pending-peers", func(m *model) { m.pendingPeers = "api" }, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
