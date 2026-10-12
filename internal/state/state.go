@@ -66,6 +66,7 @@ type GroupLayout struct {
 	Shown     int    `json:"shown,omitempty"`
 	Layout    string `json:"layout,omitempty"`
 	Favourite bool   `json:"favourite,omitempty"` // a dashboard favourite: additive and optional, so old snapshots still load
+	Peers     bool   `json:"peers,omitempty"`     // members may read and type into each other; additive and optional, so an old snapshot loads with it off
 }
 
 // Load reads the snapshot at path. It never returns a corrupt State: a missing
