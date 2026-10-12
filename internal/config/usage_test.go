@@ -52,3 +52,21 @@ func TestUsageThresholds(t *testing.T) {
 		}
 	}
 }
+
+func TestQueuePauseLine(t *testing.T) {
+	cases := []struct {
+		in   float64
+		want float64
+	}{
+		{0, 0},
+		{-0.1, 0},
+		{1.5, 0},
+		{0.2, 0.2},
+		{1, 1},
+	}
+	for _, c := range cases {
+		if got := (UsageConfig{PauseBelow: c.in}).QueuePauseLine(); got != c.want {
+			t.Errorf("pause-below %v = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
