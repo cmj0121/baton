@@ -85,8 +85,11 @@ func TestAutoChain(t *testing.T) {
 	if got := AutoChain(0, "feat/127-docs", pr); got != 127 {
 		t.Errorf("Closes wins, got %d", got)
 	}
-	if got := AutoChain(0, "feat/wip", &Pull{Number: 130}); got != 130 {
-		t.Errorf("PR number when no Closes, got %d", got)
+	if got := AutoChain(0, "feat/wip", &Pull{Number: 130}); got != 0 {
+		t.Errorf("a PR with no Closes is not an issue, got %d", got)
+	}
+	if got := AutoChain(0, "feat/127-docs", &Pull{Number: 130}); got != 127 {
+		t.Errorf("branch digits win when the PR closes nothing, got %d", got)
 	}
 	if got := AutoChain(0, "feat/127-docs", nil); got != 127 {
 		t.Errorf("branch digits, got %d", got)
