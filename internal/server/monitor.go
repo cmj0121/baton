@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode"
 
+	"github.com/cmj0121/baton/internal/attn"
 	"github.com/cmj0121/baton/internal/panel"
 )
 
@@ -189,14 +189,15 @@ func (mo *monitor) roll(id string) string {
 // ladder now has seven rungs, and seven positional booleans at a call site is a
 // bug waiting for its first typo.
 type stateSignals struct {
-	cur      panel.State // the state the panel is in now
-	agent    bool        // Kind == panel.Agent; the ladder above idle is agent-only
-	declared bool        // an agent's own panel.attention declaration stands
-	quiet    bool        // no output for at least idleAfter
-	doneDue  bool        // agent, done-on-quiet is on, and quiet for at least done-after
-	stuckDue bool        // agent, stuck-after is armed, and quiet for at least stuck-after
-	taskDone bool        // the panel's in-flight task just went terminal-done (an event, not a timer)
-	looksAtt bool        // the quiet tail reads like a question, and nothing suppresses the heuristic
+	cur        panel.State // the state the panel is in now
+	agent      bool        // Kind == panel.Agent; the ladder above idle is agent-only
+	declared   bool        // an agent's own panel.attention declaration stands
+	quiet      bool        // no output for at least idleAfter
+	doneDue    bool        // agent, done-on-quiet is on, and quiet for at least done-after
+	stuckDue   bool        // agent, stuck-after is armed, and quiet for at least stuck-after
+	taskDone   bool        // the panel's in-flight task just went terminal-done (an event, not a timer)
+	looksAtt   bool        // the quiet tail reads like a question, and nothing suppresses the heuristic
+	overlayAtt bool        // a permission overlay is on screen on the tick that would promote to stuck
 }
 
 // nextState is the Monitor's pure transition: it returns the state the panel
@@ -207,9 +208,12 @@ type stateSignals struct {
 // The order of the switch IS the detection precedence, highest first, and two of
 // the orderings are load-bearing rather than incidental:
 //
-//   - The stuck TIMER outranks the tail HEURISTIC. An agent silent for ten
+//   - The stuck TIMER outranks the guessing tail. An agent silent for ten
 //     minutes whose tail happens to end in "?" is better described as stuck than
-//     as attention: the timer is certain and the tail is a guess.
+//     as attention: the timer is certain and the "?" is a guess. A permission
+//     overlay is not that guess. On the tick that would promote, overlayAtt
+//     keeps or raises attention; a panel already stuck is not stuckable, so the
+//     sniff does not reopen it.
 //   - The tail heuristic outranks the done timer. A tail reading "Apply this
 //     refactor? [y/N]" at twenty seconds is a question NOW, and making it wait
 //     out done-after to be called done would bury an answerable item under a
@@ -232,6 +236,8 @@ func nextState(sig stateSignals) (panel.State, bool) {
 	case sig.cur == panel.Exited: // rung 0: the process is gone; nothing else applies
 		ns = panel.Exited
 	case sig.declared: // rung 1: the agent said so itself, and outranks every guess
+		ns = panel.Attention
+	case sig.overlayAtt && stuckable(sig.cur): // the promotion tick saw a permission overlay, not a guess
 		ns = panel.Attention
 	case sig.stuckDue && stuckable(sig.cur): // rung 2a: the silence has outlasted the agent's budget
 		ns = panel.Stuck
@@ -278,6 +284,9 @@ func (sig stateSignals) wantsTail() bool {
 	if !settling(sig.cur) {
 		return false // rung 3's own precondition, and it excludes exited with it
 	}
+	// stuckDue stays a reason to skip THIS read. The permission overlay is a
+	// separate, narrower read on that same edge (signalsLocked); folding it
+	// into looksAtt would let a trailing "?" outrank the timer.
 	return sig.quiet && !sig.declared && !sig.stuckDue && (!sig.taskDone || !sig.agent)
 }
 
@@ -313,7 +322,16 @@ func (s *Server) signalsLocked(p panel.Panel, taskDone bool) stateSignals {
 			sig.stuckDue = s.mon.quietFor(p.ID, w)
 		}
 	}
-	if sig.wantsTail() && !s.suppressedLocked(p.ID) {
+	// One tail read, and only when a cheaper rung has not already closed the
+	// question. The overlay sniff is the exception: it runs on the stuck
+	// promotion edge alone, so a quiet idle fleet still does not copy a
+	// kilobyte per panel per tick. Suppression applies to both reads — a
+	// resolve must not be undone by the screen it just dismissed.
+	suppressed := s.suppressedLocked(p.ID)
+	if sig.stuckDue && stuckable(sig.cur) && !suppressed {
+		sig.overlayAtt = attn.PermissionOverlay(s.pty.Tail(p.ID, attnTailBytes))
+	}
+	if sig.wantsTail() && !suppressed {
 		sig.looksAtt = looksLikeAttention(s.pty.Tail(p.ID, attnTailBytes))
 	}
 	return sig
@@ -340,37 +358,15 @@ func renderSpark(buckets []int) string {
 	return sb.String()
 }
 
-// overlayAttnLines is how many trailing content lines the overlay sniff may
-// search. Inbox trust beats recall: a distinctive phrase further up the
-// attnTailBytes tail is ordinary log, not a live permission TUI.
-const overlayAttnLines = 12
-
-// overlayAttnPhrases are distinctive permission-TUI tokens. A bare "allow" or
-// a "?" earlier in the attnTailBytes window is not enough.
-var overlayAttnPhrases = []string{
-	"don't ask again",
-	"do not ask again",
-	"do you want to proceed",
-	"allow this",
-	"allow command",
-	"allow tool",
-}
-
-// optionYes / optionNo match a permission overlay's numbered choices. The pair
-// together is the signal; either token alone (or a bare "No") is ordinary prose.
-var (
-	optionYes = regexp.MustCompile(`(?:^|[^0-9])(?:❯\s*)?1\.\s+yes\b`)
-	optionNo  = regexp.MustCompile(`(?:^|[^0-9])(?:❯\s*)?[23]\.\s+no\b`)
-)
-
 // looksLikeAttention reports whether a quiet panel's trailing output reads like it
 // is waiting on you. Last-line rules run on the last content line so a question
-// sitting above a box-drawing border still flags; overlay phrases scan the last
-// overlayAttnLines content lines of the same attnTailBytes tail. Conservative on
-// purpose: the safe default is idle, since over-flagging attention cries wolf.
-// Process completion is handled separately, as the exited state.
+// sitting above a box-drawing border still flags; overlay phrases are the shared
+// matcher in internal/attn, scanning the last attn.OverlayLines content lines of
+// the same attnTailBytes tail. Conservative on purpose: the safe default is idle,
+// since over-flagging attention cries wolf. Process completion is handled
+// separately, as the exited state.
 func looksLikeAttention(tail []byte) bool {
-	lines := attnContentLines(ansiSeq.ReplaceAllString(string(tail), ""))
+	lines := attn.ContentLines(string(tail))
 	n := len(lines)
 	if n == 0 {
 		return false
@@ -378,39 +374,7 @@ func looksLikeAttention(tail []byte) bool {
 	if attnLastLine(lines[n-1]) {
 		return true
 	}
-	start := 0
-	if n > overlayAttnLines {
-		start = n - overlayAttnLines
-	}
-	return attnOverlay(lines[start:])
-}
-
-// attnContentLines splits on \n and \r the way lineShape does, then drops a line
-// only when every visible rune is whitespace or Unicode Box Drawing
-// (U+2500–U+257F). A permission TUI's last physical line is often only a border;
-// a line like "│ Allow this? │" is content.
-func attnContentLines(text string) []string {
-	raw := strings.FieldsFunc(text, func(r rune) bool { return r == '\n' || r == '\r' })
-	out := make([]string, 0, len(raw))
-	for _, line := range raw {
-		if boxBorderLine(line) {
-			continue
-		}
-		out = append(out, line)
-	}
-	return out
-}
-
-func boxBorderLine(s string) bool {
-	for _, r := range s {
-		if unicode.IsSpace(r) {
-			continue
-		}
-		if r < '\u2500' || r > '\u257F' {
-			return false
-		}
-	}
-	return true
+	return attn.Overlay(lines)
 }
 
 func attnLastLine(line string) bool {
@@ -428,28 +392,6 @@ func attnLastLine(line string) bool {
 		return true
 	}
 	return false
-}
-
-// attnOverlay flags a permission TUI whose prompt is not on the last content
-// line. Phrases are distinctive on purpose; optionYes without optionNo is a
-// changelog, not a chooser.
-func attnOverlay(lines []string) bool {
-	var sawYes, sawNo bool
-	for _, line := range lines {
-		lower := strings.ToLower(line)
-		for _, p := range overlayAttnPhrases {
-			if strings.Contains(lower, p) {
-				return true
-			}
-		}
-		if optionYes.MatchString(lower) {
-			sawYes = true
-		}
-		if optionNo.MatchString(lower) {
-			sawNo = true
-		}
-	}
-	return sawYes && sawNo
 }
 
 // activityText is the live status line for a state and how long it has held —
