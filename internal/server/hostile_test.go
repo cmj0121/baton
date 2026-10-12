@@ -43,7 +43,7 @@ var hostileActions = []string{
 	"panel.unpin", "panel.favourite", "panel.unfavourite", "panel.attention",
 	"panel.resolve", "panel.ack", "panel.tail", "panel.diff", "panel.git", "panel.log",
 	"panel.logview", "fleet.search", "group.show", "group.layout", "group.favourite",
-	"group.unfavourite", "group.peers", "task.enqueue", "task.list", "task.cancel", "task.promote",
+	"group.unfavourite", "group.peers", "peer.list", "peer.tail", "peer.send", "task.enqueue", "task.list", "task.cancel", "task.promote",
 	"task.demote", "task.drain", "config.get", "score.submit", "score.list", "score.status",
 	"score.merge", "score.reword", "score.lower", "score.edit", "worktree.list",
 	"issues.board", "issues.block",
