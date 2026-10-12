@@ -86,6 +86,9 @@ signal beats a guess, and an answerable item beats a reviewable one:
 
 - **The `stuck` timer beats the tail heuristic.** An agent silent for ten minutes whose scrollback happens to end in a
   `?` is better described as stuck than as waiting on you. The timer is a fact; the tail is a guess about text.
+- **On the tick that would promote a panel to `stuck`, a permission overlay is read once more.** A match stays, or
+  becomes, `attention`. A bare `?` still loses to the timer. A panel that is already `stuck` is not read again. After
+  `baton ctl resolve`, that same screen does not raise its hand a second time.
 - **The tail heuristic beats the `done` timer.** A tail reading `Apply this refactor? [y/N]` at twenty seconds is a
   question _now_. Making it wait out `done-after` to be called `done` would bury something you can answer in one
   keystroke underneath something you have to go and read.
@@ -158,6 +161,7 @@ bottom-aligned, because the question is always the last thing a program printed.
 | `j` / `k`, `↓` / `↑` | move the cursor                                                                   |
 | `g` / `G`            | first / last row                                                                  |
 | **`i`**              | **reply in place** — the line goes to the panel, the row clears, the cursor stays |
+| **`1` / `2` / `3`**  | **answer a permission overlay** — the digit and a newline, then the row clears    |
 | `enter`              | zoom the panel — and acknowledge **nothing**                                      |
 | `-`                  | snooze the row for `settings.inbox-snooze`                                        |
 | `x`                  | dismiss the row until the panel next produces output                              |
@@ -172,9 +176,15 @@ reply **is** the acknowledgement), and leaves the cursor at its index — so the
 item already in place. An empty reply sends a bare newline on purpose: accepting a `[y/N]` default is a real answer, and
 refusing it would make the commonest confirmation the one case the queue cannot handle.
 
-While the composer is open it owns the keyboard outright, so a reply containing the letter `x` is text rather than a
-verb. There is **no echo** — the inbox never attaches, because attaching per row would cost a replay flush and a repaint
-each time, which is exactly the cost this exists to remove. `enter` zooms for anyone who wants to watch a reply land.
+While the composer is open it owns the keyboard outright, so a reply containing the letter `x` — or the digit `1` — is
+text rather than a verb. There is **no echo** — the inbox never attaches, because attaching per row would cost a replay
+flush and a repaint each time, which is exactly the cost this exists to remove. `enter` zooms for anyone who wants to
+watch a reply land.
+
+`1`, `2` and `3` are that same reply with the typing taken out, and only for a permission overlay. The row must be
+`attention`, with no declared reason, and the tail the inbox has already pulled must be the overlay the monitor reads.
+The digit and a newline go to the panel and the row clears. A `stuck`, `done` or failed row, a declared reason, a bare
+`?`, and an empty tail do not send. A tail that has not arrived yet says so and waits.
 
 ### The order is the feature
 
