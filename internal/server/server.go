@@ -683,6 +683,13 @@ type Server struct {
 	submits   rateBuckets
 	sayCapped rateBuckets
 
+	// peerSends is the per-sender cap on peer.send, keyed by the panel the
+	// connection declared as its own and guarded by mu. A rateBuckets for the
+	// reason submits is one: every panel in a peers-on group holds this door, so
+	// a single stamp would be handed from sender to sender and cap nobody. See
+	// minPeerSendGap.
+	peerSends rateBuckets
+
 	// merges watches for the SLOW collapse of the fleet memory, the one the rate
 	// cap cannot catch. Guarded by mu. See mergeAlarm.
 	merges mergeAlarm
@@ -1060,6 +1067,7 @@ func New(ln net.Listener, opts ...Option) *Server {
 		refine:          gapStamp{gap: minRefineGap},
 		submits:         rateBuckets{gap: minSubmitGap, burst: submitBurst},
 		sayCapped:       rateBuckets{gap: saySubmitCappedEvery},
+		peerSends:       rateBuckets{gap: minPeerSendGap, burst: peerSendBurst},
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -3138,6 +3146,13 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 		// one owner, and a conductor closing a channel the operator opened is the
 		// same decision made by the wrong party.
 		return "conductor role: group peer interaction is an operator setting"
+	case "peer.list", "peer.tail", "peer.send":
+		// The peer verbs are a group's panels reaching each other, and the
+		// conductor is not one of them: it sits in no group and already drives the
+		// fleet through its own table. Refused here, by role, so that peer.tail
+		// cannot become the way round the panel.tail fence below — the read is the
+		// same read. The reason leads with `peer:` like every other peer refusal.
+		return "peer: conductor role: the peer verbs are for the panels of a group"
 	case "panel.log", "panel.logview":
 		// Logging is an operator surface for the same reason the inbox is, and with an
 		// edge the inbox does not have: panel.log asks the DAEMON to write files, on
@@ -3761,6 +3776,14 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		// The inbox pulling one row's trailing output, so its detail pane shows the
 		// same bytes the Monitor sniffed. The clamp and the reply live in tail.go.
 		s.sendTail(cc, cmd.ID, cmd.Count)
+	case "peer.list":
+		// The three peer verbs: a panel reaching the others in a group the operator
+		// switched on. Authorised per call from live state; all of it is in peer.go.
+		s.peerList(cc)
+	case "peer.tail":
+		s.peerTail(cc, cmd)
+	case "peer.send":
+		s.peerSend(cc, cmd)
 	case "panel.ack":
 		// A human dealt with a panel from the inbox — dismissed, snoozed, or
 		// answered it. The record is fleet state; the reasoning is in ack.go.
