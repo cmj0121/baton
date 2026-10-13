@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -794,8 +795,24 @@ func (m model) togglePeers() model {
 		return m
 	}
 	m.pendingPeers = it.name
+	m.pendingPeersMembers = m.directMembers(it.name)
 	m.status = m.peersPrompt(it.name)
 	return m
+}
+
+// directMembers is the set of panels sitting directly in group, as one
+// comparable value: their ids, sorted, so fleet order does not make two equal
+// sets differ. It is what a y to the peers question agrees to — see
+// peersPromptLive.
+func (m model) directMembers(group string) string {
+	var ids []string
+	for _, p := range m.fleet {
+		if p.Group == group {
+			ids = append(ids, p.ID)
+		}
+	}
+	slices.Sort(ids)
+	return strings.Join(ids, "\x00")
 }
 
 // hasDirectMember reports whether any panel's group is exactly this path — the
@@ -815,14 +832,22 @@ func (m model) peersPrompt(group string) string {
 }
 
 // peersPromptLive reports whether the parked peers question is still the one on
-// screen: the dashboard is showing, the status line still reads the prompt, and
-// the group it names still has a panel directly in it — the same test togglePeers
-// asked before it parked the question. A y is an answer only to a question the
-// operator can see; the moment any of the three stops holding, there is no
-// question left to answer.
+// screen: the dashboard is showing, the status line still reads the prompt, the
+// group it names still has a panel directly in it — the same test togglePeers
+// asked before it parked the question — and those panels are the SAME ones. A y
+// is an answer only to a question the operator can see; the moment any of the
+// four stops holding, there is no question left to answer.
+//
+// The last is the one a name cannot carry. The prompt names a group, but what
+// the operator is agreeing to is which terminals may reach which, and that is
+// the panels in it when they read the question. Any client may file a panel
+// into the group or out of it between the question and the y, and a yes given
+// to two panels must not open a channel among three. A changed set withdraws
+// the question; the operator asks again and answers for the group as it is.
 func (m model) peersPromptLive() bool {
 	return m.pendingPeers != "" && m.mode == modeDashboard &&
-		m.status == m.peersPrompt(m.pendingPeers) && m.hasDirectMember(m.pendingPeers)
+		m.status == m.peersPrompt(m.pendingPeers) && m.hasDirectMember(m.pendingPeers) &&
+		m.directMembers(m.pendingPeers) == m.pendingPeersMembers
 }
 
 // dropStalePeersPrompt withdraws a peers question that is no longer live. If the

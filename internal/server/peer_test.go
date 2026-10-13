@@ -1,6 +1,7 @@
 package server
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/state"
 )
 
 // peerEvent is one plugin event a test saw, by name and fields.
@@ -391,12 +393,12 @@ func TestPeerAuthorisedPerCallFromLiveState(t *testing.T) {
 		t.Fatal("setup: the conversation should start allowed")
 	}
 
-	if err := s.setGroupPeers("", "work", false); err != nil {
+	if _, err := s.setGroupPeers("", "work", false); err != nil {
 		t.Fatalf("turn peers off: %v", err)
 	}
 	all(`off for group "work"`)
 
-	if err := s.setGroupPeers("", "work", true); err != nil {
+	if _, err := s.setGroupPeers("", "work", true); err != nil {
 		t.Fatalf("turn peers back on: %v", err)
 	}
 	if !peerSendOK(t, s, "a1", "a2") {
@@ -552,4 +554,325 @@ func TestPeerSendFoldsLineBreaksForAnAgent(t *testing.T) {
 	over := []byte(strings.Repeat("\n", maxPeerSendBytes) + "x")
 	wantPeerRefusal(t, "over the cap before folding",
 		peerDo(t, s, "a1", proto.Command{Action: "peer.send", ID: "a2", Data: over}), "over the 4096-byte cap")
+}
+
+// peerWidenRefusal is the fence's one refusal, for the group it names.
+func peerWidenRefusal(group string) string {
+	return `group "` + group + `" has peer interaction on; the operator adds panels to it`
+}
+
+// peerGroupOf returns the group a panel sits in.
+func peerGroupOf(t *testing.T, s *Server, id string) string {
+	t.Helper()
+	i := s.indexLocked(id)
+	if i < 0 {
+		t.Fatalf("no panel %q", id)
+	}
+	return s.panels[i].Group
+}
+
+// TestPeersOnGroupIsWidenedByTheOperatorOnly is the hole beside the flag's own
+// fence: group.peers is refused to an agent and to the conductor, so neither
+// may reach the same end by pulling an existing panel into a group that is
+// already on. Every re-filing verb is walked, as each kind of caller.
+func TestPeersOnGroupIsWidenedByTheOperatorOnly(t *testing.T) {
+	type caller struct {
+		name, self, role string
+		fenced           bool
+	}
+	callers := []caller{
+		{"an agent panel", "a1", "", true},
+		{"an agent outside the group", "lone", "", true},
+		{"the conductor role", "boss", roleConductor, true},
+		{"the conductor role with no self", "", roleConductor, true},
+		{"the cockpit", "", "", false},
+		{"a shell panel", "sh", "", false},
+		{"a self naming no panel", "ghost", "", false},
+	}
+	moves := []struct {
+		name  string
+		cmd   proto.Command
+		moved string // a panel the command re-files…
+		from  string // …out of this group…
+		to    string // …into this peers-on one
+	}{
+		{"panel.group", proto.Command{Action: "panel.group", IDs: []string{"o1"}, Group: "work"}, "o1", "other", "work"},
+		{"panel.group, one already inside and one not", proto.Command{Action: "panel.group", IDs: []string{"a2", "o1"}, Group: "work"}, "o1", "other", "work"},
+		{"panel.group of an ungrouped panel", proto.Command{Action: "panel.group", IDs: []string{"lone"}, Group: "work"}, "lone", "", "work"},
+		{"panel.rename onto the group", proto.Command{Action: "panel.rename", Group: "other", Name: "work"}, "o1", "other", "work"},
+		{"panel.ungroup dissolving a sub-group into it", proto.Command{Action: "panel.ungroup", Group: "work/sub"}, "sub", "work/sub", "work"},
+	}
+	for _, mv := range moves {
+		for _, who := range callers {
+			t.Run(mv.name+"/"+who.name, func(t *testing.T) {
+				s, _, _, _ := peerFleet()
+				s.allowNameConflict = true // or a rename onto a taken name stops at the name check
+				cc := ctl(who.self)
+				cc.role = who.role
+				s.onCommand(cc, mv.cmd)
+				err := replyErr(cc)
+
+				if !who.fenced {
+					if err != "" || peerGroupOf(t, s, mv.moved) != mv.to {
+						t.Fatalf("the operator's %s should go through: error %q, %s sits in %q",
+							mv.cmd.Action, err, mv.moved, peerGroupOf(t, s, mv.moved))
+					}
+					if !s.groupPeers[mv.to] {
+						t.Fatalf("group %q should still be peers-on after the operator added to it", mv.to)
+					}
+					return
+				}
+				if err != peerWidenRefusal(mv.to) {
+					t.Fatalf("want the refusal %q, got %q", peerWidenRefusal(mv.to), err)
+				}
+				// Refused whole: nothing moved, not even the panel that was allowed to.
+				want := map[string]string{"a1": "work", "a2": "work", "o1": "other", "sub": "work/sub", "lone": ""}
+				for id, group := range want {
+					if got := peerGroupOf(t, s, id); got != group {
+						t.Fatalf("a refused %s must move nothing: %s went from %q to %q", mv.cmd.Action, id, group, got)
+					}
+				}
+			})
+		}
+	}
+}
+
+// TestPeersFenceLeavesOrdinaryRegroupsAlone is the other side: the fence is
+// about ADDING to a peers-on group and nothing else. An agent may still re-file
+// a panel where it already sits, move panels between peers-off groups, take
+// one out of a peers-on group, and dissolve a group whose parent is off.
+func TestPeersFenceLeavesOrdinaryRegroupsAlone(t *testing.T) {
+	cases := []struct {
+		name  string
+		cmd   proto.Command
+		panel string
+		want  string
+	}{
+		{"re-filing a panel already in the peers-on group", proto.Command{Action: "panel.group", IDs: []string{"a2"}, Group: "work"}, "a2", "work"},
+		{"into a peers-off group", proto.Command{Action: "panel.group", IDs: []string{"lone"}, Group: "other"}, "lone", "other"},
+		{"out of the peers-on group into a peers-off one", proto.Command{Action: "panel.group", IDs: []string{"a2"}, Group: "other"}, "a2", "other"},
+		{"out of the peers-on group by id", proto.Command{Action: "panel.ungroup", IDs: []string{"a2"}}, "a2", ""},
+		{"renaming the peers-on group itself", proto.Command{Action: "panel.rename", Group: "work", Name: "team"}, "a2", "team"},
+		{"dissolving a group with a peers-off parent", proto.Command{Action: "panel.ungroup", Group: "other"}, "o1", ""},
+		{"reordering", proto.Command{Action: "panel.move", IDs: []string{"o1"}, Index: 0}, "o1", "other"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, _, _ := peerFleet()
+			cc := ctl("a1")
+			s.onCommand(cc, tc.cmd)
+			if err := replyErr(cc); err != "" {
+				t.Fatalf("an agent's %s should not be fenced, got %q", tc.cmd.Action, err)
+			}
+			if got := peerGroupOf(t, s, tc.panel); got != tc.want {
+				t.Fatalf("%s should sit in %q, sits in %q", tc.panel, tc.want, got)
+			}
+		})
+	}
+}
+
+// TestPeersFenceIsNotOnASubGroupsOwnRekey pins the one destination the fence
+// must not count. Dissolving "a/b" moves its sub-group "a/b/b" up onto "a/b",
+// and "a/b" is peers-on — but its own panels and its flag are leaving for "a"
+// in the same step, so nobody is staying there to be added to.
+func TestPeersFenceIsNotOnASubGroupsOwnRekey(t *testing.T) {
+	s, _, _ := gateServer(
+		panel.Panel{ID: "w", Kind: panel.Agent, State: panel.Idle},
+		panel.Panel{ID: "own", Kind: panel.Agent, Group: "a/b", State: panel.Idle},
+		panel.Panel{ID: "kid", Kind: panel.Agent, Group: "a/b/b", State: panel.Idle},
+	)
+	s.groupPeers = map[string]bool{"a/b": true}
+
+	cc := ctl("w")
+	s.onCommand(cc, proto.Command{Action: "panel.ungroup", Group: "a/b"})
+	if err := replyErr(cc); err != "" {
+		t.Fatalf("dissolving a group is not adding to it, got %q", err)
+	}
+	if peerGroupOf(t, s, "own") != "a" || peerGroupOf(t, s, "kid") != "a/b" {
+		t.Fatalf("the dissolve should have promoted both: own in %q, kid in %q", peerGroupOf(t, s, "own"), peerGroupOf(t, s, "kid"))
+	}
+	// The flag went with the panels it was set for, and the sub-group that took
+	// the old path did not inherit it.
+	if !s.groupPeers["a"] || s.groupPeers["a/b"] {
+		t.Fatalf("the flag should have followed its panels to \"a\", got %v", s.groupPeers)
+	}
+}
+
+// TestServerOwnSpawnIntoAPeersOnGroupIsNotFenced: a NEW panel filed straight
+// into a peers-on group by the server — a worktree spawn under its branch, a
+// plugin's spawn — is not the fence's business. Those go through groupPanels,
+// which has no connection to ask.
+func TestServerOwnSpawnIntoAPeersOnGroupIsNotFenced(t *testing.T) {
+	s, _, _, _ := peerFleet()
+	if err := s.groupPanels([]string{"lone"}, "work"); err != nil {
+		t.Fatalf("the server's own filing into a peers-on group should go through: %v", err)
+	}
+	if peerGroupOf(t, s, "lone") != "work" || !s.groupPeers["work"] {
+		t.Fatalf("lone should sit in a still peers-on work, sits in %q", peerGroupOf(t, s, "lone"))
+	}
+}
+
+// TestGroupPeersValidatesTheNameBothWays: turning the flag OFF used to skip the
+// name check, so a name of any size and any bytes reached an event, a log line
+// and a broadcast. Both directions refuse what panel.group refuses.
+func TestGroupPeersValidatesTheNameBothWays(t *testing.T) {
+	bad := map[string]string{
+		"an escape sequence":              "work\x1b[2J\x07",
+		"too long":                        strings.Repeat("g", maxNameRunes+1),
+		"a hundred kilobytes":             strings.Repeat("g\x1b", 50_000),
+		"an empty segment":                "work//sub",
+		"an invalid path a megabyte long": strings.Repeat("g//", 300_000),
+	}
+	for name, group := range bad {
+		for _, on := range []bool{true, false} {
+			s, _, _, events := peerFleet()
+			changed, err := s.setGroupPeers("", group, on)
+			if err == nil || changed {
+				t.Fatalf("%s (enable=%v): want a refusal, got changed=%v err=%v", name, on, changed, err)
+			}
+			if len(err.Error()) > 1024 {
+				t.Fatalf("%s (enable=%v): the refusal carries %d bytes of the name back", name, on, len(err.Error()))
+			}
+			if len(*events) != 0 || len(s.groupPeers) != 1 {
+				t.Fatalf("%s (enable=%v): a refused name must change and emit nothing: %+v", name, on, *events)
+			}
+		}
+	}
+}
+
+// TestGroupPeersNoOpSaysNothing: asking for the state a group is already in is
+// a success that did nothing, so it emits nothing and broadcasts nothing — the
+// caller alone gets the snapshot it reads as its answer.
+func TestGroupPeersNoOpSaysNothing(t *testing.T) {
+	s, _, _, events := peerFleet()
+	watcher := ctl("")
+	watcher.greeted = true
+	s.clients[watcher] = struct{}{}
+
+	for _, cmd := range []proto.Command{
+		{Action: "group.peers", Group: "nobody"},             // off, never on
+		{Action: "group.peers", Group: "other"},              // off, already off
+		{Action: "group.peers", Group: "work", Enable: true}, // on, already on
+	} {
+		cc := ctl("")
+		s.onCommand(cc, cmd)
+		if msg := peerReply(t, cc); msg.Type != "panels" {
+			t.Fatalf("a no-op %+v should still answer its caller with the snapshot, got %+v", cmd, msg)
+		}
+		if len(*events) != 0 || len(watcher.out) != 0 {
+			t.Fatalf("a no-op %+v must emit and broadcast nothing: %d events, %d broadcasts", cmd, len(*events), len(watcher.out))
+		}
+	}
+	if len(s.groupPeers) != 1 || !s.groupPeers["work"] {
+		t.Fatalf("the no-ops must have changed nothing, got %v", s.groupPeers)
+	}
+
+	// The control: a real flip does emit, and does reach the other client.
+	cc := ctl("")
+	s.onCommand(cc, proto.Command{Action: "group.peers", Group: "work"})
+	if len(*events) != 1 || len(watcher.out) != 1 || s.groupPeers["work"] {
+		t.Fatalf("a real flip should emit once and broadcast once: %d events, %d broadcasts, flags %v", len(*events), len(watcher.out), s.groupPeers)
+	}
+}
+
+// TestPeerPrefixScrubsTheSendersID: ids are minted by the server, but a restore
+// takes them from the state file as written. Whatever one holds, the prefix is
+// one line with nothing in it a terminal acts on.
+func TestPeerPrefixScrubsTheSendersID(t *testing.T) {
+	s, _, written := gateServer(
+		panel.Panel{ID: "p\x1b[2J\n9" + strings.Repeat("9", 200), Kind: panel.Agent, Title: "alice", Group: "work", State: panel.Idle},
+		panel.Panel{ID: "a2", Kind: panel.Agent, Title: "bob", Group: "work", State: panel.Idle},
+	)
+	s.groupPeers = map[string]bool{"work": true}
+
+	if msg := peerDo(t, s, s.panels[0].ID, proto.Command{Action: "peer.send", ID: "a2", Data: []byte("hi")}); msg.Type != "notice" {
+		t.Fatalf("the send should be admitted, got %+v", msg)
+	}
+	want := "a2:[from alice (p[2J 9" + strings.Repeat("9", maxPeerTitleRunes-6) + ")] hi\n"
+	if len(*written) != 1 || (*written)[0] != want {
+		t.Fatalf("typed %q, want %q", *written, want)
+	}
+}
+
+// TestRefusalsDoNotEchoALongName: a refusal that quotes a group name back must
+// not be a way to have 120 KB returned. Every verb that takes a group name off
+// the wire is sent one, as a valid path and as an invalid one.
+func TestRefusalsDoNotEchoALongName(t *testing.T) {
+	names := map[string]string{
+		"one long segment": strings.Repeat("g", 120_000),
+		"an invalid path":  strings.Repeat("g//", 40_000),
+		"a deep path":      strings.Repeat("g/", 60_000) + "g",
+	}
+	for what, long := range names {
+		for _, cmd := range []proto.Command{
+			{Action: "panel.group", IDs: []string{"a1"}, Group: long},
+			{Action: "panel.ungroup", Group: long},
+			{Action: "panel.rename", Group: long, Name: "team"},
+			{Action: "panel.rename", Group: "work", Name: long},
+			{Action: "panel.dispatch-group", Group: long, Prompt: "go"},
+			{Action: "group.peers", Group: long, Enable: true},
+			{Action: "group.peers", Group: long},
+		} {
+			s, _, _, _ := peerFleet()
+			cc := ctl("")
+			s.onCommand(cc, cmd)
+			err := replyErr(cc)
+			if err == "" {
+				t.Fatalf("%s with %s (%d bytes) should be refused", cmd.Action, what, len(long))
+			}
+			if len(err) > 1024 {
+				t.Fatalf("%s with %s: the refusal is %d bytes long: %.80s…", cmd.Action, what, len(err), err)
+			}
+		}
+	}
+}
+
+// TestRestoreSkipsAPanelWithAnInvalidID: a snapshot is a file. An id is typed
+// into terminals and quoted in replies as it stands, so a record whose id is
+// not a clean name is left out rather than carried into the fleet.
+func TestRestoreSkipsAPanelWithAnInvalidID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	st := state.State{Seq: 3, Panels: []state.PanelState{
+		{ID: "1", Kind: "agent", Title: "good", Group: "work"},
+		{ID: "p\x1b[2J", Kind: "agent", Title: "escape", Group: "work"},
+		{ID: "7\n8", Kind: "agent", Title: "newline", Group: "work"},
+		{ID: "a\u202eb", Kind: "agent", Title: "bidi", Group: "work"},
+		{ID: "", Kind: "agent", Title: "empty", Group: "work"},
+		{ID: strings.Repeat("9", maxNameRunes+1), Kind: "agent", Title: "long", Group: "work"},
+		{ID: "2", Kind: "shell", Title: "also good", Group: "work"},
+	}}
+	if err := st.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	s := New(nil, WithStateFile(path))
+	s.Restore()
+
+	var got []string
+	for _, p := range s.panels {
+		got = append(got, p.ID)
+	}
+	if want := []string{"1", "2"}; !slices.Equal(got, want) {
+		t.Fatalf("restored panels %q, want only the clean ids %q", got, want)
+	}
+	if len(s.specs) != 2 {
+		t.Fatalf("a skipped panel must leave no spawn spec behind, got %d specs", len(s.specs))
+	}
+}
+
+// TestPeerSendNoticeScrubsTheTargetID is the defence behind that one: whatever
+// id a target carries, the sender's notice is one clean line.
+func TestPeerSendNoticeScrubsTheTargetID(t *testing.T) {
+	bad := "t\x1b[2J\n9" + strings.Repeat("9", 200)
+	s, _, _ := gateServer(
+		panel.Panel{ID: "a1", Kind: panel.Agent, Title: "alice", Group: "work", State: panel.Idle},
+		panel.Panel{ID: bad, Kind: panel.Shell, Title: "bob", Group: "work", State: panel.Idle},
+	)
+	s.groupPeers = map[string]bool{"work": true}
+
+	msg := peerDo(t, s, "a1", proto.Command{Action: "peer.send", ID: bad, Data: []byte("hi")})
+	want := "sent 2 bytes to bob (t[2J 9" + strings.Repeat("9", maxPeerTitleRunes-6) + ")"
+	if msg.Type != "notice" || msg.Notice != want {
+		t.Fatalf("notice %q, want %q", msg.Notice, want)
+	}
 }

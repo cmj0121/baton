@@ -830,6 +830,111 @@ func peersJSON(panels []proto.Panel) (string, error) {
 	return string(data), nil
 }
 
+// stripStrings removes every 7-bit string sequence from s that is terminated
+// inside s, and for one that is not, removes only its introducer. See
+// plainTail for why this is not left to the escape parser.
+//
+// The introducers are ESC followed by "]" (OSC), "P" (DCS), "X" (SOS), "^"
+// (PM) or "_" (APC). Every other ESC is left for the escape parser, whose
+// remaining sequences are bounded.
+//
+// WHAT IT GUARANTEES is a property of its output, not of the inputs it was
+// tried on: every ESC in the result is immediately followed by a printable
+// byte that is not one of those five. That is the whole of what keeps the
+// parser out of a string state, and it takes two rules to hold.
+//
+// An ESC is not kept before a control byte, another ESC, or the end of the
+// buffer. To a terminal a C0 control inside an escape sequence is carried out
+// and the sequence goes on, so "ESC LF ^" is still a PM introducer, one line
+// later — and an ESC with nothing printable after it is nothing a reader
+// needs.
+//
+// And both rules are applied where a byte is WRITTEN, not where it is read,
+// because taking a sequence out moves its neighbours together. An ESC that
+// introduced nothing where it stood ("ESC ESC ]" is an ESC and then an OSC)
+// can end up against a "]" that was only text, and the parser would read the
+// pair as an introducer this pass never saw — unterminated, and swallowing
+// the rest. So a byte that may not follow an ESC never lands after one: the
+// ESC is dropped instead.
+//
+// Each byte is written once and at most one is dropped per write, and each
+// string scan stops at the next ESC, so the pass is linear: no byte is looked
+// at more than twice. stripStringsSteps counts the looks, which is how the
+// tests hold it to that without timing anything.
+func stripStrings(s string) string {
+	out, _ := stripStringsSteps(s)
+	return out
+}
+
+// stripStringsSteps is stripStrings, also returning how many bytes it looked
+// at: one per turn of its own loop and one per byte a string scan read.
+func stripStringsSteps(s string) (string, int) {
+	if strings.IndexByte(s, 0x1b) < 0 {
+		return s, 0
+	}
+	steps := 0
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); {
+		steps++
+		c := s[i]
+		if c == 0x1b && i+1 < len(s) && isStringIntro(s[i+1]) {
+			i += 2
+			i += stringEnd(s[i:], s[i-1] == ']', &steps)
+			continue
+		}
+		if !mayFollowESC(c) {
+			out = dropTrailingESC(out)
+		}
+		out = append(out, c)
+		i++
+	}
+	return string(dropTrailingESC(out)), steps
+}
+
+// isStringIntro reports whether c, after an ESC, opens a string sequence.
+func isStringIntro(c byte) bool {
+	return c == ']' || c == 'P' || c == 'X' || c == '^' || c == '_'
+}
+
+// mayFollowESC reports whether stripStrings lets c stand right after an ESC:
+// a printable byte that opens no string sequence.
+func mayFollowESC(c byte) bool {
+	return c >= 0x20 && c != 0x7f && !isStringIntro(c)
+}
+
+// dropTrailingESC removes the ESC out ends with, if it ends with one. It never
+// ends with two: an ESC is itself a byte that may not follow an ESC, so writing
+// one drops the one before it.
+func dropTrailingESC(out []byte) []byte {
+	if len(out) > 0 && out[len(out)-1] == 0x1b {
+		out = out[:len(out)-1]
+	}
+	return out
+}
+
+// stringEnd is how many bytes of rest a string sequence's body and terminator
+// take, or 0 when rest holds no terminator for it. ST (ESC \) ends any of
+// them and BEL ends an OSC. Any other ESC aborts the string, as it does on a
+// terminal, and an aborted string is an unterminated one here: its text stays.
+// That abort is also what keeps the scans linear: one never reads past the
+// next ESC, so no two of them cover the same bytes. steps is charged one per
+// byte read.
+func stringEnd(rest string, osc bool, steps *int) int {
+	for j := 0; j < len(rest); j++ {
+		*steps++
+		switch {
+		case osc && rest[j] == 0x07:
+			return j + 1
+		case rest[j] == 0x1b:
+			if j+1 < len(rest) && rest[j+1] == '\\' {
+				return j + 2
+			}
+			return 0
+		}
+	}
+	return 0
+}
+
 // plainTail turns the raw tail of a panel's terminal into text a model can be
 // handed: every escape sequence is removed whole, then every rune a terminal
 // would act on or be lied to by (scrub.Drop — controls, bidi and zero-width
@@ -841,8 +946,11 @@ func peersJSON(panels []proto.Panel) (string, error) {
 // to one: a tail is a screen, and its line breaks are most of its meaning. Tabs
 // are kept for the same reason.
 //
-// Before either, every byte that is not part of a valid UTF-8 rune is dropped.
-// The tail is cut by size, so it can open on the second or third byte of a
+// Before either, every byte that is not part of a valid UTF-8 rune is replaced
+// by U+FFFD, which the last step drops. REPLACED and not removed, so that what
+// stood on either side of it is not joined: with the byte simply gone, an ESC
+// before it and a "P" or "]" after it would meet and read as a string
+// introducer nobody wrote. The tail is cut by size, so it can open on the second or third byte of a
 // character, and the escape parser reads a bare 0x90, 0x98 or 0x9D–0x9F as an
 // 8-bit string introducer (DCS, SOS, OSC, PM, APC) and swallows everything up to
 // a terminator that never comes: one cut CJK character at the head and the
@@ -853,12 +961,31 @@ func peersJSON(panels []proto.Panel) (string, error) {
 // control and for scrub everywhere else. A panel's terminal is UTF-8, where a
 // raw C1 byte is not a control to begin with.
 //
+// The STRING sequences — OSC, DCS, SOS, PM, APC — are taken out here rather
+// than left to the escape parser, and the difference is what happens to one
+// with no end. The parser reads everything after the introducer as the string
+// until a terminator arrives, and a tail is a window: the terminator may be
+// past its end, or there may never have been one. One unterminated `ESC ]`
+// then swallowed the rest of the screen, which is the opposite of a filter —
+// whatever came after it, a prompt or a secret or the line the caller asked
+// about, was silently not there. So a string sequence is removed whole only
+// when its terminator is in the buffer (stripStrings); otherwise only the two
+// introducer bytes go and the text stays, to be scrubbed like any other.
+//
 // The sequences go FIRST and as a whole, which scrub alone would not do: it
 // drops the ESC and leaves "[1;31m" behind as text, on purpose, so a person can
 // see that something tried. A model reading forty lines of colour parameters
 // sees nothing else.
 func plainTail(raw []byte) string {
-	lines := strings.Split(ansi.Strip(strings.ToValidUTF8(string(raw), "")), "\n")
+	// Never more than a peek may ask for. The server clamps a tail to the same
+	// number, so this cuts nothing it sent; it is here so that the cost of this
+	// function is bounded by a constant of its own and not by whoever is on the
+	// other end of the socket. A cut inside a character is the case the first
+	// step below already handles.
+	if len(raw) > peekMaxBytes {
+		raw = raw[len(raw)-peekMaxBytes:]
+	}
+	lines := strings.Split(ansi.Strip(stripStrings(strings.ToValidUTF8(string(raw), "\uFFFD"))), "\n")
 	for i, line := range lines {
 		var b strings.Builder
 		b.Grow(len(line))

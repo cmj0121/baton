@@ -169,3 +169,64 @@ func TestPeerVerbsOverTheSocket(t *testing.T) {
 		}
 	}
 }
+
+// TestPeersFenceConductor is the peers fence from the
+// conductor's side of the socket. It may not pull an EXISTING panel into a group
+// the operator switched on — that is group.peers by another verb — but a NEW
+// panel it spawns straight into that group (a worktree agent, filed under its
+// branch) lands there: building out a group the operator opened is the ordinary
+// flow, and the flag stays as the operator set it.
+func TestPeersFenceConductor(t *testing.T) {
+	requireGitDiff(t)
+	repo := gitRepoWithChange(t)
+	_, sock := startDiffServer(t)
+
+	const group = "feature/own"
+	cockpit := dialReady(t, sock)
+	mate := createAgentIn(t, cockpit, repo)
+	outsider := createAgentIn(t, cockpit, repo)
+	if err := cockpit.Send(proto.Command{Action: "panel.group", IDs: []string{mate}, Group: group}); err != nil {
+		t.Fatalf("group: %v", err)
+	}
+	recvType(t, cockpit, "panels")
+	setPeers(t, cockpit, group, true)
+
+	conductor := dialAs(t, sock, outsider, "conductor")
+	// answer returns the reply to one command: its error, or the snapshot the
+	// change broadcast. Nothing else is on this connection's queue to mistake
+	// for it — it attached after the setup above.
+	answer := func(cmd proto.Command) proto.ServerMsg {
+		t.Helper()
+		if err := conductor.Send(cmd); err != nil {
+			t.Fatalf("%s: %v", cmd.Action, err)
+		}
+		for {
+			if msg := recv(t, conductor); msg.Type == "panels" || msg.Type == "error" {
+				return msg
+			}
+		}
+	}
+
+	msg := answer(proto.Command{Action: "panel.group", IDs: []string{outsider}, Group: group})
+	if want := `group "feature/own" has peer interaction on; the operator adds panels to it`; msg.Type != "error" || msg.Error != want {
+		t.Fatalf("a conductor pulling a panel into a peers-on group: want %q, got %+v", want, msg)
+	}
+	if got := panelByID(recvList(t, cockpit), outsider).Group; got != "" {
+		t.Fatalf("the refused regroup must not have moved the panel, it sits in %q", got)
+	}
+
+	snap := answer(proto.Command{
+		Action: "panel.git", Git: "worktree-add",
+		Dir: repo, Name: group,
+		Path: "/bin/sh", Args: []string{"-c", "sleep 30"},
+	})
+	if snap.Type != "panels" || len(snap.Panels) != 3 {
+		t.Fatalf("a conductor's worktree spawn should add a third panel, got %+v", snap)
+	}
+	if spawned := snap.Panels[2]; spawned.Group != group {
+		t.Fatalf("the spawned agent should be filed under %q, sits in %q", group, spawned.Group)
+	}
+	if !groupPeers(snap, group) {
+		t.Fatalf("the group should still be peers-on after the spawn: %+v", snap.Groups)
+	}
+}

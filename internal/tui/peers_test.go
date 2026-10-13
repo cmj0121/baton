@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -772,5 +773,70 @@ func TestPeersSpeaksZhTW(t *testing.T) {
 	m = press(m, keyPeers)
 	if m.status != `已關閉 "api" 的互通` {
 		t.Fatalf("the zh-TW off line is wrong: %q", m.status)
+	}
+}
+
+// TestPeersPromptDropsWhenMembersChange: the y agrees to the panels that were in
+// the group when the question was asked, not to whatever the name holds by the
+// time it is typed. Any client can file a panel in or out in between, so a
+// snapshot with a different set of direct members withdraws the question — and a
+// snapshot with the same set, in any order, leaves it standing.
+func TestPeersPromptDropsWhenMembersChange(t *testing.T) {
+	// A fleet with nobody asking for attention, so the only thing a snapshot can
+	// say on the status line is what happened to the question.
+	calm := func() []panel.Panel {
+		fleet := groupedFleet()
+		for i := range fleet {
+			fleet[i].State = panel.Idle
+		}
+		return fleet
+	}
+	asked := func() model {
+		m := baseModel()
+		m.fleet = calm()
+		m.cursorOnGroup(t, "api")
+		return press(m, keyPeers)
+	}
+	regroup := func(change map[string]string) []panel.Panel {
+		fleet := calm()
+		for i := range fleet {
+			if g, ok := change[fleet[i].ID]; ok {
+				fleet[i].Group = g
+			}
+		}
+		return fleet
+	}
+	for name, change := range map[string]map[string]string{
+		"a panel filed into the group":  {"2": "api"},
+		"a panel filed out of it":       {"3": ""},
+		"one out and another in":        {"3": "db", "2": "api"},
+		"a panel moved in from a group": {"4": "api"},
+	} {
+		sent := sentCommands(t)
+		m := asked()
+		if m.pendingPeers != "api" {
+			t.Fatalf("%s: setup: api should be asked about, pending %q", name, m.pendingPeers)
+		}
+
+		m.applyEvent(peersSnapshot(regroup(change)))
+		if m.pendingPeers != "" || m.status != "peers left off" {
+			t.Fatalf("%s: the question should be withdrawn with its prompt, pending=%q status=%q", name, m.pendingPeers, m.status)
+		}
+		answersNothing(t, m, sent, name)
+	}
+
+	// The same members in another order are the same members: the question
+	// stands, and its y opens the group.
+	sent := sentCommands(t)
+	m := asked()
+	fleet := calm()
+	slices.Reverse(fleet)
+	m.applyEvent(peersSnapshot(fleet))
+	if m.pendingPeers != "api" {
+		t.Fatalf("a reordered fleet must not withdraw the question, pending %q", m.pendingPeers)
+	}
+	m = press(m, "y")
+	if len(*sent) != 1 || (*sent)[0].Action != "group.peers" || (*sent)[0].Group != "api" || !(*sent)[0].Enable {
+		t.Fatalf("the standing question's y should open api, sent %+v", *sent)
 	}
 }

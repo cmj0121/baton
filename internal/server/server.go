@@ -3527,19 +3527,19 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 			return
 		}
 	case "panel.group":
-		if err := s.groupPanels(cmd.IDs, cmd.Group); err != nil {
+		if err := s.groupPanelsAs(cc, cmd.IDs, cmd.Group); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
 		s.broadcastFleet()
 	case "panel.ungroup":
-		if err := s.ungroup(cmd.IDs, cmd.Group); err != nil {
+		if err := s.ungroupAs(cc, cmd.IDs, cmd.Group); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
 		s.broadcastFleet()
 	case "panel.rename":
-		if err := s.rename(cmd.ID, cmd.Group, cmd.Name); err != nil {
+		if err := s.renameAs(cc, cmd.ID, cmd.Group, cmd.Name); err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
 			return
 		}
@@ -3627,8 +3627,16 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		}
 		s.broadcastFleet()
 	case "group.peers":
-		if err := s.setGroupPeers(cc.self, cmd.Group, cmd.Enable); err != nil {
+		changed, err := s.setGroupPeers(cc.self, cmd.Group, cmd.Enable)
+		if err != nil {
 			send(cc, proto.ServerMsg{Type: "error", Error: err.Error()})
+			return
+		}
+		if !changed {
+			// Already as asked: nothing to tell the fleet, a plugin or the log. The
+			// caller still gets the snapshot it reads as its answer, and only the
+			// caller — a no-op must not be a way to make every cockpit redraw.
+			send(cc, s.panelsMsg())
 			return
 		}
 		s.broadcastFleet()
@@ -4858,6 +4866,15 @@ func (s *Server) Restore() {
 	s.seq = st.Seq
 	max := s.seq
 	for _, ps := range st.Panels {
+		// A snapshot is a file, and an id is the one field of it that is never
+		// re-validated: the server mints ids, so nothing downstream expects one to
+		// carry a control character — it is typed into terminals (the peer prefix),
+		// quoted in replies and handed to plugins as it stands. A record whose id
+		// is empty or is not what nameSafe would accept as a name is not restored.
+		if ps.ID == "" || nameSafe(ps.ID) != nil {
+			log.Warn().Str("panel", quotable(ps.ID)).Msg("persisted panel has an invalid id; not restored")
+			continue
+		}
 		s.panels = append(s.panels, panel.Panel{
 			ID:          ps.ID,
 			Kind:        panel.ParseKind(ps.Kind),
@@ -4900,7 +4917,7 @@ func (s *Server) Restore() {
 	// name a peers-on group none of its panels sit in.
 	s.prunePeersLocked()
 	s.restoreTasksLocked()
-	log.Info().Int("panels", len(st.Panels)).Int("seq", s.seq).Int("tasks", len(s.tasks)).Msg("state restored")
+	log.Info().Int("panels", len(s.panels)).Int("seq", s.seq).Int("tasks", len(s.tasks)).Msg("state restored")
 }
 
 // restoreTasksLocked reloads the on-disk backlog into the task table. Every
@@ -5963,7 +5980,7 @@ func (s *Server) fanoutTargets(group, prompt string) ([]string, error) {
 	}
 	s.mu.Unlock()
 	if len(ids) == 0 {
-		return nil, fmt.Errorf("no panel in group %q", group)
+		return nil, fmt.Errorf("no panel in group %q", quotable(group))
 	}
 	return ids, nil
 }
@@ -6971,15 +6988,23 @@ func (s *Server) purgeExited() int {
 // (the empty string means "ungrouped"); ids that match no panel are skipped, and
 // if none match at all it errors.
 func (s *Server) groupPanels(ids []string, name string) error {
+	return s.groupPanelsAs(nil, ids, name)
+}
+
+// groupPanelsAs is groupPanels on behalf of a connection, which is what the
+// peers fence reads (peersWidenLocked); nil is the server itself or a plugin.
+func (s *Server) groupPanelsAs(cc *clientConn, ids []string, name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return fmt.Errorf("panel.group needs a name")
 	}
-	if !panel.GroupValid(name) {
-		return fmt.Errorf("invalid group path %q", name)
-	}
+	// nameSafe first: it is the check that bounds the name, and the refusal after
+	// it quotes the name back.
 	if err := nameSafe(name); err != nil {
 		return err
+	}
+	if !panel.GroupValid(name) {
+		return fmt.Errorf("invalid group path %q", name)
 	}
 	if len(ids) == 0 {
 		return fmt.Errorf("panel.group needs at least one panel")
@@ -6998,6 +7023,9 @@ func (s *Server) groupPanels(ids []string, name string) error {
 	defer s.mu.Unlock()
 	if !s.allowNameConflict && s.nameTakenLocked(name, "", name) {
 		return fmt.Errorf("the name %q is already taken", name)
+	}
+	if err := s.peersWidenLocked(cc, func(p panel.Panel) (string, bool) { _, ok := want[p.ID]; return name, ok }); err != nil {
+		return err
 	}
 	moved := s.setGroupLocked(func(p panel.Panel) bool { _, ok := want[p.ID]; return ok }, name)
 	if moved == 0 {
@@ -7203,6 +7231,13 @@ func (s *Server) remapGroupPeersLocked(oldPrefix, newPrefix string) {
 // to the dashboard as lone panels. Given ids it removes just those members from
 // whatever group they sit in; otherwise it dissolves the whole named group.
 func (s *Server) ungroup(ids []string, name string) error {
+	return s.ungroupAs(nil, ids, name)
+}
+
+// ungroupAs is ungroup on behalf of a connection. Only the dissolve is fenced:
+// taking panels OUT of a group by id files them nowhere, and a group that
+// dissolves lands its panels in its parent, which may be peers-on.
+func (s *Server) ungroupAs(cc *clientConn, ids []string, name string) error {
 	if len(ids) > 0 {
 		want := make(map[string]struct{}, len(ids))
 		for _, id := range ids {
@@ -7228,13 +7263,17 @@ func (s *Server) ungroup(ids []string, name string) error {
 	// "backend". moveGroupSubtreeLocked also re-keys the dissolved level's view
 	// settings (dropping the root's own).
 	s.mu.Lock()
+	if err := s.peersWidenLocked(cc, subtreeDest(name, panel.GroupParent(name))); err != nil {
+		s.mu.Unlock()
+		return err
+	}
 	moved := s.moveGroupSubtreeLocked(name, panel.GroupParent(name))
 	if moved > 0 {
 		s.emit("group.change", map[string]any{"group": name})
 	}
 	s.mu.Unlock()
 	if moved == 0 {
-		return fmt.Errorf("no panels in group %q", name)
+		return fmt.Errorf("no panels in group %q", quotable(name))
 	}
 	log.Info().Str("group", name).Int("panels", moved).Msg("group dissolved")
 	return nil
@@ -7268,14 +7307,23 @@ func (s *Server) ungroup(ids []string, name string) error {
 // paragraph above defends, since two names that differ past the cut are one name
 // to nameTakenLocked and two on the screen.
 func nameSafe(name string) error {
-	if strings.ContainsFunc(name, scrub.Drop) {
-		return fmt.Errorf("the name %q contains a control character", name)
-	}
+	// Length first: the control-character refusal quotes the name back, and a
+	// refusal must not be a way to have a megabyte echoed.
 	if n := len([]rune(name)); n > maxNameRunes {
 		return fmt.Errorf("the name is %d runes long, and the limit is %d", n, maxNameRunes)
 	}
+	if strings.ContainsFunc(name, scrub.Drop) {
+		return fmt.Errorf("the name %q contains a control character", name)
+	}
 	return nil
 }
+
+// quotable is a name from the wire as a refusal may quote it back: cut to the
+// length a real name can have. A verb that looks a group up rather than
+// creating one never runs nameSafe on it — there is nothing to protect, the
+// name matches a group or it does not — but its "no such group" answer quotes
+// what it was sent, and a refusal must not be a way to have a megabyte echoed.
+func quotable(name string) string { return scrub.Capped(name, maxNameRunes) }
 
 // maxNameRunes caps a panel title or a work-item name.
 //
@@ -7296,6 +7344,13 @@ const maxNameRunes = 128
 // the Group on every member. Exactly one target must be given, and the new name
 // must be non-empty.
 func (s *Server) rename(id, group, name string) error {
+	return s.renameAs(nil, id, group, name)
+}
+
+// renameAs is rename on behalf of a connection. A panel rename files nothing;
+// a group rename can land on a group that is already there, which is a merge,
+// so that half is fenced (peersWidenLocked).
+func (s *Server) renameAs(cc *clientConn, id, group, name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return fmt.Errorf("panel.rename needs a name")
@@ -7309,7 +7364,7 @@ func (s *Server) rename(id, group, name string) error {
 	case id != "":
 		return s.renamePanel(id, name)
 	case group != "":
-		return s.renameGroup(group, name)
+		return s.renameGroup(cc, group, name)
 	default:
 		return fmt.Errorf("panel.rename needs a panel id or a group")
 	}
@@ -7338,17 +7393,20 @@ func (s *Server) renamePanel(id, title string) error {
 // new name. Renaming onto an existing group name merges the two — group identity
 // is the name itself. The check and the rewrite share one lock so the merge
 // decision cannot race another rename.
-func (s *Server) renameGroup(old, name string) error {
+func (s *Server) renameGroup(cc *clientConn, old, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !panel.GroupValid(name) {
 		return fmt.Errorf("invalid group path %q", name)
 	}
 	if panel.GroupIsUnder(old, name) {
-		return fmt.Errorf("cannot nest group %q inside itself", old)
+		return fmt.Errorf("cannot nest group %q inside itself", quotable(old))
 	}
 	if !s.allowNameConflict && s.nameTakenLocked(name, "", old) {
 		return fmt.Errorf("the name %q is already taken", name)
+	}
+	if err := s.peersWidenLocked(cc, subtreeDest(old, name)); err != nil {
+		return err
 	}
 	// A group rename is a subtree prefix move: it rewrites old → name across every
 	// descendant path (so renaming "db" → "backend/db" nests the whole subtree) and
@@ -7356,7 +7414,7 @@ func (s *Server) renameGroup(old, name string) error {
 	// two, as before — group identity is the path.
 	moved := s.moveGroupSubtreeLocked(old, name)
 	if moved == 0 {
-		return fmt.Errorf("no panels in group %q", old)
+		return fmt.Errorf("no panels in group %q", quotable(old))
 	}
 	s.emit("group.change", map[string]any{"group": name, "from": old})
 	log.Info().Str("from", old).Str("to", name).Int("panels", moved).Msg("group renamed")
@@ -7614,10 +7672,26 @@ func (s *Server) setGroupFavourite(group string, fav bool) error {
 // also why a self that names no live panel is let through rather than refused:
 // there is no panel to read a kind from, and refusing would only teach a caller
 // to declare nothing. A command-kind panel passes for the shell's reason.
-func (s *Server) setGroupPeers(self, group string, on bool) error {
+//
+// The name is validated in BOTH directions, exactly as panel.group validates
+// one, and before the lock. Off used to skip it on the argument that off for a
+// group that is not there is already true — but the name still went into an
+// event, a log line and a broadcast, so a hundred kilobytes of escape bytes
+// could be pushed through all three by anyone, as often as they liked.
+//
+// changed says whether the flag actually moved. A call that asks for the state
+// the group is already in is a success that did nothing, so it says nothing:
+// no event, no log line, and the caller broadcasts nothing.
+func (s *Server) setGroupPeers(self, group string, on bool) (changed bool, err error) {
 	group = strings.TrimSpace(group)
 	if group == "" {
-		return fmt.Errorf("group.peers needs a group")
+		return false, fmt.Errorf("group.peers needs a group")
+	}
+	if !panel.GroupValid(group) {
+		return false, fmt.Errorf("invalid group path %q", quotable(group))
+	}
+	if err := nameSafe(group); err != nil {
+		return false, err
 	}
 
 	s.mu.Lock()
@@ -7626,20 +7700,23 @@ func (s *Server) setGroupPeers(self, group string, on bool) error {
 		// Only a self that resolves to an AGENT is refused; an unknown id, a shell
 		// and a command panel all fall through (see the doc comment for why).
 		if i := s.indexLocked(self); i >= 0 && s.panels[i].IsAgent() {
-			return fmt.Errorf("group.peers: an agent panel may not change peer interaction; it is an operator setting")
+			return false, fmt.Errorf("group.peers: an agent panel may not change peer interaction; it is an operator setting")
 		}
 	}
+	if on && !s.groupHasMemberLocked(group) {
+		return false, fmt.Errorf("group.peers: no panels in group %q", group)
+	}
+	if s.groupPeers[group] == on {
+		return false, nil
+	}
 	if on {
-		if !s.groupHasMemberLocked(group) {
-			return fmt.Errorf("group.peers: no panels in group %q", group)
-		}
 		s.groupPeers[group] = true
 	} else {
 		delete(s.groupPeers, group)
 	}
 	s.emit("group.change", map[string]any{"group": group, "peers": on})
 	log.Info().Str("group", group).Bool("peers", on).Msg("group peers set")
-	return nil
+	return true, nil
 }
 
 // wirePanel encodes one panel for the wire and joins in everything the domain

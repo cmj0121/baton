@@ -273,7 +273,11 @@ func peerFolds(r rune) bool {
 // corrupt the command. Both end in the Enter a dispatched brief ends in.
 func peerPayload(me, to panel.Panel, text string) []byte {
 	if to.IsAgent() {
-		text = fmt.Sprintf("[from %s (%s)] %s", scrub.Capped(me.Title, maxPeerTitleRunes), me.ID, text)
+		// The id is scrubbed with the title. The server mints ids, but a restore
+		// takes them from the state file as written, and this line is typed into
+		// somebody else's terminal.
+		text = fmt.Sprintf("[from %s (%s)] %s",
+			scrub.Capped(me.Title, maxPeerTitleRunes), scrub.Capped(me.ID, maxPeerTitleRunes), text)
 	}
 	return dispatchData(text, "")
 }
@@ -303,5 +307,83 @@ func (s *Server) peerSend(cc *clientConn, cmd proto.Command) {
 	// text, and not the prefix the server added.
 	log.Info().Str("from", me.ID).Str("to", to.ID).Str("group", me.Group).Int("bytes", len(cmd.Data)).Msg("peer send")
 	s.emit("peer.send", map[string]any{"from": me.ID, "to": to.ID, "group": me.Group, "bytes": len(cmd.Data)})
-	send(cc, proto.ServerMsg{Type: "notice", ID: to.ID, Notice: fmt.Sprintf("sent %d bytes to %s (%s)", len(cmd.Data), scrub.Capped(to.Title, maxPeerTitleRunes), to.ID)})
+	send(cc, proto.ServerMsg{Type: "notice", ID: to.ID, Notice: fmt.Sprintf("sent %d bytes to %s (%s)", len(cmd.Data), scrub.Capped(to.Title, maxPeerTitleRunes), scrub.Capped(to.ID, maxPeerTitleRunes))})
+}
+
+// peersFencedLocked reports whether cc is held to the peers fence: a conductor
+// connection, or one whose declared panel is an agent. It is the identity rule
+// setGroupPeers refuses on, for the same reason — the cockpit declares no self,
+// and a shell inside baton is the operator's own hands. nil is the server
+// itself or a plugin, which is not a connection at all. Caller holds s.mu.
+func (s *Server) peersFencedLocked(cc *clientConn) bool {
+	switch {
+	case cc == nil:
+		return false
+	case cc.role == roleConductor:
+		return true
+	case cc.self == "":
+		return false
+	}
+	i := s.indexLocked(cc.self)
+	return i >= 0 && s.panels[i].IsAgent()
+}
+
+// peersWidenLocked refuses a re-filing that would put an EXISTING panel into a
+// peers-on group it is not already in, when an agent or the conductor asks for
+// it. dest names where the command would file a panel, and false for a panel
+// it does not touch. Caller holds s.mu, and holds it across the move, so the
+// answer cannot go stale between the check and the write.
+//
+// Without this the flag's own fence is decoration. group.peers is refused to
+// an agent and to the conductor because opening a channel between terminals is
+// the operator's decision (D9) — and then panel.group, open to both, lets
+// either pull any panel on the fleet into a group that is already on, which is
+// the same decision made one panel at a time. So who is IN a peers-on group is
+// the operator's to widen, as the flag is the operator's to set.
+//
+// The whole command is refused, never the offending part of it: a regroup that
+// half happened is harder to read than one that did not.
+//
+// What is deliberately NOT fenced:
+//
+//   - a panel already in that exact group, re-filed where it sits;
+//   - any move into a group that is peers-off, and any move out of one;
+//   - a NEW panel spawned straight into a peers-on group — a worktree spawn
+//     filed under its branch, a plugin's spawn. Those arrive through the
+//     server's own groupPanels and not through a connection's panel.group, and
+//     a conductor building out a group the operator opened is the ordinary
+//     flow: the operator chose the group, not a list of ids.
+//
+// It is the declared-identity guardrail setGroupPeers is, no more: a self is
+// declared, not proven, and this stops an agent's accident, not an agent
+// that lies about who it is.
+func (s *Server) peersWidenLocked(cc *clientConn, dest func(panel.Panel) (string, bool)) error {
+	if !s.peersFencedLocked(cc) {
+		return nil
+	}
+	for _, p := range s.panels {
+		if to, ok := dest(p); ok && to != p.Group && s.groupPeers[to] {
+			return fmt.Errorf("group %q has peer interaction on; the operator adds panels to it", to)
+		}
+	}
+	return nil
+}
+
+// subtreeDest is the dest of a subtree move — a group rename, or a dissolve
+// into the parent — for peersWidenLocked: where each panel under oldPrefix
+// lands.
+//
+// A destination that is itself under oldPrefix is not one. That happens when a
+// group dissolves and its sub-groups move up a level: "a/b/b" lands on "a/b",
+// whose own panels and whose own flag are leaving in the same step. Nobody is
+// staying there to be reached, so it is a re-key and not a merge (see
+// remapGroupPeersLocked, which draws the same line).
+func subtreeDest(oldPrefix, newPrefix string) func(panel.Panel) (string, bool) {
+	return func(p panel.Panel) (string, bool) {
+		if !panel.GroupIsUnder(oldPrefix, p.Group) {
+			return "", false
+		}
+		to := swapGroupPrefix(p.Group, oldPrefix, newPrefix)
+		return to, !panel.GroupIsUnder(oldPrefix, to)
+	}
 }

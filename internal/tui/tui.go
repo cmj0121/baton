@@ -212,10 +212,14 @@ type model struct {
 	// snapshot can land between the question and the y, and the group that gets
 	// opened has to be the one the prompt named. It lives exactly as long as the
 	// prompt is on screen; see peersPromptLive.
-	pendingPeers       string
-	pendingSpawn       bool // A's workdir is awaiting here/isolate; handled beside pendingClose so w/n cannot leak
-	pendingConductor   bool // a conductor spawn is in flight; zoom it when it lands in a snapshot
-	pendingGlobalShell bool // a global-shell spawn is in flight; zoom it when it lands in a snapshot
+	pendingPeers string
+	// pendingPeersMembers is the group's direct members as they were when the
+	// question was asked (directMembers). The y agrees to THOSE panels reaching
+	// each other; see peersPromptLive.
+	pendingPeersMembers string
+	pendingSpawn        bool // A's workdir is awaiting here/isolate; handled beside pendingClose so w/n cannot leak
+	pendingConductor    bool // a conductor spawn is in flight; zoom it when it lands in a snapshot
+	pendingGlobalShell  bool // a global-shell spawn is in flight; zoom it when it lands in a snapshot
 	// pendingReveal is an ORDINARY spawn from this cockpit in flight: put the
 	// cursor on the panel when it lands, so the operator can see the thing they
 	// just asked for (#98).
