@@ -124,6 +124,14 @@ const (
 	keyLayout    = "L" // in the group split: cycle the tile layout (shift+l; bare l moves focus)
 	keyResize    = "z" // in the group split: enter resize mode — arrows grow/shrink the focused tile
 
+	// keyAttentionMark says "this screen is a wait": a row for the attention
+	// classifier to learn from, written by the daemon when panel.classifier.record
+	// is on. Bare m in the inbox (where -, x and 1–3 are its neighbours) and C-t m
+	// in a zoom, as a fixed zoom affordance like keyGitMenu rather than a
+	// binding: m is the dashboard's move key, and move has nothing to do in a
+	// zoom, so the leader-prefixed letter is free there.
+	keyAttentionMark = "m"
+
 	keyCtrlC = "ctrl+c" // captured in command mode — exit is the detach binding only
 	keyCtrlE = "ctrl+e" // captured in command mode — exit is the detach binding only
 )

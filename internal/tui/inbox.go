@@ -74,6 +74,7 @@ type inboxRow struct {
 	state  panel.State
 	code   int       // exit status; a non-zero one on an exited panel renders as failed
 	reason string    // the agent's own words. ALREADY SANITISED by the server — see below
+	source string    // who raised the hand when there are no words: "classifier" earns a line, "tail" is the default and says nothing
 	since  time.Time // when the panel entered this state; the queue sorts on it
 	stale  bool      // no longer qualifies, or is gone: greyed, not yanked from under the cursor
 }
@@ -163,6 +164,7 @@ func rowOf(p proto.Panel) inboxRow {
 		state:  panel.ParseState(p.State),
 		code:   p.ExitCode,
 		reason: p.Reason,
+		source: p.Source,
 		since:  since,
 	}
 }
@@ -445,7 +447,9 @@ func (m model) clearRow(idx int, until time.Time, sendText string) model {
 		// queue the one case the inbox cannot handle.
 		m.sendf(proto.Command{Action: "panel.input", ID: row.id, Data: []byte(sendText)})
 	}
-	ack := proto.Command{Action: "panel.ack", ID: row.id}
+	// A reply clears the row as answered, so the daemon knows this was a wait
+	// the human met rather than a guess they threw out.
+	ack := proto.Command{Action: "panel.ack", ID: row.id, Answered: sendText != ""}
 	if !until.IsZero() {
 		ack.Until = until.Format(time.RFC3339Nano)
 	}
@@ -535,10 +539,38 @@ func (m model) handleInboxKey(key string, k tea.Key) (tea.Model, tea.Cmd) {
 		return m.snoozeInboxRow()
 	case "x":
 		return m.dismissInboxRow()
+	case keyAttentionMark:
+		return m.markInboxRow()
 	case "1", "2", "3":
 		return m.answerInboxOverlay(key)
 	}
 	return m, nil
+}
+
+// markInboxRow tells the daemon the selected row's screen is a wait — the
+// operator teaching the classifier a tail the fleet's own guess missed or
+// under-sold. The row stays where it is: a mark is a label, not a clearing,
+// and whatever the human does with the row next is a separate decision.
+func (m model) markInboxRow() (tea.Model, tea.Cmd) {
+	r, ok := m.inboxSelected()
+	if !ok {
+		return m, nil
+	}
+	if r.stale || r.state == panel.Exited {
+		// A dead screen is not a wait; the daemon refuses it too, but the
+		// status line should say why rather than "marked".
+		m.status = m.tr("inbox.stale-row", "that row is stale — r refreshes the queue")
+		return m, nil
+	}
+	return m.markPanel(r.id, r.title), nil
+}
+
+// markPanel sends attention.mark for one panel and says so on the status line.
+// The inbox row and the zoom each guard their own target and share this.
+func (m model) markPanel(id, title string) model {
+	m.sendf(proto.Command{Action: "attention.mark", ID: id})
+	m.status = m.tr("inbox.marked", "marked as a wait") + " " + truncate(sanitizeText(title), 24)
+	return m
 }
 
 // answerInboxOverlay types the digit and a newline into a live permission
@@ -898,7 +930,10 @@ func (m model) inboxRowLines(width, rows int) []string {
 }
 
 // inboxDetailBlock builds the tail pane: the agent's declared reason on a ▸ line
-// when one stands, then the trailing output, bottom-aligned.
+// when one stands — or, when none does and the trained classifier is what
+// raised the row, the word "classifier" on that line, so a wrong guess can be
+// blamed on the right guesser — then the trailing output, bottom-aligned. The
+// regex earns no line: it is the default, and today's rows already read that way.
 //
 // Bottom-aligned because the question is always the LAST thing a program printed —
 // aligning to the top would show the setup and cut off the ask. The bytes are raw
@@ -910,11 +945,15 @@ func (m model) inboxDetailBlock(width, rows int) []string {
 		return nil
 	}
 	var head []string
-	if r.reason != "" {
+	switch {
+	case r.reason != "":
 		// Already sanitised by the server; see rowOf. Escaping it again would mangle
 		// a legitimate reason.
 		head = append(head, lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).
 			Width(width).Render(truncate("▸ "+r.reason, width)))
+	case r.source == "classifier":
+		head = append(head, lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).
+			Width(width).Render(truncate("▸ "+m.tr("inbox.classifier", "classifier"), width)))
 	}
 	tail, pulled := m.inboxTails[r.id]
 	body := []string{mutedStyle.Render(m.tr("inbox.waiting", "waiting for the tail…"))}
@@ -999,7 +1038,7 @@ func (m model) inboxFooter() string {
 		fitLegend(w, "j/k", m.tr("legend.move", "move"), "tab", m.tr("legend.filter", "filter"),
 			"enter", m.tr("legend.zoom", "zoom"), "r", m.tr("legend.re-sort", "re-sort"), "esc", m.tr("legend.close", "close")),
 		fitLegend(w, "i", m.tr("inbox.reply", "reply"), "-", m.tr("inbox.snooze", "snooze"), "x", m.tr("inbox.dismiss", "dismiss"),
-			"1/2/3", m.tr("inbox.answer", "answer")),
+			"1/2/3", m.tr("inbox.answer", "answer"), keyAttentionMark, m.tr("inbox.mark", "mark as a wait")),
 	)
 }
 
