@@ -403,6 +403,16 @@ func (c *Client) ResolveAttention(id string) error {
 	return c.Do(proto.Command{Action: "panel.resolve", ID: id})
 }
 
+// AttentionMark tells the server that panel id is waiting on a person,
+// whatever the fleet's own guess says: its tail at this instant is recorded as
+// a positive example for the attention classifier (when panel.classifier.record
+// is on). It is a label, not a verdict — the panel's state does not change —
+// and it is an operator's verb, so id is required and a conductor connection
+// is refused.
+func (c *Client) AttentionMark(id string) error {
+	return c.Do(proto.Command{Action: "attention.mark", ID: id})
+}
+
 // Dispatch assigns prompt to panel id as a task brief: the server records it on
 // the panel and delivers it to the process as a unit. Unlike SendText (raw
 // keystrokes), the brief reaches every frontend's card and the snapshot.
@@ -746,20 +756,28 @@ func (c *Client) worktreeExchange(cmd proto.Command) (json.RawMessage, error) {
 // a subsystem's reply is a new message type, but the connection it arrives on is
 // as chatty as ever.
 func (c *Client) rawExchange(cmd proto.Command, replyType string, payload func(proto.ServerMsg) json.RawMessage) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := c.replyExchange(cmd, replyType, func(m proto.ServerMsg) { out = payload(m) })
+	return out, err
+}
+
+// replyExchange is the drain under rawExchange and the typed verbs: it sends
+// cmd and the config.get barrier, hands every reply of type replyType to take,
+// and returns at the barrier with the server's first error if it refused cmd.
+func (c *Client) replyExchange(cmd proto.Command, replyType string, take func(proto.ServerMsg)) error {
 	if err := c.send(cmd); err != nil {
-		return nil, err
+		return err
 	}
 	if err := c.send(proto.Command{Action: "config.get"}); err != nil {
-		return nil, err
+		return err
 	}
 	deadline := time.Now().Add(ioTimeout)
-	var out json.RawMessage
 	var firstErr error
 	for {
 		_ = c.conn.SetReadDeadline(deadline)
 		var msg proto.ServerMsg
 		if err := c.dec.Decode(&msg); err != nil {
-			return nil, fmt.Errorf("read from baton: %w", err)
+			return fmt.Errorf("read from baton: %w", err)
 		}
 		switch msg.Type {
 		case "error":
@@ -767,12 +785,9 @@ func (c *Client) rawExchange(cmd proto.Command, replyType string, payload func(p
 				firstErr = fmt.Errorf("%s", msg.Error)
 			}
 		case replyType:
-			out = payload(msg)
+			take(msg)
 		case "config":
-			if firstErr != nil {
-				return nil, firstErr
-			}
-			return out, nil
+			return firstErr
 		}
 	}
 }
@@ -858,6 +873,24 @@ func (c *Client) ScoreStatus() (string, error) {
 		return "", err
 	}
 	return string(payload), nil
+}
+
+// ClassifierStatus asks the daemon about the MOLD attention classifier: whether
+// one is configured, what its socket said when probed just now, and how the
+// row files stand. The probe is the daemon's, not this client's — the socket
+// lives on the daemon's host — and a probe that finds mold alive re-arms the
+// daemon's absence latch, which is why `baton ctl classifier status` is also
+// how an operator brings a restarted mold back without a reload.
+func (c *Client) ClassifierStatus() (*proto.ClassifierStatus, error) {
+	var out *proto.ClassifierStatus
+	err := c.replyExchange(proto.Command{Action: "classifier.status"}, "classifier", func(m proto.ServerMsg) { out = m.Classifier })
+	if err != nil {
+		return nil, err
+	}
+	if out == nil {
+		return nil, fmt.Errorf("classifier.status: the daemon answered without a payload")
+	}
+	return out, nil
 }
 
 func (c *Client) send(cmd proto.Command) error {

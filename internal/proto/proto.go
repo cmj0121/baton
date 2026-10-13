@@ -117,7 +117,7 @@ const EventBufferSize = 256
 // zoomed client streams a panel with attach/input/resize/detach, and organises
 // the fleet with panel.group / panel.rename.
 type Command struct {
-	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.relaunch | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | panel.tail | panel.diff | panel.git | panel.log | panel.logview | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | group.peers | peer.list | peer.tail | peer.send | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run | remote.status | remote.enable | remote.disable | remote.rotate | remote.kick | score.submit | score.list | score.status | score.merge | score.reword | score.lower | worktree.list | worktree.sweep | issues.board | issues.block
+	Action    string   `json:"action"`              // hello | panel.list | panel.create | panel.respawn | panel.relaunch | panel.close | panel.purge | panel.attach | panel.detach | panel.input | panel.dispatch | panel.dispatch-group | panel.resize | panel.group | panel.ungroup | panel.rename | panel.move | panel.pin | panel.unpin | panel.favourite | panel.unfavourite | panel.signal | panel.attention | panel.resolve | panel.ack | attention.mark | panel.tail | panel.diff | panel.git | panel.log | panel.logview | fleet.search | group.show | group.layout | group.favourite | group.unfavourite | group.peers | peer.list | peer.tail | peer.send | task.enqueue | task.list | task.cancel | task.promote | task.demote | task.drain | server.reload | config.get | command.run | remote.status | remote.enable | remote.disable | remote.rotate | remote.kick | score.submit | score.list | score.status | score.merge | score.reword | score.lower | worktree.list | worktree.sweep | issues.board | issues.block
 	Kind      string   `json:"kind,omitempty"`      // panel kind for "panel.create": "shell" (the default), "agent", or "command"
 	ID        string   `json:"id,omitempty"`        // target panel for close/attach/input/resize/diff, the panel to rename, the panel "score.list" ranks its entries for (empty = rank against no context), the score entry a refine verb corrects, or — empty on "panel.git" worktree-add — the spawn that has no source panel at all
 	Path      string   `json:"path,omitempty"`      // init command (binary path) for "panel.create"; empty = default shell. Also the agent command for a targetless "panel.git" worktree-add, which spawns one
@@ -156,6 +156,13 @@ type Command struct {
 	// produces output, i.e. until the panel itself does something — while a value
 	// is the snooze, which additionally expires on the clock.
 	Until string `json:"until,omitempty"`
+
+	// Answered marks a "panel.ack" that follows a reply typed from the inbox —
+	// the row was cleared because the human answered it, not because they
+	// judged the guess wrong. An ack without it that dismisses a guessed
+	// attention is the one honest negative the classifier's holdout gets; an
+	// answered wait is the opposite of that, and must not be filed as one.
+	Answered bool `json:"answered,omitempty"`
 
 	// Role and Self are declared on "hello" by a control client (the conductor
 	// agent driving the fleet over the socket). Role "conductor" puts the
@@ -319,6 +326,15 @@ type Panel struct {
 	// panel.attention. Empty when no declaration stands — a heuristic or a timer
 	// raises the state without a reason, and the inbox shows the tail instead.
 	Reason string `json:"reason,omitempty"`
+
+	// Source is WHO put the panel into attention, carried only while it is
+	// there: "declared" when the agent's own declaration stands, "tail" when the
+	// Monitor's regex read a question off the screen, "classifier" when the
+	// trained bundle called a tail the regex had passed over. Reason says why in
+	// the agent's words; this says which guess to blame when there are none — an
+	// operator dismissing a row should know which guesser was wrong, and a bundle
+	// that keeps being wrong is noticed here first. Empty for every other state.
+	Source string `json:"source,omitempty"`
 
 	// Since is when the panel entered its current state, as an RFC 3339 instant.
 	// It is joined in when a snapshot is built (like Pid), never carried on the
@@ -657,7 +673,7 @@ type RemoteInfo struct {
 
 // ServerMsg is broadcast or replied from the server to a client.
 type ServerMsg struct {
-	Type       string      `json:"type"`                  // "welcome" | "panels" | "telemetry" | "output" (pty bytes; Rows/Cols are set only on the replay an attach opens with) | "stats" | "error" | "ephemeral" | "ephemeral-exit" (a transient panel's process ended; ID names it, Failed says it exited non-zero — additive and ignorable, like "ping") | "diff" | "gitout" | "search" | "notice" | "config" | "footer" | "usage" | "tasks" | "tail" (the pulled trailing output of one panel: ID names it, Data carries the bytes) | "peers" (the reply to peer.list: Panels carries the group-mates the caller may reach, and nothing else) | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline) | "remote" (the remote-access status and connection list) | "goodbye" (the server is dropping this connection on purpose; Error says why) | "score" (a score.* verb's reply; Score carries the payload) | "worktree" (a worktree.* verb's reply; Worktree carries the payload) | "issues" (issues.board / issues.block reply; Issues carries the board JSON)
+	Type       string      `json:"type"`                  // "welcome" | "panels" | "telemetry" | "output" (pty bytes; Rows/Cols are set only on the replay an attach opens with) | "stats" | "error" | "ephemeral" | "ephemeral-exit" (a transient panel's process ended; ID names it, Failed says it exited non-zero — additive and ignorable, like "ping") | "diff" | "gitout" | "search" | "notice" | "config" | "footer" | "usage" | "tasks" | "tail" (the pulled trailing output of one panel: ID names it, Data carries the bytes) | "peers" (the reply to peer.list: Panels carries the group-mates the caller may reach, and nothing else) | "ping" (an additive, ignorable server→client keepalive that resets the client's idle read deadline) | "remote" (the remote-access status and connection list) | "goodbye" (the server is dropping this connection on purpose; Error says why) | "score" (a score.* verb's reply; Score carries the payload) | "worktree" (a worktree.* verb's reply; Worktree carries the payload) | "issues" (issues.board / issues.block reply; Issues carries the board JSON) | "classifier" (the classifier.status reply; Classifier carries the payload)
 	Version    string      `json:"version,omitempty"`     // protocol version, set on "welcome"
 	ServerVer  string      `json:"server_ver,omitempty"`  // the server's build version, set on "welcome"
 	Enforce    string      `json:"enforce,omitempty"`     // the resource-limit backend in force on the host the panels run on ("cgroup", "none"), set on "welcome" and "config" so a frontend offering to edit limits can say whether they bite
@@ -734,4 +750,42 @@ type ServerMsg struct {
 	// for the same reason Score does — one field carrying two additive shapes,
 	// which old clients ignore whole rather than mis-reading.
 	Worktree json.RawMessage `json:"worktree,omitempty"`
+
+	// Classifier is the reply to classifier.status, set on "classifier": whether
+	// the MOLD attention classifier is configured, what the socket said when
+	// probed just now, and how the row files stand. It is a typed field rather
+	// than raw JSON because the shape is one object with one owner — there is
+	// no second verb to version beside it — and a typed reply is what lets
+	// `baton ctl classifier status` print one line without re-parsing. Old
+	// clients ignore the unknown field entirely.
+	Classifier *ClassifierStatus `json:"classifier,omitempty"`
+}
+
+// ClassifierStatus is what classifier.status answers: the config in force, the
+// state of the absence latch as it stood BEFORE the probe, the probe's own
+// outcome, and the row-file counts. Absent and Error are both carried because
+// they answer different questions — "was the regex deciding alone until now"
+// and "is the socket reachable this instant" — and a probe that succeeds
+// clears the latch, so the two can disagree on purpose.
+type ClassifierStatus struct {
+	Enabled       bool        `json:"enabled"`                  // a panel.classifier block is configured; everything below is zero when not
+	Socket        string      `json:"socket,omitempty"`         // the unix socket mold serves on, paths expanded
+	Scope         string      `json:"scope,omitempty"`          // the mold scope that holds the one key
+	MinConfidence float64     `json:"min_confidence,omitempty"` // baton's gate on the raw score, 0–1
+	Absent        bool        `json:"absent,omitempty"`         // the latch as it stood before this probe: a failure had been seen and asks were not dialing
+	Error         string      `json:"error,omitempty"`          // this probe's dial, timeout or parse error, verbatim; empty on success
+	Mold          *MoldStatus `json:"mold,omitempty"`           // what the socket said about itself; nil when the probe failed
+	Record        bool        `json:"record"`                   // the row files are written (panel.classifier.record)
+	Rows          int         `json:"rows"`                     // lines in the positive row file, 0 when it does not exist
+	Holdout       int         `json:"holdout"`                  // lines in the holdout file, 0 when it does not exist
+	Capped        bool        `json:"capped,omitempty"`         // either file is at its cap and no longer written (D13)
+}
+
+// MoldStatus is mold's own `{"op":"status"}` reply, field for field.
+type MoldStatus struct {
+	PID     int    `json:"pid"`
+	Version string `json:"version"`
+	Bundle  string `json:"bundle"`
+	Keys    int    `json:"keys"`
+	Device  string `json:"device"`
 }

@@ -54,7 +54,8 @@ func (s *Server) ackPanel(cc *clientConn, cmd proto.Command) {
 	}
 
 	s.mu.Lock()
-	if s.indexLocked(cmd.ID) < 0 {
+	i := s.indexLocked(cmd.ID)
+	if i < 0 {
 		s.mu.Unlock()
 		return
 	}
@@ -62,6 +63,17 @@ func (s *Server) ackPanel(cc *clientConn, cmd proto.Command) {
 		s.acked = make(map[string]time.Time)
 	}
 	s.acked[cmd.ID] = until
+	// A dismiss of a GUESSED attention — the tail regex's or the classifier's,
+	// never a declared one and never a timer's — is the one honest negative the
+	// fleet can hand the classifier, and it goes to the holdout for `mold eval`
+	// (D6, R5). A snooze says nothing about the guess: the human may simply
+	// have chosen to wait. An ANSWERED row says the guess was right — the
+	// inbox marks those — and writes nothing here: a positive is the agent's
+	// or the operator's to certify (panel.attention, attention.mark), not a
+	// side effect of clearing the queue.
+	if src := s.sourceLocked(s.panels[i]); until.IsZero() && !cmd.Answered && (src == "tail" || src == "classifier") {
+		s.recordRowLocked(cmd.ID, false)
+	}
 	s.mu.Unlock()
 
 	// A plain broadcast, not broadcastFleet: an acknowledgement is a live opinion

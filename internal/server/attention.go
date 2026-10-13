@@ -72,6 +72,13 @@ func (s *Server) declareAttention(cc *clientConn, cmd proto.Command) {
 	s.declared[id] = &declaration{Reason: reason}
 	s.panels[i].Reason = reason
 	s.rederiveLocked(i, s.panels[i].State)
+	// The one label with no regex in play (D6): the agent itself says this
+	// screen is a wait, so its tail at this instant is a positive row for the
+	// classifier. Agent panels only — a shell's declaration is addressed by
+	// hand and says nothing about what an agent's screen looks like.
+	if s.panels[i].Kind == panel.Agent {
+		s.recordRowLocked(id, true)
+	}
 	s.mu.Unlock()
 
 	s.broadcast(s.panelsMsg())
@@ -172,6 +179,7 @@ func (s *Server) rederiveLocked(i int, base panel.State) bool {
 	from := p.State
 	p.State = ns
 	s.mon.entered(p.ID)
+	s.noteRaisedLocked(p.ID, ns, sig)
 	p.Activity = activityText(ns, s.mon.since(p.ID))
 	f := panelFields(*p)
 	f["from"], f["to"] = from.String(), ns.String()

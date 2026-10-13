@@ -198,6 +198,7 @@ type stateSignals struct {
 	taskDone   bool        // the panel's in-flight task just went terminal-done (an event, not a timer)
 	looksAtt   bool        // the quiet tail reads like a question, and nothing suppresses the heuristic
 	overlayAtt bool        // a permission overlay is on screen on the tick that would promote to stuck
+	classAtt   bool        // the classifier called the tail still on screen attention, a tick or more after being asked
 }
 
 // nextState is the Monitor's pure transition: it returns the state the panel
@@ -226,6 +227,15 @@ type stateSignals struct {
 //     withdraws an undeclared attention) or an explicit resolve leaves that state.
 //     This exclusion is a project-lead ruling on top of DESIGN §2.1, which lists
 //     rung 2b as firing from any live state.
+//   - The classifier's answer sits below the timers and above done, beside the
+//     regex it is a second opinion to (D4): still a guess about text, so the
+//     stuck timer beats it, and still a question now, so it beats a review
+//     later. Unlike looksAtt it fires from idle and done as well as running,
+//     because its read is asynchronous (D5): the tail was asked about on the
+//     settling tick and the answer lands a tick or more later, by which time the
+//     panel has settled — and may have reached done — on the same quiet clock.
+//     It never fires on a panel already in attention or stuck: there is nothing
+//     to raise, and a stuck panel is the timer's to describe.
 //
 // Exited is terminal. Idle, done, stuck and attention all hold until output
 // resumes or a higher rung fires — resting states never move on their own except
@@ -243,6 +253,8 @@ func nextState(sig stateSignals) (panel.State, bool) {
 		ns = panel.Stuck
 	case sig.taskDone && sig.agent && sig.cur != panel.Attention: // rung 2b: the server SAW the work finish, rather than inferring it
 		ns = panel.Done
+	case sig.classAtt && sig.cur != panel.Attention && sig.cur != panel.Stuck: // rung 3, by the classifier: the answer to an earlier tick's tail
+		ns = panel.Attention
 	case sig.looksAtt: // rung 3: the tail reads like a question
 		ns = panel.Attention
 	case sig.doneDue && sig.cur == panel.Idle: // rung 2c: quiet long enough that the turn reads as over
@@ -331,10 +343,44 @@ func (s *Server) signalsLocked(p panel.Panel, taskDone bool) stateSignals {
 	if sig.stuckDue && stuckable(sig.cur) && !suppressed {
 		sig.overlayAtt = attn.PermissionOverlay(s.pty.Tail(p.ID, attnTailBytes))
 	}
+	// The classifier's answer to an EARLIER tick's tail, applied before — and
+	// regardless of — the read below: by now the panel has usually settled past
+	// the one tick wantsTail allows. This is the one extra read, paid only by a
+	// panel holding an answer, and only to check the screen is still the one the
+	// question was about.
+	if !suppressed && sig.cur != panel.Exited {
+		sig.classAtt = s.takeClassHitLocked(p.ID)
+	}
 	if sig.wantsTail() && !suppressed {
-		sig.looksAtt = looksLikeAttention(s.pty.Tail(p.ID, attnTailBytes))
+		tail := s.pty.Tail(p.ID, attnTailBytes)
+		sig.looksAtt = looksLikeAttention(tail)
+		// The regex said no; ask the second opinion about the same bytes, off the
+		// tick. A client that has already failed is not asked (regex decides).
+		// The worker shapes the text, so the tick pays only for the hash.
+		if !sig.looksAtt && s.classLiveLocked() {
+			s.enqueueClassLocked(p.ID, fnv64(tail), tail)
+		}
+	} else if sig.classWantsTail() && !suppressed && s.classLiveLocked() && !s.classAskedLocked(p.ID) {
+		// A resting panel whose screen the classifier has NOT been asked
+		// about: the ask failed while mold was away, or the memory of asking
+		// was dropped by a reload or a status probe. One more read, once —
+		// the ask records the screen, and a "no" is remembered as well as a
+		// "yes", so a resting fleet of fifty pays fifty reads at a re-arm
+		// and none a second later. Without this, a panel that settled on
+		// `Password:` while mold was down would wait for output that never
+		// comes.
+		tail := s.pty.Tail(p.ID, attnTailBytes)
+		s.enqueueClassLocked(p.ID, fnv64(tail), tail)
 	}
 	return sig
+}
+
+// classWantsTail reports whether the classifier may still raise this resting
+// panel: quiet, at rest in a state its rung can lift (idle or done — the
+// settling states are wantsTail's), with no declaration and no timer about
+// to speak for it.
+func (sig stateSignals) classWantsTail() bool {
+	return sig.quiet && !sig.declared && !sig.stuckDue && (sig.cur == panel.Idle || sig.cur == panel.Done)
 }
 
 // renderSpark turns a window of per-bucket byte counts into a bar sparkline,

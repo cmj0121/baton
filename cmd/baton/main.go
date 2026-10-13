@@ -43,6 +43,7 @@ import (
 	"github.com/shirou/gopsutil/v4/process"
 
 	"github.com/cmj0121/baton/internal/attn"
+	"github.com/cmj0121/baton/internal/classifier"
 	"github.com/cmj0121/baton/internal/client"
 	"github.com/cmj0121/baton/internal/config"
 	"github.com/cmj0121/baton/internal/cwd"
@@ -1634,6 +1635,7 @@ func reloadableSettings(cfg config.Config) reloadable {
 	rc.settings.LogMaxBytes = panellog.MaxBytes(cfg.Panel.LogMaxMB)
 	rc.settings.Restart, rc.settings.AgentRestart = restartPolicies(cfg)
 	rc.settings.Attention, rc.settings.AgentAttention = attentionPolicies(cfg)
+	rc.settings.Classifier, rc.settings.ClassifierRecord = classifierPolicy(cfg)
 	rc.settings.AgentIsolate = isolationPolicies(cfg)
 	rc.settings.TrackCwd, rc.settings.RestoreCwd = cwdPolicy(cfg)
 	if cfg.Settings.AllowNameConflict != nil {
@@ -1847,6 +1849,19 @@ func attentionPolicies(cfg config.Config) (attn.Policy, map[string]attn.Policy) 
 		perAgent[name] = p
 	}
 	return fleet, perAgent
+}
+
+// classifierPolicy projects the `panel.classifier` block onto the server
+// settings: nil without the block, otherwise the resolved client config and the
+// record flag. A key that does not parse is warned about and keeps its default;
+// the block itself stays on, which is Resolve's contract and the reason the
+// warning says so.
+func classifierPolicy(cfg config.Config) (*classifier.Config, bool) {
+	c, record, err := cfg.Panel.Classifier.Resolve()
+	if err != nil {
+		log.Warn().Err(err).Msg("classifier key ignored; its built-in default applies and the classifier stays on")
+	}
+	return c, record
 }
 
 // runClient attaches a TUI cockpit to this session's server. If the cockpit

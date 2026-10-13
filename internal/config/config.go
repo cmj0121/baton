@@ -448,6 +448,11 @@ type PanelDefaults struct {
 	// Unset runs on the built-in defaults.
 	Attention AttentionConfig `yaml:",inline"`
 
+	// Classifier is the optional MOLD classifier that reads the same tail window
+	// as the attention regex. Fleet-wide only, and a nested block on purpose: its
+	// presence is the switch, and absent it the fleet runs exactly as before.
+	Classifier *ClassifierConfig `yaml:"classifier,omitempty"`
+
 	// TrackCwd is how a panel's live working directory is learned: "auto" (the
 	// default — the shell's own report when it makes one, the process table
 	// otherwise), "osc7", "proc", or "off" to not track it at all.

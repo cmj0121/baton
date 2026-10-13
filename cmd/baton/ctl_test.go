@@ -77,6 +77,7 @@ func TestCtlRuns(t *testing.T) {
 		ctlSend{ID: id, Text: "hi"},
 		ctlSend{ID: id, Text: "x", NoEnter: true},
 		ctlAttention{ID: id, Why: "which migration do I run first?"},
+		ctlAttentionMark{ID: id},
 		ctlResolve{ID: id},
 		ctlDispatch{ID: id, Prompt: "land the fix"},
 		ctlDispatchGroup{Group: "g", Prompt: "ship it"},

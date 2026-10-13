@@ -116,3 +116,28 @@ func TestReloadableSettingsCarriesAttention(t *testing.T) {
 		t.Errorf("the profile override did not reach the settings: %v", got)
 	}
 }
+
+// TestReloadableSettingsCarriesClassifier checks the classifier block reaches
+// the server settings on the same terms as the ladder: absent is nil, present
+// is a resolved config with the record flag beside it, and a bad key keeps its
+// default without switching the block off.
+func TestReloadableSettingsCarriesClassifier(t *testing.T) {
+	if rc := reloadableSettings(config.Config{}); rc.settings.Classifier != nil || rc.settings.ClassifierRecord {
+		t.Errorf("no block should leave the classifier off, got %+v record=%v", rc.settings.Classifier, rc.settings.ClassifierRecord)
+	}
+
+	on := true
+	rc := reloadableSettings(config.Config{Panel: config.PanelDefaults{
+		Classifier: &config.ClassifierConfig{Scope: "mine", Timeout: "soon", Record: &on},
+	}})
+	c := rc.settings.Classifier
+	if c == nil {
+		t.Fatal("the block did not reach the settings")
+	}
+	if c.Scope != "mine" || c.Timeout != config.DefaultClassifierTimeout {
+		t.Errorf("scope/timeout = %q/%v, want mine/%v (bad timeout keeps its default)", c.Scope, c.Timeout, config.DefaultClassifierTimeout)
+	}
+	if !rc.settings.ClassifierRecord {
+		t.Error("record: true did not reach the settings")
+	}
+}
