@@ -11,8 +11,10 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/cmj0121/baton/internal/control"
+	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/server"
@@ -751,7 +753,15 @@ func TestAttentionMarkIsALabelNotAVerdict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
+	// Let the panel's own lifecycle settle first: a fresh spawn walks from
+	// spawning to running on its own, and a snapshot taken either side of the
+	// mark would blame the mark for that walk.
+	deadline := time.Now().Add(5 * time.Second)
 	before := panelByID(t, c, id).State
+	for before == panel.Spawning.String() && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+		before = panelByID(t, c, id).State
+	}
 	if err := c.AttentionMark(id); err != nil {
 		t.Fatalf("mark: %v", err)
 	}
