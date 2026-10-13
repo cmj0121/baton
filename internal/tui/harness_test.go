@@ -93,6 +93,18 @@ func waitCmd(t *testing.T, cmds <-chan proto.Command, match func(proto.Command) 
 	}
 }
 
+// expectNoCmd fails if any command reaches the recording server within a short
+// window — the "nothing else went out" half of a test whose expected commands
+// have already been drained.
+func expectNoCmd(t *testing.T, cmds <-chan proto.Command) {
+	t.Helper()
+	select {
+	case c := <-cmds:
+		t.Fatalf("nothing else should go out, got %+v", c)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 // cursorOnPanel points the dashboard cursor at a panel row by id, and cursorOnGroup
 // at a group row by path.
 //

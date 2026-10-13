@@ -3555,6 +3555,9 @@ func (m model) handleZoomKey(k tea.Key) (tea.Model, tea.Cmd) {
 			if key == keyGitMenu { // C-t G → the git menu, on the zoomed agent panel
 				return m.openGitPicker()
 			}
+			if key == keyAttentionMark { // C-t m → this screen is a wait: a row for the classifier
+				return m.markZoomedPanel()
+			}
 		}
 		return m.advanceSeq(key, cmdBinding, runZoomBinding)
 	}
@@ -3595,6 +3598,19 @@ func (m model) runEscape(b binding) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m.runAction(b.act)
+}
+
+// markZoomedPanel is C-t m: the operator looking at the zoomed panel and saying
+// its screen is a wait. The daemon records the tail as a positive row for the
+// classifier (when panel.classifier.record is on) and the panel's state is left
+// to the ladder. The daemon refuses an exited panel and says so; the zoom
+// refuses one (and a transient diff) itself, since it has no row to be stale.
+func (m model) markZoomedPanel() (tea.Model, tea.Cmd) {
+	if m.zoomID == "" || m.zoomExited || m.zoomEphemeral {
+		m.status = m.tr("status.mark-nothing-here", "nothing to mark here")
+		return m, nil
+	}
+	return m.markPanel(m.zoomID, m.zoomTitle), nil
 }
 
 // runZoomBinding runs a command resolved from inside a zoom. The zoom's target
@@ -4735,6 +4751,7 @@ func (m model) helpSections() (title string, secs []helpSection) {
 			{"Panels", keycaps(pfx, m.bindingKey(actSignal), false), tr("help.zoom.signal", "send a signal to this panel")},
 			{"Panels", keycaps(pfx, keyGitMenu, false), tr("help.zoom.git", "git menu · diff, log, commit, push, worktree (agent panel)")},
 			{"Panels", keycaps(pfx, m.bindingKey(actIssues), false), tr("help.zoom.issues", "GitHub issues for this panel's repo")},
+			{"Panels", keycaps(pfx, keyAttentionMark, false), tr("help.zoom.mark", "mark this screen as a wait · a row for the attention classifier")},
 			{"Panels", keycaps(pfx, m.bindingKey(actLogToggle), false) + " " + keycaps("", m.bindingKey(actLogView), false), tr("help.common.log", "log this panel's output to a file · read it back")},
 			{"View", keycaps(pfx, m.bindingKey(actBack), false), tr("help.zoom.back", "back one level (to the split / dashboard)")},
 			{"View", kc(pfx) + " " + keycaps("", m.bindingKey(actDashboard), false), tr("help.zoom.dashboard", "straight to the dashboard")},

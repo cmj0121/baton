@@ -158,6 +158,24 @@ func PluginFile() string {
 	return filepath.Join(home(), ".baton", "plug-in.lua")
 }
 
+// AttentionRows is where the daemon records the tails a human (or the agent
+// itself) certified as a wait ($HOME/.baton/attention-rows.jsonl), one
+// `{"text":…,"keys":["attention"]}` line each — the shape `mold train --labelled`
+// reads. Like UsageLimitsFile it belongs to the operator rather than to one
+// fleet: a training set is the same training set whichever socket it was
+// gathered under.
+func AttentionRows() string {
+	return filepath.Join(home(), ".baton", "attention-rows.jsonl")
+}
+
+// AttentionHoldout is the sibling of AttentionRows for the tails a human
+// dismissed from the inbox ($HOME/.baton/attention-holdout.jsonl): `"keys":[]`
+// rows, which `mold eval` reads as negatives and `mold train` refuses, so the
+// two sets live in two files rather than one with a flag.
+func AttentionHoldout() string {
+	return filepath.Join(home(), ".baton", "attention-holdout.jsonl")
+}
+
 // EnsureDir creates the directory that holds the given file, with private perms.
 func EnsureDir(file string) error {
 	return os.MkdirAll(filepath.Dir(file), 0o700)

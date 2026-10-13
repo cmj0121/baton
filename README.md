@@ -185,7 +185,8 @@ Five things Baton does that a terminal multiplexer does not:
   not. One quiet clock ranks every one of them — `running`, `idle` at ten seconds, `done` for an agent that finished its
   turn, `stuck` when it has gone on too long — and an agent can raise its own hand above the lot. `C-t a` opens the
   inbox from any view and the queue is cleared from there; `settings.notify` sends an OSC 9 desktop notification when
-  nobody is looking, coalesced, and never for `done`. See **[docs/ATTENTION.md](docs/ATTENTION.md)**.
+  nobody is looking, coalesced, and never for `done`. A local [MOLD](https://github.com/cmj0121/mold) bundle can sit
+  beside the regex and learn the waits the fleet marks. See **[docs/ATTENTION.md](docs/ATTENTION.md)**.
 - **A conductor** — the fleet path. `n C` opens an agent that drives the fleet for you: it spawns, groups, dispatches and
   enqueues the other panels over the socket, through `baton ctl` or the `baton mcp` tools, fenced so it cannot wreck its
   own host. Standing orders live in `$HOME/.baton/CONDUCTOR.md`. See **[docs/CONTROL.md](docs/CONTROL.md)**.

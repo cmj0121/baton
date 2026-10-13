@@ -176,7 +176,10 @@ distinction exists to prevent. A shell still reaches `attention` when its own ou
 (`panel.attention`, which carries a reason) beats every guess baton makes from the outside; the **`stuck` timer** beats
 the **tail heuristic** (the last content line, or a permission overlay in the last dozen, reads like a
 question), because a certain timer outranks a guess about text; and the tail heuristic in turn beats the
-**`done` timer**, because a question asked _now_ outranks a review that could wait.
+**`done` timer**, because a question asked _now_ outranks a review that could wait. With `panel.classifier` set, a
+**trained classifier** (a MOLD bundle, asked off the tick about the same tail) sits beside the tail heuristic: either
+guess raises a panel, neither demotes one. The snapshot carries which of them did as `source` — `declared`, `tail` or
+`classifier` — while the panel is in `attention`.
 Full precedence, and what each rung is for, in **[ATTENTION.md](ATTENTION.md#how-a-state-is-decided)**.
 
 **`failed` is not a state.** A panel that exited badly is `exited` with a non-zero exit code, and the cockpit renders
@@ -198,6 +201,12 @@ panel:
   agents:
     claude:
       stuck-after: 30m # this profile legitimately thinks for longer
+  classifier: # optional, fleet-wide: a MOLD bundle beside the tail heuristic
+    socket: ~/.mold/mold.sock
+    scope: baton-attention
+    min-confidence: 0.5
+    timeout: 2s
+    record: false # write the rows a bundle is trained from
 ```
 
 The states exist to answer one question — **who needs a human** — and the queue that clears them is `C-t a`, the
@@ -514,7 +523,9 @@ config:
 
 **The attention queue.** `settings.inbox-done`, `inbox-snooze`, `notify`, `notify-coalesce`, `fold-quiet` and
 `fold-similar` shape the inbox, the dashboard's quiet fold and the desktop notifications; `panel.done-on-quiet`,
-`done-after` and `stuck-after` shape the quiet ladder above. Full reference: **[ATTENTION.md](ATTENTION.md#configuration)**.
+`done-after` and `stuck-after` shape the quiet ladder above; `panel.classifier` adds a trained guess beside the tail
+heuristic, and its `record` key writes the rows that train it. Full reference:
+**[ATTENTION.md](ATTENTION.md#configuration)**.
 
 **Remote access.** `settings.remote` (off by default) lets a cockpit on another machine attach over
 `ssh <this host> baton --stdio`, once it carries the 8-character passkey the fleet was enabled with. `C-t @` is the

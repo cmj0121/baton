@@ -472,6 +472,38 @@ func TestInboxTailShowsTheDeclaredReason(t *testing.T) {
 	}
 }
 
+// TestInboxTailNamesTheClassifier. A row the trained bundle raised says so on
+// the ▸ line, so a dismissal blames the right guesser; the regex is the default
+// and says nothing, as it always has; and an agent's own words still win.
+func TestInboxTailNamesTheClassifier(t *testing.T) {
+	cases := []struct {
+		name   string
+		source string
+		reason string
+		want   string
+		absent string
+	}{
+		{"classifier", "classifier", "", "▸ classifier", ""},
+		{"tail", "tail", "", "", "▸"},
+		{"declared over classifier", "classifier", "which one?", "▸ which one?", "classifier"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := wire("1", "attention", time.Minute)
+			p.Source, p.Reason = tc.source, tc.reason
+			m := openedInbox(t, p)
+			m.applyTail("1", []byte("waiting\n"))
+			pane := strings.Join(m.inboxDetailBlock(60, 8), "\n")
+			if tc.want != "" && !strings.Contains(pane, tc.want) {
+				t.Errorf("pane should carry %q, got %q", tc.want, pane)
+			}
+			if tc.absent != "" && strings.Contains(pane, tc.absent) {
+				t.Errorf("pane should not carry %q, got %q", tc.absent, pane)
+			}
+		})
+	}
+}
+
 // TestInboxViewRows is a render smoke test over all four buckets
 // plus a stale row and an open composer, so a width or padding mistake shows up as
 // a failure rather than as a corrupted frame in front of a user.
@@ -713,8 +745,8 @@ func TestInboxReplyAnswersAndAdvances(t *testing.T) {
 		t.Errorf("panel.input = %q to %q, want \"yes\\n\" to \"1\"", in.Data, in.ID)
 	}
 	ack := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "panel.ack" })
-	if ack.ID != "1" || ack.Until != "" {
-		t.Errorf("the reply IS the acknowledgement: got %+v", ack)
+	if ack.ID != "1" || ack.Until != "" || !ack.Answered {
+		t.Errorf("the reply IS the acknowledgement, and says so: got %+v", ack)
 	}
 
 	if m.inboxComposing {
@@ -862,12 +894,14 @@ func TestInboxReplyRefusedOnAnExitedPanel(t *testing.T) {
 // it carries no expiry at all — the daemon drops the record on the panel's next
 // byte, and nothing else.
 func TestInboxDismissIsABareAck(t *testing.T) {
+	// A bare ack — no Until, not Answered — is what the daemon files as a
+	// negative when the row was a guess; a reply must never look like this.
 	m, cmds := clientInbox(t, wire("1", "stuck", 2*time.Minute), wire("2", "done", time.Minute))
 
 	m = press(m, "x")
 
 	ack := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "panel.ack" })
-	if ack.ID != "1" || ack.Until != "" {
+	if ack.ID != "1" || ack.Until != "" || ack.Answered {
 		t.Errorf("a dismiss carries no until, got %+v", ack)
 	}
 	if got := rowIDs(m); !eqIDs(got, "2") || m.inboxCursor != 0 {
@@ -1030,4 +1064,30 @@ func TestInboxLegendNamesTheOverlayAnswer(t *testing.T) {
 	if !strings.Contains(zh, "1/2/3") || !strings.Contains(zh, "回答") || strings.Contains(zh, "answer") {
 		t.Fatalf("zh-TW legend = %q, want 1/2/3 and 回答", zh)
 	}
+}
+
+// TestInboxMarkTeachesWithoutClearing: m sends attention.mark for the selected
+// row and leaves the row where it is — a mark is a label for the classifier,
+// not a clearing, and no panel.ack rides with it.
+func TestInboxMarkTeachesWithoutClearing(t *testing.T) {
+	m, cmds := clientInbox(t,
+		wire("1", "attention", 2*time.Minute),
+		wire("2", "attention", time.Minute),
+	)
+
+	m = press(m, keyAttentionMark)
+	mark := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "attention.mark" })
+	if mark.ID != "1" {
+		t.Errorf("attention.mark should name the selected row, got %+v", mark)
+	}
+	if got := rowIDs(m); !eqIDs(got, "1", "2") {
+		t.Fatalf("a mark must not clear the row, got %v", got)
+	}
+	if m.inboxCleared["1"] {
+		t.Error("a mark is not an acknowledgement")
+	}
+	if !strings.Contains(m.status, "marked as a wait") {
+		t.Errorf("status = %q, want the mark confirmed", m.status)
+	}
+	expectNoCmd(t, cmds)
 }

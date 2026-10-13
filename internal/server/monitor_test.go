@@ -63,6 +63,17 @@ func TestNextState(t *testing.T) {
 		{"a question raises attention from spawning", stateSignals{cur: panel.Spawning, quiet: true, looksAtt: true}, panel.Attention, true},
 		{"a question now beats a review later", stateSignals{cur: panel.Running, agent: true, quiet: true, doneDue: true, looksAtt: true}, panel.Attention, true},
 
+		// Rung 3 by the classifier — an answer to an earlier tick, so it fires from the
+		// resting states looksAtt never sees, and sits where the regex sits.
+		{"the classifier raises attention from idle", stateSignals{cur: panel.Idle, agent: true, quiet: true, classAtt: true}, panel.Attention, true},
+		{"the classifier raises attention from done", stateSignals{cur: panel.Done, agent: true, quiet: true, classAtt: true}, panel.Attention, true},
+		{"the classifier raises attention from running", stateSignals{cur: panel.Running, agent: true, quiet: true, classAtt: true}, panel.Attention, true},
+		{"the classifier does not reopen a stuck panel", stateSignals{cur: panel.Stuck, agent: true, quiet: true, classAtt: true}, panel.Stuck, false},
+		{"the classifier holds attention without moving", stateSignals{cur: panel.Attention, agent: true, quiet: true, classAtt: true}, panel.Attention, false},
+		{"a declaration still wins over the classifier", stateSignals{cur: panel.Idle, agent: true, quiet: true, declared: true, classAtt: true}, panel.Attention, true},
+		{"the stuck timer still beats the classifier", stateSignals{cur: panel.Idle, agent: true, quiet: true, stuckDue: true, classAtt: true}, panel.Stuck, true},
+		{"the classifier beats the done timer", stateSignals{cur: panel.Idle, agent: true, quiet: true, doneDue: true, classAtt: true}, panel.Attention, true},
+
 		// Rung 2c — the done timer, which only ever fires from idle.
 		{"done from idle", stateSignals{cur: panel.Idle, agent: true, quiet: true, doneDue: true}, panel.Done, true},
 		{"an agent passes through idle first", stateSignals{cur: panel.Running, agent: true, quiet: true, doneDue: true}, panel.Idle, true},

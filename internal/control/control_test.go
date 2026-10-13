@@ -11,8 +11,10 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/cmj0121/baton/internal/control"
+	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/server"
@@ -733,4 +735,41 @@ func panelByID(t *testing.T, c *control.Client, id string) proto.Panel {
 	}
 	t.Fatalf("panel %q is not in the fleet", id)
 	return proto.Panel{}
+}
+
+// TestAttentionMarkIsALabelNotAVerdict: the operator's mark goes through, and
+// the panel's state is untouched by it — the row it writes (when recording is
+// on) is the daemon's business, and the fleet snapshot shows nothing new.
+func TestAttentionMarkIsALabelNotAVerdict(t *testing.T) {
+	sock := startServer(t)
+
+	c, err := control.DialSocket(sock, "", "", "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	id, err := c.SpawnPanel("", nil, "")
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	// Let the panel's own lifecycle settle first: a fresh spawn walks from
+	// spawning to running on its own, and a snapshot taken either side of the
+	// mark would blame the mark for that walk.
+	deadline := time.Now().Add(5 * time.Second)
+	before := panelByID(t, c, id).State
+	for before == panel.Spawning.String() && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+		before = panelByID(t, c, id).State
+	}
+	if err := c.AttentionMark(id); err != nil {
+		t.Fatalf("mark: %v", err)
+	}
+	if got := panelByID(t, c, id).State; got != before {
+		t.Fatalf("a mark must not change the state: %q -> %q", before, got)
+	}
+	// An unknown id is a silent no-op, as the inbox's own verbs are.
+	if err := c.AttentionMark("999"); err != nil {
+		t.Fatalf("an unknown id should be silent, got %v", err)
+	}
 }

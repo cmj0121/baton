@@ -117,6 +117,8 @@ acts, and exits.
 | `baton ctl send <id> <text> [--no-enter]`                             | type text into a panel; submits with a newline unless `--no-enter`               |
 | `baton ctl attention --why <text> [--id ID]`                          | say this panel needs a human, and why — see [Raising a hand](#raising-a-hand)    |
 | `baton ctl resolve [--id ID]`                                         | say the reason has passed; the panel leaves the queue                            |
+| `baton ctl attention-mark --id ID`                                    | say a panel's screen is a wait: a row for the classifier, no change to the panel |
+| `baton ctl classifier status`                                         | one line on the attention classifier: off, unreachable, or what mold says        |
 | `baton ctl group <name> <id>...`                                      | file panels under a work item (a slash-`path` nests: `backend/api`)              |
 | `baton ctl group peers <group> on\|off`                               | let the panels of one group read and type into each other — see [Peers](#peers)  |
 | `baton ctl rename [--id ID \| --group G] <name>`                      | rename a panel or a group (rename a group to a path to re-parent it)             |
@@ -499,7 +501,15 @@ declares its identity on the `hello` handshake:
 
 `panel.attention` carries `reason` (required) and an `id` that may be left empty to mean the connection's own `self`;
 `panel.resolve` carries the same `id`. Both reply with an error or with the `panels` snapshot the change produced, and
-the panel's declared reason comes back on `proto.Panel.reason` — already sanitised, as above.
+the panel's declared reason comes back on `proto.Panel.reason` — already sanitised, as above. While a panel is in
+`attention` the snapshot also says who raised it on `proto.Panel.source`: `declared`, `tail` (the regex) or `classifier`.
+
+`attention.mark` carries an `id` (required) and writes that panel's tail as a positive row for the classifier when
+`panel.classifier.record` is on; it changes no state, and replies with a `notice` saying whether a row landed.
+`classifier.status` takes nothing and replies with a `classifier` message: whether a block is configured, the socket and
+scope, mold's own status when the socket answers (or the dial error when it does not), and how many rows each file
+holds. The probe it runs re-arms a classifier the daemon had written off. Both are described in
+[ATTENTION.md](./ATTENTION.md#a-classifier-beside-the-regex).
 
 A dispatch carries two more fields: `prompt` (the brief) and an optional `submit` override (the keys appended to send it,
 default a newline) on `panel.dispatch` / `panel.dispatch-group`; `task.enqueue` / `task.cancel` / `task.promote` /
@@ -537,6 +547,7 @@ always speak the socket directly).
 | dispatch to other panels, enqueue tasks   | **drain the queue** — clearing the backlog is operator-only    |
 | **list** the worktrees baton opened       | **sweep** them — removing trees from disk is operator-only     |
 | read a panel's title, state and telemetry | **log a panel to a file**, or read a log back — see below      |
+| ask `classifier.status`                   | **mark a screen as a wait** — an inbox verb, see below         |
 | reorder queued tasks (promote / demote)   |                                                                |
 | **raise its own hand** and stand down     | raise or lower **another panel's** hand                        |
 | close other panels, purge exited          | reload or stop the server                                      |
@@ -586,7 +597,10 @@ Panel logging (`C-t l` / `C-t L`, [LOGGING.md](LOGGING.md)) is refused outright,
 the daemon to **write files on its own host, as you**, which is the shape of request the remote actions are already
 fenced away from; and `panel.logview` would hand an agent another panel's transcript to read at leisure, which is the
 surface the inbox's `panel.tail` fence exists to keep shut. Opening either later is deleting one line, and the interface
-room is left for exactly that.
+room is left for exactly that. `attention.mark` is fenced with `panel.tail` and `panel.ack`, because it is an inbox
+verb and the inbox is the operator's; `classifier.status` is open to a conductor, like `worktree.list`, because whether
+the fleet's attention is the regex alone is a fact about the fleet an agent driving it may ask — and re-arming the
+classifier by asking is not an operator-only act.
 
 [Peers](#peers) does not open that surface to the conductor. `peer.tail` is the same read as `panel.tail`, which is why
 the three `peer.*` verbs are refused by role before anything else is checked: the conductor is not one of a group's

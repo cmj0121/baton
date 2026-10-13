@@ -29,6 +29,7 @@ type ctlCLI struct {
 	Signal        ctlSignal        `cmd:"" help:"Send a signal to panels."`
 	Send          ctlSend          `cmd:"" help:"Send text (a prompt) to a panel."`
 	Attention     ctlAttention     `cmd:"" help:"Say this panel needs a human, and why."`
+	AttentionMark ctlAttentionMark `cmd:"" name:"attention-mark" help:"Record a panel's screen as a wait for the classifier to learn from."`
 	Resolve       ctlResolve       `cmd:"" help:"Say the reason this panel needed a human has passed."`
 	Dispatch      ctlDispatch      `cmd:"" help:"Assign a task brief to a panel and deliver it as a unit."`
 	DispatchGroup ctlDispatchGroup `cmd:"" name:"dispatch-group" help:"Dispatch one task to every member of a work item."`
@@ -36,6 +37,7 @@ type ctlCLI struct {
 	Score         ctlScore         `cmd:"" help:"Manage the fleet memory (submit/list/status)."`
 	Conductor     ctlConductor     `cmd:"" help:"Manage the conductor (reset its workspace)."`
 	Worktree      ctlWorktree      `cmd:"" help:"Manage the git worktrees baton opened (list/sweep)."`
+	Classifier    ctlClassifier    `cmd:"" help:"Inspect the MOLD attention classifier (status)."`
 }
 
 // ctlMain parses and runs `baton ctl <command>`. It is kept separate from the
@@ -279,6 +281,21 @@ type ctlAttention struct {
 
 func (x ctlAttention) Run(c *control.Client) error {
 	return c.DeclareAttention(x.ID, x.Why)
+}
+
+// ctlAttentionMark is the operator's half of the classifier's teaching loop:
+// `baton ctl attention-mark --id <panel>` writes that panel's tail as a positive
+// row (when panel.classifier.record is on) and changes nothing about the panel.
+// Unlike the declaration, --id is required: a mark is something an operator
+// says ABOUT a panel, never something a panel says about itself. It is a flat
+// verb rather than a child of `attention` so the declaration keeps its own Run
+// and its exact shape, as dispatch-group sits beside dispatch.
+type ctlAttentionMark struct {
+	ID string `required:"" help:"Panel whose screen is a wait on a person."`
+}
+
+func (x ctlAttentionMark) Run(c *control.Client) error {
+	return c.AttentionMark(x.ID)
 }
 
 // ctlResolve is the inverse, and the reason a declaration can be trusted: an

@@ -28,6 +28,7 @@ import (
 
 	"github.com/cmj0121/baton/internal/attn"
 	"github.com/cmj0121/baton/internal/cgroup"
+	"github.com/cmj0121/baton/internal/classifier"
 	"github.com/cmj0121/baton/internal/cwd"
 	"github.com/cmj0121/baton/internal/gitdiff"
 	"github.com/cmj0121/baton/internal/gitops"
@@ -196,6 +197,15 @@ type Settings struct {
 	// name, and every tick resolves the policy afresh from it.
 	Attention      attn.Policy
 	AgentAttention map[string]attn.Policy
+
+	// Classifier is the resolved `panel.classifier` block, nil when the file has
+	// none — the fleet then runs on the regex alone, as it always has. It is
+	// fleet-wide with no per-profile layer, unlike the ladder above: one bundle
+	// answers one question for every profile. ClassifierRecord is whether the
+	// attention row files are written, a switch of its own because writing
+	// scrollback to disk is not the same decision as reading answers off a socket.
+	Classifier       *classifier.Config
+	ClassifierRecord bool
 
 	// AgentIsolate holds the per-profile container isolation, keyed by profile
 	// name. There is no fleet-wide counterpart, unlike every other policy above:
@@ -465,6 +475,29 @@ type Server struct {
 	// a SIGHUP change the thresholds under a running fleet. Guarded by mu.
 	attention      attn.Policy
 	agentAttention map[string]attn.Policy
+
+	// The classifier beside the regex: classifier is the live client (nil = off,
+	// rebuilt whole on reload, which is also how its failure latch is reset) and
+	// classifierRecord whether the row files are written. Guarded by mu.
+	//
+	// The ask runs OFF the tick (D5): classQ carries one question per quiet
+	// panel to the worker (classifyLoop), classAsked remembers the tail hash each
+	// panel was last asked about so the same screen is not asked twice, classHit
+	// holds the hash a confident "attention" came back for until the next tick
+	// applies it, and raisedBy records who raised an undeclared attention —
+	// "tail" or "classifier" — for the inbox to print (D10). The three maps are
+	// made in New and guarded by mu; classQ is made once, with the Monitor.
+	classifier       *classifier.Client
+	classifierRecord bool
+	classQ           chan classReq
+	classAsked       map[string]uint64
+	classHit         map[string]uint64
+	raisedBy         map[string]string
+
+	// rows and holdout are the two row files the classifier learns from
+	// (rows.go): the certified waits and the dismissed guesses. Made lazily by
+	// rowFileLocked, written only while classifierRecord is on. Guarded by mu.
+	rows, holdout *rowFile
 
 	// declared is the top of the detection precedence: what each agent has said
 	// about ITSELF, keyed by panel id, populated lazily and dropped when the panel
@@ -1029,6 +1062,7 @@ func New(ln net.Listener, opts ...Option) *Server {
 		ln:          ln,
 		clients:     make(map[*clientConn]struct{}),
 		mon:         newMonitor(),
+		classQ:      make(chan classReq, classQueueCap),
 		specs:       make(map[string]spawnSpec),
 		sessions:    make(map[string][]string),
 		restarts:    make(map[string]*restartState),
@@ -1052,6 +1086,9 @@ func New(ln net.Listener, opts ...Option) *Server {
 		pendingDispatch: make(map[string]delivery),
 		declared:        make(map[string]*declaration),
 		taskSettled:     make(map[string]bool),
+		classAsked:      make(map[string]uint64),
+		classHit:        make(map[string]uint64),
+		raisedBy:        make(map[string]string),
 		acked:           make(map[string]time.Time),
 		exitedAt:        make(map[string]time.Time),
 		tasks:           make(map[string]*task.Task),
@@ -1126,6 +1163,12 @@ func (s *Server) Reload(set Settings) {
 	s.limits, s.agentLimits = set.Limits, set.AgentLimits
 	s.restart, s.agentRestart = set.Restart, set.AgentRestart
 	s.attention, s.agentAttention = set.Attention, set.AgentAttention
+	// A fresh client per reload, so a SIGHUP is also the reset of its failure
+	// latch; the worker picks up whichever client stands when it next asks.
+	s.classifier, s.classifierRecord = newClassifier(set.Classifier), set.ClassifierRecord
+	// A reload is how a retrained bundle comes into service, so every quiet
+	// screen is asked again; a fresh client alone would not need it.
+	s.forgetAskedLocked()
 	s.agentIsolate = set.AgentIsolate // resolved per spawn, so live panels keep the runtime they started under
 	s.trackCwd, s.restoreCwd = set.TrackCwd, set.RestoreCwd
 	// The logging policy swaps whole, like the caps: a panel records its PROFILE,
@@ -1189,6 +1232,7 @@ func (s *Server) Reload(set Settings) {
 		Str("worktree_dir", set.WorktreeDir).Interface("limits", set.Limits.Fields()).Int("agent_limits", len(set.AgentLimits)).
 		Dur("done_after", set.Attention.Done()).Dur("stuck_after", set.Attention.Stuck()).Int("agent_attention", len(set.AgentAttention)).
 		Float64("pause_below", pauseBelow).
+		Bool("classifier", set.Classifier != nil).Bool("classifier_record", set.ClassifierRecord).
 		Int("panels_recapped", updated).Strs("respawn_to_apply", deferred).
 		Msg("settings reloaded")
 }
@@ -1352,6 +1396,7 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 			s.exitedAt[id] = time.Now()   // the Monitor is about to forget it; keep the instant the queue sorts on
 			s.mon.forget(id)              // a dead panel no longer ticks
 			delete(s.declared, id)        // …and its raised hand goes with it
+			s.forgetClassLocked(id)       // …and whoever raised it, and any answer still waiting
 			delete(s.acked, id)           // …and any acknowledgement of it
 			delete(s.taskSettled, id)     // …as does any pending done edge
 			delete(s.pendingDispatch, id) // a held dispatch dies with its panel, as it does with the process
@@ -1491,8 +1536,11 @@ func (s *Server) fanOutput(id string, data []byte, end int64) {
 			s.mon.entered(id)
 			// A byte of output invalidates any pending "the turn is over" event: the
 			// panel is demonstrably working, so a task that finished a moment ago must
-			// not drag it to done on the next tick.
+			// not drag it to done on the next tick. The hand that was raised by a
+			// guess goes down with it — the panel has left attention.
 			delete(s.taskSettled, id)
+			delete(s.raisedBy, id)
+			delete(s.classAsked, id) // the screen is changing; the next settle asks about the new one
 			f := panelFields(s.panels[i])
 			f["from"], f["to"] = from.String(), panel.Running.String()
 			s.emit("panel.state", f)
@@ -1618,6 +1666,7 @@ func (s *Server) Serve() error {
 	go s.statsLoop(stop)
 	go s.usageLoop(stop)
 	go s.monitorLoop(stop)
+	go s.classifyLoop(stop)
 	go s.saverLoop(stop)
 	go s.taskSaverLoop(stop)
 
@@ -2140,10 +2189,12 @@ func (s *Server) monitorTick() (proto.ServerMsg, bool) {
 		// terminal-done is the only one entitled to promote the panel to done.
 		taskDone := s.taskSettled[p.ID]
 		delete(s.taskSettled, p.ID)
-		if ns, ok := nextState(s.signalsLocked(*p, taskDone)); ok {
+		sig := s.signalsLocked(*p, taskDone)
+		if ns, ok := nextState(sig); ok {
 			from := p.State
 			p.State = ns
 			s.mon.entered(p.ID)
+			s.noteRaisedLocked(p.ID, ns, sig)
 			changed = true
 			f := panelFields(*p)
 			f["from"], f["to"] = from.String(), ns.String()
@@ -3179,7 +3230,7 @@ func (s *Server) guardConductor(cc *clientConn, cmd proto.Command) string {
 		// has score.submit, and a conductor that wants to correct it has the three
 		// refine verbs; neither needs a terminal to do it in.
 		return "conductor role: the score editor is an operator surface"
-	case "panel.tail", "panel.ack":
+	case "panel.tail", "panel.ack", "attention.mark":
 		// The inbox verbs, and the inbox is an operator surface. There is no conductor
 		// queue — an agent triaging the fleet's attention is a design this round
 		// deliberately did not build (DESIGN §12) — and the fence is where that
@@ -3796,6 +3847,10 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		// A human dealt with a panel from the inbox — dismissed, snoozed, or
 		// answered it. The record is fleet state; the reasoning is in ack.go.
 		s.ackPanel(cc, cmd)
+	case "attention.mark":
+		// A human saying "this panel is waiting on a person": a positive row for
+		// the classifier, and no change to the panel. The write is in rows.go.
+		s.markAttention(cc, cmd)
 	case "panel.resize":
 		s.pty.Resize(cmd.ID, cmd.Rows, cmd.Cols)
 	case "score.submit":
@@ -3829,6 +3884,12 @@ func (s *Server) onCommand(cc *clientConn, cmd proto.Command) {
 		send(cc, proto.ServerMsg{Type: "worktree", Worktree: worktreeJSON(s.worktreeEntries())})
 	case "worktree.sweep":
 		send(cc, proto.ServerMsg{Type: "worktree", Worktree: worktreeJSON(s.sweepWorktrees())})
+	case "classifier.status":
+		// Read-only and open to a conductor, like worktree.list: whether the
+		// fleet's attention is the regex alone is a fact about the fleet an agent
+		// driving it may ask. The probe it runs is the one way to re-arm the
+		// latch short of a reload, and re-arming is not an operator-only act.
+		s.classifierStatus(cc)
 	case "issues.board":
 		s.issuesBoard(cc, cmd.Dir)
 	case "issues.block":
@@ -5404,6 +5465,7 @@ func (s *Server) pruneExitedLocked() (stop []string) {
 			s.forgetRestartLocked(p.ID)
 			s.forgetCwdLocked(p.ID)
 			delete(s.declared, p.ID)
+			s.forgetClassLocked(p.ID)
 			delete(s.acked, p.ID)
 			delete(s.taskSettled, p.ID)
 			delete(s.exitedAt, p.ID)
@@ -6479,6 +6541,7 @@ func (s *Server) closePanel(id string) error {
 	s.forgetRestartLocked(id)     // …and any restart armed for it: it must not come back
 	s.forgetCwdLocked(id)         // …and the output tail kept to read its directory reports
 	delete(s.declared, id)        // …and whatever it had said about needing a human
+	s.forgetClassLocked(id)       // …and who raised its hand, and any classifier answer in flight
 	delete(s.acked, id)           // …and any acknowledgement a human left on it
 	delete(s.taskSettled, id)     // …and any pending done edge
 	delete(s.exitedAt, id)        // …and the instant it died, if it had
@@ -7759,6 +7822,7 @@ func (s *Server) wirePanel(p panel.Panel, pids map[string]int, held map[string]b
 	// frame, not one per panel inside s.mu.
 	out.Replay = held[p.ID]
 	out.Acked = s.ackedLocked(p.ID)
+	out.Source = s.sourceLocked(p)
 	if sink := s.logs[p.ID]; sink != nil {
 		out.Logging, out.LogPath = true, sink.Path()
 	}
