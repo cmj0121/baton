@@ -4,6 +4,26 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v2.5.0](https://github.com/cmj0121/baton/releases/tag/v2.5.0) — panels that can talk to their group
+
+2026-10-13
+
+- **Panels in a group can read and type into each other, when you switch it on.** `g p` on a group row, or
+  `baton ctl group peers <group> on|off`, opens one group. While it is on, a worker's MCP server offers `baton_peers`,
+  `baton_peek` and `baton_tell`: list the group-mates, read one's recent output, type one line into its terminal. An
+  agent receives the line prefixed with who sent it; a shell runs it. It is off by default, marked `⋈` wherever the
+  group shows, and a guardrail rather than a boundary — [CONTROL](docs/CONTROL.md#peers) lists what it does not
+  protect (#145).
+- **A permission prompt is no longer filed as stuck.** The tick that would move a quiet panel to stuck reads its tail
+  for a permission overlay first and keeps it in attention, and the inbox answers that overlay with `1`, `2` or `3`.
+- **A vendor's queue pauses when its own quota runs low.** `usage.pause-below` is the remaining fraction under which
+  that vendor's agents take no new queued work; other vendors keep draining. It is off unless set.
+- **An issue card opens its own worktree.** `w` on an issue's detail card asks for a branch, spawns the default agent
+  into a fresh worktree and binds the tree to the issue. A pull request is no longer chained to an issue that happens
+  to share its number.
+- **A panel answers a device-status query.** A program that sends `CSI 5 n` now gets `CSI 0 n` back, as a terminal
+  would; readline macros that wait on that reply work inside a panel (#143).
+
 ## [v2.4.3](https://github.com/cmj0121/baton/releases/tag/v2.4.3) — a zoom that does not tear
 
 2026-10-01
