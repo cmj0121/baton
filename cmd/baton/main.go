@@ -83,8 +83,11 @@ func main() {
 		os.Exit(ctlMain(os.Args[2:]))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "mcp" {
-		// --score-only is what an ordinary agent panel's config passes; the
-		// conductor's passes nothing and gets the whole table.
+		// --score-only is what an ordinary agent panel's config passes, and it
+		// selects the worker table: the memory's write tool and the peer tools.
+		// The name is older than the peer tools and is kept because live panels'
+		// configs carry it. The conductor's config passes nothing and gets the
+		// fleet-control table.
 		os.Exit(mcpMain(slices.Contains(os.Args[2:], "--score-only")))
 	}
 	// `baton usage-sink` is the status line baton hands to the Claude Code panels

@@ -63,6 +63,15 @@ func (a args) boolDefault(key string, def bool) bool {
 	return def
 }
 
+// intDefault reads a whole number, which JSON delivers as a float64. Anything
+// else — absent, a string, a fraction — is def.
+func (a args) intDefault(key string, def int) int {
+	if v, ok := a[key].(float64); ok && v == float64(int(v)) {
+		return int(v)
+	}
+	return def
+}
+
 func (a args) strSlice(key string) []string {
 	raw, ok := a[key].([]any)
 	if !ok {

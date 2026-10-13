@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -94,5 +95,21 @@ func TestThePrimerKeepsAttentionAboutItself(t *testing.T) {
 	window := strings.ToLower(primer[max(0, at-400):min(len(primer), at+400)])
 	if !strings.Contains(window, "your own") && !strings.Contains(window, "yourself") {
 		t.Errorf("baton_attention is described without saying it is about the conductor's OWN panel:\n%s", window)
+	}
+}
+
+// TestWorkerToolsQuoteTheServersCaps is the same principle applied to the
+// worker's tools. Their descriptions tell a model how much it may read and send,
+// and those figures are this package's caps written out a second time in a
+// package that cannot import them — so this is where the two are held together.
+func TestWorkerToolsQuoteTheServersCaps(t *testing.T) {
+	docs := mcp.WorkerToolDocs()
+	for _, tc := range []struct{ tool, claim string }{
+		{"baton_peek", fmt.Sprintf("at most %d)", maxTailBytes)},
+		{"baton_tell", fmt.Sprintf("(%d bytes)", maxPeerSendBytes)},
+	} {
+		if !strings.Contains(docs[tc.tool], tc.claim) {
+			t.Errorf("%s should quote the daemon's cap as %q; a model is told:\n%s", tc.tool, tc.claim, docs[tc.tool])
+		}
 	}
 }

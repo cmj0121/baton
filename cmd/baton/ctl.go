@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/alecthomas/kong"
 
@@ -21,7 +22,7 @@ type ctlCLI struct {
 	Tree          ctlTree          `cmd:"" help:"Print the daemon's process tree: groups, panels, and their OS descendants."`
 	Spawn         ctlSpawn         `cmd:"" help:"Spawn a panel and print its id."`
 	Close         ctlClose         `cmd:"" help:"Close panels by id."`
-	Group         ctlGroup         `cmd:"" help:"Group panels under a work item."`
+	Group         ctlGroup         `cmd:"" help:"Group panels under a work item, or switch a group's peer interaction: group peers <group> on|off."`
 	Rename        ctlRename        `cmd:"" help:"Rename a panel or a group."`
 	Pin           ctlPin           `cmd:"" help:"Pin panels to live tiles in their group split."`
 	Unpin         ctlUnpin         `cmd:"" help:"Unpin panels."`
@@ -157,13 +158,65 @@ func (x ctlClose) Run(c *control.Client) error {
 	return c.Do(proto.Command{Action: "panel.close", IDs: x.IDs})
 }
 
+// ctlGroup is two verbs behind one word. `group <name> <id>...` files panels
+// under a work item, as it always has. `group peers <group> on|off` switches
+// peer interaction for a group.
+//
+// The second form is read out of the first one's arguments rather than declared
+// as a subcommand, because kong will not give one command both positional
+// arguments and a child, and `group <name> <id>...` is in scripts and in the
+// conductor's briefing. What tells them apart is that a panel id is a decimal
+// number and neither "on" nor "off" nor (usually) a group name is: see peers.
 type ctlGroup struct {
-	Name string   `arg:"" help:"Work item name to file the panels under."`
-	IDs  []string `arg:"" name:"id" help:"Panel ids to group."`
+	Name string   `arg:"" help:"Work item name to file the panels under; or 'peers', to switch peer interaction for a group: peers <group> on|off."`
+	IDs  []string `arg:"" name:"id" help:"Panel ids to group. After 'peers': the group, then on or off."`
 }
 
+// ctlGroupPeersUsage is the whole grammar of the peers form.
+const ctlGroupPeersUsage = "usage: baton ctl group peers <group> on|off"
+
 func (x ctlGroup) Run(c *control.Client) error {
+	group, on, isPeers, err := x.peers()
+	switch {
+	case err != nil:
+		return err
+	case isPeers:
+		return c.GroupPeers(group, on)
+	}
 	return c.Do(proto.Command{Action: "panel.group", Group: x.Name, IDs: x.IDs})
+}
+
+// peers reports whether the arguments are the peers form, and what it asks for.
+//
+// `group peers 3 4` still files panels 3 and 4 under a work item called "peers":
+// when every argument after the word is a panel id, it is the old verb. Anything
+// else after `peers` is this one, and then it must be exactly a group and on or
+// off — a typo such as `group peers work onn` is a usage error, not an attempt to
+// group two panels that do not exist.
+func (x ctlGroup) peers() (group string, on, isPeers bool, err error) {
+	if x.Name != "peers" || allPanelIDs(x.IDs) {
+		return "", false, false, nil
+	}
+	if len(x.IDs) == 2 {
+		switch x.IDs[1] {
+		case "on":
+			return x.IDs[0], true, true, nil
+		case "off":
+			return x.IDs[0], false, true, nil
+		}
+	}
+	return "", false, true, errors.New(ctlGroupPeersUsage)
+}
+
+// allPanelIDs reports whether every argument is shaped like a panel id, which
+// the daemon draws as decimal numbers.
+func allPanelIDs(args []string) bool {
+	for _, a := range args {
+		if _, err := strconv.ParseUint(a, 10, 64); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 type ctlRename struct {

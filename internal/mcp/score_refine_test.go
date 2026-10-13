@@ -118,7 +118,14 @@ func runAs(t *testing.T, sock, self string, reqs ...string) []testResp {
 	t.Helper()
 	s := New("9.9.9")
 	s.dial = func() (*control.Client, error) { return control.DialSocket(sock, "", self, "") }
+	return serveReqs(t, s, reqs...)
+}
 
+// serveReqs feeds the newline-joined requests through s and returns the decoded
+// responses in order. It is the serve-and-decode loop every helper here shares;
+// what they differ in is the server they build and the panel its dials declare.
+func serveReqs(t *testing.T, s *Server, reqs ...string) []testResp {
+	t.Helper()
 	in := strings.NewReader(strings.Join(reqs, "\n"))
 	var out bytes.Buffer
 	if err := s.Serve(in, &out); err != nil {

@@ -258,7 +258,8 @@ a path. Nothing is sent until the drop, and a group carried into its own subtree
 **The group-by lens.** `v g` cycles which parents the tree is built from: **work item** (the fleet's own structure),
 **directory**, **profile**, or **state**. A lens is a projection and never a mutation — switching to `group by: state`
 does not move a panel into a group called `attention`, and switching back leaves the fleet exactly as it was. The
-reorganising verbs (`m`, `g g`, `g c`, `g a`, `g u`, `e`) are refused under a lens and say so: a bucket is not a work item,
+reorganising verbs (`m`, `g g`, `g c`, `g a`, `g u`, `e`) and the peers switch (`g p`) are refused under a lens and
+say so: a bucket is not a work item,
 and there is no meaning to moving a panel "into" a directory. The heading states the lens whenever one is in force.
 The lens and the cards-or-tree choice are the two view settings a cockpit **remembers across sessions**, in that cockpit
 alone — see [TUI.md](./TUI.md#remembered-view-settings--tuistatejson).
@@ -273,6 +274,22 @@ sort to the **front of their own level**, each marked with a `⊙`. It is **serv
 snapshot — so it survives a restart, is shared across clients, and follows a group through a rename or ungroup. It is
 **separate from the split's pin**: favouriting only reorders the dashboard, never which tiles stream live or the single-pin
 descend.
+
+**Peers.** `g p` on a work item's row switches **peers** for that group: while it is on, the panels filed directly in
+it may list each other, read each other's recent output, and type one line into each other's terminal. It is off by
+default, it is the operator's to set — the cockpit asks `y/n` before switching it on, and a conductor or an agent panel
+is refused the verb — and it is **server-owned state**: `group.peers` carries the group and `Command.Enable` (`enable`
+on the wire, `true` for on), and the flag rides the snapshot as `GroupView.Peers` (`peers`), persisted with the rest of
+the fleet. It is matched on the **exact path** — peers on `backend` says nothing about `backend/api` — and it belongs
+to the panels rather than the name: it is dropped when the group's last direct member leaves, follows a pure rename,
+and is never switched on by a merge into a group that already had panels. Adding a panel to a peers-on group is the
+operator's as well: a conductor or an agent panel that tries — by `panel.group`, a rename that merges, or a dissolve
+into it — is refused. A panel reaches its group-mates with
+`peer.list` (reply: a `ServerMsg` of type `peers`, whose `Panels` are the reachable group-mates and nothing else),
+`peer.tail` (type `tail`) and `peer.send` (type `notice`), each authorised per call against the caller's own panel and
+refused with a reason that starts `peer:`. A peers-on group is marked `⋈` on its row and card, in its split's title, on
+each member's tile and in a zoomed member's footer. The tools an agent uses, what a send types, and the limits of the
+whole arrangement are in [CONTROL.md](./CONTROL.md#peers).
 
 **The group split.** Zooming a work item opens a split scoped to that path's **direct children** — each direct panel
 rendered live in its own tile, plus one tile per immediate **sub-group** (a rollup box marked `▣`). By default the split
@@ -550,6 +567,7 @@ after `settings.key-timeout` (default `1.2s`).
 |                        | `f` / `/`                   | find panels / fleet search across every panel               |
 |                        | `g g`                       | mark / unmark a panel                                       |
 |                        | `g c` / `g a` / `g u`       | create a work item / add to it / dissolve it                |
+|                        | `g p`                       | peers: let a work item's panels read and type to each other |
 |                        | `e` / `*`                   | rename / favourite the panel or work item                   |
 |                        | `D` / `T` / `t` / `Q`       | diff / dispatch / enqueue / the task queue                  |
 |                        | `v u` / `v k` / `v p`       | usage footer / keycast / the detail pane                    |

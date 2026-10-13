@@ -33,7 +33,7 @@ import (
 //
 //	n  new     n c form · n . here · n C conductor · n h global shell · n w worktree · n s score · n r re-launch
 //	v  view    v u usage · v U usage detail · v k keycast · v p preview · v l layout · v g lens
-//	g  group   g g mark · g c create · g a add · g u ungroup
+//	g  group   g g mark · g c create · g a add · g u ungroup · g p peers
 //	x  purge   x x — the second tap is the confirmation
 //
 // No landing is also a binding of its own, so a sequence fires on its last key
@@ -96,6 +96,7 @@ const (
 	keyGroup     = "g c"   // create a work item from the marked panels
 	keyAdd       = "g a"   // add the marked panels to the selected group
 	keyUngroup   = "g u"   // dissolve the selected work item
+	keyPeers     = "g p"   // let the selected group's panels read and type into each other, or stop them
 	keyRename    = "e"     // edit the name of the selected panel or group
 	keyFavourite = "*"     // favourite / unfavourite the selected panel or group (sorts it to the front)
 	keyGrab      = "m"     // move: pick the selected row up, carry it through the tree, drop it
@@ -181,6 +182,7 @@ const (
 	actGroup
 	actAdd
 	actUngroup
+	actPeers
 	actRename
 	actFavourite
 	actGrab
@@ -282,6 +284,7 @@ var bindings = []binding{
 	{"group", keyGroup, "group the marked panels", actGroup, "Work items", "create"},
 	{"add", keyAdd, "add the marked panels to the selected group", actAdd, "Work items", "add"},
 	{"ungroup", keyUngroup, "ungroup the selected work item", actUngroup, "Work items", "ungroup"},
+	{"peers", keyPeers, "let the group's panels read and type into each other", actPeers, "Work items", "peers"},
 	{"rename", keyRename, "rename the panel or group", actRename, "Work items", "rename"},
 	{"favourite", keyFavourite, "favourite the panel or group (sorts it to the front)", actFavourite, "Work items", "favourite"},
 	{"move", keyGrab, "pick a row up — arrows carry it, enter drops it", actGrab, "Work items", "move"},

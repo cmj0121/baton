@@ -50,7 +50,7 @@ Press a landing and the status bar names what it can take next, so a family is d
 reading this page:
 
 ```text
- DASHBOARD │ g …  g mark · c create · a add · u ungroup            ⏱ 09:34:51             ● local
+ DASHBOARD │ g …  g mark · c create · a add · u ungroup · p peers  ⏱ 09:34:51             ● local
 ```
 
 The line is fitted to the bar it rides on. Where there is room, each key is labelled; where there is not — a wide family
@@ -114,6 +114,7 @@ dashboard row — the work-item verbs — is refused in a zoom with the way forw
 |                 | (C-t)  | `g`     | `c`                   | create a work item from the marked panels              |
 |                 | (C-t)  | `g`     | `a`                   | add the marked panels to the selected work item        |
 |                 | (C-t)  | `g`     | `u`                   | dissolve the selected work item                        |
+|                 | (C-t)  | `g`     | `p`                   | peers: let its panels read and type into each other    |
 |                 | (C-t)  | ·       | `e`                   | rename the panel or work item                          |
 |                 | (C-t)  | ·       | `*`                   | favourite it, sorting it to the front                  |
 |                 | (C-t)  | ·       | `m`                   | pick a row up; arrows carry it, enter drops it         |
@@ -202,6 +203,16 @@ dashboard row — the work-item verbs — is refused in a zoom with the way forw
 | **Git menu**    | ·      | ·       | `d` `l` `s`           | diff · log · status                                    |
 |                 | ·      | ·       | `a` `c` `p`           | stage all · commit · push                              |
 |                 | ·      | ·       | `b` `w` `W` `x`       | branch · worktree · worktrees · remove worktree        |
+
+`g p` switches **peers** for the work item under the cursor: while it is on, the panels filed directly in that group
+may list each other, read each other's recent output and type into each other's terminals. Switching it **on asks
+first** — `let the panels in "<group>" read and type into each other? (y/n)` — and only `y` confirms: `enter` and every
+other key leave it off, and the question is withdrawn as soon as its line leaves the status bar, you leave the
+dashboard, or the panels directly in the group change — one joins, one leaves, or the last one goes — since a yes
+given for two panels must not open a channel among three. Switching it **off does not ask**. The key is refused, with the reason
+on the status line, on a panel row or the quiet fold, under a group-by lens, and for a work item that holds only
+sub-groups — the flag reaches the panels directly in a group, and that one has none. A group with peers on carries a
+`⋈`. What the flag grants, and what it does not protect, is in [CONTROL.md](./CONTROL.md#peers).
 
 Issue detail `w` asks for a branch, prefilled `feat/<number>`, spawns the fleet default agent, and binds the new tree
 to that issue. The board's `w` does not. A repository with no GitHub remote still gets the tree; the bind is skipped.

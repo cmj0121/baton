@@ -303,7 +303,7 @@ func (m model) canAutoSaver() bool {
 	if m.input != inputNone || m.scrolling || m.editing || m.prefix {
 		return false
 	}
-	if m.backendDown || m.pendingClose || m.pendingRestart || m.pendingSpawn {
+	if m.backendDown || m.pendingClose || m.pendingRestart || m.pendingSpawn || m.pendingPeers != "" {
 		return false
 	}
 	return true

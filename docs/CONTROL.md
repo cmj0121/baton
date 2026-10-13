@@ -45,12 +45,13 @@ The **fleet path** is you → conductor → fleet. Hand it a batch of objectives
 dispatches or enqueues the work. You stay on the inbox. One agent is still **`A`**. A fleet is **`n C`** plus standing
 orders in `$HOME/.baton/CONDUCTOR.md`.
 
-| Question           | Chosen                                                                                                                                                                                                                                     |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| What control means | **Dispatch-only.** The conductor spawns, groups, dispatches, enqueues, signals, and closes _other_ panels. It raises _its own_ hand when stuck. The inbox stays the operator's. Not observe-and-steer. Not a planner sitting in the fleet. |
-| How it is present  | **Manual `n C`** (or `r` on its dead slot). The daemon does not spawn it at start. A `CONDUCTOR.md` on disk is not a spawn switch.                                                                                                         |
-| The `A` key        | **Unchanged.** One agent is still `A`. The fleet path sits beside it: `n C` + `$HOME/.baton/CONDUCTOR.md`.                                                                                                                                 |
-| Worker `baton ctl` | **Unchanged.** An empty `BATON_ROLE` is still the full cockpit. Isolation (`isolate: docker`) remains the knob that actually drops `BATON_SOCK`.                                                                                           |
+| Question           | Chosen                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| What control means | **Dispatch-only.** The conductor spawns, groups, dispatches, enqueues, signals, and closes _other_ panels. It raises _its own_ hand when stuck. The inbox stays the operator's. The conductor does not observe-and-steer, and is not a planner sitting in the fleet.                                                                                                       |
+| How it is present  | **Manual `n C`** (or `r` on its dead slot). The daemon does not spawn it at start. A `CONDUCTOR.md` on disk is not a spawn switch.                                                                                                                                                                                                                                         |
+| The `A` key        | **Unchanged.** One agent is still `A`. The fleet path sits beside it: `n C` + `$HOME/.baton/CONDUCTOR.md`.                                                                                                                                                                                                                                                                 |
+| Worker `baton ctl` | **Unchanged.** An empty `BATON_ROLE` is still the full cockpit. Isolation (`isolate: docker`) remains the knob that actually drops `BATON_SOCK`.                                                                                                                                                                                                                           |
+| Worker to worker   | **Off, until you switch it on for one group.** Panels in a group whose **peers** flag is on may list each other, read each other's recent output, and type one line into each other's terminal — see [Peers](#peers). The operator switches it on; a conductor and an agent panel are refused the verb — a guardrail, with the [limits](#what-it-does-not-protect) of one. |
 
 ### The operator's brief — `$HOME/.baton/CONDUCTOR.md`
 
@@ -117,6 +118,7 @@ acts, and exits.
 | `baton ctl attention --why <text> [--id ID]`                          | say this panel needs a human, and why — see [Raising a hand](#raising-a-hand)    |
 | `baton ctl resolve [--id ID]`                                         | say the reason has passed; the panel leaves the queue                            |
 | `baton ctl group <name> <id>...`                                      | file panels under a work item (a slash-`path` nests: `backend/api`)              |
+| `baton ctl group peers <group> on\|off`                               | let the panels of one group read and type into each other — see [Peers](#peers)  |
 | `baton ctl rename [--id ID \| --group G] <name>`                      | rename a panel or a group (rename a group to a path to re-parent it)             |
 | `baton ctl pin <id>...` / `unpin <id>...`                             | pin/unpin panels to live tiles                                                   |
 | `baton ctl signal <signal> <id>...`                                   | send a signal, e.g. `SIGINT`                                                     |
@@ -276,6 +278,215 @@ auto-loads the tools — no setup. The MCP subprocess inherits the conductor pan
 like the CLI. A tool failure (bad arguments, a rejected command, the daemon down) returns as an MCP error result the
 model can read and recover from, not a dropped connection.
 
+**An ordinary agent panel gets a different, much smaller table.** A worker is launched pointing at an MCP config baton
+writes in its own directory (`~/.baton/agent-mcp.json`, see [SCORE.md](SCORE.md)), which runs this binary as
+`baton mcp --score-only`. That flag selects the **worker table** — four tools and none of the fleet verbs above:
+
+`score_submit` · `baton_peers` · `baton_peek` · `baton_tell`
+
+The flag is named for the first of them and is older than the other three; it is kept because panels already running
+carry it in their config. `score_submit` writes to the fleet memory. The three `baton_*` tools are how a worker reaches
+the other panels of its group, and they are the subject of the next section. The conductor's table is the one listed
+above and has none of these three.
+
+## Peers
+
+Switch **peers** on for a group and the panels in it may reach each other: list who is there, read a group-mate's
+recent output, and type one line into a group-mate's terminal. It is **off by default** and set **per group**. The
+operator switches it on; an agent panel and a conductor are refused the verb. That refusal is a guardrail against
+accidents, not a lock — see [What it does not protect](#what-it-does-not-protect).
+
+```sh
+# You, from your own terminal: open the channel for one group, and close it again.
+baton ctl group peers review on
+baton ctl group peers review off
+```
+
+On the dashboard the same switch is **`g p`** with the cursor on the group's row (see [KEYS.md](KEYS.md)). An agent in
+that group then has three tools, and uses them like this:
+
+| Tool          | Arguments                              | Returns                                                                                               |
+| ------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `baton_peers` | —                                      | the group-mates it may reach, as JSON: each one's `id`, `title`, `kind` and `state`                   |
+| `baton_peek`  | `id`, `bytes` (default 4096, max 8192) | the tail of that panel's output as plain text, terminal control sequences removed                     |
+| `baton_tell`  | `id`, `text`                           | types `text` into that panel as one line and presses Enter; replies with the size sent and the target |
+
+`baton_peek` reads the **tail** of what the panel printed, cut by size, so it can start mid-line and a full-screen
+program reads as fragments. An escape string cut off before its terminator loses only its introducer: the text after
+it is kept rather than swallowed. A panel with nothing to show answers `(panel <id> has no output to show)`.
+
+**The reach is exactly one group.** The flag is on a group's full path and says nothing about any other: with peers on
+for `backend`, a panel in `backend/api` is not a peer of a panel in `backend`, and the other way round. A peer is
+another panel filed **directly** in the caller's own group that is still running. The caller itself, an exited panel,
+the conductor and the global shell are never peers — the last two by default sit in no group, and are refused even if
+filed into one.
+
+**Who may flip it.** The operator, from the cockpit or from `baton ctl` in a plain terminal or a shell panel. A
+**conductor** connection is refused `group.peers` in both directions, and so is `baton ctl group peers` run from inside
+an **agent panel**: opening a channel between agents is a decision about which agents may reach which terminals, and
+an agent that could make it would be granting itself the reach. Switching it **on** is refused for a group with no panel
+filed directly in it; switching it off never is.
+
+The daemon tells an agent from the operator by the panel id the connection **declares** as its own, and only a
+declared id that resolves to an agent panel is refused — a connection that declares none, or one that names no panel,
+is taken for the operator. So the rule stops an agent that reaches for the switch; it does not stop one that hides
+who it is. That limit is the first row of [What it does not protect](#what-it-does-not-protect).
+
+**How long the flag lasts.** It is a decision about the panels in a group, not about a name, so:
+
+- it is **dropped when the group's last direct member leaves** — regrouped, ungrouped, closed or purged. An exited
+  panel still on the dashboard counts as a member. A name that is later reused starts with peers off;
+- it **follows a pure rename**, and a nested group dissolved into a parent that had no panels of its own carries it
+  along;
+- a **merge never switches it on**: rename or dissolve a peers-on group into a group that already had panels, and the
+  destination keeps whatever it had — on if you had switched it on, off otherwise;
+- a panel **moved into** a peers-on group is in reach from that moment — the flag covers whoever is in the group, not
+  the panels that were there when you set it. **Moving one in is the operator's**, like the flag: see
+  [Who may add a panel](#who-may-add-a-panel);
+- it is persisted with the rest of the fleet state, so it survives a daemon restart.
+
+**Every call is decided again.** Nothing is granted at spawn. The tools are **always** in a worker's tool list, whether
+or not its group has peers on, and the daemon authorises each call from the fleet as it stands — so a flag switched
+off, or a panel moved out, mid-conversation refuses the very next call with the reason.
+
+### Who may add a panel
+
+Who is in a peers-on group decides who can type into whom, so widening one is fenced the way the flag is. A
+**conductor** connection, and a connection whose declared panel is an **agent**, is refused any command that would put
+an existing panel into a peers-on group it is not already in:
+
+```text
+group "review" has peer interaction on; the operator adds panels to it
+```
+
+| Refused to an agent or the conductor                                          | Not refused                                                               |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `panel.group` (`baton ctl group`, `baton_group`) of ids into a peers-on group | the operator, from the cockpit or `baton ctl` outside an agent panel      |
+| a group **rename** that merges onto a peers-on group that has panels          | re-filing a panel into the group it is already in                         |
+| a **dissolve** (`panel.ungroup`) whose parent group is peers-on               | a move into a peers-off group, or out of a peers-on one                   |
+|                                                                               | renaming the peers-on group itself                                        |
+|                                                                               | the server's own filing: a worktree spawn under its branch name, a plugin |
+
+The last row is a real opening, not a footnote: a **new** panel that the server files itself is not fenced, so a
+worktree spawn whose branch name is a peers-on group's name lands in that group, whoever asked for the spawn.
+
+The **whole command** is refused, never just the offending ids — a regroup that half happened is harder to read than one
+that did not. The consequence for a fleet run by a conductor is worth stating plainly: a conductor that spawns a panel
+and then groups it with `baton_group` **cannot add it to a peers-on group**. You add it, or you switch peers off first,
+let the conductor build the group, and switch it back on. Like the flag's own fence this goes by the identity a
+connection declares, with the same [limit](#what-it-does-not-protect).
+
+### What a send does
+
+`baton_tell` types into a real terminal, and what arrives depends on what is listening:
+
+| Target                           | What is typed                                                                         |
+| -------------------------------- | ------------------------------------------------------------------------------------- |
+| an **agent** panel               | one line: `[from <title> (<id>)]`, a space, then the text — the sender's title and id |
+| a **shell** or **command** panel | the text exactly as written, with no prefix — a shell runs it as a command            |
+
+- **Every send ends in Enter.** There is no option to leave text unsubmitted in a group-mate's input line.
+- **An agent gets one line.** Tabs and line breaks (CR, LF, `U+0085`, `U+2028`, `U+2029`) fold to a single space and
+  the ends are trimmed. Any other control or invisible character — an escape sequence, `Ctrl-C`, a bidi override, a
+  zero-width character, `U+FFFD` — and invalid UTF-8 are **refused**, not stripped: a peer says something to an agent,
+  it does not press its keys. The sender's title and panel id inside the prefix are each cleaned to one line and capped at 64 runes.
+- **A shell gets the bytes as sent**, control characters included. Typing into a shell is the point.
+- **Size.** One send carries at most **4096 bytes**, counted on the text as given; the prefix is not charged.
+- **Rate.** Each sender may send **three in a row, then one every two seconds**. A send over the cap is refused, not
+  queued, and the refusal says how long to wait.
+- **A panel waiting on a human takes none.** A send to a panel in `attention` is refused: an agent does not answer
+  another agent's permission prompt, and the inbox stays yours.
+- **It is not a dispatch.** No task is recorded on the target, no brief reaches its card, and no task hook runs.
+
+### On the wire
+
+| Verb          | Command fields                  | Reply                                                                              |
+| ------------- | ------------------------------- | ---------------------------------------------------------------------------------- |
+| `group.peers` | `group`, `enable` (`true` = on) | the `panels` snapshot broadcast to every client; the group's entry carries `peers` |
+| `peer.list`   | —                               | `type: "peers"`, with `panels` holding the group-mates the caller may reach        |
+| `peer.tail`   | `id`, `count` (bytes)           | `type: "tail"`, with `id` and `data`                                               |
+| `peer.send`   | `id`, `data`                    | `type: "notice"`, with `id` (the target) and `notice`, to the sender alone         |
+
+The caller of a `peer.*` verb is the `self` its connection declared on `hello` — there is no field to name another.
+`peer.tail` answers with the **raw** tail of the target's output, escape sequences included: `count` is clamped to
+8192 bytes and `0` means the daemon's own default window. A client that hands it to a model strips it first, as
+`baton_peek` does. `peer.send` refuses a non-empty `submit`. A refusal is `type: "error"`, and every `peer.*` refusal
+starts with `peer:` and names its cause:
+
+| Refusal                                                                                        | When                                                |
+| ---------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `peer: this connection declared no panel of its own`                                           | the caller declared no `self`                       |
+| `peer: "<id>" is not a live panel`                                                             | the caller's `self` is unknown or has exited        |
+| `peer: the conductor and the global shell are not peers`                                       | the caller's own panel is one of the two            |
+| `peer: conductor role: the peer verbs are for the panels of a group`                           | the connection declared the conductor role          |
+| `peer: panel "<id>" is in no group`                                                            | the caller is ungrouped                             |
+| `peer: peer interaction is off for group "<group>"; the operator switches it on`               | the caller's group has peers off                    |
+| `peer: a target panel id is required`                                                          | `peer.tail` / `peer.send` with no `id`              |
+| `peer: no panel with id "<id>"`                                                                | the target does not exist                           |
+| `peer: "<id>" is your own panel`                                                               | the target is the caller                            |
+| `peer: panel "<id>" is not in your group "<group>"`                                            | the target is in another group, a sub-group or none |
+| `peer: panel "<id>" is the conductor, which is never a peer`                                   | the target is the conductor                         |
+| `peer: panel "<id>" is the global shell, which is never a peer`                                | the target is the global shell                      |
+| `peer: panel "<id>" has exited`                                                                | the target's process has ended                      |
+| `peer: peer.send takes no submit sequence; every send ends in Enter`                           | `peer.send` carried a `submit`                      |
+| `peer: peer.send needs something to send`                                                      | no bytes, or nothing but whitespace to an agent     |
+| `peer: peer.send carries <n> bytes, over the 4096-byte cap`                                    | the text is too long                                |
+| `peer: text sent to an agent must be valid UTF-8`                                              | invalid UTF-8 to an agent target                    |
+| `peer: control bytes are not sent to an agent; send plain text`                                | a control or invisible character to an agent target |
+| `peer: panel "<id>" is waiting for a human; it takes no peer input until the operator answers` | the target is in `attention`                        |
+| `peer: sending too fast; retry in <duration>`                                                  | the sender is over its rate cap                     |
+
+The rate check is last, so a send refused for any other reason costs the sender nothing.
+
+`group.peers` has its own refusals, which do not carry the prefix. The group name is checked first, switching on or
+off alike:
+
+| Refusal                                                                                  | When                                         |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `group.peers needs a group`                                                              | the group is empty                           |
+| `invalid group path "<group>"`                                                           | the name is not a valid slash-path           |
+| `the name is <n> runes long, and the limit is 128`                                       | the name is too long                         |
+| `the name "<group>" contains a control character`                                        | a control or invisible character in the name |
+| `group.peers: an agent panel may not change peer interaction; it is an operator setting` | the caller's declared panel is an agent      |
+| `group.peers: no panels in group "<group>"`                                              | switching on a group with no direct member   |
+| `conductor role: group peer interaction is an operator setting`                          | the connection declared the conductor role   |
+
+Asking for the state a group is already in is not an error and changes nothing: no `group.change` fires and nothing is
+logged.
+
+### Seeing it
+
+A group with peers on is marked **`⋈`** wherever it or its panels are drawn: on the group's dashboard row and card, in
+the group split's title (`⋈ peers`), at the head of each member's tile, and in the footer strip of a zoomed member
+(`⋈ peers`, the bare glyph when the strip is narrow) — so while you type into a panel you can see that its group-mates
+may type into it too. Under a group-by lens the rows, cards and split titles are buckets rather than groups and carry
+no mark; a tile too narrow to hold it goes without.
+
+Each admitted send writes one line to the daemon log (`peer send`, with `from`, `to`, `group` and `bytes`) and fires
+the `peer.send` [plugin event](PLUGIN.md) with the same four fields; flipping the flag logs
+`group peers set` and fires `group.change` with `group` and `peers`.
+
+### What it does not protect
+
+Peers is a convenience you open deliberately, with these limits. None of them is hidden by the checks above.
+
+| Limit                                                | What it means                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Who is calling is declared, not proven**           | The operator-only rules on the flag and on who joins a peers-on group, and the caller of every `peer.*` verb, all rest on the `self` a connection declares from `BATON_PANEL_ID`. An agent that runs `baton ctl group peers <group> on` with that variable unset or changed is not refused, and so can switch its own group on, and the same goes for filing a panel into a peers-on group; one that declares another panel's id calls the peer verbs as that panel. It is a guardrail against accidents, like the conductor fence. |
+| **A peer borrows its group-mate's permissions**      | An agent can type into a group-mate that runs with looser permissions — a wider tool allowlist, a different directory, a shell — and have it do what the sender could not. Group panels you would trust with each other's reach.                                                                                                                                                                                                                                                                                                    |
+| **It is a guardrail, not a jail**                    | The group check, the caps and the prefix apply to the `peer.*` verbs and nothing else. A worker's plain `baton ctl send`, to any panel in the fleet, is exactly as unfenced as it was before, and the flag's own fence is the soft one in the row above; `isolate: docker` is still what removes the socket.                                                                                                                                                                                                                        |
+| **A send can land in the middle of your typing**     | A peer's line is typed into the same terminal you are typing into and can interleave with it. Nothing holds it back while you are attached.                                                                                                                                                                                                                                                                                                                                                                                         |
+| **The `[from …]` prefix is only text**               | Anything that can type into the panel can type the same characters, and a shell target gets no prefix at all. It tells an agent who is speaking; it proves nothing.                                                                                                                                                                                                                                                                                                                                                                 |
+| **Output carries whatever was printed**              | A group-mate's tail can hold a secret it printed — a token, an `.env` dump — and reading it puts that in another agent's context. Only the size is capped.                                                                                                                                                                                                                                                                                                                                                                          |
+| **The `attention` refusal is best-effort**           | A panel's state is set on a monitor tick, so a send can still land between a permission prompt being drawn and the tick that notices it.                                                                                                                                                                                                                                                                                                                                                                                            |
+| **The rate cap bounds a sender, not a conversation** | Two agents answering each other each stay under their own cap. An A→B→A loop is slowed to one message every two seconds per side, not stopped.                                                                                                                                                                                                                                                                                                                                                                                      |
+| **The state file is trusted**                        | The flag is persisted in the daemon's state file (`baton.state.json`). A `"peers": true` written there by hand is honoured at the next start for any group that has a panel in it, with no question asked — the file is your own, and whatever can write it could already drive the fleet.                                                                                                                                                                                                                                          |
+| **The tools need the panel's identity**              | The caller is the `BATON_PANEL_ID` the MCP server process inherited. An agent CLI that starts its MCP servers with a scrubbed environment declares no panel, and every peer tool is refused.                                                                                                                                                                                                                                                                                                                                        |
+
+A shell panel is given no `BATON_PANEL_ID` (see [below](#the-wire-directly)), so in practice a shell or command panel
+is something a peer reads and types into, not something that calls the peer verbs itself. And the tools ride on the
+worker MCP config: with `panel.agent-mcp: false` an agent is not handed them at all.
+
 ## The wire, directly
 
 Both surfaces are thin wrappers over the socket — an agent that prefers raw JSON-RPC can speak it. A control client
@@ -331,6 +542,8 @@ always speak the socket directly).
 | close other panels, purge exited          | reload or stop the server                                      |
 |                                           | spawn faster than the rate cap, or past the fleet ceiling (64) |
 |                                           | **name an agent profile** on a spawn — see below               |
+|                                           | switch a group's **peers** flag, or use any `peer.*` verb      |
+|                                           | **add a panel to a peers-on group** — see below                |
 
 A worktree spawn is a spawn, so it draws on the same two limits from the same purse: the fleet ceiling and the rate cap
 count `spawn --worktree` exactly as they count `spawn`, and a conductor cannot dodge one by switching to the other.
@@ -375,6 +588,21 @@ fenced away from; and `panel.logview` would hand an agent another panel's transc
 surface the inbox's `panel.tail` fence exists to keep shut. Opening either later is deleting one line, and the interface
 room is left for exactly that.
 
+[Peers](#peers) does not open that surface to the conductor. `peer.tail` is the same read as `panel.tail`, which is why
+the three `peer.*` verbs are refused by role before anything else is checked: the conductor is not one of a group's
+panels, and it already drives every panel through its own table. `group.peers` is refused with them, on and off alike —
+which agents may read and type into which terminals is the operator's decision, and a conductor closing a channel you
+opened is the same decision made by the wrong party. What peers adds is reach **between workers**, in one group you
+named, and its own limits are listed [where it is described](#what-it-does-not-protect).
+
+Nor may a conductor widen one. `panel.group` is open to it everywhere else, and left open here it would let a conductor
+pull any panel in the fleet into a group that is already on — the operator's decision made one panel at a time. So
+grouping panels into a peers-on group, renaming a group onto one, and dissolving a sub-group into one are refused with
+`group "<group>" has peer interaction on; the operator adds panels to it`, the whole command at once. A conductor that
+creates a worker and then files it with `baton_group` therefore cannot place it in a peers-on group: you add it, or
+switch peers off while the conductor builds the group. An agent panel's connection is held to the same rule; the full
+list is under [Who may add a panel](#who-may-add-a-panel).
+
 A spawn from a conductor has its **profile name stripped**, so the panels it creates resolve to the fleet-wide
 [resource limits](LIMITS.md) rather than to any profile's own. The name is what a panel's caps resolve through, so an
 agent free to name one would be an agent free to name its way into wider caps than the fleet's.
@@ -401,4 +629,5 @@ None of this is an escalation, and it should not be read as one. A conductor alr
 `panel.create` and `panel.input`, under the spawn caps, because driving the fleet is what the role is for. What was
 wrong with `commit` is that it was neither charged nor consistent with the two verbs beside it.
 
-A plain cockpit connection declares no role and is never fenced.
+A plain cockpit connection declares no role and is never fenced. An **agent panel's** connection declares no role
+either, and is refused two things for being an agent's: `group.peers`, and adding a panel to a peers-on group.

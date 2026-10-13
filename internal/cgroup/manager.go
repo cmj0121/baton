@@ -82,7 +82,7 @@ func (m *Manager) Probe() {
 		return
 	}
 	m.probed = true
-	if root, err := detectRoot(); err != nil {
+	if root, err := detectRoot(); err != nil { //nolint:staticcheck // always true only off Linux, where detectRoot is a stub
 		m.reason = err.Error()
 	} else {
 		m.mode, m.root, m.reason = ModeCgroup, root, ""

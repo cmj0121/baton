@@ -44,10 +44,11 @@ never come near the score.
 
 The last line of that block is the only place an agent is ever told the memory can be written to, and it is what makes
 a fleet able to fill its own. It names `baton ctl` rather than the MCP tool because that is the door every panel has:
-`score_submit` is served from a `.mcp.json` written into the conductor's workspace and nowhere else — a worker panel
-runs in **your** repository, where baton does not write — while the socket and the panel id are in every panel's
-environment, so the CLI works from inside any of them and stamps the submission with that panel's directory, profile
-and work item.
+`score_submit` does not reach all of them. The conductor loads it from the `.mcp.json` in its workspace; a worker gets
+it through `~/.baton/agent-mcp.json` (see below), but not when `panel.agent-mcp` is `false`, when its CLI takes no MCP
+config option, or when its command line already names a config of its own — and a shell panel never does. The socket
+and the panel id, by contrast, are in every agent panel's environment, so the CLI works from inside any of them and
+stamps the submission with that panel's directory, profile and work item.
 
 **It is rendered for an empty store too, and it is the only part of the block that is.** Otherwise a fresh install
 could never start: nothing to inject means no block, no block means the agent is never told, never told means nothing
@@ -77,14 +78,15 @@ panel:
 
 **Every panel may submit, and `score.submit` has never been fenced.** What an agent needs is to be TOLD, and there are
 two ways it is. An agent panel is launched pointing at an MCP config baton writes in its own directory
-(`~/.baton/agent-mcp.json`), carrying `score_submit` and nothing else — so the invitation sits in the agent's tool list
-on every turn, costing it no turn to learn. A dispatched brief carries the sentence as well, which is what reaches an
-agent whose runtime speaks no MCP.
+(`~/.baton/agent-mcp.json`), carrying `score_submit` beside the three peer tools and nothing that drives the fleet — so
+the invitation sits in the agent's tool list on every turn, costing it no turn to learn. A dispatched brief carries the
+sentence as well, which is what reaches an agent whose runtime speaks no MCP.
 
 The config is baton's own and never lands in your repository — a worker panel runs in your working tree, where a
-dotfile baton wrote would show up in `git status`. It carries only the memory's write tool: the full table drives the
-fleet (spawn, close, signal) and that is the conductor's job. Turn it off with `panel.agent-mcp: false`, or on the
-panel-config page's DEFAULTS tab.
+dotfile baton wrote would show up in `git status`. It carries the memory's write tool and the three
+[peer tools](CONTROL.md#peers) (`baton_peers`, `baton_peek`, `baton_tell`), which answer only in a group you switched
+peers on for: the full table drives the fleet (spawn, close, signal) and that is the conductor's job. Turn it off with
+`panel.agent-mcp: false`, or on the panel-config page's DEFAULTS tab.
 
 It is resolved at **every launch**, not stored on the panel — so a re-run (`r`) and a panel the daemon rebuilt from its
 snapshot are wired exactly like a fresh spawn. That matters more than it sounds: the flag used to be frozen into the
