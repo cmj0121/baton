@@ -161,7 +161,9 @@ Monitor 帶著面板走過一小組狀態,從你產生它的那一刻,到你關�
 **一個狀態是怎麼決定的。** 高的贏,第一個命中的說了算:agent 自己的**宣告**(`panel.attention`,帶著一個理由)
 勝過 baton 從外面做的每一個猜測;**`stuck` 計時器**勝過**尾巴啟發式**(最後一行有內容的列,或最後十幾行裡的權限
 overlay,讀起來像個問句),因為確定的計時器壓過對文字的猜測;而尾巴啟發式又勝過 **`done` 計時器**,因為**現在**
-就在問的問題,壓過一個可以等的審閱。完整的優先序與每一階的用意,見
+就在問的問題,壓過一個可以等的審閱。設了 `panel.classifier` 之後,一個訓練過的分類器(一個 MOLD bundle,在 tick
+之外被問同一段尾巴)站在尾巴啟發式旁邊:兩種猜測任一個都能升起面板,誰都不會降級任何一個。面板在 `attention` 期間,
+快照用 `source` 帶著是誰升起它的——`declared`、`tail` 或 `classifier`。完整的優先序與每一階的用意,見
 **[ATTENTION.zh-TW.md](ATTENTION.zh-TW.md#一個狀態是怎麼決定的)**。
 
 **`failed` 不是一個狀態。** 一個結束得不好的面板,是帶著非零離開碼的 `exited`,而座艙把它畫成 failed。常駐程式
@@ -183,6 +185,12 @@ panel:
   agents:
     claude:
       stuck-after: 30m # 這個 profile 本來就會想比較久
+  classifier: # 選用,全隊一份:站在尾巴啟發式旁邊的 MOLD bundle
+    socket: ~/.mold/mold.sock
+    scope: baton-attention
+    min-confidence: 0.5
+    timeout: 2s
+    record: false # 寫出 bundle 用來訓練的資料列
 ```
 
 這些狀態存在,是為了回答一個問題——**誰需要人**——而清掉它們的那份待辦是 `C-t a`,注意力收件匣。收件匣、儀表板的
@@ -454,7 +462,8 @@ close-on-done 旗標。當排程器找不到空閒 agent 時,它會替這樣的�
 
 **注意力待辦。** `settings.inbox-done`、`inbox-snooze`、`notify`、`notify-coalesce`、`fold-quiet` 與
 `fold-similar` 形塑收件匣、儀表板的安靜摺疊與桌面通知;`panel.done-on-quiet`、`done-after` 與 `stuck-after` 則
-形塑上文那座安靜梯。完整參照見 **[ATTENTION.zh-TW.md](ATTENTION.zh-TW.md#設定)**。
+形塑上文那座安靜梯;`panel.classifier` 在尾巴啟發式旁邊加上一個訓練過的猜測,而它的 `record` 鍵寫出訓練它的資料列。
+完整參照見 **[ATTENTION.zh-TW.md](ATTENTION.zh-TW.md#設定)**。
 
 **遠端連線。** `settings.remote`(預設關閉)讓另一台機器上的 cockpit 透過 `ssh <這台主機> baton --stdio` 連進來,
 前提是它帶著打開遠端時產生的那組 8 字元 passkey。`C-t @` 是那個畫面:開關、passkey,以及每一條連線的來源、角色與

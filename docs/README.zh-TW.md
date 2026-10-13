@@ -176,7 +176,8 @@ Score、任務佇列、行程樹上限與用量頁尾,在另外三個身上沒�
 - **不必輪詢的注意力** — 一支隊伍大多時候都好好的;你會盯著螢幕,是為了不好好的那幾個。一支安靜計時器替每個面板
   排序——`running`、十秒後的 `idle`、agent 做完一輪的 `done`、拖太久的 `stuck`——而 agent 也可以自己舉手,凌駕
   整道階梯。`C-t a` 在任何畫面都能打開收件匣,待辦就在那裡清掉;`settings.notify` 會在沒人看著時送出 OSC 9 桌面
-  通知,會併攏,而且永遠不為 `done` 而響。見 **[docs/ATTENTION.md](ATTENTION.zh-TW.md)**。
+  通知,會併攏,而且永遠不為 `done` 而響。一個本機的 [MOLD](https://github.com/cmj0121/mold) bundle 可以站在正規
+  表達式旁邊,學會隊伍標記出來的那些等待。見 **[docs/ATTENTION.md](ATTENTION.zh-TW.md)**。
 - **一個 conductor** — 艦隊路徑。`n C` 開啟一個替你驅動整隊的 agent:它透過 socket——經由 `baton ctl` 或
   `baton mcp` 工具——開工人、分組、派工、排隊,並圍上柵欄讓它無法搞壞自己的宿主。常設命令在
   `$HOME/.baton/CONDUCTOR.md`。見 **[docs/CONTROL.md](CONTROL.zh-TW.md)**。

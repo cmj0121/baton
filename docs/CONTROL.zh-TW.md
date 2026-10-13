@@ -111,6 +111,8 @@ worktrees, do not reset this workspace.
 | `baton ctl send <id> <text> [--no-enter]`                             | 把文字打進某個面板;除非 `--no-enter`,否則以換行送出                       |
 | `baton ctl attention --why <text> [--id ID]`                          | 說這個面板需要人,以及為什麼——見 [舉手](#舉手)                             |
 | `baton ctl resolve [--id ID]`                                         | 說那個理由已經過去了;面板離開待辦                                         |
+| `baton ctl attention-mark --id ID`                                    | 說某個面板的畫面是在等:給分類器的一筆資料,面板本身不變                    |
+| `baton ctl classifier status`                                         | 關於注意力分類器的一行:關著、連不上,或 mold 自己怎麼說                    |
 | `baton ctl group <name> <id>...`                                      | 把面板歸入一個工作項目(斜線 `path` 可巢狀:`backend/api`)                  |
 | `baton ctl group peers <group> on\|off`                               | 讓某一個群組裡的面板互相讀取與輸入,見 [群組互通](#群組互通)               |
 | `baton ctl rename [--id ID \| --group G] <name>`                      | 重新命名面板或群組(把群組改名成路徑即可重新掛父層)                        |
@@ -463,7 +465,14 @@ shell 面板拿不到 `BATON_PANEL_ID`(見[下文](#直接對接線路)),所以�
 
 `panel.attention` 帶著 `reason`(必填)與一個可以留空、表示這條連線自己的 `self` 的 `id`;`panel.resolve` 帶著
 同一個 `id`。兩者都以一個錯誤、或以這次變更產生的 `panels` 快照回覆,而面板宣告的理由會經由
-`proto.Panel.reason` 回來——如上文所述,那是已經清洗過的。
+`proto.Panel.reason` 回來——如上文所述,那是已經清洗過的。面板在 `attention` 期間,快照也在 `proto.Panel.source`
+上說是誰升起它的:`declared`、`tail`(正規表達式)或 `classifier`。
+
+`attention.mark` 帶著一個 `id`(必填),並在 `panel.classifier.record` 開著時把那個面板的尾巴寫成分類器的一筆
+正例;它不改任何狀態,並以一則 `notice` 回覆,說一筆資料列有沒有落地。`classifier.status` 什麼都不帶,以一則
+`classifier` 訊息回覆:有沒有設定區塊、socket 與 scope、socket 回應時 mold 自己的狀態(連不上時則是撥號錯誤),以及
+每個檔案裡有幾筆資料列。它跑的那次探測會把一個被 daemon 放棄的分類器重新上膛。兩者都寫在
+[ATTENTION.zh-TW.md](./ATTENTION.zh-TW.md#分類器站在正規表達式旁邊)。
 
 一次 dispatch 多帶兩個欄位:`prompt`(那份簡報)以及一個選用的 `submit` 覆寫值(接在後面用來送出的按鍵,
 預設為換行),用在 `panel.dispatch` / `panel.dispatch-group`;`task.enqueue` / `task.cancel` / `task.promote` /
@@ -499,6 +508,7 @@ conductor 角色由伺服器端強制執行,早在任何指令生效之前。它
 | dispatch 給其他面板、把任務排入佇列    | **清空佇列**——把待辦清光是操作者專屬        |
 | 列出 baton 開過的 worktree             | 清掃它們——把樹從磁碟上刪掉是操作者專屬      |
 | 讀面板的標題、狀態與遙測               | **把面板記錄到檔案**、或讀回記錄檔——見下    |
+| 問 `classifier.status`                 | 把畫面標為等待——收件匣的動詞,見下           |
 | 重新排序已排入的任務(promote / demote) |                                             |
 | **舉起它自己的手**、以及把手放下       | 舉起或放下**另一個面板的**手                |
 | 關閉其他面板、清除已結束               | 重載或停掉伺服器                            |
@@ -539,7 +549,10 @@ agent 的待辦凍住的 conductor。
 面板記錄(`C-t l` / `C-t L`,[LOGGING.zh-TW.md](LOGGING.zh-TW.md))兩個方向都直接拒絕。`panel.log` 是在要求
 daemon **以你的身分、在它自己的主機上寫檔案**,而那正是遠端動作早就被圍起來的那種請求;`panel.logview` 則會把
 另一個面板的逐字稿交給 agent 慢慢讀,而那正是收件匣的 `panel.tail` 柵欄要擋住的那個面。日後要打開其中任何一個,
-都只是刪掉一行,而介面上的空間就是為此保留的。
+都只是刪掉一行,而介面上的空間就是為此保留的。`attention.mark` 跟 `panel.tail`、`panel.ack` 圍在同一道柵欄裡,因為
+它是收件匣的動詞,而收件匣是操作者的;`classifier.status` 對 conductor 開放,跟 `worktree.list` 一樣,因為「這支隊伍
+的注意力是不是只靠正規表達式」是一個驅動隊伍的 agent 可以問的、關於隊伍的事實——而靠發問來把分類器重新上膛,不是
+操作者專屬的動作。
 
 [群組互通](#群組互通)並沒有把那個面對 conductor 打開。`peer.tail` 跟 `panel.tail` 是同一種讀取,所以三個
 `peer.*` 動詞在檢查任何其他條件之前,就先依角色被拒絕:conductor 不是任何群組的面板,而且它本來就透過自己那張表駕駛

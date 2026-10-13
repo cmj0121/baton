@@ -139,6 +139,7 @@ dashboard row — the work-item verbs — is refused in a zoom with the way forw
 |                 | C-t    | ·       | `l`                   | start or stop logging the panel to a file              |
 |                 | C-t    | ·       | `L`                   | open that log in a temporary panel                     |
 |                 | C-t    | ·       | `G`                   | the git menu, on a zoomed agent panel                  |
+|                 | C-t    | ·       | `m`                   | in a zoom: mark this screen as a wait                  |
 | **Session**     | C-t    | ·       | `S`                   | force-restart the server, ending the fleet             |
 |                 | (C-t)  | ·       | `R`                   | reload config; the fleet keeps running                 |
 |                 | (C-t)  | ·       | `q`                   | detach; the server keeps running                       |
@@ -176,6 +177,7 @@ dashboard row — the work-item verbs — is refused in a zoom with the way forw
 | **Inbox**       | ·      | ·       | `i`                   | step into the panel that wants you                     |
 |                 | ·      | ·       | `1` / `2` / `3`       | answer a permission overlay, when the tail is one      |
 |                 | ·      | ·       | `-`                   | snooze the row                                         |
+|                 | ·      | ·       | `m`                   | mark the row's screen as a wait, for the classifier    |
 | **Queue**       | ·      | ·       | `shift+↑` / `↓`       | promote / demote the task                              |
 | **Usage**       | ·      | ·       | `tab` / `S-tab`       | next / previous tab: Account, Session, Week            |
 |                 | ·      | ·       | `u`                   | cycle the footer segment                               |
