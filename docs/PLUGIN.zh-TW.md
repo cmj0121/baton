@@ -133,6 +133,8 @@ end)
 | `panel.exit`      | 一支行程自行結束         | 面板 + `exit_code`                                             |
 | `panel.close`     | 一個面板被退場           | `{ id }`                                                       |
 | `group.change`    | 成員/改名/顯示數量變動   | 該群組                                                         |
+|                   | 群組的互通旗標被切換     | `{ group, peers }`——`peers` 是切換後的狀態                     |
+| `peer.send`       | 一個面板往同群組面板打字 | `{ from, to, group, bytes }`——面板 id、所屬群組、大小          |
 | `task.change`     | 一個任務被記錄或改變狀態 | 該任務——`id`、`prompt`、`status`、`panel`、`group`、`attempts` |
 | `server.reload`   | 設定/外掛被重載          | —                                                              |
 | `panel.output`    | 有位元組抵達某個面板     | 面板 + `data`——**高流量、需選擇加入、預設關閉**                |

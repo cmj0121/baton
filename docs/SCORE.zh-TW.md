@@ -39,9 +39,10 @@ prompt,完全不經過 Score。
 ## 隊伍怎麼餵它
 
 那個區塊的最後一行,是 agent 唯一一次被告知這份記憶可以寫。它就是讓一支隊伍能夠自己把記憶填起來的那個
-東西。它寫的是 `baton ctl` 而不是 MCP 工具,因為那才是每一個面板都有的門:`score_submit` 是由一份只寫進
-conductor 專屬工作區、其他地方一概不寫的 `.mcp.json` 供應的——worker 面板跑在你自己的 repository 裡,
-baton 不會往那裡寫東西——而 socket 與面板 id 本來就在每一個面板的環境變數裡,所以那個 CLI 在任何一個面板
+東西。它寫的是 `baton ctl` 而不是 MCP 工具,因為那才是每一個面板都有的門:`score_submit` 並不是
+每個面板都拿得到。conductor 從工作區裡的 `.mcp.json` 載入它;worker 則透過 `~/.baton/agent-mcp.json`(見下文)
+拿到,但 `panel.agent-mcp` 設成 `false`、它的 CLI 不收 MCP 設定選項、或它的命令列已經指定了自己的設定時就沒有,
+而 shell 面板永遠沒有。相對地,socket 與面板 id 本來就在每一個 agent 面板的環境變數裡,所以那個 CLI 在任何一個面板
 裡都能跑,而且會把那個面板的目錄、profile 與工作項目一起蓋章記下來。
 
 空的 store 也會渲染這一行,而且它是整個區塊裡唯一會這樣的部分。否則一份全新安裝根本無法起步:沒有東西
@@ -70,12 +71,13 @@ panel:
 ```
 
 **每一個面板本來就能提交**,`score.submit` 從來沒有被擋過。agent 缺的是「被告知」,而告知有兩條路。agent 面板
-開啟時會指向一份 baton 寫在自己目錄裡的 MCP 設定(`~/.baton/agent-mcp.json`),裡面只有 `score_submit`——邀請
+開啟時會指向一份 baton 寫在自己目錄裡的 MCP 設定(`~/.baton/agent-mcp.json`),裡面是 `score_submit` 加上三個 peer 工具,沒有任何駕駛艦隊的東西——邀請
 就常駐在工具清單裡,每一輪都看得到,而且不花 agent 任何一個 turn。派送出去的簡報也會帶那句話,那是給不會
 講 MCP 的 runtime 走的路。
 
 那份設定是 baton 自己的,不會掉進你的 repo——worker 面板跑在你的工作目錄裡,baton 在那裡寫 dotfile 會出現在
-`git status` 上。它也只帶記憶的寫入工具:完整的工具表是用來駕駛艦隊的(開面板、關面板、送 signal),那是
+`git status` 上。它帶的是記憶的寫入工具,加上三個 [peer 工具](CONTROL.zh-TW.md#群組互通)(`baton_peers`、`baton_peek`、`baton_tell`),
+後者只在你打開互通的群組裡才有回應:完整的工具表是用來駕駛艦隊的(開面板、關面板、送 signal),那是
 conductor 的工作。要關掉就寫 `panel.agent-mcp: false`,或在面板設定的「開啟預設」分頁切換。
 
 它是在**每一次啟動**當下才解析出來的,不會存在面板身上——所以重跑(`r`)以及 daemon 從快照重建回來的面板,
