@@ -21,13 +21,22 @@ func ctl(self string) *clientConn {
 // replyErr drains what a verb sent back, returning the error text or "" when it
 // answered with nothing (which is what a success looks like: the fleet snapshot
 // goes to the registered clients, not to the caller).
-func replyErr(cc *clientConn) string {
+func replyErr(cc *clientConn) string { return replyOf(cc, "error") }
+
+// replyOf drains what a verb sent back and returns the text of the first
+// message of type typ — its Error for "error", its Notice for "notice" — or ""
+// when none was queued. Messages of any other type are drained with it.
+func replyOf(cc *clientConn, typ string) string {
 	for {
 		select {
 		case msg := <-cc.out:
-			if msg.Type == "error" {
+			if msg.Type != typ {
+				continue
+			}
+			if typ == "error" {
 				return msg.Error
 			}
+			return msg.Notice
 		default:
 			return ""
 		}
@@ -39,6 +48,24 @@ func stateOf(s *Server, id string) panel.State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.panels[s.indexLocked(id)].State
+}
+
+// hasHit reports whether the worker has recorded a classifier answer for id,
+// under the lock the worker writes it under.
+func hasHit(s *Server, id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.classHit[id]
+	return ok
+}
+
+// sourceOf is what the wire says raised the panel's hand, by id — "declared",
+// "tail", "classifier", or "" when it is not in attention.
+func sourceOf(s *Server, id string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pids, held := s.pty.Pids(), s.pty.Held()
+	return s.wirePanel(s.panels[s.indexLocked(id)], pids, held).Source
 }
 
 // reasonOf is the panel's live declared reason, by id.

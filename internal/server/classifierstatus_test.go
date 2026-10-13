@@ -24,7 +24,7 @@ func classifierStatusOf(t *testing.T, s *Server, cc *clientConn) proto.Classifie
 // reply says nothing else about a socket it was never given.
 func TestClassifierStatusOffWithoutAClient(t *testing.T) {
 	s, _, _ := gateServer(panel.Panel{ID: "p1", Kind: panel.Agent, State: panel.Running})
-	got := classifierStatusOf(t, s, conn(""))
+	got := classifierStatusOf(t, s, ctl(""))
 	if got.Enabled || got.Socket != "" || got.Mold != nil || got.Error != "" {
 		t.Fatalf("no client should read as off and nothing else, got %+v", got)
 	}
@@ -36,10 +36,10 @@ func TestClassifierStatusOffWithoutAClient(t *testing.T) {
 func TestClassifierStatusReportsADeadSocket(t *testing.T) {
 	s, _, _ := gateServer(panel.Panel{ID: "p1", Kind: panel.Agent, State: panel.Running})
 	path := moldtest.Sock(t)
-	s.classifier = testClient(path)
+	withClassifier(t, s, path)
 	s.classifierRecord = true
 
-	got := classifierStatusOf(t, s, conn(""))
+	got := classifierStatusOf(t, s, ctl(""))
 	if !got.Enabled || got.Socket != path || got.Scope != "baton-attention" || got.MinConfidence != 0.5 || !got.Record {
 		t.Fatalf("the config in force should ride on the reply, got %+v", got)
 	}
@@ -61,8 +61,7 @@ func TestClassifierStatusReportsADeadSocket(t *testing.T) {
 func TestClassifierStatusProbeClearsTheLatch(t *testing.T) {
 	s, _, _ := gateServer(panel.Panel{ID: "p1", Kind: panel.Agent, State: panel.Running})
 	path := moldtest.Sock(t)
-	client := testClient(path)
-	s.classifier = client
+	client := withClassifier(t, s, path)
 
 	// Trip the latch while nothing listens, then bring the fake up.
 	if _, err := client.Ask(context.Background(), "x"); err == nil {
@@ -75,7 +74,7 @@ func TestClassifierStatusProbeClearsTheLatch(t *testing.T) {
 		return moldtest.StatusReply(4772, "0.3.1", "/b", 12, "cpu")
 	})
 
-	got := classifierStatusOf(t, s, conn(""))
+	got := classifierStatusOf(t, s, ctl(""))
 	if got.Error != "" || got.Mold == nil {
 		t.Fatalf("a live socket should answer with mold's status, got %+v", got)
 	}
@@ -102,9 +101,9 @@ func TestClassifierStatusIsOpenToAConductor(t *testing.T) {
 	moldtest.Serve(t, path, func(map[string]any) []byte {
 		return moldtest.StatusReply(4772, "0.3.1", "/b", 12, "cpu")
 	})
-	s.classifier = testClient(path)
+	withClassifier(t, s, path)
 
-	cc := conn("p1")
+	cc := ctl("p1")
 	cc.role = roleConductor
 	got := classifierStatusOf(t, s, cc)
 	if !got.Enabled || got.Mold == nil {

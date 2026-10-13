@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cmj0121/baton/internal/control"
 	"github.com/cmj0121/baton/internal/proto"
 )
 
@@ -46,12 +45,7 @@ func TestClassifierLine(t *testing.T) {
 // no classifier block, the one situation a test server has for free: the
 // client round-trips the typed reply and the verb prints the off line.
 func TestCtlClassifierOff(t *testing.T) {
-	sock := ctlTestServer(t)
-	c, err := control.DialSocket(sock, "", "", "")
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	defer func() { _ = c.Close() }()
+	c := ctlDial(t, ctlTestServer(t))
 
 	printed := captureStdout(t, func() {
 		if err := (ctlClassifierStatus{}).Run(c); err != nil {

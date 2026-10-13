@@ -77,9 +77,6 @@ func (s *Server) classifyLoop(stop <-chan struct{}) {
 				continue
 			}
 			s.mu.Lock()
-			if s.classHit == nil {
-				s.classHit = make(map[string]uint64)
-			}
 			s.classHit[req.id] = req.hash
 			s.mu.Unlock()
 		}
@@ -99,9 +96,6 @@ func (s *Server) enqueueClassLocked(id string, hash uint64, tail []byte) {
 	}
 	select {
 	case s.classQ <- classReq{id: id, hash: hash, tail: tail}:
-		if s.classAsked == nil {
-			s.classAsked = make(map[string]uint64)
-		}
 		s.classAsked[id] = hash
 	default:
 	}
@@ -111,21 +105,22 @@ func (s *Server) enqueueClassLocked(id string, hash uint64, tail []byte) {
 // configured and it has not been found absent. Caller holds s.mu.
 func (s *Server) classLiveLocked() bool { return s.classifier != nil && !s.classifier.Absent() }
 
-// classAskedLocked reports whether the classifier has been asked about SOME
-// screen of this panel since it last woke — any hash, not a particular one;
-// the per-screen check is enqueueClassLocked's. Caller holds s.mu.
+// classAskedLocked reports whether the classifier holds an entry for this
+// panel. At rest that entry is always about the screen showing now: output
+// wakes the panel, and the wake deletes the entry, so a resting panel's screen
+// has not changed since it was asked about. Caller holds s.mu.
 func (s *Server) classAskedLocked(id string) bool {
 	_, ok := s.classAsked[id]
 	return ok
 }
 
 // forgetAskedLocked drops every "already asked" memory, so each quiet panel is
-// asked once more about the screen it holds. It is what a re-armed classifier
-// needs — a fresh client on reload, or a status probe that found mold alive —
-// since the asks that failed while it was absent were forgotten one by one,
-// but the ones dropped at a full queue or answered "no" by a stale bundle were
-// not. Caller holds s.mu.
-func (s *Server) forgetAskedLocked() { s.classAsked = nil }
+// asked once more about the screen it holds. The one reason to want that is a
+// RETRAINED bundle: its "no" may now be a "yes", and a reload or a status probe
+// is the operator saying "ask every screen again". Re-arming alone needs none
+// of it — a failed ask forgets itself, and nothing is enqueued while the
+// client is absent. Caller holds s.mu.
+func (s *Server) forgetAskedLocked() { clear(s.classAsked) }
 
 // takeClassHitLocked consumes a pending classifier hit for a panel and reports
 // whether it still applies: the tail is read once more and the answer counts
@@ -152,9 +147,6 @@ func (s *Server) noteRaisedLocked(id string, ns panel.State, sig stateSignals) {
 	if ns != panel.Attention || sig.declared {
 		delete(s.raisedBy, id)
 		return
-	}
-	if s.raisedBy == nil {
-		s.raisedBy = make(map[string]string)
 	}
 	if sig.classAtt {
 		s.raisedBy[id] = "classifier"

@@ -183,7 +183,7 @@ classifier: on — mold 0.3.1 pid 4772, bundle ~/.mold/bundle, 12 keys, cpu; sco
 
 | 事件                                                          | 檔案                               | 資料列                            |
 | ------------------------------------------------------------- | ---------------------------------- | --------------------------------- |
-| agent 面板自己的 `baton ctl attention --why`                  | `~/.baton/attention-rows.jsonl`    | `{"text":…,"keys":["attention"]}` |
+| 面板自己的 `baton ctl attention --why`                        | `~/.baton/attention-rows.jsonl`    | `{"text":…,"keys":["attention"]}` |
 | `m` / `C-t m` / `baton ctl attention-mark --id`               | `~/.baton/attention-rows.jsonl`    | `{"text":…,"keys":["attention"]}` |
 | 在正規表達式或分類器升起的列上按 `x`                          | `~/.baton/attention-holdout.jsonl` | `{"text":…,"keys":[]}`            |
 | 在這種列上按 `i` / `1`–`3`——回覆把列當作「已回答」清掉        | 沒有                               | —                                 |

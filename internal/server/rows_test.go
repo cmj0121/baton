@@ -13,12 +13,10 @@ import (
 )
 
 // rowsHome points $HOME at a fresh directory so the two row files are the
-// test's own, and returns it.
-func rowsHome(t *testing.T) string {
+// test's own.
+func rowsHome(t *testing.T) {
 	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	return home
+	t.Setenv("HOME", t.TempDir())
 }
 
 // fileLines is the file's lines, or nil when it does not exist.
@@ -46,16 +44,17 @@ func recordingServer(t *testing.T, state panel.State, screen, needle string) (*S
 }
 
 // notice drains a verb's reply for its notice text, "" when there was none.
-func notice(cc *clientConn) string {
-	for {
-		select {
-		case msg := <-cc.out:
-			if msg.Type == "notice" {
-				return msg.Notice
-			}
-		default:
-			return ""
-		}
+func notice(cc *clientConn) string { return replyOf(cc, "notice") }
+
+// seedRows writes body as the whole of the row file at path, making its
+// directory first — a file the daemon finds already there.
+func seedRows(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -80,9 +79,10 @@ func TestDeclarationWritesAPositiveRow(t *testing.T) {
 	}
 }
 
-// TestDeclarationFromAShellWritesNothing: a shell's declaration is addressed
-// by hand and says nothing about what an agent's screen looks like.
-func TestDeclarationFromAShellWritesNothing(t *testing.T) {
+// TestDeclarationFromAShellWritesAPositive: the rows are the screens the
+// classifier is asked about, and it is asked about shells too — so a shell's
+// declaration labels its tail like an agent's does.
+func TestDeclarationFromAShellWritesAPositive(t *testing.T) {
 	rowsHome(t)
 	s, _, _ := gateServer(panel.Panel{ID: "sh1", Kind: panel.Shell, State: panel.Running})
 	s.pty = scriptPty(t, "sh1", "Password:", "Password")
@@ -92,8 +92,9 @@ func TestDeclarationFromAShellWritesNothing(t *testing.T) {
 	if got := stateOf(s, "sh1"); got != panel.Attention {
 		t.Fatalf("the declaration itself still stands, got %v", got)
 	}
-	if got := fileLines(t, paths.AttentionRows()); got != nil {
-		t.Fatalf("a shell panel's tail is not a training row, got %q", got)
+	want := `{"text":"Password:","keys":["attention"]}`
+	if got := fileLines(t, paths.AttentionRows()); len(got) != 1 || got[0] != want {
+		t.Fatalf("rows file = %q, want exactly [%s]", got, want)
 	}
 }
 
@@ -139,6 +140,22 @@ func TestMarkWritesAPositiveRowAndLeavesTheStateAlone(t *testing.T) {
 	}
 }
 
+// TestMarkRefusesAnExitedPanelOutLoud: a dead screen is not a wait, and the
+// cockpit's row may be stale, so the daemon writes nothing and says why rather
+// than leaving the status line on "marked".
+func TestMarkRefusesAnExitedPanelOutLoud(t *testing.T) {
+	s, _ := recordingServer(t, panel.Exited, "Password:", "Password")
+	cc := ctl("")
+
+	s.onCommand(cc, proto.Command{Action: "attention.mark", ID: "p1"})
+	if got := notice(cc); got != "not marked: the panel has exited" {
+		t.Fatalf("an exited panel should be refused with a notice, got %q", got)
+	}
+	if got := fileLines(t, paths.AttentionRows()); got != nil {
+		t.Fatalf("an exited panel's screen is not a row, got %q", got)
+	}
+}
+
 // TestMarkIsAnOperatorVerb: the inbox is an operator surface, and a conductor
 // labelling tails across the fleet would be an agent teaching the classifier
 // what an agent thinks a wait looks like.
@@ -165,10 +182,9 @@ func TestMarkIsAnOperatorVerb(t *testing.T) {
 func TestDismissOfAGuessWritesANegative(t *testing.T) {
 	s, clk := recordingServer(t, panel.Running, "Apply this refactor?", "refactor?")
 
-	clk.add(idleAfter)
-	s.monitorTick()
-	if stateOf(s, "p1") != panel.Attention || s.sourceOf("p1") != "tail" {
-		t.Fatalf("setup: the regex should raise it, got %v %q", stateOf(s, "p1"), s.sourceOf("p1"))
+	settle(s, clk)
+	if stateOf(s, "p1") != panel.Attention || sourceOf(s, "p1") != "tail" {
+		t.Fatalf("setup: the regex should raise it, got %v %q", stateOf(s, "p1"), sourceOf(s, "p1"))
 	}
 
 	cc := ctl("")
@@ -188,10 +204,9 @@ func TestDismissOfAGuessWritesANegative(t *testing.T) {
 // TestSnoozeOfAGuessWritesNothing (R5): a snooze is "later", not "wrong".
 func TestSnoozeOfAGuessWritesNothing(t *testing.T) {
 	s, clk := recordingServer(t, panel.Running, "Apply this refactor?", "refactor?")
-	clk.add(idleAfter)
-	s.monitorTick()
-	if s.sourceOf("p1") != "tail" {
-		t.Fatalf("setup: the regex should raise it, got %q", s.sourceOf("p1"))
+	settle(s, clk)
+	if sourceOf(s, "p1") != "tail" {
+		t.Fatalf("setup: the regex should raise it, got %q", sourceOf(s, "p1"))
 	}
 
 	until := clk.now().Add(10 * time.Minute).Format(time.RFC3339Nano)
@@ -205,11 +220,10 @@ func TestSnoozeOfAGuessWritesNothing(t *testing.T) {
 // human clearing the row is not a vote against the agent's own word.
 func TestDismissOfADeclarationWritesNothing(t *testing.T) {
 	s, clk := recordingServer(t, panel.Running, "Apply this refactor?", "refactor?")
-	clk.add(idleAfter)
-	s.monitorTick()
+	settle(s, clk)
 	s.declareAttention(ctl("p1"), proto.Command{Action: "panel.attention", Reason: "really waiting"})
-	if s.sourceOf("p1") != "declared" {
-		t.Fatalf("setup: the declaration should stand, got %q", s.sourceOf("p1"))
+	if sourceOf(s, "p1") != "declared" {
+		t.Fatalf("setup: the declaration should stand, got %q", sourceOf(s, "p1"))
 	}
 	rowsBefore := fileLines(t, paths.AttentionRows())
 
@@ -228,10 +242,9 @@ func TestDismissOfADeclarationWritesNothing(t *testing.T) {
 // panel.attention's and attention.mark's to certify.
 func TestAnsweredAckWritesNothing(t *testing.T) {
 	s, clk := recordingServer(t, panel.Running, "Apply this refactor?", "refactor?")
-	clk.add(idleAfter)
-	s.monitorTick()
-	if s.sourceOf("p1") != "tail" {
-		t.Fatalf("setup: the regex should have raised it, got %q", s.sourceOf("p1"))
+	settle(s, clk)
+	if sourceOf(s, "p1") != "tail" {
+		t.Fatalf("setup: the regex should have raised it, got %q", sourceOf(s, "p1"))
 	}
 
 	s.onCommand(ctl(""), proto.Command{Action: "panel.ack", ID: "p1", Answered: true})
@@ -270,8 +283,7 @@ func TestRecordOffWritesNothingAnywhere(t *testing.T) {
 	if got := notice(cc); got != "marked as a wait (not recorded)" {
 		t.Fatalf("with record off the reply says so, got %q", got)
 	}
-	clk.add(idleAfter)
-	s.monitorTick()
+	settle(s, clk)
 	s.onCommand(cc, proto.Command{Action: "panel.ack", ID: "p1"})
 	s.declareAttention(ctl("p1"), proto.Command{Action: "panel.attention", Reason: "waiting"})
 
@@ -285,14 +297,9 @@ func TestRecordOffWritesNothingAnywhere(t *testing.T) {
 // TestRowFileDedupsAcrossALoad: the set is filled from the file on first use,
 // so the same overlay is one row across daemon restarts too.
 func TestRowFileDedupsAcrossALoad(t *testing.T) {
-	home := rowsHome(t)
-	path := filepath.Join(home, ".baton", "attention-rows.jsonl")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(`{"text":"Password:","keys":["attention"]}`+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	rowsHome(t)
+	path := paths.AttentionRows()
+	seedRows(t, path, `{"text":"Password:","keys":["attention"]}`+"\n")
 	f := &rowFile{path: path}
 	if f.append("Password:", true) != 0 {
 		t.Fatal("a text already on disk must not be written again")
@@ -314,16 +321,11 @@ func TestRowFileDedupsAcrossALoad(t *testing.T) {
 // TestRowFileStopsAtTheCap is D13: at the cap the write is skipped, said once,
 // and the file is not grown — never truncated.
 func TestRowFileStopsAtTheCap(t *testing.T) {
-	home := rowsHome(t)
-	path := filepath.Join(home, ".baton", "attention-holdout.jsonl")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	rowsHome(t)
+	path := paths.AttentionHoldout()
 	line := `{"text":"x","keys":[]}` + "\n"
 	full := strings.Repeat(line, rowCap/len(line)+1)
-	if err := os.WriteFile(path, []byte(full), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	seedRows(t, path, full)
 	logs := captureLog(t)
 
 	f := &rowFile{path: path}
@@ -346,32 +348,20 @@ func TestRowFileStopsAtTheCap(t *testing.T) {
 // TestRowCountsReadTheFiles is what `classifier status` shows: lines per file,
 // zero when absent, and the cap flag — read from disk, under no lock.
 func TestRowCountsReadTheFiles(t *testing.T) {
-	home := rowsHome(t)
+	rowsHome(t)
 
 	if r, h, c := rowCounts(); r != 0 || h != 0 || c {
 		t.Fatalf("absent files count as empty, got %d %d %v", r, h, c)
 	}
 
-	dir := filepath.Join(home, ".baton")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	rows := strings.Repeat(`{"text":"a","keys":["attention"]}`+"\n", 3)
-	if err := os.WriteFile(filepath.Join(dir, "attention-rows.jsonl"), []byte(rows), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "attention-holdout.jsonl"), []byte(`{"text":"b","keys":[]}`+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	seedRows(t, paths.AttentionRows(), strings.Repeat(`{"text":"a","keys":["attention"]}`+"\n", 3))
+	seedRows(t, paths.AttentionHoldout(), `{"text":"b","keys":[]}`+"\n")
 	if r, h, c := rowCounts(); r != 3 || h != 1 || c {
 		t.Fatalf("counts = %d %d %v, want 3 1 false", r, h, c)
 	}
 
 	line := `{"text":"x","keys":[]}` + "\n"
-	full := strings.Repeat(line, rowCap/len(line)+1)
-	if err := os.WriteFile(filepath.Join(dir, "attention-holdout.jsonl"), []byte(full), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	seedRows(t, paths.AttentionHoldout(), strings.Repeat(line, rowCap/len(line)+1))
 	if _, _, c := rowCounts(); !c {
 		t.Fatal("a file at its cap should be reported")
 	}

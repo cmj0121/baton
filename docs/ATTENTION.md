@@ -201,7 +201,7 @@ What lands in the two files, and what never does:
 
 | Event                                                                 | File                               | Row                               |
 | --------------------------------------------------------------------- | ---------------------------------- | --------------------------------- |
-| an agent panel's own `baton ctl attention --why`                      | `~/.baton/attention-rows.jsonl`    | `{"text":…,"keys":["attention"]}` |
+| a panel's own `baton ctl attention --why`                             | `~/.baton/attention-rows.jsonl`    | `{"text":…,"keys":["attention"]}` |
 | `m` / `C-t m` / `baton ctl attention-mark --id`                       | `~/.baton/attention-rows.jsonl`    | `{"text":…,"keys":["attention"]}` |
 | `x` on a row the **regex or the classifier** raised                   | `~/.baton/attention-holdout.jsonl` | `{"text":…,"keys":[]}`            |
 | `i` / `1`–`3` on such a row — the reply clears it as **answered**     | nothing                            | —                                 |

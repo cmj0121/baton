@@ -1089,9 +1089,5 @@ func TestInboxMarkTeachesWithoutClearing(t *testing.T) {
 	if !strings.Contains(m.status, "marked as a wait") {
 		t.Errorf("status = %q, want the mark confirmed", m.status)
 	}
-	select {
-	case c := <-cmds:
-		t.Errorf("nothing but the mark should go out, got %+v", c)
-	case <-time.After(50 * time.Millisecond):
-	}
+	expectNoCmd(t, cmds)
 }

@@ -299,7 +299,7 @@ func (sig stateSignals) wantsTail() bool {
 	// stuckDue stays a reason to skip THIS read. The permission overlay is a
 	// separate, narrower read on that same edge (signalsLocked); folding it
 	// into looksAtt would let a trailing "?" outrank the timer.
-	return sig.quiet && !sig.declared && !sig.stuckDue && (!sig.taskDone || !sig.agent)
+	return sig.undecided() && (!sig.taskDone || !sig.agent)
 }
 
 // signalsLocked reads everything nextState needs about one panel: the quiet
@@ -351,37 +351,37 @@ func (s *Server) signalsLocked(p panel.Panel, taskDone bool) stateSignals {
 	if !suppressed && sig.cur != panel.Exited {
 		sig.classAtt = s.takeClassHitLocked(p.ID)
 	}
-	if sig.wantsTail() && !suppressed {
+	// One read serves both opinions. The settling tick reads for the regex, and
+	// a "no" asks the classifier about the same bytes for free. A resting panel
+	// the classifier has no entry for is read once more: it settled while mold
+	// was away, its ask was dropped at a full queue, or a reload or probe forgot
+	// it. At rest an entry is always about the screen showing now, because wake
+	// deletes it — so the map lookup, not a tail read, decides, and it runs
+	// before classLiveLocked takes the client's mutex. The worker shapes the
+	// text, so the tick pays only for the hash.
+	regex := sig.wantsTail()
+	reask := !regex && sig.classWantsTail() && !s.classAskedLocked(p.ID) && s.classLiveLocked()
+	if (regex || reask) && !suppressed {
 		tail := s.pty.Tail(p.ID, attnTailBytes)
-		sig.looksAtt = looksLikeAttention(tail)
-		// The regex said no; ask the second opinion about the same bytes, off the
-		// tick. A client that has already failed is not asked (regex decides).
-		// The worker shapes the text, so the tick pays only for the hash.
+		if regex {
+			sig.looksAtt = looksLikeAttention(tail)
+		}
 		if !sig.looksAtt && s.classLiveLocked() {
 			s.enqueueClassLocked(p.ID, fnv64(tail), tail)
 		}
-	} else if sig.classWantsTail() && !suppressed && s.classLiveLocked() && !s.classAskedLocked(p.ID) {
-		// A resting panel whose screen the classifier has NOT been asked
-		// about: the ask failed while mold was away, or the memory of asking
-		// was dropped by a reload or a status probe. One more read, once —
-		// the ask records the screen, and a "no" is remembered as well as a
-		// "yes", so a resting fleet of fifty pays fifty reads at a re-arm
-		// and none a second later. Without this, a panel that settled on
-		// `Password:` while mold was down would wait for output that never
-		// comes.
-		tail := s.pty.Tail(p.ID, attnTailBytes)
-		s.enqueueClassLocked(p.ID, fnv64(tail), tail)
 	}
 	return sig
 }
 
 // classWantsTail reports whether the classifier may still raise this resting
-// panel: quiet, at rest in a state its rung can lift (idle or done — the
-// settling states are wantsTail's), with no declaration and no timer about
-// to speak for it.
+// (idle or done) panel, with nothing above its rung left to speak for it.
 func (sig stateSignals) classWantsTail() bool {
-	return sig.quiet && !sig.declared && !sig.stuckDue && (sig.cur == panel.Idle || sig.cur == panel.Done)
+	return sig.undecided() && (sig.cur == panel.Idle || sig.cur == panel.Done)
 }
+
+// undecided is what both tail reads share: quiet, with no declaration and no
+// stuck timer already deciding the panel.
+func (sig stateSignals) undecided() bool { return sig.quiet && !sig.declared && !sig.stuckDue }
 
 // renderSpark turns a window of per-bucket byte counts into a bar sparkline,
 // scaled to the busiest bucket so the shape shows relative output rate. An

@@ -12,10 +12,18 @@ import (
 // client so the commands the git menu sends can be asserted.
 func zoomedAgent(t *testing.T) (model, <-chan proto.Command) {
 	t.Helper()
+	return zoomedAgentIn(t, panel.Running)
+}
+
+// zoomedAgentIn is zoomedAgent with the panel in the given state. An exited
+// panel carries a replay, so the zoom opens onto its last screen rather than
+// being refused as a dead slot.
+func zoomedAgentIn(t *testing.T, state panel.State) (model, <-chan proto.Command) {
+	t.Helper()
 	c, cmds := recordingServer(t)
 	m := baseModel()
 	m.client = c
-	p := panel.Panel{ID: "a1", Kind: panel.Agent, Title: "claude · api", State: panel.Running}
+	p := panel.Panel{ID: "a1", Kind: panel.Agent, Title: "claude · api", State: state, Replay: state == panel.Exited}
 	m.fleet = []panel.Panel{p}
 	m = m.zoomInto(p)
 	return m, cmds

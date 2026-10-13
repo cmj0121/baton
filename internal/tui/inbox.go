@@ -556,9 +556,9 @@ func (m model) markInboxRow() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	if r.stale || r.state == panel.Exited {
-		// A dead screen is not a wait; the daemon refuses it too, but the
-		// status line should say why rather than "marked".
+	// Only staleness is checked here: the daemon refuses an exited panel and
+	// says so, and its notice replaces "marked" on the status line.
+	if r.stale {
 		m.status = m.tr("inbox.stale-row", "that row is stale — r refreshes the queue")
 		return m, nil
 	}

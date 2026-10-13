@@ -485,9 +485,8 @@ type Server struct {
 	// panel was last asked about so the same screen is not asked twice, classHit
 	// holds the hash a confident "attention" came back for until the next tick
 	// applies it, and raisedBy records who raised an undeclared attention —
-	// "tail" or "classifier" — for the inbox to print (D10). All but classQ are
-	// made lazily by their writers and guarded by mu; classQ is made once, with
-	// the Monitor.
+	// "tail" or "classifier" — for the inbox to print (D10). The three maps are
+	// made in New and guarded by mu; classQ is made once, with the Monitor.
 	classifier       *classifier.Client
 	classifierRecord bool
 	classQ           chan classReq
@@ -1087,6 +1086,9 @@ func New(ln net.Listener, opts ...Option) *Server {
 		pendingDispatch: make(map[string]delivery),
 		declared:        make(map[string]*declaration),
 		taskSettled:     make(map[string]bool),
+		classAsked:      make(map[string]uint64),
+		classHit:        make(map[string]uint64),
+		raisedBy:        make(map[string]string),
 		acked:           make(map[string]time.Time),
 		exitedAt:        make(map[string]time.Time),
 		tasks:           make(map[string]*task.Task),
@@ -1164,7 +1166,9 @@ func (s *Server) Reload(set Settings) {
 	// A fresh client per reload, so a SIGHUP is also the reset of its failure
 	// latch; the worker picks up whichever client stands when it next asks.
 	s.classifier, s.classifierRecord = newClassifier(set.Classifier), set.ClassifierRecord
-	s.forgetAskedLocked()             // a new client, or a retrained bundle: ask every quiet screen again
+	// A reload is how a retrained bundle comes into service, so every quiet
+	// screen is asked again; a fresh client alone would not need it.
+	s.forgetAskedLocked()
 	s.agentIsolate = set.AgentIsolate // resolved per spawn, so live panels keep the runtime they started under
 	s.trackCwd, s.restoreCwd = set.TrackCwd, set.RestoreCwd
 	// The logging policy swaps whole, like the caps: a panel records its PROFILE,

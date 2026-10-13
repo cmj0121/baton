@@ -31,16 +31,14 @@ func TestZoomMarkTeachesTheClassifier(t *testing.T) {
 	}
 }
 
-// TestZoomMarkRefusesADeadScreen: an exited panel has no screen worth learning
-// from, and the cockpit says so rather than sending a mark the daemon would
-// write anyway.
+// TestZoomMarkRefusesADeadScreen: a zoom has no row to be stale, so it refuses
+// an exited panel itself rather than sending a mark the daemon would refuse.
 func TestZoomMarkRefusesADeadScreen(t *testing.T) {
-	c, cmds := recordingServer(t)
-	m := baseModel()
-	m.client = c
-	p := panel.Panel{ID: "a1", Kind: panel.Agent, Title: "claude · api", State: panel.Exited}
-	m.fleet = []panel.Panel{p}
-	m = m.zoomInto(p)
+	m, cmds := zoomedAgentIn(t, panel.Exited)
+	if m.mode != modeZoom || !m.zoomExited {
+		t.Fatalf("setup: the zoom should be open on the exited panel, got mode %v exited %v", m.mode, m.zoomExited)
+	}
+	waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "panel.resize" }) // the zoom's own attach and resize
 
 	nm, _ := m.handleZoomKey(key("ctrl+t"))
 	m = nm.(model)
@@ -50,11 +48,28 @@ func TestZoomMarkRefusesADeadScreen(t *testing.T) {
 	if !strings.Contains(m.status, "nothing to mark") {
 		t.Errorf("status = %q, want a refusal", m.status)
 	}
-	select {
-	case cmd := <-cmds:
-		if cmd.Action == "attention.mark" {
-			t.Fatal("an exited panel must not be marked")
-		}
-	case <-time.After(50 * time.Millisecond):
+	expectNoCmd(t, cmds)
+}
+
+// TestInboxMarkLeavesAnExitedRowToTheDaemon: an exited row that is not stale
+// sends the mark — the daemon refuses an exited panel and says so, and its
+// notice is what the status line ends on.
+func TestInboxMarkLeavesAnExitedRowToTheDaemon(t *testing.T) {
+	failed := wire("1", "exited", time.Minute)
+	failed.ExitCode = 2
+	m, cmds := clientInbox(t, failed)
+	if got := rowIDs(m); !eqIDs(got, "1") {
+		t.Fatalf("setup: a failed exit should be the one row, got %v", got)
+	}
+
+	m = press(m, keyAttentionMark)
+	mark := waitCmd(t, cmds, func(c proto.Command) bool { return c.Action == "attention.mark" })
+	if mark.ID != "1" {
+		t.Fatalf("attention.mark should name the exited row, got %+v", mark)
+	}
+
+	m.applyEvent(proto.ServerMsg{Type: "notice", ID: "1", Notice: "not marked: the panel has exited"})
+	if m.status != "not marked: the panel has exited" {
+		t.Errorf("status = %q, want the daemon's refusal", m.status)
 	}
 }

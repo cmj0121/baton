@@ -27,12 +27,22 @@ func classifierServer(t *testing.T, reply func(req map[string]any) []byte) (*Ser
 	s, clk, _ := gateServer(panel.Panel{ID: "p1", Kind: panel.Agent, State: panel.Running})
 	path := moldtest.Sock(t)
 	mold := moldtest.Serve(t, path, reply)
-	s.classifier = testClient(path)
+	withClassifier(t, s, path)
+	return s, clk, mold
+}
+
+// withClassifier attaches a testClient at path to s, makes the ask queue, and
+// runs the worker until the test ends — the wiring New and the Monitor do for a
+// daemon. It returns the client so a test can trip or read its latch.
+func withClassifier(t *testing.T, s *Server, path string) *classifier.Client {
+	t.Helper()
+	c := testClient(path)
+	s.classifier = c
 	s.classQ = make(chan classReq, classQueueCap)
 	stop := make(chan struct{})
 	t.Cleanup(func() { close(stop) })
 	go s.classifyLoop(stop)
-	return s, clk, mold
+	return c
 }
 
 // waitFor polls cond until it holds or the deadline passes.
@@ -47,20 +57,12 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// hasHit reports whether the worker has recorded an answer for id, under the
-// lock the worker writes it under.
-func (s *Server) hasHit(id string) bool {
+// asked reports whether the classifier holds an "already asked" entry for id,
+// under the lock the worker forgets it under.
+func asked(s *Server, id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.classHit[id]
-	return ok
-}
-
-func (s *Server) sourceOf(id string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	pids, held := s.pty.Pids(), s.pty.Held()
-	return s.wirePanel(s.panels[s.indexLocked(id)], pids, held).Source
+	return s.classAskedLocked(id)
 }
 
 // TestClassifierRaisesAPlainTailFromIdle is the unit's acceptance row: a quiet
@@ -73,25 +75,24 @@ func TestClassifierRaisesAPlainTailFromIdle(t *testing.T) {
 	s, clk, mold := classifierServer(t, func(map[string]any) []byte { return moldtest.AskReply("attention", 0.9, "baton-attention") })
 	s.pty = scriptPty(t, "p1", "Your call, and then I continue", "I continue")
 
-	clk.add(idleAfter)
-	s.monitorTick()
-	if s.panels[0].State != panel.Idle {
-		t.Fatalf("the regex passes a plain tail; the first tick settles to idle, got %v", s.panels[0].State)
+	settle(s, clk)
+	if stateOf(s, "p1") != panel.Idle {
+		t.Fatalf("the regex passes a plain tail; the first tick settles to idle, got %v", stateOf(s, "p1"))
 	}
-	waitFor(t, "the classifier's answer", func() bool { return s.hasHit("p1") })
+	waitFor(t, "the classifier's answer", func() bool { return hasHit(s, "p1") })
 	if mold.Dials() != 1 {
 		t.Fatalf("one tail, one ask, got %d dials", mold.Dials())
 	}
 
 	clk.add(monitorInterval)
 	s.monitorTick()
-	if s.panels[0].State != panel.Attention {
-		t.Fatalf("the second tick applies the answer, got %v", s.panels[0].State)
+	if stateOf(s, "p1") != panel.Attention {
+		t.Fatalf("the second tick applies the answer, got %v", stateOf(s, "p1"))
 	}
-	if got := s.sourceOf("p1"); got != "classifier" {
+	if got := sourceOf(s, "p1"); got != "classifier" {
 		t.Fatalf("the snapshot should blame the classifier, got %q", got)
 	}
-	if s.hasHit("p1") {
+	if hasHit(s, "p1") {
 		t.Fatal("an applied hit is consumed")
 	}
 
@@ -103,8 +104,8 @@ func TestClassifierRaisesAPlainTailFromIdle(t *testing.T) {
 	}
 
 	s.routeOutput("p1", []byte("ok, continuing"), 0)
-	if s.panels[0].State != panel.Running || s.sourceOf("p1") != "" {
-		t.Fatalf("output wakes the panel and drops the source, got %v %q", s.panels[0].State, s.sourceOf("p1"))
+	if stateOf(s, "p1") != panel.Running || sourceOf(s, "p1") != "" {
+		t.Fatalf("output wakes the panel and drops the source, got %v %q", stateOf(s, "p1"), sourceOf(s, "p1"))
 	}
 }
 
@@ -125,8 +126,7 @@ func TestClassifierNoIsNotAnAnswer(t *testing.T) {
 			s, clk, mold := classifierServer(t, func(map[string]any) []byte { return tc.reply })
 			s.pty = scriptPty(t, "p1", "Your call, and then I continue", "I continue")
 
-			clk.add(idleAfter)
-			s.monitorTick()
+			settle(s, clk)
 			waitFor(t, "the ask to go out", func() bool { return mold.Dials() == 1 })
 			// Give a wrong-headed worker every chance to record a hit before asserting.
 			time.Sleep(100 * time.Millisecond)
@@ -134,10 +134,10 @@ func TestClassifierNoIsNotAnAnswer(t *testing.T) {
 				clk.add(monitorInterval)
 				s.monitorTick()
 			}
-			if s.panels[0].State != panel.Idle {
-				t.Fatalf("a no leaves the regex's idle in place, got %v", s.panels[0].State)
+			if stateOf(s, "p1") != panel.Idle {
+				t.Fatalf("a no leaves the regex's idle in place, got %v", stateOf(s, "p1"))
 			}
-			if got := s.sourceOf("p1"); got != "" {
+			if got := sourceOf(s, "p1"); got != "" {
 				t.Fatalf("an idle panel has no source, got %q", got)
 			}
 		})
@@ -157,18 +157,17 @@ func TestClassifierIgnoresAStaleAnswer(t *testing.T) {
 	})
 	s.pty = scriptPty(t, "p1", "Your call, and then I continue", "I continue")
 
-	clk.add(idleAfter)
-	s.monitorTick()
-	waitFor(t, "the classifier's answer", func() bool { return s.hasHit("p1") })
+	settle(s, clk)
+	waitFor(t, "the classifier's answer", func() bool { return hasHit(s, "p1") })
 
 	// The screen moved on before the answer was applied.
 	s.pty = scriptPty(t, "p1", "Compiling 12 of 40", "12 of 40")
 	clk.add(monitorInterval)
 	s.monitorTick()
-	if s.panels[0].State != panel.Idle {
-		t.Fatalf("an answer about a tail no longer on screen must not raise the panel, got %v", s.panels[0].State)
+	if stateOf(s, "p1") != panel.Idle {
+		t.Fatalf("an answer about a tail no longer on screen must not raise the panel, got %v", stateOf(s, "p1"))
 	}
-	if s.hasHit("p1") {
+	if hasHit(s, "p1") {
 		t.Fatal("a stale hit is dropped, not kept for a screen that may come back")
 	}
 }
@@ -181,10 +180,9 @@ func TestNoClassifierAsksNothing(t *testing.T) {
 	s.classQ = make(chan classReq, classQueueCap)
 	s.pty = scriptPty(t, "p1", "Your call, and then I continue", "I continue")
 
-	clk.add(idleAfter)
-	s.monitorTick()
-	if s.panels[0].State != panel.Idle {
-		t.Fatalf("got %v, want idle", s.panels[0].State)
+	settle(s, clk)
+	if stateOf(s, "p1") != panel.Idle {
+		t.Fatalf("got %v, want idle", stateOf(s, "p1"))
 	}
 	if len(s.classQ) != 0 || len(s.classAsked) != 0 {
 		t.Fatalf("nothing should be asked without a classifier: queue %d, asked %v", len(s.classQ), s.classAsked)
@@ -197,20 +195,19 @@ func TestRaisedBySaysWhichGuess(t *testing.T) {
 	s, clk, _ := gateServer(panel.Panel{ID: "p1", Kind: panel.Agent, State: panel.Running})
 	s.pty = scriptPty(t, "p1", "Apply this refactor?", "refactor?")
 
-	clk.add(idleAfter)
-	s.monitorTick()
-	if s.panels[0].State != panel.Attention || s.sourceOf("p1") != "tail" {
-		t.Fatalf("a regex raise is the tail's, got %v %q", s.panels[0].State, s.sourceOf("p1"))
+	settle(s, clk)
+	if stateOf(s, "p1") != panel.Attention || sourceOf(s, "p1") != "tail" {
+		t.Fatalf("a regex raise is the tail's, got %v %q", stateOf(s, "p1"), sourceOf(s, "p1"))
 	}
 
 	s.declared["p1"] = &declaration{Reason: "which migration?"}
-	if got := s.sourceOf("p1"); got != "declared" {
+	if got := sourceOf(s, "p1"); got != "declared" {
 		t.Fatalf("a standing declaration outranks the guess on the wire, got %q", got)
 	}
 	delete(s.declared, "p1")
 
 	s.routeOutput("p1", []byte("done"), 0)
-	if _, ok := s.raisedBy["p1"]; ok || s.sourceOf("p1") != "" {
+	if _, ok := s.raisedBy["p1"]; ok || sourceOf(s, "p1") != "" {
 		t.Fatalf("leaving attention forgets who raised it, got %v", s.raisedBy)
 	}
 }
@@ -223,22 +220,12 @@ func TestRaisedBySaysWhichGuess(t *testing.T) {
 func TestAnAskThatFailedIsAskedAgainOnceMoldIsBack(t *testing.T) {
 	s, clk, _ := gateServer(panel.Panel{ID: "p1", Kind: panel.Agent, State: panel.Running})
 	path := moldtest.Sock(t) // nobody listens yet
-	s.classifier = testClient(path)
-	s.classQ = make(chan classReq, classQueueCap)
-	stop := make(chan struct{})
-	t.Cleanup(func() { close(stop) })
-	go s.classifyLoop(stop)
+	withClassifier(t, s, path)
 	s.pty = scriptPty(t, "p1", "Password:", "Password:")
 
-	clk.add(idleAfter)
-	s.monitorTick()
+	settle(s, clk)
 	waitFor(t, "the latch to trip on the dead socket", func() bool { return s.classifier.Absent() })
-	waitFor(t, "the failed ask to be forgotten", func() bool {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		_, asked := s.classAsked["p1"]
-		return !asked
-	})
+	waitFor(t, "the failed ask to be forgotten", func() bool { return !asked(s, "p1") })
 
 	// mold comes up, answering attention; the operator runs `classifier status`.
 	mold := moldtest.Serve(t, path, func(req map[string]any) []byte {
@@ -256,11 +243,11 @@ func TestAnAskThatFailedIsAskedAgainOnceMoldIsBack(t *testing.T) {
 	// The unchanged screen is asked on the next tick, and raised on the one after.
 	clk.add(monitorInterval)
 	s.monitorTick()
-	waitFor(t, "the re-ask to be answered", func() bool { return s.hasHit("p1") })
+	waitFor(t, "the re-ask to be answered", func() bool { return hasHit(s, "p1") })
 	clk.add(monitorInterval)
 	s.monitorTick()
-	if s.panels[0].State != panel.Attention || s.sourceOf("p1") != "classifier" {
-		t.Fatalf("the re-asked screen should be raised by the classifier, got %v %q", s.panels[0].State, s.sourceOf("p1"))
+	if stateOf(s, "p1") != panel.Attention || sourceOf(s, "p1") != "classifier" {
+		t.Fatalf("the re-asked screen should be raised by the classifier, got %v %q", stateOf(s, "p1"), sourceOf(s, "p1"))
 	}
 	if mold.Dials() != 2 { // one status probe, one ask
 		t.Fatalf("want one probe and one ask after mold came back, got %d dials", mold.Dials())

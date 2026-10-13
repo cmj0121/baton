@@ -40,8 +40,9 @@ func (s *Server) classifierStatus(cc *clientConn) {
 		// The conversion is the compile-time check that the two types stay in step.
 		m := proto.MoldStatus(mold)
 		st.Mold = &m
-		// The probe is also the re-arm (D9): the quiet screens that went
-		// unasked while mold was away get asked on their next tick.
+		// A live probe is the operator's "ask every screen again" (D9): after
+		// a retrain, the old bundle's "no"s are worth asking anew. Re-arming
+		// alone would not need it — failed asks forget themselves.
 		s.mu.Lock()
 		s.forgetAskedLocked()
 		s.mu.Unlock()

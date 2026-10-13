@@ -125,12 +125,6 @@ func (f *rowFile) load() {
 	})
 }
 
-// countRows is the line count of a row file (0 when absent or unreadable) and
-// whether it has reached its cap.
-func countRows(path string) (lines int, capped bool) {
-	return scanRows(path, nil)
-}
-
 // scanRows opens path once, reports its size against rowCap from the open
 // handle, and counts its lines, handing each to each when it is non-nil. The
 // scanner's buffer is the cap itself, so no line of a file under the cap is
@@ -195,16 +189,22 @@ func (s *Server) recordRowLocked(id string, positive bool) int {
 // own terms.
 //
 // An unknown id is a silent no-op, as panel.ack's is: the row can be reaped
-// between the keystroke and the command. The reply is the plain fleet
-// broadcast plus a notice saying whether a row landed — "row N" is the line
-// the file now ends on — so the status line can say more than "sent".
+// between the keystroke and the command. An exited panel is refused out loud:
+// a dead screen is not a wait, whatever it says, and the cockpit's row may be
+// stale, so the notice is what tells the operator nothing was recorded. The
+// reply is otherwise the plain fleet broadcast plus a notice saying whether a
+// row landed — "row N" is the line the file now ends on — so the status line
+// can say more than "sent".
 func (s *Server) markAttention(cc *clientConn, cmd proto.Command) {
 	s.mu.Lock()
 	i := s.indexLocked(cmd.ID)
-	if i < 0 || s.panels[i].State == panel.Exited {
-		// A dead screen is not a wait, whatever it says; the zoom refuses the
-		// key for the same reason, and the inbox row may be stale.
+	if i < 0 {
 		s.mu.Unlock()
+		return
+	}
+	if s.panels[i].State == panel.Exited {
+		s.mu.Unlock()
+		send(cc, proto.ServerMsg{Type: "notice", ID: cmd.ID, Notice: "not marked: the panel has exited"})
 		return
 	}
 	n := s.recordRowLocked(cmd.ID, true)
@@ -223,7 +223,7 @@ func (s *Server) markAttention(cc *clientConn, cmd proto.Command) {
 // files rather than the Server's own bookkeeping so a ctl connection can ask
 // without s.mu, and so a file the operator rotated by hand reads as what it is.
 func rowCounts() (rows, holdout int, capped bool) {
-	rows, rc := countRows(paths.AttentionRows())
-	holdout, hc := countRows(paths.AttentionHoldout())
+	rows, rc := scanRows(paths.AttentionRows(), nil)
+	holdout, hc := scanRows(paths.AttentionHoldout(), nil)
 	return rows, holdout, rc || hc
 }

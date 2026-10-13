@@ -3603,7 +3603,8 @@ func (m model) runEscape(b binding) (tea.Model, tea.Cmd) {
 // markZoomedPanel is C-t m: the operator looking at the zoomed panel and saying
 // its screen is a wait. The daemon records the tail as a positive row for the
 // classifier (when panel.classifier.record is on) and the panel's state is left
-// to the ladder. An exited panel has no screen worth learning from.
+// to the ladder. The daemon refuses an exited panel and says so; the zoom
+// refuses one (and a transient diff) itself, since it has no row to be stale.
 func (m model) markZoomedPanel() (tea.Model, tea.Cmd) {
 	if m.zoomID == "" || m.zoomExited || m.zoomEphemeral {
 		m.status = m.tr("status.mark-nothing-here", "nothing to mark here")
