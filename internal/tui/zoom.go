@@ -42,6 +42,12 @@ import (
 // its resize — is clamped before the emulator stores it. Left as asked, the next delete-line
 // indexes past the buffer; the recover below then drops the rest of the chunk and the panel
 // shows a torn screen until the program repaints (#139).
+//
+// Before any of that, MaskST neutralises a 0x9C inside a window title or other string
+// sequence. The parser — the emulator's, and the one the filter decodes with — takes it
+// for a string terminator even when it is the middle of a UTF-8 character, so a title
+// such as 服務架構 would end early and print its tail onto the grid (#148). It runs first
+// so everything after it reads the string whole.
 func writeEmu(emu *vt.SafeEmulator, irm *vtirm.Filter, data []byte) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -51,7 +57,7 @@ func writeEmu(emu *vt.SafeEmulator, irm *vtirm.Filter, data []byte) {
 	if irm != nil {
 		irm.Rows = emu.Height()
 	}
-	_, _ = emu.Write(irm.Rewrite(vtquery.Strip(data)))
+	_, _ = emu.Write(irm.Rewrite(vtquery.Strip(irm.MaskST(data))))
 }
 
 // feedEmu writes one panel output message into emu.
