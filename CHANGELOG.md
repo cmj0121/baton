@@ -4,6 +4,23 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v2.5.1](https://github.com/cmj0121/baton/releases/tag/v2.5.1) — a title that stays off the screen
+
+2026-10-18
+
+- **A zoomed Claude Code panel no longer smears.** Its window title carries a byte the emulator's parser took for a
+  string terminator — every `✳ ✻ ✽` spinner frame, and much CJK — so the title's tail was printed onto the panel and
+  every later repaint landed on the wrong rows. The stream is now corrected before it is parsed (#148, upstream
+  charmbracelet/x#848).
+- **A local classifier can raise a quiet wait.** `panel.classifier:` asks a [MOLD](https://github.com/cmj0121/mold)
+  bundle over its unix socket about the same tail the regex reads, and a confident `attention` raises the panel. It
+  is off unless configured; a missing or failing socket leaves the regex to decide, and `baton ctl classifier status`
+  probes it (#147).
+- **The fleet can teach it.** With `record: true`, a declared wait and `m` in the inbox (`C-t m` in a zoom) write
+  positive rows, and dismissing a guessed attention writes a negative one — the
+  [teaching loop](docs/ATTENTION.md#teaching-it) ends in `mold train --labelled`. The inbox marks what the classifier
+  raised with `▸ classifier`.
+
 ## [v2.5.0](https://github.com/cmj0121/baton/releases/tag/v2.5.0) — panels that can talk to their group
 
 2026-10-13
