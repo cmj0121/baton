@@ -31,6 +31,10 @@
 // a margin whenever it still believes an older, taller PTY size, which every zoom passes
 // through between its attach and its resize (github.com/cmj0121/baton#139). A real terminal
 // clamps the request; the Filter does it on the way in.
+//
+// MaskST, run on the stream before anything else parses it, works around the parser
+// itself: x/ansi ends an OSC or DCS string on a 0x9C that is really the middle of a UTF-8
+// character, spilling the rest of a window title onto the screen (github.com/cmj0121/baton#148).
 package vtirm
 
 import (
@@ -38,6 +42,7 @@ import (
 	"strconv"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/ansi/parser"
 )
 
 const (
@@ -70,6 +75,9 @@ type Filter struct {
 	insert bool   // IRM is set: printed cells push the rest of the line right
 	state  byte   // ansi decoder state, carried because a chunk may split a sequence
 	held   []byte // a CSI sequence split across chunks, held until it completes
+
+	vtState  parser.State // the emulator parser's state as MaskST last left it
+	utf8Left int          // bytes of a UTF-8 character the parser will still swallow whole
 }
 
 // Rewrite returns b with insert-mode printing expressed as ICH, and mode 4 removed.
