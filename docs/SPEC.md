@@ -92,7 +92,10 @@ panel:
 The env is resolved from the profile at every start, so a reload reaches the next spawn and a re-run alike, and it
 crosses into an isolated panel's container too — it is the profile's, unlike `env-allow`, which names the host's. It
 never outranks baton: a key under `BATON_` is refused and reported, and the panel identity the server injects is applied
-after it.
+after it. It applies to spawns that name a profile — the cockpit's picker, the queue, worktrees, `n r` — and not to
+`baton ctl spawn` or the MCP spawn tool, which send a binary rather than a profile so a conductor cannot name its way
+into wider caps. It is for configuration, not secrets: an isolated panel receives it as `docker --env` arguments, visible
+in the process list, so a credential belongs in `env-allow`.
 
 **Detected backends.** On every config load the daemon checks which of the catalogue's commands the machine the _fleet_
 runs on actually has — presence on `PATH`, nothing more. The scan runs on the server because that is the machine panels
