@@ -10,279 +10,102 @@
 **English** · [繁體中文](docs/README.zh-TW.md) · [日本語](docs/README.ja.md) · [한국어](docs/README.ko.md) ·
 [Français](docs/README.fr.md) · [Deutsch](docs/README.de.md) · [Español](docs/README.es.md)
 
-Running a handful of AI coding agents at once? It gets messy fast — windows to juggle, sessions scattered across tabs, and
-no single place to see who's working, who's stuck, and who's waiting on you.
-
-Baton is to AI agents what tmux is to shells. It gives you **one keyboard-driven cockpit**: a live dashboard of every
-agent, grouped into the tasks they belong to, any one a keystroke away.
-
-You hold the baton. The agents play. You conduct. 🎼
+Running a handful of AI coding agents at once gets messy fast — windows to juggle, sessions scattered across tabs, and
+no single place to see who's working, who's stuck, and who's waiting on you. Baton is to AI agents what tmux is to
+shells: **one keyboard-driven cockpit**, a live dashboard of every agent grouped into the tasks they belong to, any one
+a keystroke away. You hold the baton. The agents play. You conduct. 🎼
 
 ![Baton cockpit demo — the key list, then panels spawned, the conductor opened, two panels grouped into a work item, and the same ? pressed again in the split and in the zoom](docs/assets/baton-demo.png)
 
-_One key does the whole tour: `?` lists the keys for wherever you are. Panels spawn, `n C` calls the conductor, `g g`
-then `g c` groups two into a work item — and `?` again in the split, `C-t ?` in the zoom, are three different tables._
-
-_Recorded from [`baton-demo.tape`](docs/assets/baton-demo.tape); the conductor's agent CLI is a stand-in
-([`demo-agent.sh`](docs/assets/demo-agent.sh)) so the clip records the same on any machine, and the fleet it drives over
-the socket is real._
+_`?` lists the keys for wherever you are: panels spawn, `n C` calls the conductor, `g g` then `g c` groups two into a
+work item — and `?` again in the split and `C-t ?` in the zoom show three different tables._
 
 ## Get started
 
-Baton is a single static binary. On macOS, tap it with [Homebrew](https://brew.sh):
-
-```sh
-brew install cmj0121/tap/baton
-```
-
-On Linux, one line does it:
+Baton is a single static binary: `brew install cmj0121/tap/baton` on macOS, or on Linux:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/cmj0121/baton/main/scripts/install.sh | sh
 ```
 
-…or, on any platform, grab it with [Go](https://go.dev) 1.26+:
+…or `go install github.com/cmj0121/baton/cmd/baton@latest` with [Go](https://go.dev) 1.26+. Then run `baton`, and:
 
-```sh
-go install github.com/cmj0121/baton/cmd/baton@latest
-```
+1. **`A`** spawns an agent (pick a working directory; `enter` lands here, `w` isolates on a branch).
+2. **`enter`** zooms in to watch it work; **`C-t d`** pops back to the dashboard.
+3. **`q`** detaches — everything keeps running. Come back any time with `baton`.
 
-…or build from a clone with `make install`. Then just run:
+Lost? **`?`** shows the keys for wherever you are. For a whole fleet, **`n C`** opens a conductor that follows your
+standing orders in `$HOME/.baton/CONDUCTOR.md` — see **[docs/CONTROL.md](docs/CONTROL.md)**.
 
-```sh
-baton
-```
+## Concepts
 
-Baton starts its background server and drops you on the **dashboard** — your home base. Your first minute:
+A **panel** is one live terminal running an agent CLI or a shell. A **work item** groups the panels of one task. A
+**task** is a brief you dispatch to an agent, queued until it is free. The **conductor** is an agent that drives the
+rest of the fleet for you.
 
-1. Press **`A`** to spawn an agent (you'll pick a working directory; enter lands here, `w` isolates on a branch).
-2. Press **`enter`** to zoom in and watch it work; **`C-t d`** pops you back to the dashboard.
-3. Press **`q`** to detach and walk away — everything keeps running. Come back any time with `baton`.
+You see them through three views: the **dashboard** (every panel as cards or a live tree), a **group** (one work
+item's panels streaming side by side) and a **zoom** (one panel as your only terminal, the leader `C-t` to step out).
+Behind them, a headless server owns every terminal over a Unix socket, so you detach and reattach without losing a
+thing. See **[docs/SPEC.md](docs/SPEC.md)**.
 
-Lost? **`?`** always shows the keys for wherever you are.
+## Why Baton
 
-A fleet is **`n C`** plus standing orders in `$HOME/.baton/CONDUCTOR.md` — the conductor spawns the workers and
-dispatches the work. One agent is still **`A`**. See **[docs/CONTROL.md](docs/CONTROL.md)**.
+tmux hands you windows and has no idea what is in them. Baton assumes every pane holds an agent, and builds from there:
 
-## Why not just tmux?
+- **You see who needs you.** Each panel carries a live state, and the ones waiting on a human queue up in one inbox
+  instead of being found by cycling through windows.
+- **Work stays grouped.** Panels that serve one task form a work item, made with two keys and driven as one.
+- **You hand work out, not keystrokes.** Dispatch a brief to one agent or a whole group, or let a conductor run the
+  fleet.
+- **The fleet is bounded.** Caps hold a runaway build's whole process tree, and usage is traced back to the panel that
+  spent it.
+- **The fleet remembers.** What agents keep learning is ranked and handed to the next brief.
 
-Because tmux has no idea what is in the pane. It hands you windows; you supply the memory of which one is which, and you
-find out an agent has been waiting on you by cycling through them until you see it. Baton assumes the pane holds an
-agent, and the rest follows from that:
-
-| What you are doing            | tmux, by hand                         | Baton                                                                             |
-| ----------------------------- | ------------------------------------- | --------------------------------------------------------------------------------- |
-| Finding who needs you         | cycle the panes and read              | a live state per panel, and a `C-t a` inbox of the ones that stopped for a human  |
-| Keeping related work together | name the windows, remember the scheme | work items — a named group of panels, made with two keys                          |
-| Handing work out              | type it into each pane yourself       | dispatch a task to one or a whole group, or let a conductor agent drive the fleet |
-| Stopping a runaway build      | nothing                               | CPU, memory and process caps, held over the panel's whole process tree            |
-| Knowing what the fleet costs  | nothing                               | the billing window's tokens and cost, and your quota bars, traced to a panel      |
-
-Baton is not a tmux replacement and does not want your shells — run it inside tmux if that is where you live.
-
-## And the others?
-
-tmux is the wrong comparison for half of this. herdr, Claude Squad and cmux already assume the pane holds an agent. They
-are not the same product in different clothes:
-
-|                                | Baton                           | herdr              | Claude Squad     | cmux                 |
-| ------------------------------ | ------------------------------- | ------------------ | ---------------- | -------------------- |
-| Runtime                        | own PTY daemon                  | own PTY daemon     | tmux wrap        | GPU terminal         |
-| Who needs you                  | `C-t a` inbox                   | blocked sidebar    | session list     | notification rings   |
-| Isolation                      | offer on `A`; first-class `n w` | workspaces         | spawn = worktree | workspaces           |
-| Score, task queue, caps, usage | Baton only                      | —                  | —                | —                    |
-| License                        | `MIT`                           | `Apache 2.0`       | `AGPL-3.0`       | `GPL-3.0-or-later`   |
-| vs tmux                        | not a replacement               | replacement-shaped | wraps it         | a terminal, not tmux |
-
-Score, the task queue, the process-tree caps and the usage footer have no counterpart on the other three.
-
-## Concept
-
-- **Agents, not shells.** The unit of work is a running agent, not a window to babysit.
-- **Dashboard, not windows.** A live overview of everything at once, not a pile of tabs.
-- **Headless core, replaceable frontends.** The brain is a background daemon; the face that renders it is swappable.
-
-| Concept          | What it is                                                                                                             |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| **Panel**        | One live terminal — an _agent_ panel (an agent CLI) or a _shell_ panel.                                                |
-| **Work item**    | A named group of panels that belong to one task.                                                                       |
-| **Task**         | A brief you dispatch to an agent — tracked through its lifecycle, queued and scheduled if it must wait.                |
-| **Conductor**    | An agent that drives the fleet for you — spawns, groups, and prompts the other panels over the socket.                 |
-| **Global shell** | A singleton plain host shell the server holds in `$HOME`, always one keystroke away — a home base, not a fleet driver. |
-
-## Views
-
-You drive Baton through three views, moving between them with a keystroke:
-
-- **Dashboard** — mission control. A small fleet is a grid of **cards**, one per panel and one per work item; from six
-  things at the top level up it becomes a live **tree** of every panel: work items as rows, their sub-groups indented under them,
-  their panels under those. `space` shows or hides what is nested under a row at any depth, `→` opens a work item and
-  steps inside it, `←` shuts it and steps back out — on the cards that pair moves between them instead. `v l` switches the
-  two layouts by hand. The tree row carries
-  the state, the working directory, the output sparkline and the dispatched task as the terminal gets wide enough for
-  each; `v p` adds a detail pane beside it. Here you navigate, spawn and close panels, and group them into work items.
-- **Group** — a work item's live split: its panels tiled side by side, all streaming at once. The first few stream as
-  live tiles; the rest fold into a single **summary tile** you can zoom into. Pin a few to keep them always-on, drive the
-  focused one in place with **`i`**, or **`enter`** to drop into it.
-- **Zoom** — one panel as your only terminal. Keystrokes go straight to the program; the leader **`C-t`** is how you act
-  or step back out.
-
-## Keys
-
-Keys are **modal**: on the dashboard and in a group each action is a single key; in a zoom or interact your keystrokes
-drive the program, so a Baton action is the leader **`C-t`** then the key. Press **`?`** for the full, rebindable list of
-the current view, and **`C-t k`** to edit the key map. Four keys are **landings** that open a family rather than acting
-alone — `n` spawns, `v` draws, `g` groups, `x` is the double tap that confirms itself — and the status bar names what
-each can take next.
-
-| Where       | Key               | Does                                                         |
-| ----------- | ----------------- | ------------------------------------------------------------ |
-| After `C-t` | `d` / `b`         | jump to the dashboard / back one level                       |
-|             | `a`               | the attention inbox — clear what needs a human               |
-|             | `[`               | enter scroll mode                                            |
-|             | `l` / `L`         | log the panel to a file / read that log back                 |
-|             | `R` / `S`         | reload config / force-restart the server                     |
-|             | `q`               | detach (server keeps running)                                |
-| Dashboard   | `jk` / `↑↓`       | move the cursor                                              |
-|             | `hl` / `←→`       | move a card · in the tree: collapse / expand a work item     |
-|             | `space`           | show / hide what is nested under the row                     |
-|             | `v p` / `v g`     | detail pane / cycle group-by: work item, dir, profile, state |
-|             | `v l`             | the dashboard layout: cards or tree                          |
-|             | `m`               | pick a row up — arrows carry it, `enter` drops it            |
-|             | `enter`           | open / zoom the selection                                    |
-|             | `p` / `n c`       | new shell / command panel                                    |
-|             | `A`               | new agent — workdir, then enter here or `w` isolate          |
-|             | `n w`             | isolate first: repo, then branch, fleet-default agent        |
-|             | `n .`             | new shell panel in the focused panel's directory             |
-|             | `n C`             | open the conductor (an agent that drives the fleet)          |
-|             | `n h`             | open the global shell (a host shell in `$HOME`)              |
-|             | `w` / `x x`       | close the selection / purge exited                           |
-|             | `r`               | re-run the exited panel(s) under the focus                   |
-|             | `g g` / `g c`     | mark / group the marked panels                               |
-|             | `g a` / `g u`     | add to the selected work item / ungroup                      |
-|             | `s` / `f` / `D`   | signal / find / diff the selection                           |
-|             | `/`               | search every panel's output (grep the fleet)                 |
-|             | `T` / `Q` / `I`   | dispatch a task / manage the queue / GitHub issues           |
-|             | `v u`             | cycle the usage footer: off / window / focused panel / quota |
-|             | `v U`             | account usage — quota bars, and who is spending them         |
-|             | `v k`             | toggle the key-press readout in the footer                   |
-| Group       | `tab`             | focus the next panel                                         |
-|             | `+` / `-`         | show more / fewer live tiles                                 |
-|             | `L`               | cycle the tile layout                                        |
-|             | `p` / `i`         | pin / interact with the focused panel                        |
-|             | `enter`           | zoom the focused panel                                       |
-| Zoom        | type              | drive the program directly                                   |
-|             | `C-t f` / `C-t G` | search the scrollback / git menu (agent)                     |
-
-See **[docs/KEYS.md](docs/KEYS.md)** for the complete key reference, and **[docs/SPEC.md](docs/SPEC.md)** for the design
-behind every view.
+Baton does not want your shells — run it inside tmux if that is where you live.
 
 ## Features
 
-Five things Baton does that a terminal multiplexer does not:
+- **Attention** — panels ranked `running`, `idle`, `done` or `stuck`; `C-t a` is the inbox. [ATTENTION](docs/ATTENTION.md)
+- **Conductor** — `n C` drives the fleet through `baton ctl` or `baton mcp`, fenced from its host. [CONTROL](docs/CONTROL.md)
+- **Tasks** — `T` dispatches a brief to an agent or a work item; `Q` is a backlog a scheduler drains onto free agents.
+- **Score** — what agents keep learning climbs a ladder and leads every brief, kept in `score.md`. [SCORE](docs/SCORE.md)
+- **Caps** — CPU, memory and process limits held over a panel's whole process tree. [LIMITS](docs/LIMITS.md)
+- **Usage** — `v u` shows tokens, cost and quota bars; `v U` shows which panels spend them. [USAGE](docs/USAGE.md)
+- **Isolation** — `isolate: docker` runs a profile's panels in a container on your worktree. [ISOLATION](docs/ISOLATION.md)
+- **Fleet grep** — `/` searches every panel's output; `C-t [` scrolls and copies over OSC 52, even over SSH.
+- **Backends** — `claude`, `codex`, `gemini`, `aider`, `opencode` and `grok` detected; add your own under `panel.agents`.
+- **Remote** — `baton --remote` attaches to a fleet on another machine over your ssh. [REMOTE](docs/REMOTE.md)
+- **Plugins** — one Lua file, `$HOME/.baton/plug-in.lua`, hooks events and adds commands. [PLUGIN](docs/PLUGIN.md)
+- **The usual** — diff (`D`), a git menu (`C-t G`), signals (`s`), panel logs, serial ports, a restart policy, hot
+  reload (`C-t R`), themes and split layouts.
 
-- **Attention, not polling** — a fleet is mostly fine; you are looking at the screen because of the few panels that are
-  not. One quiet clock ranks every one of them — `running`, `idle` at ten seconds, `done` for an agent that finished its
-  turn, `stuck` when it has gone on too long — and an agent can raise its own hand above the lot. `C-t a` opens the
-  inbox from any view and the queue is cleared from there; `settings.notify` sends an OSC 9 desktop notification when
-  nobody is looking, coalesced, and never for `done`. A local [MOLD](https://github.com/cmj0121/mold) bundle can sit
-  beside the regex and learn the waits the fleet marks. See **[docs/ATTENTION.md](docs/ATTENTION.md)**.
-- **A conductor** — the fleet path. `n C` opens an agent that drives the fleet for you: it spawns, groups, dispatches and
-  enqueues the other panels over the socket, through `baton ctl` or the `baton mcp` tools, fenced so it cannot wreck its
-  own host. Standing orders live in `$HOME/.baton/CONDUCTOR.md`. See **[docs/CONTROL.md](docs/CONTROL.md)**.
-- **Tasks and a backlog** — `T` dispatches a brief to an agent, or fans it across a whole work item; it is recorded on
-  the card and delivered when the agent is ready. `Q` manages a persistent backlog that a server-owned scheduler drains
-  onto free agents. A `task.pre` Lua hook can rewrite or veto a brief; `task.change` watches it.
-- **Caps over the whole process tree** — cap what a panel may use, CPU, memory and processes, and hold its **whole
-  process tree** to it, so a runaway build cannot take the machine with it. A fleet-wide floor with per-agent overrides,
-  applied to the running fleet by `C-t R`, enforced with cgroup v2 on Linux — and the panel says plainly when a host
-  cannot enforce them. See **[docs/LIMITS.md](docs/LIMITS.md)**.
-- **Usage traced to a panel** — `v u` cycles a footer readout: the billing window's tokens and cost with a countdown
-  (`⊙ 1.2M tok · ≈$12.34 API · ⏳ 2:14:31`), the focused panel's share of it, or your account's rate-limit bars
-  (`⊙ 5h ▓▓▓▓▓░░░ 2:14:31 · 7d ▓▓▓░░░░░ 3d4h`). `v U` opens the lot — every quota window, the extra-usage credit, and
-  which panels are eating them. See **[docs/USAGE.md](docs/USAGE.md)**.
+## Essential keys
 
-Four more that most of them do not have either:
+On the dashboard each action is one key; in a zoom your keystrokes drive the program, so prefix the leader `C-t`.
 
-- **Container isolation** — opt in per agent profile with `isolate: docker`, and that profile's panels run inside a
-  container with your worktree mounted. You name the image (Baton ships none); `mount`, `network`, `env-allow` and
-  `user` decide what else crosses, and nothing from your environment does unless you name it. Off by default, and not a
-  boundary against a hostile agent. See **[docs/ISOLATION.md](docs/ISOLATION.md)**.
-- **Grep the whole fleet** — `/` searches every panel's output at once and lists the hits grouped by panel; `enter`
-  zooms the one you pick, landed on the match. `C-t f` regex-searches a single scrollback, and scroll mode (`C-t [`)
-  selects and copies over OSC 52, so it works over SSH with no helper binary.
-- **Agent backends** — Baton knows a catalogue of agent CLIs (`claude`, `codex`, `gemini`, `aider`, `opencode`, `grok`)
-  and detects which of them the machine the fleet runs on actually has. `A` spawns the one you pick; `C-t P` sets the
-  fleet default and names the ones this machine has not got with where to get each; `C-t R` re-detects after an install.
-  Add your own — command, arguments, caps or container — under `panel.agents`.
-- **Remote access** — `baton --remote` attaches the same cockpit to a fleet on **another machine**, over the ssh you
-  already use to reach it: no listening port, no TLS, no key exchange of Baton's own. Off by default; `C-t @` turns it
-  on, mints a passkey that is never written to disk, and lists every live connection to kick, rotate or shut down. See
-  **[docs/REMOTE.md](docs/REMOTE.md)**.
+| Where       | Key           | Does                                                |
+| ----------- | ------------- | --------------------------------------------------- |
+| Dashboard   | `jk` / `↑↓`   | move the cursor                                     |
+|             | `enter`       | open / zoom the selection                           |
+|             | `A`           | new agent — workdir, then enter here or `w` isolate |
+|             | `n C`         | open the conductor (an agent that drives the fleet) |
+|             | `g g` / `g c` | mark / group the marked panels                      |
+|             | `T` / `Q`     | dispatch a task / manage the queue                  |
+|             | `w` / `x x`   | close the selection / purge exited                  |
+| After `C-t` | `d` / `b`     | jump to the dashboard / back one level              |
+|             | `a`           | the attention inbox — clear what needs a human      |
+|             | `q`           | detach (server keeps running)                       |
 
-And the cockpit you would expect of a multiplexer, each a keystroke away:
-
-| Feature              | Key             | What it does                                                                                          |
-| -------------------- | --------------- | ----------------------------------------------------------------------------------------------------- |
-| Diff                 | `D`             | the agent panel's work-tree diff — staged and unstaged at once, untracked included                    |
-| Git                  | `C-t G`         | diff, log, status, stage, commit, push, branch and worktrees — **[docs/GIT.md](docs/GIT.md)**         |
-| Signals              | `s`             | any signal to the selection, the focused tile or the whole group                                      |
-| Find                 | `f`             | filter the fleet by title or group                                                                    |
-| Group layouts        | `+` `-` `L`     | how many members stream as live tiles, and the shape of the split                                     |
-| Global shell         | `n h`           | one plain host shell the server holds in `$HOME`, always one keystroke away                           |
-| Remembered directory | `n .`           | panels track their live directory from OSC 7 — **[docs/RESTART.md](docs/RESTART.md)**                 |
-| Panel logging        | `C-t l` `C-t L` | pipe a panel's output to a file, and read it back — **[docs/LOGGING.md](docs/LOGGING.md)**            |
-| Serial port          | `n c`           | `baton serial /dev/… 115200` — a port in a panel, reconnecting — **[docs/SERIAL.md](docs/SERIAL.md)** |
-| Persistence          | `r`             | the fleet survives a restart as exited slots you re-run from their retained spec                      |
-| Restart policy       | —               | `panel.restart: on-failure` brings a panel back with a backoff and a limit                            |
-| Hot reload           | `C-t R`         | config without restarting the fleet — or a `SIGHUP` to the daemon                                     |
-| Appearance           | —               | theme and custom split grids in `$HOME/.baton/TUI.yaml` — **[docs/TUI.md](docs/TUI.md)**              |
-| Mouse                | —               | off by default, so your terminal's own selection stays available                                      |
-| Language             | —               | the key list reads in English or 繁體中文 — **[docs/TUI.md](docs/TUI.md#language)**                   |
-| Screen protector     | —               | a full-screen digital rain when the cockpit rests — **[docs/TUI.md](docs/TUI.md)**                    |
-
-## Architecture
-
-A headless **baton server** (a background daemon) owns all state and every terminal. Pluggable frontends attach over a
-single Unix domain socket — commands up, events down — so you detach and reattach without losing a thing.
-
-See **[docs/SPEC.md](docs/SPEC.md)** for the full diagram and interaction model.
-
-## Plugins
-
-A single Lua file (`$HOME/.baton/plug-in.lua`) reshapes Baton to your workflow: react to lifecycle events (ping you when
-an agent needs you, chain the next step when one finishes), drive the fleet, add your own commands, and set config — all
-through one `baton` object. See **[docs/PLUGIN.md](docs/PLUGIN.md)**.
+Everything else, rebindable with `C-t k`, is in **[docs/KEYS.md](docs/KEYS.md)**.
 
 ## Documentation
 
-- **[docs/SPEC.md](docs/SPEC.md)** — the full specification: views, the panel lifecycle, work items, signals, diff,
-  persistence, the per-view key reference, and the architecture diagram.
-- **[docs/ATTENTION.md](docs/ATTENTION.md)** — attention at scale: the quiet ladder (`done`, `stuck`, failed), the
-  `C-t a` inbox, the dashboard folds, desktop notifications, and every knob they take.
-- **[docs/TUI.md](docs/TUI.md)** — the cockpit appearance file (`$HOME/.baton/TUI.yaml`): the colour theme and the
-  group-split layouts (presets and custom grids).
-- **[docs/LIMITS.md](docs/LIMITS.md)** — resource limits: the config, the two layers, hot reload, and where they are
-  actually enforced.
-- **[docs/ISOLATION.md](docs/ISOLATION.md)** — container isolation: the per-profile config, what the agent keeps, how
-  the caps are enforced inside a container, and what it is not a boundary for.
-- **[docs/RESTART.md](docs/RESTART.md)** — the restart policy: what is and is not a failure, the backoff and the limit,
-  and why there is no `always`.
-- **[docs/GIT.md](docs/GIT.md)** — the git menu: every op, the commit-editor flow, worktrees, and the config.
-- **[docs/LOGGING.md](docs/LOGGING.md)** — panel logging: what is written, where it lands, the session markers, the
-  roll, and what it is not a boundary for.
-- **[docs/REMOTE.md](docs/REMOTE.md)** — remote access over SSH: the `--stdio` bridge, the passkey and what it is and
-  is not, the `C-t @` connection list, and the failures it reports.
-- **[docs/SERIAL.md](docs/SERIAL.md)** — serial ports: `baton serial`, the line settings and which the platform can
-  set, the `cu.`/`tty.` trap, what happens when the cable is pulled, and why a dispatch reaches the device.
-- **[docs/USAGE.md](docs/USAGE.md)** — the account usage footer and quota bars: every source, the config, and caveats.
-- **[docs/PLUGIN.md](docs/PLUGIN.md)** — the Lua plugin API: the `baton` object, events, commands, and config.
-- **[docs/CONTROL.md](docs/CONTROL.md)** — driving the fleet by agent: the conductor, the `baton ctl` CLI, the
-  `baton mcp` tools, and the guardrails.
-- **[docs/SCORE.md](docs/SCORE.md)** — Score, the fleet's memory: the `score.md` file and its one undo, the tier
-  ladder, the ranking weights, compaction, and what it is not a boundary for.
-- **[docs/DAEMON.md](docs/DAEMON.md)** — the daemon: the order it boots in, readiness probes, and what to do when
-  `baton` says the server did not come up.
+- **Using** — [SPEC](docs/SPEC.md) · [KEYS](docs/KEYS.md) · [ATTENTION](docs/ATTENTION.md) · [TUI](docs/TUI.md) ·
+  [GIT](docs/GIT.md) · [LOGGING](docs/LOGGING.md)
+- **Fleet** — [CONTROL](docs/CONTROL.md) · [SCORE](docs/SCORE.md) · [USAGE](docs/USAGE.md) · [LIMITS](docs/LIMITS.md) ·
+  [ISOLATION](docs/ISOLATION.md) · [RESTART](docs/RESTART.md)
+- **Extending** — [PLUGIN](docs/PLUGIN.md) · [REMOTE](docs/REMOTE.md) · [SERIAL](docs/SERIAL.md)
+- **Internals** — [DAEMON](docs/DAEMON.md)
 
 ## DDD (Dream-Driven Development)
 
