@@ -4,6 +4,20 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v2.5.2](https://github.com/cmj0121/baton/releases/tag/v2.5.2) — a grok panel without the grey slab
+
+2026-10-19
+
+- **An agent profile can set env.** `panel.agents.<name>.env` is a map of variables every spawn of that profile
+  carries, read at each start, so a reload reaches the next spawn, a re-run and a relaunch alike, and an isolated
+  panel gets it inside its container (#150).
+- **A grok panel can drop its own background.** `GROK_THEME: terminal` and `GROK_TERMINAL_THEME: "1"` in the grok
+  profile's env select grok's theme that paints no background, so the panel blends with the cockpit the way a claude
+  panel does.
+- **baton's own identity always wins.** A key under `BATON_` is refused and reported, and the panel id and socket the
+  server injects are applied after the profile's env; a key or value that cannot be set is dropped with a warning,
+  never the spawn.
+
 ## [v2.5.1](https://github.com/cmj0121/baton/releases/tag/v2.5.1) — a title that stays off the screen
 
 2026-10-18
