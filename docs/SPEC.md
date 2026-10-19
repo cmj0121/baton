@@ -75,10 +75,29 @@ client resolves the profile and sends `panel.create` with the command, args, and
 there, and the panel's title reads `<command> · <workdir>` (e.g. `claude · baton`) so its task and place are visible at
 a glance.
 
+**Profile environment.** A profile's `env` map is set in the environment of every process it spawns, on top of what
+the daemon inherited — for an agent CLI whose look is chosen by a variable. grok's default theme paints its own grey
+background, which shows as a slab beside a cockpit drawn on the terminal's own; its `terminal` theme paints none:
+
+```yaml
+panel:
+  agents:
+    grok:
+      command: grok
+      env:
+        GROK_THEME: terminal
+        GROK_TERMINAL_THEME: "1" # the theme is behind a rollout flag in grok 1.0.x
+```
+
+The env is resolved from the profile at every start, so a reload reaches the next spawn and a re-run alike, and it
+crosses into an isolated panel's container too — it is the profile's, unlike `env-allow`, which names the host's. It
+never outranks baton: a key under `BATON_` is refused and reported, and the panel identity the server injects is applied
+after it.
+
 **Detected backends.** On every config load the daemon checks which of the catalogue's commands the machine the _fleet_
 runs on actually has — presence on `PATH`, nothing more. The scan runs on the server because that is the machine panels
 are spawned from: a cockpit attached over a remote socket would otherwise answer with the binaries on its own laptop,
-which is worse than answering nothing. A preset carries a name, a command, and a homepage — arguments, caps, patience,
+which is worse than answering nothing. A preset carries a name, a command, and a homepage — arguments, env, caps, patience,
 and isolation live in a `panel.agents` profile, which overrides the preset of the same name outright, homepage included,
 and a profile that isolates is never tested against the host's `PATH` because its command runs inside an image.
 
