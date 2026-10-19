@@ -214,6 +214,12 @@ type Settings struct {
 	// the host exactly as it does today.
 	AgentIsolate map[string]isolate.Policy
 
+	// AgentEnv holds the per-profile environment, keyed by profile name, as the
+	// KEY=VALUE entries a spawn of that profile adds to what the daemon inherited.
+	// Like AgentIsolate it has no fleet-wide counterpart — the daemon's own
+	// environment already is one — and a profile absent from it adds nothing.
+	AgentEnv map[string][]string
+
 	// TrackCwd is how a panel's live working directory is learned and RestoreCwd
 	// which panels a re-run puts back in it.
 	TrackCwd   cwd.Track
@@ -292,6 +298,11 @@ type Server struct {
 	// leaves the container running and only the recorded name can find it again.
 	agentIsolate map[string]isolate.Policy
 	containers   map[string]string
+
+	// agentEnv is the per-profile environment (Settings.AgentEnv), resolved at
+	// spawn from the profile name like the caps, so a reload reaches the next
+	// spawn and a re-run without touching any spec the server retains.
+	agentEnv map[string][]string
 
 	onReload func() // invoked on a server.reload command; re-reads config and Reloads
 
@@ -1170,6 +1181,7 @@ func (s *Server) Reload(set Settings) {
 	// screen is asked again; a fresh client alone would not need it.
 	s.forgetAskedLocked()
 	s.agentIsolate = set.AgentIsolate // resolved per spawn, so live panels keep the runtime they started under
+	s.agentEnv = set.AgentEnv         // the same: a running process's environment cannot be changed anyway
 	s.trackCwd, s.restoreCwd = set.TrackCwd, set.RestoreCwd
 	// The logging policy swaps whole, like the caps: a panel records its PROFILE,
 	// so every resolution from here on reads the new destination. Files ALREADY
@@ -1255,8 +1267,19 @@ func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 	s.mu.Lock()
 	caps := s.effectiveLimitsLocked(profile)
 	iso := s.agentIsolate[profile]
+	env := s.agentEnv[profile]
 	wireMemory, refusal := s.wiresMemoryLocked(id)
 	s.mu.Unlock()
+
+	// The profile's env goes in first, on the launched copy only: ptymgr appends a
+	// spec's env after os.Environ() and exec keeps the last of a duplicate key, so
+	// the profile overrides what the daemon inherited while everything the spec
+	// already carries — the panel identity, a commit's GIT_EDITOR — still overrides
+	// the profile. A fresh slice, so the retained spec's backing array is never
+	// written through, and the respawn path's "assign, do not merge" stays true.
+	if len(env) > 0 {
+		spec.Env = append(slices.Clone(env), spec.Env...)
+	}
 
 	// Hand an agent panel a session of its own, on the launched copy only — the
 	// spec the caller retains for respawn must stay free of the id, because
@@ -6407,8 +6430,9 @@ func (s *Server) respawnPanel(id string) error {
 	//
 	// Assigning Env replaces it rather than merging into it. That is correct only
 	// because an agent spec's Env holds nothing but the identity this server put
-	// there — if a profile ever carries custom environment onto a spawn, this line
-	// would silently swallow it on the first re-run and must merge instead.
+	// there. A profile's own env (panel.agents.<name>.env) is never stored here:
+	// startPanel layers it onto the launched copy on every start, which is why a
+	// re-run keeps it and also picks up an edit made since.
 	// A conductor is always an agent, so the second half of the condition never
 	// decides anything today; it is there so a conductor's workspace rebuild does
 	// not quietly depend on that invariant holding in a restored state file.

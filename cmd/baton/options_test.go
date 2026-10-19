@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -152,5 +153,20 @@ func TestReloadableSettingsCarriesIsolation(t *testing.T) {
 	}}}
 	if got := reloadableSettings(cfg).settings.AgentIsolate; len(got) != 1 {
 		t.Fatalf("AgentIsolate = %v, want the walled profile", got)
+	}
+}
+
+// TestAgentEnvsProjectsConfig covers the env table's seam: a profile with env
+// reaches the daemon as sorted entries with its bad keys dropped, and a profile
+// without any is absent rather than stored empty.
+func TestAgentEnvsProjectsConfig(t *testing.T) {
+	cfg := config.Config{Panel: config.PanelDefaults{Agents: map[string]config.AgentProfile{
+		"grok":   {Command: "grok", Env: map[string]string{"GROK_THEME": "terminal", "BATON_ROLE": "conductor"}},
+		"claude": {Command: "claude"},
+	}}}
+
+	got := reloadableSettings(cfg).settings.AgentEnv
+	if len(got) != 1 || !slices.Equal(got["grok"], []string{"GROK_THEME=terminal"}) {
+		t.Fatalf("AgentEnv = %v, want only grok's GROK_THEME", got)
 	}
 }

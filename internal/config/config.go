@@ -628,6 +628,19 @@ type AgentProfile struct {
 	// its restart policy restate only what they change.
 	LogDir string `yaml:"log-dir,omitempty"`
 
+	// Env is set in the environment of every process this profile spawns, on top
+	// of what the daemon itself inherited. It exists for agent CLIs whose look or
+	// behaviour is chosen by a variable — grok paints its own background unless
+	// GROK_THEME=terminal, which is wrong inside a cockpit and right in a bare
+	// terminal, so the profile is the only place that knows which one it is in.
+	//
+	// It never outranks baton: a key under the reserved BATON_ prefix is refused
+	// (see Environ), and the identity the server injects is applied after this, so
+	// a profile cannot make a panel claim to be another panel or a conductor.
+	// Unlike env-allow it is not an isolation setting — the variables reach a
+	// containerised panel too, because they are the profile's, not the host's.
+	Env map[string]string `yaml:"env,omitempty"`
+
 	// Attention is this profile's quiet ladder, layered the same way. It is the
 	// override that matters most in practice: how long silence means "thinking"
 	// rather than "wedged" is a property of the agent, and no fleet-wide number
@@ -663,6 +676,47 @@ type AgentProfile struct {
 	// agent cannot leave root-owned files in the tree it was given; "root" or an
 	// explicit "1000:1000" overrides that for an image that needs it.
 	User string `yaml:"user,omitempty"`
+}
+
+// reservedEnvPrefix is the namespace baton's own panel identity lives in
+// (paths.EnvSocket, EnvRole, EnvPanelID). A profile may not write into it.
+const reservedEnvPrefix = "BATON_"
+
+// Environ is the profile's env as KEY=VALUE entries, sorted by key so a spawn is
+// reproducible, and an error naming every entry it dropped. It follows the
+// "report and drop" discipline rather than Isolation's fail-closed one: a
+// variable that cannot be set costs that variable, never the spawn.
+//
+// An entry is dropped when its key is empty, carries '=' or a NUL (neither can be
+// spelled in an environment), or sits under the reserved BATON_ prefix. A NUL in
+// a value is refused the same way, since exec would reject the whole spawn.
+func (a AgentProfile) Environ() ([]string, error) {
+	if len(a.Env) == 0 {
+		return nil, nil
+	}
+	keys := make([]string, 0, len(a.Env))
+	for k := range a.Env {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	var (
+		out []string
+		err error
+	)
+	for _, k := range keys {
+		v := a.Env[k]
+		switch {
+		case k == "" || strings.ContainsAny(k, "=\x00"):
+			err = errors.Join(err, fmt.Errorf("env key %q is not a variable name", k))
+		case strings.HasPrefix(k, reservedEnvPrefix):
+			err = errors.Join(err, fmt.Errorf("env key %q is reserved for baton's own panel identity", k))
+		case strings.ContainsRune(v, 0):
+			err = errors.Join(err, fmt.Errorf("env value of %q contains a NUL byte", k))
+		default:
+			out = append(out, k+"="+v)
+		}
+	}
+	return out, err
 }
 
 // Isolation is the parsed isolation policy, and an error naming anything the file

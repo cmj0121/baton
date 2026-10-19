@@ -1637,6 +1637,7 @@ func reloadableSettings(cfg config.Config) reloadable {
 	rc.settings.Attention, rc.settings.AgentAttention = attentionPolicies(cfg)
 	rc.settings.Classifier, rc.settings.ClassifierRecord = classifierPolicy(cfg)
 	rc.settings.AgentIsolate = isolationPolicies(cfg)
+	rc.settings.AgentEnv = agentEnvs(cfg)
 	rc.settings.TrackCwd, rc.settings.RestoreCwd = cwdPolicy(cfg)
 	if cfg.Settings.AllowNameConflict != nil {
 		rc.settings.AllowNameConflict = *cfg.Settings.AllowNameConflict
@@ -1786,6 +1787,27 @@ func isolationPolicies(cfg config.Config) map[string]isolate.Policy {
 			out = make(map[string]isolate.Policy, len(cfg.Panel.Agents))
 		}
 		out[name] = p
+	}
+	return out
+}
+
+// agentEnvs projects each profile's env onto the KEY=VALUE entries a spawn adds,
+// reporting and dropping any entry the profile got wrong: one bad variable costs
+// that variable, not the profile's spawns.
+func agentEnvs(cfg config.Config) map[string][]string {
+	var out map[string][]string
+	for name, prof := range cfg.Panel.Agents {
+		env, err := prof.Environ()
+		if err != nil {
+			log.Warn().Err(err).Str("agent", name).Msg("agent env entries ignored")
+		}
+		if len(env) == 0 {
+			continue
+		}
+		if out == nil {
+			out = make(map[string][]string, len(cfg.Panel.Agents))
+		}
+		out[name] = env
 	}
 	return out
 }
