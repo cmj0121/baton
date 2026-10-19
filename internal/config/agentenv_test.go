@@ -65,3 +65,15 @@ func TestEnvironDropsWhatCannotBeSet(t *testing.T) {
 		}
 	}
 }
+
+// TestEnvironIsSorted pins the order over enough keys and calls that Go's
+// randomised map iteration would show through if Environ did not sort.
+func TestEnvironIsSorted(t *testing.T) {
+	prof := AgentProfile{Command: "x", Env: map[string]string{"E": "5", "B": "2", "D": "4", "A": "1", "C": "3"}}
+	want := []string{"A=1", "B=2", "C=3", "D=4", "E=5"}
+	for range 50 {
+		if env, _ := prof.Environ(); !slices.Equal(env, want) {
+			t.Fatalf("Environ() = %v, want %v", env, want)
+		}
+	}
+}
