@@ -417,8 +417,7 @@ func run(cmd *exec.Cmd) ([]byte, error) {
 		return []byte(buf.String()), err
 	case <-time.After(removeTimeout):
 		_ = cmd.Process.Kill()
-		<-done
-		return nil, fmt.Errorf("timed out after %s", removeTimeout)
+		return nil, fmt.Errorf("timed out after %s (%w)", removeTimeout, <-done)
 	}
 }
 

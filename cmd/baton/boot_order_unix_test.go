@@ -450,8 +450,8 @@ func TestForceStopsADaemonStuckAboveTheBind(t *testing.T) {
 		t.Fatalf("stopDaemon on a daemon stuck above the bind: %v", err)
 	}
 	select {
-	case <-exited:
-		t.Logf("the stuck daemon was stopped in %s", time.Since(start))
+	case err := <-exited:
+		t.Logf("the stuck daemon was stopped in %s (exit: %v)", time.Since(start), err)
 	case <-time.After(2 * time.Second):
 		t.Fatal("stopDaemon returned, but the daemon it was meant to stop is still running")
 	}
