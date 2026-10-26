@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 
 	"github.com/cmj0121/baton/internal/i18n"
 	"github.com/cmj0121/baton/internal/panel"
@@ -461,12 +462,13 @@ func groupRow(t *testing.T, m model, path string) dashItem {
 	return dashItem{}
 }
 
-// TestPeersMarkOnTreeRow: the tree row carries the mark for a peers-on group and
-// for no other row — not its sub-group, not its member panels.
+// TestPeersMarkOnTreeRow: the collapsed tree row carries the mark for a peers-on
+// group and for no other row — not its sub-group, not its member panels.
 func TestPeersMarkOnTreeRow(t *testing.T) {
 	m := baseModel()
 	m.fleet = nestedFleet()
 	backend := groupRow(t, m, "backend")
+	backend.expanded = false
 	api := dashItem{kind: itemGroup, name: "backend/api", depth: 1, members: nestedFleet()[1:3]}
 
 	if strings.Contains(m.rowOf(backend), peersGlyph) {
@@ -492,20 +494,65 @@ func TestPeersMarkOnTreeRow(t *testing.T) {
 	}
 }
 
-// TestPeersMarkCostsOneCell: the mark is one cell of the row's lead and nothing
-// else moves — the group's name is still whole beside it.
-func TestPeersMarkCostsOneCell(t *testing.T) {
+// TestPeersGlyphIsTheDisclosureCell: on the tree row the peers glyph is not a
+// column of its own but stands in the disclosure cell — ⇄ where a collapsed
+// group shows ▸, and the expanded ▾ kept but drawn in the peers colour — so the
+// lead is exactly as wide as a peers-off row's and the name stays whole.
+func TestPeersGlyphIsTheDisclosureCell(t *testing.T) {
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(prev)
+
 	m := baseModel()
 	m.fleet = nestedFleet()
-	backend := groupRow(t, m, "backend")
-	plain := lipgloss.Width(m.rowLead(backend))
+	open := groupRow(t, m, "backend")
+	if !open.expanded {
+		t.Fatal("the fixture's backend row should start expanded")
+	}
+	shut := open
+	shut.expanded = false
+	stateColour := states[groupState(open.members)].color
+	paint := func(c lipgloss.TerminalColor, s string) string {
+		return lipgloss.NewStyle().Foreground(c).Bold(true).Render(s)
+	}
+
+	offOpen, offShut := m.rowLead(open), m.rowLead(shut)
+	if row := ansi.Strip(m.rowOf(open)); !strings.Contains(row, "▾ backend (") {
+		t.Fatalf("a peers-off expanded row should show ▾, got %q", row)
+	}
+	if row := ansi.Strip(m.rowOf(shut)); !strings.Contains(row, "▸ backend (") {
+		t.Fatalf("a peers-off collapsed row should show ▸, got %q", row)
+	}
+	if !strings.Contains(offOpen, paint(stateColour, "▾")) || !strings.Contains(offShut, paint(stateColour, "▸")) {
+		t.Fatalf("a peers-off row should draw its triangle in the group's state colour: %q / %q", offOpen, offShut)
+	}
 
 	m.peerGroups = map[string]bool{"backend": true}
-	if got := lipgloss.Width(m.rowLead(backend)); got != plain+1 {
-		t.Fatalf("a marked row's lead is %d cells, want %d (one cell wider)", got, plain+1)
-	}
-	if row := ansi.Strip(m.rowOf(backend)); !strings.Contains(row, peersGlyph+"▾ backend (") {
-		t.Fatalf("the mark should sit against the group glyph with the name whole, got %q", row)
+	for _, c := range []struct {
+		name      string
+		it        dashItem
+		off, want string
+		gone      string
+	}{
+		{"collapsed", shut, offShut, peersGlyph + " backend (", "▸"},
+		{"expanded", open, offOpen, "▾ backend (", peersGlyph},
+	} {
+		lead := m.rowLead(c.it)
+		if lipgloss.Width(lead) != lipgloss.Width(c.off) {
+			t.Errorf("%s: a peers-on lead is %d cells, want %d (the glyph takes no extra column)",
+				c.name, lipgloss.Width(lead), lipgloss.Width(c.off))
+		}
+		row := ansi.Strip(m.rowOf(c.it))
+		if !strings.Contains(row, c.want) {
+			t.Errorf("%s: want %q in the row, got %q", c.name, c.want, row)
+		}
+		if strings.Contains(row, c.gone) {
+			t.Errorf("%s: the row should not show %q, got %q", c.name, c.gone, row)
+		}
+		glyph := strings.TrimSuffix(c.want, " backend (")
+		if !strings.Contains(lead, paint(colCyan, glyph)) {
+			t.Errorf("%s: the %s should be drawn in the peers colour, got %q", c.name, glyph, lead)
+		}
 	}
 }
 
@@ -628,7 +675,7 @@ func TestPeersMarkYieldsOnANarrowTile(t *testing.T) {
 	direct := panel.Panel{ID: "1", Kind: panel.Shell, Title: "backend · d", State: panel.Running, Group: "backend"}
 	tile := func(cols int) string { return m.renderTile(direct, false, cols, 4, 0) }
 
-	// The head is "⋈ ● " and then the title: four cells before the first letter.
+	// The head is "⇄ ● " and then the title: four cells before the first letter.
 	const fits = 5
 	off := [2]string{tile(fits - 1), tile(fits)}
 

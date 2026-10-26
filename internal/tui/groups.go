@@ -901,10 +901,11 @@ func (m model) groupPeersOn(name string) bool {
 
 // peersGlyph is the mark every peers surface leads with, so the tree row, the
 // card, the split and the zoom say the same thing with the same shape.
-const peersGlyph = "⋈"
+const peersGlyph = "⇄"
 
 // peersMark is the bare glyph, for the places that have a column and no room for
-// a word: the tree row, the card head and a member tile's head.
+// a word: the card head and a member tile's head. The tree row draws the same
+// glyph in its disclosure cell instead (see rowLead).
 func peersMark() string {
 	return lipgloss.NewStyle().Foreground(colCyan).Bold(true).Render(peersGlyph)
 }
