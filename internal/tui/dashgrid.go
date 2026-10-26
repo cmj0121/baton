@@ -191,9 +191,14 @@ func cardTitleColor(selected bool) lipgloss.TerminalColor {
 
 // cardMarks is the decoration a card head carries before its glyph, with the gap
 // that separates it from the glyph. It is rowMarks — the same source as the tree
-// row's — so a card cannot quietly stop showing one of them.
+// row's — so a card cannot quietly stop showing one of them, plus the peers ⇄ of
+// a peers-on group, which the tree row draws in its disclosure cell instead. It
+// goes last, against the ▣ it qualifies, as it sits in the tree row's glyph cell.
 func (m model) cardMarks(it dashItem) string {
 	marks := m.rowMarks(it)
+	if it.kind == itemGroup && m.groupPeersOn(it.name) {
+		marks += peersMark()
+	}
 	if marks == "" {
 		return ""
 	}

@@ -154,11 +154,23 @@ func (m model) rowLead(it dashItem) string {
 		// The disclosure marker IS the group's glyph rather than an extra column: a
 		// row that is a container already says so by having one, and the old ▣ said
 		// nothing the indentation does not.
+		//
+		// A peers-on group spends the same cell on its peers glyph rather than on a
+		// column of its own: collapsed it shows ⇄ where ▸ would be, and expanded it
+		// keeps ▾ — the children below already say it is open — drawn in the peers
+		// colour, so the flag stays visible either way.
 		open := "▸"
 		if it.expanded {
 			open = "▾"
 		}
-		b.WriteString(lipgloss.NewStyle().Foreground(states[groupState(it.members)].color).Bold(true).Render(open))
+		colour := states[groupState(it.members)].color
+		if m.groupPeersOn(it.name) {
+			colour = colCyan
+			if !it.expanded {
+				open = peersGlyph
+			}
+		}
+		b.WriteString(lipgloss.NewStyle().Foreground(colour).Bold(true).Render(open))
 	default:
 		b.WriteString(m.logBadge(it.panel))
 		info := stateInfoFor(it.panel)
@@ -213,14 +225,15 @@ func treeRails(it dashItem) string {
 }
 
 // rowMarks is what a row says about itself before its glyph: the selection mark
-// while marking, the favourite ⊙, the ⋈ of a group whose panels may reach each
-// other, and the ⇅ of a row being carried.
+// while marking, the favourite ⊙, and the ⇅ of a row being carried.
 //
 // The tree row and the card grid both draw it from here, and that is the point.
 // The ⇅ was added while the dashboard had no cards at all, so a card assembled
 // from its own idea of what a row shows would have silently lacked it — and the
 // next decoration would have gone the same way, on whichever layout was not being
-// looked at that week.
+// looked at that week. The one mark it leaves out is a group's peers ⇄: the tree
+// row draws that in its disclosure cell, which a card does not have, so
+// cardMarks adds it there instead.
 //
 // A carried row is marked where it still SITS. Nothing is sent until the drop, so
 // drawing it under the cursor would be drawing a move that has not happened — and
@@ -232,9 +245,6 @@ func (m model) rowMarks(it dashItem) string {
 	}
 	if m.itemFavourite(it) {
 		b.WriteString(lipgloss.NewStyle().Foreground(colBrandHi).Render("⊙"))
-	}
-	if it.kind == itemGroup && m.groupPeersOn(it.name) {
-		b.WriteString(peersMark())
 	}
 	if m.grabbedRow(it) {
 		b.WriteString(lipgloss.NewStyle().Foreground(colBrandHi).Bold(true).Render("⇅"))

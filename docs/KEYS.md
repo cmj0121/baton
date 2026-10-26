@@ -214,7 +214,7 @@ dashboard, or the panels directly in the group change — one joins, one leaves,
 given for two panels must not open a channel among three. Switching it **off does not ask**. The key is refused, with the reason
 on the status line, on a panel row or the quiet fold, under a group-by lens, and for a work item that holds only
 sub-groups — the flag reaches the panels directly in a group, and that one has none. A group with peers on carries a
-`⋈`. What the flag grants, and what it does not protect, is in [CONTROL.md](./CONTROL.md#peers).
+`⇄`, in place of its `▸` while collapsed. What the flag grants, and what it does not protect, is in [CONTROL.md](./CONTROL.md#peers).
 
 Issue detail `w` asks for a branch, prefilled `feat/<number>`, spawns the fleet default agent, and binds the new tree
 to that issue. The board's `w` does not. A repository with no GitHub remote still gets the tree; the bind is skipped.

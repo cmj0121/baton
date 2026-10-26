@@ -458,11 +458,11 @@ logged.
 
 ### Seeing it
 
-A group with peers on is marked **`⋈`** wherever it or its panels are drawn: on the group's dashboard row and card, in
-the group split's title (`⋈ peers`), at the head of each member's tile, and in the footer strip of a zoomed member
-(`⋈ peers`, the bare glyph when the strip is narrow) — so while you type into a panel you can see that its group-mates
-may type into it too. Under a group-by lens the rows, cards and split titles are buckets rather than groups and carry
-no mark; a tile too narrow to hold it goes without.
+A group with peers on is marked **`⇄`** wherever it or its panels are drawn: on the group's dashboard row (in place of
+the `▸` while collapsed; expanded, its `▾` turns cyan) and card, in the group split's title (`⇄ peers`), at the head of
+each member's tile, and in the footer strip of a zoomed member (`⇄ peers`, the bare glyph when the strip is narrow) — so
+while you type into a panel you can see that its group-mates may type into it too. Under a group-by lens the rows, cards
+and split titles are buckets rather than groups and carry no mark; a tile too narrow to hold it goes without.
 
 Each admitted send writes one line to the daemon log (`peer send`, with `from`, `to`, `group` and `bytes`) and fires
 the `peer.send` [plugin event](PLUGIN.md) with the same four fields; flipping the flag logs
