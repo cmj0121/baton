@@ -318,9 +318,9 @@ operator's as well: a conductor or an agent panel that tries — by `panel.group
 into it — is refused. A panel reaches its group-mates with
 `peer.list` (reply: a `ServerMsg` of type `peers`, whose `Panels` are the reachable group-mates and nothing else),
 `peer.tail` (type `tail`) and `peer.send` (type `notice`), each authorised per call against the caller's own panel and
-refused with a reason that starts `peer:`. A peers-on group is marked `⋈` on its row and card, in its split's title, on
-each member's tile and in a zoomed member's footer. The tools an agent uses, what a send types, and the limits of the
-whole arrangement are in [CONTROL.md](./CONTROL.md#peers).
+refused with a reason that starts `peer:`. A peers-on group is marked `⇄` on its row (standing in for the collapsed `▸`)
+and card, in its split's title, on each member's tile and in a zoomed member's footer. The tools an agent uses, what a
+send types, and the limits of the whole arrangement are in [CONTROL.md](./CONTROL.md#peers).
 
 **The group split.** Zooming a work item opens a split scoped to that path's **direct children** — each direct panel
 rendered live in its own tile, plus one tile per immediate **sub-group** (a rollup box marked `▣`). By default the split
