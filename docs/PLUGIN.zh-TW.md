@@ -124,21 +124,21 @@ end)
 
 事件集合(衍生自 SPEC.md 中的生命週期):
 
-| 事件              | 觸發時機                 | 酬載                                                           |
-| ----------------- | ------------------------ | -------------------------------------------------------------- |
-| `panel.spawn`     | 一個面板被建立           | 該面板                                                         |
-| `panel.state`     | 任何生命週期轉換         | 面板 + `from`、`to`                                            |
-| `panel.attention` | 一個面板進入 `attention` | 該面板                                                         |
-| `panel.idle`      | 一個面板穩定至 `idle`    | 該面板                                                         |
-| `panel.exit`      | 一支行程自行結束         | 面板 + `exit_code`                                             |
-| `panel.close`     | 一個面板被退場           | `{ id }`                                                       |
-| `group.change`    | 成員/改名/顯示數量變動   | 該群組                                                         |
-|                   | 群組的互通旗標被切換     | `{ group, peers }`——`peers` 是切換後的狀態                     |
-| `peer.send`       | 一個面板往同群組面板打字 | `{ from, to, group, bytes }`——面板 id、所屬群組、大小          |
-| `task.change`     | 一個任務被記錄或改變狀態 | 該任務——`id`、`prompt`、`status`、`panel`、`group`、`attempts` |
-| `server.reload`   | 設定/外掛被重載          | —                                                              |
-| `panel.output`    | 有位元組抵達某個面板     | 面板 + `data`——**高流量、需選擇加入、預設關閉**                |
-| `panel.title`     | 一個面板生成或改變狀態   | 該面板——**這是一個過濾器:回傳要顯示的標題字串**                |
+| 事件              | 觸發時機                 | 酬載                                                                               |
+| ----------------- | ------------------------ | ---------------------------------------------------------------------------------- |
+| `panel.spawn`     | 一個面板被建立           | 該面板                                                                             |
+| `panel.state`     | 任何生命週期轉換         | 面板 + `from`、`to`                                                                |
+| `panel.attention` | 一個面板進入 `attention` | 該面板                                                                             |
+| `panel.idle`      | 一個面板穩定至 `idle`    | 該面板                                                                             |
+| `panel.exit`      | 一支行程自行結束         | 面板 + `exit_code`                                                                 |
+| `panel.close`     | 一個面板被退場           | `{ id }`                                                                           |
+| `group.change`    | 成員/改名/顯示數量變動   | 該群組                                                                             |
+|                   | 群組的互通旗標被切換     | `{ group, peers }`——`peers` 是切換後的狀態                                         |
+| `peer.send`       | 一個面板往同群組面板打字 | `{ from, to, group, bytes, submitted }`——面板 id、所屬群組、大小、是否按下了 Enter |
+| `task.change`     | 一個任務被記錄或改變狀態 | 該任務——`id`、`prompt`、`status`、`panel`、`group`、`attempts`                     |
+| `server.reload`   | 設定/外掛被重載          | —                                                                                  |
+| `panel.output`    | 有位元組抵達某個面板     | 面板 + `data`——**高流量、需選擇加入、預設關閉**                                    |
+| `panel.title`     | 一個面板生成或改變狀態   | 該面板——**這是一個過濾器:回傳要顯示的標題字串**                                    |
 
 `panel.attention` 與 `panel.exit` 是最主打的 hook:「當某個 agent 需要我時提醒我」、「當這一步
 完成時啟動下一步」、「完成時發桌面通知」全都由它們衍生而來。

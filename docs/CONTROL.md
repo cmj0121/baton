@@ -307,11 +307,11 @@ baton ctl group peers review off
 On the dashboard the same switch is **`g p`** with the cursor on the group's row (see [KEYS.md](KEYS.md)). An agent in
 that group then has three tools, and uses them like this:
 
-| Tool          | Arguments                              | Returns                                                                                               |
-| ------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `baton_peers` | —                                      | the group-mates it may reach, as JSON: each one's `id`, `title`, `kind` and `state`                   |
-| `baton_peek`  | `id`, `bytes` (default 4096, max 8192) | the tail of that panel's output as plain text, terminal control sequences removed                     |
-| `baton_tell`  | `id`, `text`                           | types `text` into that panel as one line and presses Enter; replies with the size sent and the target |
+| Tool          | Arguments                              | Returns                                                                                                                                   |
+| ------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `baton_peers` | —                                      | the group-mates it may reach, as JSON: each one's `id`, `title`, `kind` and `state`                                                       |
+| `baton_peek`  | `id`, `bytes` (default 4096, max 8192) | the tail of that panel's output as plain text, terminal control sequences removed                                                         |
+| `baton_tell`  | `id`, `text`                           | types `text` into that panel as one line and presses Enter; replies with the size typed and the target, not whether the panel acted on it |
 
 `baton_peek` reads the **tail** of what the panel printed, cut by size, so it can start mid-line and a full-screen
 program reads as fragments. An escape string cut off before its terminator loses only its introducer: the text after
@@ -387,7 +387,14 @@ connection declares, with the same [limit](#what-it-does-not-protect).
 | an **agent** panel               | one line: `[from <title> (<id>)]`, a space, then the text — the sender's title and id |
 | a **shell** or **command** panel | the text exactly as written, with no prefix — a shell runs it as a command            |
 
-- **Every send ends in Enter.** There is no option to leave text unsubmitted in a group-mate's input line.
+- **Every send ends in Enter** — the target profile's [`submit`](SPEC.md#panels) key (`"\r"` for grok), else `"\n"`.
+  There is no option to leave text unsubmitted in a group-mate's input line, and the sender cannot choose the key.
+- **An agent gets the text, a short pause, then the Enter** as its own write, so a busy TUI does not take the pair for
+  a paste. If the target's process changes during the pause, the Enter is dropped and the send fails: nothing was
+  submitted. A shell gets text and Enter in one write.
+- **The reply says what baton typed, not what the panel did.** A send that pressed Enter answers
+  `typed <n> bytes into <title> (<id>) and pressed Enter; not confirmed the panel took it` — read the panel back with
+  `baton_peek` to see whether it did.
 - **An agent gets one line.** Tabs and line breaks (CR, LF, `U+0085`, `U+2028`, `U+2029`) fold to a single space and
   the ends are trimmed. Any other control or invisible character — an escape sequence, `Ctrl-C`, a bidi override, a
   zero-width character, `U+FFFD` — and invalid UTF-8 are **refused**, not stripped: a peer says something to an agent,
@@ -402,12 +409,12 @@ connection declares, with the same [limit](#what-it-does-not-protect).
 
 ### On the wire
 
-| Verb          | Command fields                  | Reply                                                                              |
-| ------------- | ------------------------------- | ---------------------------------------------------------------------------------- |
-| `group.peers` | `group`, `enable` (`true` = on) | the `panels` snapshot broadcast to every client; the group's entry carries `peers` |
-| `peer.list`   | —                               | `type: "peers"`, with `panels` holding the group-mates the caller may reach        |
-| `peer.tail`   | `id`, `count` (bytes)           | `type: "tail"`, with `id` and `data`                                               |
-| `peer.send`   | `id`, `data`                    | `type: "notice"`, with `id` (the target) and `notice`, to the sender alone         |
+| Verb          | Command fields                  | Reply                                                                                                                                                                 |
+| ------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `group.peers` | `group`, `enable` (`true` = on) | the `panels` snapshot broadcast to every client; the group's entry carries `peers`                                                                                    |
+| `peer.list`   | —                               | `type: "peers"`, with `panels` holding the group-mates the caller may reach                                                                                           |
+| `peer.tail`   | `id`, `count` (bytes)           | `type: "tail"`, with `id` and `data`                                                                                                                                  |
+| `peer.send`   | `id`, `data`                    | `type: "notice"`, with `id` (the target) and `notice` (`typed <n> bytes into <title> (<id>) and pressed Enter; not confirmed the panel took it`), to the sender alone |
 
 The caller of a `peer.*` verb is the `self` its connection declared on `hello` — there is no field to name another.
 `peer.tail` answers with the **raw** tail of the target's output, escape sequences included: `count` is clamped to
@@ -440,6 +447,12 @@ starts with `peer:` and names its cause:
 
 The rate check is last, so a send refused for any other reason costs the sender nothing.
 
+One error comes after the text was typed, and so carries no `peer:` prefix and still counts against the rate cap:
+
+| Error                                                                                              | When                                                                          |
+| -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `typed <n> bytes into <title> (<id>), but its process changed before Enter; nothing was submitted` | the target agent's process exited or restarted between the text and the Enter |
+
 `group.peers` has its own refusals, which do not carry the prefix. The group name is checked first, switching on or
 off alike:
 
@@ -464,9 +477,9 @@ each member's tile, and in the footer strip of a zoomed member (`⇄ peers`, the
 while you type into a panel you can see that its group-mates may type into it too. Under a group-by lens the rows, cards
 and split titles are buckets rather than groups and carry no mark; a tile too narrow to hold it goes without.
 
-Each admitted send writes one line to the daemon log (`peer send`, with `from`, `to`, `group` and `bytes`) and fires
-the `peer.send` [plugin event](PLUGIN.md) with the same four fields; flipping the flag logs
-`group peers set` and fires `group.change` with `group` and `peers`.
+Each admitted send writes one line to the daemon log (`peer send`, with `from`, `to`, `group`, `bytes` and
+`submitted` — `false` when the Enter was dropped) and fires the `peer.send` [plugin event](PLUGIN.md) with the same five
+fields; flipping the flag logs `group peers set` and fires `group.change` with `group` and `peers`.
 
 ### What it does not protect
 
@@ -511,10 +524,11 @@ scope, mold's own status when the socket answers (or the dial error when it does
 holds. The probe it runs re-arms a classifier the daemon had written off. Both are described in
 [ATTENTION.md](./ATTENTION.md#a-classifier-beside-the-regex).
 
-A dispatch carries two more fields: `prompt` (the brief) and an optional `submit` override (the keys appended to send it,
-default a newline) on `panel.dispatch` / `panel.dispatch-group`; `task.enqueue` / `task.cancel` / `task.promote` /
-`task.demote` / `task.drain` / `task.list` drive the backlog and reply with a `tasks` snapshot. A spawn-on-demand
-`task.enqueue` carries the worker's `path` / `args` / `dir` and an `ephemeral` close-on-done flag.
+A dispatch carries two more fields: `prompt` (the brief) and an optional `submit` override (the keys appended to send it;
+unset, the target profile's [`submit`](SPEC.md#panels), else a newline) on `panel.dispatch` / `panel.dispatch-group`;
+`task.enqueue` / `task.cancel` / `task.promote` / `task.demote` / `task.drain` / `task.list` drive the backlog and
+reply with a `tasks` snapshot. A spawn-on-demand `task.enqueue` carries the worker's `path` / `args` /
+`dir` and an `ephemeral` close-on-done flag.
 
 Baton injects the wiring into an agent panel's process, which both `baton ctl` and `baton mcp` read automatically:
 
