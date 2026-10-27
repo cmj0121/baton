@@ -387,7 +387,8 @@ connection declares, with the same [limit](#what-it-does-not-protect).
 | an **agent** panel               | one line: `[from <title> (<id>)]`, a space, then the text — the sender's title and id |
 | a **shell** or **command** panel | the text exactly as written, with no prefix — a shell runs it as a command            |
 
-- **Every send ends in Enter** — the target profile's [`submit`](SPEC.md#panels) key (`"\r"` for grok), else `"\n"`.
+- **Every send ends in Enter** — the target profile's [`submit`](SPEC.md#panels) key, else its CLI's built-in default
+  (`"\r"` for grok), else `"\n"`.
   There is no option to leave text unsubmitted in a group-mate's input line, and the sender cannot choose the key.
 - **An agent gets the text, a short pause, then the Enter** as its own write, so a busy TUI does not take the pair for
   a paste. If the target's process changes during the pause, the Enter is dropped and the send fails: nothing was
@@ -525,7 +526,8 @@ holds. The probe it runs re-arms a classifier the daemon had written off. Both a
 [ATTENTION.md](./ATTENTION.md#a-classifier-beside-the-regex).
 
 A dispatch carries two more fields: `prompt` (the brief) and an optional `submit` override (the keys appended to send it;
-unset, the target profile's [`submit`](SPEC.md#panels), else a newline) on `panel.dispatch` / `panel.dispatch-group`;
+unset, the target profile's [`submit`](SPEC.md#panels), else its CLI's built-in default — `"\r"` for grok — else a
+newline) on `panel.dispatch` / `panel.dispatch-group`;
 `task.enqueue` / `task.cancel` / `task.promote` / `task.demote` / `task.drain` / `task.list` drive the backlog and
 reply with a `tasks` snapshot. A spawn-on-demand `task.enqueue` carries the worker's `path` / `args` /
 `dir` and an `ephemeral` close-on-done flag.

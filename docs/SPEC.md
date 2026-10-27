@@ -99,21 +99,24 @@ in the process list, so a credential belongs in `env-allow`.
 
 **Profile submit key.** A profile's `submit` is the key sequence baton presses after every line it types into that
 profile's panels — a group-mate's `baton_tell`, a dispatched brief, a queued task. It is one of `"\r"`, `"\n"` or
-`"\r\n"`; unset (or `""`) means `"\n"`. grok reads `"\n"` as a new line inside its input box and submits only on a
-carriage return:
+`"\r\n"`; unset (or `""`) means the built-in default for a CLI baton knows, and `"\n"` for the rest. grok reads `"\n"`
+as a new line inside its input box and submits only on a carriage return, so a panel whose command is `grok` — under
+any profile name, or none, as with `baton ctl spawn --agent grok` — submits with `"\r"` out of the box. Writing it is
+optional, and setting `submit: "\n"` explicitly overrides the built-in default:
 
 ```yaml
 panel:
   agents:
     grok:
       command: grok
-      submit: "\r"
+      submit: "\r" # optional: grok's built-in default
 ```
 
 Double-quote it: in YAML `'\r'` and a bare `\r` are a backslash and an `r`, which no TUI reads as Enter. A value that is
-not one of the three is warned about in `baton.log` and dropped, so that profile submits with `"\n"`. The key is re-read
-on a reload (`C-t R` or `SIGHUP`) and applies to the next line typed. A dispatch that names its own `submit` wins over the
-profile's; a panel whose profile is not in the config submits with `"\n"`.
+not one of the three is warned about in `baton.log` and dropped, so that profile falls back to its CLI's built-in default
+(`"\r"` for grok), else `"\n"`. The key is re-read on a reload (`C-t R` or `SIGHUP`) and applies to the next line typed.
+A dispatch that names its own `submit` wins over the profile's; a panel whose profile is not in the config submits with
+its CLI's built-in default, else `"\n"`.
 
 Into an **agent** panel baton types each line in two writes: the text, a pause of about 50 ms, then the submit on its
 own — so a busy TUI does not read the pair as one paste and leave it unsent. It is best effort: the pause is a head
