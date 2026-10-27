@@ -206,6 +206,10 @@ type Panel struct {
 	// records it. Empty for a shell, and for an agent spawned without one. It is
 	// how a frontend can group or filter a fleet by what KIND of agent is running,
 	// which at fifty panels is a question the title alone answers badly.
+	//
+	// The server keeps the profile on its spawn spec and fills this field only on
+	// the wire snapshot it sends (wirePanel); on the server's own record it is
+	// empty, so server code reads the spec instead.
 	Profile string
 
 	// Cwd is the directory the panel's process is in now, as opposed to the one it

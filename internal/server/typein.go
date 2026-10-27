@@ -67,6 +67,8 @@ func (l *inputLanes) acquire(id string) (release func()) {
 // submitFor resolves the sequence that submits a line typed into panel id and
 // whether it is an agent: explicit wins, then the panel's profile's
 // (s.agentSubmit), then defaultSubmit. Takes s.mu itself; callers must NOT hold it.
+// The profile is read from the spawn spec (s.specs), not the panel record: the
+// server fills panel.Panel.Profile only on the wire snapshot, never on its own.
 //
 // An id that is not in the fleet resolves to defaultSubmit and not-an-agent, so
 // a line sent to a panel that just closed is written the old way, in one piece —
@@ -82,11 +84,12 @@ func (s *Server) submitFor(id, explicit string) (submit string, agent bool) {
 		return defaultSubmit, false
 	}
 	p := s.panels[i]
+	profile := s.specs[id].Profile
 	switch {
 	case explicit != "":
 		submit = explicit
-	case s.agentSubmit[p.Profile] != "":
-		submit = s.agentSubmit[p.Profile]
+	case s.agentSubmit[profile] != "":
+		submit = s.agentSubmit[profile]
 	default:
 		submit = defaultSubmit
 	}
