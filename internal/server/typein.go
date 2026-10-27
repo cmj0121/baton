@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"github.com/cmj0121/baton/internal/agents"
 )
 
 // defaultSubmitGap is how long an agent panel is given between the text and the
@@ -65,10 +67,13 @@ func (l *inputLanes) acquire(id string) (release func()) {
 }
 
 // submitFor resolves the sequence that submits a line typed into panel id and
-// whether it is an agent: explicit wins, then the panel's profile's
-// (s.agentSubmit), then defaultSubmit. Takes s.mu itself; callers must NOT hold it.
-// The profile is read from the spawn spec (s.specs), not the panel record: the
-// server fills panel.Panel.Profile only on the wire snapshot, never on its own.
+// whether it is an agent: explicit wins, then the panel's profile's configured
+// submit (s.agentSubmit), then the built-in default for its command
+// (agents.SubmitFor), then defaultSubmit. Takes s.mu itself; callers must NOT
+// hold it. Profile and command are read from the spawn spec (s.specs), not the
+// panel record: the server fills panel.Panel.Profile only on the wire snapshot,
+// and the spec keeps the pre-isolation command, so a containerised grok, a
+// profile-less `spawn --agent grok` and a restored panel all still submit right.
 //
 // An id that is not in the fleet resolves to defaultSubmit and not-an-agent, so
 // a line sent to a panel that just closed is written the old way, in one piece —
@@ -84,12 +89,14 @@ func (s *Server) submitFor(id, explicit string) (submit string, agent bool) {
 		return defaultSubmit, false
 	}
 	p := s.panels[i]
-	profile := s.specs[id].Profile
+	spec := s.specs[id]
 	switch {
 	case explicit != "":
 		submit = explicit
-	case s.agentSubmit[profile] != "":
-		submit = s.agentSubmit[profile]
+	case s.agentSubmit[spec.Profile] != "":
+		submit = s.agentSubmit[spec.Profile]
+	case agents.SubmitFor(spec.Command) != "":
+		submit = agents.SubmitFor(spec.Command)
 	default:
 		submit = defaultSubmit
 	}

@@ -643,11 +643,13 @@ type AgentProfile struct {
 
 	// Submit is the key sequence that submits a line typed into this profile's
 	// panels — a peer send, a dispatched brief. One of "\r", "\n", "\r\n";
-	// unset (or "") means the server default "\n". It exists because agent TUIs
-	// disagree on what Enter is: grok reads "\n" as a newline inside its input
-	// box and only "\r" as the key that sends it, so a peer's message sat typed
-	// and never submitted. Which byte a TUI wants is a property of the agent, so
-	// the profile is where it is said.
+	// unset (or "") means the built-in default for a CLI baton knows, keyed on
+	// the command (agents.SubmitFor; grok: "\r"), and the server default "\n"
+	// for the rest. It exists because agent TUIs disagree on what Enter is: grok
+	// reads "\n" as a newline inside its input box and only "\r" as the key that
+	// sends it, so a peer's message sat typed and never submitted. Which byte a
+	// TUI wants is a property of the agent, so the profile is where it is said —
+	// and a value set here, "\n" included, beats the built-in default.
 	//
 	// It must be double-quoted in YAML: '\r' and a bare \r are a backslash and
 	// an r, which no TUI reads as Enter — SubmitSequence refuses them by name
@@ -736,7 +738,8 @@ func (a AgentProfile) Environ() ([]string, error) {
 // naming the accepted values for anything else. The set is closed on purpose:
 // every byte here is typed into an agent after each message, so a value baton
 // does not recognise is far more likely a quoting mistake than a key the user
-// meant — and the caller drops it back to the default rather than type it.
+// meant — and the caller drops it, as if unset (the CLI's built-in default, else
+// "\n"), rather than type it.
 func (a AgentProfile) SubmitSequence() (string, error) {
 	switch a.Submit {
 	case "", "\r", "\n", "\r\n":

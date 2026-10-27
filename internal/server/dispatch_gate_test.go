@@ -68,11 +68,12 @@ func typedAgentLine(written []string, id, text string) bool {
 
 // submittedLines counts the lines written fully typed into agent panels: one
 // per submit-only write. A pre-split text+"\n" write counts as none, so a test
-// that asserts how many lines landed also asserts they were split.
+// that asserts how many lines landed also asserts they were split. Any submit
+// sequence counts: a grok panel submits with "\r" by default.
 func submittedLines(written []string) int {
 	n := 0
 	for _, w := range written {
-		if _, data, _ := strings.Cut(w, ":"); data == defaultSubmit {
+		if _, data, _ := strings.Cut(w, ":"); data == "\n" || data == "\r" || data == "\r\n" {
 			n++
 		}
 	}

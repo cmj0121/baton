@@ -59,6 +59,25 @@ func MCPConfigArgs(command, path string) []string {
 	return nil
 }
 
+// SubmitFor is the key sequence a backend reads as "send this line", or "" when
+// baton does not know one and the server default applies.
+//
+// It resolves on the COMMAND rather than on the profile name, for the same reason
+// MCPConfigArgs does: a user's own panel.agents entry replaces the preset of the
+// same name entirely, and `reviewer: {command: grok}` is still grok.
+//
+// Only grok is here: it reads "\n" as a newline inside its input box and submits
+// on "\r" alone, so without this every line typed into it sits unsent. The rest
+// return "" rather than a guess — a wrong key leaves a line typed and never sent,
+// which is worse than the default that works for most CLIs.
+func SubmitFor(command string) string {
+	switch filepath.Base(command) {
+	case "grok":
+		return "\r"
+	}
+	return ""
+}
+
 // Scanned is one catalogue entry with this machine's verdict on it: the backend,
 // and whether the command behind it is absent.
 //

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/proto"
+	"github.com/cmj0121/baton/internal/ptymgr"
 )
 
 // writeLog records every writeInput call as its own entry, so a test can tell a
@@ -272,6 +275,54 @@ func TestSubmitFor(t *testing.T) {
 					tc.id, tc.explicit, submit, agent, tc.submit, tc.agent)
 			}
 		})
+	}
+}
+
+// The built-in default is keyed on the spawn spec's command: a grok with no
+// profile still submits with "\r", a profile's configured submit still beats it,
+// and a CLI baton knows nothing about keeps defaultSubmit.
+func TestSubmitForCommandDefault(t *testing.T) {
+	s, _, _ := typeinServer(t,
+		panel.Panel{ID: "bare", Kind: panel.Agent},
+		panel.Panel{ID: "pinned", Kind: panel.Agent},
+		panel.Panel{ID: "claude", Kind: panel.Agent},
+	)
+	s.specs["bare"] = spawnSpec{Spec: ptymgr.Spec{Command: "/usr/local/bin/grok"}}
+	s.specs["pinned"] = spawnSpec{Spec: ptymgr.Spec{Command: "grok"}, Profile: "mygrok"}
+	s.specs["claude"] = spawnSpec{Spec: ptymgr.Spec{Command: "claude"}}
+	s.agentSubmit = map[string]string{"mygrok": "\n"}
+
+	for _, tc := range []struct {
+		name, id, explicit, submit string
+	}{
+		{"grok without a profile", "bare", "", "\r"},
+		{"explicit wins over the command default", "bare", "\r\n", "\r\n"},
+		{"profile's configured submit wins", "pinned", "", "\n"},
+		{"unknown command", "claude", "", defaultSubmit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if submit, _ := s.submitFor(tc.id, tc.explicit); submit != tc.submit {
+				t.Fatalf("submitFor(%q, %q) = %q, want %q", tc.id, tc.explicit, submit, tc.submit)
+			}
+		})
+	}
+}
+
+// A profile-less agent spawned through createPanel from a command named grok
+// submits with "\r": the default comes from the command the spec records.
+func TestSubmitForBareGrok(t *testing.T) {
+	s, dir := identityServer(t)
+	grok := filepath.Join(t.TempDir(), "grok")
+	if err := os.Symlink("/bin/cat", grok); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	id, err := s.createPanel(originOperator, proto.KindAgent, grok, nil, dir, "", false, false)
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if submit, agent := s.submitFor(id, ""); submit != "\r" || !agent {
+		t.Fatalf("submitFor(%q, \"\") = (%q, %v), want (%q, true)", id, submit, agent, "\r")
 	}
 }
 

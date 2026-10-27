@@ -1814,9 +1814,10 @@ func agentEnvs(cfg config.Config) map[string][]string {
 }
 
 // agentSubmits projects each profile's submit sequence, reporting and dropping a
-// value the profile got wrong: the panel then submits with the server default,
-// which is what it did before the key existed, rather than the profile's panels
-// being refused. A profile that sets none is absent, not stored empty.
+// value the profile got wrong: the panel then submits as if the key were unset —
+// its CLI's built-in default (agents.SubmitFor), else the server default —
+// rather than the profile's panels being refused. A profile that sets none is
+// absent, not stored empty.
 func agentSubmits(cfg config.Config) map[string]string {
 	var out map[string]string
 	for name, prof := range cfg.Panel.Agents {

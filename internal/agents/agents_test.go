@@ -173,3 +173,19 @@ func TestMergeDropsThePresetHomepage(t *testing.T) {
 		t.Errorf("an overridden preset kept the preset homepage %q", b.Homepage)
 	}
 }
+
+// SubmitFor knows grok by its command basename and nothing else: a lookalike
+// name or an empty command gets no guess.
+func TestSubmitFor(t *testing.T) {
+	for _, tc := range []struct{ command, want string }{
+		{"grok", "\r"},
+		{"/opt/bin/grok", "\r"},
+		{"claude", ""},
+		{"", ""},
+		{"grok-build", ""},
+	} {
+		if got := agents.SubmitFor(tc.command); got != tc.want {
+			t.Errorf("SubmitFor(%q) = %q, want %q", tc.command, got, tc.want)
+		}
+	}
+}
