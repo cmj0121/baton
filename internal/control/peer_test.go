@@ -75,7 +75,7 @@ func TestPeerClientRoundTrip(t *testing.T) {
 	}
 
 	note, err := worker.PeerSend(mate, "echo peer-$((40+2))")
-	if err != nil || !strings.HasPrefix(note, "sent 19 bytes to ") || !strings.HasSuffix(note, "("+mate+")") {
+	if err != nil || !strings.HasPrefix(note, "typed 19 bytes into ") || !strings.HasSuffix(note, "("+mate+") and pressed Enter; not confirmed the panel took it") {
 		t.Fatalf("PeerSend should return the daemon's notice, got %q, %v", note, err)
 	}
 	var tail string
@@ -215,7 +215,7 @@ func TestPeerSendReturnsItsOwnNotice(t *testing.T) {
 				_ = enc.Encode(proto.ServerMsg{Type: "config"})
 			case "peer.send":
 				_ = enc.Encode(proto.ServerMsg{Type: "notice", Notice: "broadcast before"})
-				_ = enc.Encode(proto.ServerMsg{Type: "notice", ID: cmd.ID, Notice: "sent 1 bytes to mate (" + cmd.ID + ")"})
+				_ = enc.Encode(proto.ServerMsg{Type: "notice", ID: cmd.ID, Notice: "typed 1 bytes into mate (" + cmd.ID + ") and pressed Enter; not confirmed the panel took it"})
 				_ = enc.Encode(proto.ServerMsg{Type: "notice", Notice: "broadcast after"})
 			}
 		}
@@ -226,7 +226,7 @@ func TestPeerSendReturnsItsOwnNotice(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer func() { _ = c.Close() }()
-	if note, err := c.PeerSend("9", "x"); err != nil || note != "sent 1 bytes to mate (9)" {
+	if note, err := c.PeerSend("9", "x"); err != nil || note != "typed 1 bytes into mate (9) and pressed Enter; not confirmed the panel took it" {
 		t.Errorf("PeerSend = %q, %v; want its own notice, not a broadcast beside it", note, err)
 	}
 }

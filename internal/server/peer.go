@@ -288,10 +288,10 @@ func peerPayload(me, to panel.Panel, text string) []byte {
 // else of a dispatch — no task is recorded on the target, no brief reaches its
 // card and no task hook runs, because a peer's message is not an assignment.
 //
-// The reply is a notice to the sender alone, carrying the target's id. The id
-// is what lets a client tell this reply from the notices the daemon broadcasts
-// to every connection for its own reasons. There is no fleet broadcast: nothing
-// a snapshot carries changed.
+// The reply (peerSendReply) goes to the sender alone, carrying the target's id.
+// The id is what lets a client tell this reply from the notices the daemon
+// broadcasts to every connection for its own reasons. There is no fleet
+// broadcast: nothing a snapshot carries changed.
 func (s *Server) peerSend(cc *clientConn, cmd proto.Command) {
 	s.mu.Lock()
 	me, to, text, reason := s.peerSendLocked(cc.self, cmd.ID, cmd.Data, cmd.Submit, s.mon.now())
@@ -311,8 +311,21 @@ func (s *Server) peerSend(cc *clientConn, cmd proto.Command) {
 	// all three places is len(cmd.Data) as the sender gave it — not the folded
 	// text, and not the prefix the server added.
 	log.Info().Str("from", me.ID).Str("to", to.ID).Str("group", me.Group).Int("bytes", len(cmd.Data)).Bool("submitted", submitted).Msg("peer send")
-	s.emit("peer.send", map[string]any{"from": me.ID, "to": to.ID, "group": me.Group, "bytes": len(cmd.Data)})
-	send(cc, proto.ServerMsg{Type: "notice", ID: to.ID, Notice: fmt.Sprintf("sent %d bytes to %s (%s)", len(cmd.Data), scrub.Capped(to.Title, maxPeerTitleRunes), scrub.Capped(to.ID, maxPeerTitleRunes))})
+	s.emit("peer.send", map[string]any{"from": me.ID, "to": to.ID, "group": me.Group, "bytes": len(cmd.Data), "submitted": submitted})
+	send(cc, peerSendReply(len(cmd.Data), to, submitted))
+}
+
+// peerSendReply is peer.send's answer to its sender. It says what the server
+// did — typed the line, then pressed Enter or did not — and claims nothing more:
+// whether the panel took the line is not something the server can see. A line
+// whose Enter was dropped is an error, because nothing was submitted and the
+// sender must not read it as sent.
+func peerSendReply(n int, to panel.Panel, submitted bool) proto.ServerMsg {
+	title, id := scrub.Capped(to.Title, maxPeerTitleRunes), scrub.Capped(to.ID, maxPeerTitleRunes)
+	if !submitted {
+		return proto.ServerMsg{Type: "error", ID: to.ID, Error: fmt.Sprintf("typed %d bytes into %s (%s), but its process changed before Enter; nothing was submitted", n, title, id)}
+	}
+	return proto.ServerMsg{Type: "notice", ID: to.ID, Notice: fmt.Sprintf("typed %d bytes into %s (%s) and pressed Enter; not confirmed the panel took it", n, title, id)}
 }
 
 // peersFencedLocked reports whether cc is held to the peers fence: a conductor

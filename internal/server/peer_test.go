@@ -292,9 +292,50 @@ func TestPeerSendEmitsOneEventPerAdmittedSend(t *testing.T) {
 		t.Fatalf("want exactly one peer.send event, got %+v", *events)
 	}
 	f := (*events)[0].fields
-	if f["from"] != "a1" || f["to"] != "a2" || f["group"] != "work" || f["bytes"] != 5 || len(f) != 4 {
+	if f["from"] != "a1" || f["to"] != "a2" || f["group"] != "work" || f["bytes"] != 5 || f["submitted"] != true || len(f) != 5 {
 		t.Fatalf("peer.send event fields = %+v", f)
 	}
+}
+
+// TestPeerSendReplyIsWhatTheServerDid pins both replies word for word (#154):
+// the old "sent N bytes" claimed a delivery the server never saw. A submitted
+// line is a notice that says Enter was pressed and no more; a line whose Enter
+// was dropped, because the target's process changed between the text and the
+// submit, is an error a sender cannot mistake for a send. Both carry the
+// target's id, and the plugin event says which one happened.
+func TestPeerSendReplyIsWhatTheServerDid(t *testing.T) {
+	t.Run("submitted", func(t *testing.T) {
+		s, _, written, events := peerFleet()
+		msg := peerDo(t, s, "a1", proto.Command{Action: "peer.send", ID: "a2", Data: []byte("hello")})
+		const want = "typed 5 bytes into bob (a2) and pressed Enter; not confirmed the panel took it"
+		if msg.Type != "notice" || msg.ID != "a2" || msg.Notice != want || msg.Error != "" {
+			t.Fatalf("reply = %+v\nwant a notice for a2 reading %q", msg, want)
+		}
+		if submittedLines(*written) != 1 || len(*events) != 1 || (*events)[0].fields["submitted"] != true {
+			t.Fatalf("a submitted line: writes %q, events %+v", *written, *events)
+		}
+	})
+	t.Run("dropped", func(t *testing.T) {
+		s, _, written, events := peerFleet()
+		// The process is replaced as soon as the text lands, so the pid read
+		// after the gap differs from the one read before it.
+		pid := 10
+		s.pidOf = func(string) int { return pid }
+		inner := s.writeInput
+		s.writeInput = func(id string, data []byte) { inner(id, data); pid = 11 }
+
+		msg := peerDo(t, s, "a1", proto.Command{Action: "peer.send", ID: "a2", Data: []byte("hello")})
+		const want = "typed 5 bytes into bob (a2), but its process changed before Enter; nothing was submitted"
+		if msg.Type != "error" || msg.ID != "a2" || msg.Error != want || msg.Notice != "" {
+			t.Fatalf("reply = %+v\nwant an error for a2 reading %q", msg, want)
+		}
+		if submittedLines(*written) != 0 || len(*written) != 1 {
+			t.Fatalf("a dropped submit must type the text alone, got %q", *written)
+		}
+		if len(*events) != 1 || (*events)[0].fields["submitted"] != false {
+			t.Fatalf("a dropped submit is still announced, as not submitted: %+v", *events)
+		}
+	})
 }
 
 // peerSendOK reports whether one send from self to target was admitted, and
@@ -524,7 +565,7 @@ func TestPeerSendFoldsLineBreaksForAnAgent(t *testing.T) {
 	const multi = "\n a\r\nb\n\n\rc\td \r"
 
 	msg := peerDo(t, s, "a1", proto.Command{Action: "peer.send", ID: "a2", Data: []byte(multi)})
-	if msg.Type != "notice" || !strings.Contains(msg.Notice, "sent 14 bytes") {
+	if msg.Type != "notice" || !strings.HasPrefix(msg.Notice, "typed 14 bytes into ") {
 		t.Fatalf("the reply should report the 14 bytes as given, got %+v", msg)
 	}
 	peerDo(t, s, "a1", proto.Command{Action: "peer.send", ID: "sh", Data: []byte(multi)})
@@ -873,7 +914,7 @@ func TestPeerSendNoticeScrubsTheTargetID(t *testing.T) {
 	s.groupPeers = map[string]bool{"work": true}
 
 	msg := peerDo(t, s, "a1", proto.Command{Action: "peer.send", ID: bad, Data: []byte("hi")})
-	want := "sent 2 bytes to bob (t[2J 9" + strings.Repeat("9", maxPeerTitleRunes-6) + ")"
+	want := "typed 2 bytes into bob (t[2J 9" + strings.Repeat("9", maxPeerTitleRunes-6) + ") and pressed Enter; not confirmed the panel took it"
 	if msg.Type != "notice" || msg.Notice != want {
 		t.Fatalf("notice %q, want %q", msg.Notice, want)
 	}
