@@ -267,10 +267,11 @@ func peerFolds(r rune) bool {
 	return false
 }
 
-// peerPayload is the bytes a peer.send types into its target. An agent is told
+// peerPayload is the text a peer.send types into its target. An agent is told
 // who is typing, because it has to tell a peer from its human; a shell (or a
 // command panel) gets the bytes as they were sent, because a prefix would
-// corrupt the command. Both end in the Enter a dispatched brief ends in.
+// corrupt the command. Neither carries the Enter: peerSend has typeLine add the
+// target's submit, as a dispatched brief's is added.
 func peerPayload(me, to panel.Panel, text string) []byte {
 	if to.IsAgent() {
 		// The id is scrubbed with the title. The server mints ids, but a restore
@@ -279,11 +280,11 @@ func peerPayload(me, to panel.Panel, text string) []byte {
 		text = fmt.Sprintf("[from %s (%s)] %s",
 			scrub.Capped(me.Title, maxPeerTitleRunes), scrub.Capped(me.ID, maxPeerTitleRunes), text)
 	}
-	return dispatchData(text, "")
+	return []byte(text)
 }
 
 // peerSend handles peer.send: type into a group-mate. It is delivered with the
-// primitive a dispatched brief ends in (dispatchData + writeInput) and nothing
+// primitive a dispatched brief ends in (submitFor + typeLine) and nothing
 // else of a dispatch — no task is recorded on the target, no brief reaches its
 // card and no task hook runs, because a peer's message is not an assignment.
 //
@@ -300,12 +301,16 @@ func (s *Server) peerSend(cc *clientConn, cmd proto.Command) {
 		return
 	}
 
-	s.writeInput(to.ID, peerPayload(me, to, text))
+	// The submit is the target's, never the sender's (peerSendLocked refuses
+	// one): "" lets submitFor take the target profile's sequence. typeLine blocks
+	// for the gap on this connection goroutine, which is only this sender's wait.
+	submit, agent := s.submitFor(to.ID, "")
+	submitted := s.typeLine(to.ID, agent, peerPayload(me, to, text), submit)
 	// A feature that lets agents type into terminals has to be visible while it
 	// does it: one log line and one plugin event per admitted send. The size in
 	// all three places is len(cmd.Data) as the sender gave it — not the folded
 	// text, and not the prefix the server added.
-	log.Info().Str("from", me.ID).Str("to", to.ID).Str("group", me.Group).Int("bytes", len(cmd.Data)).Msg("peer send")
+	log.Info().Str("from", me.ID).Str("to", to.ID).Str("group", me.Group).Int("bytes", len(cmd.Data)).Bool("submitted", submitted).Msg("peer send")
 	s.emit("peer.send", map[string]any{"from": me.ID, "to": to.ID, "group": me.Group, "bytes": len(cmd.Data)})
 	send(cc, proto.ServerMsg{Type: "notice", ID: to.ID, Notice: fmt.Sprintf("sent %d bytes to %s (%s)", len(cmd.Data), scrub.Capped(to.Title, maxPeerTitleRunes), scrub.Capped(to.ID, maxPeerTitleRunes))})
 }

@@ -111,7 +111,7 @@ func TestPeerVerbsAllowedInAPeersOnGroup(t *testing.T) {
 			t.Fatalf("%s should answer %q, got %+v", cmd.Action, want[i], msg)
 		}
 	}
-	if len(*written) != 1 {
+	if submittedLines(*written) != 1 {
 		t.Fatalf("the one send should have typed once, got %q", *written)
 	}
 }
@@ -260,7 +260,9 @@ func TestPeerSendPrefixesAnAgentAndNotAShell(t *testing.T) {
 	peerDo(t, s, "a1", proto.Command{Action: "peer.send", ID: "sh", Data: []byte("make test")})
 
 	want := []string{
-		"a2:[from al[2Jice the first (a1)] are you done?\n",
+		// An agent's line is its text and then its Enter, two writes; a shell's is
+		// one, exactly as before the split (#154).
+		"a2:[from al[2Jice the first (a1)] are you done?", "a2:\n",
 		"sh:make test\n",
 	}
 	if !slices.Equal(*written, want) {
@@ -323,8 +325,8 @@ func TestPeerSendRateCapRefusesAFlood(t *testing.T) {
 			t.Fatal("a send past the burst was admitted")
 		}
 	}
-	if len(*written) != peerSendBurst || len(*events) != peerSendBurst {
-		t.Fatalf("a refused send must not be queued or announced: %d writes, %d events", len(*written), len(*events))
+	if submittedLines(*written) != peerSendBurst || len(*events) != peerSendBurst {
+		t.Fatalf("a refused send must not be queued or announced: %d lines, %d events", submittedLines(*written), len(*events))
 	}
 
 	// Another sender has its own allowance, to the same target.
@@ -418,7 +420,7 @@ func TestPeerAuthorisedPerCallFromLiveState(t *testing.T) {
 	}
 	all(`off for group "other"`)
 
-	if len(*written) != 2 {
+	if submittedLines(*written) != 2 {
 		t.Fatalf("only the two allowed sends should have typed, got %q", *written)
 	}
 }
@@ -445,8 +447,8 @@ func TestPeerPrefixBoundsTheSendersTitle(t *testing.T) {
 	s.panels[0].Title = strings.Repeat("t", maxPeerTitleRunes+50)
 
 	peerDo(t, s, "a1", proto.Command{Action: "peer.send", ID: "a2", Data: []byte("hi")})
-	want := "a2:[from " + strings.Repeat("t", maxPeerTitleRunes) + " (a1)] hi\n"
-	if len(*written) != 1 || (*written)[0] != want {
+	want := []string{"a2:[from " + strings.Repeat("t", maxPeerTitleRunes) + " (a1)] hi", "a2:\n"}
+	if !slices.Equal(*written, want) {
 		t.Fatalf("typed %q, want %q", *written, want)
 	}
 }
@@ -528,7 +530,7 @@ func TestPeerSendFoldsLineBreaksForAnAgent(t *testing.T) {
 	peerDo(t, s, "a1", proto.Command{Action: "peer.send", ID: "sh", Data: []byte(multi)})
 
 	want := []string{
-		"a2:[from alice (a1)] a b c d\n",
+		"a2:[from alice (a1)] a b c d", "a2:\n",
 		"sh:" + multi + "\n",
 	}
 	if !slices.Equal(*written, want) {
@@ -544,7 +546,7 @@ func TestPeerSendFoldsLineBreaksForAnAgent(t *testing.T) {
 	const breaks = "a\u0085b\u2028c\u2029d\t\r\u0085\n\u2028\u2029\te"
 	peerDo(t, s, "sh", proto.Command{Action: "peer.send", ID: "a2", Data: []byte(breaks)})
 	peerDo(t, s, "a2", proto.Command{Action: "peer.send", ID: "sh", Data: []byte(breaks)})
-	want = []string{"a2:[from term (sh)] a b c d e\n", "sh:" + breaks + "\n"}
+	want = []string{"a2:[from term (sh)] a b c d e", "a2:\n", "sh:" + breaks + "\n"}
 	if !slices.Equal(*written, want) {
 		t.Fatalf("typed into the targets:\n got %q\nwant %q", *written, want)
 	}
@@ -788,8 +790,8 @@ func TestPeerPrefixScrubsTheSendersID(t *testing.T) {
 	if msg := peerDo(t, s, s.panels[0].ID, proto.Command{Action: "peer.send", ID: "a2", Data: []byte("hi")}); msg.Type != "notice" {
 		t.Fatalf("the send should be admitted, got %+v", msg)
 	}
-	want := "a2:[from alice (p[2J 9" + strings.Repeat("9", maxPeerTitleRunes-6) + ")] hi\n"
-	if len(*written) != 1 || (*written)[0] != want {
+	want := []string{"a2:[from alice (p[2J 9" + strings.Repeat("9", maxPeerTitleRunes-6) + ")] hi", "a2:\n"}
+	if !slices.Equal(*written, want) {
 		t.Fatalf("typed %q, want %q", *written, want)
 	}
 }

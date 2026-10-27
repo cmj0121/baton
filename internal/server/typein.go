@@ -142,7 +142,8 @@ func (s *Server) typeLine(id string, agent bool, text []byte, submit string) boo
 // typeLineThen runs typeLine and then done(ok), on its own goroutine tracked by
 // s.typing when the line has a gap to wait out (agent and submitGap > 0); inline
 // otherwise — a zero gap has nothing to hand off. Used by the monitor tick's
-// deliver so the tick never sleeps. Shutdown waits on s.typing, so a line
+// deliver so the tick never sleeps, and by dispatchScored so a plugin's
+// dispatch never holds the Lua worker for the gap. Shutdown waits on s.typing, so a line
 // already handed off is finished, not cut between its text and its Enter.
 //
 // The hand-off is registered under s.mu, checked against shuttingDown: the

@@ -38,7 +38,7 @@ func TestPauseBelowOffDoesNotHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.monitorTick()
-	if len(*written) != 1 {
+	if submittedLines(*written) != 1 {
 		t.Fatalf("unset pause-below must not pause, wrote %v", *written)
 	}
 }
@@ -91,7 +91,7 @@ func TestClaudeHoldUsesTheMinimumWindowAndIgnoresModelCeilings(t *testing.T) {
 		t.Fatal(err)
 	}
 	s2.monitorTick()
-	if len(*written) != 1 {
+	if submittedLines(*written) != 1 {
 		t.Fatal("remaining equal to the line must not pause")
 	}
 }
@@ -104,7 +104,7 @@ func TestNoReadingDoesNotPause(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.monitorTick()
-	if len(*written) != 1 {
+	if submittedLines(*written) != 1 {
 		t.Fatal("claude with no limits reading must still drain")
 	}
 }
@@ -135,7 +135,7 @@ func TestGrokPausesOnItsOwnWeekOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.monitorTick()
-	if len(*written) != 1 || (*written)[0] != "c:claude work\n" {
+	if !typedAgentLine(*written, "c", "claude work") {
 		t.Fatalf("claude should drain while grok's 7d is held, wrote %v", *written)
 	}
 	var queued int
@@ -161,7 +161,7 @@ func TestGrokPausesOnItsOwnWeekOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	s2.monitorTick()
-	if len(*wrote2) != 1 {
+	if submittedLines(*wrote2) != 1 {
 		t.Fatal("a 7d figure that is not on the grok reading must not pause grok")
 	}
 }
@@ -179,7 +179,7 @@ func TestGrokSpendWindowDoesNotPause(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.monitorTick()
-	if len(*written) != 1 {
+	if submittedLines(*written) != 1 {
 		t.Fatal("a spend window is not a quota ceiling")
 	}
 }

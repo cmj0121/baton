@@ -1,6 +1,8 @@
 package server
 
 import (
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,11 +46,37 @@ func gateServer(panels ...panel.Panel) (*Server, *fakeClock, *[]string) {
 		// assertion about a brief's shape would be made against a fleet nobody runs.
 		scoreFeedback: true,
 	}
+	// One entry per write, so an agent's text and its submit show as two entries
+	// and a shell's line as one — the split #154 turns on. submitGap is left at
+	// zero, so an agent's line is typed inline, and pidOf answers 0 (a process the
+	// server cannot see), which typeLine reads as "cannot check" and submits.
 	s.writeInput = func(id string, data []byte) { *written = append(*written, id+":"+string(data)) }
+	s.pidOf = func(string) int { return 0 }
 	for _, p := range panels {
 		mo.spawned(p.ID)
 	}
 	return s, clk, written
+}
+
+// typedAgentLine reports whether written is exactly one line typed into agent
+// panel id: its text as one write, then defaultSubmit as a write of its own —
+// the shape typeLine gives an agent (#154), and the one a joined text+"\n"
+// write, the pre-split shape, fails.
+func typedAgentLine(written []string, id, text string) bool {
+	return slices.Equal(written, []string{id + ":" + text, id + ":" + defaultSubmit})
+}
+
+// submittedLines counts the lines written fully typed into agent panels: one
+// per submit-only write. A pre-split text+"\n" write counts as none, so a test
+// that asserts how many lines landed also asserts they were split.
+func submittedLines(written []string) int {
+	n := 0
+	for _, w := range written {
+		if _, data, _ := strings.Cut(w, ":"); data == defaultSubmit {
+			n++
+		}
+	}
+	return n
 }
 
 // TestDispatchHeldUntilSettle checks the ready-gate: a dispatch to a panel that is
@@ -72,7 +100,7 @@ func TestDispatchHeldUntilSettle(t *testing.T) {
 
 	clk.add(idleAfter) // the panel goes quiet
 	s.monitorTick()
-	if len(*written) != 1 || (*written)[0] != "p1:do it\n" {
+	if !typedAgentLine(*written, "p1", "do it") {
 		t.Fatalf("settling should deliver the held dispatch, got %v", *written)
 	}
 	if len(s.pendingDispatch) != 0 {
@@ -88,7 +116,7 @@ func TestDispatchImmediateWhenReady(t *testing.T) {
 	if err := s.dispatchPanel("p1", "go", "\r"); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	if len(*written) != 1 || (*written)[0] != "p1:go\r" {
+	if !slices.Equal(*written, []string{"p1:go", "p1:\r"}) {
 		t.Fatalf("a settled panel should deliver immediately with the given submit, got %v", *written)
 	}
 	if len(s.pendingDispatch) != 0 {
@@ -114,8 +142,8 @@ func TestDispatchSupersedesHeld(t *testing.T) {
 	if len(s.pendingDispatch) != 0 {
 		t.Fatalf("an immediate dispatch should leave nothing held, pending=%d", len(s.pendingDispatch))
 	}
-	want := []string{"p1:first\n", "p1:second\n"}
-	if len(*written) != 2 || (*written)[0] != want[0] || (*written)[1] != want[1] {
+	want := []string{"p1:first", "p1:\n", "p1:second", "p1:\n"}
+	if !slices.Equal(*written, want) {
 		t.Fatalf("delivered %v, want %v", *written, want)
 	}
 }
@@ -137,11 +165,11 @@ func TestDispatchGroupFansAndSkipsConductor(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("group api has 2 non-conductor members, reached %d", n)
 	}
-	if len(*written) != 2 {
+	if submittedLines(*written) != 2 {
 		t.Fatalf("expected 2 deliveries (conductor skipped), got %v", *written)
 	}
 	for _, w := range *written {
-		if w == "2:refactor\n" {
+		if w == "2:refactor" || w == "2:"+defaultSubmit {
 			t.Fatalf("the conductor must never be a group-dispatch target, got %v", *written)
 		}
 	}

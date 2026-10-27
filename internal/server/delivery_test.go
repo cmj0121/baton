@@ -48,7 +48,7 @@ func TestEnqueueDefersTheFilterToDelivery(t *testing.T) {
 	if seen[0] != want {
 		t.Fatalf("delivery brief = %+v, want %+v", seen[0], want)
 	}
-	if len(*written) != 1 || (*written)[0] != "a1:later\n" {
+	if !typedAgentLine(*written, "a1", "later") {
 		t.Fatalf("delivered %v, want the prompt on a1", *written)
 	}
 }
@@ -148,7 +148,7 @@ func TestAVetoAtDeliveryEndsTheTaskInTheBacklog(t *testing.T) {
 		t.Fatalf("enqueue: %v", err)
 	}
 	s.monitorTick()
-	if len(*written) != 1 || (*written)[0] != "a1:next\n" {
+	if !typedAgentLine(*written, "a1", "next") {
 		t.Fatalf("delivered %v, want the next task on the released agent", *written)
 	}
 }
@@ -173,7 +173,7 @@ func TestARewriteIsDeliveredButNeverRecorded(t *testing.T) {
 	}
 	s.monitorTick()
 
-	if len(*written) != 1 || (*written)[0] != "a1:[R] later\n" {
+	if !typedAgentLine(*written, "a1", "[R] later") {
 		t.Fatalf("delivered %v, want the rewrite on the wire", *written)
 	}
 	if got := s.tasks[id].Prompt; got != "later" {
@@ -206,7 +206,7 @@ func TestARewriteIsNotCompoundedByARestart(t *testing.T) {
 
 	cc := conn("")
 	first.onCommand(cc, proto.Command{Action: "panel.dispatch", ID: "a1", Prompt: "ORIG"})
-	if len(*sentFirst) != 1 || (*sentFirst)[0] != "a1:[R] ORIG\n" {
+	if !typedAgentLine(*sentFirst, "a1", "[R] ORIG") {
 		t.Fatalf("first daemon sent %v, want the rewrite delivered", *sentFirst)
 	}
 	tk := taskFor(first, "a1")
@@ -231,7 +231,7 @@ func TestARewriteIsNotCompoundedByARestart(t *testing.T) {
 
 	second.monitorTick() // the scheduler redrives it onto the idle agent
 
-	if len(*sentSecond) != 1 || (*sentSecond)[0] != "a1:[R] ORIG\n" {
+	if !typedAgentLine(*sentSecond, "a1", "[R] ORIG") {
 		t.Fatalf("after the restart the agent got %v, want the rewrite applied exactly once", *sentSecond)
 	}
 }
@@ -257,7 +257,7 @@ func TestASupersededQueuedDeliveryIsDropped(t *testing.T) {
 	}
 	s.monitorTick()
 
-	if len(*written) != 1 || (*written)[0] != "a1:urgent\n" {
+	if !typedAgentLine(*written, "a1", "urgent") {
 		t.Fatalf("wrote %v, want only the dispatch that superseded the queued one", *written)
 	}
 	if got := s.panels[0].Task; got != "urgent" {
@@ -290,7 +290,7 @@ func TestASupersededVetoLeavesTheNewTaskAlone(t *testing.T) {
 	if got := s.panels[0].Task; got != "urgent" {
 		t.Fatalf("card = %q, want the superseding brief left standing", got)
 	}
-	if len(*written) != 1 || (*written)[0] != "a1:urgent\n" {
+	if !typedAgentLine(*written, "a1", "urgent") {
 		t.Fatalf("wrote %v, want the superseding dispatch delivered", *written)
 	}
 }
@@ -325,8 +325,8 @@ func TestAFastTickDeliversTheWholeBurst(t *testing.T) {
 
 	s.monitorTick()
 
-	if len(*written) != burst {
-		t.Fatalf("one tick delivered %d of %d, want the whole burst", len(*written), burst)
+	if submittedLines(*written) != burst {
+		t.Fatalf("one tick delivered %d of %d, want the whole burst", submittedLines(*written), burst)
 	}
 	if len(s.deferred) != 0 {
 		t.Fatalf("deferred %d, want nothing held back from a tick that cost nothing", len(s.deferred))
@@ -350,8 +350,8 @@ func TestTheDeliveryBudgetBoundsASlowTick(t *testing.T) {
 	}
 
 	s.monitorTick()
-	if len(*written) != 1 {
-		t.Fatalf("the slow tick delivered %d, want it to stop at the budget", len(*written))
+	if submittedLines(*written) != 1 {
+		t.Fatalf("the slow tick delivered %d, want it to stop at the budget", submittedLines(*written))
 	}
 	if len(s.deferred) != 3 {
 		t.Fatalf("deferred %d, want the rest held for later ticks", len(s.deferred))
@@ -361,9 +361,9 @@ func TestTheDeliveryBudgetBoundsASlowTick(t *testing.T) {
 	for range 3 {
 		s.monitorTick()
 	}
-	if len(*written) != 4 || len(s.deferred) != 0 {
+	if submittedLines(*written) != 4 || len(s.deferred) != 0 {
 		t.Fatalf("after four ticks %d delivered and %d still deferred, want all four through",
-			len(*written), len(s.deferred))
+			submittedLines(*written), len(s.deferred))
 	}
 }
 
@@ -389,7 +389,7 @@ func TestAPluginQueuedTaskIsDeliveredBare(t *testing.T) {
 	if len(seen) != 0 {
 		t.Fatalf("the chain ran over a plugin-originated task: %+v", seen)
 	}
-	if len(*written) != 1 || (*written)[0] != "a1:later\n" {
+	if !typedAgentLine(*written, "a1", "later") {
 		t.Fatalf("delivered %v, want the bare prompt on a1", *written)
 	}
 

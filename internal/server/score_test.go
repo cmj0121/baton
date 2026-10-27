@@ -34,6 +34,10 @@ func scoreServer(st *score.Store) (*Server, *fakeClock, *[]byte) {
 	// stands for a daemon whose config said yes and whose Open succeeded, and the
 	// option is what keeps the store and the knob from disagreeing.
 	WithScore(ScoreState{Store: st, Enabled: st != nil})(s)
+	// delivered is the CONTENT the panel received, every write concatenated: what
+	// these tests assert is the brief's shape, and that is the same whether the
+	// submit rode with the text or came after it. A test that pins the write split
+	// installs a writeLog instead (see TestDirectDispatchNilStore).
 	var delivered []byte
 	s.writeInput = func(id string, data []byte) { delivered = append(delivered, data...) }
 	return s, clk, &delivered
@@ -113,32 +117,33 @@ func TestDirectDispatchInjectsScore(t *testing.T) {
 
 // TestDirectDispatchNilStore checks the disabled contract: with no store wired
 // the dispatch neither errors nor injects — the delivered bytes are exactly the
-// plain prompt plus the submit sequence.
+// plain prompt, then (p1 being an agent) the submit sequence as its own write.
 func TestDirectDispatchNilStore(t *testing.T) {
-	s, _, delivered := scoreServer(nil)
+	s, _, _ := scoreServer(nil)
+	w := &writeLog{}
+	s.writeInput = w.write
 
 	cc := conn("")
 	s.onCommand(cc, proto.Command{Action: "panel.dispatch", ID: "p1", Prompt: "fix the login flow"})
 	noError(t, cc)
 
-	if got, want := *delivered, dispatchData("fix the login flow", ""); string(got) != string(want) {
-		t.Fatalf("nil store must deliver the bare prompt, got %q want %q", got, want)
-	}
+	equalWrites(t, w.got(), []string{"p1:fix the login flow", "p1:" + defaultSubmit})
 }
 
 // scoreFleet is scoreServer with a second agent beside the first, in the same
 // group but its own directory and profile — the smallest fleet a fan-out can
 // tell apart. It records what each member received rather than one concatenated
-// stream, because "per member" is the whole assertion.
-func scoreFleet(st *score.Store) (*Server, *fakeClock, map[string]string) {
+// stream, because "per member" is the whole assertion — and each member's writes
+// one by one, because an agent's brief is its text and then its submit (#154).
+func scoreFleet(st *score.Store) (*Server, *fakeClock, map[string][]string) {
 	s, clk, _ := scoreServer(st)
 	s.panels = append(s.panels, panel.Panel{
 		ID: "p2", Kind: panel.Agent, Title: "codex #1", State: panel.Idle,
 		Group: "auth", Cwd: "/work/api",
 	})
 	s.specs["p2"] = spawnSpec{Profile: "codex"}
-	got := map[string]string{}
-	s.writeInput = func(id string, data []byte) { got[id] += string(data) }
+	got := map[string][]string{}
+	s.writeInput = func(id string, data []byte) { got[id] = append(got[id], string(data)) }
 	return s, clk, got
 }
 
@@ -175,7 +180,7 @@ func TestGroupDispatchBindsEachMember(t *testing.T) {
 		if b.Score == "" {
 			t.Fatalf("brief for %s carries no score block", want.Panel)
 		}
-		if !strings.Contains(got[want.Panel], "prefer table-driven tests") {
+		if !strings.Contains(strings.Join(got[want.Panel], ""), "prefer table-driven tests") {
 			t.Fatalf("%s received %q, want the block ahead of the prompt", want.Panel, got[want.Panel])
 		}
 	}
@@ -206,7 +211,7 @@ func TestAFanoutCountsNoUserSignal(t *testing.T) {
 	noError(t, cc)
 
 	for _, id := range []string{"p1", "p2"} {
-		if !strings.Contains(got[id], "Keep the build green.") {
+		if !strings.Contains(strings.Join(got[id], ""), "Keep the build green.") {
 			t.Fatalf("%s received %q; the fan-out never landed, so the count below is vacuous", id, got[id])
 		}
 	}
@@ -247,7 +252,7 @@ func TestGroupDispatchDropsOnlyTheVetoedMember(t *testing.T) {
 	// Exact rather than a contains: the store here is empty, so the whole score
 	// section is the feedback hint, and spelling the delivery out is what would
 	// catch the hint going missing as well as the prompt.
-	if want := scoreHintLine + "\n\nrace it\n"; got["p2"] != want {
+	if want := []string{scoreHintLine + "\n\nrace it", defaultSubmit}; !reflect.DeepEqual(got["p2"], want) {
 		t.Fatalf("p2 received %q, want %q — the fan-out should have reached it anyway", got["p2"], want)
 	}
 
@@ -307,7 +312,7 @@ func TestTheFanoutBudgetFailsClosed(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("panels reached = %v, want only the member that was filtered", got)
 	}
-	if got["p1"] == "" {
+	if len(got["p1"]) == 0 {
 		t.Fatalf("panels reached = %v, want the filtered member to have been dispatched", got)
 	}
 	msg := reply(t, cc)
@@ -458,7 +463,8 @@ func TestASpawnOnDemandTaskScoresAtItsHeldDelivery(t *testing.T) {
 	if seen.Panel != pid {
 		t.Fatalf("brief = %+v, want it bound to the panel provisioned for the task", seen)
 	}
-	if seen.Score == "" || len(*written) != 1 || !strings.Contains((*written)[0], "prefer table-driven tests") {
+	if seen.Score == "" || len(*written) != 2 || !strings.Contains((*written)[0], "prefer table-driven tests") ||
+		(*written)[1] != pid+":"+defaultSubmit {
 		t.Fatalf("brief = %+v delivered %v, want the block rendered at the held delivery", seen, *written)
 	}
 	_ = s.closePanel(pid) // reap the real process

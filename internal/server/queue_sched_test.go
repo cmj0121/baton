@@ -26,7 +26,7 @@ func TestScheduleAssignsToIdleAgent(t *testing.T) {
 	if tk.Panel != "1" || tk.Status != task.Dispatched {
 		t.Fatalf("the task should be assigned and dispatched, got %+v", tk)
 	}
-	if len(*written) != 1 || (*written)[0] != "1:do it\n" {
+	if !typedAgentLine(*written, "1", "do it") {
 		t.Fatalf("the prompt should be delivered to the agent, got %v", *written)
 	}
 	if s.panels[0].Task != "do it" {

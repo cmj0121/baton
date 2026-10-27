@@ -1,6 +1,7 @@
 package server
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -212,7 +213,7 @@ func TestADispatchToASettledPanelIsStillRefusedSynchronously(t *testing.T) {
 // there or be silently downgraded to the default newline.
 //
 // Both roads out of deliver are walked, because they build their bytes with
-// different calls: a plugin's brief goes out bare through dispatchData, and every
+// different calls: a plugin's brief goes out as the bare prompt, and every
 // other one through briefBytes after the bind. Dropping the sequence on either
 // one is the same silent downgrade, and one case cannot see the other.
 func TestAParkedDispatchKeepsItsSubmitSequence(t *testing.T) {
@@ -231,7 +232,7 @@ func TestAParkedDispatchKeepsItsSubmitSequence(t *testing.T) {
 			}
 			settle(s, clk)
 
-			if len(*written) != 1 || (*written)[0] != "p1:go\x1b\r" {
+			if !slices.Equal(*written, []string{"p1:go", "p1:\x1b\r"}) {
 				t.Fatalf("delivered %q, want the parked dispatch's own submit sequence", *written)
 			}
 		})
@@ -270,7 +271,7 @@ func TestASupersededParkedDispatchIsDropped(t *testing.T) {
 	}
 	settle(s, clk)
 
-	if len(*written) != 1 || (*written)[0] != "p1:second\n" {
+	if !typedAgentLine(*written, "p1", "second") {
 		t.Fatalf("delivered %v, want only the brief that superseded the other", *written)
 	}
 }
@@ -310,7 +311,7 @@ func TestAParkedDispatchIsClaimedBeforeItIsWritten(t *testing.T) {
 
 	settle(s, clk)
 
-	if len(*written) != 1 || (*written)[0] != "p1:second\n" {
+	if !typedAgentLine(*written, "p1", "second") {
 		t.Fatalf("delivered %v, want only the brief that superseded the one in flight", *written)
 	}
 }
@@ -367,7 +368,7 @@ func TestAPanelThatGoesBusyMidBindDiscardsTheBoundBytes(t *testing.T) {
 	if saw[1].Cwd != "/work/billing" || saw[1].Group != "billing" {
 		t.Fatalf("the second bind saw %+v, want the panel as it is at the write", saw[1])
 	}
-	if len(*written) != 1 || (*written)[0] != "p1:run the migration\n" {
+	if !typedAgentLine(*written, "p1", "run the migration") {
 		t.Fatalf("delivered %v, want exactly one write, at settle", *written)
 	}
 }
