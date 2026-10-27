@@ -625,6 +625,17 @@ type Server struct {
 	// once in New, then read without a lock — like writeInput above.
 	pidOf func(id string) int
 
+	// Typed input (typein.go). submitGap is the pause between a line's text and
+	// its submit on an agent panel — defaultSubmitGap from New, 0 in a Server a
+	// test builds by hand, so those tests never sleep. lanes serializes the
+	// split writes per panel so two senders cannot interleave inside one line,
+	// and typing tracks the goroutines typeLineThen hands a gap to, so Shutdown
+	// can let them finish. submitGap is set once in New, then read without a
+	// lock; lanes and typing guard themselves.
+	submitGap time.Duration
+	lanes     inputLanes
+	typing    sync.WaitGroup
+
 	// scoreState is the fleet memory (internal/score): the store whose entries are
 	// rendered into directly dispatched briefs and served over the score.* verbs,
 	// what the config asked for, why no store is running when none is, and whether
@@ -1154,6 +1165,7 @@ func New(ln net.Listener, opts ...Option) *Server {
 	if s.pidOf == nil {
 		s.pidOf = func(id string) int { return s.pty.Pids()[id] }
 	}
+	s.submitGap = defaultSubmitGap
 	s.pty.OnOutput(s.routeOutput)
 	s.pty.OnClose(s.onPanelExit)
 	return s
@@ -4798,6 +4810,28 @@ func (s *Server) broadcastFleet() {
 // swallowed.
 const shutdownJoinTimeout = 2 * time.Second
 
+// shutdownTypingTimeout bounds how long Shutdown waits for lines typeLineThen
+// handed off to finish. A healthy line needs one submitGap; a few of them cover
+// a scheduler hiccup, and anything longer is a write blocked on a panel that has
+// stopped reading — which only the kill that follows can end.
+const shutdownTypingTimeout = 4 * defaultSubmitGap
+
+// waitTyping waits for s.typing, giving up (and logging) after d.
+func (s *Server) waitTyping(d time.Duration) {
+	finished := make(chan struct{})
+	go func() {
+		s.typing.Wait()
+		close(finished)
+	}()
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-finished:
+	case <-timer.C:
+		log.Warn().Dur("waited", d).Msg("gave up waiting for typed lines to finish; killing panels mid-line")
+	}
+}
+
 // Shutdown sends SIGKILL to every live panel's process group, so no child
 // process outlives the daemon when it stops, then waits for their output pumps
 // to finish. The signal handler calls this on the way out (after SaveNow has
@@ -4819,6 +4853,15 @@ func (s *Server) Shutdown() int {
 		}
 	}
 	s.mu.Unlock()
+
+	// A line handed to typeLineThen is let finish before the kills: a panel
+	// killed between its text and its Enter would leave that text sitting
+	// unsubmitted in a transcript that then ends — the half-typed line this whole
+	// path exists to prevent. Normally that costs at most one submitGap, but a
+	// line's PTY write can block on a hung agent's full input queue, and the
+	// KillAll below is the very thing that would unblock it; so the wait is
+	// bounded, like the pump join, and a line still stuck is abandoned to it.
+	s.waitTyping(shutdownTypingTimeout)
 
 	n := s.pty.KillAll(syscall.SIGKILL)
 	if n > 0 {
