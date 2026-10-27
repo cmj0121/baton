@@ -92,20 +92,22 @@ profile,不像 `env-allow` 指名的是宿主的變數。它永遠壓不過 bato
 
 **Profile 送出鍵。** profile 的 `submit` 是 baton 每往那個 profile 的面板打一行字之後按下的按鍵序列——同群組面板的
 `baton_tell`、派下去的簡報、排隊的任務都一樣。它只能是 `"\r"`、`"\n"` 或 `"\r\n"` 其中之一;沒設(或 `""`)就是
-`"\n"`。grok 把 `"\n"` 當成輸入框裡的換行,只有 carriage return 才會送出:
+baton 認得的 CLI 的內建預設值,其餘的是 `"\n"`。grok 把 `"\n"` 當成輸入框裡的換行,只有 carriage return 才會送出,所
+以指令是 `grok` 的面板——不管 profile 叫什麼名字,或像 `baton ctl spawn --agent grok` 那樣根本沒有 profile——開箱就以
+`"\r"` 送出。這個設定可寫可不寫;明確設成 `submit: "\n"` 就會蓋過內建預設值:
 
 ```yaml
 panel:
   agents:
     grok:
       command: grok
-      submit: "\r"
+      submit: "\r" # 可省略:grok 的內建預設值
 ```
 
 一定要用雙引號:在 YAML 裡 `'\r'` 與沒加引號的 `\r` 是一個反斜線加一個 `r`,沒有任何 TUI 會把它當成 Enter。不是這
-三者之一的值會在 `baton.log` 留下警告並被丟掉,那個 profile 就以 `"\n"` 送出。重新載入(`C-t R` 或 `SIGHUP`)時會重
-讀這個鍵,對下一行打進去的字生效。dispatch 自己指定的 `submit` 優先於 profile 的;profile 不在設定裡的面板以 `"\n"`
-送出。
+三者之一的值會在 `baton.log` 留下警告並被丟掉,那個 profile 就退回它 CLI 的內建預設值(grok 是 `"\r"`),沒有才
+是 `"\n"`。重新載入(`C-t R` 或 `SIGHUP`)時會重讀這個鍵,對下一行打進去的字生效。dispatch 自己指定的 `submit` 優先
+於 profile 的;profile 不在設定裡的面板以它 CLI 的內建預設值送出,沒有才是 `"\n"`。
 
 往 agent 面板打字時,baton 會把每一行分成兩次寫入:先寫文字,停大約 50 ms,再單獨寫入送出鍵——這樣忙碌中的 TUI 才不會
 把兩者當成一次貼上,然後留著不送。這是盡力而為:那段停頓只是讓 agent 先起跑,不代表確認它讀到了文字。如果停頓期間
