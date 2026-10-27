@@ -4,6 +4,22 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v2.6.0](https://github.com/cmj0121/baton/releases/tag/v2.6.0) — agents that know their own enter key
+
+2026-10-27
+
+- **An agent profile can name its submit key.** `panel.agents.<name>.submit` takes `"\r"`, `"\n"` or `"\r\n"`; a bad
+  value, including the backslash-and-r a single-quoted `'\r'` produces, is warned about and dropped, and a reload
+  swaps the table whole (#154).
+- **grok submits out of the box.** grok reads `"\n"` as a newline in its input box, so every peer send, dispatch and
+  queued task sat typed and unsent. A grok command now defaults to `"\r"`; an explicit profile `submit:` still wins.
+- **A line reaches an agent as text, a gap, then the submit.** A busy agent read text and Enter in one write as a
+  paste; they are now separate writes 50ms apart, a shell still gets one write, and the Enter is dropped if the
+  panel's process changes in between.
+- **peer.send says what it did, not what it hopes.** The reply is that N bytes were typed and Enter pressed, or an
+  error that nothing was submitted; the `peer.send` plugin event gains `submitted`.
+- **A peers-on group shows `⇄` in its disclosure cell** instead of spending a column on `⋈`.
+
 ## [v2.5.2](https://github.com/cmj0121/baton/releases/tag/v2.5.2) — a grok panel without the grey slab
 
 2026-10-19
