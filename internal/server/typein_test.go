@@ -244,10 +244,14 @@ func TestInputLanesReleasedAfterUse(t *testing.T) {
 
 func TestSubmitFor(t *testing.T) {
 	s, _, _ := typeinServer(t,
-		panel.Panel{ID: "grok", Kind: panel.Agent, Profile: "grok"},
-		panel.Panel{ID: "plain", Kind: panel.Agent, Profile: "claude"},
+		panel.Panel{ID: "grok", Kind: panel.Agent},
+		panel.Panel{ID: "plain", Kind: panel.Agent},
 		panel.Panel{ID: "sh", Kind: panel.Shell},
 	)
+	// The profile lives on the spawn spec, as createPanel leaves it — never on
+	// the panel record.
+	s.specs["grok"] = spawnSpec{Profile: "grok"}
+	s.specs["plain"] = spawnSpec{Profile: "claude"}
 	s.agentSubmit = map[string]string{"grok": "\r"}
 
 	for _, tc := range []struct {
@@ -268,6 +272,22 @@ func TestSubmitFor(t *testing.T) {
 					tc.id, tc.explicit, submit, agent, tc.submit, tc.agent)
 			}
 		})
+	}
+}
+
+// A panel spawned through createPanel resolves its profile's submit: the
+// profile is recorded on the spawn spec only, so a submitFor that read the
+// panel record would fall back to defaultSubmit here.
+func TestSubmitForSpawnedAgentUsesItsProfile(t *testing.T) {
+	s, dir := identityServer(t)
+	s.agentSubmit = map[string]string{"grok": "\r"}
+
+	id, err := s.createPanel(originOperator, proto.KindAgent, "/bin/cat", nil, dir, "grok", false, false)
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if submit, agent := s.submitFor(id, ""); submit != "\r" || !agent {
+		t.Fatalf("submitFor(%q, \"\") = (%q, %v), want (%q, true)", id, submit, agent, "\r")
 	}
 }
 
@@ -315,10 +335,11 @@ func TestShutdownTypingWaitIsBounded(t *testing.T) {
 // submitted, behind every write site U4 routed through typeLine.
 func submitSiteServer(state panel.State) (*Server, *fakeClock, *[]string) {
 	s, clk, written := gateServer(
-		panel.Panel{ID: "g", Kind: panel.Agent, Title: "grok", Profile: "grok", Group: "work", State: state},
+		panel.Panel{ID: "g", Kind: panel.Agent, Title: "grok", Group: "work", State: state},
 		panel.Panel{ID: "c", Kind: panel.Agent, Title: "plain", Group: "work", State: panel.Running},
 		panel.Panel{ID: "sh", Kind: panel.Shell, Title: "term", Group: "work", State: panel.Running},
 	)
+	s.specs["g"] = spawnSpec{Profile: "grok"}
 	s.agentSubmit = map[string]string{"grok": "\r"}
 	s.groupPeers = map[string]bool{"work": true}
 	return s, clk, written
