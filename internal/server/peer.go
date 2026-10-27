@@ -162,7 +162,7 @@ func (s *Server) peerTail(cc *clientConn, cmd proto.Command) {
 // A submit sequence is refused rather than honoured. It would be typed raw and
 // outside the cap, and a sender that could choose it could choose none — a
 // message left unsent in a group-mate's input line for the next one to land on.
-// Every admitted send ends in the default Enter.
+// Every admitted send ends in the target profile's submit, else "\n".
 func (s *Server) peerSendLocked(self, target string, data []byte, submit string, now time.Time) (me, to panel.Panel, text, reason string) {
 	me, to, reason = s.peerReasonLocked(self, target)
 	switch {
