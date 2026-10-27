@@ -220,6 +220,12 @@ type Settings struct {
 	// environment already is one — and a profile absent from it adds nothing.
 	AgentEnv map[string][]string
 
+	// AgentSubmit holds the per-profile submit sequence, keyed by profile name;
+	// a profile absent here submits with defaultSubmit. Already validated: the
+	// projection drops a value the profile got wrong, so what reaches the server
+	// is one of "\r", "\n", "\r\n".
+	AgentSubmit map[string]string
+
 	// TrackCwd is how a panel's live working directory is learned and RestoreCwd
 	// which panels a re-run puts back in it.
 	TrackCwd   cwd.Track
@@ -303,6 +309,11 @@ type Server struct {
 	// spawn from the profile name like the caps, so a reload reaches the next
 	// spawn and a re-run without touching any spec the server retains.
 	agentEnv map[string][]string
+
+	// agentSubmit is the per-profile submit sequence (Settings.AgentSubmit), read
+	// from the panel's profile each time a line is typed in, so a reload reaches
+	// the next send to a panel that is already running.
+	agentSubmit map[string]string
 
 	onReload func() // invoked on a server.reload command; re-reads config and Reloads
 
@@ -1182,6 +1193,7 @@ func (s *Server) Reload(set Settings) {
 	s.forgetAskedLocked()
 	s.agentIsolate = set.AgentIsolate // resolved per spawn, so live panels keep the runtime they started under
 	s.agentEnv = set.AgentEnv         // the same: a running process's environment cannot be changed anyway
+	s.agentSubmit = set.AgentSubmit   // read per typed line, so it reaches live panels from the next send on
 	s.trackCwd, s.restoreCwd = set.TrackCwd, set.RestoreCwd
 	// The logging policy swaps whole, like the caps: a panel records its PROFILE,
 	// so every resolution from here on reads the new destination. Files ALREADY

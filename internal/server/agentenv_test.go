@@ -84,3 +84,29 @@ func TestRespawnReadsTheReloadedProfileEnv(t *testing.T) {
 	}
 	ringHas(t, s, id, "C<terminal|"+id+">")
 }
+
+// TestReloadSwapsAgentSubmit pins that the submit table is the config, not a
+// cache: a reload replaces it whole, so a profile dropped from the file falls
+// back to the default instead of keeping the sequence it had.
+func TestReloadSwapsAgentSubmit(t *testing.T) {
+	s := newHostServer(t)
+	submitOf := func(profile string) (string, bool) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		v, ok := s.agentSubmit[profile]
+		return v, ok
+	}
+
+	s.Reload(Settings{AgentSubmit: map[string]string{"grok": "\r"}})
+	if v, ok := submitOf("grok"); !ok || v != "\r" {
+		t.Fatalf("after reload grok submit = %q, %v; want CR", v, ok)
+	}
+
+	s.Reload(Settings{AgentSubmit: map[string]string{"codex": "\r\n"}})
+	if v, ok := submitOf("grok"); ok {
+		t.Fatalf("a profile dropped from the config must not keep its submit, got %q", v)
+	}
+	if v, _ := submitOf("codex"); v != "\r\n" {
+		t.Fatalf("codex submit = %q, want CRLF", v)
+	}
+}

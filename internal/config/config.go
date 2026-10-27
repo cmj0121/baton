@@ -641,6 +641,19 @@ type AgentProfile struct {
 	// containerised panel too, because they are the profile's, not the host's.
 	Env map[string]string `yaml:"env,omitempty"`
 
+	// Submit is the key sequence that submits a line typed into this profile's
+	// panels — a peer send, a dispatched brief. One of "\r", "\n", "\r\n";
+	// unset (or "") means the server default "\n". It exists because agent TUIs
+	// disagree on what Enter is: grok reads "\n" as a newline inside its input
+	// box and only "\r" as the key that sends it, so a peer's message sat typed
+	// and never submitted. Which byte a TUI wants is a property of the agent, so
+	// the profile is where it is said.
+	//
+	// It must be double-quoted in YAML: '\r' and a bare \r are a backslash and
+	// an r, which no TUI reads as Enter — SubmitSequence refuses them by name
+	// rather than typing two stray characters after every message.
+	Submit string `yaml:"submit,omitempty"`
+
 	// Attention is this profile's quiet ladder, layered the same way. It is the
 	// override that matters most in practice: how long silence means "thinking"
 	// rather than "wedged" is a property of the agent, and no fleet-wide number
@@ -717,6 +730,19 @@ func (a AgentProfile) Environ() ([]string, error) {
 		}
 	}
 	return out, err
+}
+
+// SubmitSequence is the profile's submit sequence, "" when unset, and an error
+// naming the accepted values for anything else. The set is closed on purpose:
+// every byte here is typed into an agent after each message, so a value baton
+// does not recognise is far more likely a quoting mistake than a key the user
+// meant — and the caller drops it back to the default rather than type it.
+func (a AgentProfile) SubmitSequence() (string, error) {
+	switch a.Submit {
+	case "", "\r", "\n", "\r\n":
+		return a.Submit, nil
+	}
+	return "", fmt.Errorf(`submit %q is not one of "\r", "\n", "\r\n" (double-quote it in YAML: '\r' is a backslash and an r)`, a.Submit)
 }
 
 // Isolation is the parsed isolation policy, and an error naming anything the file

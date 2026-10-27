@@ -1,6 +1,7 @@
 package main
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -168,5 +169,25 @@ func TestAgentEnvsProjectsConfig(t *testing.T) {
 	got := reloadableSettings(cfg).settings.AgentEnv
 	if len(got) != 1 || !slices.Equal(got["grok"], []string{"GROK_THEME=terminal"}) {
 		t.Fatalf("AgentEnv = %v, want only grok's GROK_THEME", got)
+	}
+}
+
+// TestAgentSubmitsProjectsConfig covers the submit table's seam: a valid
+// sequence reaches the daemon, a bad one is dropped (so that profile submits
+// with the default), and a profile without one, or with "", is absent.
+func TestAgentSubmitsProjectsConfig(t *testing.T) {
+	cfg := config.Config{Panel: config.PanelDefaults{Agents: map[string]config.AgentProfile{
+		"grok":   {Command: "grok", Submit: "\r"},
+		"codex":  {Command: "codex", Submit: "\r\n"},
+		"quoted": {Command: "grok", Submit: `\r`},
+		"letter": {Command: "grok", Submit: "x"},
+		"empty":  {Command: "claude", Submit: ""},
+		"claude": {Command: "claude"},
+	}}}
+
+	got := reloadableSettings(cfg).settings.AgentSubmit
+	want := map[string]string{"grok": "\r", "codex": "\r\n"}
+	if !maps.Equal(got, want) {
+		t.Fatalf("AgentSubmit = %q, want %q", got, want)
 	}
 }
