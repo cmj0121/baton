@@ -1638,6 +1638,7 @@ func reloadableSettings(cfg config.Config) reloadable {
 	rc.settings.Classifier, rc.settings.ClassifierRecord = classifierPolicy(cfg)
 	rc.settings.AgentIsolate = isolationPolicies(cfg)
 	rc.settings.AgentEnv = agentEnvs(cfg)
+	rc.settings.AgentSubmit = agentSubmits(cfg)
 	rc.settings.TrackCwd, rc.settings.RestoreCwd = cwdPolicy(cfg)
 	if cfg.Settings.AllowNameConflict != nil {
 		rc.settings.AllowNameConflict = *cfg.Settings.AllowNameConflict
@@ -1808,6 +1809,28 @@ func agentEnvs(cfg config.Config) map[string][]string {
 			out = make(map[string][]string, len(cfg.Panel.Agents))
 		}
 		out[name] = env
+	}
+	return out
+}
+
+// agentSubmits projects each profile's submit sequence, reporting and dropping a
+// value the profile got wrong: the panel then submits with the server default,
+// which is what it did before the key existed, rather than the profile's panels
+// being refused. A profile that sets none is absent, not stored empty.
+func agentSubmits(cfg config.Config) map[string]string {
+	var out map[string]string
+	for name, prof := range cfg.Panel.Agents {
+		seq, err := prof.SubmitSequence()
+		if err != nil {
+			log.Warn().Err(err).Str("agent", name).Msg("agent submit ignored; using the default")
+		}
+		if seq == "" {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]string, len(cfg.Panel.Agents))
+		}
+		out[name] = seq
 	}
 	return out
 }

@@ -97,6 +97,31 @@ after it. It applies to spawns that name a profile — the cockpit's picker, the
 into wider caps. It is for configuration, not secrets: an isolated panel receives it as `docker --env` arguments, visible
 in the process list, so a credential belongs in `env-allow`.
 
+**Profile submit key.** A profile's `submit` is the key sequence baton presses after every line it types into that
+profile's panels — a group-mate's `baton_tell`, a dispatched brief, a queued task. It is one of `"\r"`, `"\n"` or
+`"\r\n"`; unset (or `""`) means `"\n"`. grok reads `"\n"` as a new line inside its input box and submits only on a
+carriage return:
+
+```yaml
+panel:
+  agents:
+    grok:
+      command: grok
+      submit: "\r"
+```
+
+Double-quote it: in YAML `'\r'` and a bare `\r` are a backslash and an `r`, which no TUI reads as Enter. A value that is
+not one of the three is warned about in `baton.log` and dropped, so that profile submits with `"\n"`. The key is re-read
+on a reload (`C-t R` or `SIGHUP`) and applies to the next line typed. A dispatch that names its own `submit` wins over the
+profile's; a panel whose profile is not in the config submits with `"\n"`.
+
+Into an **agent** panel baton types each line in two writes: the text, a pause of about 50 ms, then the submit on its
+own — so a busy TUI does not read the pair as one paste and leave it unsent. It is best effort: the pause is a head
+start for the agent, not a confirmation that it read the text. If the panel's process changes during the pause (it
+exited, or was restarted) the Enter is dropped rather than pressed into a process that never saw the text. A shell or
+command panel still gets the text and its submit in one write. A key you type into the panel from the cockpit during the
+pause can land before the Enter and be submitted with the line.
+
 **Detected backends.** On every config load the daemon checks which of the catalogue's commands the machine the _fleet_
 runs on actually has — presence on `PATH`, nothing more. The scan runs on the server because that is the machine panels
 are spawned from: a cockpit attached over a remote socket would otherwise answer with the binaries on its own laptop,
@@ -318,9 +343,11 @@ operator's as well: a conductor or an agent panel that tries — by `panel.group
 into it — is refused. A panel reaches its group-mates with
 `peer.list` (reply: a `ServerMsg` of type `peers`, whose `Panels` are the reachable group-mates and nothing else),
 `peer.tail` (type `tail`) and `peer.send` (type `notice`), each authorised per call against the caller's own panel and
-refused with a reason that starts `peer:`. A peers-on group is marked `⇄` on its row (standing in for the collapsed `▸`)
-and card, in its split's title, on each member's tile and in a zoomed member's footer. The tools an agent uses, what a
-send types, and the limits of the whole arrangement are in [CONTROL.md](./CONTROL.md#peers).
+refused with a reason that starts `peer:`. One `peer.send` failure is not a refusal and carries no prefix: an `error`
+saying nothing was submitted, when the target's process changed between the text and the Enter. A peers-on group is
+marked `⇄` on its row (standing in for the collapsed `▸`) and card, in its split's title, on each member's tile and in a
+zoomed member's footer. The tools an agent uses, what a send types, and the limits of the whole arrangement are in
+[CONTROL.md](./CONTROL.md#peers).
 
 **The group split.** Zooming a work item opens a split scoped to that path's **direct children** — each direct panel
 rendered live in its own tile, plus one tile per immediate **sub-group** (a rollup box marked `▣`). By default the split

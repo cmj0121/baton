@@ -162,7 +162,7 @@ func (s *Server) peerTail(cc *clientConn, cmd proto.Command) {
 // A submit sequence is refused rather than honoured. It would be typed raw and
 // outside the cap, and a sender that could choose it could choose none — a
 // message left unsent in a group-mate's input line for the next one to land on.
-// Every admitted send ends in the default Enter.
+// Every admitted send ends in the target profile's submit, else "\n".
 func (s *Server) peerSendLocked(self, target string, data []byte, submit string, now time.Time) (me, to panel.Panel, text, reason string) {
 	me, to, reason = s.peerReasonLocked(self, target)
 	switch {
@@ -267,10 +267,11 @@ func peerFolds(r rune) bool {
 	return false
 }
 
-// peerPayload is the bytes a peer.send types into its target. An agent is told
+// peerPayload is the text a peer.send types into its target. An agent is told
 // who is typing, because it has to tell a peer from its human; a shell (or a
 // command panel) gets the bytes as they were sent, because a prefix would
-// corrupt the command. Both end in the Enter a dispatched brief ends in.
+// corrupt the command. Neither carries the Enter: peerSend has typeLine add the
+// target's submit, as a dispatched brief's is added.
 func peerPayload(me, to panel.Panel, text string) []byte {
 	if to.IsAgent() {
 		// The id is scrubbed with the title. The server mints ids, but a restore
@@ -279,18 +280,18 @@ func peerPayload(me, to panel.Panel, text string) []byte {
 		text = fmt.Sprintf("[from %s (%s)] %s",
 			scrub.Capped(me.Title, maxPeerTitleRunes), scrub.Capped(me.ID, maxPeerTitleRunes), text)
 	}
-	return dispatchData(text, "")
+	return []byte(text)
 }
 
 // peerSend handles peer.send: type into a group-mate. It is delivered with the
-// primitive a dispatched brief ends in (dispatchData + writeInput) and nothing
+// primitive a dispatched brief ends in (submitFor + typeLine) and nothing
 // else of a dispatch — no task is recorded on the target, no brief reaches its
 // card and no task hook runs, because a peer's message is not an assignment.
 //
-// The reply is a notice to the sender alone, carrying the target's id. The id
-// is what lets a client tell this reply from the notices the daemon broadcasts
-// to every connection for its own reasons. There is no fleet broadcast: nothing
-// a snapshot carries changed.
+// The reply (peerSendReply) goes to the sender alone, carrying the target's id.
+// The id is what lets a client tell this reply from the notices the daemon
+// broadcasts to every connection for its own reasons. There is no fleet
+// broadcast: nothing a snapshot carries changed.
 func (s *Server) peerSend(cc *clientConn, cmd proto.Command) {
 	s.mu.Lock()
 	me, to, text, reason := s.peerSendLocked(cc.self, cmd.ID, cmd.Data, cmd.Submit, s.mon.now())
@@ -300,14 +301,31 @@ func (s *Server) peerSend(cc *clientConn, cmd proto.Command) {
 		return
 	}
 
-	s.writeInput(to.ID, peerPayload(me, to, text))
+	// The submit is the target's, never the sender's (peerSendLocked refuses
+	// one): "" lets submitFor take the target profile's sequence. typeLine blocks
+	// for the gap on this connection goroutine, which is only this sender's wait.
+	submit, agent := s.submitFor(to.ID, "")
+	submitted := s.typeLine(to.ID, agent, peerPayload(me, to, text), submit)
 	// A feature that lets agents type into terminals has to be visible while it
 	// does it: one log line and one plugin event per admitted send. The size in
 	// all three places is len(cmd.Data) as the sender gave it — not the folded
 	// text, and not the prefix the server added.
-	log.Info().Str("from", me.ID).Str("to", to.ID).Str("group", me.Group).Int("bytes", len(cmd.Data)).Msg("peer send")
-	s.emit("peer.send", map[string]any{"from": me.ID, "to": to.ID, "group": me.Group, "bytes": len(cmd.Data)})
-	send(cc, proto.ServerMsg{Type: "notice", ID: to.ID, Notice: fmt.Sprintf("sent %d bytes to %s (%s)", len(cmd.Data), scrub.Capped(to.Title, maxPeerTitleRunes), scrub.Capped(to.ID, maxPeerTitleRunes))})
+	log.Info().Str("from", me.ID).Str("to", to.ID).Str("group", me.Group).Int("bytes", len(cmd.Data)).Bool("submitted", submitted).Msg("peer send")
+	s.emit("peer.send", map[string]any{"from": me.ID, "to": to.ID, "group": me.Group, "bytes": len(cmd.Data), "submitted": submitted})
+	send(cc, peerSendReply(len(cmd.Data), to, submitted))
+}
+
+// peerSendReply is peer.send's answer to its sender. It says what the server
+// did — typed the line, then pressed Enter or did not — and claims nothing more:
+// whether the panel took the line is not something the server can see. A line
+// whose Enter was dropped is an error, because nothing was submitted and the
+// sender must not read it as sent.
+func peerSendReply(n int, to panel.Panel, submitted bool) proto.ServerMsg {
+	title, id := scrub.Capped(to.Title, maxPeerTitleRunes), scrub.Capped(to.ID, maxPeerTitleRunes)
+	if !submitted {
+		return proto.ServerMsg{Type: "error", ID: to.ID, Error: fmt.Sprintf("typed %d bytes into %s (%s), but its process changed before Enter; nothing was submitted", n, title, id)}
+	}
+	return proto.ServerMsg{Type: "notice", ID: to.ID, Notice: fmt.Sprintf("typed %d bytes into %s (%s) and pressed Enter; not confirmed the panel took it", n, title, id)}
 }
 
 // peersFencedLocked reports whether cc is held to the peers fence: a conductor

@@ -287,11 +287,11 @@ baton ctl group peers review off
 在儀表板上,同一個開關是游標停在該群組那一列時的 `g p`(見 [KEYS.zh-TW.md](KEYS.zh-TW.md))。那個群組裡的
 agent 接著就有三個工具可用:
 
-| 工具          | 引數                               | 回傳                                                                 |
-| ------------- | ---------------------------------- | -------------------------------------------------------------------- |
-| `baton_peers` | —                                  | 它碰得到的同群組面板,JSON 格式:各自的 `id`、`title`、`kind`、`state` |
-| `baton_peek`  | `id`、`bytes`(預設 4096,最多 8192) | 那個面板輸出的尾段,純文字,終端機控制序列已移除                       |
-| `baton_tell`  | `id`、`text`                       | 把 `text` 當成一行打進那個面板並按下 Enter;回覆送出的大小與目標      |
+| 工具          | 引數                               | 回傳                                                                                 |
+| ------------- | ---------------------------------- | ------------------------------------------------------------------------------------ |
+| `baton_peers` | —                                  | 它碰得到的同群組面板,JSON 格式:各自的 `id`、`title`、`kind`、`state`                 |
+| `baton_peek`  | `id`、`bytes`(預設 4096,最多 8192) | 那個面板輸出的尾段,純文字,終端機控制序列已移除                                       |
+| `baton_tell`  | `id`、`text`                       | 把 `text` 當成一行打進那個面板並按下 Enter;回覆打進去的大小與目標,不代表面板已經照做 |
 
 `baton_peek` 讀的是面板印出內容的尾段,依大小截斷,所以開頭可能落在一行的中間,而全螢幕程式讀起來會是碎片。
 結尾符號還沒出現就被截斷的跳脫字串,只會少掉它的引導碼:後面的文字會留下來,不會被吞掉。
@@ -359,7 +359,13 @@ worktree spawn,不論是誰要求的,都會落進那個群組。
 | agent 面板            | 一行字:`[from <title> (<id>)]`、一個空白、再接文字,也就是送出者的標題與 id |
 | shell 或 command 面板 | 文字原封不動,沒有前綴;shell 會把它當指令執行                               |
 
-- 每一次送出都以 Enter 結尾。沒有選項可以把文字留在同群組面板的輸入列上不送出。
+- 每一次送出都以 Enter 結尾,也就是目標 profile 的 [`submit`](SPEC.zh-TW.md#面板panels) 鍵(grok 是 `"\r"`),
+  沒設就是 `"\n"`。沒有選項可以把文字留在同群組面板的輸入列上不送出,送出者也不能挑按鍵。
+- agent 先收到文字、短暫停頓,再收到單獨寫入的 Enter,這樣忙碌中的 TUI 才不會把兩者當成貼上。如果停頓期間目標的
+  行程變了,Enter 會被丟掉,這次送出失敗:什麼都沒有送出。shell 則是文字與 Enter 一次寫入。
+- 回覆說的是 baton 打了什麼,不是面板做了什麼。按下 Enter 的送出會回
+  `typed <n> bytes into <title> (<id>) and pressed Enter; not confirmed the panel took it`;要知道面板有沒有收下,
+  用 `baton_peek` 讀回來看。
 - agent 收到的是一行。Tab 與換行(CR、LF、`U+0085`、`U+2028`、`U+2029`)摺成一個空白,頭尾修掉。其他任何控制
   字元或看不見的字元(跳脫序列、`Ctrl-C`、雙向覆寫、零寬字元、`U+FFFD`)以及不合法的 UTF-8 一律拒絕,而不是
   默默剝掉:peer 是對 agent 說話,不是替它按鍵。前綴裡的送出者標題與面板 id 各自會被清成一行,並截在 64 個 rune。
@@ -372,12 +378,12 @@ worktree spawn,不論是誰要求的,都會落進那個群組。
 
 ### 線路上
 
-| 動詞          | 指令欄位                       | 回覆                                                      |
-| ------------- | ------------------------------ | --------------------------------------------------------- |
-| `group.peers` | `group`、`enable`(`true` 為開) | 廣播給每個客戶端的 `panels` 快照;該群組的項目帶著 `peers` |
-| `peer.list`   | —                              | `type: "peers"`,`panels` 裡是呼叫者碰得到的同群組面板     |
-| `peer.tail`   | `id`、`count`(位元組)          | `type: "tail"`,帶 `id` 與 `data`                          |
-| `peer.send`   | `id`、`data`                   | `type: "notice"`,帶 `id`(目標)與 `notice`,只回給送出者    |
+| 動詞          | 指令欄位                       | 回覆                                                                                                                                             |
+| ------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `group.peers` | `group`、`enable`(`true` 為開) | 廣播給每個客戶端的 `panels` 快照;該群組的項目帶著 `peers`                                                                                        |
+| `peer.list`   | —                              | `type: "peers"`,`panels` 裡是呼叫者碰得到的同群組面板                                                                                            |
+| `peer.tail`   | `id`、`count`(位元組)          | `type: "tail"`,帶 `id` 與 `data`                                                                                                                 |
+| `peer.send`   | `id`、`data`                   | `type: "notice"`,帶 `id`(目標)與 `notice`(`typed <n> bytes into <title> (<id>) and pressed Enter; not confirmed the panel took it`),只回給送出者 |
 
 `peer.*` 動詞的呼叫者,就是那條連線在 `hello` 時宣告的 `self`,沒有欄位可以指名別人。`peer.tail` 回的是目標輸出
 未經處理的尾段,跳脫序列也在內:`count` 上限是 8192 個位元組,`0` 表示 daemon 自己的預設視窗。要把它交給模型的
@@ -409,6 +415,12 @@ worktree spawn,不論是誰要求的,都會落進那個群組。
 
 速率檢查排在最後,所以因為其他原因被拒絕的送出,不會花掉送出者任何額度。
 
+有一個錯誤發生在文字已經打進去之後,所以不帶 `peer:` 前綴,也照樣算進速率額度:
+
+| 錯誤                                                                                               | 什麼時候                                       |
+| -------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `typed <n> bytes into <title> (<id>), but its process changed before Enter; nothing was submitted` | 目標 agent 的行程在文字與 Enter 之間結束或重啟 |
+
 `group.peers` 有自己的拒絕,不帶那個前綴。群組名稱最先檢查,打開與關閉都一樣:
 
 | 拒絕訊息                                                                                 | 什麼時候                       |
@@ -429,8 +441,8 @@ worktree spawn,不論是誰要求的,都會落進那個群組。
 (`⇄ peers`)、每個成員磚的開頭,以及放大某個成員時的頁腳條(`⇄ peers`,頁腳太窄時只剩符號)。所以你往一個
 面板打字的時候,看得到它的同群組面板也能往裡面打。在分組視角下,列、卡片與分割標題是桶而不是群組,不帶標記;
 窄到放不下的磚也不帶。每一次放行的送出會在 daemon 記錄檔寫一行(`peer send`,帶 `from`、`to`、`group`、
-`bytes`),並觸發帶著同樣四個欄位的 `peer.send` [外掛事件](PLUGIN.zh-TW.md);切換旗標會記下 `group peers set`,
-並觸發帶著 `group` 與 `peers` 的 `group.change`。
+`bytes` 與 `submitted`,Enter 被丟掉時為 `false`),並觸發帶著同樣五個欄位的 `peer.send`
+[外掛事件](PLUGIN.zh-TW.md);切換旗標會記下 `group peers set`,並觸發帶著 `group` 與 `peers` 的 `group.change`。
 
 ### 它不保護什麼
 
@@ -474,10 +486,11 @@ shell 面板拿不到 `BATON_PANEL_ID`(見[下文](#直接對接線路)),所以�
 每個檔案裡有幾筆資料列。它跑的那次探測會把一個被 daemon 放棄的分類器重新上膛。兩者都寫在
 [ATTENTION.zh-TW.md](./ATTENTION.zh-TW.md#分類器站在正規表達式旁邊)。
 
-一次 dispatch 多帶兩個欄位:`prompt`(那份簡報)以及一個選用的 `submit` 覆寫值(接在後面用來送出的按鍵,
-預設為換行),用在 `panel.dispatch` / `panel.dispatch-group`;`task.enqueue` / `task.cancel` / `task.promote` /
-`task.demote` / `task.drain` / `task.list` 驅動待辦,並以一份 `tasks` 快照回覆。一次隨需開新的 `task.enqueue`
-會帶著 worker 的 `path` / `args` / `dir`,以及一個 `ephemeral` 完成即關的旗標。
+一次 dispatch 多帶兩個欄位:`prompt`(那份簡報)以及一個選用的 `submit` 覆寫值(接在後面用來送出的按鍵;
+沒設就用目標 profile 的 [`submit`](SPEC.zh-TW.md#面板panels),再沒有才是換行),用在
+`panel.dispatch` / `panel.dispatch-group`;`task.enqueue` / `task.cancel` / `task.promote` / `task.demote` /
+`task.drain` / `task.list` 驅動待辦,並以一份 `tasks` 快照回覆。一次隨需開新的 `task.enqueue` 會帶著
+worker 的 `path` / `args` / `dir`,以及一個 `ephemeral` 完成即關的旗標。
 
 Baton 把接線注入 agent 面板的行程,`baton ctl` 與 `baton mcp` 兩者都會自動讀取:
 

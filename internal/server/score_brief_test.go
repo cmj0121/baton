@@ -177,11 +177,11 @@ func TestABriefIsNotQuotedBackAtItself(t *testing.T) {
 // signal is skipped before the store is ever reached, so the disabled fleet
 // cannot be refused a dispatch by a subsystem it switched off.
 func TestABriefIsQuietWithTheStoreOff(t *testing.T) {
-	s, _, delivered := scoreServer(nil)
+	s, _, _ := scoreServer(nil)
+	w := &writeLog{}
+	s.writeInput = w.write
 	dispatch(t, s, conn(""), "keep the build green")
-	if got := string(*delivered); got != "keep the build green\n" {
-		t.Fatalf("delivered %q, want the operator's own prompt and no score block", got)
-	}
+	equalWrites(t, w.got(), []string{"p1:keep the build green", "p1:" + defaultSubmit})
 	// The brief still carries the panel's context, which the score block is only
 	// one field of.
 	b := s.dispatchBrief("p1", "keep the build green")

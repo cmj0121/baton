@@ -121,21 +121,21 @@ events that outruns the worker drops oldest-first (like telemetry) rather than b
 
 The event set (derived from the lifecycle in SPEC.md):
 
-| Event             | Fires when                          | Payload                                                           |
-| ----------------- | ----------------------------------- | ----------------------------------------------------------------- |
-| `panel.spawn`     | a panel is created                  | the panel                                                         |
-| `panel.state`     | any lifecycle transition            | panel + `from`, `to`                                              |
-| `panel.attention` | a panel enters `attention`          | the panel                                                         |
-| `panel.idle`      | a panel settles to `idle`           | the panel                                                         |
-| `panel.exit`      | a process ends on its own           | panel + `exit_code`                                               |
-| `panel.close`     | a panel is retired                  | `{ id }`                                                          |
-| `group.change`    | membership / rename / show changes  | the group                                                         |
-|                   | a group's peers flag is flipped     | `{ group, peers }` — `peers` is the new state                     |
-| `peer.send`       | a panel types into a group-mate     | `{ from, to, group, bytes }` — panel ids, their group, the size   |
-| `task.change`     | a task is recorded or changes state | the task — `id`, `prompt`, `status`, `panel`, `group`, `attempts` |
-| `server.reload`   | config/plugin reloaded              | —                                                                 |
-| `panel.output`    | bytes arrive on a panel             | panel + `data` — **high-volume, opt-in, off by default**          |
-| `panel.title`     | a panel spawns or changes state     | the panel — **a filter: return the title string to show**         |
+| Event             | Fires when                          | Payload                                                                                               |
+| ----------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `panel.spawn`     | a panel is created                  | the panel                                                                                             |
+| `panel.state`     | any lifecycle transition            | panel + `from`, `to`                                                                                  |
+| `panel.attention` | a panel enters `attention`          | the panel                                                                                             |
+| `panel.idle`      | a panel settles to `idle`           | the panel                                                                                             |
+| `panel.exit`      | a process ends on its own           | panel + `exit_code`                                                                                   |
+| `panel.close`     | a panel is retired                  | `{ id }`                                                                                              |
+| `group.change`    | membership / rename / show changes  | the group                                                                                             |
+|                   | a group's peers flag is flipped     | `{ group, peers }` — `peers` is the new state                                                         |
+| `peer.send`       | a panel types into a group-mate     | `{ from, to, group, bytes, submitted }` — panel ids, their group, the size, whether Enter was pressed |
+| `task.change`     | a task is recorded or changes state | the task — `id`, `prompt`, `status`, `panel`, `group`, `attempts`                                     |
+| `server.reload`   | config/plugin reloaded              | —                                                                                                     |
+| `panel.output`    | bytes arrive on a panel             | panel + `data` — **high-volume, opt-in, off by default**                                              |
+| `panel.title`     | a panel spawns or changes state     | the panel — **a filter: return the title string to show**                                             |
 
 `panel.attention` and `panel.exit` are the headline hooks: "ping me when an agent needs me," "kick off the next step when
 this one finishes," "desktop-notify on completion" all fall out of them.

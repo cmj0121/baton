@@ -793,7 +793,7 @@ func peerTools() []tool {
 		},
 		{
 			name: "baton_tell",
-			desc: fmt.Sprintf("Type one line into another panel in your group's terminal and press Enter. An agent panel receives it as a prompt, prefixed with your panel's title and id so it can tell you from its human; a shell panel receives it exactly as written and runs it as a command. Sends are limited in size (%d bytes) and in rate, and a panel that is waiting for a human takes none.", tellMaxBytes) + peerWhen,
+			desc: fmt.Sprintf("Type one line into another panel in your group's terminal and press Enter. An agent panel receives it as a prompt, prefixed with your panel's title and id so it can tell you from its human; a shell panel receives it exactly as written and runs it as a command. Sends are limited in size (%d bytes) and in rate, and a panel that is waiting for a human takes none. The reply says the line was typed and Enter pressed, not that the panel acted on it; read it back with baton_peek. If the panel's process changed before Enter, nothing was submitted and the call fails.", tellMaxBytes) + peerWhen,
 			schema: obj(map[string]any{
 				"id":   str("panel id to type into, from baton_peers"),
 				"text": str("the line to type; line breaks sent to an agent are folded into spaces"),

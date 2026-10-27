@@ -3,6 +3,9 @@ package mcp
 import (
 	"encoding/json"
 	"math/rand"
+	"net"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -132,6 +135,11 @@ func TestWorkerToolList(t *testing.T) {
 	if desc := byName["baton_tell"]["description"].(string); !strings.Contains(desc, "press Enter") || !strings.Contains(desc, "one line") {
 		t.Errorf("baton_tell must say it types one line and presses Enter: %s", desc)
 	}
+	// #154: the reply reports what the daemon did, never that the panel took
+	// the line, and the description must not promise more.
+	if desc := byName["baton_tell"]["description"].(string); !strings.Contains(desc, "not that the panel acted on it") || !strings.Contains(desc, "nothing was submitted and the call fails") {
+		t.Errorf("baton_tell must say its reply is no delivery receipt, and when it fails: %s", desc)
+	}
 
 	required := func(name string) []string {
 		schema := byName[name]["inputSchema"].(map[string]any)
@@ -201,7 +209,7 @@ func TestPeerToolsRoundTrip(t *testing.T) {
 	// A shell runs what it is told: the arithmetic only appears evaluated if the
 	// line was typed AND submitted.
 	text, isErr = f.one(t, f.me, "baton_tell", map[string]any{"id": f.shell, "text": "echo peer-$((40+2))"})
-	if isErr || !strings.Contains(text, "("+f.shell+")") || !strings.HasPrefix(text, "sent ") {
+	if isErr || !strings.Contains(text, "("+f.shell+")") || !strings.HasPrefix(text, "typed 19 bytes into ") {
 		t.Fatalf("baton_tell should hand back the daemon's notice naming the shell, got %q (error=%v)", text, isErr)
 	}
 	f.peekUntil(t, f.shell, "peer-42")
@@ -230,8 +238,15 @@ func TestPeerToolsRoundTrip(t *testing.T) {
 			meTitle = p.Title
 		}
 	}
-	if text, isErr = f.one(t, f.me, "baton_tell", map[string]any{"id": f.mate, "text": "hello-mate"}); isErr {
-		t.Fatalf("baton_tell: %s", text)
+	mateTitle := ""
+	for _, p := range fleet {
+		if p.ID == f.mate {
+			mateTitle = p.Title
+		}
+	}
+	text, isErr = f.one(t, f.me, "baton_tell", map[string]any{"id": f.mate, "text": "hello-mate"})
+	if want := "typed 10 bytes into " + mateTitle + " (" + f.mate + ") and pressed Enter; not confirmed the panel took it"; isErr || text != want {
+		t.Fatalf("baton_tell to an agent = %q (error=%v), want the daemon's notice %q", text, isErr, want)
 	}
 	f.peekUntil(t, f.mate, "[from "+meTitle+" ("+f.me+")] hello-mate")
 }
@@ -516,5 +531,67 @@ func TestStripStringsWritesItsOutputOnce(t *testing.T) {
 		if allocs := testing.AllocsPerRun(5, func() { stripStrings(in) }); allocs > 4 {
 			t.Errorf("%s: %d KiB cost %.0f allocations; the output is being rebuilt", name, len(in)>>10, allocs)
 		}
+	}
+}
+
+// TestTellRelaysBothReplies: baton_tell hands a model the daemon's reply as it
+// was given — a submitted line's notice as the tool's text, a dropped submit's
+// error as a tool error — so a line whose Enter never went out cannot read as
+// a send (#154). A stand-in daemon gives each reply; a real one cannot be made
+// to drop the Enter on cue.
+func TestTellRelaysBothReplies(t *testing.T) {
+	const (
+		notice = "typed 2 bytes into mate (9) and pressed Enter; not confirmed the panel took it"
+		failed = "typed 2 bytes into mate (9), but its process changed before Enter; nothing was submitted"
+	)
+	for _, tc := range []struct {
+		name  string
+		reply proto.ServerMsg
+		want  string
+		isErr bool
+	}{
+		{"submitted", proto.ServerMsg{Type: "notice", ID: "9", Notice: notice}, notice, false},
+		{"dropped", proto.ServerMsg{Type: "error", ID: "9", Error: failed}, failed, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, err := os.MkdirTemp("", "bt")
+			if err != nil {
+				t.Fatalf("temp dir: %v", err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(dir) })
+			sock := filepath.Join(dir, "s.sock")
+			ln, err := net.Listen("unix", sock)
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			t.Cleanup(func() { _ = ln.Close() })
+			go func() {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				defer func() { _ = conn.Close() }()
+				dec, enc := json.NewDecoder(conn), json.NewEncoder(conn)
+				for {
+					var cmd proto.Command
+					if dec.Decode(&cmd) != nil {
+						return
+					}
+					switch cmd.Action {
+					case "hello":
+						_ = enc.Encode(proto.ServerMsg{Type: "panels"})
+					case "config.get":
+						_ = enc.Encode(proto.ServerMsg{Type: "config"})
+					case "peer.send":
+						_ = enc.Encode(tc.reply)
+					}
+				}
+			}()
+
+			text, isErr := peerFleet{sock: sock}.one(t, "7", "baton_tell", map[string]any{"id": "9", "text": "hi"})
+			if text != tc.want || isErr != tc.isErr {
+				t.Fatalf("baton_tell = %q (error=%v), want %q (error=%v)", text, isErr, tc.want, tc.isErr)
+			}
+		})
 	}
 }

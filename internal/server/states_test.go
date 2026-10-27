@@ -55,7 +55,7 @@ func TestDispatchToADonePanelIsDelivered(t *testing.T) {
 	if err := s.dispatchPanel("p1", "next task", ""); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	if len(*written) != 1 {
+	if !typedAgentLine(*written, "p1", "next task") {
 		t.Fatalf("a done panel should receive the prompt at once, got %v", *written)
 	}
 	if len(s.pendingDispatch) != 0 {

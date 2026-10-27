@@ -220,6 +220,12 @@ type Settings struct {
 	// environment already is one — and a profile absent from it adds nothing.
 	AgentEnv map[string][]string
 
+	// AgentSubmit holds the per-profile submit sequence, keyed by profile name;
+	// a profile absent here submits with defaultSubmit. Already validated: the
+	// projection drops a value the profile got wrong, so what reaches the server
+	// is one of "\r", "\n", "\r\n".
+	AgentSubmit map[string]string
+
 	// TrackCwd is how a panel's live working directory is learned and RestoreCwd
 	// which panels a re-run puts back in it.
 	TrackCwd   cwd.Track
@@ -303,6 +309,11 @@ type Server struct {
 	// spawn from the profile name like the caps, so a reload reaches the next
 	// spawn and a re-run without touching any spec the server retains.
 	agentEnv map[string][]string
+
+	// agentSubmit is the per-profile submit sequence (Settings.AgentSubmit), read
+	// from the panel's profile each time a line is typed in, so a reload reaches
+	// the next send to a panel that is already running.
+	agentSubmit map[string]string
 
 	onReload func() // invoked on a server.reload command; re-reads config and Reloads
 
@@ -613,6 +624,17 @@ type Server struct {
 	// own map in production; a test swaps it to stand in for a live process. Set
 	// once in New, then read without a lock — like writeInput above.
 	pidOf func(id string) int
+
+	// Typed input (typein.go). submitGap is the pause between a line's text and
+	// its submit on an agent panel — defaultSubmitGap from New, 0 in a Server a
+	// test builds by hand, so those tests never sleep. lanes serializes the
+	// split writes per panel so two senders cannot interleave inside one line,
+	// and typing tracks the goroutines typeLineThen hands a gap to, so Shutdown
+	// can let them finish. submitGap is set once in New, then read without a
+	// lock; lanes and typing guard themselves.
+	submitGap time.Duration
+	lanes     inputLanes
+	typing    sync.WaitGroup
 
 	// scoreState is the fleet memory (internal/score): the store whose entries are
 	// rendered into directly dispatched briefs and served over the score.* verbs,
@@ -1143,6 +1165,7 @@ func New(ln net.Listener, opts ...Option) *Server {
 	if s.pidOf == nil {
 		s.pidOf = func(id string) int { return s.pty.Pids()[id] }
 	}
+	s.submitGap = defaultSubmitGap
 	s.pty.OnOutput(s.routeOutput)
 	s.pty.OnClose(s.onPanelExit)
 	return s
@@ -1182,6 +1205,7 @@ func (s *Server) Reload(set Settings) {
 	s.forgetAskedLocked()
 	s.agentIsolate = set.AgentIsolate // resolved per spawn, so live panels keep the runtime they started under
 	s.agentEnv = set.AgentEnv         // the same: a running process's environment cannot be changed anyway
+	s.agentSubmit = set.AgentSubmit   // read per typed line, so it reaches live panels from the next send on
 	s.trackCwd, s.restoreCwd = set.TrackCwd, set.RestoreCwd
 	// The logging policy swaps whole, like the caps: a panel records its PROFILE,
 	// so every resolution from here on reads the new destination. Files ALREADY
@@ -2509,8 +2533,9 @@ type delivery struct {
 	attempt int
 }
 
-// bindDelivery renders d into the bytes the panel receives, running the bind
-// unless plugin marks it. It must be called with s.mu RELEASED, because the
+// bindDelivery renders d into the text the panel receives, running the bind
+// unless plugin marks it. The text carries no submit: d.submit is resolved
+// against the panel by submitFor and typed after it (typeLine). It must be called with s.mu RELEASED, because the
 // bind blocks on the Lua worker for up to its fail-open timeout.
 //
 // ok=false is a task.pre veto, and the two callers answer it differently — the
@@ -2523,7 +2548,7 @@ func (s *Server) bindDelivery(d delivery) (data []byte, ok bool, took time.Durat
 		// baton.enqueue and baton.dispatch get what a plugin-originated dispatch
 		// gets: the bare prompt, no block. Running the chain over one would re-enter
 		// a task.pre hook that dispatches, once per delivery, unbounded.
-		return dispatchData(d.prompt, d.submit), true, 0
+		return []byte(d.prompt), true, 0
 	}
 	b, ok, took := s.bindBrief(d.panel, d.prompt)
 	if !ok {
@@ -2534,7 +2559,7 @@ func (s *Server) bindDelivery(d delivery) (data []byte, ok bool, took time.Durat
 	// its own rewrite would be rewritten again on every restart, because
 	// restoreTasksLocked re-queues an in-flight task and the chain now runs at
 	// delivery. See dispatchScored.
-	return briefBytes(b.Score, b.Prompt, d.submit), true, took
+	return briefBytes(b.Score, b.Prompt), true, took
 }
 
 // deliver carries out one delivery with s.mu RELEASED.
@@ -2560,6 +2585,23 @@ func (s *Server) bindDelivery(d delivery) (data []byte, ok bool, took time.Durat
 // The other cost of the ordering is that a veto arrives when the task is already
 // marked dispatched on a panel, and has to be walked back rather than refused;
 // vetoQueuedTask does that.
+//
+// The write goes through typeLineThen, so an agent's text and its Enter — the
+// gap between them — finish on a goroutine of their own and the tick never
+// sleeps (#154). The reinforcement is counted only when the line was SUBMITTED
+// (ok): a line whose Enter was dropped because the panel's process changed, or
+// one refused because the daemon is shutting down, reached no agent as a brief,
+// and signalDelivered's rule is to count only a delivery that landed. The task
+// itself stays dispatched either way — what the panel does with a half-typed
+// line is the same question it was before the split.
+//
+// A tick can hand several lines to one panel (a held dispatch and the backlog
+// draining behind it). Each is its own goroutine queued on the panel's input
+// lane, so each line lands whole — but ORDER across handed-off lines is not
+// guaranteed: the goroutines start in no fixed order and the lane's
+// sync.Mutex is not FIFO, so the second line can be typed before the first.
+// And Shutdown waits only shutdownTypingTimeout — a few gaps — so a burst
+// longer than that is cut by the kill like any other line still in flight.
 func (s *Server) deliver(d delivery) {
 	data, ok, _ := s.bindDelivery(d)
 	if !ok {
@@ -2569,8 +2611,12 @@ func (s *Server) deliver(d delivery) {
 	if !s.claimDelivery(d) {
 		return
 	}
-	s.writeInput(d.panel, data)
-	s.signalDelivered(d)
+	submit, agent := s.submitFor(d.panel, d.submit)
+	s.typeLineThen(d.panel, agent, data, submit, func(ok bool) {
+		if ok {
+			s.signalDelivered(d)
+		}
+	})
 }
 
 // signalDelivered records a DELIVERED brief as the user's reinforcement of
@@ -4786,6 +4832,28 @@ func (s *Server) broadcastFleet() {
 // swallowed.
 const shutdownJoinTimeout = 2 * time.Second
 
+// shutdownTypingTimeout bounds how long Shutdown waits for lines typeLineThen
+// handed off to finish. A healthy line needs one submitGap; a few of them cover
+// a scheduler hiccup, and anything longer is a write blocked on a panel that has
+// stopped reading — which only the kill that follows can end.
+const shutdownTypingTimeout = 4 * defaultSubmitGap
+
+// waitTyping waits for s.typing, giving up (and logging) after d.
+func (s *Server) waitTyping(d time.Duration) {
+	finished := make(chan struct{})
+	go func() {
+		s.typing.Wait()
+		close(finished)
+	}()
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-finished:
+	case <-timer.C:
+		log.Warn().Dur("waited", d).Msg("gave up waiting for typed lines to finish; killing panels mid-line")
+	}
+}
+
 // Shutdown sends SIGKILL to every live panel's process group, so no child
 // process outlives the daemon when it stops, then waits for their output pumps
 // to finish. The signal handler calls this on the way out (after SaveNow has
@@ -4807,6 +4875,15 @@ func (s *Server) Shutdown() int {
 		}
 	}
 	s.mu.Unlock()
+
+	// A line handed to typeLineThen is let finish before the kills: a panel
+	// killed between its text and its Enter would leave that text sitting
+	// unsubmitted in a transcript that then ends — the half-typed line this whole
+	// path exists to prevent. Normally that costs at most one submitGap, but a
+	// line's PTY write can block on a hung agent's full input queue, and the
+	// KillAll below is the very thing that would unblock it; so the wait is
+	// bounded, like the pump join, and a line still stuck is abandoned to it.
+	s.waitTyping(shutdownTypingTimeout)
 
 	n := s.pty.KillAll(syscall.SIGKILL)
 	if n > 0 {
@@ -5056,47 +5133,36 @@ func taskSeqNum(id string) int {
 	return n
 }
 
-// defaultSubmit is the bytes appended to a dispatched prompt to submit it — a
-// newline, the same rule control.SendText uses. A dispatch may override it (some
-// REPLs want a different sequence), but the hard default lives here, not inline.
+// defaultSubmit is the sequence that submits a line typed into a panel — a
+// newline, the same rule control.SendText uses — when neither the command (a
+// dispatch's Submit) nor the panel's agent profile (Settings.AgentSubmit) names
+// one. submitFor is the one place that precedence is resolved; the builders
+// below hand back text only, and typeLine adds the submit — in the same write
+// for a shell, as its own write after a gap for an agent (#154).
 const defaultSubmit = "\n"
 
-// dispatchData is the bytes a dispatch delivers: the prompt followed by its submit
-// sequence (the default when the caller gives none).
-func dispatchData(prompt, submit string) []byte {
-	if submit == "" {
-		submit = defaultSubmit
-	}
-	return append([]byte(prompt), submit...)
-}
-
-// briefBytes is what a panel receives for a whole brief: the score block, a
-// blank line, then the prompt and its submit sequence. An empty block leaves the
-// bare prompt.
+// briefBytes is the text a panel receives for a whole brief: the score block, a
+// blank line, then the prompt. An empty block leaves the bare prompt. The submit
+// is not part of it: typeLine adds it, because for an agent it has to arrive as
+// a write of its own.
 //
 // It is the ONE place the two halves are joined, which is what makes #44's rule
 // checkable rather than remembered — a queued task drained onto a panel has to
 // carry the same block a direct dispatch to that panel would have carried, and
 // two sites laying the block out would be two chances for them to differ.
 //
-// The blocked form is laid out in ONE sized buffer rather than concatenated and
-// then appended to: the block is the largest thing a dispatch carries, and
-// joining it to the prompt first copies the whole brief an extra time before
-// dispatchData copies it again. The bare form is already one allocation and goes
-// straight through.
-func briefBytes(scoreBlock, prompt, submit string) []byte {
+// The blocked form is laid out in ONE sized buffer rather than concatenated: the
+// block is the largest thing a dispatch carries, and building it through a
+// string first would copy the whole brief an extra time.
+func briefBytes(scoreBlock, prompt string) []byte {
 	if scoreBlock == "" {
-		return dispatchData(prompt, submit)
-	}
-	if submit == "" {
-		submit = defaultSubmit
+		return []byte(prompt)
 	}
 	const gap = "\n\n"
-	b := make([]byte, 0, len(scoreBlock)+len(gap)+len(prompt)+len(submit))
+	b := make([]byte, 0, len(scoreBlock)+len(gap)+len(prompt))
 	b = append(b, scoreBlock...)
 	b = append(b, gap...)
-	b = append(b, prompt...)
-	return append(b, submit...)
+	return append(b, prompt...)
 }
 
 // dispatchPanel is the PLUGIN's direct dispatch (baton.dispatch, and each member
@@ -5233,8 +5299,29 @@ func (s *Server) dispatchScored(id, prompt, submit string, author task.Author) (
 	d.task, d.attempt = t.ID, t.Attempts
 	s.mu.Unlock()
 
-	s.writeInput(id, data)
-	s.signalDelivered(d)
+	// Off s.mu: submitFor and typeLineThen take it. The line is handed off rather
+	// than typed inline because this is not only a connection goroutine: the
+	// plugin's baton.dispatch and dispatch_group reach it on the ONE Lua worker,
+	// and holding that worker for a gap per agent member would push every
+	// concurrent task.pre hook past its fail-open timeout — a veto silently
+	// skipped. Counted only when submitted, as in deliver. The brief is persisted
+	// now, not after the submit: it is the task's record, already set above, and
+	// what a restart restores is the same whether the Enter has landed yet.
+	//
+	// The hand-off costs ordering. Two direct dispatches to one agent back to back
+	// — a plugin calling baton.dispatch(p1, A) then baton.dispatch(p1, B) on the
+	// Lua worker — are two goroutines queued on the panel's lane, and the lane's
+	// sync.Mutex is not FIFO, so B can be typed before A; and unlike deliver,
+	// nothing re-checks a claim before the write here, so the card says B while A
+	// may land last. The window is microseconds, and from the wire it is
+	// practically closed, since a client waits for the reply before its next
+	// dispatch. A FIFO lane would be the fix if it ever matters.
+	submit, agent := s.submitFor(id, submit)
+	s.typeLineThen(id, agent, data, submit, func(ok bool) {
+		if ok {
+			s.signalDelivered(d)
+		}
+	})
 	s.markDirty() // persist the brief so a restart restores it
 	return took, nil
 }
