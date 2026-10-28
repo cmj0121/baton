@@ -644,12 +644,13 @@ type AgentProfile struct {
 	// Submit is the key sequence that submits a line typed into this profile's
 	// panels — a peer send, a dispatched brief. One of "\r", "\n", "\r\n";
 	// unset (or "") means the built-in default for a CLI baton knows, keyed on
-	// the command (agents.SubmitFor; grok: "\r"), and the server default "\n"
-	// for the rest. It exists because agent TUIs disagree on what Enter is: grok
-	// reads "\n" as a newline inside its input box and only "\r" as the key that
-	// sends it, so a peer's message sat typed and never submitted. Which byte a
-	// TUI wants is a property of the agent, so the profile is where it is said —
-	// and a value set here, "\n" included, beats the built-in default.
+	// the command (agents.SubmitFor; grok and codex: "\r"), and the server
+	// default "\n" for the rest. It exists because agent TUIs disagree on what
+	// Enter is: grok and codex read "\n" as a newline inside their input box and
+	// only "\r" as the key that sends it, so a peer's message sat typed and never
+	// submitted. Which byte a TUI wants is a property of the agent, so the
+	// profile is where it is said — and a value set here, "\n" included, beats
+	// the built-in default.
 	//
 	// It must be double-quoted in YAML: '\r' and a bare \r are a backslash and
 	// an r, which no TUI reads as Enter — SubmitSequence refuses them by name

@@ -66,13 +66,13 @@ func MCPConfigArgs(command, path string) []string {
 // MCPConfigArgs does: a user's own panel.agents entry replaces the preset of the
 // same name entirely, and `reviewer: {command: grok}` is still grok.
 //
-// Only grok is here: it reads "\n" as a newline inside its input box and submits
-// on "\r" alone, so without this every line typed into it sits unsent. The rest
-// return "" rather than a guess — a wrong key leaves a line typed and never sent,
-// which is worse than the default that works for most CLIs.
+// Only grok and codex are here: each reads "\n" as a newline inside its input
+// box and submits on "\r" alone, so without this every line typed into it sits
+// unsent. The rest return "" rather than a guess — a wrong key leaves a line
+// typed and never sent, which is worse than the default that works for most CLIs.
 func SubmitFor(command string) string {
 	switch filepath.Base(command) {
-	case "grok":
+	case "grok", "codex":
 		return "\r"
 	}
 	return ""
