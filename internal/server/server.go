@@ -559,6 +559,17 @@ type Server struct {
 	osc7Tail    map[string][]byte
 	reportedCwd map[string]bool
 
+	// pasteMode is whether each panel's program last turned bracketed paste on,
+	// read from its output whatever track-cwd says; a panel absent from it has not
+	// been heard to set the mode and is typed into raw. pasteTail carries the end
+	// of each panel's output for the same reason osc7Tail does (see pastemode.go).
+	// Both are the running process's, so an exit, a re-run and every close drop
+	// them. pasteSeam is the scratch buffer the reader joins a tail and a chunk's
+	// head in, reused so the output path does not allocate. Guarded by mu.
+	pasteMode map[string]bool
+	pasteTail map[string][]byte
+	pasteSeam []byte
+
 	// pendingDispatch holds a dispatch whose panel was not yet ready to receive it
 	// (still spawning or mid-output), to be bound and delivered once the panel
 	// settles to idle/attention. Keyed by panel id, guarded by mu; the monitor tick
@@ -1442,6 +1453,7 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 			s.panels[i].Activity = exitActivity(s.panels[i].Kind, exitCode)
 			s.exitedAt[id] = time.Now()   // the Monitor is about to forget it; keep the instant the queue sorts on
 			s.mon.forget(id)              // a dead panel no longer ticks
+			s.forgetPasteModeLocked(id)   // …and the paste mode its program asked for ends with it
 			delete(s.declared, id)        // …and its raised hand goes with it
 			s.forgetClassLocked(id)       // …and whoever raised it, and any answer still waiting
 			delete(s.acked, id)           // …and any acknowledgement of it
@@ -1572,6 +1584,7 @@ func (s *Server) fanOutput(id string, data []byte, end int64) {
 		delete(s.acked, id)
 	}
 	s.noteOutputCwdLocked(id, data)
+	s.notePasteModeLocked(id, data)
 	if i := s.indexLocked(id); i >= 0 {
 		// A byte of output wakes every resting state back to running — but NOT
 		// while the agent's own declaration stands. An agent that prints a spinner
@@ -5574,6 +5587,7 @@ func (s *Server) pruneExitedLocked() (stop []string) {
 			delete(s.launched, p.ID)
 			s.forgetRestartLocked(p.ID)
 			s.forgetCwdLocked(p.ID)
+			s.forgetPasteModeLocked(p.ID)
 			delete(s.declared, p.ID)
 			s.forgetClassLocked(p.ID)
 			delete(s.acked, p.ID)
@@ -6570,7 +6584,8 @@ func (s *Server) respawnPanel(id string) error {
 		s.panels[i].Cwd = dir
 		s.mon.spawned(id) // restart the Monitor's clock; first output wakes it to running
 	}
-	delete(s.osc7Tail, id) // the old process's output tail says nothing about the new one
+	delete(s.osc7Tail, id)      // the old process's output tail says nothing about the new one
+	s.forgetPasteModeLocked(id) // …nor does its paste mode: unknown until the new one sets it
 	s.mu.Unlock()
 
 	s.resumeLog(id) // a logged panel comes back into the same file, under a new session marker
@@ -6651,6 +6666,7 @@ func (s *Server) closePanel(id string) error {
 	delete(s.launched, id)        // …and the launch its live session was followed from
 	s.forgetRestartLocked(id)     // …and any restart armed for it: it must not come back
 	s.forgetCwdLocked(id)         // …and the output tail kept to read its directory reports
+	s.forgetPasteModeLocked(id)   // …and the paste mode its program asked for
 	delete(s.declared, id)        // …and whatever it had said about needing a human
 	s.forgetClassLocked(id)       // …and who raised its hand, and any classifier answer in flight
 	delete(s.acked, id)           // …and any acknowledgement a human left on it
@@ -7137,6 +7153,7 @@ func (s *Server) purgeExited() int {
 			delete(s.launched, p.ID)
 			s.forgetRestartLocked(p.ID)
 			s.forgetCwdLocked(p.ID)
+			s.forgetPasteModeLocked(p.ID)
 			continue
 		}
 		kept = append(kept, p)
