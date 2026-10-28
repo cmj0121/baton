@@ -278,19 +278,23 @@ func TestSubmitFor(t *testing.T) {
 	}
 }
 
-// The built-in default is keyed on the spawn spec's command: a grok with no
-// profile still submits with "\r", a profile's configured submit still beats it,
+// The built-in default is keyed on the spawn spec's command: a grok or codex
+// with no profile still submits with "\r", a profile's configured submit still beats it,
 // and a CLI baton knows nothing about keeps defaultSubmit.
 func TestSubmitForCommandDefault(t *testing.T) {
 	s, _, _ := typeinServer(t,
 		panel.Panel{ID: "bare", Kind: panel.Agent},
 		panel.Panel{ID: "pinned", Kind: panel.Agent},
 		panel.Panel{ID: "claude", Kind: panel.Agent},
+		panel.Panel{ID: "codex", Kind: panel.Agent},
+		panel.Panel{ID: "pinnedcodex", Kind: panel.Agent},
 	)
 	s.specs["bare"] = spawnSpec{Spec: ptymgr.Spec{Command: "/usr/local/bin/grok"}}
 	s.specs["pinned"] = spawnSpec{Spec: ptymgr.Spec{Command: "grok"}, Profile: "mygrok"}
 	s.specs["claude"] = spawnSpec{Spec: ptymgr.Spec{Command: "claude"}}
-	s.agentSubmit = map[string]string{"mygrok": "\n"}
+	s.specs["codex"] = spawnSpec{Spec: ptymgr.Spec{Command: "/opt/homebrew/bin/codex"}}
+	s.specs["pinnedcodex"] = spawnSpec{Spec: ptymgr.Spec{Command: "codex"}, Profile: "mycodex"}
+	s.agentSubmit = map[string]string{"mygrok": "\n", "mycodex": "\n"}
 
 	for _, tc := range []struct {
 		name, id, explicit, submit string
@@ -299,6 +303,8 @@ func TestSubmitForCommandDefault(t *testing.T) {
 		{"explicit wins over the command default", "bare", "\r\n", "\r\n"},
 		{"profile's configured submit wins", "pinned", "", "\n"},
 		{"unknown command", "claude", "", defaultSubmit},
+		{"codex without a profile", "codex", "", "\r"},
+		{"profile's configured submit wins over codex", "pinnedcodex", "", "\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if submit, _ := s.submitFor(tc.id, tc.explicit); submit != tc.submit {
