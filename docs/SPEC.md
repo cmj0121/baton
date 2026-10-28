@@ -125,6 +125,14 @@ exited, or was restarted) the Enter is dropped rather than pressed into a proces
 command panel still gets the text and its submit in one write. A key you type into the panel from the cockpit during the
 pause can land before the Enter and be submitted with the line.
 
+When the agent's TUI has turned on bracketed-paste mode (`ESC[?2004h` — codex, claude and grok all do), the text is sent
+as one bracketed paste, `ESC[200~` … `ESC[201~`, and the submit follows after the same pause. That is what keeps a TUI
+with paste-burst detection, such as codex, from reading the Enter after a long line as a newline inside the burst and
+leaving the message typed but unsent. Any paste markers inside the text itself are stripped first, so a line cannot end
+the paste early. An agent that has turned the mode off, or has not been seen to turn it on, gets the raw text. baton
+reads the mode from the panel's output whatever `track-cwd` is set to, and forgets it when the process exits or
+restarts.
+
 **Detected backends.** On every config load the daemon checks which of the catalogue's commands the machine the _fleet_
 runs on actually has — presence on `PATH`, nothing more. The scan runs on the server because that is the machine panels
 are spawned from: a cockpit attached over a remote socket would otherwise answer with the binaries on its own laptop,

@@ -364,6 +364,9 @@ worktree spawn,不論是誰要求的,都會落進那個群組。
   送出,送出者也不能挑按鍵。
 - agent 先收到文字、短暫停頓,再收到單獨寫入的 Enter,這樣忙碌中的 TUI 才不會把兩者當成貼上。如果停頓期間目標的
   行程變了,Enter 會被丟掉,這次送出失敗:什麼都沒有送出。shell 則是文字與 Enter 一次寫入。
+- 處於 bracketed paste 模式的 agent,會把文字當成一次貼上收到。目標的 TUI 開啟了這個模式時(codex、claude 與 grok
+  都會開),文字會包在 `ESC[200~` … `ESC[201~` 裡送達,文字裡的標記會先剝掉,Enter 則在停頓之後跟上——這樣 codex
+  就不會把 Enter 當成換行,讓長訊息留著不送。見[面板](SPEC.zh-TW.md#面板panels)。
 - 回覆說的是 baton 打了什麼,不是面板做了什麼。按下 Enter 的送出會回
   `typed <n> bytes into <title> (<id>) and pressed Enter; not confirmed the panel took it`;要知道面板有沒有收下,
   用 `baton_peek` 讀回來看。
