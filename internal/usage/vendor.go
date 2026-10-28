@@ -237,3 +237,14 @@ func AttachWeekQuota(r VendorReport, w *Window) VendorReport {
 	r.Windows = append([]VendorWindow{qw}, r.Windows...)
 	return r
 }
+
+// AttachQuotaWindows prepends a vendor's own stated windows onto a report that
+// already has a reading — AttachWeekQuota for a vendor that states more than a
+// week. An empty list is a no-op, for the same reason a nil window is there.
+func AttachQuotaWindows(r VendorReport, ws []VendorWindow) VendorReport {
+	if len(ws) == 0 {
+		return r
+	}
+	r.Windows = append(append([]VendorWindow(nil), ws...), r.Windows...)
+	return r
+}
