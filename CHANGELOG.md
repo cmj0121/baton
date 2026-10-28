@@ -4,6 +4,20 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v2.6.2](https://github.com/cmj0121/baton/releases/tag/v2.6.2) — codex, typed whole and counted
+
+2026-10-28
+
+- **A long line reaches a bracketed-paste agent as one paste.** codex read an Enter landing just after a fast burst
+  of typed text as a newline inside it, so long messages sat unsent. baton now tracks each panel's DEC 2004 mode and,
+  while it is on, wraps an agent line in `ESC[200~ … ESC[201~` (markers inside stripped) before the usual gap and
+  submit (#161).
+- **codex usage is read from its rollouts.** The usage cockpit now counts codex tokens from `token_usage_record` lines
+  under `$CODEX_HOME`, de-duplicated by response id and credited to the session's cwd; cost shows a dash because
+  codex states no price (#161).
+- **codex rate-limit windows show on the vendor roll.** The 5h and 7d columns come from the newest `rate_limits`
+  block on disk, so they reflect this machine's last codex turn; they do not pause the queue (#161).
+
 ## [v2.6.1](https://github.com/cmj0121/baton/releases/tag/v2.6.1) — codex submits out of the box
 
 2026-10-28
