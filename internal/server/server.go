@@ -382,6 +382,11 @@ type Server struct {
 	// loops start.
 	grokWeek func(context.Context) (*usage.Window, bool)
 
+	// codexLimits is codex's own rate-limit windows, as the newest local rollout
+	// last heard them from codex's server. Nil leaves codex's 5h and 7d columns
+	// dashed. Set once before the loops start, like grokWeek.
+	codexLimits func(context.Context) ([]usage.VendorWindow, bool)
+
 	// pauseBelow is usage.pause-below: remaining quota under this fraction pauses
 	// the queue for that vendor. 0 is off. quotaHold remembers the last logged
 	// state per vendor so a tick does not repeat the line. Guarded by mu.
@@ -1069,6 +1074,14 @@ func WithVendorUsage(window time.Duration) Option {
 // a test, or a build that has not asked, leaves the column empty.
 func WithGrokLimits(week func(context.Context) (*usage.Window, bool)) Option {
 	return func(s *Server) { s.grokWeek = week }
+}
+
+// WithCodexLimits wires codex's own rate-limit windows onto the vendor roll. The
+// reading is local — the rate_limits block of this machine's last codex turn —
+// so it says nothing of codex spent elsewhere. A nil reader leaves the columns
+// empty, which is how a test keeps the operator's real rollouts out of it.
+func WithCodexLimits(windows func(context.Context) ([]usage.VendorWindow, bool)) Option {
+	return func(s *Server) { s.codexLimits = windows }
 }
 
 // WithUsageLimits wires the account's rate-limit bars: p reads the current standing,
@@ -1976,6 +1989,11 @@ func (s *Server) vendorUsage(ctx context.Context) ([]proto.VendorUsage, []usage.
 		if r.Vendor == "grok" && r.State == usage.VendorReading && s.grokWeek != nil {
 			if w, ok := s.grokWeek(ctx); ok {
 				r = usage.AttachWeekQuota(r, w)
+			}
+		}
+		if r.Vendor == "codex" && r.State == usage.VendorReading && s.codexLimits != nil {
+			if ws, ok := s.codexLimits(ctx); ok {
+				r = usage.AttachQuotaWindows(r, ws)
 			}
 		}
 		v := proto.VendorUsage{
