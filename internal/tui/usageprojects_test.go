@@ -298,7 +298,7 @@ func TestTheWeekHeaderSaysWhichWeek(t *testing.T) {
 		{"mixed", []proto.VendorUsage{
 			{Vendor: "claude", WeekSince: "2026-07-06T14:00:00Z", WeekQuota: true},
 			{Vendor: "grok", WeekSince: "2026-07-01T10:00:00Z"},
-			{Vendor: "codex", WeekSince: "2026-07-01T10:00:00Z"}, // no row in the table
+			{Vendor: "aider", WeekSince: "2026-07-01T10:00:00Z"}, // no row in the table
 		}, "week: claude since 07-06 14:00 · grok last 7 days"},
 	} {
 		m := onTab(projectsModel(t), usageTabWeek)
@@ -311,7 +311,7 @@ func TestTheWeekHeaderSaysWhichWeek(t *testing.T) {
 			t.Errorf("%s: no %q in\n%s", c.name, c.want, strings.Join(lines, "\n"))
 			continue
 		}
-		if strings.Contains(lines[i], "codex") {
+		if strings.Contains(lines[i], "aider") {
 			t.Errorf("%s: the header names an agent with no row: %q", c.name, lines[i])
 		}
 	}

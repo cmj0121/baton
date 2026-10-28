@@ -34,7 +34,7 @@ func TestVendorUsageSaysNothingBeforeDetection(t *testing.T) {
 func TestEveryDetectedBackendGetsAnHonestRow(t *testing.T) {
 	s := &Server{usageWindow: time.Hour}
 	s.agents = []proto.AgentBackend{
-		{Name: "codex", Command: "codex"},                  // installed, no reader
+		{Name: "aider", Command: "aider"},                  // installed, no reader
 		{Name: "gemini", Command: "gemini", Missing: true}, // not installed
 	}
 	rows, _ := s.vendorUsage(context.Background())
@@ -45,13 +45,13 @@ func TestEveryDetectedBackendGetsAnHonestRow(t *testing.T) {
 	for _, r := range rows {
 		by[r.Vendor] = r
 	}
-	if by["codex"].State != "no-source" {
-		t.Errorf("codex state = %q, want no-source", by["codex"].State)
+	if by["aider"].State != "no-source" {
+		t.Errorf("aider state = %q, want no-source", by["aider"].State)
 	}
 	if by["gemini"].State != "absent" {
 		t.Errorf("gemini state = %q, want absent", by["gemini"].State)
 	}
-	for _, name := range []string{"codex", "gemini"} {
+	for _, name := range []string{"aider", "gemini"} {
 		r := by[name]
 		if r.Reason == "" {
 			t.Errorf("%s has state %q and no reason; the cockpit renders a blank line", name, r.State)
@@ -60,7 +60,7 @@ func TestEveryDetectedBackendGetsAnHonestRow(t *testing.T) {
 			t.Errorf("%s has no reading but carries %d tokens and %d windows", name, r.Tokens, len(r.Windows))
 		}
 	}
-	if by["codex"].Reason == by["gemini"].Reason {
+	if by["aider"].Reason == by["gemini"].Reason {
 		t.Error("'installed but unreadable' and 'not installed' give the same reason")
 	}
 }
@@ -118,6 +118,7 @@ func TestAttachVendorsDoesNotMutateTheHeldPayload(t *testing.T) {
 func TestGrokWeekQuotaLandsOnlyOnAGrokReading(t *testing.T) {
 	t.Setenv("GROK_HOME", t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	t.Setenv("CODEX_HOME", t.TempDir())
 	weekEnd := time.Date(2026, 9, 21, 0, 44, 30, 0, time.UTC)
 	s := &Server{usageWindow: time.Hour}
 	s.grokWeek = func(context.Context) (*usage.Window, bool) {

@@ -22,9 +22,9 @@ func TestReportStatesAreDistinguishable(t *testing.T) {
 		t.Errorf("a missing command reported %q, want %q", absent.State, VendorAbsent)
 	}
 
-	// codex is a catalogue name with no reader, and is present on this test's
+	// aider is a catalogue name with no reader, and is present on this test's
 	// machine by construction.
-	noSource := Report(ctx, VendorCandidate{Name: "codex"}, time.Hour, now)
+	noSource := Report(ctx, VendorCandidate{Name: "aider"}, time.Hour, now)
 	if noSource.State != VendorNoSource {
 		t.Errorf("an installed vendor with no reader reported %q, want %q", noSource.State, VendorNoSource)
 	}
@@ -125,8 +125,8 @@ func TestEveryRegisteredVendorBuildsAReader(t *testing.T) {
 			t.Errorf("%s builds a reader that names no source", n)
 		}
 	}
-	if HasVendorReader("codex") {
-		t.Error("codex has a reader; this test's premise elsewhere is that it does not")
+	if HasVendorReader("aider") {
+		t.Error("aider has a reader; this test's premise elsewhere is that it does not")
 	}
 }
 

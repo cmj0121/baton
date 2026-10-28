@@ -208,7 +208,7 @@ func TestTheWeekSkipsVendorsItCannotRead(t *testing.T) {
 	s := weekServer(&cur)
 	got := s.refreshWeek([]usage.VendorReport{
 		{Vendor: "claude", State: usage.VendorAbsent},
-		{Vendor: "codex", State: usage.VendorNoSource},
+		{Vendor: "aider", State: usage.VendorNoSource},
 	}, nil)
 	if len(got) != 0 {
 		t.Errorf("week figures for vendors it cannot read: %v", got)
