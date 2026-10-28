@@ -279,8 +279,8 @@ func TestVendorSince(t *testing.T) {
 		t.Errorf("claude week = %v / %v, want {-p-a: 42} hinted /p/a", snap.Projects, snap.ProjectHints)
 	}
 
-	if _, ok, _ := VendorSince(context.Background(), "codex", recent); ok {
-		t.Error("codex has no reader, yet VendorSince reported one")
+	if _, ok, _ := VendorSince(context.Background(), "aider", recent); ok {
+		t.Error("aider has no reader, yet VendorSince reported one")
 	}
 
 	prev := vendorReaders["claude"]
