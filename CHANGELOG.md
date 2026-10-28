@@ -4,6 +4,14 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v2.6.1](https://github.com/cmj0121/baton/releases/tag/v2.6.1) — codex submits out of the box
+
+2026-10-28
+
+- **codex submits out of the box.** codex reads `"\n"` as a newline in its composer and submits only on `"\r"`, so
+  every peer send, dispatch and queued task typed into a codex panel sat unsent. A codex command now defaults to
+  `"\r"`, keyed on the command basename like grok; an explicit profile `submit:` still wins (#158).
+
 ## [v2.6.0](https://github.com/cmj0121/baton/releases/tag/v2.6.0) — agents that know their own enter key
 
 2026-10-27
