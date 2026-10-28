@@ -141,6 +141,21 @@ type vendorFormat struct {
 	// stated cwd against the directory it was found in. Nil when the format states
 	// no cwd to check.
 	dirName func(cwd string) string
+
+	// origin is the project directory and session a log belongs to, for a vendor
+	// whose tree is not laid out by project. Nil means originOf's reading of the
+	// path, which is right for every vendor that files a session under its project
+	// and wrong for one that files it under a date: there the first segment under
+	// the root is a year, and a year is not a project.
+	origin func(root, path string) (project, session string)
+}
+
+// originOf is the format's origin hook when it has one, else the path layout.
+func (f vendorFormat) originOf(root, path string) (project, session string) {
+	if f.origin != nil {
+		return f.origin(root, path)
+	}
+	return originOf(root, path)
 }
 
 // record is one decoded usage line, in the terms every vendor shares.
@@ -295,7 +310,7 @@ func (p *LocalProvider) walk(ctx context.Context, cutoff, now time.Time) (*scan,
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		project, session := originOf(p.dir, path)
+		project, session := sc.format.originOf(p.dir, path)
 		sc.transcript(path, project, session)
 		return nil
 	})
