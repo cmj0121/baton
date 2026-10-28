@@ -360,7 +360,7 @@ worktree spawn,不論是誰要求的,都會落進那個群組。
 | shell 或 command 面板 | 文字原封不動,沒有前綴;shell 會把它當指令執行                               |
 
 - 每一次送出都以 Enter 結尾,也就是目標 profile 的 [`submit`](SPEC.zh-TW.md#面板panels) 鍵,
-  沒設就用它 CLI 的內建預設值(grok 是 `"\r"`),都沒有才是 `"\n"`。沒有選項可以把文字留在同群組面板的輸入列上不
+  沒設就用它 CLI 的內建預設值(grok 與 codex 是 `"\r"`),都沒有才是 `"\n"`。沒有選項可以把文字留在同群組面板的輸入列上不
   送出,送出者也不能挑按鍵。
 - agent 先收到文字、短暫停頓,再收到單獨寫入的 Enter,這樣忙碌中的 TUI 才不會把兩者當成貼上。如果停頓期間目標的
   行程變了,Enter 會被丟掉,這次送出失敗:什麼都沒有送出。shell 則是文字與 Enter 一次寫入。
@@ -488,7 +488,7 @@ shell 面板拿不到 `BATON_PANEL_ID`(見[下文](#直接對接線路)),所以�
 [ATTENTION.zh-TW.md](./ATTENTION.zh-TW.md#分類器站在正規表達式旁邊)。
 
 一次 dispatch 多帶兩個欄位:`prompt`(那份簡報)以及一個選用的 `submit` 覆寫值(接在後面用來送出的按鍵;
-沒設就用目標 profile 的 [`submit`](SPEC.zh-TW.md#面板panels),再來是它 CLI 的內建預設值(grok 是 `"\r"`),
+沒設就用目標 profile 的 [`submit`](SPEC.zh-TW.md#面板panels),再來是它 CLI 的內建預設值(grok 與 codex 是 `"\r"`),
 都沒有才是換行),用在
 `panel.dispatch` / `panel.dispatch-group`;`task.enqueue` / `task.cancel` / `task.promote` / `task.demote` /
 `task.drain` / `task.list` 驅動待辦,並以一份 `tasks` 快照回覆。一次隨需開新的 `task.enqueue` 會帶著
