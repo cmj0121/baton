@@ -25,7 +25,7 @@ Baton 顯示帳號的兩件不同的事,而這個區別正是重點:
 如果 Baton 讀不到預設 agent 的用量,這一段會直接說明,而不是給一個數字:
 
 ```text
-⊙ codex · baton has no usage source for this agent
+⊙ aider · baton has no usage source for this agent
 ```
 
 按 **`v u`** 在頁尾的幾種檢視之間循環,按 **`v U`** 打開完整畫面;選擇會持久保存。
@@ -62,8 +62,8 @@ Baton 顯示帳號的兩件不同的事,而這個區別正是重點:
    Agent        5h left  7d left  resets    spent      panels
  ▸ claude *     62%      71%      2:14:31   1.2M tok   1.1M tok · 4 panels
  ▸ grok         -        64%      3d12h     58.0M tok  -
- ◦ codex        ---
- · gemini       ---
+ ▸ codex        -        88%      5d2h      3.4M tok   -
+ ◦ gemini       ---
  · aider        ---
  · opencode     ---
 
@@ -87,7 +87,7 @@ Baton 顯示帳號的兩件不同的事,而這個區別正是重點:
 後端,以及它對各自用量能誠實說出口的話。`*` 標的是你的預設 agent,也就是頁尾正在
 回報的那一個。
 
-Baton 認得六個 agent CLI,能讀到其中兩個的帳。這份清單直接說明哪個是哪個,
+Baton 認得六個 agent CLI,能讀到其中三個的帳。這份清單直接說明哪個是哪個,
 而不是讓你從一個永遠不動的數字自己推。共有三種狀態:
 
 | 標記 | 狀態                           | 意思                                                      |
@@ -103,18 +103,19 @@ Baton 認得六個 agent CLI,能讀到其中兩個的帳。這份清單直接說
 
 Baton **讀得到**的 agent 會有四欄,而它們是來自三個地方的四個問題:
 
-| 欄位      | 誰的讀數 | 說的是什麼                                                             |
-| --------- | -------- | ---------------------------------------------------------------------- |
-| `5h left` | 帳號的   | 五小時窗口還剩多少（只有 Claude）                                      |
-| `7d left` | 該廠商的 | 本週還剩多少——Claude 的 Anthropic 週額度，或 grok 自己的每週 credit 池 |
-| `resets`  | 兩者皆有 | 這個 agent 的窗口何時翻新——見下部說明                                  |
-| `spent`   | 廠商的   | 它自己的讀取器在本窗口看到的,整台機器都算                              |
-| `panels`  | Baton 的 | **你的**面板跑在這個 agent 上花掉了多少                                |
+| 欄位      | 誰的讀數 | 說的是什麼                                                                                  |
+| --------- | -------- | ------------------------------------------------------------------------------------------- |
+| `5h left` | 該廠商的 | 五小時窗口還剩多少——Claude 的,或 codex 回報了五小時窗口時 codex 的                          |
+| `7d left` | 該廠商的 | 本週還剩多少——Claude 的 Anthropic 週額度、grok 自己的每週 credit 池,或 codex 的每週速率窗口 |
+| `resets`  | 兩者皆有 | 這個 agent 的窗口何時翻新——見下部說明                                                       |
+| `spent`   | 廠商的   | 它自己的讀取器在本窗口看到的,整台機器都算                                                   |
+| `panels`  | Baton 的 | **你的**面板跑在這個 agent 上花掉了多少                                                     |
 
 `resets` 是每一個讀得到的 agent 都有的那一欄,而且會有兩種不同的時刻落在這裡。對
 Claude,它是**額度自己的重置時刻**,跟 `工作階段（5h）` 進度條倒數到的是同一刻——所以
 它跟旁邊的 `5h left` 一致。對 grok,它是 Grok Build 每週 credit 池的結束時刻,跟旁邊
-`7d left` 倒數到的是同一刻。對其他每一個 agent,它是 Baton 用來量 `spent` 的那個窗口
+`7d left` 倒數到的是同一刻。對 codex,它是 codex 替自己的速率窗口公布的重置時刻。
+對其他每一個 agent,它是 Baton 用來量 `spent` 的那個窗口
 的結束時刻,也是唯一有人說過的、屬於那個 agent 的重置。兩者都沒有的 agent 顯示記號,
 而不是一個憑空生出來的倒數。
 
@@ -123,14 +124,16 @@ Claude,它是**額度自己的重置時刻**,跟 `工作階段（5h）` 進度�
 如果你同時也在別的終端機裡跑同一個 agent,這兩欄之間的差距本身就是一個讀數。
 
 非 claude 的 agent 在 `panels` 顯示破折號,意思是**Baton 無法歸屬**,不是這個 agent
-閒著。歸屬要靠 session id,而 Baton 只有 Claude Code 這一個可以遞交的對象——grok 的
-面板再怎麼操也進不了那一欄。旁邊的 `spent` 才是說明這個 agent 有沒有在工作的那一欄,
+閒著。歸屬要靠 session id,而 Baton 只有 Claude Code 這一個可以遞交的對象——grok 或
+codex 的面板再怎麼操也進不了那一欄。旁邊的 `spent` 才是說明這個 agent 有沒有在工作的那一欄,
 這也正是它存在的理由。
 
-`5h left` 對除了 Claude 以外的每個 agent 都畫成破折號:那個窗口是 Anthropic 的,
-借過去等於印出一個別人沒說過的上限。`7d left` 是 Claude 的 Anthropic 週額度,以及
-grok CLI 已登入時它自己的每週 credit 池——不是同一週,也不是拿 Claude 的數字去填的
-坑。Grok 沒有公布五小時節流,所以它的 `5h left` 維持破折號。
+`5h left` 是每個廠商自己的五小時窗口,絕不借用別人的:Claude 的那個是 Anthropic 的,
+借過去等於印出一個別人沒說過的上限。`7d left` 是 Claude 的 Anthropic 週額度、grok CLI
+已登入時它自己的每週 credit 池,以及 codex 自己的每週速率窗口——不是同一週,也不是拿
+Claude 的數字去填的坑。Grok 沒有公布五小時節流,所以它的 `5h left` 維持破折號;codex 的
+則維持破折號,直到 codex 回報五小時窗口為止。codex 的窗口從哪裡來、可能有多舊,見
+[Baton 讀得到哪些 agent 的用量](#baton-讀得到哪些-agent-的用量)。
 
 上面的進度條顯示的是**用掉的**,這三欄顯示的是**剩下的**。進度條是拿來跟下一條比對
 形狀的;一列三格的數字只會被讀一次,為的是決定要不要在這裡再開一個 agent。
@@ -204,7 +207,7 @@ token 數,以及費用。花掉這些的 agent 縮排列在底下,帶著它占�
 
 額度週的起點是廠商公布的每週重置時刻減去七天:Claude 的來自帳號的七日上限(見
 [額度進度條](#額度進度條--usagelimits)),grok 的則是 grok CLI 已登入時它自己的每週
-credit 池。daemon 會記住最後一次看到的重置時刻,並一次往前推一週,所以一次讀取上限
+credit 池,codex 的則是它的每週速率窗口。daemon 會記住最後一次看到的重置時刻,並一次往前推一週,所以一次讀取上限
 失敗,不會悄悄把這一週變成滾動的七天;只有自 daemon 啟動以來從沒公布過重置的 agent,
 才會拿到最近七天。
 
@@ -230,6 +233,10 @@ worktree 照樣能歸併:
 對不上任何專案、或同時對上兩個的 grok worktree,會自成一列 `grok worktree <name>`。
 grok 規則比對的是所有 agent 的專案,所以一個只有 Claude 碰過的 repo,它的 grok
 worktree 照樣會併進去。
+
+codex 依日期、而不是依專案存放 rollout,所以一個 codex session 歸屬到它的 rollout
+第一行(`session_meta`)寫的 `cwd`,再依同樣的規則歸併。沒寫 `cwd` 的 rollout 會保持
+未歸屬,而不是記到某個日期目錄頭上。
 
 括號裡的標籤是一個桶,不是專案。它畫成淡色、沒有標記,而且不論多重,都排在所有真正的
 專案後面:
@@ -435,22 +442,33 @@ skill 與 agent 清單、hook 注入的內容。session 的每一個 turn 都會
 | ---------- | ----------------------------------------------------------------------- | -------------------------- |
 | `claude`   | `~/.claude/projects/**/*.jsonl` transcript                              | Baton 依模型自行計價       |
 | `grok`     | `~/.grok/sessions/**/updates.jsonl`,已登入時再加上 CLI 的每週 credit 池 | **Grok 自己報的數字**,換算 |
-| `codex`    | —                                                                       | —                          |
+| `codex`    | `~/.codex/sessions/**/rollout-*.jsonl`,再加上 codex 自己的速率窗口      | 無——只有 token             |
 | `gemini`   | —                                                                       | —                          |
 | `aider`    | —                                                                       | —                          |
 | `opencode` | —                                                                       | —                          |
 
-`CLAUDE_CONFIG_DIR` 和 `GROK_HOME` 可以搬動這兩個根目錄,行為和各廠商自己的 CLI 一致。
+`CLAUDE_CONFIG_DIR`、`GROK_HOME` 和 `CODEX_HOME` 可以搬動這三個根目錄,行為和各廠商
+自己的 CLI 一致。
 
-這兩個 reader 有一點差異值得知道。Claude Code 的 transcript 只寫 token 和模型、
+這幾個 reader 有一點差異值得知道。Claude Code 的 transcript 只寫 token 和模型、
 不寫價格,所以 Baton 用一張逐模型的表計價。Grok 每一輪都會寫出成本,所以 Baton
 直接讀那個數字,不去重算——Baton 裡沒有 Grok 的價目表,xAI 改價時也就不會過期。
+codex 的 rollout 寫了 token(`token_usage_record` 那幾行)、沒寫價格,而 Baton 也沒有
+codex 的價目表,所以 codex 的消耗以 token 計,成本顯示 `-`,絕不是一個猜出來的金額。
 
 Grok 的 `7d left` 是第三種讀數。grok CLI 已登入時,Baton 會問 `/usage` modal
 用的同一支 billing 端點（`GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`）,
 帶的是 `~/.grok/auth.json` 裡的 access token。token 只送到那裡,不會寫進 log,
 也不會寫回檔案——refresh 是 Grok 自己的事。那個池是每週的;Grok 沒有公布五小時
 節流,所以 `5h left` 維持破折號。
+
+codex 的 `5h left` 與 `7d left` 完全不來自任何端點。codex 每一輪都會在 rollout 裡寫一筆
+`token_count` 事件,帶著它的伺服器最後一次公布的 `rate_limits`,Baton 讀的是磁碟上最新的
+那一筆。這有兩個後果。它只反映這台機器上最後一輪 codex:在別台機器、或網頁版花掉的
+codex,在本機有新的一輪寫下新區塊之前,這裡一點都不會動。而且它會變舊:公布的重置時刻
+已過的窗口會被丟掉,而不是用一個早已不成立的用量顯示;還沒重置的窗口則照最後公布的樣子
+顯示,可能低估。7 天的窗口填進 `7d left`;300 分鐘的窗口會填進 `5h left`,不過目前還沒有
+看過任何 codex 帳號回報這種窗口。
 
 破折號表示 Baton **沒有用量來源**,不是說那個 agent 免費。Grok 的帳特別容易被漏掉:
 `chat_history.jsonl`、`events.jsonl`、`summary.json`、`prompt_context.json` 裡
@@ -509,7 +527,7 @@ alarm 小於等於 warn——會整組退回預設值,這樣顏色才會永遠�
 艦隊不會因為升級而改變。剩餘嚴格低於這條線時,排程器不再把排隊的工作交給那個廠商,
 也不再為排隊的任務生成新面板。讀數剛好落在線上仍然會排下去。Claude 取它自己的 5h 與
 7d 之中較小的那個,不用各模型的上限,也不用花費視窗。Grok 只用它自己讀數上的 7d 視窗;
-標成 5h 的、以及其他廠商的數字,都不會讓它暫停。廠商是指令(`claude`、`grok`),不是
+標成 5h 的、以及其他廠商的數字,都不會讓它暫停。codex 的窗口會顯示,但不會讓佇列暫停。廠商是指令(`claude`、`grok`),不是
 profile 的名字。沒有讀數就不會暫停。人按的 `A` 或 `panel.create`、conductor 的生成,
 以及已經在跑的那一輪,都會繼續。進入暫停與恢復各記一次 log。
 

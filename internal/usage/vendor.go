@@ -8,7 +8,7 @@ import (
 
 // The per-vendor view of account usage.
 //
-// baton knows six agent CLIs and can read the usage of two of them. That ratio is
+// baton knows six agent CLIs and can read the usage of three of them. That ratio is
 // the whole design problem here, and the answer is to say so rather than to hide
 // it. An operator looking at a fleet has to be able to tell three things apart:
 //
@@ -98,6 +98,7 @@ type VendorReport struct {
 // vendor's files and found books to keep.
 var vendorReaders = map[string]func(window time.Duration) Provider{
 	"claude": func(w time.Duration) Provider { return NewLocalProvider(w) },
+	"codex":  func(w time.Duration) Provider { return NewCodexProvider(w) },
 	"grok":   func(w time.Duration) Provider { return NewGrokProvider(w) },
 }
 
@@ -156,7 +157,7 @@ func VendorsWithReaders() []string {
 
 // The reasons a vendor has no figure. They are phrased as what baton did or could
 // not do, never as a claim about the vendor's own spend — "baton has no usage
-// source for codex" is true and checkable, "codex has used nothing" would be a
+// source for aider" is true and checkable, "aider has used nothing" would be a
 // guess wearing the same clothes.
 const (
 	reasonNotInstalled = "not installed on the fleet's machine"
@@ -234,5 +235,16 @@ func AttachWeekQuota(r VendorReport, w *Window) VendorReport {
 	}
 	qw := VendorWindow{Label: WindowWeek, Fraction: w.Fraction(), ResetsAt: w.ResetsAt}
 	r.Windows = append([]VendorWindow{qw}, r.Windows...)
+	return r
+}
+
+// AttachQuotaWindows prepends a vendor's own stated windows onto a report that
+// already has a reading — AttachWeekQuota for a vendor that states more than a
+// week. An empty list is a no-op, for the same reason a nil window is there.
+func AttachQuotaWindows(r VendorReport, ws []VendorWindow) VendorReport {
+	if len(ws) == 0 {
+		return r
+	}
+	r.Windows = append(append([]VendorWindow(nil), ws...), r.Windows...)
 	return r
 }

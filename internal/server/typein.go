@@ -110,6 +110,15 @@ func (s *Server) submitFor(id, explicit string) (submit string, agent bool) {
 // own write. Returns false when the submit was dropped because the panel's
 // process ended or changed during the gap.
 //
+// An agent whose program has turned on bracketed paste gets its text wrapped as
+// one paste (see asPaste), and the gap and submit follow as before. That is what
+// tells a TUI with paste-burst detection — codex reads an Enter that arrives just
+// after a fast run of typed bytes as a newline inside the burst — that the text
+// is over and the Enter is a key of its own; without the markers a long message
+// sat in the input line, typed and never sent. An agent that turned the mode off,
+// or has not been heard to set it, gets the raw text it always did, since a
+// program that never asked for the markers would take them for input.
+//
 // The pid check guards against an Enter landing in the wrong process: a panel
 // restarted during the gap has a fresh agent that never saw the text, and an
 // Enter there submits whatever that agent had in its own input line. So the
@@ -136,7 +145,10 @@ func (s *Server) typeLine(id string, agent bool, text []byte, submit string) boo
 		return true
 	}
 
-	pid := s.pidOf(id)
+	paste, pid := s.pasteModeAndPid(id)
+	if paste {
+		text = asPaste(text)
+	}
 	s.writeInput(id, text)
 	if s.submitGap > 0 {
 		time.Sleep(s.submitGap)

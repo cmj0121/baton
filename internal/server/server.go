@@ -382,6 +382,11 @@ type Server struct {
 	// loops start.
 	grokWeek func(context.Context) (*usage.Window, bool)
 
+	// codexLimits is codex's own rate-limit windows, as the newest local rollout
+	// last heard them from codex's server. Nil leaves codex's 5h and 7d columns
+	// dashed. Set once before the loops start, like grokWeek.
+	codexLimits func(context.Context) ([]usage.VendorWindow, bool)
+
 	// pauseBelow is usage.pause-below: remaining quota under this fraction pauses
 	// the queue for that vendor. 0 is off. quotaHold remembers the last logged
 	// state per vendor so a tick does not repeat the line. Guarded by mu.
@@ -558,6 +563,17 @@ type Server struct {
 	restoreCwd  cwd.Restore
 	osc7Tail    map[string][]byte
 	reportedCwd map[string]bool
+
+	// pasteMode is whether each panel's program last turned bracketed paste on,
+	// read from its output whatever track-cwd says; a panel absent from it has not
+	// been heard to set the mode and is typed into raw. pasteTail carries the end
+	// of each panel's output for the same reason osc7Tail does (see pastemode.go).
+	// Both are the running process's, so an exit, a re-run and every close drop
+	// them. pasteSeam is the scratch buffer the reader joins a tail and a chunk's
+	// head in, reused so the output path does not allocate. Guarded by mu.
+	pasteMode map[string]bool
+	pasteTail map[string][]byte
+	pasteSeam []byte
 
 	// pendingDispatch holds a dispatch whose panel was not yet ready to receive it
 	// (still spawning or mid-output), to be bound and delivered once the panel
@@ -1071,6 +1087,14 @@ func WithGrokLimits(week func(context.Context) (*usage.Window, bool)) Option {
 	return func(s *Server) { s.grokWeek = week }
 }
 
+// WithCodexLimits wires codex's own rate-limit windows onto the vendor roll. The
+// reading is local — the rate_limits block of this machine's last codex turn —
+// so it says nothing of codex spent elsewhere. A nil reader leaves the columns
+// empty, which is how a test keeps the operator's real rollouts out of it.
+func WithCodexLimits(windows func(context.Context) ([]usage.VendorWindow, bool)) Option {
+	return func(s *Server) { s.codexLimits = windows }
+}
+
 // WithUsageLimits wires the account's rate-limit bars: p reads the current standing,
 // and self is the path to baton's own binary, which the Claude Code panels the
 // daemon launches are pointed at as their status line (see withStatusLine).
@@ -1442,6 +1466,7 @@ func (s *Server) onPanelExit(id string, exitCode int) {
 			s.panels[i].Activity = exitActivity(s.panels[i].Kind, exitCode)
 			s.exitedAt[id] = time.Now()   // the Monitor is about to forget it; keep the instant the queue sorts on
 			s.mon.forget(id)              // a dead panel no longer ticks
+			s.forgetPasteModeLocked(id)   // …and the paste mode its program asked for ends with it
 			delete(s.declared, id)        // …and its raised hand goes with it
 			s.forgetClassLocked(id)       // …and whoever raised it, and any answer still waiting
 			delete(s.acked, id)           // …and any acknowledgement of it
@@ -1572,6 +1597,7 @@ func (s *Server) fanOutput(id string, data []byte, end int64) {
 		delete(s.acked, id)
 	}
 	s.noteOutputCwdLocked(id, data)
+	s.notePasteModeLocked(id, data)
 	if i := s.indexLocked(id); i >= 0 {
 		// A byte of output wakes every resting state back to running — but NOT
 		// while the agent's own declaration stands. An agent that prints a spinner
@@ -1976,6 +2002,11 @@ func (s *Server) vendorUsage(ctx context.Context) ([]proto.VendorUsage, []usage.
 		if r.Vendor == "grok" && r.State == usage.VendorReading && s.grokWeek != nil {
 			if w, ok := s.grokWeek(ctx); ok {
 				r = usage.AttachWeekQuota(r, w)
+			}
+		}
+		if r.Vendor == "codex" && r.State == usage.VendorReading && s.codexLimits != nil {
+			if ws, ok := s.codexLimits(ctx); ok {
+				r = usage.AttachQuotaWindows(r, ws)
 			}
 		}
 		v := proto.VendorUsage{
@@ -5574,6 +5605,7 @@ func (s *Server) pruneExitedLocked() (stop []string) {
 			delete(s.launched, p.ID)
 			s.forgetRestartLocked(p.ID)
 			s.forgetCwdLocked(p.ID)
+			s.forgetPasteModeLocked(p.ID)
 			delete(s.declared, p.ID)
 			s.forgetClassLocked(p.ID)
 			delete(s.acked, p.ID)
@@ -6570,7 +6602,8 @@ func (s *Server) respawnPanel(id string) error {
 		s.panels[i].Cwd = dir
 		s.mon.spawned(id) // restart the Monitor's clock; first output wakes it to running
 	}
-	delete(s.osc7Tail, id) // the old process's output tail says nothing about the new one
+	delete(s.osc7Tail, id)      // the old process's output tail says nothing about the new one
+	s.forgetPasteModeLocked(id) // …nor does its paste mode: unknown until the new one sets it
 	s.mu.Unlock()
 
 	s.resumeLog(id) // a logged panel comes back into the same file, under a new session marker
@@ -6651,6 +6684,7 @@ func (s *Server) closePanel(id string) error {
 	delete(s.launched, id)        // …and the launch its live session was followed from
 	s.forgetRestartLocked(id)     // …and any restart armed for it: it must not come back
 	s.forgetCwdLocked(id)         // …and the output tail kept to read its directory reports
+	s.forgetPasteModeLocked(id)   // …and the paste mode its program asked for
 	delete(s.declared, id)        // …and whatever it had said about needing a human
 	s.forgetClassLocked(id)       // …and who raised its hand, and any classifier answer in flight
 	delete(s.acked, id)           // …and any acknowledgement a human left on it
@@ -7137,6 +7171,7 @@ func (s *Server) purgeExited() int {
 			delete(s.launched, p.ID)
 			s.forgetRestartLocked(p.ID)
 			s.forgetCwdLocked(p.ID)
+			s.forgetPasteModeLocked(p.ID)
 			continue
 		}
 		kept = append(kept, p)

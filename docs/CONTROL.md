@@ -393,6 +393,10 @@ connection declares, with the same [limit](#what-it-does-not-protect).
 - **An agent gets the text, a short pause, then the Enter** as its own write, so a busy TUI does not take the pair for
   a paste. If the target's process changes during the pause, the Enter is dropped and the send fails: nothing was
   submitted. A shell gets text and Enter in one write.
+- **An agent in bracketed-paste mode gets the text as one paste.** When the target's TUI has turned the mode on (codex,
+  claude and grok all do), the text arrives wrapped in `ESC[200~` … `ESC[201~`, with any markers inside it stripped,
+  and the Enter follows after the pause — so codex does not take the Enter for a newline and leave a long message unsent.
+  See [Panels](SPEC.md#panels).
 - **The reply says what baton typed, not what the panel did.** A send that pressed Enter answers
   `typed <n> bytes into <title> (<id>) and pressed Enter; not confirmed the panel took it` — read the panel back with
   `baton_peek` to see whether it did.

@@ -31,7 +31,7 @@ no usage source for your default agent, the segment says so instead of showing a
 number:
 
 ```text
-⊙ codex · baton has no usage source for this agent
+⊙ aider · baton has no usage source for this agent
 ```
 
 Press **`v u`** to cycle the footer segment through its views, and **`v U`** to
@@ -71,8 +71,8 @@ The other two are the same spend by project; see
    Agent        5h left  7d left  resets    spent      panels
  ▸ claude *     62%      71%      2:14:31   1.2M tok   1.1M tok · 4 panels
  ▸ grok         -        64%      3d12h     58.0M tok  -
- ◦ codex        ---
- · gemini       ---
+ ▸ codex        -        88%      5d2h      3.4M tok   -
+ ◦ gemini       ---
  · aider        ---
  · opencode     ---
 
@@ -100,7 +100,7 @@ The bars above are one account's. The list at the bottom is the **fleet's**: eve
 agent backend baton knows, and what it can honestly say about each one's usage.
 `*` marks your default agent — the one the footer is reporting.
 
-Baton knows six agent CLIs and can read the books of two of them, and the roll
+Baton knows six agent CLIs and can read the books of three of them, and the roll
 says which is which rather than leaving you to work it out from a number that
 never moves. There are three states:
 
@@ -119,19 +119,20 @@ empty bars here, and no zeros standing in for a missing reading.
 A vendor baton **can** read gets four columns, and they are four different
 questions from three different places:
 
-| Column    | Whose reading | What it says                                                                         |
-| --------- | ------------- | ------------------------------------------------------------------------------------ |
-| `5h left` | the account's | what is left of the five-hour window (Claude only)                                   |
-| `7d left` | that vendor's | what is left of the week — Claude's Anthropic week, or grok's own weekly credit pool |
-| `resets`  | either        | when this agent's window rolls over — see below                                      |
-| `spent`   | the vendor's  | what its own reader saw this window, everywhere on this machine                      |
-| `panels`  | baton's       | what the panels **you** run on this agent have spent                                 |
+| Column    | Whose reading | What it says                                                                                                           |
+| --------- | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `5h left` | that vendor's | what is left of the five-hour window — Claude's, or codex's when codex reports one                                     |
+| `7d left` | that vendor's | what is left of the week — Claude's Anthropic week, grok's own weekly credit pool, or codex's weekly rate-limit window |
+| `resets`  | either        | when this agent's window rolls over — see below                                                                        |
+| `spent`   | the vendor's  | what its own reader saw this window, everywhere on this machine                                                        |
+| `panels`  | baton's       | what the panels **you** run on this agent have spent                                                                   |
 
 `resets` is the one column every readable agent has, and two different instants
 land in it. For Claude it is the **quota's own reset**, the same instant the
 `Session (5h)` bar counts down to — so it agrees with the `5h left` figure beside
 it. For grok it is the end of Grok Build's weekly credit pool, the same instant
-the `7d left` figure beside it counts down to. For every other agent it is the
+the `7d left` figure beside it counts down to. For codex it is the reset codex
+stated for its own rate-limit window. For every other agent it is the
 end of the window baton measured `spent` over, which is the only reset anybody
 has stated for it. An agent that has stated neither gets the mark rather than an
 invented countdown.
@@ -144,15 +145,18 @@ between the two columns is itself a reading.
 
 A dash under `panels` on a non-claude agent means **baton cannot attribute this**,
 not that the agent is idle. Attribution runs on a session id, and baton has one to
-hand only to Claude Code — a grok panel cannot reach that column however hard it
+hand only to Claude Code — a grok or codex panel cannot reach that column however hard it
 works. The `spent` column beside it is what says whether the agent has been
 working, which is why it is there.
 
-`5h left` is dashed out for every agent but Claude: that window is Anthropic's,
-and lending it across the column would print a limit nobody else stated. `7d left`
-is Claude's Anthropic week, and grok's own weekly credit pool when the grok CLI
-is signed in — not the same week, and not a hole to fill with Claude's number.
-Grok publishes no five-hour throttle, so its `5h left` stays a dash.
+`5h left` is each vendor's own five-hour window, never another's: Claude's is
+Anthropic's, and lending it across the column would print a limit nobody else
+stated. `7d left` is Claude's Anthropic week, grok's own weekly credit pool when
+the grok CLI is signed in, and codex's own weekly rate-limit window — not the same
+week, and not a hole to fill with Claude's number. Grok publishes no five-hour
+throttle, so its `5h left` stays a dash; codex's stays a dash until codex reports
+a five-hour window. See [Which agents baton can account for](#which-agents-baton-can-account-for)
+for where codex's windows come from and how old they can be.
 
 They show what is **left** where the bars above show what is **gone**. A bar is a
 shape you compare against the bar below it; a cell in a row of three is read once,
@@ -241,7 +245,7 @@ days` — rather than pretending to one week.
 A quota week starts at the vendor's stated weekly reset minus seven days:
 Claude's comes from the account's seven-day limit (see
 [Quota bars](#quota-bars--usagelimits)), grok's from its weekly credit pool when
-the grok CLI is signed in. The daemon remembers the last reset it saw and steps
+the grok CLI is signed in, codex's from its weekly rate-limit window. The daemon remembers the last reset it saw and steps
 it forward a week at a time, so a failed limits read does not quietly turn the
 week into a rolling one; only an agent that has never stated a reset since the
 daemon started gets the last seven days.
@@ -270,6 +274,11 @@ worktree deleted long ago still folds:
 A grok worktree that matches no project, or matches two, stays on its own as
 `grok worktree <name>`. The grok rule resolves against every agent's projects,
 so a grok worktree of a repo only Claude has worked in still joins it.
+
+Codex files its rollouts by date, not by project, so a codex session is
+attributed to the `cwd` its rollout states on its first (`session_meta`) line,
+and folded from there by the same rules. A rollout that states no `cwd` is left
+unattributed rather than credited to a date directory.
 
 A label in parentheses is a bucket, not a project. It is drawn muted, without a
 mark, and listed after every real project whatever it weighs:
@@ -509,19 +518,21 @@ characters or one CJK character a token), and its error is bounded by its size.
 | ---------- | ------------------------------------------------------------------------------------- | -------------------------------- |
 | `claude`   | `~/.claude/projects/**/*.jsonl` transcripts                                           | Priced by Baton, per model       |
 | `grok`     | `~/.grok/sessions/**/updates.jsonl`, plus the CLI's weekly credit pool when signed in | **Grok's own figure**, converted |
-| `codex`    | —                                                                                     | —                                |
+| `codex`    | `~/.codex/sessions/**/rollout-*.jsonl`, plus codex's own rate-limit windows           | None — tokens only               |
 | `gemini`   | —                                                                                     | —                                |
 | `aider`    | —                                                                                     | —                                |
 | `opencode` | —                                                                                     | —                                |
 
-`CLAUDE_CONFIG_DIR` and `GROK_HOME` relocate the two roots the way each vendor's
-own CLI does.
+`CLAUDE_CONFIG_DIR`, `GROK_HOME` and `CODEX_HOME` relocate the three roots the way
+each vendor's own CLI does.
 
-The two readers differ in one way worth knowing. Claude Code's transcripts state
+The readers differ in one way worth knowing. Claude Code's transcripts state
 tokens and a model but no price, so Baton prices them from a per-model table.
 Grok states the cost of every turn, so Baton reads that number rather than
 reconstructing it — there is no Grok price table in Baton to go stale when xAI
-reprices.
+reprices. Codex's rollouts state tokens (the `token_usage_record` lines) and no
+price, and Baton keeps no codex price table, so codex's spend is counted in tokens
+and its cost reads `-`, never a guessed dollar figure.
 
 Grok's `7d left` is a third reading. When the grok CLI is signed in, Baton asks
 the same billing endpoint the `/usage` modal uses (`GET
@@ -529,6 +540,17 @@ https://cli-chat-proxy.grok.com/v1/billing?format=credits`), with the access
 token in `~/.grok/auth.json`. The token is sent only there, never logged, and
 never written back — Grok itself refreshes it. That pool is weekly; Grok
 publishes no five-hour throttle, so `5h left` stays a dash.
+
+Codex's `5h left` and `7d left` come from no endpoint at all. Every turn codex
+writes a `token_count` event into its rollout carrying the `rate_limits` its
+server last stated, and Baton reads the newest one on disk. That has two
+consequences. It reflects only **this machine's last codex turn**: codex spent on
+another machine, or in the web app, moves nothing here until a local turn writes a
+fresh block. And it ages: a window whose stated reset has passed is dropped rather
+than shown at a fill it no longer has, but one that has not reset yet is shown as
+last stated, which may understate it. A 7-day window fills `7d left`; a 300-minute
+window would fill `5h left`, though no codex account has yet been seen to report
+one.
 
 A dash means Baton has **no usage source**, not that the agent is free. Grok's
 accounting in particular is easy to miss: `chat_history.jsonl`, `events.jsonl`,
@@ -595,7 +617,8 @@ The scheduler stops handing that vendor new queued work, and stops spawning a pa
 for a queued task, when remaining is strictly under the line. A reading that lands
 on the line still drains. Claude uses the smaller of its own 5h and 7d windows, not
 the per-model ceilings and not a spend window. Grok uses only the 7d window on its
-own reading; a 5h label, and another vendor's numbers, do not pause it. The vendor
+own reading; a 5h label, and another vendor's numbers, do not pause it. Codex's
+windows are shown but do not pause the queue. The vendor
 is the command (`claude`, `grok`), not the profile name. No reading does not pause.
 A human `A` or `panel.create`, a conductor spawn, and a turn already in flight keep
 going. The hold is logged once when it starts and once when it ends.

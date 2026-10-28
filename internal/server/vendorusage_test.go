@@ -34,7 +34,7 @@ func TestVendorUsageSaysNothingBeforeDetection(t *testing.T) {
 func TestEveryDetectedBackendGetsAnHonestRow(t *testing.T) {
 	s := &Server{usageWindow: time.Hour}
 	s.agents = []proto.AgentBackend{
-		{Name: "codex", Command: "codex"},                  // installed, no reader
+		{Name: "aider", Command: "aider"},                  // installed, no reader
 		{Name: "gemini", Command: "gemini", Missing: true}, // not installed
 	}
 	rows, _ := s.vendorUsage(context.Background())
@@ -45,13 +45,13 @@ func TestEveryDetectedBackendGetsAnHonestRow(t *testing.T) {
 	for _, r := range rows {
 		by[r.Vendor] = r
 	}
-	if by["codex"].State != "no-source" {
-		t.Errorf("codex state = %q, want no-source", by["codex"].State)
+	if by["aider"].State != "no-source" {
+		t.Errorf("aider state = %q, want no-source", by["aider"].State)
 	}
 	if by["gemini"].State != "absent" {
 		t.Errorf("gemini state = %q, want absent", by["gemini"].State)
 	}
-	for _, name := range []string{"codex", "gemini"} {
+	for _, name := range []string{"aider", "gemini"} {
 		r := by[name]
 		if r.Reason == "" {
 			t.Errorf("%s has state %q and no reason; the cockpit renders a blank line", name, r.State)
@@ -60,7 +60,7 @@ func TestEveryDetectedBackendGetsAnHonestRow(t *testing.T) {
 			t.Errorf("%s has no reading but carries %d tokens and %d windows", name, r.Tokens, len(r.Windows))
 		}
 	}
-	if by["codex"].Reason == by["gemini"].Reason {
+	if by["aider"].Reason == by["gemini"].Reason {
 		t.Error("'installed but unreadable' and 'not installed' give the same reason")
 	}
 }
@@ -118,6 +118,7 @@ func TestAttachVendorsDoesNotMutateTheHeldPayload(t *testing.T) {
 func TestGrokWeekQuotaLandsOnlyOnAGrokReading(t *testing.T) {
 	t.Setenv("GROK_HOME", t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	t.Setenv("CODEX_HOME", t.TempDir())
 	weekEnd := time.Date(2026, 9, 21, 0, 44, 30, 0, time.UTC)
 	s := &Server{usageWindow: time.Hour}
 	s.grokWeek = func(context.Context) (*usage.Window, bool) {
@@ -153,5 +154,64 @@ func TestGrokWeekQuotaLandsOnlyOnAGrokReading(t *testing.T) {
 				t.Errorf("%s carried grok's week window: %+v", name, w)
 			}
 		}
+	}
+}
+
+// Codex's stated windows land on the codex row's reading, in front of baton's
+// own spend window, and nowhere else.
+func TestCodexLimitsLandOnlyOnACodexReading(t *testing.T) {
+	t.Setenv("GROK_HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	t.Setenv("CODEX_HOME", t.TempDir())
+	weekEnd := time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC)
+	fiveEnd := time.Date(2026, 10, 28, 15, 0, 0, 0, time.UTC)
+	s := &Server{usageWindow: time.Hour}
+	s.codexLimits = func(context.Context) ([]usage.VendorWindow, bool) {
+		return []usage.VendorWindow{
+			{Label: usage.WindowFiveHour, Fraction: 0.40, ResetsAt: fiveEnd},
+			{Label: usage.WindowWeek, Fraction: 0.125, ResetsAt: weekEnd},
+		}, true
+	}
+	s.agents = []proto.AgentBackend{
+		{Name: "codex", Command: "codex"},
+		{Name: "claude", Command: "claude"},
+		{Name: "grok", Command: "grok"},
+	}
+	by := map[string]proto.VendorUsage{}
+	rows, _ := s.vendorUsage(context.Background())
+	for _, r := range rows {
+		by[r.Vendor] = r
+	}
+	codex := by["codex"]
+	if codex.State != "reading" {
+		t.Fatalf("codex state = %q, want reading so the windows have a row to land on", codex.State)
+	}
+	if len(codex.Windows) < 2 {
+		t.Fatalf("codex windows = %+v, want the 5h and 7d first", codex.Windows)
+	}
+	five, week := codex.Windows[0], codex.Windows[1]
+	if five.Label != usage.WindowFiveHour || five.UsedPercent != 40 || five.ResetsAt != fiveEnd.Format(time.RFC3339) {
+		t.Errorf("codex 5h = %+v, want 40%% resetting %s", five, fiveEnd.Format(time.RFC3339))
+	}
+	if week.Label != usage.WindowWeek || week.UsedPercent != 12.5 || week.ResetsAt != weekEnd.Format(time.RFC3339) {
+		t.Errorf("codex 7d = %+v, want 12.5%% resetting %s", week, weekEnd.Format(time.RFC3339))
+	}
+	for _, name := range []string{"claude", "grok"} {
+		for _, w := range by[name].Windows {
+			if w.Label == usage.WindowFiveHour || w.Label == usage.WindowWeek {
+				t.Errorf("%s carried codex's window: %+v", name, w)
+			}
+		}
+	}
+
+	// A codex that is not installed has no reading, so the windows have no row to
+	// land on — a ceiling printed beside "not installed" would be a contradiction.
+	s.agents = []proto.AgentBackend{{Name: "codex", Command: "codex", Missing: true}}
+	rows, _ = s.vendorUsage(context.Background())
+	if len(rows) != 1 || rows[0].State != "absent" {
+		t.Fatalf("missing codex rows = %+v, want one absent row", rows)
+	}
+	if len(rows[0].Windows) != 0 {
+		t.Errorf("an absent codex carried windows: %+v", rows[0].Windows)
 	}
 }
