@@ -325,7 +325,23 @@ func (s *Server) lookup(name string) (tool, bool) {
 // it (#99). Deriving the check from the registry is what makes the two fail
 // together instead of drifting apart.
 func ToolNames() []string {
-	tools := defaultTools()
+	return names(defaultTools())
+}
+
+// WorkerToolNames is every tool NewWorker's server registers, in registration
+// order — ToolNames for the other table.
+//
+// Its caller is internal/skills, whose worker skills name these tools to a model
+// that will only ever be handed this table. A skill naming a tool the worker does
+// not have is an instruction to call something that is not there, so the skill
+// test checks every tool name in a worker skill against this list, derived from
+// the same table NewWorker serves rather than copied beside it.
+func WorkerToolNames() []string {
+	return names(workerTools(defaultTools()))
+}
+
+// names is a tool table's names, in its order.
+func names(tools []tool) []string {
 	out := make([]string, 0, len(tools))
 	for _, t := range tools {
 		out = append(out, t.name)
