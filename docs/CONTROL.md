@@ -22,8 +22,9 @@ the box), with four differences:
   brief) and zooms the restart, or **spawns** one when there is none and zooms it the moment it lands.
 - **Control-only workspace.** The conductor runs in a private directory of baton's own — never your source tree. Its
   only local surface is the control wiring baton drops in: the briefing (written as both `BATON.md` and `CLAUDE.md`,
-  the latter so the default Claude conductor auto-reads it as project instructions) and a `.mcp.json`. So the agent's
-  path of least resistance is to drive baton, not to wander your code.
+  the latter so the default Claude conductor auto-reads it as project instructions), a `.mcp.json`, and its
+  [skills](#agent-skills) under `.claude/skills/`. So the agent's path of least resistance is to drive baton, not to
+  wander your code.
 - **One workspace, kept until you reboot.** There is one workspace per control socket, not one per open, so closing the
   conductor and opening it again lands in the same directory with the settings it had collected — the permission grants
   an agent writes beside itself survive a restart instead of being asked for every time. It lives under
@@ -290,6 +291,77 @@ The flag is named for the first of them and is older than the other three; it is
 carry it in their config. `score_submit` writes to the fleet memory. The three `baton_*` tools are how a worker reaches
 the other panels of its group, and they are the subject of the next section. The conductor's table is the one listed
 above and has none of these three.
+
+Each server also says up front what it is for. The `initialize` reply carries an `instructions` string for its role:
+what baton is, which tools this server offers, and which skill explains when to use them — `conduct` for the
+conductor, `peers` and `score` for a worker. A client that does not support skills never finds one, but the first two
+sentences still orient it.
+
+### Agent skills
+
+A tool description says what a tool does and nothing about when to reach for it, what the etiquette is, or what a
+refusal means — and the conductor's primer, the one other carrier, is read by the conductor alone. Baton ships that
+guidance as Agent Skills: a `SKILL.md` per topic, which Claude Code lists by its one-line description and reads only
+when the agent decides it needs it, so a skill costs a session one line of context until it is wanted. The text is
+embedded in the binary, so the skills an agent reads always describe the tools that same binary serves.
+
+| Role      | Skills                    | Written to                                                                                                 |
+| --------- | ------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| worker    | `baton`, `peers`, `score` | a plugin named `baton-panel` under `~/.baton/agent-plugin/<hash>/`, handed to `claude` with `--plugin-dir` |
+| conductor | `baton`, `conduct`        | `.claude/skills/` in the conductor's workspace                                                             |
+
+`baton` is the entry both roles share: what baton is, how to tell you are inside it, and which skill to read next. It
+names no tool, because no tool is in both tables. `peers` and `score` cover the worker table; `conduct` covers dispatch
+versus send, the queue, groups, signals, the guardrails and curating the score. Each role gets only the skills for the
+tools it has: a worker is refused the fleet verbs and a conductor the peer verbs, and a skill teaching a tool the
+reader cannot call would only teach it to be refused.
+
+**A worker's skills never land in your repository**, for the same reason its MCP config does not: it runs in your
+working tree, where a dotfile baton wrote would show up in `git status`. The plugin directory is named for a hash of
+everything in it and is never rewritten in place, so a running panel keeps reading the tree it launched against while a
+newer baton builds the next one beside it. Old hashes are left on disk — a running panel may still be reading one — and
+are safe to delete once no panel is. A hash directory that is there but incomplete can only be a hand edit; baton
+refuses it rather than deleting a path another launch may already be using, logs a Warn, and starts the panel without
+skills. Removing that directory fixes it.
+
+**The conductor's skills are rewritten on every spawn and re-run, on top of its primer and never in place of it.** The
+primer (`CLAUDE.md`) is read every time and a skill only when the agent chooses to, so the tool list the conductor acts
+on stays in the primer, which points at `.claude/skills/conduct/SKILL.md` for the depth. `.claude/skills/` is somewhere
+you may well keep skills of your own, so baton records the names it wrote in `.claude/skills/.baton-skills` and only
+ever replaces or retires those. A skill you put there is left alone, whatever it is called.
+
+A worker panel is handed its skills only when all of these hold:
+
+- **`panel.agent-mcp` is on** (the default) and the panel is an agent panel, not the conductor.
+- **Baton wired its own MCP config into the launch.** Not when the CLI takes no MCP config option, its command line
+  already names a config of its own, or the config could not be written — the skills teach tools that panel would not
+  have. `baton ctl score status` reports which panels got the config and why the rest did not (see
+  [SCORE.md](SCORE.md#which-panels-can-actually-write)).
+- **The backend is Claude Code.** `--plugin-dir` is a `claude` flag; every other backend gets none.
+- **That `claude` takes `--plugin-dir`.** The flag is younger than the CLI, and an old install exits on a flag it does
+  not know, so appending it blind would turn "this panel lacks its skills" into "this panel does not start". Before
+  appending it, baton runs `claude --help` once — the binary found on the daemon's `PATH`, which is the one the launch
+  execs — with no stdin and a 2-second deadline, and looks for the flag. The answer is cached per binary path and
+  modification time, so an upgrade in place asks again.
+- **The panel is not isolated.** Under `isolate: docker` the binary lives in the image, and the host's `claude` — the
+  only one a probe could run — says nothing about it.
+
+Like the MCP config, all of this is decided at every launch and never stored on the panel, so a re-run (`r`) or a panel
+restored from the snapshot picks the skills up as soon as the gate opens.
+
+**When a worker has no skills,** the probe left its reason in `$HOME/.baton/baton.log`, naming the binary:
+
+| Line                                                 | Level | Means                                                                                 | Cached                        |
+| ---------------------------------------------------- | ----- | ------------------------------------------------------------------------------------- | ----------------------------- |
+| `this claude predates --plugin-dir`                  | Debug | help printed, flag absent: upgrade `claude`                                           | until the binary changes      |
+| `could not ask claude whether it takes --plugin-dir` | Warn  | `--help` failed or the binary would not run                                           | until the binary changes      |
+| `claude did not answer --help in time`               | Warn  | no answer within 2 seconds — a cold disk, a loaded host, a first run unpacking itself | no: the next spawn asks again |
+| `agent skills not written`                           | Warn  | the plugin tree could not be built, including the incomplete-directory case above     | no                            |
+
+The Debug line appears only for a daemon started with `-v`. A cached answer runs no probe and logs nothing, so a verdict
+is logged once, by the spawn that asked; only a repeated timeout repeats its Warn. No probe line at all, on a daemon
+logging at Debug, means the gate stopped earlier — check `score status` for the MCP config, and whether the panel is
+isolated or runs another backend.
 
 ## Peers
 

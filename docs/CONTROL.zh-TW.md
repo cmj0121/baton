@@ -23,8 +23,8 @@
   或在沒有任何 conductor 時**開一個(spawn)**,並在它落地的當下就放大進去。
 - **僅供控制的工作區。** conductor 跑在 baton 自己的一個私有目錄裡——絕不會是你的原始碼樹。它唯一的本機介面是
   baton 放進去的控制接線:簡報(同時寫成 `BATON.md` 與 `CLAUDE.md`,後者是為了讓預設的 Claude conductor
-  自動把它讀成專案指示)以及一個 `.mcp.json`。如此一來,這個 agent 阻力最小的路徑就是去驅動 baton,
-  而不是四處翻你的程式碼。
+  自動把它讀成專案指示)、一個 `.mcp.json`,以及放在 `.claude/skills/` 底下的[技能](#agent-技能)。如此一來,
+  這個 agent 阻力最小的路徑就是去驅動 baton,而不是四處翻你的程式碼。
 - **一個工作區,留到你重開機為止。** 工作區是每個控制 socket 一份,而不是每次開啟一份,所以關掉 conductor
   再開一次會回到同一個目錄、帶著它先前收集的設定——agent 寫在自己旁邊的權限授權會跨重啟存活,
   不必每次都重按一遍。它位於 `$XDG_RUNTIME_DIR/baton/`(或你的暫存目錄)底下,只有在不存在時才建立,
@@ -271,6 +271,68 @@ conductor 的工作區隨附一個 `.mcp.json`,指向這支以 `baton mcp` 執�
 旗標的名字取自第一個工具,比另外三個都早;留著它是因為已經在跑的面板,設定裡寫的就是它。`score_submit`
 寫進隊伍的記憶。三個 `baton_*` 工具是 worker 碰到同群組其他面板的方式,也就是下一節要講的事。conductor 的表
 是上面列的那一張,沒有這三個。
+
+每個伺服器也會一開始就說明自己是做什麼的。`initialize` 的回覆帶著一段依角色而定的 `instructions` 字串:baton
+是什麼、這個伺服器提供哪些工具、以及哪個技能解釋何時該用它們——conductor 是 `conduct`,worker 是 `peers` 與
+`score`。不支援技能的 client 永遠找不到技能,但前兩句仍然足以讓它搞清楚方向。
+
+### Agent 技能
+
+工具說明講的是工具做什麼,卻完全不講何時該拿起它、禮節是什麼、被拒絕又代表什麼——而另一個載體,conductor
+的 primer,只有 conductor 自己讀。baton 把這些指引做成 Agent Skills 隨附:每個主題一份 `SKILL.md`,Claude Code
+只用它的一行說明把它列出來,等 agent 自己判斷需要時才讀全文,所以一個技能在被用到之前,只花一個 session
+一行 context。內容嵌在執行檔裡,所以 agent 讀到的技能,描述的永遠是同一支執行檔提供的工具。
+
+| 角色      | 技能                      | 寫到哪裡                                                                                             |
+| --------- | ------------------------- | ---------------------------------------------------------------------------------------------------- |
+| worker    | `baton`, `peers`, `score` | `~/.baton/agent-plugin/<hash>/` 底下一個名為 `baton-panel` 的 plugin,以 `--plugin-dir` 交給 `claude` |
+| conductor | `baton`, `conduct`        | conductor 工作區裡的 `.claude/skills/`                                                               |
+
+`baton` 是兩個角色共用的入口:baton 是什麼、怎麼知道自己身在其中、下一個該讀哪個技能。它不提任何工具,因為
+沒有任何工具同時出現在兩張表裡。`peers` 與 `score` 涵蓋 worker 表;`conduct` 涵蓋 dispatch 與 send 的分別、
+佇列、群組、signal、護欄以及整理 score。每個角色只拿到它手上工具的技能:worker 被拒絕使用駕駛隊伍的動詞,
+conductor 被拒絕使用 peer 動詞,而教讀者一個它呼叫不了的工具,只會教它去被拒絕。
+
+worker 的技能永遠不會落進你的 repo,理由和它的 MCP 設定一樣:它跑在你的工作目錄裡,baton 在那裡寫的 dotfile
+會出現在 `git status` 上。plugin 目錄以其中全部內容的雜湊命名,而且從不就地重寫,所以運行中的面板會繼續讀它啟動
+時的那棵樹,同時較新的 baton 在旁邊建下一棵。舊的雜湊目錄會留在磁碟上——運行中的面板可能還在讀——等沒有面板在
+讀時就可以放心刪掉。雜湊目錄存在卻不完整,只可能是手動改出來的;baton 會拒絕它,而不是刪掉一個別的啟動可能
+正在用的路徑,記一行 Warn,然後讓面板在沒有技能的情況下啟動。把那個目錄刪掉就好了。
+
+conductor 的技能在每一次 spawn 與重跑時都會重寫,疊在它的 primer 之上,從不取而代之。primer(`CLAUDE.md`)每次
+都會被讀,技能則只在 agent 選擇時才讀,所以 conductor 據以行動的工具清單留在 primer 裡,由 primer 指向
+`.claude/skills/conduct/SKILL.md` 提供深度。`.claude/skills/` 很可能也放著你自己的技能,所以 baton 把它寫過的
+名字記在 `.claude/skills/.baton-skills`,只會取代或移除那些。你自己放進去的技能,不管叫什麼名字都不會被動到。
+
+worker 面板只有在下列條件全部成立時才會拿到技能:
+
+- `panel.agent-mcp` 是開的(預設值),而且這是 agent 面板,不是 conductor。
+- baton 把自己的 MCP 設定接進了這次啟動。CLI 不收 MCP 設定選項、命令列已經指定了自己的設定、或設定寫不進去時
+  都沒有——技能教的是那個面板不會有的工具。`baton ctl score status` 會回報哪些面板拿到了設定、其餘的又為什麼
+  沒有(見 [SCORE.zh-TW.md](SCORE.zh-TW.md#到底哪些面板寫得進去))。
+- 後端是 Claude Code。`--plugin-dir` 是 `claude` 的旗標;其他後端一律沒有。
+- 那個 `claude` 收 `--plugin-dir`。這個旗標比 CLI 年輕,舊版遇到不認得的旗標會直接結束,所以盲目附上它,會把
+  「這個面板少了技能」變成「這個面板起不來」。附上之前,baton 會跑一次 `claude --help`——用的是在 daemon 的
+  `PATH` 上找到的那支執行檔,也就是啟動時真正會 exec 的那支——不給 stdin、限時 2 秒,然後找這個旗標。答案依
+  執行檔路徑與修改時間快取,所以就地升級會再問一次。
+- 面板沒有隔離。在 `isolate: docker` 底下,執行檔在 image 裡,而主機上的 `claude`——probe 唯一跑得到的那支——
+  對它什麼也說明不了。
+
+和 MCP 設定一樣,這一切都在每一次啟動時決定,不會存在面板身上,所以重跑(`r`)或從快照還原的面板,只要條件
+一成立就會拿到技能。
+
+worker 沒有技能時,probe 會把原因連同執行檔名一起留在 `$HOME/.baton/baton.log`:
+
+| 那一行                                               | 等級  | 意思                                                       | 快取                   |
+| ---------------------------------------------------- | ----- | ---------------------------------------------------------- | ---------------------- |
+| `this claude predates --plugin-dir`                  | Debug | help 印出來了但沒有這個旗標:升級 `claude`                  | 直到執行檔改變         |
+| `could not ask claude whether it takes --plugin-dir` | Warn  | `--help` 失敗,或執行檔跑不起來                             | 直到執行檔改變         |
+| `claude did not answer --help in time`               | Warn  | 2 秒內沒有回應——磁碟還冷、主機太忙、第一次執行正在解壓自己 | 不快取:下次 spawn 再問 |
+| `agent skills not written`                           | Warn  | plugin 樹建不起來,包括上面那種不完整目錄的情況             | 不快取                 |
+
+Debug 那一行只有以 `-v` 啟動的 daemon 才會出現。快取的答案不會跑 probe,也什麼都不記,所以一個結論只會由提問的
+那次 spawn 記一次;只有反覆逾時才會重複它的 Warn。daemon 記到 Debug 等級卻完全沒有 probe 的那一行,代表條件在更早
+就擋下了——去看 `score status` 裡的 MCP 設定,以及這個面板是否被隔離、或跑的是別的後端。
 
 ## 群組互通
 
