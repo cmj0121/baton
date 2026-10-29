@@ -37,6 +37,11 @@ type Server struct {
 	version string                          // baton's build version, reported in serverInfo
 	dial    func() (*control.Client, error) // how a tool call reaches the socket; control.DialAsProcess by default
 	tools   []tool
+	// instructions is the role's orientation, sent in the initialize result. It
+	// names the role's skill rather than repeating it: the field is read at the
+	// start of every session on every client, while a skill loads only when its
+	// subject comes up, so the long how-to belongs there.
+	instructions string
 }
 
 // tool is one MCP tool: its name, one-line description, JSON-Schema input shape,
@@ -56,7 +61,7 @@ func New(version string) *Server {
 	// as itself, so a fleet-wide rate cap tells it from the operator's own shell —
 	// which, when an agent runtime was started from that shell, is the same
 	// session. See control.DialAsProcess.
-	s := &Server{version: version, dial: control.DialAsProcess}
+	s := &Server{version: version, dial: control.DialAsProcess, instructions: conductorInstructions}
 	s.tools = defaultTools()
 	return s
 }
@@ -77,8 +82,24 @@ func New(version string) *Server {
 func NewWorker(version string) *Server {
 	s := New(version)
 	s.tools = workerTools(s.tools)
+	s.instructions = workerInstructions
 	return s
 }
+
+// The two roles' orientations. The conductor's names its tools by family (its
+// table is too long to list, and tools/list enumerates it anyway); the worker's
+// four are few enough to name outright. Every literal tool name here is pinned
+// against the role's table by TestInitializeCarriesRoleInstructions. Both defer
+// WHEN to use the tools to the role's Agent Skill, which a client without skills
+// support simply never finds; the first two sentences still orient that client.
+const (
+	conductorInstructions = "baton is a terminal multiplexer that runs a fleet of AI coding agents, each in its own panel. " +
+		"This server is the conductor's: its baton_* tools spawn, brief, dispatch to, signal and close those panels, and its score_* tools write and curate the fleet's shared memory. " +
+		"The conduct skill explains when to reach for each."
+	workerInstructions = "baton is a terminal multiplexer that runs a fleet of AI coding agents, and you are one panel in it. " +
+		"This server offers baton_peers, baton_peek and baton_tell to see and message your group-mates, and score_submit to record a lesson in the fleet's shared memory. " +
+		"The peers and score skills explain when to use them."
+)
 
 // workerTools is the worker's table: the memory's write tool out of the full
 // one, then the peer tools, which are in no other table.
@@ -239,6 +260,7 @@ func (s *Server) initializeResult(params json.RawMessage) map[string]any {
 		"protocolVersion": version,
 		"capabilities":    map[string]any{"tools": map[string]any{}},
 		"serverInfo":      map[string]any{"name": "baton", "version": s.version},
+		"instructions":    s.instructions,
 	}
 }
 

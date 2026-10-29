@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -261,4 +262,42 @@ func toolNames(ts []tool) []string {
 		out = append(out, t.name)
 	}
 	return out
+}
+
+// TestInitializeCarriesRoleInstructions: the handshake tells the client what this
+// server is for, and the conductor and a worker are told different things.
+//
+// A client surfaces instructions to the model before any tool is called, so a
+// worker reading the conductor's text would be pointed at a skill it was never
+// given; equal strings would mean one role is being misdirected.
+//
+// Every tool name the text spells out must be one that role's server registers:
+// a renamed tool, or a worker told about a conductor-only verb, would send the
+// model after a call that answers "unknown tool".
+func TestInitializeCarriesRoleInstructions(t *testing.T) {
+	cs, ws := New("test"), NewWorker("test")
+	cond, _ := cs.initializeResult(nil)["instructions"].(string)
+	work, _ := ws.initializeResult(nil)["instructions"].(string)
+	if strings.TrimSpace(cond) == "" || strings.TrimSpace(work) == "" {
+		t.Fatalf("instructions must be present on both roles: conductor %q, worker %q", cond, work)
+	}
+	if cond == work {
+		t.Fatalf("conductor and worker instructions must differ, both %q", cond)
+	}
+	name := regexp.MustCompile(`\b(baton|score)_[a-z_]+\b`)
+	for _, role := range []struct {
+		who  string
+		text string
+		srv  *Server
+	}{{"conductor", cond, cs}, {"worker", work, ws}} {
+		have := map[string]bool{}
+		for _, n := range toolNames(role.srv.tools) {
+			have[n] = true
+		}
+		for _, n := range name.FindAllString(role.text, -1) {
+			if !have[n] {
+				t.Errorf("%s instructions name %q, which its server does not register", role.who, n)
+			}
+		}
+	}
 }
