@@ -283,13 +283,14 @@ conductor 的工作區隨附一個 `.mcp.json`,指向這支以 `baton mcp` 執�
 只用它的一行說明把它列出來,等 agent 自己判斷需要時才讀全文,所以一個技能在被用到之前,只花一個 session
 一行 context。內容嵌在執行檔裡,所以 agent 讀到的技能,描述的永遠是同一支執行檔提供的工具。
 
-| 角色      | 技能                      | 寫到哪裡                                                                                             |
-| --------- | ------------------------- | ---------------------------------------------------------------------------------------------------- |
-| worker    | `baton`, `peers`, `score` | `~/.baton/agent-plugin/<hash>/` 底下一個名為 `baton-panel` 的 plugin,以 `--plugin-dir` 交給 `claude` |
-| conductor | `baton`, `conduct`        | conductor 工作區裡的 `.claude/skills/`                                                               |
+| 角色      | 技能                        | 寫到哪裡                                                                                             |
+| --------- | --------------------------- | ---------------------------------------------------------------------------------------------------- |
+| worker    | `baton`, `peers`, `score`   | `~/.baton/agent-plugin/<hash>/` 底下一個名為 `baton-panel` 的 plugin,以 `--plugin-dir` 交給 `claude` |
+| conductor | `baton`, `conduct`          | conductor 工作區裡的 `.claude/skills/`                                                               |
+| outside   | `baton`, `conduct`, `drive` | 你裝到哪裡就在哪裡——見 [baton 之外的 agent](#baton-之外的-agent)                                     |
 
-`baton` 是兩個角色共用的入口:baton 是什麼、怎麼知道自己身在其中、下一個該讀哪個技能。它不提任何工具,因為
-沒有任何工具同時出現在兩張表裡。`peers` 與 `score` 涵蓋 worker 表;`conduct` 涵蓋 dispatch 與 send 的分別、
+`baton` 是每個角色共用的入口:baton 是什麼、怎麼知道自己是哪個角色、下一個該讀哪個技能。它不提任何工具,因為
+沒有任何工具出現在每一張表裡。`peers` 與 `score` 涵蓋 worker 表;`conduct` 涵蓋 dispatch 與 send 的分別、
 佇列、群組、signal、護欄以及整理 score。每個角色只拿到它手上工具的技能:worker 被拒絕使用駕駛隊伍的動詞,
 conductor 被拒絕使用 peer 動詞,而教讀者一個它呼叫不了的工具,只會教它去被拒絕。
 
@@ -334,6 +335,63 @@ Debug 那一行只有以 `-v` 啟動的 daemon 才會出現。快取的答案不
 那次 spawn 記一次;只有反覆逾時才會重複它的 Warn。daemon 記到 Debug 等級卻完全沒有 probe 的那一行,代表條件在更早
 就擋下了——去看 `score status` 裡的 MCP 設定,以及這個面板是否被隔離、或跑的是別的後端;又或者在 daemon 的
 `PATH` 上找不到 `claude`,這種情況會直接答否、一行也不記。
+
+### baton 之外的 agent
+
+上面的技能只到得了 baton 啟動的 agent。你在自己終端機裡跑的 agent——一個你叫它「在這個分支上開三個 reviewer」的
+Claude Code session——從沒聽過 baton,所以 baton 為它另外附了第三組:`baton` 告訴它自己是哪個角色,`drive` 講怎麼
+連上、以及哪些事可以不問就做,`conduct` 講怎麼駕駛整支隊伍。安裝方式有兩種。
+
+從 Claude Code marketplace:
+
+```text
+/plugin marketplace add cmj0121/baton
+/plugin install baton@cmj0121-baton
+```
+
+或者用你手上已經有的執行檔,完全不經過 marketplace:
+
+```sh
+baton skill install              # 這個 repo 的 ./.claude/skills(預設,等同 --project)
+baton skill install --user       # ~/.claude/skills,你跑的每一個 Claude Code session 都會讀
+baton skill uninstall [--user]   # 移除 baton 在那裡裝的東西,其他一概不動
+```
+
+兩者提供的文字相同,差別在於它何時改變:`baton skill install` 寫入的是你所執行那支執行檔裡內嵌的版本,所以升級後
+重跑一次,技能就和那個 daemon 對齊;而 marketplace 安裝只有在某次 release 把 plugin 的版本號往上調時,才會拿到
+技能的變更——Claude Code 的 plugin 快取認的是版本號,不是檔案內容。
+
+只有技能,沒有 MCP 伺服器。兩種方式都不會把 `baton mcp` 接進來。外部 agent 連上時沒有角色、也沒有面板,也就是
+cockpit 自己那個不受限的角色:conductor 的圍欄——不准清空佇列、不准清理 worktree、不准切換 peer——對它不適用,
+而一個在使用者層級註冊的 MCP 伺服器,會把這份權限交給你開的每一個 Claude Code session,worker 面板也包括在內。
+這一步比安裝技能該悄悄做的大得多。`drive` 會叫 agent 先用唯讀的動詞看清楚、做任何破壞性的事之前先問,而且它不靠
+任何 MCP,透過預設 socket 上的 `baton ctl` 就能連上 baton。如果你還是想要結構化的工具,就自己選擇加入:
+
+```sh
+claude mcp add baton -- baton mcp
+```
+
+這會提供 conductor 那整張駕駛隊伍的工具表,而且不受限。
+
+`--project` 會寫進你的 repo。它在目前目錄底下建立 `.claude/skills/{baton,conduct,drive}/` 與
+`.claude/skills/.baton-skills` 這份清單,所以它們會出現在 `git status` 上:要讓 repo 上的每個人共用這些技能就
+commit 它們,否則就加進 `.gitignore`。每一個在那個 repo 裡啟動的 agent 都會讀到它們——baton 在那裡開的 worker
+面板也一樣。
+
+worker 面板會被告知退下。worker 若透過專案或使用者層級的安裝找到 `drive`,就可能把自己當成外部角色,而它單純的
+`baton ctl` 會撥到不受限的角色。所以 `baton`、`drive` 與 `conduct` 都帶著同一句話:如果設了 `BATON_PANEL_ID`
+而 `BATON_ROLE` 不是 `conductor`,你就是 baton 裡的 worker——守好你的任務與 worker 的技能。同樣有
+`BATON_PANEL_ID` 的 conductor 仍然適用。
+
+`--user` 會遮住 conductor 自己那份。同名時個人技能優先於專案技能,所以 `~/.claude/skills` 裡的 `baton` 與
+`conduct`,才是 conductor 真正讀的那份,而不是 baton 每次 spawn 時寫進它工作區的那份——內容凍結在最後一次安裝
+它們的那個 baton 的版本。每次升級後都要重跑 `baton skill install --user`;指令結束時會這樣提醒,而 daemon 在一次
+執行中第一次寫 conductor 工作區時,會為每個遮住它的路徑記一行 Warn(重新啟動後會再記一次)。
+
+你自己的技能永遠不會被覆寫。寫入任何東西之前,每一個目標名稱都會先檢查。`.baton-skills` 沒有列出的同名目錄,
+或是一個是 symlink、一般檔案而不是目錄的名稱,都算外來的;只要有任何一個外來名稱,整次安裝就會失敗,把它們全部
+列出來,什麼都不寫。`--force` 會取代它們:每一個都先被移除——symlink 移除的是連結本身,從不是它指向的東西——再
+重新寫入,清單也接手擁有權,所以之後 `baton skill uninstall` 會把它移除。uninstall 只會移除清單上列出的名稱。
 
 ## 群組互通
 

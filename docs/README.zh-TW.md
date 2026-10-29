@@ -62,6 +62,7 @@ Baton 不想接管你的 shell——你如果活在 tmux 裡,就把它跑在 tmu
 
 - **注意力** — 面板依 `running`、`idle`、`done` 或 `stuck` 排序;`C-t a` 是收件匣。[ATTENTION](ATTENTION.zh-TW.md)
 - **Conductor** — `n C` 透過 `baton ctl` 或 `baton mcp` 驅動整隊,並與它的宿主隔開。[CONTROL](CONTROL.zh-TW.md)
+- **Agent 技能** — `baton skill install` 或 Claude Code marketplace,教 baton 之外的 agent 駕駛它。[CONTROL](CONTROL.zh-TW.md#baton-之外的-agent)
 - **任務** — `T` 把簡報派給一個 agent 或一個工作項目;`Q` 是一份由排程器分派給空閒 agent 的待辦佇列。
 - **Score** — agent 一再學到的東西沿著階梯往上爬,並領在每份簡報之前,存於 `score.md`。[SCORE](SCORE.zh-TW.md)
 - **上限** — CPU、記憶體與行程數限制,管的是面板整棵行程樹。[LIMITS](LIMITS.zh-TW.md)
