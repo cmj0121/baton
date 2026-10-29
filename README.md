@@ -67,6 +67,7 @@ Baton does not want your shells — run it inside tmux if that is where you live
 
 - **Attention** — panels ranked `running`, `idle`, `done` or `stuck`; `C-t a` is the inbox. [ATTENTION](docs/ATTENTION.md)
 - **Conductor** — `n C` drives the fleet through `baton ctl` or `baton mcp`, fenced from its host. [CONTROL](docs/CONTROL.md)
+- **Agent skills** — `baton skill install` or the Claude Code marketplace teaches an agent outside baton to drive it. [CONTROL](docs/CONTROL.md#agents-outside-baton)
 - **Tasks** — `T` dispatches a brief to an agent or a work item; `Q` is a backlog a scheduler drains onto free agents.
 - **Score** — what agents keep learning climbs a ladder and leads every brief, kept in `score.md`. [SCORE](docs/SCORE.md)
 - **Caps** — CPU, memory and process limits held over a panel's whole process tree. [LIMITS](docs/LIMITS.md)

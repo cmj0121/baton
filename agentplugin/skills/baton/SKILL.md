@@ -1,6 +1,6 @@
 ---
 name: baton
-description: Explains baton, the terminal multiplexer this agent may be running in, how to tell which role it has, and which skill to read next. Use when BATON_SOCK is set.
+description: Explains baton, the multiplexer for AI coding agents — how to tell your role and which skill to read next. Use when baton is mentioned or BATON_SOCK is set.
 ---
 
 # baton
@@ -11,7 +11,7 @@ operator drives them from a cockpit. Every panel is a real terminal. baton
 watches each one's state (working, idle, waiting on a human, exited), can hand
 an agent a task, and files panels into groups (work items).
 
-## Are you inside baton?
+## Which role are you?
 
 - `BATON_SOCK` is in your environment: the control socket. You are in a baton
   panel, or in something started from one.
@@ -19,12 +19,14 @@ an agent a task, and files panels into groups (work items).
   panel does not.
 - `BATON_ROLE=conductor` means you are the conductor. Empty means you are a
   worker.
-- An MCP server named `baton` is in your tool list: baton wired it for you, and
-  which tools it offers matches your role.
+- An MCP server named `baton` that baton wired for you offers the tools that
+  match your role.
 
-None of these: you are not in baton, and the other baton skills do not apply.
+None of these, but a baton daemon answers `baton ctl list` on its default
+socket: you are outside, and the operator may ask you to drive it. Nothing
+answers: the other baton skills do not apply.
 
-## The two roles
+## The three roles
 
 **Worker** — an ordinary agent panel, running in the operator's repository and
 given tasks by the operator or by the conductor. baton is the room you work in,
@@ -36,14 +38,23 @@ group.
 workspace with no source code, and it spawns, groups, dispatches, and closes
 other panels instead of writing code itself. There is only ever one.
 
+**Outside** — an agent in the operator's own terminal, not in any panel, asked
+to work the fleet on their behalf. It reaches the daemon through its default
+socket and holds the operator's own unscoped reach, so it looks before it acts
+and asks before it destroys. If `BATON_PANEL_ID` is set and `BATON_ROLE` is not
+`conductor`, you are a worker inside baton: do not drive the fleet from here —
+keep to your task and the worker's skills, `score` and `peers`.
+
 ## Read next
 
 - Worker: the `score` skill, for when to record what you learned about this
   fleet; the `peers` skill, for when and how to reach the other panels in your
   group.
 - Conductor: the `conduct` skill, for driving the fleet.
+- Outside: the `drive` skill, for connecting and what to ask first; then
+  `conduct`, for how the fleet is driven.
 
-## What baton puts in your terminal
+## What baton puts in a panel's terminal
 
 - **A `── Score ──` block** at the top of a brief: the fleet's memory, ranked
   for your panel. It is standing advice from earlier rounds of this fleet, not
@@ -55,8 +66,8 @@ other panels instead of writing code itself. There is only ever one.
 
 ## Needing a human
 
-When you are blocked on a decision, an approval, or a credential, raise your
-hand rather than waiting silently or guessing:
+In a panel, when you are blocked on a decision, an approval, or a credential,
+raise your hand rather than waiting silently or guessing:
 
     baton ctl attention --why "two migrations conflict — which one wins?"
     baton ctl resolve        # once the need has passed
@@ -65,7 +76,7 @@ The `--why` sentence is what the operator reads in their queue, so make it the
 question. Raising a hand also takes your panel out of the pool the scheduler
 hands queued work to, which is why `resolve` matters once you have your answer.
 
-## What is not yours
+## What is not a worker's
 
 - Driving other panels — spawning, closing, signalling, dispatching, typing
   into them with `baton ctl send` — is the operator's or the conductor's job.

@@ -1,0 +1,10 @@
+{
+  "name": "baton",
+  "version": "2.6.2",
+  "description": "Agent Skills for driving baton, the terminal multiplexer for AI coding agents, from an agent running outside it: what baton is, how to reach it, how to conduct its fleet.",
+  "author": {
+    "name": "cmj",
+    "url": "https://github.com/cmj0121"
+  },
+  "license": "MIT"
+}

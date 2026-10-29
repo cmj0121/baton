@@ -305,13 +305,14 @@ guidance as Agent Skills: a `SKILL.md` per topic, which Claude Code lists by its
 when the agent decides it needs it, so a skill costs a session one line of context until it is wanted. The text is
 embedded in the binary, so the skills an agent reads always describe the tools that same binary serves.
 
-| Role      | Skills                    | Written to                                                                                                 |
-| --------- | ------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| worker    | `baton`, `peers`, `score` | a plugin named `baton-panel` under `~/.baton/agent-plugin/<hash>/`, handed to `claude` with `--plugin-dir` |
-| conductor | `baton`, `conduct`        | `.claude/skills/` in the conductor's workspace                                                             |
+| Role      | Skills                      | Written to                                                                                                 |
+| --------- | --------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| worker    | `baton`, `peers`, `score`   | a plugin named `baton-panel` under `~/.baton/agent-plugin/<hash>/`, handed to `claude` with `--plugin-dir` |
+| conductor | `baton`, `conduct`          | `.claude/skills/` in the conductor's workspace                                                             |
+| outside   | `baton`, `conduct`, `drive` | wherever you install them — see [Agents outside baton](#agents-outside-baton)                              |
 
-`baton` is the entry both roles share: what baton is, how to tell you are inside it, and which skill to read next. It
-names no tool, because no tool is in both tables. `peers` and `score` cover the worker table; `conduct` covers dispatch
+`baton` is the entry every role shares: what baton is, how to tell which role you hold, and which skill to read next.
+It names no tool, because no tool is in every table. `peers` and `score` cover the worker table; `conduct` covers dispatch
 versus send, the queue, groups, signals, the guardrails and curating the score. Each role gets only the skills for the
 tools it has: a worker is refused the fleet verbs and a conductor the peer verbs, and a skill teaching a tool the
 reader cannot call would only teach it to be refused.
@@ -363,6 +364,75 @@ The Debug line appears only for a daemon started with `-v`. A cached answer runs
 is logged once, by the spawn that asked; only a repeated timeout repeats its Warn. No probe line at all, on a daemon
 logging at Debug, means the gate stopped earlier — check `score status` for the MCP config, and whether the panel is
 isolated or runs another backend — or `claude` was not found on the daemon's `PATH`, which returns no without a line.
+
+### Agents outside baton
+
+The skills above reach only agents baton launched. An agent you run in your own terminal — a Claude Code session you
+ask to "spawn three reviewers on this branch" — has never heard of baton, so baton ships a third set for it: `baton`
+to tell it which role it holds, `drive` for connecting and for what it may do unasked, and `conduct` for how the fleet
+is driven. Install it one of two ways.
+
+From the Claude Code marketplace:
+
+```text
+/plugin marketplace add cmj0121/baton
+/plugin install baton@cmj0121-baton
+```
+
+Or from the binary you already have, with no marketplace involved:
+
+```sh
+baton skill install              # ./.claude/skills under the current directory (the default, same as --project)
+baton skill install --user       # ~/.claude/skills, read by every Claude Code session you run
+baton skill uninstall [--user]   # remove what baton installed there, and nothing else
+```
+
+Both serve the same text. The difference is when it changes: `baton skill install` writes the copy embedded in the
+binary you ran, so re-running it after an upgrade brings the skills level with that daemon, while **a marketplace
+install only picks up skill changes when a release bumps the plugin's version** — Claude Code updates an installed plugin
+only when its version changes, so new files under the same version never reach you.
+
+**Skills only, no MCP server.** Neither route wires `baton mcp` in. An outside agent connects with no role and no
+panel, which is the cockpit's own unscoped role: the conductor's fence — no draining the queue, no sweeping worktrees,
+no switching peers — does not apply to it, and an MCP server registered user-wide would hand that reach to every
+Claude Code session you start, worker panels included. That is a bigger step than installing skills should take
+silently. `drive` tells the agent to look with the read-only verbs first and to ask before anything destructive, and
+it reaches baton through `baton ctl` on the default socket without any MCP at all. If you want structured tools anyway,
+opt in yourself:
+
+```sh
+claude mcp add baton -- baton mcp
+```
+
+That serves the conductor's full fleet table, unscoped.
+
+**`--project` writes into your repository.** It creates `.claude/skills/{baton,conduct,drive}/` and the
+`.claude/skills/.baton-skills` manifest under the current directory, so they show in `git status`: commit them to share
+the skills with everyone on the repository, or add them to `.gitignore`. Every agent that starts in that repository
+reads them — the worker panels baton spawns there too. The command prints the directory it resolved before acting,
+and refuses one that resolves outside the current directory: a repository can commit `.claude` as a symlink, and
+install, `--force` and uninstall would otherwise write and delete wherever it points. `--user` follows a symlinked
+`~/.claude` wherever it goes, since a home linked into a dotfiles repository is your own layout.
+
+**Worker panels are told to stand down.** A worker that finds `drive` through a project or user install would otherwise
+read itself as the outside role, and its plain `baton ctl` would dial the unscoped role. So `baton`, `drive` and
+`conduct` each carry the same sentence: if `BATON_PANEL_ID` is set and `BATON_ROLE` is not `conductor`, you are a
+worker inside baton — keep to your task and the worker's skills. The conductor, which also has `BATON_PANEL_ID`, is
+still served.
+
+**`--user` shadows the conductor's own copy.** A personal skill outranks a project one of the same name, so the
+`baton` and `conduct` in `~/.claude/skills` are what the conductor reads instead of the ones baton writes into its
+workspace on every spawn — frozen at the text of whichever baton last installed them. Re-run
+`baton skill install --user` after every upgrade; the command says so when it finishes, and the daemon logs a Warn
+naming each shadowing path the first time it writes the conductor's workspace in a run (a restart names it again).
+
+**Your own skills are never overwritten.** Every target name is checked before anything is written. A same-name
+directory that `.baton-skills` does not list, or a name that is a symlink or a plain file rather than a directory, is
+foreign, and any foreign name fails the whole install with all of them listed and nothing written. `--force` replaces
+them: each is removed — a symlink as the link, never what it points to — and written fresh, and the manifest takes
+ownership, so `baton skill uninstall` removes it later. Uninstall only ever removes the names the manifest lists, and
+only `baton`, `conduct` and `drive`, the three it installs: a `.baton-skills` that lists anything else, is not a plain
+file (a symlink, say), or is over 4 KiB vouches for nothing (the last is an error).
 
 ## Peers
 

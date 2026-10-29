@@ -12,7 +12,11 @@
 // The skills are embedded rather than read from disk so the text an agent reads
 // is always the text that matches the tools this binary serves; the test beside
 // this file holds every tool name a skill mentions to the MCP table its reader
-// is actually handed.
+// is actually handed. They come from two trees: the public ones (baton,
+// conduct, drive) from agentplugin.FS, the same files the marketplace serves to
+// agents outside baton, and the worker-only ones (peers, score) from assets
+// here, which nothing outside baton has a use for. A name lives in exactly one
+// of the two, so Read never has to choose.
 //
 // Two ways out, one per role. A conductor runs in a workspace baton owns, so its
 // skills are written into that workspace's .claude/skills (WriteSkills). A
@@ -28,43 +32,56 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 
+	"github.com/cmj0121/baton/agentplugin"
 	"github.com/cmj0121/baton/internal/paths"
 )
 
 //go:embed assets
 var assets embed.FS
 
-// Set is which role's skills: the one an ordinary agent panel is handed, or the
-// conductor's.
+// Set is which role's skills: the one an ordinary agent panel is handed, the
+// conductor's, or an outside agent's.
 type Set int
 
-// The two roles. Worker is every ordinary agent panel; Conductor is the one
-// panel baton marks as driving the fleet.
+// The three roles. Worker is every ordinary agent panel; Conductor is the one
+// panel baton marks as driving the fleet; Outside is an agent baton did not
+// launch, driving it on the operator's behalf through `baton ctl` or `baton
+// mcp` — the full, unfenced conductor table.
 const (
 	Worker Set = iota
 	Conductor
+	Outside
 )
 
-// sets is each role's skills. The entry skill, baton, is in both and names no
-// tool because no tool is in both tables; each role's own skill names that
+// sets is each role's skills. The entry skill, baton, is in every set and names
+// no tool because no tool is in both the worker's table and the full one the
+// conductor and an outside agent are served; each role's own skill names that
 // role's tools. A worker gets no conduct (it is refused the fleet verbs) and the
 // conductor gets no peers or score (it is refused the peer verbs, and its own
-// memory duties are a section of conduct).
+// memory duties are a section of conduct). An outside agent gets the
+// conductor's skills plus drive, which is how it reaches baton at all.
 var sets = map[Set][]string{
 	Worker:    {"baton", "peers", "score"},
 	Conductor: {"baton", "conduct"},
+	Outside:   {"baton", "conduct", "drive"},
 }
 
 // manifestName is the file WriteSkills records its own names in. It is how a
 // later write tells a skill baton put there from one the operator did.
 const manifestName = ".baton-skills"
+
+// manifestCap is the most bytes manifest reads. A real one is a few skill
+// names; anything past this is not one baton wrote.
+const manifestCap = 4 << 10
 
 // pluginName is the plugin's name in its manifest. It is not "baton", so the
 // directory baton hands a panel never collides with a baton plugin the operator
@@ -78,8 +95,13 @@ func Names(set Set) []string {
 	return slices.Clone(sets[set])
 }
 
-// Read is one skill's SKILL.md, as embedded.
+// Read is one skill's SKILL.md, as embedded: the public tree first, then the
+// worker-only one. A miss in the second is the error returned, so an unknown
+// name still fails as fs.ErrNotExist.
 func Read(name string) ([]byte, error) {
+	if data, err := agentplugin.FS.ReadFile("skills/" + name + "/SKILL.md"); err == nil {
+		return data, nil
+	}
 	return assets.ReadFile("assets/" + name + "/SKILL.md")
 }
 
@@ -95,6 +117,23 @@ func Read(name string) ([]byte, error) {
 // plain name is skipped rather than followed: the file is on disk, and the one
 // thing worse than a stale skill is a RemoveAll steered out of dir.
 func WriteSkills(dir string, set Set) error {
+	prev, err := os.ReadFile(filepath.Join(dir, manifestName))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	var retire []string
+	for _, old := range strings.Fields(string(prev)) {
+		if old == filepath.Base(old) && old != "." && old != ".." {
+			retire = append(retire, old)
+		}
+	}
+	return writeSet(dir, set, retire)
+}
+
+// writeSet writes set into dir, then removes every name in prev that set does
+// not hold, then records set as dir's manifest. Each caller decides which
+// listed names it trusts enough to pass as prev.
+func writeSet(dir string, set Set, prev []string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -116,12 +155,8 @@ func WriteSkills(dir string, set Set) error {
 	// Retire after writing, and record the new manifest last: a failure anywhere
 	// above leaves the old manifest naming everything baton may own, so the next
 	// write still knows to clean it.
-	prev, err := os.ReadFile(filepath.Join(dir, manifestName))
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	for _, old := range strings.Fields(string(prev)) {
-		if slices.Contains(names, old) || old != filepath.Base(old) || old == "." || old == ".." {
+	for _, old := range prev {
+		if slices.Contains(names, old) {
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(dir, old)); err != nil {
@@ -249,4 +284,167 @@ func install(tmp, dir string) error {
 		return os.RemoveAll(tmp)
 	}
 	return fmt.Errorf("install plugin %s: %w (an incomplete tree is there; remove it)", dir, err)
+}
+
+// Install writes set into dir the way WriteSkills does, but refuses to clobber
+// what it does not own, and returns every path it wrote.
+//
+// It is a separate function rather than an option on WriteSkills because the
+// two dirs differ in who else is there. The conductor's workspace is baton's,
+// and a same-name skill in it is one baton wrote or a stale copy it should
+// replace, so WriteSkills keeps overwriting and the conductor path is untouched.
+// `baton skill install` writes into the operator's repository or their home,
+// where a skill called conduct may be the operator's own, and overwriting it
+// without a word destroys work. So every target name is checked BEFORE anything
+// is written: a name that exists and is not in dir's manifest is foreign, and
+// any foreign name fails the whole install with all of them listed, leaving dir
+// exactly as it was. Half an install would be the worst of both — some of the
+// operator's skills replaced and baton's set incomplete.
+//
+// Foreign also covers a name the manifest lists that is no longer a real
+// directory: a symlink there would carry WriteSkills' MkdirAll and write out of
+// dir to wherever it points, and the manifest is a file on disk, not proof of
+// what sits beside it. Every name is Lstat'ed, owned or not.
+//
+// dir itself, and the path above it, may be symlinks: Install writes wherever
+// dir resolves. Whether a symlinked dir is acceptable depends on who chose it,
+// so that is the caller's check — `baton skill` confines a --project dir to the
+// current directory and lets a --user one follow the operator's dotfiles. The
+// guard here is on the levels baton creates and owns — dir/<name> and the files
+// in it.
+//
+// Ownership comes from manifest, which vouches only for the names in set: a
+// .baton-skills listing anything else — committed to a cloned repository, say
+// — neither claims that name nor gets it retired. That includes baton's own
+// worker-only skills, which an install of set never writes.
+//
+// force replaces foreign names outright: removed (a symlink as the link, never
+// its target), then written fresh, so no file of the operator's lingers inside
+// a directory baton now claims, and the manifest takes ownership so uninstall
+// removes it too.
+func Install(dir string, set Set, force bool) ([]string, error) {
+	owned, _, err := manifest(dir, set)
+	if err != nil {
+		return nil, err
+	}
+	var foreign []string
+	for _, name := range Names(set) {
+		// Accepted residual risk: a process running as the same user can swap
+		// dir/<name> for a link between this Lstat and the write. Closing that
+		// race needs openat-style writes in the shared paths.WriteFileAtomic, and
+		// such a process can already write anywhere this user can.
+		fi, err := os.Lstat(filepath.Join(dir, name))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !fi.IsDir() || !slices.Contains(owned, name) {
+			foreign = append(foreign, name)
+		}
+	}
+	if len(foreign) > 0 && !force {
+		return nil, fmt.Errorf("%s already holds skills baton did not install, or that are not plain directories: %s (re-run with --force to replace them)", dir, strings.Join(foreign, ", "))
+	}
+	for _, name := range foreign {
+		if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
+			return nil, err
+		}
+	}
+	// WriteFileAtomic opens the target's .tmp sibling without O_EXCL, so a link
+	// planted under that name would be followed. Remove is Lstat-based and
+	// takes the link, never its target.
+	for _, tmp := range append(tmpNames(dir, set), filepath.Join(dir, manifestName+".tmp")) {
+		if err := os.Remove(tmp); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+	}
+	if err := writeSet(dir, set, owned); err != nil {
+		return nil, err
+	}
+	var written []string
+	for _, name := range Names(set) {
+		written = append(written, filepath.Join(dir, name, "SKILL.md"))
+	}
+	return append(written, filepath.Join(dir, manifestName)), nil
+}
+
+// tmpNames is the temp path WriteFileAtomic uses for each SKILL.md in set.
+func tmpNames(dir string, set Set) []string {
+	var out []string
+	for _, name := range Names(set) {
+		out = append(out, filepath.Join(dir, name, "SKILL.md.tmp"))
+	}
+	return out
+}
+
+// Uninstall removes from dir every skill of set its manifest lists, then the
+// manifest, and returns every path it removed. A directory the manifest does
+// not name is left alone whatever it is called, and so is one it names that is
+// not in set. A dir with no manifest — or with one that is not a regular file,
+// which baton never writes — has nothing of baton's in it, so that is no error.
+func Uninstall(dir string, set Set) ([]string, error) {
+	m := filepath.Join(dir, manifestName)
+	owned, present, err := manifest(dir, set)
+	if err != nil || !present {
+		return nil, err
+	}
+	var removed []string
+	for _, name := range owned {
+		p := filepath.Join(dir, name)
+		if _, err := os.Lstat(p); err != nil {
+			continue
+		}
+		if err := os.RemoveAll(p); err != nil {
+			return removed, err
+		}
+		removed = append(removed, p)
+	}
+	if err := os.Remove(m); err != nil {
+		return removed, err
+	}
+	return append(removed, m), nil
+}
+
+// manifest is the names of set that dir's .baton-skills records, and whether
+// a manifest is there at all. Any other entry is dropped: the file may come
+// from a cloned repository, and a name it lists is not proof baton wrote that
+// directory. A missing manifest is an empty one, and so is one that is not a
+// regular file — a symlink could point at any file, a FIFO would block the
+// read. The file is opened once, without following a link and without
+// blocking, and its type is checked on the open descriptor, so nothing can
+// swap it between the check and the read. One over manifestCap is an error
+// rather than a truncated read, which could cut a name in half.
+func manifest(dir string, set Set) ([]string, bool, error) {
+	p := filepath.Join(dir, manifestName)
+	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ELOOP) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, false, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, false, nil
+	}
+	b, err := io.ReadAll(io.LimitReader(f, manifestCap+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(b) > manifestCap {
+		return nil, false, fmt.Errorf("%s is over %d bytes; baton did not write it", p, manifestCap)
+	}
+	var names []string
+	for _, n := range strings.Fields(string(b)) {
+		if slices.Contains(sets[set], n) {
+			names = append(names, n)
+		}
+	}
+	return names, true, nil
 }

@@ -15,6 +15,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/cmj0121/baton/agentplugin"
 	"github.com/cmj0121/baton/internal/mcp"
 )
 
@@ -25,11 +26,42 @@ import (
 var toolToken = regexp.MustCompile(`\b(baton|score)_[a-z_]+\b`)
 
 // registry is the table the agent reading a set's skills is actually handed.
+// An outside agent is served the full table by `baton mcp`, the conductor's.
 func registry(set Set) []string {
-	if set == Conductor {
-		return mcp.ToolNames()
+	if set == Worker {
+		return mcp.WorkerToolNames()
 	}
-	return mcp.WorkerToolNames()
+	return mcp.ToolNames()
+}
+
+// allSets is every role, so a test that walks the sets cannot quietly skip one
+// added later without being edited here.
+var allSets = []Set{Worker, Conductor, Outside}
+
+// embedded is every skill name across both trees. A name in both is a failure,
+// not a precedence rule: Read would serve the public copy and the internal one
+// would be dead text that still looks maintained.
+func embedded(t *testing.T) []string {
+	t.Helper()
+	trees := []struct {
+		fsys fs.FS
+		dir  string
+	}{{agentplugin.FS, "skills"}, {assets, "assets"}}
+	var names []string
+	for _, tree := range trees {
+		entries, err := fs.ReadDir(tree.fsys, tree.dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if slices.Contains(names, e.Name()) {
+				t.Errorf("skill %q is embedded in both agentplugin and internal/skills/assets", e.Name())
+				continue
+			}
+			names = append(names, e.Name())
+		}
+	}
+	return names
 }
 
 func mustRead(t *testing.T, name string) string {
@@ -43,10 +75,11 @@ func mustRead(t *testing.T, name string) string {
 
 // TestSkillsNameOnlyTheirTablesTools is the drift test: a skill is an
 // instruction, and an instruction to call a tool the reader was not given is a
-// turn spent on a refusal at best. A skill shipped in both sets must hold for
-// both tables, which — since no tool is in both — means it names none.
+// turn spent on a refusal at best. A skill shipped to a worker and to a
+// full-table set (Conductor, Outside) must hold for both tables, which — since
+// no tool is in both — means it names none.
 func TestSkillsNameOnlyTheirTablesTools(t *testing.T) {
-	for _, set := range []Set{Worker, Conductor} {
+	for _, set := range allSets {
 		reg := registry(set)
 		for _, name := range Names(set) {
 			for _, tok := range toolToken.FindAllString(mustRead(t, name), -1) {
@@ -79,9 +112,9 @@ func TestConductNamesEveryConductorTool(t *testing.T) {
 	}
 }
 
-// TestSetsAreTheRolesSkills pins the two sets (D2), and that every skill in the
+// TestSetsAreTheRolesSkills pins the three sets, that every skill in either
 // embedded tree belongs to at least one — an orphan would be text no agent is
-// ever handed.
+// ever handed — and that every name in a set resolves.
 func TestSetsAreTheRolesSkills(t *testing.T) {
 	if got, want := Names(Worker), []string{"baton", "peers", "score"}; !slices.Equal(got, want) {
 		t.Errorf("Names(Worker) = %v, want %v", got, want)
@@ -89,17 +122,44 @@ func TestSetsAreTheRolesSkills(t *testing.T) {
 	if got, want := Names(Conductor), []string{"baton", "conduct"}; !slices.Equal(got, want) {
 		t.Errorf("Names(Conductor) = %v, want %v", got, want)
 	}
-	entries, err := fs.ReadDir(assets, "assets")
-	if err != nil {
-		t.Fatal(err)
+	if got, want := Names(Outside), []string{"baton", "conduct", "drive"}; !slices.Equal(got, want) {
+		t.Errorf("Names(Outside) = %v, want %v", got, want)
 	}
-	for _, e := range entries {
-		if !slices.Contains(Names(Worker), e.Name()) && !slices.Contains(Names(Conductor), e.Name()) {
-			t.Errorf("assets/%s is in no set", e.Name())
+	for _, name := range embedded(t) {
+		if !slices.ContainsFunc(allSets, func(s Set) bool { return slices.Contains(Names(s), name) }) {
+			t.Errorf("skill %s is in no set", name)
+		}
+	}
+	for _, set := range allSets {
+		for _, name := range Names(set) {
+			if _, err := Read(name); err != nil {
+				t.Errorf("Read(%q) (set %d): %v", name, set, err)
+			}
 		}
 	}
 	if _, err := Read("nope"); err == nil {
 		t.Error("Read of an unknown skill should fail")
+	}
+}
+
+// TestPublicSkillsComeFromAgentplugin: everything an outside agent is handed
+// must be what the marketplace serves, so the Outside set reads only from the
+// agentplugin tree, and the worker-only skills stay out of it.
+func TestPublicSkillsComeFromAgentplugin(t *testing.T) {
+	for _, name := range Names(Outside) {
+		want, err := agentplugin.FS.ReadFile("skills/" + name + "/SKILL.md")
+		if err != nil {
+			t.Errorf("Outside skill %s is not in agentplugin: %v", name, err)
+			continue
+		}
+		if got := mustRead(t, name); got != string(want) {
+			t.Errorf("Read(%q) is not the agentplugin copy", name)
+		}
+	}
+	for _, name := range []string{"peers", "score"} {
+		if _, err := fs.Stat(agentplugin.FS, "skills/"+name); err == nil {
+			t.Errorf("worker-only skill %s is published in agentplugin", name)
+		}
 	}
 }
 
@@ -108,25 +168,21 @@ func TestSetsAreTheRolesSkills(t *testing.T) {
 // short enough to sit in every session's skill index, and a body short enough
 // to be read whole when it is loaded.
 func TestFrontmatter(t *testing.T) {
-	entries, err := fs.ReadDir(assets, "assets")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries {
-		raw := mustRead(t, e.Name())
+	for _, name := range embedded(t) {
+		raw := mustRead(t, name)
 		rest, ok := strings.CutPrefix(raw, "---\n")
 		if !ok {
-			t.Errorf("%s: no opening frontmatter fence", e.Name())
+			t.Errorf("%s: no opening frontmatter fence", name)
 			continue
 		}
 		front, body, ok := strings.Cut(rest, "\n---\n")
 		if !ok {
-			t.Errorf("%s: no closing frontmatter fence", e.Name())
+			t.Errorf("%s: no closing frontmatter fence", name)
 			continue
 		}
 		var fm map[string]any
 		if err := yaml.Unmarshal([]byte(front), &fm); err != nil {
-			t.Errorf("%s: frontmatter is not YAML: %v", e.Name(), err)
+			t.Errorf("%s: frontmatter is not YAML: %v", name, err)
 			continue
 		}
 		keys := make([]string, 0, len(fm))
@@ -135,17 +191,17 @@ func TestFrontmatter(t *testing.T) {
 		}
 		slices.Sort(keys)
 		if !slices.Equal(keys, []string{"description", "name"}) {
-			t.Errorf("%s: frontmatter keys = %v, want exactly name and description", e.Name(), keys)
+			t.Errorf("%s: frontmatter keys = %v, want exactly name and description", name, keys)
 		}
-		if fm["name"] != e.Name() {
-			t.Errorf("%s: name = %v, want the directory name", e.Name(), fm["name"])
+		if fm["name"] != name {
+			t.Errorf("%s: name = %v, want the directory name", name, fm["name"])
 		}
 		desc, _ := fm["description"].(string)
 		if desc == "" || utf8.RuneCountInString(desc) > 160 {
-			t.Errorf("%s: description must be 1..160 chars, is %d: %q", e.Name(), utf8.RuneCountInString(desc), desc)
+			t.Errorf("%s: description must be 1..160 chars, is %d: %q", name, utf8.RuneCountInString(desc), desc)
 		}
 		if n := strings.Count(strings.TrimRight(body, "\n"), "\n") + 1; n > 100 {
-			t.Errorf("%s: body is %d lines, budget is 100", e.Name(), n)
+			t.Errorf("%s: body is %d lines, budget is 100", name, n)
 		}
 	}
 }
@@ -379,4 +435,34 @@ func TestPluginConcurrent(t *testing.T) {
 	}
 	assertPlugin(t, dirs[0], Worker)
 	assertOnlyHashDirs(t, base, dirs[0])
+}
+
+// --- Outside-role guard (U2, #162 Phase 2) ---
+
+// workerGuard is the one sentence that turns a worker away from the
+// fleet-driving skills. A user-wide install of the public plugin loads drive and
+// conduct into every worker panel too, and a worker's plain `baton ctl` dials
+// the unscoped cockpit role, so nothing but this sentence stands between a
+// worker that matched "operate baton" and the whole fleet. It names
+// BATON_ROLE so the conductor, which also carries BATON_PANEL_ID, still reads
+// conduct as its own. It is one fixed string, not three paraphrases, so a
+// reword in one skill cannot quietly weaken the guard in another.
+const workerGuard = "If `BATON_PANEL_ID` is set and `BATON_ROLE` is not `conductor`, you are a " +
+	"worker inside baton: do not drive the fleet from here — keep to your task and " +
+	"the worker's skills, `score` and `peers`."
+
+// collapse folds every run of whitespace to one space, so the guard may be
+// wrapped to the skills' line width without ceasing to be the same sentence.
+func collapse(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// TestOutsideSkillsCarryTheWorkerGuard: drive and conduct are the skills a
+// stray worker could act on, and baton is where a worker first decides which
+// role it has, so each must carry the guard word for word.
+func TestOutsideSkillsCarryTheWorkerGuard(t *testing.T) {
+	want := collapse(workerGuard)
+	for _, name := range []string{"baton", "conduct", "drive"} {
+		if !strings.Contains(collapse(mustRead(t, name)), want) {
+			t.Errorf("skill %s does not carry the worker guard verbatim: %q", name, workerGuard)
+		}
+	}
 }

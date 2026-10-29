@@ -83,6 +83,11 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "ctl" {
 		os.Exit(ctlMain(os.Args[2:]))
 	}
+	// `baton skill install|uninstall` writes files and quits; like ctl it wants
+	// none of the cockpit's setup and has its own parser (see skill.go).
+	if len(os.Args) > 1 && os.Args[1] == "skill" {
+		os.Exit(skillMain(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "mcp" {
 		// --score-only is what an ordinary agent panel's config passes, and it
 		// selects the worker table: the memory's write tool and the peer tools.
