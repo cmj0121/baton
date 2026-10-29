@@ -349,7 +349,8 @@ A worker panel is handed its skills only when all of these hold:
 Like the MCP config, all of this is decided at every launch and never stored on the panel, so a re-run (`r`) or a panel
 restored from the snapshot picks the skills up as soon as the gate opens.
 
-**When a worker has no skills,** the probe left its reason in `$HOME/.baton/baton.log`, naming the binary:
+**When a worker has no skills,** baton left its reason in `$HOME/.baton/baton.log`, and the probe's lines name the
+binary they asked:
 
 | Line                                                 | Level | Means                                                                                 | Cached                        |
 | ---------------------------------------------------- | ----- | ------------------------------------------------------------------------------------- | ----------------------------- |
@@ -361,7 +362,7 @@ restored from the snapshot picks the skills up as soon as the gate opens.
 The Debug line appears only for a daemon started with `-v`. A cached answer runs no probe and logs nothing, so a verdict
 is logged once, by the spawn that asked; only a repeated timeout repeats its Warn. No probe line at all, on a daemon
 logging at Debug, means the gate stopped earlier — check `score status` for the MCP config, and whether the panel is
-isolated or runs another backend.
+isolated or runs another backend — or `claude` was not found on the daemon's `PATH`, which returns no without a line.
 
 ## Peers
 
