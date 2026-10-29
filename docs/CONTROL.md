@@ -382,15 +382,15 @@ From the Claude Code marketplace:
 Or from the binary you already have, with no marketplace involved:
 
 ```sh
-baton skill install              # ./.claude/skills in this repository (the default, same as --project)
+baton skill install              # ./.claude/skills under the current directory (the default, same as --project)
 baton skill install --user       # ~/.claude/skills, read by every Claude Code session you run
 baton skill uninstall [--user]   # remove what baton installed there, and nothing else
 ```
 
 Both serve the same text. The difference is when it changes: `baton skill install` writes the copy embedded in the
 binary you ran, so re-running it after an upgrade brings the skills level with that daemon, while **a marketplace
-install only picks up skill changes when a release bumps the plugin's version** — Claude Code keys its plugin cache on
-that, not on the files.
+install only picks up skill changes when a release bumps the plugin's version** — Claude Code updates an installed plugin
+only when its version changes, so new files under the same version never reach you.
 
 **Skills only, no MCP server.** Neither route wires `baton mcp` in. An outside agent connects with no role and no
 panel, which is the cockpit's own unscoped role: the conductor's fence — no draining the queue, no sweeping worktrees,

@@ -352,14 +352,14 @@ Claude Code session——從沒聽過 baton,所以 baton 為它另外附了第�
 或者用你手上已經有的執行檔,完全不經過 marketplace:
 
 ```sh
-baton skill install              # 這個 repo 的 ./.claude/skills(預設,等同 --project)
+baton skill install              # 目前目錄底下的 ./.claude/skills(預設,等同 --project)
 baton skill install --user       # ~/.claude/skills,你跑的每一個 Claude Code session 都會讀
 baton skill uninstall [--user]   # 移除 baton 在那裡裝的東西,其他一概不動
 ```
 
 兩者提供的文字相同,差別在於它何時改變:`baton skill install` 寫入的是你所執行那支執行檔裡內嵌的版本,所以升級後
 重跑一次,技能就和那個 daemon 對齊;而 marketplace 安裝只有在某次 release 把 plugin 的版本號往上調時,才會拿到
-技能的變更——Claude Code 的 plugin 快取認的是版本號,不是檔案內容。
+技能的變更——Claude Code 只在版本號改變時才更新已安裝的 plugin,同一個版本號底下的新檔案永遠到不了你手上。
 
 只有技能,沒有 MCP 伺服器。兩種方式都不會把 `baton mcp` 接進來。外部 agent 連上時沒有角色、也沒有面板,也就是
 cockpit 自己那個不受限的角色:conductor 的圍欄——不准清空佇列、不准清理 worktree、不准切換 peer——對它不適用,
