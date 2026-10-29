@@ -276,6 +276,8 @@ type Server struct {
 	ln  net.Listener
 	pty *ptymgr.Manager
 
+	shadowWarned sync.Map // personal skill path → struct{}: warnShadowedSkills names each once per run
+
 	allowNameConflict bool   // when false, panel titles and group names stay unique
 	replayBytes       int    // per-panel replay buffer; 0 keeps the ptymgr default
 	defaultDir        string // workdir for a panel that asks for none; empty → the user's home
@@ -4522,6 +4524,7 @@ func (s *Server) makeConductorWorkspace(id string) (string, error) {
 		return "", fmt.Errorf("create conductor workspace: %w", err)
 	}
 	writeConductorFiles(ws, id)
+	s.warnShadowedSkills(ws)
 	log.Info().Str("panel", id).Str("workspace", ws).Msg("conductor workspace ready")
 	return ws, nil
 }
@@ -4558,6 +4561,7 @@ func (s *Server) refreshConductorWiring() {
 	}
 
 	writeConductorFiles(dir, id)
+	s.warnShadowedSkills(dir)
 	log.Info().Str("panel", id).Str("workspace", dir).Msg("conductor brief refreshed")
 	if live {
 		s.notifyAttached(id, "\r\n[conductor brief updated — re-read BATON.md]\r\n")
@@ -4636,6 +4640,31 @@ func writeConductorFiles(ws, id string) {
 	// operator's own skill in the same directory survives every respawn.
 	if err := skills.WriteSkills(filepath.Join(ws, ".claude", "skills"), skills.Conductor); err != nil {
 		log.Warn().Str("file", ".claude/skills").Str("workspace", ws).Err(err).Msg("conductor wiring not written")
+	}
+}
+
+// warnShadowedSkills logs, at Warn, each ~/.claude/skills/<name> that exists for
+// a conductor skill. A personal skill outranks a project one of the same name,
+// so that copy — `baton skill install --user`, or the operator's own — is what
+// the conductor reads instead of the one writeConductorFiles just wrote, and it
+// may be an older baton's text. Nothing there is the daemon's to remove; it says
+// so where the operator will look when the conductor acts on stale guidance.
+//
+// Once per path per daemon run: the workspace is rewritten on every conductor
+// spawn, respawn and reload, and the same line each time is noise that buries
+// the first one. A copy removed and put back later in the same run is not named
+// again; a restart names it.
+func (s *Server) warnShadowedSkills(ws string) {
+	personal := paths.Expand("~/.claude/skills")
+	for _, name := range skills.Names(skills.Conductor) {
+		p := filepath.Join(personal, name)
+		if _, err := os.Lstat(p); err != nil {
+			continue
+		}
+		if _, seen := s.shadowWarned.LoadOrStore(p, struct{}{}); seen {
+			continue
+		}
+		log.Warn().Str("skill", p).Str("workspace", ws).Msg("a personal skill shadows the conductor's workspace copy")
 	}
 }
 
