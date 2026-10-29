@@ -1,0 +1,16 @@
+{
+  "name": "cmj0121-baton",
+  "description": "Plugins for baton, the terminal multiplexer for AI coding agents.",
+  "owner": {
+    "name": "cmj",
+    "url": "https://github.com/cmj0121"
+  },
+  "plugins": [
+    {
+      "name": "baton",
+      "source": "./agentplugin",
+      "description": "Agent Skills for driving baton, the terminal multiplexer for AI coding agents, from an agent running outside it.",
+      "version": "2.6.2"
+    }
+  ]
+}

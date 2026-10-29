@@ -12,7 +12,11 @@
 // The skills are embedded rather than read from disk so the text an agent reads
 // is always the text that matches the tools this binary serves; the test beside
 // this file holds every tool name a skill mentions to the MCP table its reader
-// is actually handed.
+// is actually handed. They come from two trees: the public ones (baton,
+// conduct, drive) from agentplugin.FS, the same files the marketplace serves to
+// agents outside baton, and the worker-only ones (peers, score) from assets
+// here, which nothing outside baton has a use for. A name lives in exactly one
+// of the two, so Read never has to choose.
 //
 // Two ways out, one per role. A conductor runs in a workspace baton owns, so its
 // skills are written into that workspace's .claude/skills (WriteSkills). A
@@ -35,31 +39,38 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/cmj0121/baton/agentplugin"
 	"github.com/cmj0121/baton/internal/paths"
 )
 
 //go:embed assets
 var assets embed.FS
 
-// Set is which role's skills: the one an ordinary agent panel is handed, or the
-// conductor's.
+// Set is which role's skills: the one an ordinary agent panel is handed, the
+// conductor's, or an outside agent's.
 type Set int
 
-// The two roles. Worker is every ordinary agent panel; Conductor is the one
-// panel baton marks as driving the fleet.
+// The three roles. Worker is every ordinary agent panel; Conductor is the one
+// panel baton marks as driving the fleet; Outside is an agent baton did not
+// launch, driving it on the operator's behalf through `baton ctl` or `baton
+// mcp` — the full, unfenced conductor table.
 const (
 	Worker Set = iota
 	Conductor
+	Outside
 )
 
-// sets is each role's skills. The entry skill, baton, is in both and names no
-// tool because no tool is in both tables; each role's own skill names that
+// sets is each role's skills. The entry skill, baton, is in every set and names
+// no tool because no tool is in both the worker's table and the full one the
+// conductor and an outside agent are served; each role's own skill names that
 // role's tools. A worker gets no conduct (it is refused the fleet verbs) and the
 // conductor gets no peers or score (it is refused the peer verbs, and its own
-// memory duties are a section of conduct).
+// memory duties are a section of conduct). An outside agent gets the
+// conductor's skills plus drive, which is how it reaches baton at all.
 var sets = map[Set][]string{
 	Worker:    {"baton", "peers", "score"},
 	Conductor: {"baton", "conduct"},
+	Outside:   {"baton", "conduct", "drive"},
 }
 
 // manifestName is the file WriteSkills records its own names in. It is how a
@@ -78,8 +89,13 @@ func Names(set Set) []string {
 	return slices.Clone(sets[set])
 }
 
-// Read is one skill's SKILL.md, as embedded.
+// Read is one skill's SKILL.md, as embedded: the public tree first, then the
+// worker-only one. A miss in the second is the error returned, so an unknown
+// name still fails as fs.ErrNotExist.
 func Read(name string) ([]byte, error) {
+	if data, err := agentplugin.FS.ReadFile("skills/" + name + "/SKILL.md"); err == nil {
+		return data, nil
+	}
 	return assets.ReadFile("assets/" + name + "/SKILL.md")
 }
 
