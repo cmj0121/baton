@@ -32,12 +32,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/cmj0121/baton/agentplugin"
 	"github.com/cmj0121/baton/internal/paths"
@@ -77,6 +79,10 @@ var sets = map[Set][]string{
 // later write tells a skill baton put there from one the operator did.
 const manifestName = ".baton-skills"
 
+// manifestCap is the most bytes manifest reads. A real one is a few skill
+// names; anything past this is not one baton wrote.
+const manifestCap = 4 << 10
+
 // pluginName is the plugin's name in its manifest. It is not "baton", so the
 // directory baton hands a panel never collides with a baton plugin the operator
 // installed themselves.
@@ -111,6 +117,23 @@ func Read(name string) ([]byte, error) {
 // plain name is skipped rather than followed: the file is on disk, and the one
 // thing worse than a stale skill is a RemoveAll steered out of dir.
 func WriteSkills(dir string, set Set) error {
+	prev, err := os.ReadFile(filepath.Join(dir, manifestName))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	var retire []string
+	for _, old := range strings.Fields(string(prev)) {
+		if old == filepath.Base(old) && old != "." && old != ".." {
+			retire = append(retire, old)
+		}
+	}
+	return writeSet(dir, set, retire)
+}
+
+// writeSet writes set into dir, then removes every name in prev that set does
+// not hold, then records set as dir's manifest. Each caller decides which
+// listed names it trusts enough to pass as prev.
+func writeSet(dir string, set Set, prev []string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -132,12 +155,8 @@ func WriteSkills(dir string, set Set) error {
 	// Retire after writing, and record the new manifest last: a failure anywhere
 	// above leaves the old manifest naming everything baton may own, so the next
 	// write still knows to clean it.
-	prev, err := os.ReadFile(filepath.Join(dir, manifestName))
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	for _, old := range strings.Fields(string(prev)) {
-		if slices.Contains(names, old) || old != filepath.Base(old) || old == "." || old == ".." {
+	for _, old := range prev {
+		if slices.Contains(names, old) {
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(dir, old)); err != nil {
@@ -287,22 +306,33 @@ func install(tmp, dir string) error {
 // dir to wherever it points, and the manifest is a file on disk, not proof of
 // what sits beside it. Every name is Lstat'ed, owned or not.
 //
-// dir itself, and the path above it, may be symlinks, and that is deliberate:
-// a ~/.claude or ~/.claude/skills linked into a dotfiles repository is the
-// operator's own layout and the place they mean. The guard is on the levels
-// baton creates and owns — dir/<name> and the files in it.
+// dir itself, and the path above it, may be symlinks: Install writes wherever
+// dir resolves. Whether a symlinked dir is acceptable depends on who chose it,
+// so that is the caller's check — `baton skill` confines a --project dir to the
+// current directory and lets a --user one follow the operator's dotfiles. The
+// guard here is on the levels baton creates and owns — dir/<name> and the files
+// in it.
+//
+// Ownership comes from manifest, which vouches only for the names in set: a
+// .baton-skills listing anything else — committed to a cloned repository, say
+// — neither claims that name nor gets it retired. That includes baton's own
+// worker-only skills, which an install of set never writes.
 //
 // force replaces foreign names outright: removed (a symlink as the link, never
 // its target), then written fresh, so no file of the operator's lingers inside
 // a directory baton now claims, and the manifest takes ownership so uninstall
 // removes it too.
 func Install(dir string, set Set, force bool) ([]string, error) {
-	owned, err := manifest(dir)
+	owned, _, err := manifest(dir, set)
 	if err != nil {
 		return nil, err
 	}
 	var foreign []string
 	for _, name := range Names(set) {
+		// Accepted residual risk: a process running as the same user can swap
+		// dir/<name> for a link between this Lstat and the write. Closing that
+		// race needs openat-style writes in the shared paths.WriteFileAtomic, and
+		// such a process can already write anywhere this user can.
 		fi, err := os.Lstat(filepath.Join(dir, name))
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -330,7 +360,7 @@ func Install(dir string, set Set, force bool) ([]string, error) {
 			return nil, err
 		}
 	}
-	if err := WriteSkills(dir, set); err != nil {
+	if err := writeSet(dir, set, owned); err != nil {
 		return nil, err
 	}
 	var written []string
@@ -349,17 +379,15 @@ func tmpNames(dir string, set Set) []string {
 	return out
 }
 
-// Uninstall removes from dir every skill its manifest lists, then the manifest,
-// and returns every path it removed. A directory the manifest does not name is
-// left alone whatever it is called — the same ownership rule WriteSkills keeps —
-// and a dir with no manifest has nothing of baton's in it, so that is no error.
-func Uninstall(dir string) ([]string, error) {
+// Uninstall removes from dir every skill of set its manifest lists, then the
+// manifest, and returns every path it removed. A directory the manifest does
+// not name is left alone whatever it is called, and so is one it names that is
+// not in set. A dir with no manifest — or with one that is not a regular file,
+// which baton never writes — has nothing of baton's in it, so that is no error.
+func Uninstall(dir string, set Set) ([]string, error) {
 	m := filepath.Join(dir, manifestName)
-	if _, err := os.Lstat(m); errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	owned, err := manifest(dir)
-	if err != nil {
+	owned, present, err := manifest(dir, set)
+	if err != nil || !present {
 		return nil, err
 	}
 	var removed []string
@@ -379,22 +407,44 @@ func Uninstall(dir string) ([]string, error) {
 	return append(removed, m), nil
 }
 
-// manifest is the names dir's .baton-skills records, dropping any entry that
-// is not a plain name for the reason WriteSkills gives. A missing manifest is
-// an empty one.
-func manifest(dir string) ([]string, error) {
-	b, err := os.ReadFile(filepath.Join(dir, manifestName))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+// manifest is the names of set that dir's .baton-skills records, and whether
+// a manifest is there at all. Any other entry is dropped: the file may come
+// from a cloned repository, and a name it lists is not proof baton wrote that
+// directory. A missing manifest is an empty one, and so is one that is not a
+// regular file — a symlink could point at any file, a FIFO would block the
+// read. The file is opened once, without following a link and without
+// blocking, and its type is checked on the open descriptor, so nothing can
+// swap it between the check and the read. One over manifestCap is an error
+// rather than a truncated read, which could cut a name in half.
+func manifest(dir string, set Set) ([]string, bool, error) {
+	p := filepath.Join(dir, manifestName)
+	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ELOOP) {
+		return nil, false, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, false, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, false, nil
+	}
+	b, err := io.ReadAll(io.LimitReader(f, manifestCap+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(b) > manifestCap {
+		return nil, false, fmt.Errorf("%s is over %d bytes; baton did not write it", p, manifestCap)
 	}
 	var names []string
 	for _, n := range strings.Fields(string(b)) {
-		if n == filepath.Base(n) && n != "." && n != ".." {
+		if slices.Contains(sets[set], n) {
 			names = append(names, n)
 		}
 	}
-	return names, nil
+	return names, true, nil
 }

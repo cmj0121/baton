@@ -4,7 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/alecthomas/kong"
 
@@ -36,11 +39,63 @@ type skillScope struct {
 	User    bool `xor:"scope" help:"Use ~/.claude/skills, read by every Claude Code session you run."`
 }
 
-func (s skillScope) dir() string {
+// dir is the skills directory with every symlink in its existing part
+// resolved, so what is printed and acted on is where the files really go.
+//
+// The two scopes treat a symlink differently, on purpose. A --project dir sits
+// in a repository that may have been cloned from anyone, and that repository
+// can commit .claude or .claude/skills as a symlink to anywhere — install,
+// --force and uninstall would then write and delete there. So a --project dir
+// must resolve inside the resolved current directory or it is refused. A
+// --user dir is the operator's own home, where a ~/.claude linked into a
+// dotfiles repository is their layout and the place they mean, so it is
+// followed wherever it goes.
+func (s skillScope) dir() (string, error) {
 	if s.User {
-		return paths.Expand("~/.claude/skills")
+		return resolveExisting(paths.Expand("~/.claude/skills"))
 	}
-	return paths.Expand(filepath.Join(".claude", "skills"))
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	root, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return "", err
+	}
+	dir, err := resolveExisting(filepath.Join(cwd, ".claude", "skills"))
+	if err != nil {
+		return "", err
+	}
+	if rel, err := filepath.Rel(root, dir); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("refusing %s: it resolves to %s, outside the current directory %s (a symlinked .claude?)",
+			filepath.Join(cwd, ".claude", "skills"), dir, root)
+	}
+	return dir, nil
+}
+
+// resolveExisting is p with its deepest existing ancestor's symlinks resolved
+// and the missing rest appended. An ancestor that is there but will not
+// resolve — a dangling link — is an error: MkdirAll would follow it later, to
+// wherever it points.
+func resolveExisting(p string) (string, error) {
+	var rest []string
+	for cur := p; ; cur = filepath.Dir(cur) {
+		_, err := os.Lstat(cur)
+		if err == nil {
+			r, err := filepath.EvalSymlinks(cur)
+			if err != nil {
+				return "", fmt.Errorf("resolve %s: %w", cur, err)
+			}
+			for i := len(rest) - 1; i >= 0; i-- {
+				r = filepath.Join(r, rest[i])
+			}
+			return r, nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) || filepath.Dir(cur) == cur {
+			return "", err
+		}
+		rest = append(rest, filepath.Base(cur))
+	}
 }
 
 type skillInstall struct {
@@ -49,7 +104,12 @@ type skillInstall struct {
 }
 
 func (c skillInstall) Run(out io.Writer) error {
-	written, err := skills.Install(c.dir(), skills.Outside, c.Force)
+	dir, err := c.dir()
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(out, "skills dir: "+dir)
+	written, err := skills.Install(dir, skills.Outside, c.Force)
 	if err != nil {
 		return err
 	}
@@ -71,12 +131,17 @@ type skillUninstall struct {
 }
 
 func (c skillUninstall) Run(out io.Writer) error {
-	removed, err := skills.Uninstall(c.dir())
+	dir, err := c.dir()
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(out, "skills dir: "+dir)
+	removed, err := skills.Uninstall(dir, skills.Outside)
 	if err != nil {
 		return err
 	}
 	if len(removed) == 0 {
-		_, _ = fmt.Fprintln(out, "nothing to remove: no skills installed by baton in "+c.dir())
+		_, _ = fmt.Fprintln(out, "nothing to remove: no skills installed by baton in "+dir)
 	}
 	for _, p := range removed {
 		_, _ = fmt.Fprintln(out, p)

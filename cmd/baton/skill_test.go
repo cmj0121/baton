@@ -196,10 +196,99 @@ func TestSkillUsageErrorsExitTwo(t *testing.T) {
 func TestSkillUninstallFailureExitsOne(t *testing.T) {
 	_, cwd := skillEnv(t)
 	m := filepath.Join(cwd, ".claude", "skills", ".baton-skills")
-	if err := os.MkdirAll(m, 0o700); err != nil { // a directory where the file should be
+	if err := os.MkdirAll(filepath.Dir(m), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(m, bytes.Repeat([]byte("x"), 8<<10), 0o600); err != nil { // over the cap
 		t.Fatal(err)
 	}
 	if code, _, errs := runSkill("uninstall"); code != 1 {
 		t.Errorf("exit %d, stderr %q; want 1", code, errs)
+	}
+}
+
+// TestSkillProjectRefusesAClaudeLinkedOutside: a cloned repository commits
+// .claude as a symlink out of the tree. Install and uninstall both refuse,
+// naming the path and where it resolves, and nothing out there changes — a
+// dangling link included, which MkdirAll would otherwise follow.
+func TestSkillProjectRefusesAClaudeLinkedOutside(t *testing.T) {
+	_, cwd := skillEnv(t)
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "skills")
+	for _, name := range []string{"baton", "conduct", "drive"} {
+		if err := os.MkdirAll(filepath.Join(victim, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(victim, ".baton-skills"), []byte("baton\nconduct\ndrive\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(cwd, ".claude")); err != nil {
+		t.Fatal(err)
+	}
+	snap := func() []string {
+		var out []string
+		_ = filepath.WalkDir(outside, func(p string, _ os.DirEntry, _ error) error {
+			out = append(out, p)
+			return nil
+		})
+		return out
+	}
+	before := strings.Join(snap(), "\n")
+
+	for _, args := range [][]string{{"install"}, {"install", "--force"}, {"uninstall"}} {
+		code, _, errs := runSkill(args...)
+		if code != 1 {
+			t.Errorf("%v: exit %d, stderr %q; want 1", args, code, errs)
+		}
+		if !strings.Contains(errs, resolved(t, victim)) || !strings.Contains(errs, filepath.Join(cwd, ".claude", "skills")) {
+			t.Errorf("%v: refusal does not name both paths: %q", args, errs)
+		}
+	}
+	if after := strings.Join(snap(), "\n"); after != before {
+		t.Errorf("a refused command changed the link's target:\nbefore %s\nafter  %s", before, after)
+	}
+
+	if err := os.Remove(filepath.Join(cwd, ".claude")); err != nil {
+		t.Fatal(err)
+	}
+	dangling := filepath.Join(outside, "not-yet")
+	if err := os.Symlink(dangling, filepath.Join(cwd, ".claude")); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errs := runSkill("install"); code != 1 {
+		t.Errorf("dangling .claude: exit %d, stderr %q; want 1", code, errs)
+	}
+	if _, err := os.Lstat(dangling); err == nil {
+		t.Error("install created the dangling link's target")
+	}
+}
+
+// TestSkillProjectAcceptsALinkInsideCwd: a .claude linked to somewhere inside
+// the repository is still the repository, so install writes there and prints
+// the resolved dir first.
+func TestSkillProjectAcceptsALinkInsideCwd(t *testing.T) {
+	_, cwd := skillEnv(t)
+	inner := filepath.Join(cwd, "config", "claude")
+	if err := os.MkdirAll(inner, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(inner, filepath.Join(cwd, ".claude")); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs := runSkill("install")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errs)
+	}
+	want := filepath.Join(resolved(t, inner), "skills")
+	if first, _, _ := strings.Cut(out, "\n"); first != "skills dir: "+want {
+		t.Errorf("first line %q; want the resolved dir %s", first, want)
+	}
+	mustExist(t, filepath.Join(inner, "skills", "conduct", "SKILL.md"))
+	if code, _, errs := runSkill("uninstall"); code != 0 {
+		t.Fatalf("uninstall: exit %d, stderr %q", code, errs)
+	}
+	if _, err := os.Stat(filepath.Join(inner, "skills", "conduct")); err == nil {
+		t.Error("uninstall through an inside link left conduct/")
 	}
 }

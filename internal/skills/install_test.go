@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // snapshot is every file under dir as relative path → content, so "nothing was
@@ -65,7 +67,7 @@ func TestInstallWritesTheSetAndItsManifest(t *testing.T) {
 			t.Errorf("returned paths miss %s: %v", p, paths)
 		}
 	}
-	owned, err := manifest(dir)
+	owned, _, err := manifest(dir, Outside)
 	if err != nil || !slices.Equal(owned, Names(Outside)) {
 		t.Errorf("manifest = %v, %v; want %v", owned, err, Names(Outside))
 	}
@@ -120,7 +122,7 @@ func TestInstallForceReplacesAForeignName(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "conduct", "extra.sh")); err == nil {
 		t.Error("a forced install left the operator's file inside conduct/")
 	}
-	if owned, _ := manifest(dir); !slices.Contains(owned, "conduct") {
+	if owned, _, _ := manifest(dir, Outside); !slices.Contains(owned, "conduct") {
 		t.Errorf("manifest does not own conduct after --force: %v", owned)
 	}
 }
@@ -160,7 +162,7 @@ func TestUninstallRemovesOnlyOwnedNames(t *testing.T) {
 	_, _ = f.WriteString("../outside\n")
 	_ = f.Close()
 
-	removed, err := Uninstall(dir)
+	removed, err := Uninstall(dir, Outside)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +191,7 @@ func TestUninstallRemovesOnlyOwnedNames(t *testing.T) {
 func TestUninstallWithNoManifestIsANoOp(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "skills")
 	writeFile(t, filepath.Join(dir, "conduct", "SKILL.md"), "mine")
-	removed, err := Uninstall(dir)
+	removed, err := Uninstall(dir, Outside)
 	if err != nil || len(removed) != 0 {
 		t.Fatalf("Uninstall = %v, %v; want nothing", removed, err)
 	}
@@ -270,5 +272,107 @@ func TestInstallDoesNotFollowAPlantedTempLink(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(victim); string(b) != "untouched" {
 		t.Errorf("install wrote through a planted .tmp link: %q", b)
+	}
+}
+
+// TestCraftedManifestCannotClaimAForeignName: a .baton-skills committed to a
+// cloned repository lists mine, and score — a baton skill name, but a
+// worker-only one an Outside install never writes. Neither is in the set, so
+// neither the retire step of an install nor an uninstall may remove it.
+func TestCraftedManifestCannotClaimAForeignName(t *testing.T) {
+	for _, name := range []string{"mine", "score"} {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "skills")
+			victim := filepath.Join(dir, name, "SKILL.md")
+			writeFile(t, victim, "operator's")
+			writeFile(t, filepath.Join(dir, manifestName), name+"\n")
+
+			if _, err := Install(dir, Outside, false); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(victim); err != nil {
+				t.Fatalf("install retired a name only a crafted manifest listed: %v", err)
+			}
+			writeFile(t, filepath.Join(dir, manifestName), "baton\nconduct\ndrive\n"+name+"\n")
+			if _, err := Uninstall(dir, Outside); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(victim); err != nil {
+				t.Errorf("uninstall removed a name only a crafted manifest listed: %v", err)
+			}
+		})
+	}
+}
+
+// TestSymlinkedManifestIsNoManifest: a .baton-skills that is a link vouches for
+// nothing. Install sees every existing name as foreign, uninstall finds nothing
+// of baton's, and the link's target is never touched.
+func TestSymlinkedManifestIsNoManifest(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "skills")
+	writeFile(t, filepath.Join(dir, "conduct", "SKILL.md"), "mine")
+	target := filepath.Join(t.TempDir(), "list")
+	writeFile(t, target, "baton\nconduct\ndrive\n")
+	if err := os.Symlink(target, filepath.Join(dir, manifestName)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Install(dir, Outside, false); err == nil || !strings.Contains(err.Error(), "conduct") {
+		t.Fatalf("install trusted a symlinked manifest: err %v", err)
+	}
+	removed, err := Uninstall(dir, Outside)
+	if err != nil || len(removed) != 0 {
+		t.Fatalf("Uninstall = %v, %v; want nothing", removed, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "conduct", "SKILL.md")); err != nil {
+		t.Errorf("conduct/ removed on a symlinked manifest's word: %v", err)
+	}
+	if b, _ := os.ReadFile(target); string(b) != "baton\nconduct\ndrive\n" {
+		t.Errorf("the manifest link's target changed: %q", b)
+	}
+}
+
+// TestOversizedManifestIsAnError: past the cap is not a manifest baton wrote,
+// and a truncated read could cut a name in half, so both commands refuse.
+func TestOversizedManifestIsAnError(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "skills")
+	writeFile(t, filepath.Join(dir, manifestName), "baton\n"+strings.Repeat("x", manifestCap))
+	if _, err := Install(dir, Outside, false); err == nil {
+		t.Error("install read an oversized manifest")
+	}
+	if _, err := Uninstall(dir, Outside); err == nil {
+		t.Error("uninstall read an oversized manifest")
+	}
+	if _, err := os.Stat(filepath.Join(dir, manifestName)); err != nil {
+		t.Errorf("the oversized manifest was removed: %v", err)
+	}
+}
+
+// TestFIFOManifestDoesNotHang: a .baton-skills that is a FIFO with no writer
+// would block a plain open or read forever. It is not a regular file, so it is
+// no manifest: install sees conduct/ as foreign, uninstall finds nothing.
+func TestFIFOManifestDoesNotHang(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "skills")
+	writeFile(t, filepath.Join(dir, "conduct", "SKILL.md"), "mine")
+	if err := syscall.Mkfifo(filepath.Join(dir, manifestName), 0o600); err != nil {
+		t.Skipf("mkfifo unsupported: %v", err)
+	}
+	done := make(chan struct{})
+	var installErr, uninstallErr error
+	var removed []string
+	go func() {
+		defer close(done)
+		_, installErr = Install(dir, Outside, false)
+		removed, uninstallErr = Uninstall(dir, Outside)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("install or uninstall hung on a FIFO manifest")
+	}
+	if installErr == nil || !strings.Contains(installErr.Error(), "conduct") {
+		t.Errorf("install trusted a FIFO manifest: err %v", installErr)
+	}
+	if uninstallErr != nil || len(removed) != 0 {
+		t.Errorf("Uninstall = %v, %v; want nothing", removed, uninstallErr)
 	}
 }
