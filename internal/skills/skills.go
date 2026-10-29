@@ -266,3 +266,135 @@ func install(tmp, dir string) error {
 	}
 	return fmt.Errorf("install plugin %s: %w (an incomplete tree is there; remove it)", dir, err)
 }
+
+// Install writes set into dir the way WriteSkills does, but refuses to clobber
+// what it does not own, and returns every path it wrote.
+//
+// It is a separate function rather than an option on WriteSkills because the
+// two dirs differ in who else is there. The conductor's workspace is baton's,
+// and a same-name skill in it is one baton wrote or a stale copy it should
+// replace, so WriteSkills keeps overwriting and the conductor path is untouched.
+// `baton skill install` writes into the operator's repository or their home,
+// where a skill called conduct may be the operator's own, and overwriting it
+// without a word destroys work. So every target name is checked BEFORE anything
+// is written: a name that exists and is not in dir's manifest is foreign, and
+// any foreign name fails the whole install with all of them listed, leaving dir
+// exactly as it was. Half an install would be the worst of both — some of the
+// operator's skills replaced and baton's set incomplete.
+//
+// Foreign also covers a name the manifest lists that is no longer a real
+// directory: a symlink there would carry WriteSkills' MkdirAll and write out of
+// dir to wherever it points, and the manifest is a file on disk, not proof of
+// what sits beside it. Every name is Lstat'ed, owned or not.
+//
+// dir itself, and the path above it, may be symlinks, and that is deliberate:
+// a ~/.claude or ~/.claude/skills linked into a dotfiles repository is the
+// operator's own layout and the place they mean. The guard is on the levels
+// baton creates and owns — dir/<name> and the files in it.
+//
+// force replaces foreign names outright: removed (a symlink as the link, never
+// its target), then written fresh, so no file of the operator's lingers inside
+// a directory baton now claims, and the manifest takes ownership so uninstall
+// removes it too.
+func Install(dir string, set Set, force bool) ([]string, error) {
+	owned, err := manifest(dir)
+	if err != nil {
+		return nil, err
+	}
+	var foreign []string
+	for _, name := range Names(set) {
+		fi, err := os.Lstat(filepath.Join(dir, name))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !fi.IsDir() || !slices.Contains(owned, name) {
+			foreign = append(foreign, name)
+		}
+	}
+	if len(foreign) > 0 && !force {
+		return nil, fmt.Errorf("%s already holds skills baton did not install, or that are not plain directories: %s (re-run with --force to replace them)", dir, strings.Join(foreign, ", "))
+	}
+	for _, name := range foreign {
+		if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
+			return nil, err
+		}
+	}
+	// WriteFileAtomic opens the target's .tmp sibling without O_EXCL, so a link
+	// planted under that name would be followed. Remove is Lstat-based and
+	// takes the link, never its target.
+	for _, tmp := range append(tmpNames(dir, set), filepath.Join(dir, manifestName+".tmp")) {
+		if err := os.Remove(tmp); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+	}
+	if err := WriteSkills(dir, set); err != nil {
+		return nil, err
+	}
+	var written []string
+	for _, name := range Names(set) {
+		written = append(written, filepath.Join(dir, name, "SKILL.md"))
+	}
+	return append(written, filepath.Join(dir, manifestName)), nil
+}
+
+// tmpNames is the temp path WriteFileAtomic uses for each SKILL.md in set.
+func tmpNames(dir string, set Set) []string {
+	var out []string
+	for _, name := range Names(set) {
+		out = append(out, filepath.Join(dir, name, "SKILL.md.tmp"))
+	}
+	return out
+}
+
+// Uninstall removes from dir every skill its manifest lists, then the manifest,
+// and returns every path it removed. A directory the manifest does not name is
+// left alone whatever it is called — the same ownership rule WriteSkills keeps —
+// and a dir with no manifest has nothing of baton's in it, so that is no error.
+func Uninstall(dir string) ([]string, error) {
+	m := filepath.Join(dir, manifestName)
+	if _, err := os.Lstat(m); errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	owned, err := manifest(dir)
+	if err != nil {
+		return nil, err
+	}
+	var removed []string
+	for _, name := range owned {
+		p := filepath.Join(dir, name)
+		if _, err := os.Lstat(p); err != nil {
+			continue
+		}
+		if err := os.RemoveAll(p); err != nil {
+			return removed, err
+		}
+		removed = append(removed, p)
+	}
+	if err := os.Remove(m); err != nil {
+		return removed, err
+	}
+	return append(removed, m), nil
+}
+
+// manifest is the names dir's .baton-skills records, dropping any entry that
+// is not a plain name for the reason WriteSkills gives. A missing manifest is
+// an empty one.
+func manifest(dir string) ([]string, error) {
+	b, err := os.ReadFile(filepath.Join(dir, manifestName))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, n := range strings.Fields(string(b)) {
+		if n == filepath.Base(n) && n != "." && n != ".." {
+			names = append(names, n)
+		}
+	}
+	return names, nil
+}
