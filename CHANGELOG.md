@@ -4,6 +4,22 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v2.7.0](https://github.com/cmj0121/baton/releases/tag/v2.7.0) — agents that know what baton can do
+
+2026-10-29
+
+- **Agents inside baton get native skills.** A claude worker panel is launched with `--plugin-dir` pointing at a
+  content-hashed `baton-panel` plugin (`baton`, `peers`, `score`), behind a cached `--help` probe so an older Claude
+  Code still starts; the conductor's workspace gets `baton` and `conduct`, on top of its unchanged primer (#163).
+- **MCP `initialize` carries role-specific instructions.** Any MCP client now reads what baton is and which skill
+  explains its tools before the first call; the tool names in it are tested against each role's table (#163).
+- **Agents outside baton can install the skills.** The `baton`, `conduct` and new `drive` skills ship as a Claude
+  Code plugin — `/plugin marketplace add cmj0121/baton`, then `/plugin install baton@cmj0121-baton` — or through
+  `baton skill install [--project|--user]`. Skills only: `baton mcp` stays an explicit opt-in (#164).
+- **`baton skill install` refuses what it does not own.** A same-name skill baton did not write stops the whole
+  install unless `--force`; `--project` must resolve inside the current directory, and the manifest vouches only for
+  baton's own names (#164).
+
 ## [v2.6.2](https://github.com/cmj0121/baton/releases/tag/v2.6.2) — codex, typed whole and counted
 
 2026-10-28

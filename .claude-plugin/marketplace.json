@@ -10,7 +10,7 @@
       "name": "baton",
       "source": "./agentplugin",
       "description": "Agent Skills for driving baton, the terminal multiplexer for AI coding agents, from an agent running outside it.",
-      "version": "2.6.2"
+      "version": "2.7.0"
     }
   ]
 }
