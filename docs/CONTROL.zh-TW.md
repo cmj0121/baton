@@ -376,7 +376,9 @@ claude mcp add baton -- baton mcp
 `--project` 會寫進你的 repo。它在目前目錄底下建立 `.claude/skills/{baton,conduct,drive}/` 與
 `.claude/skills/.baton-skills` 這份清單,所以它們會出現在 `git status` 上:要讓 repo 上的每個人共用這些技能就
 commit 它們,否則就加進 `.gitignore`。每一個在那個 repo 裡啟動的 agent 都會讀到它們——baton 在那裡開的 worker
-面板也一樣。
+面板也一樣。指令動手前會先印出它解析出的目錄,而解析到目前目錄之外的會被拒絕:repo 可以把 `.claude` commit
+成 symlink,否則 install、`--force` 與 uninstall 就會在它指向的地方寫入與刪除。`--user` 則不管 `~/.claude`
+連到哪裡都照著走,因為連進 dotfiles repo 的家目錄是你自己的配置。
 
 worker 面板會被告知退下。worker 若透過專案或使用者層級的安裝找到 `drive`,就可能把自己當成外部角色,而它單純的
 `baton ctl` 會撥到不受限的角色。所以 `baton`、`drive` 與 `conduct` 都帶著同一句話:如果設了 `BATON_PANEL_ID`
@@ -391,7 +393,9 @@ worker 面板會被告知退下。worker 若透過專案或使用者層級的安
 你自己的技能永遠不會被覆寫。寫入任何東西之前,每一個目標名稱都會先檢查。`.baton-skills` 沒有列出的同名目錄,
 或是一個是 symlink、一般檔案而不是目錄的名稱,都算外來的;只要有任何一個外來名稱,整次安裝就會失敗,把它們全部
 列出來,什麼都不寫。`--force` 會取代它們:每一個都先被移除——symlink 移除的是連結本身,從不是它指向的東西——再
-重新寫入,清單也接手擁有權,所以之後 `baton skill uninstall` 會把它移除。uninstall 只會移除清單上列出的名稱。
+重新寫入,清單也接手擁有權,所以之後 `baton skill uninstall` 會把它移除。uninstall 只會移除清單上列出、而且是
+它安裝的那三個 `baton`、`conduct`、`drive`:`.baton-skills` 若列了別的名稱、不是一般檔案(例如 symlink),或
+超過 4 KiB,就什麼都不算數(最後一種會直接報錯)。
 
 ## 群組互通
 

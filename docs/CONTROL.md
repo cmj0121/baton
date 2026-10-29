@@ -409,7 +409,10 @@ That serves the conductor's full fleet table, unscoped.
 **`--project` writes into your repository.** It creates `.claude/skills/{baton,conduct,drive}/` and the
 `.claude/skills/.baton-skills` manifest under the current directory, so they show in `git status`: commit them to share
 the skills with everyone on the repository, or add them to `.gitignore`. Every agent that starts in that repository
-reads them — the worker panels baton spawns there too.
+reads them — the worker panels baton spawns there too. The command prints the directory it resolved before acting,
+and refuses one that resolves outside the current directory: a repository can commit `.claude` as a symlink, and
+install, `--force` and uninstall would otherwise write and delete wherever it points. `--user` follows a symlinked
+`~/.claude` wherever it goes, since a home linked into a dotfiles repository is your own layout.
 
 **Worker panels are told to stand down.** A worker that finds `drive` through a project or user install would otherwise
 read itself as the outside role, and its plain `baton ctl` would dial the unscoped role. So `baton`, `drive` and
@@ -427,7 +430,9 @@ naming each shadowing path the first time it writes the conductor's workspace in
 directory that `.baton-skills` does not list, or a name that is a symlink or a plain file rather than a directory, is
 foreign, and any foreign name fails the whole install with all of them listed and nothing written. `--force` replaces
 them: each is removed — a symlink as the link, never what it points to — and written fresh, and the manifest takes
-ownership, so `baton skill uninstall` removes it later. Uninstall only ever removes the names the manifest lists.
+ownership, so `baton skill uninstall` removes it later. Uninstall only ever removes the names the manifest lists, and
+only `baton`, `conduct` and `drive`, the three it installs: a `.baton-skills` that lists anything else, is not a plain
+file (a symlink, say), or is over 4 KiB vouches for nothing (the last is an error).
 
 ## Peers
 
