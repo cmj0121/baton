@@ -157,7 +157,7 @@ func TestWithAgentMCPLeavesTheLaunchAlone(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	spec := ptymgr.Spec{Command: "claude"}
 
-	got, why := withAgentMCP(true, spec)
+	got, why := withAgentMCP(true, spec, nil)
 	if len(got.Args) != 2 || got.Args[0] != "--mcp-config" || why != memoryToolWired {
 		t.Fatalf("a worker agent should be pointed at a config, got %v (%q)", got.Args, why)
 	}
@@ -175,7 +175,7 @@ func TestWithAgentMCPLeavesTheLaunchAlone(t *testing.T) {
 		{"an MCP config is already named", true,
 			ptymgr.Spec{Command: "claude", Args: []string{"--mcp-config", "/mine.json"}}, memoryToolOwnConfig},
 	} {
-		got, why := withAgentMCP(tc.wire, tc.spec)
+		got, why := withAgentMCP(tc.wire, tc.spec, nil)
 		if len(got.Args) != len(tc.spec.Args) {
 			t.Errorf("%s: the launch should be untouched, got %v", tc.name, got.Args)
 		}
@@ -186,7 +186,7 @@ func TestWithAgentMCPLeavesTheLaunchAlone(t *testing.T) {
 
 	// The command is resolved by its basename, so a profile running claude from an
 	// absolute path — or under another profile name — is still claude.
-	if abs, _ := withAgentMCP(true, ptymgr.Spec{Command: "/usr/local/bin/claude"}); len(abs.Args) != 2 {
+	if abs, _ := withAgentMCP(true, ptymgr.Spec{Command: "/usr/local/bin/claude"}, nil); len(abs.Args) != 2 {
 		t.Errorf("an absolute path should resolve the same, got %v", abs.Args)
 	}
 }

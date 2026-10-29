@@ -497,6 +497,14 @@ type Server struct {
 	// panel's spec. Guarded by mu.
 	memoryTool map[string]string
 
+	// pluginDirOK caches whether a Claude Code binary takes --plugin-dir, keyed
+	// by its resolved path and mtime so an upgrade in place is asked again. It
+	// has a mutex of its own because it is consulted after startPanel has let go
+	// of mu, and a probe can take seconds — holding mu for one would stall every
+	// connection's hello behind a child process (see wiresMemoryLocked).
+	pluginDirMu sync.Mutex
+	pluginDirOK map[string]bool
+
 	// The quiet ladder. attention is the fleet-wide policy and agentAttention the
 	// per-profile ones layered over it (see Settings), resolved per tick from the
 	// profile each panel records rather than frozen at spawn — which is what lets
@@ -1358,7 +1366,7 @@ func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 	// re-run and a panel Restore rebuilt from a snapshot are wired exactly like a
 	// fresh spawn. Baking it into the stored spec is what left a whole upgraded
 	// fleet unable to write to its own memory.
-	spec, why := withAgentMCP(wireMemory, spec)
+	spec, why := withAgentMCP(wireMemory, spec, s.pluginsOK(iso))
 	if wireMemory {
 		refusal = why // this panel was in scope; the verdict is the wiring's own
 	}

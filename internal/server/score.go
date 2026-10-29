@@ -1,23 +1,29 @@
 package server
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/cmj0121/baton/internal/agents"
+	"github.com/cmj0121/baton/internal/isolate"
 	"github.com/cmj0121/baton/internal/panel"
 	"github.com/cmj0121/baton/internal/paths"
 	"github.com/cmj0121/baton/internal/proto"
 	"github.com/cmj0121/baton/internal/ptymgr"
 	"github.com/cmj0121/baton/internal/score"
+	"github.com/cmj0121/baton/internal/skills"
 )
 
 // This file is the server's side of the fleet memory (internal/score, #39): the
@@ -1936,7 +1942,16 @@ func (s *Server) wiresMemoryLocked(id string) (bool, string) {
 //     one over a file baton wanted to write in its own directory would be the
 //     cure doing more harm than the disease. It is a Warn rather than a Debug,
 //     because it is the one of the three that is a fault rather than a shape.
-func withAgentMCP(wire bool, spec ptymgr.Spec) (ptymgr.Spec, string) {
+//
+// Only once the tool IS wired does the panel also get the worker skills — the
+// baton, peers and score SKILL.md files, as a plugin directory baton builds in
+// its own home. Every refusal above leaves them off too, and not by accident:
+// they teach the agent when to reach for tools that panel would not have.
+// pluginsOK is asked last and only here, because it may exec the backend once
+// to learn whether it takes the flag; a nil one means no skills. The plugin
+// tree failing to build is the same deliberate non-error as the config: a Warn,
+// and an agent that starts with its tool and without the prose about it.
+func withAgentMCP(wire bool, spec ptymgr.Spec, pluginsOK func(ptymgr.Spec) bool) (ptymgr.Spec, string) {
 	if !wire {
 		return spec, ""
 	}
@@ -1955,7 +1970,131 @@ func withAgentMCP(wire bool, spec ptymgr.Spec) (ptymgr.Spec, string) {
 		return spec, memoryToolUnwritable
 	}
 	spec.Args = append(append([]string(nil), spec.Args...), agents.MCPConfigArgs(spec.Command, path)...)
+	if pluginsOK != nil && pluginsOK(spec) {
+		dir, err := skills.Plugin(paths.Expand("~/.baton/agent-plugin"), skills.Worker)
+		if err != nil {
+			log.Warn().Err(err).Msg("agent skills not written; the panel starts without them")
+		} else {
+			spec.Args = append(spec.Args, agents.PluginDirArgs(spec.Command, dir)...)
+		}
+	}
 	return spec, memoryToolWired
+}
+
+// probePluginDir answers whether the Claude Code binary at bin takes
+// --plugin-dir, by reading its --help. A package variable so a test can answer
+// for a binary it does not have — and never execs a real one.
+//
+// The flag is younger than the CLI, and an old install exits on a flag it does
+// not know: appending it blind would turn "this panel lacks its skills" into
+// "this panel does not start". So anything short of the flag named in the help
+// text — a timeout, a non-zero exit, a binary that will not run — is a no. No
+// stdin, so a CLI that would rather prompt than print cannot hold the spawn,
+// and a deadline for one that hangs anyway.
+//
+// The error separates a clean no — help printed, flag absent — from a probe
+// that never got an answer, because the two are logged and cached differently
+// (see supportsPluginDir). A deadline comes back wrapping
+// context.DeadlineExceeded so the caller can tell it from a broken binary.
+//
+// The probe runs in a process group of its own, and the deadline kills the
+// GROUP. claude is very often a shell wrapper around node: CommandContext alone
+// would kill the sh and orphan the node under it, still holding the output pipe
+// and still running long after the spawn gave up on it. ptymgr signals a
+// panel's group for the same reason.
+var probePluginDir = func(bin string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), pluginProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "--help")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second // a pipe still held after the kill must not hold the spawn
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return false, fmt.Errorf("%s --help gave no answer within %s: %w", bin, pluginProbeTimeout, ctx.Err())
+	}
+	if err != nil {
+		return false, fmt.Errorf("%s --help: %w", bin, err)
+	}
+	return bytes.Contains(out, []byte("--plugin-dir")), nil
+}
+
+// pluginProbeTimeout is how long probePluginDir waits for --help. A variable
+// only so a test of the deadline does not have to sit through it.
+var pluginProbeTimeout = 2 * time.Second
+
+// pluginsOK is the question withAgentMCP asks before handing a panel launched
+// under iso the worker skills.
+//
+// An isolated panel is a no without asking: its binary lives in an image, and
+// the claude on the host's PATH — the only one a probe could run — says nothing
+// about the one the container will start.
+func (s *Server) pluginsOK(iso isolate.Policy) func(ptymgr.Spec) bool {
+	if iso.Enabled() {
+		return nil
+	}
+	return s.supportsPluginDir
+}
+
+// supportsPluginDir is whether the binary spec will launch takes --plugin-dir,
+// probed once per binary and remembered.
+//
+// The binary is resolved with exec.LookPath, on the DAEMON's PATH, because that
+// is how ptymgr.StartCmd finds what it execs: exec.Command looks the name up in
+// the daemon's own environment, and a PATH in spec.Env only reaches the child
+// once it is running. Probing anything else would be asking a binary that is
+// not the one about to start. The cache key is that path plus its mtime: the
+// answer is a fact about one file, and an upgrade in place replaces the file.
+// A clean no and a binary whose --help fails are cached until that mtime moves:
+// both are facts about the file, and re-asking would only re-learn them. A
+// TIMEOUT is not cached. It is a fact about the moment — a cold disk, a loaded
+// host, a first run unpacking itself — and caching it would leave every worker
+// on a perfectly capable claude without its skills until the next upgrade. The
+// next spawn asks again. A binary that cannot be found is a no and is not
+// cached either; there is nothing to key it on, and the launch will say why.
+//
+// Each probe that runs is logged, naming the binary, so "the workers have no
+// skills" leaves a trace in baton.log: Debug for a clean no, which is an old
+// CLI behaving as expected, and Warn for no answer at all, which is a fault. A
+// cached answer runs no probe and logs nothing, so a cached verdict is logged
+// once; only a repeated timeout repeats its Warn, once per spawn it delays.
+//
+// The probe runs outside pluginDirMu, so two first launches of a new binary may
+// both ask; both get the same answer, and neither waits on the other's child.
+func (s *Server) supportsPluginDir(spec ptymgr.Spec) bool {
+	bin, err := exec.LookPath(spec.Command)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(bin)
+	if err != nil {
+		return false
+	}
+	key := bin + "\x00" + info.ModTime().String()
+
+	s.pluginDirMu.Lock()
+	ok, seen := s.pluginDirOK[key]
+	s.pluginDirMu.Unlock()
+	if seen {
+		return ok
+	}
+	ok, err = probePluginDir(bin)
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		log.Warn().Err(err).Str("binary", bin).Msg("claude did not answer --help in time; this panel starts without baton's skills, the next spawn asks again")
+		return false
+	case err != nil:
+		log.Warn().Err(err).Str("binary", bin).Msg("could not ask claude whether it takes --plugin-dir; its worker panels start without baton's skills")
+	case !ok:
+		log.Debug().Str("binary", bin).Msg("this claude predates --plugin-dir; its worker panels start without baton's skills")
+	}
+	s.pluginDirMu.Lock()
+	if s.pluginDirOK == nil {
+		s.pluginDirOK = map[string]bool{}
+	}
+	s.pluginDirOK[key] = ok
+	s.pluginDirMu.Unlock()
+	return ok
 }
 
 // memoryToolReport is the write half of score.status: whether the fleet's agent
