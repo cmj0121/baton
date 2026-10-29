@@ -59,6 +59,26 @@ func MCPConfigArgs(command, path string) []string {
 	return nil
 }
 
+// PluginDirArgs is how a backend is told to load one extra plugin directory for
+// this session only — or nil when baton does not know how to tell it.
+//
+// Resolved on the command for the reason MCPConfigArgs is, and limited to Claude
+// Code for the reason it is too: a flag a CLI does not take is a panel that
+// fails to spawn. The flag is repeatable, so this never looks at what the args
+// already carry — a user's own --plugin-dir and baton's sit side by side. Whether
+// THIS install of Claude Code is new enough to know the flag is a question about
+// one binary on one machine, and the server asks it before using this.
+func PluginDirArgs(command, path string) []string {
+	if path == "" {
+		return nil
+	}
+	switch filepath.Base(command) {
+	case "claude":
+		return []string{"--plugin-dir", path}
+	}
+	return nil
+}
+
 // SubmitFor is the key sequence a backend reads as "send this line", or "" when
 // baton does not know one and the server default applies.
 //

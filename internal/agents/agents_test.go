@@ -192,3 +192,25 @@ func TestSubmitFor(t *testing.T) {
 		}
 	}
 }
+
+// PluginDirArgs knows Claude Code by its command basename and nothing else, and
+// an empty path asks for nothing: a lookalike or another CLI handed a flag it
+// does not take is a panel that fails to spawn.
+func TestPluginDirArgs(t *testing.T) {
+	for _, tc := range []struct {
+		command, path string
+		want          []string
+	}{
+		{"claude", "/p", []string{"--plugin-dir", "/p"}},
+		{"/usr/local/bin/claude", "/p", []string{"--plugin-dir", "/p"}},
+		{"claude", "", nil},
+		{"grok", "/p", nil},
+		{"codex", "/p", nil},
+		{"claude-code", "/p", nil},
+		{"", "/p", nil},
+	} {
+		if got := agents.PluginDirArgs(tc.command, tc.path); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("PluginDirArgs(%q, %q) = %v, want %v", tc.command, tc.path, got, tc.want)
+		}
+	}
+}
