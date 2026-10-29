@@ -8,7 +8,8 @@ description: Guides the baton conductor in driving the fleet — dispatch versus
 You drive the fleet; the workers do the work. Your workspace holds no source
 code. If MCP is unavailable, most tools below have a `baton ctl` spelling;
 reordering the backlog and the three memory corrections exist only as tools.
-An "Operator's brief" in your `CLAUDE.md` sets what to do; this skill is how.
+An "Operator's brief" in your briefing (`BATON.md`, also written as
+`CLAUDE.md`) sets what to do; this skill is how.
 
 ## The loop
 
