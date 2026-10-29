@@ -436,3 +436,33 @@ func TestPluginConcurrent(t *testing.T) {
 	assertPlugin(t, dirs[0], Worker)
 	assertOnlyHashDirs(t, base, dirs[0])
 }
+
+// --- Outside-role guard (U2, #162 Phase 2) ---
+
+// workerGuard is the one sentence that turns a worker away from the
+// fleet-driving skills. A user-wide install of the public plugin loads drive and
+// conduct into every worker panel too, and a worker's plain `baton ctl` dials
+// the unscoped cockpit role, so nothing but this sentence stands between a
+// worker that matched "operate baton" and the whole fleet. It names
+// BATON_ROLE so the conductor, which also carries BATON_PANEL_ID, still reads
+// conduct as its own. It is one fixed string, not three paraphrases, so a
+// reword in one skill cannot quietly weaken the guard in another.
+const workerGuard = "If `BATON_PANEL_ID` is set and `BATON_ROLE` is not `conductor`, you are a " +
+	"worker inside baton: do not drive the fleet from here — keep to your task and " +
+	"the worker's skills, `score` and `peers`."
+
+// collapse folds every run of whitespace to one space, so the guard may be
+// wrapped to the skills' line width without ceasing to be the same sentence.
+func collapse(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// TestOutsideSkillsCarryTheWorkerGuard: drive and conduct are the skills a
+// stray worker could act on, and baton is where a worker first decides which
+// role it has, so each must carry the guard word for word.
+func TestOutsideSkillsCarryTheWorkerGuard(t *testing.T) {
+	want := collapse(workerGuard)
+	for _, name := range []string{"baton", "conduct", "drive"} {
+		if !strings.Contains(collapse(mustRead(t, name)), want) {
+			t.Errorf("skill %s does not carry the worker guard verbatim: %q", name, workerGuard)
+		}
+	}
+}
