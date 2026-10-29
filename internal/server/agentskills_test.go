@@ -48,6 +48,13 @@ func script(t *testing.T, dir, name, body string) string {
 // TestProbePluginDirReadsTheHelp: the probe is a yes only when --help runs
 // cleanly and names the flag, and a clean no is told apart from no answer.
 func TestProbePluginDirReadsTheHelp(t *testing.T) {
+	// Every case here answers, so the deadline only has to outlast a loaded
+	// -race box: the production two seconds is a timeout this test does not
+	// test, and under a full parallel suite a fresh script can miss it.
+	prev := pluginProbeTimeout
+	pluginProbeTimeout = 15 * time.Second
+	t.Cleanup(func() { pluginProbeTimeout = prev })
+
 	dir := t.TempDir()
 	for _, tc := range []struct {
 		name, body string
@@ -105,7 +112,9 @@ func TestProbePluginDirKillsTheWholeWrapper(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
-	deadline := time.Now().Add(2 * time.Second)
+	// Generous because it is a ceiling, not a wait: a dead child ends the loop at
+	// once, and only a loaded box's slow ps calls ever spend it.
+	deadline := time.Now().Add(10 * time.Second)
 	for alive(t, pid) {
 		if time.Now().After(deadline) {
 			t.Fatalf("the wrapper's child (pid %d) outlived the probe's kill", pid)
