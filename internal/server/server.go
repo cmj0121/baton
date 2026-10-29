@@ -46,6 +46,7 @@ import (
 	"github.com/cmj0121/baton/internal/score"
 	"github.com/cmj0121/baton/internal/scrub"
 	"github.com/cmj0121/baton/internal/signals"
+	"github.com/cmj0121/baton/internal/skills"
 	"github.com/cmj0121/baton/internal/state"
 	"github.com/cmj0121/baton/internal/task"
 	"github.com/cmj0121/baton/internal/usage"
@@ -495,6 +496,14 @@ type Server struct {
 	// from an empty store. Written at the one fork point, dropped with the
 	// panel's spec. Guarded by mu.
 	memoryTool map[string]string
+
+	// pluginDirOK caches whether a Claude Code binary takes --plugin-dir, keyed
+	// by its resolved path and mtime so an upgrade in place is asked again. It
+	// has a mutex of its own because it is consulted after startPanel has let go
+	// of mu, and a probe can take seconds — holding mu for one would stall every
+	// connection's hello behind a child process (see wiresMemoryLocked).
+	pluginDirMu sync.Mutex
+	pluginDirOK map[string]bool
 
 	// The quiet ladder. attention is the fleet-wide policy and agentAttention the
 	// per-profile ones layered over it (see Settings), resolved per tick from the
@@ -1357,7 +1366,7 @@ func (s *Server) startPanel(id, profile string, spec ptymgr.Spec) error {
 	// re-run and a panel Restore rebuilt from a snapshot are wired exactly like a
 	// fresh spawn. Baking it into the stored spec is what left a whole upgraded
 	// fleet unable to write to its own memory.
-	spec, why := withAgentMCP(wireMemory, spec)
+	spec, why := withAgentMCP(wireMemory, spec, s.pluginsOK(iso))
 	if wireMemory {
 		refusal = why // this panel was in scope; the verdict is the wiring's own
 	}
@@ -4586,15 +4595,17 @@ func (s *Server) resetConductorWorkspace() error {
 }
 
 // writeConductorFiles (re)writes the conductor's workspace wiring, so the agent's
-// only local surface is how to drive baton: the briefing and a .mcp.json pointing
-// an MCP-speaking agent at `baton mcp`. The briefing is written to BATON.md (the
-// canonical, agent-agnostic name) and to CLAUDE.md, which the default Claude
-// conductor auto-reads as its project instructions, so it ingests the mission with
-// no extra wiring; the CLAUDE.md copy is harmless for other agents. It is called on
-// every spawn and respawn, so an edited operator brief ($HOME/.baton/CONDUCTOR.md)
-// is re-read each time the conductor is opened. All writes are best-effort — a
-// missing or stale file just costs a hint or the auto-loaded tools, not
-// correctness.
+// only local surface is how to drive baton: the briefing, a .mcp.json pointing
+// an MCP-speaking agent at `baton mcp`, and the conductor's skills under
+// .claude/skills — where only the skills baton wrote are ever replaced or
+// removed, so a skill the operator put there is left alone. The briefing is
+// written to BATON.md (the canonical, agent-agnostic name) and to CLAUDE.md,
+// which the default Claude conductor auto-reads as its project instructions, so
+// it ingests the mission with no extra wiring; the CLAUDE.md copy is harmless for
+// other agents. It is called on every spawn and respawn, so an edited operator
+// brief ($HOME/.baton/CONDUCTOR.md) is re-read each time the conductor is opened.
+// All writes are best-effort — a missing or stale file just costs a hint or the
+// auto-loaded tools, not correctness.
 //
 // That argument holds only because the writes are atomic. os.WriteFile truncates
 // and then writes, so a failure part-way leaves a TORN file, and a torn CLAUDE.md
@@ -4617,6 +4628,14 @@ func writeConductorFiles(ws, id string) {
 		if err := paths.WriteFileAtomic(filepath.Join(ws, f.name), f.data, 0o600); err != nil {
 			log.Warn().Str("file", f.name).Str("workspace", ws).Err(err).Msg("conductor wiring not written")
 		}
+	}
+	// The skills sit on top of the primer, never in place of it: a skill loads
+	// only when the agent chooses to read it, while CLAUDE.md is read every time,
+	// so the tool list the conductor acts on (#99) stays in the primer and the
+	// skills carry the depth. WriteSkills owns only the names it wrote, so an
+	// operator's own skill in the same directory survives every respawn.
+	if err := skills.WriteSkills(filepath.Join(ws, ".claude", "skills"), skills.Conductor); err != nil {
+		log.Warn().Str("file", ".claude/skills").Str("workspace", ws).Err(err).Msg("conductor wiring not written")
 	}
 }
 
@@ -4723,6 +4742,9 @@ you can drive baton.
 
 If you speak MCP, baton's tools are auto-loaded from .mcp.json. Prefer them all
 to shelling out.
+
+For deeper guidance than this briefing, read .claude/skills/conduct/SKILL.md
+(how to run the fleet) and .claude/skills/baton/SKILL.md (what baton is).
 
 **Giving work.** ` + "`baton_dispatch`" + ` assigns a task to one panel and
 ` + "`baton_dispatch_group`" + ` to every member of a work item. This is NOT the

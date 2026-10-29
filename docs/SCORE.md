@@ -88,6 +88,11 @@ dotfile baton wrote would show up in `git status`. It carries the memory's write
 peers on for: the full table drives the fleet (spawn, close, signal) and that is the conductor's job. Turn it off with
 `panel.agent-mcp: false`, or on the panel-config page's DEFAULTS tab.
 
+A Claude Code worker that gets this config also gets the `score` skill beside it — a `SKILL.md` on when an observation
+is worth `score_submit`, which the tool's own description cannot say — built as a plugin under `~/.baton/agent-plugin/`
+and handed over with `--plugin-dir`. It follows the config: a panel without the config gets no skills either. See
+[Agent skills](CONTROL.md#agent-skills) for the rest of the gate and how to tell why a panel has none.
+
 It is resolved at **every launch**, not stored on the panel — so a re-run (`r`) and a panel the daemon rebuilt from its
 snapshot are wired exactly like a fresh spawn. That matters more than it sounds: the flag used to be frozen into the
 spawn spec, which meant a panel whose spec predated the setting could never gain the tool however often it was re-run,

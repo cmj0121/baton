@@ -2,6 +2,8 @@ package server
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -95,6 +97,58 @@ func TestThePrimerKeepsAttentionAboutItself(t *testing.T) {
 	window := strings.ToLower(primer[max(0, at-400):min(len(primer), at+400)])
 	if !strings.Contains(window, "your own") && !strings.Contains(window, "yourself") {
 		t.Errorf("baton_attention is described without saying it is about the conductor's OWN panel:\n%s", window)
+	}
+}
+
+// TestThePrimerPointsAtTheConductorSkills: the skills are written beside the
+// primer for depth, but a skill loads only when the agent decides to read it, and
+// an agent decides from what it was told. The primer is the one text it always
+// reads, so it is the primer that has to say the skills are there — by the path
+// writeConductorFiles writes them to, relative to the workspace the agent runs in.
+func TestThePrimerPointsAtTheConductorSkills(t *testing.T) {
+	primer := string(conductorPrimer("c1"))
+	for _, path := range []string{".claude/skills/conduct/SKILL.md", ".claude/skills/baton/SKILL.md"} {
+		if !strings.Contains(primer, path) {
+			t.Errorf("the briefing never names %s, so the conductor has no reason to read it", path)
+		}
+	}
+}
+
+// TestConductorWorkspaceCarriesItsSkills pins what lands in the workspace: the
+// conductor's set and nothing of the worker's. peers and score describe tools
+// only the worker's MCP server registers, so a conductor reading them would be
+// reaching for calls its own server refuses.
+//
+// The operator's skill is the other half. .claude/skills is the operator's
+// directory as much as baton's — Claude Code reads it for any skill a person
+// drops there — and the workspace is rewritten on every spawn, so a rewrite that
+// swept the directory would delete their work every time the conductor opened.
+func TestConductorWorkspaceCarriesItsSkills(t *testing.T) {
+	ws := t.TempDir()
+	dir := filepath.Join(ws, ".claude", "skills")
+	mine := filepath.Join(dir, "mine", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(mine), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mine, []byte("the operator's own"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	writeConductorFiles(ws, "c1")
+	writeConductorFiles(ws, "c1") // the respawn: a rewrite over the first
+
+	for _, name := range []string{"baton", "conduct"} {
+		if b, err := os.ReadFile(filepath.Join(dir, name, "SKILL.md")); err != nil || len(b) == 0 {
+			t.Errorf("the conductor's %s skill was not written: %d bytes, err %v", name, len(b), err)
+		}
+	}
+	for _, name := range []string{"peers", "score"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			t.Errorf("the worker's %s skill landed in the conductor's workspace", name)
+		}
+	}
+	if b, err := os.ReadFile(mine); err != nil || string(b) != "the operator's own" {
+		t.Errorf("the rewrite touched the operator's own skill: %q, err %v", b, err)
 	}
 }
 

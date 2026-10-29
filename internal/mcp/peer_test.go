@@ -179,6 +179,19 @@ func TestConductorTableUnchanged(t *testing.T) {
 	}
 }
 
+// TestWorkerToolNamesIsTheWorkerTable: what the skills test checks a worker
+// skill against is exactly what a worker's server serves, so the two cannot be
+// different lists that happen to agree today.
+func TestWorkerToolNamesIsTheWorkerTable(t *testing.T) {
+	want := []string{"score_submit", "baton_peers", "baton_peek", "baton_tell"}
+	if got := toolNames(NewWorker("9.9.9").tools); !slices.Equal(got, want) {
+		t.Errorf("worker table = %v\nwant %v", got, want)
+	}
+	if got := WorkerToolNames(); !slices.Equal(got, want) {
+		t.Errorf("WorkerToolNames = %v\nwant %v", got, want)
+	}
+}
+
 // TestPeerToolsRoundTrip drives the three tools against real panels: list the
 // group, type into a shell and an agent, read both back as plain text.
 func TestPeerToolsRoundTrip(t *testing.T) {
