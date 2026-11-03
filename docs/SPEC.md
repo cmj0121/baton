@@ -22,7 +22,9 @@ once, or one fully — and the group split sits between them, showing one work i
   re-zooming it drops you back at the same offset, still in scroll mode. Every bare key drives the program (vim, a BBS),
   never baton, so the leader works on any terminal — then pop back out to the dashboard. How much history is
   kept and replayed on attach is `panel.replay-kb` in the config (a larger value pages back further; full-screen programs
-  keep no scrollback).
+  keep no scrollback). The same value bounds the cockpit's own scrollback, and with it the terminal app's memory: about
+  one line per 128 bytes, between 2000 and 10000 lines for a zoom, and a quarter of that (at least 500) for each group
+  tile.
 
 You never juggle windows or tabs. You conduct from the dashboard, drop into a group when one task needs a closer look,
 and zoom in only when a single player needs you.
