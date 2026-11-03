@@ -4,6 +4,17 @@ Every release is cut from an annotated tag whose message _is_ the release note, 
 [GitHub releases](https://github.com/cmj0121/baton/releases) always carry the full story —
 the upgrade notes, the caveats, and why each change exists. This file is the index.
 
+## [v2.7.1](https://github.com/cmj0121/baton/releases/tag/v2.7.1) — a terminal app that stays small
+
+2026-11-03
+
+- **The cockpit's scrollback is capped from `panel.replay-kb`.** The zoom and group-tile emulators used to keep the
+  library default of 10000 lines each, about 208 MB of cells for a 200-column panel, across up to sixteen tiles. A
+  zoom now keeps one line per 128 bytes of the replay buffer, between 2000 and 10000 lines (2048 by default), and a
+  tile keeps a quarter of that, at least 500 (#165).
+- **Search highlighting no longer rebuilds the whole scrollback every frame.** Only the visible window is turned into
+  plain text (#165).
+
 ## [v2.7.0](https://github.com/cmj0121/baton/releases/tag/v2.7.0) — agents that know what baton can do
 
 2026-10-29
