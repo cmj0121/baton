@@ -207,6 +207,34 @@ func combinedPlain(emu *vt.SafeEmulator) ([]string, int) {
 	return lines, sbLen
 }
 
+// windowPlain is combinedPlain for just the n combined indices from start: the
+// slice a render needs, so a frame under an active search stringifies one
+// window rather than the whole scrollback. Entry i is index start+i; it stops
+// short where the panel's text ends.
+func windowPlain(emu *vt.SafeEmulator, start, n int) []string {
+	sbLen := emu.ScrollbackLen()
+	screen := strings.Split(emu.Render(), "\n")
+	end := min(start+n, sbLen+len(screen))
+	if start >= end {
+		return nil
+	}
+	lines := make([]string, 0, end-start)
+	var sb *vt.Scrollback
+	if start < sbLen {
+		sb = emu.Scrollback()
+	}
+	for idx := start; idx < end; idx++ {
+		if idx >= sbLen {
+			lines = append(lines, stripANSI(screen[idx-sbLen]))
+		} else if ln := sb.Line(idx); ln != nil {
+			lines = append(lines, ln.String())
+		} else {
+			lines = append(lines, "")
+		}
+	}
+	return lines
+}
+
 // searchWindow renders a scroll window like emuWindow, but with the search term
 // highlighted on any matched line: reverse video on the current hit, underline on
 // the rest. When no search is active it is exactly emuWindow.
@@ -216,7 +244,7 @@ func (m model) searchWindow(emu *vt.SafeEmulator, cols, rows, off int) []string 
 		return lines
 	}
 	start := windowStart(emu.ScrollbackLen(), off) // top of the window in the combined index space
-	plain, _ := combinedPlain(emu)
+	plain := windowPlain(emu, start, len(lines))
 
 	hit := make(map[int]bool, len(m.searchHits))
 	for _, h := range m.searchHits {
@@ -228,10 +256,10 @@ func (m model) searchWindow(emu *vt.SafeEmulator, cols, rows, off int) []string 
 	}
 	for i := range lines {
 		idx := start + i
-		if idx < 0 || idx >= len(plain) || !hit[idx] {
+		if i >= len(plain) || !hit[idx] {
 			continue
 		}
-		lines[i] = highlightLine(plain[idx], m.searchRe, cols, idx == cur)
+		lines[i] = highlightLine(plain[i], m.searchRe, cols, idx == cur)
 	}
 	return lines
 }

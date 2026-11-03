@@ -126,6 +126,7 @@ func (m *model) attachTile(p panel.Panel, emuCols, emuRows int) {
 // tiles, and since the floating pane went it has one caller.
 func (m model) attachEmu(id string, emuCols, emuRows int) *vt.SafeEmulator {
 	emu := vt.NewSafeEmulator(emuCols, emuRows)
+	emu.SetScrollbackSize(tileScrollbackLines(m.replayKB)) // a tile keeps less than a zoom (#165)
 	go zoomReader(emu, m.client, id)
 	// Attach before resize, for the reason zoomInto gives: the replay's size tag
 	// must be the size its bytes were painted at.

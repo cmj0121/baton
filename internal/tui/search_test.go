@@ -276,3 +276,43 @@ func TestCompileSearchSurvivesInvalidUTF8(t *testing.T) {
 		t.Fatal("the coerced term should match what the terminal draws for those bytes")
 	}
 }
+
+// TestSearchWindowDeepInScrollback renders windows far back in a long history,
+// one straddling the scrollback and the live screen, and the live bottom, and
+// proves each matches a highlight built from the panel's full text — the output
+// searchWindow gave when it stringified the whole scrollback every frame.
+func TestSearchWindowDeepInScrollback(t *testing.T) {
+	m := searchModel(t, 600)
+	m = m.runSearch("line5") // line5, line50..59, line500..599 — the last on the live screen
+	if !m.searchActive() {
+		t.Fatal("precondition: search active")
+	}
+	plain, sbLen := combinedPlain(m.emu)
+	rows := m.zoomRows()
+	hit := make(map[int]bool, len(m.searchHits))
+	for _, h := range m.searchHits {
+		hit[h] = true
+	}
+	for _, at := range []int{0, len(m.searchHits) / 2, len(m.searchHits) - 1} {
+		m.searchAt = at
+		m.positionToHit(m.emu)
+		for _, off := range []int{m.scrollOff, sbLen, 2, 0} {
+			want := emuWindow(m.emu, m.width, rows, off)
+			start := windowStart(sbLen, off)
+			highlighted := 0
+			for i := range want {
+				if idx := start + i; idx < len(plain) && hit[idx] {
+					want[i] = highlightLine(plain[idx], m.searchRe, m.width, idx == m.searchHits[at])
+					highlighted++
+				}
+			}
+			got := m.searchWindow(m.emu, m.width, rows, off)
+			if strings.Join(got, "\n") != strings.Join(want, "\n") {
+				t.Errorf("hit %d off %d: window differs from the full-text highlight\n got %q\nwant %q", at, off, got, want)
+			}
+			if off == m.scrollOff && highlighted == 0 {
+				t.Errorf("hit %d off %d: the window positioned on a hit highlighted nothing", at, off)
+			}
+		}
+	}
+}
