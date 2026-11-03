@@ -3468,6 +3468,7 @@ func (m model) zoomInto(p panel.Panel) model {
 	m.cursorHidden = nil
 	if m.width > 0 && m.height > 1 {
 		m.emu = vt.NewSafeEmulator(m.width, m.zoomRows())
+		m.emu.SetScrollbackSize(scrollbackLines(m.replayKB)) // not the library's 10000 lines (#165)
 		m.emuIRM = &vtirm.Filter{}
 		// Track the program's cursor visibility (DECTCEM) so a program that hides
 		// its cursor — vim, a BBS reader — does not get a phantom one drawn over it.
